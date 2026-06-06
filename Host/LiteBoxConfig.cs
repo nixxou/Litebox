@@ -70,7 +70,7 @@ internal sealed class LiteBoxConfig
         // Seed defaults + comments so the file is self-documenting.
         _kv["ShowGameRunningScreen"] = "true";
         _kv["UnloadListDuringGame"] = "false";
-        _kv["GameRunningText"] = "Le jeu est en cours...";
+        _kv["GameRunningText"] = "Game running...";
         _kv["GameRunningColor"] = "#0F0F12";
         try
         {
@@ -104,7 +104,7 @@ internal sealed class LiteBoxConfig
     // ── Typed options ────────────────────────────────────────────────────────
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
     public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", false); set => SetBool("UnloadListDuringGame", value); }
-    public string GameRunningText     => Get("GameRunningText", "Le jeu est en cours...");
+    public string GameRunningText     => Get("GameRunningText", "Game running...");
     public Color GameRunningColor     => ParseColor(Get("GameRunningColor", "#0F0F12"), Color.FromArgb(15, 15, 18));
 
     private static Color ParseColor(string s, Color def)

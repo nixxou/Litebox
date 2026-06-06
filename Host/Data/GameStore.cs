@@ -36,6 +36,24 @@ internal struct GameRow
     public long DateAddedTicks, ReleaseDateTicks, LastPlayedTicks; // 0 = none
     public bool Favorite, Hide, Broken, Completed;
     public byte Installed;     // 0 = null, 1 = false, 2 = true
+
+    // ── Extended fields (added 2026-06-06) ───────────────────────────────────
+    public int CommandLineIdx, ConfigCmdIdx, ConfigPathIdx;
+    public int DosBoxCfgIdx, ScummDataIdx, ScummTypeIdx;          // DosBox / ScummVM
+    public int SeriesIdx, SourceIdx, ReleaseTypeIdx, RootFolderIdx, CloneOfIdx, ProgressIdx;
+    public int VideoPathIdx, ThemeVideoPathIdx, ManualPathIdx, MusicPathIdx; // stored overrides
+    public long DateModifiedTicks;
+    public float CommunityStarRating;
+    public int StartupLoadDelay;
+    public int Flags;          // packed booleans, see GFlags
+}
+
+/// <summary>Bit flags packed into <see cref="GameRow.Flags"/>.</summary>
+internal static class GFlags
+{
+    public const int UseDosBox = 1, UseScummVm = 2, ScummAspect = 4, ScummFull = 8,
+        Portable = 16, UseStartup = 32, OverrideStartup = 64, HideNonExclusive = 128,
+        HideMouse = 256, DisableShutdown = 512, AggressiveHiding = 1024;
 }
 
 internal sealed class GameStore
@@ -175,6 +193,39 @@ internal sealed class GameStore
                     Broken = ParseBool(V("Broken")),
                     Completed = ParseBool(V("Completed")),
                     Installed = ParseTri(V("Installed")),
+
+                    // ── extended ────────────────────────────────────────────
+                    CommandLineIdx = Intern(V("CommandLine")),
+                    ConfigCmdIdx = Intern(V("ConfigurationCommandLine")),
+                    ConfigPathIdx = Intern(V("ConfigurationPath")),
+                    DosBoxCfgIdx = Intern(V("DosBoxConfigurationPath")),
+                    ScummDataIdx = Intern(V("ScummVMGameDataFolderPath")),
+                    ScummTypeIdx = Intern(V("ScummVMGameType")),
+                    SeriesIdx = Intern(V("Series")),
+                    SourceIdx = Intern(V("Source")),
+                    ReleaseTypeIdx = Intern(V("ReleaseType")),
+                    RootFolderIdx = Intern(V("RootFolder")),
+                    CloneOfIdx = Intern(V("CloneOf")),
+                    ProgressIdx = Intern(V("Progress")),
+                    VideoPathIdx = Intern(V("VideoPath")),
+                    ThemeVideoPathIdx = Intern(V("ThemeVideoPath")),
+                    ManualPathIdx = Intern(V("ManualPath")),
+                    MusicPathIdx = Intern(V("MusicPath")),
+                    DateModifiedTicks = ParseTicks(V("DateModified")),
+                    CommunityStarRating = ParseFloat(V("CommunityStarRating")),
+                    StartupLoadDelay = ParseInt(V("StartupLoadDelay"), 0),
+                    Flags =
+                        (ParseBool(V("UseDosBox")) ? GFlags.UseDosBox : 0)
+                      | (ParseBool(V("UseScummVM")) ? GFlags.UseScummVm : 0)
+                      | (ParseBool(V("ScummVMAspectCorrection")) ? GFlags.ScummAspect : 0)
+                      | (ParseBool(V("ScummVMFullscreen")) ? GFlags.ScummFull : 0)
+                      | (ParseBool(V("Portable")) ? GFlags.Portable : 0)
+                      | (ParseBool(V("UseStartupScreen")) ? GFlags.UseStartup : 0)
+                      | (ParseBool(V("OverrideDefaultStartupScreenSettings")) ? GFlags.OverrideStartup : 0)
+                      | (ParseBool(V("HideAllNonExclusiveFullscreenWindows")) ? GFlags.HideNonExclusive : 0)
+                      | (ParseBool(V("HideMouseCursorInGame")) ? GFlags.HideMouse : 0)
+                      | (ParseBool(V("DisableShutdownScreen")) ? GFlags.DisableShutdown : 0)
+                      | (ParseBool(V("AggressiveWindowHiding")) ? GFlags.AggressiveHiding : 0),
                 };
                 row.ReleaseYear = row.ReleaseDateTicks != 0 ? new DateTime(row.ReleaseDateTicks).Year : -1;
 

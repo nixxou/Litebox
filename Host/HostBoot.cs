@@ -137,6 +137,36 @@ internal static class HostBoot
                 Console.WriteLine($"[mediatest] scanned {scanned} game(s), {shown} with media shown");
             }
 
+            if (args.Contains("--apitest"))
+            {
+                var dm2 = PluginHelper.DataManager;
+                var cats = dm2.GetAllPlatformCategories() ?? Array.Empty<IPlatformCategory>();
+                if (cats.Length > 0)
+                {
+                    var n = cats[0].Name;
+                    var c = dm2.GetPlatformCategoryByName(n);
+                    Console.WriteLine($"[apitest] GetPlatformCategoryByName(\"{n}\") -> {(c != null ? "OK: " + c.Name : "NULL")}");
+                }
+                var plat = dm2.GetAllPlatforms().FirstOrDefault(p => p.GetAllGames(true, true).Length > 0);
+                if (plat != null)
+                {
+                    int all = plat.GetAllGames(true, true).Length;
+                    int vis = plat.GetAllGames(false, false).Length;
+                    int withFront = plat.GetGameCount(true, true, false, true, false, false, false);
+                    Console.WriteLine($"[apitest] platform \"{plat.Name}\": all={all} noHide/noBroken={vis} withBoxFront={withFront}");
+                }
+                foreach (var g in dm2.GetAllGames())
+                {
+                    var imgs = g.GetAllImagesWithDetails();
+                    if (imgs.Length > 0)
+                    {
+                        Console.WriteLine($"[apitest] GetAllImagesWithDetails(\"{g.Title}\") = {imgs.Length} image(s):");
+                        foreach (var d in imgs.Take(5)) Console.WriteLine($"    [{d.ImageType}] region='{d.Region}' -> {d.FilePath}");
+                        break;
+                    }
+                }
+            }
+
             if (args.Contains("--playlists"))
             {
                 foreach (var pl in PluginHelper.DataManager.GetAllPlaylists() ?? Array.Empty<IPlaylist>())

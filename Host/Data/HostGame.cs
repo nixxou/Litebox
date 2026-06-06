@@ -116,6 +116,12 @@ internal sealed class HostGame : DummyGame
 
     public override IAlternateName[] GetAllAlternateNames()
         => _s.AltNamesFor(R.Id).Select(a => (IAlternateName)new HostAlternateName(a, R.Id.ToString())).ToArray();
+
+    // All images on disk for this game (across all types, or one type), with details.
+    public override ImageDetails[] GetAllImagesWithDetails()
+        => MediaResolver.AllImages(_plat, R.Id, _title, null).ToArray();
+    public override ImageDetails[] GetAllImagesWithDetails(string imageType)
+        => MediaResolver.AllImages(_plat, R.Id, _title, imageType).ToArray();
 }
 
 /// <summary>IAdditionalApplication over an AddApp record.</summary>

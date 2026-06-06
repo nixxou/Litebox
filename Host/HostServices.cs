@@ -151,21 +151,28 @@ internal static class HostLaunch
             foreach (var a in addApps.Where(a => a.AutoRunBefore))
                 RunProcess(a.ApplicationPath, a.CommandLine, emulator, game, a.UseEmulator, $"autorun-before \"{a.Name}\"");
 
-            // Main target: an explicit additional-app if one was passed, else the game.
-            var main = ResolveMain(game, app, emulator, overrideCmd);
-            if (DryRun)
+            // Main target: built-in DOSBox, an explicit additional-app, or the game.
+            bool useDos = SafeBool(() => app != null ? app.UseDosBox : game.UseDosBox);
+            string target = !string.IsNullOrEmpty(SafeStr(() => app?.ApplicationPath))
+                ? app.ApplicationPath : SafeStr(() => game.ApplicationPath);
+
+            if (useDos && !string.IsNullOrEmpty(target))
             {
-                Console.WriteLine(main.HasValue
-                    ? $"[launch/dry] main: \"{ResolvePath(main.Value.path)}\" {main.Value.args}"
-                    : $"[launch/dry] main: (nothing runnable for \"{game.Title}\")");
-                Thread.Sleep(2500); // hold so the "game running" state is observable while testing
+                RunDosBox(game, target, "dosbox");   // Spawn() handles DryRun
             }
-            else if (main.HasValue)
-                RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main");
             else
-                System.Windows.Forms.MessageBox.Show(
-                    $"[dummy launch] {game.Title}\nPlatform: {game.Platform}\nApp: {game.ApplicationPath}\n\n(Close = game exited)",
-                    "LbApiHost — dummy game");
+            {
+                var main = ResolveMain(game, app, emulator, overrideCmd);
+                if (main.HasValue)
+                    RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main");
+                else if (!DryRun)
+                    System.Windows.Forms.MessageBox.Show(
+                        $"[dummy launch] {game.Title}\nPlatform: {game.Platform}\nApp: {game.ApplicationPath}\n\n(Close = game exited)",
+                        "LiteBox — dummy game");
+                else
+                    Console.WriteLine($"[launch/dry] main: (nothing runnable for \"{game.Title}\")");
+            }
+            if (DryRun) Thread.Sleep(2500); // hold so the running state is observable while testing
 
             // AutoRunAfter additional apps (cleanup).
             foreach (var a in addApps.Where(a => a.AutoRunAfter))
@@ -211,7 +218,33 @@ internal static class HostLaunch
             fileName = ResolvePath(targetPath);   // direct launch (PC, TeknoParrot, scripts)
             args = cmd?.Trim() ?? "";
         }
+        Spawn(fileName, args, label);
+    }
 
+    /// <summary>
+    /// LaunchBox's built-in DOSBox launch (LB\ThirdParty\DOSBox\DOSBox.exe): mount the
+    /// game's folder as C:, CALL the entry file, with the per-game .conf (or the default
+    /// dosbox.conf). Mirrors LB's exact command line.
+    /// </summary>
+    private static void RunDosBox(IGame game, string targetPath, string label)
+    {
+        string exe = ResolvePath(Path.Combine("ThirdParty", "DOSBox", "DOSBox.exe"));
+        string appAbs = ResolvePath(targetPath);
+        string mountDir = SafeDir(appAbs) ?? "";
+        string callFile = Path.GetFileName(appAbs);
+        string confCustom = SafeStr(() => game.DosBoxConfigurationPath);
+        string conf = !string.IsNullOrWhiteSpace(confCustom)
+            ? ResolvePath(confCustom)
+            : ResolvePath(Path.Combine("ThirdParty", "DOSBox", "dosbox.conf"));
+        string args = $"-c \"@ECHO OFF\" -c CLS -c \"MOUNT C '{mountDir}'\" -c C: -c CLS " +
+                      $"-c \"CD \" -c \"CALL {callFile}\" -c EXIT -noautoexec -noconsole -conf \"{conf}\"";
+        Spawn(exe, args, label);
+    }
+
+    /// <summary>Spawns a process (or logs it in DryRun) and waits for exit.</summary>
+    private static void Spawn(string fileName, string args, string label)
+    {
+        if (string.IsNullOrEmpty(fileName)) return;
         if (DryRun) { Console.WriteLine($"[launch/dry] {label}: \"{fileName}\" {args}"); return; }
 
         Console.WriteLine($"[launch] {label}: \"{fileName}\" {args}");
@@ -252,6 +285,9 @@ internal static class HostLaunch
     {
         try { return game.CommandLine ?? ""; } catch { return ""; }
     }
+
+    private static bool SafeBool(Func<bool> f) { try { return f(); } catch { return false; } }
+    private static string SafeStr(Func<string> f) { try { return f() ?? ""; } catch { return ""; } }
 
     private static string ResolvePath(string p)
     {

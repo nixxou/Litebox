@@ -17,6 +17,7 @@ internal sealed class HostDataManagerXml : DummyDataManager
     private readonly IPlatform[] _platforms;
     private readonly Dictionary<string, IPlatform> _platformByName;
     private readonly IPlatformCategory[] _categories;
+    private readonly Dictionary<string, IPlatformCategory> _categoryByName;
     private readonly IEmulator[] _emulators;
     private readonly Dictionary<string, IEmulator> _emulatorById;
     private readonly IPlaylist[] _playlists;
@@ -33,6 +34,8 @@ internal sealed class HostDataManagerXml : DummyDataManager
         // Platforms + categories from Platforms.xml.
         var (platforms, categories) = PlatformCatalog.Load(dataDir, imagesRoot);
         _categories = categories.Cast<IPlatformCategory>().ToArray();
+        _categoryByName = new Dictionary<string, IPlatformCategory>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in _categories) { var n = c?.Name; if (!string.IsNullOrEmpty(n)) _categoryByName[n] = c; }
 
         var byName = new Dictionary<string, HostPlatform>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in platforms) byName[p.Name] = p;
@@ -81,6 +84,8 @@ internal sealed class HostDataManagerXml : DummyDataManager
     public override IPlatform GetPlatformByName(string name)
         => (name != null && _platformByName.TryGetValue(name, out var p)) ? p : null;
     public override IPlatformCategory[] GetAllPlatformCategories() => _categories;
+    public override IPlatformCategory GetPlatformCategoryByName(string name)
+        => (name != null && _categoryByName.TryGetValue(name, out var c)) ? c : null;
     public override IList<IPlatform> GetRootPlatformsCategoriesPlaylists() => _platforms.ToList();
 
     public override IEmulator[] GetAllEmulators() => _emulators;

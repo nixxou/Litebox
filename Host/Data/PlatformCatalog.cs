@@ -74,9 +74,42 @@ internal sealed class HostPlatform : DummyPlatform
     public override string VideosFolder { get => VideosFolderValue ?? ""; set { } }
 
     // ── games ────────────────────────────────────────────────────────────────
-    public override IGame[] GetAllGames(bool includeHidden, bool includeBroken) => _games;
-    public override int GetGameCount(bool includeHidden, bool includeBroken) => _games.Length;
-    public override bool HasGames(bool includeHidden, bool includeBroken) => _games.Length > 0;
+    public override IGame[] GetAllGames(bool includeHidden, bool includeBroken)
+        => Filtered(includeHidden, includeBroken).ToArray();
+    public override int GetGameCount(bool includeHidden, bool includeBroken)
+        => Filtered(includeHidden, includeBroken).Count();
+    public override bool HasGames(bool includeHidden, bool includeBroken)
+        => Filtered(includeHidden, includeBroken).Any();
+
+    public override IGame[] GetAllGames(bool includeHidden, bool includeBroken,
+        bool exVideo, bool exBoxFront, bool exScreenshot, bool exClearLogo, bool exBackground)
+        => Filtered(includeHidden, includeBroken, exVideo, exBoxFront, exScreenshot, exClearLogo, exBackground).ToArray();
+    public override int GetGameCount(bool includeHidden, bool includeBroken,
+        bool exVideo, bool exBoxFront, bool exScreenshot, bool exClearLogo, bool exBackground)
+        => Filtered(includeHidden, includeBroken, exVideo, exBoxFront, exScreenshot, exClearLogo, exBackground).Count();
+    public override bool HasGames(bool includeHidden, bool includeBroken,
+        bool exVideo, bool exBoxFront, bool exScreenshot, bool exClearLogo, bool exBackground)
+        => Filtered(includeHidden, includeBroken, exVideo, exBoxFront, exScreenshot, exClearLogo, exBackground).Any();
+
+    private IEnumerable<IGame> Filtered(bool includeHidden, bool includeBroken,
+        bool exVideo = false, bool exBoxFront = false, bool exScreenshot = false,
+        bool exClearLogo = false, bool exBackground = false)
+    {
+        IEnumerable<IGame> q = _games;
+        if (!includeHidden) q = q.Where(g => !B(() => g.Hide));
+        if (!includeBroken) q = q.Where(g => !B(() => g.Broken));
+        // Media-presence excludes (resolve through the game's media accessors — IO or
+        // the GameCache fast path). Only evaluated when the flag is set.
+        if (exVideo)      q = q.Where(g => Has(() => g.GetVideoPath(false)));
+        if (exBoxFront)   q = q.Where(g => Has(() => g.FrontImagePath));
+        if (exScreenshot) q = q.Where(g => Has(() => g.ScreenshotImagePath));
+        if (exClearLogo)  q = q.Where(g => Has(() => g.ClearLogoImagePath));
+        if (exBackground) q = q.Where(g => Has(() => g.BackgroundImagePath));
+        return q;
+    }
+
+    private static bool B(Func<bool> f) { try { return f(); } catch { return false; } }
+    private static bool Has(Func<string> f) { try { return !string.IsNullOrEmpty(f()); } catch { return false; } }
 
     // ── media folders (custom paths honoured here) ───────────────────────────
     public override IPlatformFolder GetPlatformFolderByImageType(string imageType)

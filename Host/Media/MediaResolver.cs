@@ -138,6 +138,122 @@ internal static class MediaResolver
     public static string Music(string platformName, Guid id, string title)
         => BestInDir(MediaFolder("Music", platformName), id, Sanitize(title), MusicExts);
 
+    /// <summary>
+    /// Every image file for a game, as SDK ImageDetails (FilePath/ImageType/Region),
+    /// across all image types (or a single <paramref name="typeFilter"/>). Always IO
+    /// (the GameCache fast path only gives a best-per-type). Region "" = root folder.
+    /// </summary>
+    public static List<ImageDetails> AllImages(string platformName, Guid id, string title, string typeFilter)
+    {
+        var result = new List<ImageDetails>();
+        if (string.IsNullOrEmpty(platformName)) return result;
+        var plat = SafePlatform(platformName);
+        if (plat == null) return result;
+        string sani = Sanitize(title);
+
+        IEnumerable<string> types = !string.IsNullOrWhiteSpace(typeFilter) ? new[] { typeFilter } : AllImageTypes();
+        foreach (var type in types)
+        {
+            string folder = SafeFolder(plat, type);
+            if (folder == null || !Directory.Exists(folder)) continue;
+
+            foreach (var p in AllInDir(folder, id, sani, ImageExts))
+                Add(result, p, type, "");                       // root (no region)
+            foreach (var sub in SafeSubdirs(folder))
+                foreach (var p in AllInDir(sub, id, sani, ImageExts))
+                    Add(result, p, type, Path.GetFileName(sub)); // region subfolder
+        }
+        return result;
+
+        static void Add(List<ImageDetails> list, string path, string type, string region)
+        { var d = MakeImageDetails(path, type, region); if (d != null) list.Add(d); }
+    }
+
+    private static IEnumerable<string> SafeSubdirs(string dir)
+    {
+        try { return Directory.EnumerateDirectories(dir); } catch { return Array.Empty<string>(); }
+    }
+
+    /// <summary>All matching files in one directory (lowest -NNN first), not just the best.</summary>
+    private static IEnumerable<string> AllInDir(string dir, Guid id, string sani, HashSet<string> exts)
+    {
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) yield break;
+        string glob = sani.Length > 0 ? sani + "*" : "*";
+        List<(long num, string path)> hits = new();
+        IEnumerable<string> files;
+        try { files = Directory.EnumerateFiles(dir, glob, SearchOption.TopDirectoryOnly); }
+        catch { yield break; }
+        foreach (var f in files)
+        {
+            if (!exts.Contains(Path.GetExtension(f))) continue;
+            if (TryMatch(Path.GetFileNameWithoutExtension(f), id, sani, out long num)) hits.Add((num, f));
+        }
+        hits.Sort((a, b) => a.num.CompareTo(b.num));
+        foreach (var h in hits) yield return h.path;
+    }
+
+    // ── Image-type list (all known types) ────────────────────────────────────
+    private static string[] _allTypes;
+    private static readonly string[] DefaultImageTypes =
+    {
+        "Box - Front", "Box - Front - Reconstructed", "Box - Back", "Box - Back - Reconstructed",
+        "Box - 3D", "Box - Spine", "Box - Full", "Cart - Front", "Cart - Back", "Cart - 3D",
+        "Disc", "Clear Logo", "Banner", "Steam Banner", "Fanart - Background",
+        "Fanart - Box - Front", "Fanart - Box - Back", "Fanart - Cart - Front", "Fanart - Cart - Back",
+        "Fanart - Disc", "Arcade - Marquee", "Arcade - Cabinet", "Arcade - Control Panel",
+        "Arcade - Controls Information", "Screenshot - Gameplay", "Screenshot - Game Title",
+        "Screenshot - Game Select", "Screenshot - Game Over", "Screenshot - High Scores",
+        "Advertisement Flyer - Front", "Advertisement Flyer - Back", "Poster", "Square", "Icon",
+    };
+
+    private static IEnumerable<string> AllImageTypes()
+    {
+        if (_allTypes != null) return _allTypes;
+        try
+        {
+            var list = ImageTypes.GetList();
+            if (list != null && list.Count > 0)
+                return _allTypes = list.Where(t => !string.IsNullOrWhiteSpace(t)).Distinct().ToArray();
+        }
+        catch { }
+        return _allTypes = DefaultImageTypes;
+    }
+
+    // ── Build the SDK ImageDetails (get-only props → constructor, by param name) ─
+    private static System.Reflection.ConstructorInfo _imgDetailsCtor;
+    private static bool _imgDetailsCtorResolved;
+
+    private static ImageDetails MakeImageDetails(string path, string type, string region)
+    {
+        if (!_imgDetailsCtorResolved)
+        {
+            _imgDetailsCtorResolved = true;
+            try
+            {
+                _imgDetailsCtor = typeof(ImageDetails)
+                    .GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    .FirstOrDefault(c => c.GetParameters().Length == 3 && c.GetParameters().All(p => p.ParameterType == typeof(string)));
+            }
+            catch { _imgDetailsCtor = null; }
+        }
+        if (_imgDetailsCtor == null) return null;
+        try
+        {
+            var ps = _imgDetailsCtor.GetParameters();
+            var args = new object[3];
+            for (int i = 0; i < 3; i++)
+            {
+                var n = (ps[i].Name ?? "").ToLowerInvariant();
+                args[i] = (n.Contains("path") || n.Contains("file")) ? path
+                        : n.Contains("type") ? type
+                        : n.Contains("region") ? region
+                        : (object)null;
+            }
+            return (ImageDetails)_imgDetailsCtor.Invoke(args);
+        }
+        catch { return null; }
+    }
+
     // ── Core: best matching file in a single directory ───────────────────────
     private static string BestInDir(string dir, Guid id, string sani, HashSet<string> exts)
     {

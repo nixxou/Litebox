@@ -67,6 +67,10 @@ internal sealed class MainWindow : Form
     private string _overlayText = "";
     private string _resumeGameId;
 
+    // Tree node icons (Nostalgic Platform Icons media pack + drawn fallbacks).
+    private readonly ImageList _treeIcons = new() { ColorDepth = ColorDepth.Depth32Bit, ImageSize = new Size(22, 22) };
+    private readonly Dictionary<object, string> _nodeIconKey = new();
+
     /// <summary>Marker for the synthetic "All Games" tree root.</summary>
     private sealed class AllNode { public static readonly AllNode Instance = new(); }
 
@@ -314,11 +318,17 @@ internal sealed class MainWindow : Form
         tlv.SelectedBackColor = Accent;
         tlv.SelectedForeColor = Color.White;
         var col = new OLVColumn("", null)
-        { FillsFreeSpace = true, AspectGetter = x => x is AllNode ? "All Games" : HostPlatformCategory.NodeName(x) };
+        {
+            FillsFreeSpace = true,
+            AspectGetter = x => x is AllNode ? "All Games" : HostPlatformCategory.NodeName(x),
+            ImageGetter = x => _nodeIconKey.TryGetValue(x, out var k) ? (object)k : "fb_plat",
+        };
         tlv.Columns.Add(col);
+        tlv.SmallImageList = _treeIcons;
         tlv.CanExpandGetter = x => x is HostPlatformCategory c && c.Children.Count > 0;
         tlv.ChildrenGetter = x => (x is HostPlatformCategory c)
             ? (System.Collections.IEnumerable)c.Children : Array.Empty<object>();
+        tlv.TreeColumnRenderer = new ChevronTreeRenderer();   // LaunchBox-style rotating chevron
         tlv.SelectionChanged += (_, _) => LoadNode(tlv.SelectedObject);
         return tlv;
     }
@@ -329,9 +339,98 @@ internal sealed class MainWindow : Form
         if (_dm is HostDataManagerXml hostDm) roots.AddRange(hostDm.RootNodes);
         else { try { roots.AddRange(_dm.GetAllPlatforms()); } catch { } }
 
+        BuildTreeIcons(roots);
         _sources.Roots = roots;
         try { _sources.ExpandAll(); } catch { }
         _sources.SelectedObject = AllNode.Instance;   // → LoadNode(All)
+    }
+
+    // ── Tree icons (Nostalgic Platform Icons pack + drawn fallbacks) ─────────
+    private void BuildTreeIcons(IEnumerable<object> roots)
+    {
+        _treeIcons.Images.Clear();
+        _nodeIconKey.Clear();
+        _treeIcons.Images.Add("fb_cat", GlyphCategory());
+        _treeIcons.Images.Add("fb_play", GlyphPlaylist());
+        _treeIcons.Images.Add("fb_plat", GlyphPlatform());
+
+        string imagesRoot = MediaResolver.ImagesRoot;
+        int counter = 0;
+        void Walk(object node)
+        {
+            if (node == null || _nodeIconKey.ContainsKey(node)) return;
+            _nodeIconKey[node] = ResolveIcon(node, imagesRoot, ref counter);
+            if (node is HostPlatformCategory cat) foreach (var c in cat.Children) Walk(c);
+        }
+        foreach (var r in roots) Walk(r);
+    }
+
+    private string ResolveIcon(object node, string imagesRoot, ref int counter)
+    {
+        string sub, name, fallback;
+        if (node is AllNode) { sub = "Playlists"; name = "All Games"; fallback = "fb_play"; }
+        else if (node is IPlatformCategory c) { sub = "Platform Categories"; name = c.Name; fallback = "fb_cat"; }
+        else if (node is IPlaylist pl) { sub = "Playlists"; name = pl.Name; fallback = "fb_play"; }
+        else if (node is IPlatform p) { sub = "Platforms"; name = p.Name; fallback = "fb_plat"; }
+        else return "fb_plat";
+
+        string path = MediaResolver.PlatformIcon(imagesRoot, sub, name);
+        var img = path == null ? null : LoadScaled(path, 22);
+        if (img == null) return fallback;
+        string key = "n" + counter++;
+        _treeIcons.Images.Add(key, img);
+        return key;
+    }
+
+    private static Image LoadScaled(string path, int size)
+    {
+        try
+        {
+            using var ms = new MemoryStream(File.ReadAllBytes(path));
+            using var src = Image.FromStream(ms);
+            var bmp = new Bitmap(size, size);
+            using var g = Graphics.FromImage(bmp);
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            float ratio = Math.Min((float)size / src.Width, (float)size / src.Height);
+            int w = Math.Max(1, (int)(src.Width * ratio)), h = Math.Max(1, (int)(src.Height * ratio));
+            g.DrawImage(src, (size - w) / 2, (size - h) / 2, w, h);
+            return bmp;
+        }
+        catch { return null; }
+    }
+
+    private static Image GlyphCategory()
+    {
+        var bmp = new Bitmap(22, 22);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var b = new SolidBrush(Color.FromArgb(150, 150, 152));
+        g.FillRectangle(b, 3, 8, 16, 9);          // body
+        g.FillRectangle(b, 3, 6, 7, 3);           // tab
+        return bmp;
+    }
+    private static Image GlyphPlaylist()
+    {
+        var bmp = new Bitmap(22, 22);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var p = new Pen(Color.FromArgb(150, 150, 152), 2f);
+        g.DrawLine(p, 4, 7, 18, 7);
+        g.DrawLine(p, 4, 11, 18, 11);
+        g.DrawLine(p, 4, 15, 13, 15);
+        return bmp;
+    }
+    private static Image GlyphPlatform()
+    {
+        var bmp = new Bitmap(22, 22);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var p = new Pen(Color.FromArgb(150, 150, 152), 2f);
+        g.DrawRectangle(p, 4, 5, 14, 9);          // screen
+        g.DrawLine(p, 8, 18, 14, 18);             // stand
+        g.DrawLine(p, 11, 14, 11, 18);
+        return bmp;
     }
 
     private void LoadNode(object node)
@@ -769,6 +868,36 @@ internal sealed class MainWindow : Form
         catch (Exception ex) { MessageBox.Show(this, ex.ToString(), "Plugin error", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
     private static T Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }
+
+    // ── LaunchBox-style expansion chevron (▶ collapsed → ▼ expanded) ─────────
+    // Replaces ObjectListView's +/- box. The right→down flip reads as the
+    // small "rotation" LaunchBox shows when a category opens. Lines are off.
+    private sealed class ChevronTreeRenderer : TreeListView.TreeRenderer
+    {
+        private static readonly Color GlyphColor = Color.FromArgb(180, 180, 182);
+
+        public ChevronTreeRenderer() { IsShowLines = false; }
+
+        protected override void DrawExpansionGlyph(Graphics g, Rectangle r, bool isExpanded)
+        {
+            var oldMode = g.SmoothingMode;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            int cx = r.Left + 9;                 // matches OLV's left-aligned glyph slot
+            int cy = r.Top + r.Height / 2;
+            const int s = 4;                     // chevron arm reach
+            using var pen = new Pen(GlyphColor, 1.8f)
+            {
+                StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                EndCap = System.Drawing.Drawing2D.LineCap.Round,
+                LineJoin = System.Drawing.Drawing2D.LineJoin.Round,
+            };
+            Point[] pts = isExpanded
+                ? new[] { new Point(cx - s, cy - s / 2), new Point(cx, cy + s / 2), new Point(cx + s, cy - s / 2) } // ▼
+                : new[] { new Point(cx - s / 2, cy - s), new Point(cx + s / 2, cy), new Point(cx - s / 2, cy + s) }; // ▶
+            g.DrawLines(pen, pts);
+            g.SmoothingMode = oldMode;
+        }
+    }
 
     // ── Double-buffered panel for the flicker-free overlay ───────────────────
     private sealed class DoubleBufferedPanel : Panel

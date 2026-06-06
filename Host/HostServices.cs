@@ -228,7 +228,11 @@ internal static class HostLaunch
     /// </summary>
     private static void RunDosBox(IGame game, string targetPath, string label)
     {
-        string exe = ResolvePath(Path.Combine("ThirdParty", "DOSBox", "DOSBox.exe"));
+        // Custom DOSBox version EXE (per game) overrides the bundled one.
+        string custom = (game as LbApiHost.Host.Data.HostGame)?.CustomDosBoxVersionPath;
+        string exe = !string.IsNullOrWhiteSpace(custom)
+            ? ResolvePath(custom)
+            : ResolvePath(Path.Combine("ThirdParty", "DOSBox", "DOSBox.exe"));
         string appAbs = ResolvePath(targetPath);
         string mountDir = SafeDir(appAbs) ?? "";
         string callFile = Path.GetFileName(appAbs);

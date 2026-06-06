@@ -101,6 +101,10 @@ internal sealed class LiteBoxConfig
     }
     public void SetBool(string key, bool val) => _kv[key] = val ? "true" : "false";
 
+    public int GetInt(string key, int def)
+        => int.TryParse(Get(key), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : def;
+    public void SetInt(string key, int val) => _kv[key] = val.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
     // ── Typed options ────────────────────────────────────────────────────────
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
     public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", false); set => SetBool("UnloadListDuringGame", value); }

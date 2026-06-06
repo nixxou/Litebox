@@ -151,10 +151,10 @@ internal sealed class MainWindow : Form
         ((ToolStripDropDownMenu)optBtn.DropDown).Renderer = new DarkRenderer();
         optBtn.DropDown.BackColor = Panel2;
         optBtn.DropDown.ForeColor = Fg;
-        var miScreen = new ToolStripMenuItem("Écran « jeu en cours » au lancement")
+        var miScreen = new ToolStripMenuItem("Show \"game running\" screen on launch")
         { CheckOnClick = true, Checked = _cfg.ShowGameRunningScreen };
         miScreen.CheckedChanged += (_, _) => { _cfg.ShowGameRunningScreen = miScreen.Checked; _cfg.Save(); };
-        var miUnload = new ToolStripMenuItem("Décharger la liste pendant le jeu")
+        var miUnload = new ToolStripMenuItem("Unload the list while a game runs")
         { CheckOnClick = true, Checked = _cfg.UnloadListDuringGame };
         miUnload.CheckedChanged += (_, _) => { _cfg.UnloadListDuringGame = miUnload.Checked; _cfg.Save(); };
         optBtn.DropDownItems.Add(miScreen);

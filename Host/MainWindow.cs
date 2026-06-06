@@ -18,6 +18,7 @@ using System.Windows.Forms;
 using BrightIdeasSoftware;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
+using LbApiHost.Host.Data;
 using LbApiHost.Host.Media;
 
 namespace LbApiHost.Host;
@@ -39,7 +40,7 @@ internal sealed class MainWindow : Form
     private readonly PluginRegistry _reg;
     private readonly IDataManager _dm;
 
-    private readonly TreeView _sources;
+    private readonly TreeListView _sources;
     private readonly FastObjectListView _games;
     private readonly ToolStripTextBox _search;
     private readonly ToolStripComboBox _sortCombo;
@@ -64,11 +65,10 @@ internal sealed class MainWindow : Form
     private DoubleBufferedPanel _overlay;
     private Image _overlayImg;
     private string _overlayText = "";
-    private Src _currentSrc = new(SrcKind.All, null);
     private string _resumeGameId;
 
-    private enum SrcKind { All, Platform, Playlist }
-    private readonly record struct Src(SrcKind Kind, string Key);
+    /// <summary>Marker for the synthetic "All Games" tree root.</summary>
+    private sealed class AllNode { public static readonly AllNode Instance = new(); }
 
     // Sort options (default first = CompareName). Each maps to an OLV column so
     // sorting goes THROUGH ObjectListView (otherwise SetObjects re-sorts and
@@ -89,13 +89,7 @@ internal sealed class MainWindow : Form
 
         _games = BuildGameList();
 
-        _sources = new TreeView
-        {
-            Dock = DockStyle.Fill, BackColor = Panel, ForeColor = Fg,
-            BorderStyle = BorderStyle.None, HideSelection = false, FullRowSelect = true,
-            ShowLines = false, ShowRootLines = false, ItemHeight = 24, Indent = 16,
-        };
-        _sources.AfterSelect += (_, e) => { if (e.Node?.Tag is Src s) LoadSource(s); };
+        _sources = BuildSourceTree();
 
         var details = BuildDetails(out _logo, out _art, out _title, out _meta, out _notes);
 
@@ -308,53 +302,55 @@ internal sealed class MainWindow : Form
         return tlp;
     }
 
-    // ── Sources ──────────────────────────────────────────────────────────────
-    private void PopulateSources()
+    // ── Sources (LaunchBox-native tree: categories ▸ platforms / playlists) ───
+    private TreeListView BuildSourceTree()
     {
-        _sources.BeginUpdate();
-        _sources.Nodes.Clear();
-
-        var all = new TreeNode("  All Games") { Tag = new Src(SrcKind.All, null) };
-        _sources.Nodes.Add(all);
-
-        var platRoot = new TreeNode("PLATFORMS") { ForeColor = SubFg };
-        foreach (var name in SafePlatforms().OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
-            platRoot.Nodes.Add(new TreeNode("  " + name) { Tag = new Src(SrcKind.Platform, name) });
-        _sources.Nodes.Add(platRoot);
-        platRoot.Expand();
-
-        var pls = SafePlaylists();
-        if (pls.Count > 0)
+        var tlv = new TreeListView
         {
-            var plRoot = new TreeNode("PLAYLISTS") { ForeColor = SubFg };
-            foreach (var pl in pls)
-                plRoot.Nodes.Add(new TreeNode("  " + S(pl.Name)) { Tag = new Src(SrcKind.Playlist, S(pl.PlaylistId)) });
-            _sources.Nodes.Add(plRoot);
-            plRoot.Expand();
-        }
-
-        _sources.EndUpdate();
-        _sources.SelectedNode = all;
+            Dock = DockStyle.Fill, BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None,
+            HeaderStyle = ColumnHeaderStyle.None, FullRowSelect = true, RowHeight = 26,
+            ShowGroups = false, UseFiltering = false,
+        };
+        tlv.SelectedBackColor = Accent;
+        tlv.SelectedForeColor = Color.White;
+        var col = new OLVColumn("", null)
+        { FillsFreeSpace = true, AspectGetter = x => x is AllNode ? "All Games" : HostPlatformCategory.NodeName(x) };
+        tlv.Columns.Add(col);
+        tlv.CanExpandGetter = x => x is HostPlatformCategory c && c.Children.Count > 0;
+        tlv.ChildrenGetter = x => (x is HostPlatformCategory c)
+            ? (System.Collections.IEnumerable)c.Children : Array.Empty<object>();
+        tlv.SelectionChanged += (_, _) => LoadNode(tlv.SelectedObject);
+        return tlv;
     }
 
-    private void LoadSource(Src s)
+    private void PopulateSources()
     {
-        _currentSrc = s;
+        var roots = new List<object> { AllNode.Instance };
+        if (_dm is HostDataManagerXml hostDm) roots.AddRange(hostDm.RootNodes);
+        else { try { roots.AddRange(_dm.GetAllPlatforms()); } catch { } }
+
+        _sources.Roots = roots;
+        try { _sources.ExpandAll(); } catch { }
+        _sources.SelectedObject = AllNode.Instance;   // → LoadNode(All)
+    }
+
+    private void LoadNode(object node)
+    {
+        if (node == null) return;
         try
         {
-            // Always take a private COPY so our sort never mutates the manager's arrays.
-            IEnumerable<IGame> src = s.Kind switch
-            {
-                SrcKind.All => _dm.GetAllGames(),
-                SrcKind.Platform => _dm.GetPlatformByName(s.Key)?.GetAllGames(true, true) ?? Array.Empty<IGame>(),
-                SrcKind.Playlist => _dm.GetPlaylistById(s.Key)?.GetAllGames(true) ?? Array.Empty<IGame>(),
-                _ => Array.Empty<IGame>(),
-            };
+            IEnumerable<IGame> src =
+                  node is AllNode ? _dm.GetAllGames()
+                : node is IPlatformCategory cat ? cat.GetAllGames(true, true)
+                : node is IPlaylist pl ? pl.GetAllGames(true)
+                : node is IPlatform p ? p.GetAllGames(true, true)
+                : Array.Empty<IGame>();
             _current = (src ?? Array.Empty<IGame>()).ToArray();
         }
         catch { _current = Array.Empty<IGame>(); }
 
-        ApplySort();
+        ApplySort();              // fills the centre list (no game auto-selected)
+        ShowNodeDetails(node);    // node info on the right
     }
 
     // ── Sort + filter ────────────────────────────────────────────────────────
@@ -370,9 +366,8 @@ internal sealed class MainWindow : Form
         _games.SetObjects(_current);   // sorted through OLV by the chosen column's aspect
         _games.Sort(col, order);
         ApplyFilter();
-
-        if (_games.GetItemCount() > 0) { _games.SelectedIndex = 0; _games.EnsureVisible(0); }
-        else ShowDetails(null);
+        // No game auto-selected: the right pane shows the selected tree node's info
+        // until the user clicks a game (then ShowDetails takes over).
     }
 
     private void ApplyFilter()
@@ -418,6 +413,65 @@ internal sealed class MainWindow : Form
 
         _notes.Text = S(g.Notes).Replace("\n", "\r\n");
     }
+
+    // Right pane when a TREE node (category / platform / playlist / All) is selected.
+    private void ShowNodeDetails(object node)
+    {
+        if (node == null || node is AllNode)
+        {
+            SetImage(_logo, null); SetImage(_art, null);
+            _title.Text = node is AllNode ? "All Games" : "";
+            _meta.Text = node is AllNode ? $"Total Games: {_current.Length}" : "";
+            _notes.Text = "";
+            return;
+        }
+
+        SetImage(_logo, NodeImage(node, clearLogo: true));
+        SetImage(_art, NodeImage(node, clearLogo: false));
+        _title.Text = HostPlatformCategory.NodeName(node);
+
+        var bits = new List<string> { $"Total Games: {_current.Length}" };
+        if (node is IPlatform p)
+        {
+            void Add(string l, string v) { if (!string.IsNullOrWhiteSpace(v)) bits.Add($"{l}: {v}"); }
+            Add("Developer", Safe(() => p.Developer));
+            Add("Manufacturer", Safe(() => p.Manufacturer));
+            Add("Release", N(() => p.ReleaseDate?.Year)?.ToString());
+        }
+        _meta.Text = string.Join("    •    ", bits);
+        _notes.Text = NodeNotes(node).Replace("\n", "\r\n");
+    }
+
+    private string NodeImage(object node, bool clearLogo)
+    {
+        try
+        {
+            if (node is IPlatform p)
+                return clearLogo ? p.ClearLogoImagePath
+                     : (NonEmpty(p.BannerImagePath) ?? NonEmpty(p.BackgroundImagePath) ?? p.DefaultBoxImagePath);
+            if (node is IPlatformCategory c)
+                return clearLogo ? c.ClearLogoImagePath : (NonEmpty(c.BannerImagePath) ?? c.BackgroundImagePath);
+            if (node is IPlaylist pl)
+                return clearLogo ? pl.ClearLogoImagePath
+                     : (NonEmpty(pl.BannerImagePath) ?? NonEmpty(pl.BackgroundImagePath) ?? pl.DefaultBoxImagePath);
+        }
+        catch { }
+        return null;
+    }
+
+    private static string NodeNotes(object node)
+    {
+        try
+        {
+            if (node is IPlatform p) return S(p.Notes);
+            if (node is IPlatformCategory c) return S(c.Notes);
+            if (node is IPlaylist pl) return S(pl.Notes);
+        }
+        catch { }
+        return "";
+    }
+
+    private static string NonEmpty(string s) => string.IsNullOrEmpty(s) ? null : s;
 
     private static void SetImage(PictureBox pb, string path)
     {

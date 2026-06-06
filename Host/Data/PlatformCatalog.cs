@@ -161,6 +161,45 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory
     public override string BackgroundImagePath => Img("Fanart");
     public override string DeviceImagePath => Img("Device");
     private string Img(string type) => MediaResolver.NamedImage(_imagesRoot, "Platform Categories", _name, type);
+
+    // ── Tree children (from Parents.xml) + aggregated games ──────────────────
+    // Children are held as object because IPlatformCategory / IPlaylist do NOT derive
+    // from IPlatform in this SDK (so a single typed list can't hold all three).
+    private readonly List<object> _children = new();
+    public void AddChild(object c) { if (c != null) _children.Add(c); }
+    public IReadOnlyList<object> Children => _children;
+    public void SortChildren() => _children.Sort((a, b) => string.Compare(NodeName(a), NodeName(b), StringComparison.OrdinalIgnoreCase));
+    // SDK GetChildren can only carry the platform children (typed IList<IPlatform>).
+    public override IList<IPlatform> GetChildren() => _children.OfType<IPlatform>().ToList();
+
+    // A category's games = the union of all its descendant platforms'/playlists' games.
+    public override IGame[] GetAllGames(bool includeHidden, bool includeBroken) => Aggregate(includeHidden, includeBroken);
+    public override int GetGameCount(bool includeHidden, bool includeBroken) => Aggregate(includeHidden, includeBroken).Length;
+    public override bool HasGames(bool includeHidden, bool includeBroken) => Aggregate(includeHidden, includeBroken).Length > 0;
+
+    private IGame[] Aggregate(bool h, bool b)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<IGame>();
+        void Visit(object node)
+        {
+            if (node is HostPlatformCategory cat) { foreach (var c in cat._children) Visit(c); return; }
+            IGame[] gs;
+            try { gs = node is IPlaylist pl ? pl.GetAllGames(false) : node is IPlatform p ? p.GetAllGames(h, b) : Array.Empty<IGame>(); }
+            catch { gs = Array.Empty<IGame>(); }
+            foreach (var g in gs) { string id = SafeId(g); if (id == null || seen.Add(id)) result.Add(g); }
+        }
+        foreach (var c in _children) Visit(c);
+        return result.ToArray();
+    }
+
+    /// <summary>Display name of any tree node (platform / category / playlist).</summary>
+    internal static string NodeName(object n)
+    {
+        try { return n is IPlatform p ? (p.Name ?? "") : n is IPlatformCategory c ? (c.Name ?? "") : n is IPlaylist pl ? (pl.Name ?? "") : (n?.ToString() ?? ""); }
+        catch { return ""; }
+    }
+    private static string SafeId(IGame g) { try { return g?.Id; } catch { return null; } }
 }
 
 internal static class PlatformCatalog

@@ -55,6 +55,29 @@ internal static class MediaResolver
     private static string _lbRoot;
     private static string[] _regions = Array.Empty<string>(); // priority order; root handled separately
 
+    /// <summary>The LaunchBox Images root (or null before Init).</summary>
+    public static string ImagesRoot => string.IsNullOrEmpty(_lbRoot) ? null : Path.Combine(_lbRoot, "Images");
+
+    /// <summary>
+    /// A node icon from the "Nostalgic Platform Icons" media pack (as launchbox-web uses):
+    /// Images\Media Packs\Platform Icons\Nostalgic Platform Icons\&lt;subFolder&gt;\&lt;name&gt;.png.
+    /// subFolder = "Platforms" | "Platform Categories" | "Playlists". Null if none.
+    /// </summary>
+    public static string PlatformIcon(string imagesRoot, string subFolder, string name)
+    {
+        if (string.IsNullOrEmpty(imagesRoot) || string.IsNullOrEmpty(name)) return null;
+        string dir = Path.Combine(imagesRoot, "Media Packs", "Platform Icons", "Nostalgic Platform Icons", subFolder);
+        if (!Directory.Exists(dir)) return null;
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(dir, "*.png"))
+                if (string.Equals(Path.GetFileNameWithoutExtension(f), name, StringComparison.OrdinalIgnoreCase))
+                    return f;
+        }
+        catch { }
+        return null;
+    }
+
     /// <summary>Initialise with the LaunchBox root (parent of Data/Images). Reads region priorities.</summary>
     public static void Init(string lbRoot)
     {

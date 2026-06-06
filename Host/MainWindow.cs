@@ -56,6 +56,8 @@ internal sealed class MainWindow : Form
 
     private IGame[] _current = Array.Empty<IGame>();
     private object _currentNode;   // selected tree node (for the right pane when no game is selected)
+    private object _detailsShown;  // current right-pane subject (IGame or tree node)
+    private int _detailsLoadToken; // guards async image loads against stale selections
     private bool _ascending = true;
     private OLVColumn[] _sortColumns;   // parallel to SortLabels
     private bool _suppressSort;
@@ -440,7 +442,7 @@ internal sealed class MainWindow : Form
     private void OnGameSelectionChanged()
     {
         if (_games.SelectedObject is IGame g) ShowDetails(g);
-        else ShowNodeDetails(_currentNode);
+        else if (!ReferenceEquals(_detailsShown, _currentNode)) ShowNodeDetails(_currentNode);
     }
 
     private void LoadNode(object node)
@@ -496,11 +498,13 @@ internal sealed class MainWindow : Form
     // ── Details rendering ────────────────────────────────────────────────────
     private void ShowDetails(IGame g)
     {
-        SetImage(_logo, g == null ? null : Safe(() => g.ClearLogoImagePath));
-        SetImage(_art, g == null ? null
+        _detailsShown = g;
+        string logoPath = g == null ? null : Safe(() => g.ClearLogoImagePath);
+        string artPath = g == null ? null
             : (Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
              : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
-             : Safe(() => g.ScreenshotImagePath)));
+             : Safe(() => g.ScreenshotImagePath));
+        LoadImagesAsync(logoPath, artPath);
 
         if (g == null) { _title.Text = ""; _meta.Text = ""; _notes.Text = ""; return; }
 
@@ -527,17 +531,17 @@ internal sealed class MainWindow : Form
     // Right pane when a TREE node (category / platform / playlist / All) is selected.
     private void ShowNodeDetails(object node)
     {
+        _detailsShown = node;
         if (node == null || node is AllNode)
         {
-            SetImage(_logo, null); SetImage(_art, null);
+            LoadImagesAsync(null, null);
             _title.Text = node is AllNode ? "All Games" : "";
             _meta.Text = node is AllNode ? $"Total Games: {_current.Length}" : "";
             _notes.Text = "";
             return;
         }
 
-        SetImage(_logo, NodeImage(node, clearLogo: true));
-        SetImage(_art, NodeImage(node, clearLogo: false));
+        LoadImagesAsync(NodeImage(node, clearLogo: true), NodeImage(node, clearLogo: false));
         _title.Text = HostPlatformCategory.NodeName(node);
 
         var bits = new List<string> { $"Total Games: {_current.Length}" };
@@ -583,6 +587,31 @@ internal sealed class MainWindow : Form
 
     private static string NonEmpty(string s) => string.IsNullOrEmpty(s) ? null : s;
 
+    // Decode the right-pane images OFF the UI thread so selecting a tree node
+    // (or a game) never blocks the game-list paint — only the cheap text is set
+    // synchronously. The token discards a stale decode if the selection changed
+    // before it finished.
+    private void LoadImagesAsync(string logoPath, string artPath)
+    {
+        int token = ++_detailsLoadToken;
+        SetImage(_logo, null);   // drop the previous subject's art right away
+        SetImage(_art, null);
+        if (string.IsNullOrEmpty(logoPath) && string.IsNullOrEmpty(artPath)) return;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var logo = LoadImage(logoPath);
+            var art = LoadImage(artPath);
+            void Apply()
+            {
+                if (IsDisposed || token != _detailsLoadToken) { logo?.Dispose(); art?.Dispose(); return; }
+                var ol = _logo.Image; _logo.Image = logo; ol?.Dispose();
+                var oa = _art.Image; _art.Image = art; oa?.Dispose();
+            }
+            try { if (!IsDisposed) BeginInvoke((Action)Apply); else { logo?.Dispose(); art?.Dispose(); } }
+            catch { logo?.Dispose(); art?.Dispose(); }
+        });
+    }
+
     private static void SetImage(PictureBox pb, string path)
     {
         var old = pb.Image;
@@ -613,8 +642,7 @@ internal sealed class MainWindow : Form
 
         if (_cfg.UnloadListDuringGame)
         {
-            SetImage(_logo, null);
-            SetImage(_art, null);
+            LoadImagesAsync(null, null);             // clears + invalidates any in-flight decode
             _games.SetObjects(Array.Empty<IGame>()); // free the OLV row index during the game
         }
         if (_cfg.ShowGameRunningScreen) ShowRunningOverlay(g);

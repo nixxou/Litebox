@@ -173,6 +173,12 @@ internal sealed class HostGame : DummyGame
     public override IAlternateName[] GetAllAlternateNames()
         => _s.AltNamesFor(R.Id).Select(a => (IAlternateName)new HostAlternateName(a, R.Id.ToString())).ToArray();
 
+    public override IMount[] GetAllMounts()
+        => _s.MountsFor(R.Id).Select(m => (IMount)new HostMount(m, R.Id.ToString())).ToArray();
+
+    // Run the game's Configuration Application (DOSBox-aware for DOSBox games).
+    public override string Configure() => LbApiHost.Host.HostLaunch.RunConfigTool(this);
+
     // All images on disk for this game (across all types, or one type), with details.
     public override ImageDetails[] GetAllImagesWithDetails()
         => MediaResolver.AllImages(_plat, R.Id, _title, null).ToArray();
@@ -209,6 +215,21 @@ internal sealed class HostAdditionalApplication : DummyAdditionalApplication
     public override bool WaitForExit { get => _a.WaitForExit; set { } }
     public override bool SideA { get => _a.SideA; set { } }
     public override bool SideB { get => _a.SideB; set { } }
+}
+
+/// <summary>IMount over a GameMount record (DOSBox additional mount).</summary>
+internal sealed class HostMount : DummyMount
+{
+    private readonly GameMount _m;
+    private readonly string _gameId;
+    public HostMount(GameMount m, string gameId) { _m = m; _gameId = gameId; }
+
+    public override string GameId { get => _gameId; set { } }
+    public override char DriveLetter { get => _m.DriveLetter; set { } }
+    public override string Filesystem { get => _m.Filesystem ?? ""; set { } }
+    public override string MountType { get => _m.MountType ?? ""; set { } }
+    public override string Path { get => _m.Path ?? ""; set { } }
+    public override string Type { get => _m.Type ?? ""; set { } }
 }
 
 /// <summary>IAlternateName over an AltName record.</summary>

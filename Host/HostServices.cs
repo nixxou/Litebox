@@ -7,7 +7,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
+using System.Xml.Linq;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Generated;
@@ -227,22 +229,130 @@ internal static class HostLaunch
     /// dosbox.conf). Mirrors LB's exact command line.
     /// </summary>
     private static void RunDosBox(IGame game, string targetPath, string label)
+        => Spawn(DosBoxExe(game), BuildDosBoxArgs(game, targetPath, SafeStr(() => game.CommandLine)), label);
+
+    /// <summary>The DOSBox exe: per-game Custom DOSBox Version EXE, else the bundle.</summary>
+    private static string DosBoxExe(IGame game)
     {
-        // Custom DOSBox version EXE (per game) overrides the bundled one.
         string custom = (game as LbApiHost.Host.Data.HostGame)?.CustomDosBoxVersionPath;
-        string exe = !string.IsNullOrWhiteSpace(custom)
+        return !string.IsNullOrWhiteSpace(custom)
             ? ResolvePath(custom)
             : ResolvePath(Path.Combine("ThirdParty", "DOSBox", "DOSBox.exe"));
-        string appAbs = ResolvePath(targetPath);
-        string mountDir = SafeDir(appAbs) ?? "";
-        string callFile = Path.GetFileName(appAbs);
+    }
+
+    /// <summary>
+    /// Builds LaunchBox's exact DOSBox command line for an entry (game OR config app):
+    /// optional additional mounts, MOUNT C = game folder, CALL/.bat-or-run-direct the
+    /// entry, with the global DOSBox options (Show all commands / Don't exit / Pause).
+    /// </summary>
+    private static string BuildDosBoxArgs(IGame game, string entryPath, string extraCmd)
+    {
+        var (show, exit, pauseEach, pauseExit) = DosBoxOpts();
+
+        string appAbs = ResolvePath(entryPath);
+        string gameDir = SafeDir(appAbs) ?? "";
+        string entryFile = Path.GetFileName(appAbs);
+        string ext = Path.GetExtension(entryFile).ToLowerInvariant();
+        string entry = (ext == ".bat" || ext == ".cmd") ? "CALL " + entryFile : entryFile;  // .exe/.com run direct
+        if (!string.IsNullOrWhiteSpace(extraCmd)) entry += " " + extraCmd.Trim();
+
         string confCustom = SafeStr(() => game.DosBoxConfigurationPath);
         string conf = !string.IsNullOrWhiteSpace(confCustom)
             ? ResolvePath(confCustom)
             : ResolvePath(Path.Combine("ThirdParty", "DOSBox", "dosbox.conf"));
-        string args = $"-c \"@ECHO OFF\" -c CLS -c \"MOUNT C '{mountDir}'\" -c C: -c CLS " +
-                      $"-c \"CD \" -c \"CALL {callFile}\" -c EXIT -noautoexec -noconsole -conf \"{conf}\"";
-        Spawn(exe, args, label);
+
+        // Ordered (-c) commands; quote = always wrap the payload in quotes.
+        var cmds = new List<(string cmd, bool quote)>();
+        if (!show) { cmds.Add(("@ECHO OFF", true)); cmds.Add(("CLS", false)); }
+        foreach (var m in SafeMounts(game)) { var mc = MountCmd(m); if (mc != null) cmds.Add((mc, true)); }
+        cmds.Add(($"MOUNT C '{gameDir}'", true));
+        cmds.Add(("C:", false));
+        if (!show) cmds.Add(("CLS", false));
+        cmds.Add(("CD ", true));
+        cmds.Add((entry, true));                 // entry always quoted (e.g. "INSTALL.EXE")
+        if (exit)
+        {
+            if (pauseExit) cmds.Add(("@PAUSE", false));
+            cmds.Add(("EXIT", false));
+        }
+
+        var sb = new StringBuilder();
+        foreach (var (cmd, quote) in cmds)
+        {
+            if (pauseEach) sb.Append("-c @PAUSE ");
+            sb.Append("-c ");
+            sb.Append(quote || cmd.Contains(' ') ? $"\"{cmd}\"" : cmd);
+            sb.Append(' ');
+        }
+        sb.Append($"-noautoexec -noconsole -conf \"{conf}\"");
+        return sb.ToString();
+    }
+
+    /// <summary>One DOSBox mount command: folder → MOUNT, disk image → IMGMOUNT.</summary>
+    private static string MountCmd(IMount m)
+    {
+        string path = ResolvePath(SafeStr(() => m.Path));
+        if (string.IsNullOrEmpty(path)) return null;
+        char drive = 'C'; try { drive = m.DriveLetter; } catch { }
+        if (SafeStr(() => m.MountType).Equals("Folder", StringComparison.OrdinalIgnoreCase))
+            return $"MOUNT {drive} '{path}'";
+
+        string type = SafeStr(() => m.Type);
+        string fsRaw = SafeStr(() => m.Filesystem);
+        string t = (type.IndexOf("ISO", StringComparison.OrdinalIgnoreCase) >= 0 || type.IndexOf("CD", StringComparison.OrdinalIgnoreCase) >= 0) ? "iso"
+                 : type.IndexOf("Floppy", StringComparison.OrdinalIgnoreCase) >= 0 ? "floppy" : "hdd";
+        string fs = fsRaw.Equals("ISO", StringComparison.OrdinalIgnoreCase) ? "iso"
+                  : fsRaw.Equals("FAT", StringComparison.OrdinalIgnoreCase) ? "fat"
+                  : (string.IsNullOrEmpty(fsRaw) ? "iso" : fsRaw.ToLowerInvariant());
+        return $"IMGMOUNT {drive} '{path}' -t {t} -fs {fs}";
+    }
+
+    private static IEnumerable<IMount> SafeMounts(IGame game)
+    {
+        try { return game.GetAllMounts() ?? Array.Empty<IMount>(); }
+        catch { return Array.Empty<IMount>(); }
+    }
+
+    /// <summary>Reads the global DOSBox options from Settings.xml (fresh each launch).</summary>
+    private static (bool show, bool exit, bool pauseEach, bool pauseExit) DosBoxOpts()
+    {
+        bool show = false, exit = true, pe = false, px = false;
+        try
+        {
+            string f = Path.Combine(_lbRoot ?? ".", "Data", "Settings.xml");
+            if (File.Exists(f))
+            {
+                var s = XDocument.Load(f).Root?.Element("Settings");
+                bool B(string k, bool d) { var v = (string)s?.Element(k); return v == null ? d : v.Equals("true", StringComparison.OrdinalIgnoreCase); }
+                show = B("ShowCommands", false);
+                exit = B("ExitDosBox", true);
+                pe = B("PauseBeforeCommands", false);
+                px = B("PauseBeforeExit", false);
+            }
+        }
+        catch { }
+        return (show, exit, pe, px);
+    }
+
+    /// <summary>Runs the game's Configuration Application (DOSBox-aware). Fire-and-forget; returns the config path.</summary>
+    public static string RunConfigTool(IGame game)
+    {
+        string cfg = SafeStr(() => game.ConfigurationPath);
+        if (string.IsNullOrEmpty(cfg)) return null;
+        bool useDos = SafeBool(() => game.UseDosBox);
+        string extra = SafeStr(() => game.ConfigurationCommandLine);
+        var t = new Thread(() =>
+        {
+            try
+            {
+                if (useDos) Spawn(DosBoxExe(game), BuildDosBoxArgs(game, cfg, extra), "configure");
+                else Spawn(ResolvePath(cfg), extra?.Trim() ?? "", "configure");
+            }
+            catch (Exception ex) { Console.WriteLine("[configure] error: " + ex.Message); }
+        })
+        { IsBackground = true, Name = "LiteBox-configure" };
+        t.Start();
+        return cfg;
     }
 
     /// <summary>Spawns a process (or logs it in DryRun) and waits for exit.</summary>

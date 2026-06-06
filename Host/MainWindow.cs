@@ -33,6 +33,8 @@ internal sealed class MainWindow : Form
     private static readonly Color Fg      = Color.FromArgb(222, 222, 222);
     private static readonly Color SubFg   = Color.FromArgb(150, 150, 152);
     private static readonly Color Accent  = Color.FromArgb(0, 122, 204);
+    private static readonly Color UserRating = Color.FromArgb(255, 196, 0);   // amber: user-set rating
+    private static readonly Color CommRating = Color.FromArgb(150, 150, 152); // grey: community rating
 
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     private static extern int SetWindowTheme(IntPtr hWnd, string app, string idList);
@@ -56,6 +58,7 @@ internal sealed class MainWindow : Form
 
     private IGame[] _current = Array.Empty<IGame>();
     private object _currentNode;   // selected tree node (for the right pane when no game is selected)
+    private List<object> _treeRoots;   // tree roots (incl. AllNode) — for key lookup on restore
     private object _detailsShown;  // current right-pane subject (IGame or tree node)
     private int _detailsLoadToken; // guards async image loads against stale selections
     private bool _ascending = true;
@@ -81,7 +84,7 @@ internal sealed class MainWindow : Form
     // sorting goes THROUGH ObjectListView (otherwise SetObjects re-sorts and
     // clobbers a manual sort). "Name" uses a hidden CompareName column.
     private static readonly string[] SortLabels =
-        { "Name", "Title", "Platform", "Year", "Rating", "Plays", "Date Added", "Last Played" };
+        { "Name", "Title", "Platform", "Developer", "Year", "Rating", "Plays", "Date Added", "Date Modified", "Last Played" };
 
     public MainWindow(PluginRegistry reg, IDataManager dm)
     {
@@ -93,6 +96,7 @@ internal sealed class MainWindow : Form
         BackColor = Bg;
         ForeColor = Fg;
         Font = new Font("Segoe UI", 9f);
+        RestoreWindowState();   // size / position / maximized from the INI (overrides the defaults)
 
         _games = BuildGameList();
 
@@ -165,6 +169,9 @@ internal sealed class MainWindow : Form
         _count = new ToolStripLabel("") { ForeColor = SubFg, Alignment = ToolStripItemAlignment.Right };
         bar.Items.Add(_count);
 
+        // Persist layout / window / selection once, at close (not per change).
+        FormClosing += (_, _) => { try { SaveAll(); } catch { } };
+
         // React to game launch start/end (for the running screen + during-game unload).
         HostLaunch.GameStarted += OnGameStarted;
         HostLaunch.GameEnded += OnGameEnded;
@@ -220,7 +227,10 @@ internal sealed class MainWindow : Form
         {
             try { outer.SplitterDistance = 240; } catch { }
             try { inner.SplitterDistance = Math.Max(300, inner.Width - 380); } catch { }
-            PopulateSources();
+            RestoreColumnLayout();   // order / width / shown-hidden from the INI
+            RestoreSort();           // last sort column + direction
+            PopulateSources();       // build the tree
+            RestoreSelection();      // last category + game
             try { ActiveControl = _games; _games.Focus(); } catch { }
         };
     }
@@ -234,6 +244,9 @@ internal sealed class MainWindow : Form
             HeaderStyle = ColumnHeaderStyle.Clickable, BackColor = Panel, ForeColor = Fg,
             BorderStyle = BorderStyle.None, RowHeight = 22, UseAlternatingBackColors = true,
             AlternateRowBackColor = Row2, GridLines = false, ShowGroups = false, UseFiltering = true,
+            AllowColumnReorder = true,              // drag to reorder (persisted on close)
+            SelectColumnsOnRightClick = true,       // right-click header → show/hide columns
+            UseCellFormatEvents = true,             // per-cell colouring (user vs community rating)
         };
         olv.SelectedBackColor = Accent;
         olv.SelectedForeColor = Color.White;
@@ -241,31 +254,85 @@ internal sealed class MainWindow : Form
         olv.HeaderFormatStyle.SetBackColor(Panel2);
         olv.HeaderFormatStyle.SetForeColor(Fg);
 
-        OLVColumn Col(string title, int w, AspectGetterDelegate get, HorizontalAlignment align = HorizontalAlignment.Left)
-            => new OLVColumn(title, null) { Width = w, AspectGetter = get, TextAlign = align, Sortable = true, Searchable = true };
+        // key = stable INI identity (.Tag); never localise it.
+        OLVColumn Col(string key, string title, int w, AspectGetterDelegate get,
+                      HorizontalAlignment align = HorizontalAlignment.Left, bool visible = true)
+            => new OLVColumn(title, null) { Tag = key, Width = w, AspectGetter = get, TextAlign = align,
+                                            Sortable = true, Searchable = true, IsVisible = visible };
 
-        // Hidden sort-only columns (CompareName / dates) — usable as PrimarySortColumn.
-        var cName = Col("Name", 0, r => CompareName((IGame)r)); cName.IsVisible = false; cName.Searchable = false;
-        var cDateAdded = Col("Added", 0, r => Safe(() => ((IGame)r).DateAdded)); cDateAdded.IsVisible = false;
-        var cLastPlayed = Col("Last", 0, r => Safe(() => (object)((IGame)r).LastPlayedDate)); cLastPlayed.IsVisible = false;
+        static string Check(object v) => v is bool b && b ? "✓" : "";
 
-        var cTitle = Col("Title", 360, r => S(((IGame)r).Title));
-        var cPlat  = Col("Platform", 150, r => S(((IGame)r).Platform));
-        var cDev   = Col("Developer", 150, r => S(((IGame)r).Developer));
-        var cGenre = Col("Genre", 140, r => S(((IGame)r).GenresString));
-        var cYear  = Col("Year", 55, r => N(() => ((IGame)r).ReleaseYear), HorizontalAlignment.Right);
-        var cRate  = Col("★", 55, r => N(() => (double?)((IGame)r).StarRatingFloat), HorizontalAlignment.Right);
-        cRate.AspectToStringConverter = v => v is double d && d > 0 ? d.ToString("0.#") : "";
-        var cFav   = Col("Fav", 45, r => Safe(() => ((IGame)r).Favorite), HorizontalAlignment.Center);
+        // Hidden sort-only key column (normalized title) — the default sort.
+        var cName = Col("name", "Name", 0, r => CompareName((IGame)r), visible: false); cName.Searchable = false;
+
+        var cTitle = Col("title", "Title", 320, r => S(((IGame)r).Title));
+        var cPlat  = Col("platform", "Platform", 150, r => S(((IGame)r).Platform));
+        var cDev   = Col("developer", "Developer", 150, r => S(((IGame)r).Developer));
+        var cPub   = Col("publisher", "Publisher", 150, r => S(((IGame)r).Publisher), visible: false);
+        var cGenre = Col("genre", "Genre", 140, r => S(((IGame)r).GenresString));
+        var cSeries= Col("series", "Series", 130, r => S(((IGame)r).Series), visible: false);
+        var cRegion= Col("region", "Region", 90, r => S(((IGame)r).Region), visible: false);
+        var cMode  = Col("playmode", "Play Mode", 110, r => S(((IGame)r).PlayMode), visible: false);
+        var cVer   = Col("version", "Version", 90, r => S(((IGame)r).Version), visible: false);
+        var cStatus= Col("status", "Status", 90, r => S(((IGame)r).Status), visible: false);
+        var cSource= Col("source", "Source", 110, r => S(((IGame)r).Source), visible: false);
+        var cYear  = Col("year", "Year", 55, r => N(() => ((IGame)r).ReleaseYear), HorizontalAlignment.Right);
+        var cRel   = Col("releasedate", "Release Date", 100, r => Safe(() => (object)((IGame)r).ReleaseDate), HorizontalAlignment.Right, visible: false);
+        cRel.AspectToStringConverter = v => v is DateTime d ? d.ToString("yyyy-MM-dd") : "";
+
+        // Effective rating: user (StarRatingFloat) if set, else community — like
+        // launchbox-web / bigbox-web. Coloured per-cell in FormatCell below.
+        var cRate  = Col("rating", "Rating", 70, r => N(() => (double?)((IGame)r).CommunityOrLocalStarRating), HorizontalAlignment.Right);
+        cRate.AspectToStringConverter = v => v is double d && d > 0 ? d.ToString("0.#") + " ★" : "";
+        var cEsrb  = Col("esrb", "ESRB", 70, r => S(((IGame)r).Rating), visible: false);
+        var cComm  = Col("community", "Community", 80, r => N(() => (double?)((IGame)r).CommunityStarRating), HorizontalAlignment.Right, visible: false);
+        cComm.AspectToStringConverter = v => v is double d && d > 0 ? d.ToString("0.#") : "";
+        var cVotes = Col("votes", "Votes", 60, r => N(() => (int?)((IGame)r).CommunityStarRatingTotalVotes), HorizontalAlignment.Right, visible: false);
+
+        var cFav   = Col("fav", "Fav", 45, r => Safe(() => ((IGame)r).Favorite), HorizontalAlignment.Center);
         cFav.AspectToStringConverter = v => v is bool b && b ? "★" : "";
-        var cPlays = Col("Plays", 55, r => N(() => (int?)((IGame)r).PlayCount), HorizontalAlignment.Right);
+#pragma warning disable CS0618 // IGame.Completed is marked obsolete by the SDK but is still the Completed flag
+        var cDone  = Col("completed", "Done", 50, r => Safe(() => ((IGame)r).Completed), HorizontalAlignment.Center, visible: false);
+#pragma warning restore CS0618
+        cDone.AspectToStringConverter = Check;
+        var cBroken= Col("broken", "Broken", 55, r => Safe(() => ((IGame)r).Broken), HorizontalAlignment.Center, visible: false);
+        cBroken.AspectToStringConverter = Check;
+        var cPort  = Col("portable", "Portable", 60, r => Safe(() => ((IGame)r).Portable), HorizontalAlignment.Center, visible: false);
+        cPort.AspectToStringConverter = Check;
+        var cInst  = Col("installed", "Installed", 60, r => Safe(() => (object)((IGame)r).Installed), HorizontalAlignment.Center, visible: false);
+        cInst.AspectToStringConverter = v => v is bool b && b ? "✓" : "";
+        var cPlayers = Col("players", "Players", 60, r => N(() => ((IGame)r).MaxPlayers), HorizontalAlignment.Right, visible: false);
+        var cPlays = Col("plays", "Plays", 55, r => N(() => (int?)((IGame)r).PlayCount), HorizontalAlignment.Right);
+        var cTime  = Col("playtime", "Play Time", 80, r => Safe(() => (object)((IGame)r).PlayTime), HorizontalAlignment.Right, visible: false);
+        cTime.AspectToStringConverter = v => v is int s ? FormatPlayTime(s) : "";
+        var cAdded = Col("dateadded", "Date Added", 100, r => Safe(() => (object)((IGame)r).DateAdded), HorizontalAlignment.Right, visible: false);
+        cAdded.AspectToStringConverter = v => v is DateTime d && d != default ? d.ToString("yyyy-MM-dd") : "";
+        var cMod   = Col("datemodified", "Date Modified", 110, r => Safe(() => (object)((IGame)r).DateModified), HorizontalAlignment.Right, visible: false);
+        cMod.AspectToStringConverter = v => v is DateTime d && d != default ? d.ToString("yyyy-MM-dd") : "";
+        var cLast  = Col("lastplayed", "Last Played", 100, r => Safe(() => (object)((IGame)r).LastPlayedDate), HorizontalAlignment.Right, visible: false);
+        cLast.AspectToStringConverter = v => v is DateTime d ? d.ToString("yyyy-MM-dd") : "";
+        var cDbId  = Col("dbid", "DB Id", 70, r => N(() => ((IGame)r).LaunchBoxDbId), HorizontalAlignment.Right, visible: false);
 
         // AllColumns holds every column; RebuildColumns shows only the IsVisible ones.
-        olv.AllColumns.AddRange(new[] { cName, cTitle, cPlat, cDev, cGenre, cYear, cRate, cFav, cPlays, cDateAdded, cLastPlayed });
+        // Order here = default display order (visible first), then optional columns.
+        olv.AllColumns.AddRange(new[]
+        {
+            cName, cTitle, cPlat, cDev, cGenre, cYear, cRate, cFav, cPlays,
+            cPub, cSeries, cRegion, cMode, cVer, cStatus, cSource, cRel, cEsrb, cComm, cVotes,
+            cDone, cBroken, cPort, cInst, cPlayers, cTime, cAdded, cMod, cLast, cDbId,
+        });
         olv.RebuildColumns();
 
-        // Parallel to SortLabels: Name, Title, Platform, Year, Rating, Plays, Date Added, Last Played.
-        _sortColumns = new[] { cName, cTitle, cPlat, cYear, cRate, cPlays, cDateAdded, cLastPlayed };
+        // Parallel to SortLabels (see SortLabels): each entry maps to a column.
+        _sortColumns = new[] { cName, cTitle, cPlat, cDev, cYear, cRate, cPlays, cAdded, cMod, cLast };
+
+        // Per-cell rating colour: user rating in amber, community in muted grey.
+        olv.FormatCell += (_, e) =>
+        {
+            if (ReferenceEquals(e.Column, cRate) && !e.Item.Selected && e.Model is IGame g
+                && Safe(() => g.CommunityOrLocalStarRating) > 0)
+                e.SubItem.ForeColor = Safe(() => g.StarRatingFloat) > 0 ? UserRating : CommRating;
+        };
 
         olv.SelectionChanged += (_, _) => OnGameSelectionChanged();
         olv.ItemActivate += (_, _) => LaunchSelected();
@@ -342,10 +409,173 @@ internal sealed class MainWindow : Form
         if (_dm is HostDataManagerXml hostDm) roots.AddRange(hostDm.RootNodes);
         else { try { roots.AddRange(_dm.GetAllPlatforms()); } catch { } }
 
+        _treeRoots = roots;
         BuildTreeIcons(roots);
         _sources.Roots = roots;
         try { _sources.ExpandAll(); } catch { }
-        _sources.SelectedObject = AllNode.Instance;   // → LoadNode(All)
+        // Selection (saved category/game) is restored by RestoreSelection().
+    }
+
+    // ── Persistence (human-readable INI, written once at close) ──────────────
+    private static string ColKey(OLVColumn c) => c?.Tag as string;
+
+    private void SaveAll()
+    {
+        SaveColumnLayout();
+        SaveWindowState();
+        _cfg.Set("LastCategory", NodeKey(_currentNode) ?? "*");
+        var g = _games.SelectedObject as IGame;
+        _cfg.Set("LastGame", g != null ? S(Safe(() => g.Id)) : "");
+        var sc = (_sortColumns != null && _sortCombo.SelectedIndex >= 0 && _sortCombo.SelectedIndex < _sortColumns.Length)
+                 ? _sortColumns[_sortCombo.SelectedIndex] : null;
+        _cfg.Set("SortColumn", ColKey(sc) ?? "name");
+        _cfg.SetBool("SortAsc", _ascending);
+        _cfg.Save();
+    }
+
+    // Col.<key> = <width>,<visible 0/1>,<displayIndex or -1>
+    private void SaveColumnLayout()
+    {
+        foreach (var c in _games.AllColumns)
+        {
+            var key = ColKey(c); if (key == null) continue;
+            int di = c.IsVisible ? c.DisplayIndex : -1;
+            _cfg.Set("Col." + key, $"{c.Width},{(c.IsVisible ? 1 : 0)},{di}");
+        }
+    }
+
+    private void RestoreColumnLayout()
+    {
+        var visible = new List<(OLVColumn col, int di)>();
+        foreach (var c in _games.AllColumns)
+        {
+            var key = ColKey(c); if (key == null) continue;
+            var v = _cfg.Get("Col." + key);
+            if (string.IsNullOrEmpty(v))
+            {
+                if (c.IsVisible) visible.Add((c, int.MaxValue)); // no saved entry → keep default, order last
+                continue;
+            }
+            var p = v.Split(',');
+            if (p.Length >= 1 && int.TryParse(p[0], out var w) && w > 0) c.Width = w;
+            if (p.Length >= 2) c.IsVisible = p[1] == "1";
+            int di = (p.Length >= 3 && int.TryParse(p[2], out var d) && d >= 0) ? d : int.MaxValue;
+            if (c.IsVisible) visible.Add((c, di));
+        }
+        try
+        {
+            _games.RebuildColumns();   // applies IsVisible (builds the Columns collection)
+            // RebuildColumns keeps each column's stale DisplayIndex, so set the
+            // display order explicitly. OrderBy is stable → equal/MaxValue di keep
+            // their AllColumns order.
+            var ordered = visible.OrderBy(o => o.di).Select(o => o.col).ToList();
+            for (int i = 0; i < ordered.Count; i++) ordered[i].DisplayIndex = i;
+        }
+        catch { }
+    }
+
+    private void SaveWindowState()
+    {
+        // RestoreBounds reports {-1,-1} for a window never min/maximized, so use
+        // Bounds when Normal and RestoreBounds only when maximized/minimized.
+        var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        if (b.Width >= 200 && b.Height >= 200)
+        {
+            _cfg.SetInt("WinX", b.X); _cfg.SetInt("WinY", b.Y);
+            _cfg.SetInt("WinW", b.Width); _cfg.SetInt("WinH", b.Height);
+        }
+        _cfg.SetBool("WinMax", WindowState == FormWindowState.Maximized);
+    }
+
+    private void RestoreWindowState()
+    {
+        int w = _cfg.GetInt("WinW", 0), h = _cfg.GetInt("WinH", 0);
+        if (w >= 400 && h >= 300)
+        {
+            var rect = new Rectangle(_cfg.GetInt("WinX", 0), _cfg.GetInt("WinY", 0), w, h);
+            if (IsOnAScreen(rect)) { StartPosition = FormStartPosition.Manual; Bounds = rect; }
+            else Size = new Size(w, h);
+        }
+        if (_cfg.GetBool("WinMax", false)) WindowState = FormWindowState.Maximized;
+    }
+
+    private static bool IsOnAScreen(Rectangle r)
+    {
+        foreach (var sc in Screen.AllScreens)
+        {
+            var i = Rectangle.Intersect(sc.WorkingArea, r);
+            if (i.Width >= 100 && i.Height >= 100) return true;
+        }
+        return false;
+    }
+
+    private void RestoreSort()
+    {
+        _ascending = _cfg.GetBool("SortAsc", true);
+        if (_dirBtn != null) _dirBtn.Text = _ascending ? "▲" : "▼";
+        var key = _cfg.Get("SortColumn", "name");
+        int idx = 0;
+        for (int i = 0; i < _sortColumns.Length; i++)
+            if (string.Equals(ColKey(_sortColumns[i]), key, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+        _suppressSort = true;
+        try { _sortCombo.SelectedIndex = idx; } finally { _suppressSort = false; }
+    }
+
+    private void RestoreSelection()
+    {
+        object node = AllNode.Instance;
+        var savedCat = _cfg.Get("LastCategory");
+        if (!string.IsNullOrEmpty(savedCat)) node = FindNodeByKey(savedCat) ?? AllNode.Instance;
+
+        _sources.SelectedObject = node;   // visual; the coalesced event is a no-op via LoadNode's guard
+        LoadNode(node);                   // synchronous fill (so the saved game can be selected right after)
+        try { _sources.EnsureModelVisible(node); } catch { }
+
+        var savedGame = _cfg.Get("LastGame");
+        if (!string.IsNullOrEmpty(savedGame))
+        {
+            var g = _current.FirstOrDefault(x => string.Equals(Safe(() => x.Id), savedGame, StringComparison.OrdinalIgnoreCase));
+            if (g != null) { _games.SelectObject(g, true); _games.EnsureModelVisible(g); ShowDetails(g); }
+        }
+    }
+
+    /// <summary>Stable key for a tree node, persisted as LastCategory.</summary>
+    private static string NodeKey(object node)
+    {
+        if (node is AllNode) return "*";
+        if (node is IPlatformCategory c) return "C:" + c.Name;
+        if (node is IPlaylist pl) return "L:" + (!string.IsNullOrEmpty(pl.PlaylistId) ? pl.PlaylistId : pl.Name);
+        if (node is IPlatform p) return "P:" + p.Name;
+        return null;
+    }
+
+    private object FindNodeByKey(string key)
+    {
+        if (string.IsNullOrEmpty(key)) return null;
+        if (key == "*") return AllNode.Instance;
+        foreach (var n in EnumerateTreeNodes())
+            if (string.Equals(NodeKey(n), key, StringComparison.OrdinalIgnoreCase)) return n;
+        return null;
+    }
+
+    private IEnumerable<object> EnumerateTreeNodes()
+    {
+        if (_treeRoots == null) yield break;
+        var stack = new Stack<object>(_treeRoots);
+        while (stack.Count > 0)
+        {
+            var n = stack.Pop();
+            if (n is AllNode) continue;
+            yield return n;
+            if (n is HostPlatformCategory cat) foreach (var ch in cat.Children) stack.Push(ch);
+        }
+    }
+
+    private static string FormatPlayTime(int seconds)
+    {
+        if (seconds <= 0) return "";
+        int h = seconds / 3600, m = (seconds % 3600) / 60;
+        return h > 0 ? $"{h}h {m:00}m" : (m > 0 ? $"{m}m" : "<1m");
     }
 
     // ── Tree icons (Nostalgic Platform Icons pack + drawn fallbacks) ─────────
@@ -447,7 +677,10 @@ internal sealed class MainWindow : Form
 
     private void LoadNode(object node)
     {
-        if (node == null) return;
+        // Guard re-selecting the already-loaded node — also stops the coalesced
+        // tree SelectionChanged from re-loading (and clobbering a restored game
+        // selection) right after RestoreSelection called LoadNode directly.
+        if (node == null || ReferenceEquals(node, _currentNode)) return;
         _currentNode = node;
         try
         {

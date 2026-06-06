@@ -55,6 +55,7 @@ internal sealed class MainWindow : Form
     private readonly TextBox _notes;
 
     private IGame[] _current = Array.Empty<IGame>();
+    private object _currentNode;   // selected tree node (for the right pane when no game is selected)
     private bool _ascending = true;
     private OLVColumn[] _sortColumns;   // parallel to SortLabels
     private bool _suppressSort;
@@ -264,7 +265,7 @@ internal sealed class MainWindow : Form
         // Parallel to SortLabels: Name, Title, Platform, Year, Rating, Plays, Date Added, Last Played.
         _sortColumns = new[] { cName, cTitle, cPlat, cYear, cRate, cPlays, cDateAdded, cLastPlayed };
 
-        olv.SelectionChanged += (_, _) => ShowDetails(_games.SelectedObject as IGame);
+        olv.SelectionChanged += (_, _) => OnGameSelectionChanged();
         olv.ItemActivate += (_, _) => LaunchSelected();
         olv.CellRightClick += OnCellRightClick;
         olv.AfterSorting += (_, e) =>
@@ -433,9 +434,19 @@ internal sealed class MainWindow : Form
         return bmp;
     }
 
+    // OLV coalesces SelectionChanged (fires ~½s after SetObjects), so a node
+    // click would otherwise clear the pane just after ShowNodeDetails filled it.
+    // When nothing is selected in the list, keep showing the current node.
+    private void OnGameSelectionChanged()
+    {
+        if (_games.SelectedObject is IGame g) ShowDetails(g);
+        else ShowNodeDetails(_currentNode);
+    }
+
     private void LoadNode(object node)
     {
         if (node == null) return;
+        _currentNode = node;
         try
         {
             IEnumerable<IGame> src =

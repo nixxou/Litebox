@@ -250,7 +250,13 @@ internal static class HostLaunch
         var (show, exit, pauseEach, pauseExit) = DosBoxOpts();
 
         string appAbs = ResolvePath(entryPath);
-        string gameDir = SafeDir(appAbs) ?? "";
+        string appDir = SafeDir(appAbs) ?? "";
+        // C: is mounted at the game's Root Folder (auto-populated to the app folder, but
+        // user-editable). We then CD into the app's sub-path within that root.
+        string rootRaw = SafeStr(() => game.RootFolder);
+        string rootAbs = !string.IsNullOrWhiteSpace(rootRaw) ? ResolvePath(rootRaw) : appDir;
+        string relDir = "";
+        try { var r = Path.GetRelativePath(rootAbs, appDir); if (r != "." && !r.StartsWith("..")) relDir = r; } catch { }
         string entryFile = Path.GetFileName(appAbs);
         string ext = Path.GetExtension(entryFile).ToLowerInvariant();
         string entry = (ext == ".bat" || ext == ".cmd") ? "CALL " + entryFile : entryFile;  // .exe/.com run direct
@@ -265,10 +271,10 @@ internal static class HostLaunch
         var cmds = new List<(string cmd, bool quote)>();
         if (!show) { cmds.Add(("@ECHO OFF", true)); cmds.Add(("CLS", false)); }
         foreach (var m in SafeMounts(game)) { var mc = MountCmd(m); if (mc != null) cmds.Add((mc, true)); }
-        cmds.Add(($"MOUNT C '{gameDir}'", true));
+        cmds.Add(($"MOUNT C '{rootAbs}'", true));
         cmds.Add(("C:", false));
         if (!show) cmds.Add(("CLS", false));
-        cmds.Add(("CD ", true));
+        cmds.Add(("CD " + relDir, true));   // empty relDir → "CD " (app at root), matches LB
         cmds.Add((entry, true));                 // entry always quoted (e.g. "INSTALL.EXE")
         if (exit)
         {

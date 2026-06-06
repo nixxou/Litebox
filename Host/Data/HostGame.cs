@@ -82,6 +82,8 @@ internal sealed class HostGame : DummyGame
     public override string ConfigurationCommandLine { get => _s.Str(R.ConfigCmdIdx); set { } }
     public override string ConfigurationPath { get => _s.Str(R.ConfigPathIdx); set { } }
     public override string DosBoxConfigurationPath { get => _s.Str(R.DosBoxCfgIdx); set { } }
+    // Host-internal (not an IGame member): a custom DOSBox.exe path overriding the bundle.
+    public string CustomDosBoxVersionPath => _s.Str(R.CustomDosBoxIdx);
     public override string ScummVmGameDataFolderPath { get => _s.Str(R.ScummDataIdx); set { } }
     public override string ScummVmGameType { get => _s.Str(R.ScummTypeIdx); set { } }
     public override string Series { get => _s.Str(R.SeriesIdx); set { } }

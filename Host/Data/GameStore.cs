@@ -39,7 +39,7 @@ internal struct GameRow
 
     // ── Extended fields (added 2026-06-06) ───────────────────────────────────
     public int CommandLineIdx, ConfigCmdIdx, ConfigPathIdx;
-    public int DosBoxCfgIdx, ScummDataIdx, ScummTypeIdx;          // DosBox / ScummVM
+    public int DosBoxCfgIdx, CustomDosBoxIdx, ScummDataIdx, ScummTypeIdx;   // DosBox / ScummVM
     public int SeriesIdx, SourceIdx, ReleaseTypeIdx, RootFolderIdx, CloneOfIdx, ProgressIdx;
     public int VideoPathIdx, ThemeVideoPathIdx, ManualPathIdx, MusicPathIdx; // stored overrides
     public long DateModifiedTicks;
@@ -199,6 +199,7 @@ internal sealed class GameStore
                     ConfigCmdIdx = Intern(V("ConfigurationCommandLine")),
                     ConfigPathIdx = Intern(V("ConfigurationPath")),
                     DosBoxCfgIdx = Intern(V("DosBoxConfigurationPath")),
+                    CustomDosBoxIdx = Intern(V("CustomDosBoxVersionPath")),
                     ScummDataIdx = Intern(V("ScummVMGameDataFolderPath")),
                     ScummTypeIdx = Intern(V("ScummVMGameType")),
                     SeriesIdx = Intern(V("Series")),

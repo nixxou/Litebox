@@ -180,12 +180,18 @@ internal static class HostBoot
                 if (dosEx != null) Console.WriteLine($"[apitest] DosBox ex: \"{dosEx.Title}\" cfg='{dosEx.DosBoxConfigurationPath}' cmd='{dosEx.CommandLine}'");
                 if (scummEx != null) Console.WriteLine($"[apitest] ScummVM ex: \"{scummEx.Title}\" type='{scummEx.ScummVmGameType}' data='{scummEx.ScummVmGameDataFolderPath}'");
 
-                // In DryRun, exercise the DosBox launch path to print the built command.
+                // In DryRun, exercise the DosBox launch + Configure paths to print the commands.
                 if (HostLaunch.DryRun && dosEx != null)
                 {
                     Console.WriteLine("[apitest] dry-launching DosBox game to show the built command:");
                     PluginHelper.LaunchBoxMainViewModel.PlayGame(dosEx, null, null, null);
                     Thread.Sleep(3200);
+                    if (!string.IsNullOrEmpty(dosEx.ConfigurationPath))
+                    {
+                        Console.WriteLine("[apitest] dry-Configure to show the config command:");
+                        dosEx.Configure();
+                        Thread.Sleep(1500);
+                    }
                 }
             }
 

@@ -569,6 +569,15 @@ internal sealed class MainWindow : Form
                 }
                 menu.Items.Add(pv);
             }
+
+            // Configure (only if the game has a Configuration Application Path) —
+            // works for emulated, DOSBox and plain PC games (Configure() is DOSBox-aware).
+            if (!string.IsNullOrEmpty(S(Safe(() => g.ConfigurationPath))))
+            {
+                var cfg = new ToolStripMenuItem("Configure");
+                cfg.Click += (_, _) => Safe(() => g.Configure());
+                menu.Items.Add(cfg);
+            }
         }
 
         menu.Items.Add(new ToolStripSeparator());

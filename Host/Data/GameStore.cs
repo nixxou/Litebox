@@ -79,8 +79,10 @@ internal sealed class GameStore
     // Per-game accessory entities (resident — needed for launch/disc selection).
     private readonly Dictionary<Guid, List<AddApp>> _addApps = new();
     private readonly Dictionary<Guid, List<AltName>> _altNames = new();
+    private readonly Dictionary<Guid, List<GameMount>> _mounts = new();   // DOSBox additional mounts
     public IReadOnlyList<AddApp> AddAppsFor(Guid id) => _addApps.TryGetValue(id, out var l) ? l : (IReadOnlyList<AddApp>)Array.Empty<AddApp>();
     public IReadOnlyList<AltName> AltNamesFor(Guid id) => _altNames.TryGetValue(id, out var l) ? l : (IReadOnlyList<AltName>)Array.Empty<AltName>();
+    public IReadOnlyList<GameMount> MountsFor(Guid id) => _mounts.TryGetValue(id, out var l) ? l : (IReadOnlyList<GameMount>)Array.Empty<GameMount>();
 
     public int Count => Rows.Length;
     public string Str(int idx) => (idx > 0 && idx < Pool.Length) ? Pool[idx] : "";
@@ -123,7 +125,7 @@ internal sealed class GameStore
             {
                 if (reader.NodeType != XmlNodeType.Element) { reader.Read(); continue; }
                 string en = reader.Name;
-                if (en != "Game" && en != "AdditionalApplication" && en != "AlternateName") { reader.Read(); continue; }
+                if (en != "Game" && en != "AdditionalApplication" && en != "AlternateName" && en != "Mount") { reader.Read(); continue; }
 
                 XElement g;
                 try { g = (XElement)XNode.ReadFrom(reader); } catch { reader.Read(); continue; }
@@ -154,6 +156,21 @@ internal sealed class GameStore
                     {
                         if (!_altNames.TryGetValue(ngid, out var nl)) _altNames[ngid] = nl = new List<AltName>();
                         nl.Add(new AltName { Name = V("Name"), Region = V("Region") });
+                    }
+                    continue;
+                }
+                if (en == "Mount")
+                {
+                    if (Guid.TryParse(V("GameID"), out var mgid))
+                    {
+                        if (!_mounts.TryGetValue(mgid, out var ml)) _mounts[mgid] = ml = new List<GameMount>();
+                        var dl = V("DriveLetter");
+                        ml.Add(new GameMount
+                        {
+                            DriveLetter = !string.IsNullOrEmpty(dl) ? char.ToUpperInvariant(dl[0]) : 'C',
+                            Filesystem = V("Filesystem"), MountType = V("MountType"),
+                            Path = V("Path"), Type = V("Type"),
+                        });
                     }
                     continue;
                 }
@@ -364,4 +381,11 @@ internal sealed class AddApp
 internal sealed class AltName
 {
     public string Name, Region;
+}
+
+/// <summary>A DOSBox additional mount (folder or disk image), from the Platform XML.</summary>
+internal sealed class GameMount
+{
+    public char DriveLetter;
+    public string Filesystem, MountType, Path, Type;
 }

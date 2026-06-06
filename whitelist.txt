@@ -1,0 +1,6 @@
+# LbApiHost plugin whitelist
+# One plugin folder name per line (a subfolder of LB\Plugins).
+# Only the plugins listed here are loaded and initialized.
+# Lines starting with # or ; are comments.
+
+ExtendDB

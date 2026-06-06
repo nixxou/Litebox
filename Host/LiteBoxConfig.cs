@@ -1,0 +1,132 @@
+// Tiny dependency-free INI config, stored next to the exe (LiteBox.ini). No JSON,
+// no extra packages — just key=value lines (';' / '#' comments, optional [sections]
+// are ignored/flattened). A commented default file is written on first run so the
+// user can discover the keys.
+
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
+using System.Text;
+
+namespace LbApiHost.Host;
+
+internal sealed class LiteBoxConfig
+{
+    private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+    private readonly string _path;
+    private readonly Dictionary<string, string> _kv = new(StringComparer.OrdinalIgnoreCase);
+
+    public LiteBoxConfig(string path)
+    {
+        _path = path;
+        if (File.Exists(_path)) Load();
+        else WriteTemplate();
+    }
+
+    /// <summary>LiteBox.ini next to the running exe (falls back to the app base dir).</summary>
+    public static LiteBoxConfig LoadForExe()
+    {
+        string ini;
+        try
+        {
+            var exe = Environment.ProcessPath ?? System.Diagnostics.Process.GetCurrentProcess().MainModule!.FileName;
+            ini = Path.ChangeExtension(exe, ".ini");
+        }
+        catch { ini = Path.Combine(AppContext.BaseDirectory, "LiteBox.ini"); }
+        return new LiteBoxConfig(ini);
+    }
+
+    private void Load()
+    {
+        try
+        {
+            foreach (var raw in File.ReadAllLines(_path))
+            {
+                var t = raw.Trim();
+                if (t.Length == 0 || t[0] == ';' || t[0] == '#' || t[0] == '[') continue;
+                int eq = t.IndexOf('=');
+                if (eq <= 0) continue;
+                _kv[t.Substring(0, eq).Trim()] = t.Substring(eq + 1).Trim();
+            }
+        }
+        catch { }
+    }
+
+    public void Save()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("; LiteBox configuration");
+            foreach (var kv in _kv) sb.AppendLine($"{kv.Key}={kv.Value}");
+            File.WriteAllText(_path, sb.ToString());
+        }
+        catch { }
+    }
+
+    private void WriteTemplate()
+    {
+        // Seed defaults + comments so the file is self-documenting.
+        _kv["ShowGameRunningScreen"] = "true";
+        _kv["UnloadListDuringGame"] = "false";
+        _kv["GameRunningText"] = "Le jeu est en cours...";
+        _kv["GameRunningColor"] = "#0F0F12";
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("; LiteBox configuration");
+            sb.AppendLine("; ShowGameRunningScreen : show a fanart/colour screen while a game runs");
+            sb.AppendLine("; UnloadListDuringGame  : free the game list while a game runs, reload after");
+            sb.AppendLine("; GameRunningText       : message shown on the running screen");
+            sb.AppendLine("; GameRunningColor      : base colour (#RRGGBB) behind the fanart");
+            sb.AppendLine($"ShowGameRunningScreen={_kv["ShowGameRunningScreen"]}");
+            sb.AppendLine($"UnloadListDuringGame={_kv["UnloadListDuringGame"]}");
+            sb.AppendLine($"GameRunningText={_kv["GameRunningText"]}");
+            sb.AppendLine($"GameRunningColor={_kv["GameRunningColor"]}");
+            File.WriteAllText(_path, sb.ToString());
+        }
+        catch { }
+    }
+
+    // ── Raw accessors ────────────────────────────────────────────────────────
+    public string Get(string key, string def = null) => _kv.TryGetValue(key, out var v) ? v : def;
+    public void Set(string key, string val) => _kv[key] = val ?? "";
+
+    public bool GetBool(string key, bool def)
+    {
+        var v = Get(key);
+        if (v == null) return def;
+        return v == "1" || v.Equals("true", OIC) || v.Equals("yes", OIC) || v.Equals("on", OIC);
+    }
+    public void SetBool(string key, bool val) => _kv[key] = val ? "true" : "false";
+
+    // ── Typed options ────────────────────────────────────────────────────────
+    public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
+    public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", false); set => SetBool("UnloadListDuringGame", value); }
+    public string GameRunningText     => Get("GameRunningText", "Le jeu est en cours...");
+    public Color GameRunningColor     => ParseColor(Get("GameRunningColor", "#0F0F12"), Color.FromArgb(15, 15, 18));
+
+    private static Color ParseColor(string s, Color def)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return def;
+        s = s.Trim();
+        try
+        {
+            if (s.StartsWith("#") && s.Length == 7)
+                return Color.FromArgb(
+                    Convert.ToInt32(s.Substring(1, 2), 16),
+                    Convert.ToInt32(s.Substring(3, 2), 16),
+                    Convert.ToInt32(s.Substring(5, 2), 16));
+            if (s.Contains(","))
+            {
+                var p = s.Split(',');
+                if (p.Length == 3) return Color.FromArgb(int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]));
+            }
+            var named = Color.FromName(s);
+            if (named.IsKnownColor || named.A != 0) return named;
+        }
+        catch { }
+        return def;
+    }
+}

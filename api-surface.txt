@@ -1,0 +1,1104 @@
+ASSEMBLY: Unbroken.LaunchBox.Plugins v13.27.0.0
+Exported types: 86 | interfaces: 31 enums: 2 classes: 52 structs: 1
+
+=== [class] Unbroken.LaunchBox.Plugins.AddSaveArgs ===
+    PROP  GameSaveBase SaveToAdd {get/set}
+    PROP  Func<Boolean> ShouldOverwriteFunc {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.AddSaveResponse ===
+    PROP  String Message {get}
+    PROP  GameSaveBase SaveAdded {get/set}
+    PROP  Boolean WasSuccess {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.AutomaticPlaylist ===
+    PROP  String ArrangeBy {get/set}
+    PROP  Boolean ArrangeByDesc {get/set}
+    PROP  IReadOnlyCollection<PlaylistCriteria> Criteria {get/set}
+    PROP  String Id {get/set}
+    PROP  String ListType {get/set}
+    PROP  Nullable<Int32> MaximumItems {get/set}
+    PROP  Nullable<Int32> MinimumItems {get/set}
+    PROP  String Subtitle {get/set}
+    PROP  String Title {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.BooleanEmulatorImportAction ===
+    PROP  Boolean DefaultValue {get}
+    PROP  String Id {get}
+    PROP  String Label {get}
+    PROP  Boolean Value {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [enum] Unbroken.LaunchBox.Plugins.Data.FilterType ===
+    values: Genre, PlatformOrCategoryOrPlaylist, Developer, Publisher, Rating, PlayMode, Region, Series, Status, Source, MaxPlayers, RecentlyPlayed, Favorites, Local, Cloud, None
+
+=== [static class] Unbroken.LaunchBox.Plugins.Data.GameControllerCategories ===
+    PROP  IReadOnlyCollection<String> AllCategories {get}
+    PROP  String Gamepad {get}
+    PROP  String Joystick {get}
+    PROP  String Keyboard {get}
+    PROP  String LightGun {get}
+    PROP  String Motion {get}
+    PROP  String Mouse {get}
+    PROP  String Paddle {get}
+    PROP  String Rhythm {get}
+    PROP  String TrackBall {get}
+    PROP  String VR {get}
+    PROP  String WheelYoke {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [abstract class] Unbroken.LaunchBox.Plugins.Data.GameSaveBase ===
+    PROP  String AdditionalApplicationId {get/set}
+    PROP  Nullable<DateTime> CreatedDateTime {get}
+    PROP  String DisplayChipText {get/set}
+    PROP  String EmulatorCore {get/set}
+    PROP  String EmulatorFileName {get/set}
+    PROP  String FileLocation {get/set}
+    PROP  String GameId {get/set}
+    PROP  Boolean IsDirectory {get/set}
+    PROP  Nullable<DateTime> LastModifiedDateTime {get}
+    PROP  String MatchLineageId {get/set}
+    PROP  String MigrationFamilyId {get/set}
+    PROP  String OriginalFileName {get/set}
+    PROP  Nullable<Int64> ReportedFileSizeBytes {get/set}
+    PROP  Nullable<DateTime> ReportedLastModifiedUtc {get/set}
+    PROP  String SaveGroupId {get/set}
+    PROP  String SaveGroupName {get/set}
+    PROP  String Title {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.Data.GameSaveGame ===
+    PROP  String AdditionalApplicationId {get/set}
+    PROP  Nullable<DateTime> CreatedDateTime {get}
+    PROP  String DisplayChipText {get/set}
+    PROP  String EmulatorCore {get/set}
+    PROP  String EmulatorFileName {get/set}
+    PROP  String FileLocation {get/set}
+    PROP  String GameId {get/set}
+    PROP  Boolean IsDirectory {get/set}
+    PROP  Nullable<DateTime> LastModifiedDateTime {get}
+    PROP  String MatchLineageId {get/set}
+    PROP  String MigrationFamilyId {get/set}
+    PROP  String OriginalFileName {get/set}
+    PROP  Nullable<Int64> ReportedFileSizeBytes {get/set}
+    PROP  Nullable<DateTime> ReportedLastModifiedUtc {get/set}
+    PROP  String SaveGroupId {get/set}
+    PROP  String SaveGroupName {get/set}
+    PROP  String Title {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.Data.GameSaveState ===
+    PROP  String AdditionalApplicationId {get/set}
+    PROP  Nullable<DateTime> CreatedDateTime {get}
+    PROP  String DisplayChipText {get/set}
+    PROP  String EmulatorCore {get/set}
+    PROP  String EmulatorFileName {get/set}
+    PROP  String FileLocation {get/set}
+    PROP  String GameId {get/set}
+    PROP  Boolean IsDirectory {get/set}
+    PROP  Nullable<DateTime> LastModifiedDateTime {get}
+    PROP  String MatchLineageId {get/set}
+    PROP  String MigrationFamilyId {get/set}
+    PROP  String OriginalFileName {get/set}
+    PROP  Nullable<Int64> ReportedFileSizeBytes {get/set}
+    PROP  Nullable<DateTime> ReportedLastModifiedUtc {get/set}
+    PROP  String SaveGroupId {get/set}
+    PROP  String SaveGroupName {get/set}
+    PROP  Nullable<Int32> Slot {get/set}
+    PROP  String Title {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IAdditionalApplication ===
+    PROP  String ApplicationPath {get/set}
+    PROP  Boolean AutoRunAfter {get/set}
+    PROP  Boolean AutoRunBefore {get/set}
+    PROP  String CommandLine {get/set}
+    PROP  String Developer {get/set}
+    PROP  Nullable<Int32> Disc {get/set}
+    PROP  String EmulatorId {get/set}
+    PROP  String GameId {get}
+    PROP  String Id {get}
+    PROP  Nullable<Boolean> Installed {get/set}
+    PROP  Nullable<DateTime> LastPlayed {get/set}
+    PROP  String Name {get/set}
+    PROP  Int32 PlayCount {get/set}
+    PROP  Int32 PlayTime {get/set}
+    PROP  Int32 Priority {get/set}
+    PROP  String Publisher {get/set}
+    PROP  String Region {get/set}
+    PROP  Nullable<DateTime> ReleaseDate {get/set}
+    PROP  Boolean SideA {get/set}
+    PROP  Boolean SideB {get/set}
+    PROP  String Status {get/set}
+    PROP  Boolean UseDosBox {get/set}
+    PROP  Boolean UseEmulator {get/set}
+    PROP  String Version {get/set}
+    PROP  Boolean WaitForExit {get/set}
+    METH  String GetEffectiveCommandLine()
+    METH  Image GetIconImage(IGame game)
+    METH  String Launch(IGame game)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IAlternateName ===
+    PROP  String GameId {get/set}
+    PROP  String Name {get/set}
+    PROP  String Region {get/set}
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IBigBoxMainViewModel ===
+    METH  void PlayGame(IGame game, IAdditionalApplication app, IEmulator emulator, String overrideCommandLine)
+    METH  void Search(String query)
+    METH  void ShowAllGames()
+    METH  void ShowDevelopers()
+    METH  void ShowGame(IGame game, FilterType filterType)
+    METH  void ShowGames()
+    METH  void ShowGames(FilterType filterType, String filterValue)
+    METH  void ShowGames(IPlatform platform)
+    METH  void ShowGenres()
+    METH  void ShowOnScreenKeyboard(String text, Action<String> onFinished)
+    METH  void ShowOptions()
+    METH  void ShowPlatformCategories()
+    METH  void ShowPlatforms()
+    METH  void ShowPlaylists()
+    METH  void ShowPlayModes()
+    METH  void ShowPublishers()
+    METH  void ShowRatings()
+    METH  void ShowRegions()
+    METH  void ShowSeries()
+    METH  void ShowSources()
+    METH  void ShowStatuses()
+    METH  void ShowSystem(Boolean rebuild)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.ICustomField ===
+    PROP  String GameId {get/set}
+    PROP  String Name {get/set}
+    PROP  String Value {get/set}
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IDataManager ===
+    METH  String AddGameController(String controllerName, String controllerCategory, String[] associatedPlatforms)
+    METH  IEmulator AddNewEmulator()
+    METH  IGame AddNewGame(String title)
+    METH  IPlatform AddNewPlatform(String name)
+    METH  IPlatformCategory AddNewPlatformCategory(String name)
+    METH  IPlaylist AddNewPlaylist(String name)
+    METH  void BackgroundReloadSave(Action changes)
+    METH  void ForceReload()
+    METH  IEmulator[] GetAllEmulators()
+    METH  IGame[] GetAllGames()
+    METH  IParent[] GetAllParents()
+    METH  IPlatformCategory[] GetAllPlatformCategories()
+    METH  IPlatform[] GetAllPlatforms()
+    METH  IPlaylist[] GetAllPlaylists()
+    METH  IEmulator GetEmulatorById(String id)
+    METH  IGame GetGameById(String id)
+    METH  IList<IGameController> GetGameControllers()
+    METH  IPlatform GetPlatformByName(String name)
+    METH  IPlatformCategory GetPlatformCategoryByName(String name)
+    METH  IPlaylist GetPlaylistById(String id)
+    METH  IList<IPlatform> GetRootPlatformsCategoriesPlaylists()
+    METH  void ReloadIfNeeded()
+    METH  void Save(Boolean wait)
+    METH  Boolean TryRemoveEmulator(IEmulator emulator)
+    METH  Boolean TryRemoveGame(IGame game)
+    METH  Boolean TryRemovePlatform(IPlatform platform)
+    METH  Boolean TryRemovePlatformCategory(IPlatformCategory platformCategory)
+    METH  Boolean TryRemovePlaylist(IPlaylist playlist)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IEmulator ===
+    PROP  Boolean AggressiveWindowHiding {get/set}
+    PROP  String ApplicationPath {get/set}
+    PROP  Boolean AutoExtract {get/set}
+    PROP  String AutoHotkeyScript {get/set}
+    PROP  String CommandLine {get/set}
+    PROP  String DefaultPlatform {get/set}
+    PROP  Boolean DisableShutdownScreen {get/set}
+    PROP  Boolean EnableHardcoreAchievements {get/set}
+    PROP  String ExitAutoHotkeyScript {get/set}
+    PROP  Boolean FileNameWithoutExtensionAndPath {get/set}
+    PROP  Boolean HideAllNonExclusiveFullscreenWindows {get/set}
+    PROP  Boolean HideConsole {get/set}
+    PROP  Boolean HideMouseCursorInGame {get/set}
+    PROP  String Id {get}
+    PROP  String LoadStateAutoHotkeyScript {get/set}
+    PROP  Boolean NoQuotes {get/set}
+    PROP  Boolean NoSpace {get/set}
+    PROP  String PauseAutoHotkeyScript {get/set}
+    PROP  String ResetAutoHotkeyScript {get/set}
+    PROP  String ResumeAutoHotkeyScript {get/set}
+    PROP  String SaveStateAutoHotkeyScript {get/set}
+    PROP  Int32 StartupLoadDelay {get/set}
+    PROP  String SwapDiscsAutoHotkeyScript {get/set}
+    PROP  String Title {get/set}
+    PROP  Boolean UseStartupScreen {get/set}
+    METH  IEmulatorPlatform AddNewEmulatorPlatform()
+    METH  IEmulatorPlatform[] GetAllEmulatorPlatforms()
+    METH  Boolean TryRemoveEmulatorPlatform(IEmulatorPlatform emulatorPlatform)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IEmulatorPlatform ===
+    PROP  Nullable<Boolean> AutoExtract {get/set}
+    PROP  String CommandLine {get/set}
+    PROP  String EmulatorId {get}
+    PROP  Boolean IsDefault {get/set}
+    PROP  Boolean M3uDiscLoadEnabled {get/set}
+    PROP  String Platform {get/set}
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IGame ===
+    PROP  Boolean AggressiveWindowHiding {get/set}
+    PROP  String ApplicationPath {get/set}
+    PROP  String BackgroundImagePath {get}
+    PROP  String BackImagePath {get}
+    PROP  String Box3DImagePath {get}
+    PROP  Boolean Broken {get/set}
+    PROP  String Cart3DImagePath {get}
+    PROP  String CartBackImagePath {get}
+    PROP  String CartFrontImagePath {get}
+    PROP  String ClearLogoImagePath {get}
+    PROP  String CloneOf {get/set}
+    PROP  String CommandLine {get/set}
+    PROP  Single CommunityOrLocalStarRating {get}
+    PROP  Single CommunityStarRating {get/set}
+    PROP  Int32 CommunityStarRatingTotalVotes {get/set}
+    PROP  Boolean Completed {get/set}
+    PROP  String ConfigurationCommandLine {get/set}
+    PROP  String ConfigurationPath {get/set}
+    PROP  DateTime DateAdded {get/set}
+    PROP  DateTime DateModified {get/set}
+    PROP  String DetailsWithoutPlatform {get}
+    PROP  String DetailsWithPlatform {get}
+    PROP  String Developer {get/set}
+    PROP  String[] Developers {get}
+    PROP  Boolean DisableShutdownScreen {get/set}
+    PROP  String DosBoxConfigurationPath {get/set}
+    PROP  String EmulatorId {get/set}
+    PROP  Boolean Favorite {get/set}
+    PROP  String FrontImagePath {get}
+    PROP  BlockingCollection<String> Genres {get}
+    PROP  String GenresString {get/set}
+    PROP  Boolean Hide {get/set}
+    PROP  Boolean HideAllNonExclusiveFullscreenWindows {get/set}
+    PROP  Boolean HideMouseCursorInGame {get/set}
+    PROP  String Id {get}
+    PROP  Nullable<Boolean> Installed {get/set}
+    PROP  Nullable<DateTime> LastPlayedDate {get/set}
+    PROP  Nullable<Int32> LaunchBoxDbId {get/set}
+    PROP  String ManualPath {get/set}
+    PROP  String MarqueeImagePath {get}
+    PROP  Nullable<Int32> MaxPlayers {get/set}
+    PROP  String MusicPath {get/set}
+    PROP  String Notes {get/set}
+    PROP  Boolean OverrideDefaultStartupScreenSettings {get/set}
+    PROP  String Platform {get/set}
+    PROP  String PlatformClearLogoImagePath {get}
+    PROP  Int32 PlayCount {get/set}
+    PROP  String PlayMode {get/set}
+    PROP  String[] PlayModes {get}
+    PROP  Int32 PlayTime {get/set}
+    PROP  Boolean Portable {get/set}
+    PROP  String Progress {get/set}
+    PROP  String Publisher {get/set}
+    PROP  String[] Publishers {get}
+    PROP  String Rating {get/set}
+    PROP  Image RatingImage {get}
+    PROP  String Region {get/set}
+    PROP  Nullable<DateTime> ReleaseDate {get/set}
+    PROP  String ReleaseType {get/set}
+    PROP  Nullable<Int32> ReleaseYear {get/set}
+    PROP  String RootFolder {get/set}
+    PROP  String ScreenshotImagePath {get}
+    PROP  Boolean ScummVmAspectCorrection {get/set}
+    PROP  Boolean ScummVmFullscreen {get/set}
+    PROP  String ScummVmGameDataFolderPath {get/set}
+    PROP  String ScummVmGameType {get/set}
+    PROP  String Series {get/set}
+    PROP  String[] SeriesValues {get}
+    PROP  Boolean ShowBack {get/set}
+    PROP  String SortTitle {get/set}
+    PROP  String SortTitleOrTitle {get}
+    PROP  String Source {get/set}
+    PROP  Int32 StarRating {get/set}
+    PROP  Single StarRatingFloat {get/set}
+    PROP  Int32 StartupLoadDelay {get/set}
+    PROP  String Status {get/set}
+    PROP  String ThemeVideoPath {get/set}
+    PROP  String Title {get/set}
+    PROP  Boolean UseDosBox {get/set}
+    PROP  Boolean UseScummVm {get/set}
+    PROP  Boolean UseStartupScreen {get/set}
+    PROP  String Version {get/set}
+    PROP  String VideoPath {get/set}
+    PROP  String VideoUrl {get/set}
+    PROP  Nullable<Int32> WikipediaId {get/set}
+    PROP  String WikipediaUrl {get/set}
+    METH  Boolean AddControllerSupport(String controllerName, String controllerCategory, Nullable<Int32> supportLevel)
+    METH  IAdditionalApplication AddNewAdditionalApplication()
+    METH  IAlternateName AddNewAlternateName()
+    METH  ICustomField AddNewCustomField()
+    METH  IMount AddNewMount()
+    METH  String Configure()
+    METH  IAdditionalApplication[] GetAllAdditionalApplications()
+    METH  IAlternateName[] GetAllAlternateNames()
+    METH  ICustomField[] GetAllCustomFields()
+    METH  ImageDetails[] GetAllImagesWithDetails()
+    METH  ImageDetails[] GetAllImagesWithDetails(String imageType)
+    METH  IMount[] GetAllMounts()
+    METH  String GetBigBoxDetails(Boolean showPlatform)
+    METH  KeyValuePair`2[] GetControllerSupport()
+    METH  String GetEffectiveCommandLine()
+    METH  String GetManualPath()
+    METH  String GetMusicPath()
+    METH  String GetNewManualFilePath(String extension)
+    METH  String GetNewMusicFilePath(String extension)
+    METH  String GetNewThemeVideoFilePath(String extension)
+    METH  String GetNewVideoFilePath(String extension)
+    METH  String GetNextAvailableImageFilePath(String extension, String imageType, String region)
+    METH  String GetNextVideoFilePath(String videoType, String extension)
+    METH  String GetThemeVideoPath()
+    METH  String GetVideoPath(Boolean prioritizeThemeVideos)
+    METH  String GetVideoPath(String videoType)
+    METH  String OpenFolder()
+    METH  String OpenManual()
+    METH  String Play()
+    METH  Boolean TryRemoveAdditionalApplication(IAdditionalApplication additionalApplication)
+    METH  Boolean TryRemoveAlternateNames(IAlternateName alternateName)
+    METH  Boolean TryRemoveCustomField(ICustomField customField)
+    METH  Boolean TryRemoveMount(IMount mount)
+    METH  void UpdateTitleAndMigrateMedia(String newTitle)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IGameBadge ===
+    PROP  Image DefaultIcon {get}
+    PROP  Int32 Index {get/set}
+    PROP  String Name {get}
+    PROP  String UniqueId {get}
+    METH  Boolean GetAppliesToGame(IGame game)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IGameController ===
+    PROP  String AssociatedPlatforms {get/set}
+    PROP  String Category {get/set}
+    PROP  String Id {get}
+    PROP  String Name {get/set}
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IGameMenuItem ===
+    PROP  String Caption {get}
+    PROP  IEnumerable<IGameMenuItem> Children {get}
+    PROP  Boolean Enabled {get}
+    PROP  Image Icon {get}
+    METH  void OnSelect(IGame[] games)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.ILaunchBoxMainViewModel ===
+    PROP  String ArrangeBy {get/set}
+    PROP  Double BoxSize {get/set}
+    PROP  Object ContentBackgroundView {get}
+    PROP  Object ContentView {get}
+    PROP  Double ControlsBarHeight {get/set}
+    PROP  Object GameDetailsView {get}
+    PROP  Double GameDetailsWidth {get/set}
+    PROP  String ImageGroup {get}
+    PROP  Boolean ListView {get}
+    PROP  Double SideBarWidth {get/set}
+    METH  void Close()
+    METH  void EnterImagesView()
+    METH  void EnterListView()
+    METH  void Maximize()
+    METH  void Minimize()
+    METH  void PlayGame(IGame game, IAdditionalApplication app, IEmulator emulator, String overrideCommandLine)
+    METH  void RefreshData()
+    METH  void Restore()
+
+=== [class] Unbroken.LaunchBox.Plugins.Data.ImageDetails ===
+    PROP  String FilePath {get}
+    PROP  String ImageType {get}
+    PROP  String Region {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [static class] Unbroken.LaunchBox.Plugins.Data.ImageTypes ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  List<String> GetList()
+    METH  Type GetType()
+    METH  HashSet<String> IntegrationImageTypes()
+    METH  String ToString()
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IMount ===
+    PROP  Char DriveLetter {get/set}
+    PROP  String Filesystem {get/set}
+    PROP  String GameId {get}
+    PROP  String MountType {get/set}
+    PROP  String Path {get/set}
+    PROP  String Type {get/set}
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IParent ===
+    PROP  String Id {get}
+    PROP  String ParentPlatformCategoryName {get/set}
+    PROP  String ParentPlatformName {get/set}
+    PROP  IPlatform ParentPlatformOrCategoryOrPlaylist {get}
+    PROP  String ParentPlaylistId {get/set}
+    PROP  String PlatformCategoryName {get/set}
+    PROP  String PlatformName {get/set}
+    PROP  IPlatform PlatformOrCategoryOrPlaylist {get}
+    PROP  String PlaylistId {get/set}
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IPlatform ===
+    PROP  String BackgroundImagePath {get}
+    PROP  String BackImagesFolder {get/set}
+    PROP  String BannerImagePath {get}
+    PROP  String BannerImagesFolder {get/set}
+    PROP  String BigBoxTheme {get/set}
+    PROP  String BigBoxView {get/set}
+    PROP  String Category {get/set}
+    PROP  String ClearLogoImagePath {get}
+    PROP  String ClearLogoImagesFolder {get/set}
+    PROP  String Cpu {get/set}
+    PROP  String Default3DBoxImagePath {get}
+    PROP  String Default3DCartImagePath {get}
+    PROP  String DefaultBoxImagePath {get}
+    PROP  String DefaultCartImagePath {get}
+    PROP  String Developer {get/set}
+    PROP  String DeviceImagePath {get}
+    PROP  String Display {get/set}
+    PROP  String FanartImagesFolder {get/set}
+    PROP  String Folder {get/set}
+    PROP  String FrontImagesFolder {get/set}
+    PROP  String Graphics {get/set}
+    PROP  Boolean HideInBigBox {get}
+    PROP  String ImageType {get/set}
+    PROP  Boolean IsEmulated {get}
+    PROP  String LastGameId {get/set}
+    PROP  String ManualsFolder {get/set}
+    PROP  String Manufacturer {get/set}
+    PROP  String MaxControllers {get/set}
+    PROP  String Media {get/set}
+    PROP  String Memory {get/set}
+    PROP  String MusicFolder {get/set}
+    PROP  String Name {get}
+    PROP  String NestedName {get/set}
+    PROP  String Notes {get/set}
+    PROP  String PlatformCategoryClearLogoImagePath {get}
+    PROP  Nullable<DateTime> ReleaseDate {get/set}
+    PROP  String ScrapeAs {get/set}
+    PROP  String ScreenshotImagesFolder {get/set}
+    PROP  String SortTitle {get/set}
+    PROP  String SortTitleOrTitle {get}
+    PROP  String Sound {get/set}
+    PROP  String SteamBannerImagesFolder {get/set}
+    PROP  String VideoPath {get/set}
+    PROP  String VideosFolder {get/set}
+    METH  IGame[] GetAllGames(Boolean includeHidden, Boolean includeBroken)
+    METH  IGame[] GetAllGames(Boolean includeHidden, Boolean includeBroken, Boolean excludeGamesMissingVideos, Boolean excludeGamesMissingBoxFrontImage, Boolean excludeGamesMissingScreenshotImage, Boolean excludeGamesMissingClearLogoImage, Boolean excludeGamesMissingBackgroundImage)
+    METH  IPlatformDocument[] GetAllPlatformDocuments()
+    METH  IPlatformFolder[] GetAllPlatformFolders()
+    METH  IList<IPlatform> GetChildren()
+    METH  Int32 GetGameCount(Boolean includeHidden, Boolean includeBroken)
+    METH  Int32 GetGameCount(Boolean includeHidden, Boolean includeBroken, Boolean excludeGamesMissingVideos, Boolean excludeGamesMissingBoxFrontImage, Boolean excludeGamesMissingScreenshotImage, Boolean excludeGamesMissingClearLogoImage, Boolean excludeGamesMissingBackgroundImage)
+    METH  String GetNewPlatformLogoPath(String url)
+    METH  String GetNewPlatformVideoPath(String url)
+    METH  IPlatformFolder GetPlatformFolderByImageType(String imageType)
+    METH  String GetPlatformVideoPath(Boolean fallBackToGameVideos, Boolean allowThemePath)
+    METH  Boolean HasGames(Boolean includeHidden, Boolean includeBroken)
+    METH  Boolean HasGames(Boolean includeHidden, Boolean includeBroken, Boolean excludeGamesMissingVideos, Boolean excludeGamesMissingBoxFrontImage, Boolean excludeGamesMissingScreenshotImage, Boolean excludeGamesMissingClearLogoImage, Boolean excludeGamesMissingBackgroundImage)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IPlatformCategory ===
+    PROP  String BackgroundImagePath {get}
+    PROP  String BannerImagePath {get}
+    PROP  String ClearLogoImagePath {get}
+    PROP  String DeviceImagePath {get}
+    PROP  Boolean HideInBigBox {get}
+    PROP  String Name {get}
+    PROP  String NestedName {get/set}
+    PROP  String Notes {get/set}
+    PROP  String SortTitle {get/set}
+    PROP  String SortTitleOrTitle {get}
+    PROP  String VideoPath {get/set}
+    METH  IGame[] GetAllGames(Boolean includeHidden, Boolean includeBroken)
+    METH  IGame[] GetAllGames(Boolean includeHidden, Boolean includeBroken, Boolean excludeGamesMissingVideos, Boolean excludeGamesMissingBoxFrontImage, Boolean excludeGamesMissingScreenshotImage, Boolean excludeGamesMissingClearLogoImage, Boolean excludeGamesMissingBackgroundImage)
+    METH  IList<IPlatform> GetChildren()
+    METH  Int32 GetGameCount(Boolean includeHidden, Boolean includeBroken)
+    METH  Int32 GetGameCount(Boolean includeHidden, Boolean includeBroken, Boolean excludeGamesMissingVideos, Boolean excludeGamesMissingBoxFrontImage, Boolean excludeGamesMissingScreenshotImage, Boolean excludeGamesMissingClearLogoImage, Boolean excludeGamesMissingBackgroundImage)
+    METH  String GetNewPlatformLogoPath(String url)
+    METH  String GetNewPlatformVideoPath(String url)
+    METH  String GetPlatformVideoPath(Boolean fallBackToGameVideos, Boolean allowThemePath)
+    METH  Boolean HasGames(Boolean includeHidden, Boolean includeBroken)
+    METH  Boolean HasGames(Boolean includeHidden, Boolean includeBroken, Boolean excludeGamesMissingVideos, Boolean excludeGamesMissingBoxFrontImage, Boolean excludeGamesMissingScreenshotImage, Boolean excludeGamesMissingClearLogoImage, Boolean excludeGamesMissingBackgroundImage)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IPlatformDocument ===
+    PROP  String FilePath {get/set}
+    PROP  String Name {get/set}
+    PROP  String Platform {get/set}
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IPlatformFolder ===
+    PROP  String FolderPath {get/set}
+    PROP  String MediaType {get/set}
+    PROP  String Platform {get/set}
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IPlaylist ===
+    PROP  Boolean AutoPopulate {get/set}
+    PROP  String BackgroundImagePath {get}
+    PROP  String BannerImagePath {get}
+    PROP  String BigBoxTheme {get/set}
+    PROP  String BigBoxView {get/set}
+    PROP  String Category {get/set}
+    PROP  String ClearLogoImagePath {get}
+    PROP  String Default3DBoxImagePath {get}
+    PROP  String Default3DCartImagePath {get}
+    PROP  String DefaultBoxImagePath {get}
+    PROP  String DefaultCartImagePath {get}
+    PROP  String DeviceImagePath {get}
+    PROP  Boolean HideInBigBox {get}
+    PROP  String ImageType {get/set}
+    PROP  Boolean IncludeWithPlatforms {get/set}
+    PROP  String LastGameId {get/set}
+    PROP  String Name {get}
+    PROP  String NestedName {get/set}
+    PROP  String Notes {get/set}
+    PROP  String PlatformCategoryClearLogoImagePath {get}
+    PROP  String PlaylistId {get}
+    PROP  String SortBy {get/set}
+    PROP  String SortTitle {get/set}
+    PROP  String SortTitleOrTitle {get}
+    PROP  String VideoPath {get/set}
+    METH  IPlaylistFilter AddNewPlaylistFilter()
+    METH  IPlaylistGame AddNewPlaylistGame()
+    METH  void ClearGames()
+    METH  IGame[] GetAllGames(Boolean sort)
+    METH  IPlaylistFilter[] GetAllPlaylistFilters()
+    METH  IPlaylistGame[] GetAllPlaylistGames()
+    METH  IList<IPlatform> GetChildren()
+    METH  Int32 GetGameCount(Boolean includeHidden, Boolean includeBroken)
+    METH  Int32 GetGameCount(Boolean includeHidden, Boolean includeBroken, Boolean excludeGamesMissingVideos, Boolean excludeGamesMissingBoxFrontImage, Boolean excludeGamesMissingScreenshotImage, Boolean excludeGamesMissingClearLogoImage, Boolean excludeGamesMissingBackgroundImage)
+    METH  String GetNewPlatformLogoPath(String url)
+    METH  String GetNewPlatformVideoPath(String url)
+    METH  String GetPlatformVideoPath(Boolean fallBackToGameVideos, Boolean allowThemePath)
+    METH  Boolean HasGames(Boolean includeHidden, Boolean includeBroken)
+    METH  Boolean HasGames(Boolean includeHidden, Boolean includeBroken, Boolean excludeGamesMissingVideos, Boolean excludeGamesMissingBoxFrontImage, Boolean excludeGamesMissingScreenshotImage, Boolean excludeGamesMissingClearLogoImage, Boolean excludeGamesMissingBackgroundImage)
+    METH  Boolean TryRemovePlaylistFilter(IPlaylistFilter playlistFilter)
+    METH  Boolean TryRemovePlaylistGame(IPlaylistGame playlistGame)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IPlaylistFilter ===
+    PROP  String ComparisonTypeKey {get/set}
+    PROP  String FieldKey {get/set}
+    PROP  String PlaylistId {get}
+    PROP  String Value {get/set}
+    METH  Boolean GetMatches(IGame game)
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IPlaylistGame ===
+    PROP  String GameFileName {get/set}
+    PROP  String GameId {get/set}
+    PROP  String GamePlatform {get/set}
+    PROP  String GameTitle {get/set}
+    PROP  Nullable<Int32> LaunchBoxDbId {get/set}
+    PROP  Int32 ManualOrder {get/set}
+    PROP  String PlaylistId {get}
+    METH  IGame GetActualGame()
+
+=== [interface] Unbroken.LaunchBox.Plugins.Data.IStateManager ===
+    PROP  String BigBoxCurrentTheme {get}
+    PROP  Boolean IsBigBox {get}
+    PROP  Boolean IsBigBoxInAttractMode {get}
+    PROP  Boolean IsBigBoxLocked {get}
+    PROP  Boolean IsPremium {get}
+    METH  IGame[] GetAllSelectedGames()
+    METH  IPlatform GetSelectedPlatform()
+
+=== [static class] Unbroken.LaunchBox.Plugins.Data.SystemEventTypes ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [static class] Unbroken.LaunchBox.Plugins.Data.VideoTypes ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  List<String> GetList()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.EmulatorActionArgs ===
+    PROP  IGame Game {get}
+    PROP  String Identifier {get}
+    PROP  String Platform {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.EmulatorBiosFile ===
+    PROP  EmulatorBiosGroup ApplicableGroup {get}
+    PROP  String Description {get}
+    PROP  String FileName {get}
+    PROP  String Location {get}
+    PROP  String Md5 {get}
+    PROP  Boolean Required {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.EmulatorBiosGroup ===
+    PROP  Boolean AllItemsRequired {get}
+    PROP  String Description {get}
+    PROP  String Id {get}
+    PROP  Boolean IsGroupRequired {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.EmulatorControllerAction ===
+    PROP  String Description {get}
+    PROP  String Identifier {get}
+    PROP  String Label {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.EmulatorControllerOption ===
+    PROP  Object CurrentValue {get}
+    PROP  Object DefaultValue {get}
+    PROP  String Description {get}
+    PROP  String Identifier {get}
+    PROP  String Label {get}
+    PROP  EmulatorControllerOptionTypes OptionType {get}
+    PROP  IReadOnlyList<Object> PossibleValues {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [enum] Unbroken.LaunchBox.Plugins.EmulatorControllerOptionTypes ===
+    values: String, Boolean, ThreeState, Double, Integer, DateTime, FilePath
+
+=== [class] Unbroken.LaunchBox.Plugins.EmulatorControllerVersion ===
+    PROP  String Description {get}
+    PROP  String Identifier {get}
+    PROP  String Label {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [abstract class] Unbroken.LaunchBox.Plugins.EmulatorImportAction ===
+    PROP  String Id {get}
+    PROP  String Label {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.EmulatorInstallResponse ===
+    PROP  IEmulator InstalledEmulator {get}
+    PROP  String Message {get}
+    PROP  Boolean WasSuccess {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.EmulatorOptionArgs ===
+    PROP  IGame Game {get}
+    PROP  String Identifier {get}
+    PROP  String Platform {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [abstract class] Unbroken.LaunchBox.Plugins.EmulatorPlugin ===
+    PROP  String EmulatorName {get}
+    METH  AddSaveResponse AddSaveFile(AddSaveArgs args)
+    METH  Boolean Equals(Object obj)
+    METH  PluginResponse FireEmulatorImportAction(ImportActionArgs args)
+    METH  IEnumerable<IEmulator> GetApplicableEmulators(IEnumerable<IEmulator> emulators)
+    METH  IEnumerable<EmulatorBiosFile> GetBiosFilesForPlatform(String platform)
+    METH  IEnumerable<EmulatorBiosFile> GetBiosFilesForPlatform(String emulatorApplicationPath, String platform, String commandLine)
+    METH  IReadOnlyList<String> GetCompanionSaveFiles(String primaryFilePath)
+    METH  String GetCurrentVersion(String applicationPath)
+    METH  Int32 GetHashCode()
+    METH  IEnumerable<EmulatorImportAction> GetImportActions()
+    METH  IEnumerable<EmulatorControllerVersion> GetInstallableVersions()
+    METH  IReadOnlyDictionary<Int32, String> GetPotentialSaveSlots()
+    METH  GetSavesResponse GetSaves(GetSavesArgs args)
+    METH  Type GetType()
+    METH  PluginResponse InjectRetroAchievementsCredentials(InjectRetroAchievementsCredentialsArgs args)
+    METH  EmulatorInstallResponse InstallEmulator(InstallEmulatorArgs args)
+    METH  EmulatorSupportResponse IsPlatformSupported(String platform)
+    METH  Boolean IsSaveActive(GameSaveBase save, String emulatorApplicationPath)
+    METH  Boolean IsSaveContainer(GameSaveBase save)
+    METH  Boolean IsSecondarySaveFile(String filePath)
+    METH  Boolean IsUpdateAvailable(IEmulator emulator, EmulatorControllerVersion& version)
+    METH  Boolean IsUpdateAvailable(String emulatorAppPath, EmulatorControllerVersion& version)
+    METH  String NormalizeCommandLineForExecutable(String commandLine, String applicationPath)
+    METH  PrepareForLaunchResponse PrepareEmulatorForLaunch(PrepareForLaunchArgs args)
+    METH  PluginResponse RemoveSave(GameSaveBase save)
+    METH  RetroAchievementSupportResponse SupportsRetroAchievements(String emulatorApplicationPath)
+    METH  Boolean SupportsSaveManagement()
+    METH  String ToString()
+    METH  Boolean TryBackupSave(GameSaveBase save, String emulatorApplicationPath, String destinationFolder, String& error)
+    METH  Boolean TryComputeSaveSignature(GameSaveBase save, String emulatorApplicationPath, String& signature)
+    METH  Boolean TryGetSaveGroupInfo(GameSaveBase save, String primaryFilePath, String& saveGroupId, String& saveGroupName)
+    METH  Boolean UseSaveGroupIdForPersistedMatch(GameSaveBase save)
+
+=== [class] Unbroken.LaunchBox.Plugins.EmulatorSupportResponse ===
+    PROP  Boolean Recommended {get}
+    PROP  Boolean Supported {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.GetSavesArgs ===
+    PROP  IReadOnlyCollection<IAdditionalApplication> AdditionalApplications {get/set}
+    PROP  IEmulator Emulator {get/set}
+    PROP  IReadOnlyCollection<IGame> Games {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.GetSavesResponse ===
+    PROP  IReadOnlyCollection<GameSaveBase> FoundSaves {get}
+    PROP  String Message {get}
+    PROP  Boolean WasSuccess {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [interface] Unbroken.LaunchBox.Plugins.IBigBoxThemeElementPlugin ===
+    METH  Boolean OnDown(Boolean held)
+    METH  Boolean OnEnter()
+    METH  Boolean OnEscape()
+    METH  Boolean OnLeft(Boolean held)
+    METH  Boolean OnPageDown()
+    METH  Boolean OnPageUp()
+    METH  Boolean OnRight(Boolean held)
+    METH  void OnSelectionChanged(FilterType filterType, String filterValue, IPlatform platform, IPlatformCategory category, IPlaylist playlist, IGame game)
+    METH  Boolean OnUp(Boolean held)
+
+=== [interface] Unbroken.LaunchBox.Plugins.IEmulatorWithCores ===
+    METH  String[] GetAllAvailableCores(String emulatorFilePath)
+    METH  String[] GetSuggestedCores(String emulatorFilePath, String platform)
+
+=== [interface] Unbroken.LaunchBox.Plugins.IGameConfiguringPlugin ===
+    METH  void OnAfterGameConfigurationOpens(IGame game)
+    METH  void OnBeforeGameConfigurationOpens(IGame game)
+    METH  void OnGameConfigurationExited(IGame game)
+
+=== [interface] Unbroken.LaunchBox.Plugins.IGameLaunchingPlugin ===
+    METH  void OnAfterGameLaunched(IGame game, IAdditionalApplication app, IEmulator emulator)
+    METH  void OnBeforeGameLaunching(IGame game, IAdditionalApplication app, IEmulator emulator)
+    METH  void OnGameExited()
+
+=== [interface] Unbroken.LaunchBox.Plugins.IGameMenuItemPlugin ===
+    PROP  String Caption {get}
+    PROP  Image IconImage {get}
+    PROP  Boolean ShowInBigBox {get}
+    PROP  Boolean ShowInLaunchBox {get}
+    PROP  Boolean SupportsMultipleGames {get}
+    METH  Boolean GetIsValidForGame(IGame selectedGame)
+    METH  Boolean GetIsValidForGames(IGame[] selectedGames)
+    METH  void OnSelected(IGame selectedGame)
+    METH  void OnSelected(IGame[] selectedGames)
+
+=== [interface] Unbroken.LaunchBox.Plugins.IGameMultiMenuItemPlugin ===
+    METH  IEnumerable<IGameMenuItem> GetMenuItems(IGame[] selectedGames)
+
+=== [class] Unbroken.LaunchBox.Plugins.ImportActionArgs ===
+    PROP  EmulatorImportAction Action {get}
+    PROP  IList<IGame> GamesImported {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  void ReportActionProgress(String label, Nullable<Double> progress)
+    METH  Boolean ShouldCancelAction()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.InjectRetroAchievementsCredentialsArgs ===
+    PROP  String EmulatorApplicationPath {get}
+    PROP  Nullable<Boolean> HardcoreEnabled {get}
+    PROP  Nullable<Boolean> IsEnabled {get}
+    PROP  String Token {get}
+    PROP  String Username {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.InstallEmulatorArgs ===
+    PROP  IEmulator ExistingEmulator {get}
+    PROP  String Platform {get}
+    PROP  Action<String, String, Nullable<Double>> ReportProgressAction {get}
+    PROP  Func<Boolean> ShouldCancelFunc {get}
+    PROP  Boolean ShouldCreateEmulator {get}
+    PROP  String Version {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [interface] Unbroken.LaunchBox.Plugins.ISystemEventsPlugin ===
+    METH  void OnEventRaised(String eventType)
+
+=== [interface] Unbroken.LaunchBox.Plugins.ISystemMenuItemPlugin ===
+    PROP  Boolean AllowInBigBoxWhenLocked {get}
+    PROP  String Caption {get}
+    PROP  Image IconImage {get}
+    PROP  Boolean ShowInBigBox {get}
+    PROP  Boolean ShowInLaunchBox {get}
+    METH  void OnSelected()
+
+=== [class] Unbroken.LaunchBox.Plugins.ManualPlaylist ===
+    PROP  String ArrangeBy {get/set}
+    PROP  Boolean ArrangeByDesc {get/set}
+    PROP  String Id {get/set}
+    PROP  IReadOnlyCollection<PlaylistItem> Items {get/set}
+    PROP  String ListType {get/set}
+    PROP  Nullable<Int32> MaximumItems {get/set}
+    PROP  Nullable<Int32> MinimumItems {get/set}
+    PROP  String Subtitle {get/set}
+    PROP  String Title {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [abstract class] Unbroken.LaunchBox.Plugins.PlaylistBase ===
+    PROP  String ArrangeBy {get/set}
+    PROP  Boolean ArrangeByDesc {get/set}
+    PROP  String Id {get/set}
+    PROP  String ListType {get/set}
+    PROP  Nullable<Int32> MaximumItems {get/set}
+    PROP  Nullable<Int32> MinimumItems {get/set}
+    PROP  String Subtitle {get/set}
+    PROP  String Title {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.PlaylistCriteria ===
+    PROP  String Comparison {get/set}
+    PROP  String Field {get/set}
+    PROP  String Value {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.PlaylistItem ===
+    PROP  String GameTitle {get/set}
+    PROP  Nullable<Int32> LaunchBoxGamesDatabaseId {get/set}
+    PROP  String Platform {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [abstract class] Unbroken.LaunchBox.Plugins.PlaylistProviderPlugin ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  ProvideResponse ProvidePrioritizedPlaylists()
+    METH  ProvideResponse ProvideRandomPlaylists()
+    METH  String ToString()
+
+=== [static class] Unbroken.LaunchBox.Plugins.PluginHelper ===
+    PROP  IBigBoxMainViewModel BigBoxMainViewModel {get/set}
+    PROP  IDataManager DataManager {get/set}
+    PROP  ILaunchBoxMainViewModel LaunchBoxMainViewModel {get/set}
+    PROP  IRetroAchievementsApi RetroAchievementsApi {get/set}
+    PROP  IStateManager StateManager {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.PluginResponse ===
+    PROP  String Message {get}
+    PROP  Boolean WasSuccess {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.PrepareForLaunchArgs ===
+    PROP  IAdditionalApplication AppBeingLaunched {get}
+    PROP  String CurrentCommandLine {get}
+    PROP  IEmulator EmulatorBeingLaunched {get}
+    PROP  IGame GameBeingLaunched {get}
+    PROP  Nullable<RetroAchievementCredentials> RetroAchievementCredentials {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.PrepareForLaunchResponse ===
+    PROP  String Message {get}
+    PROP  String NewCommandLine {get/set}
+    PROP  Boolean WasSuccess {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.ProvideResponse ===
+    PROP  IEnumerator<PlaylistBase> Enumerator {get/set}
+    PROP  String Message {get/set}
+    PROP  Boolean Success {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [struct] Unbroken.LaunchBox.Plugins.RetroAchievementCredentials ===
+    PROP  String Token {get}
+    PROP  String Username {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.Achievement ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.Console ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.Game ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.GameCompletionProgress ===
+    PROP  Int32 ConsoleId {get/set}
+    PROP  String ConsoleName {get/set}
+    PROP  Int32 GameId {get/set}
+    PROP  Nullable<DateTime> HighestAwardDate {get/set}
+    PROP  String HighestAwardKind {get/set}
+    PROP  String ImageIcon {get/set}
+    PROP  Int32 MaxPossible {get/set}
+    PROP  Nullable<DateTime> MostRecentAwardedDate {get/set}
+    PROP  Int32 NumAwarded {get/set}
+    PROP  Int32 NumAwardedHardcore {get/set}
+    PROP  String Title {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.GameInfo ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.GameInfoWithProgress ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [interface] Unbroken.LaunchBox.Plugins.RetroAchievements.IRetroAchievementsApi ===
+    METH  List<GameCompletionProgress> GetAllUserCompletionProgress()
+    METH  IEnumerable<Console> GetConsoles()
+    METH  GameInfo GetGameInfo(String gameId)
+    METH  GameInfoWithProgress GetGameInfoWithProgress(IGame game)
+    METH  GameInfoWithProgress GetGameInfoWithProgress(String gameId)
+    METH  GameInfoWithProgress GetGameProgression(IGame game)
+    METH  GameInfoWithProgress GetGameProgression(String gameId)
+    METH  IEnumerable<Game> GetGamesForConsole(String consoleId)
+    METH  Boolean GetHasCredentials()
+    METH  IEnumerable<RecentlyPlayedGame> GetRecentlyPlayedGames(Int32 count, Int32 offset)
+    METH  UserRankAndScore GetUserRankAndScore()
+    METH  UserSummary GetUserSummary(Int32 recentGamesCount, Int32 recentAchievementCount)
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.LastActivity ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.RecentAchievement ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.RecentAwards ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.RecentlyPlayedGame ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.UserPoints ===
+    PROP  String Points {get/set}
+    PROP  String SoftcorePoints {get/set}
+    PROP  String TotalPoints {get/set}
+    PROP  String TotalSoftcorePoints {get/set}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.UserRankAndScore ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievements.UserSummary ===
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+
+=== [class] Unbroken.LaunchBox.Plugins.RetroAchievementSupportResponse ===
+    PROP  String CurrentToken {get}
+    PROP  String CurrentUsername {get}
+    PROP  Boolean IsEnabled {get}
+    PROP  Boolean IsHardcore {get}
+    PROP  Boolean IsSupported {get}
+    METH  Boolean Equals(Object obj)
+    METH  Int32 GetHashCode()
+    METH  Type GetType()
+    METH  String ToString()
+

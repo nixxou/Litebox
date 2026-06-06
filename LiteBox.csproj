@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <Platforms>AnyCPU;x64</Platforms>
+    <!-- Output exe is LiteBox.exe. RootNamespace stays LbApiHost (the C#
+         namespaces are unchanged; only the produced assembly/file is renamed). -->
+    <AssemblyName>LiteBox</AssemblyName>
+    <RootNamespace>LbApiHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The real LaunchBox plugin SDK — the exact interface contract we
+         implement. Copied local so the host runs standalone. -->
+    <!-- Compile-time only. Private=false → NOT copied to output and NOT pinned in
+         deps.json, so the host resolves whatever Unbroken.LaunchBox.Plugins version
+         lives in LB\Core at runtime (version-agnostic, like a plugin). The HintPath
+         here is just the compile reference. -->
+    <Reference Include="Unbroken.LaunchBox.Plugins">
+      <HintPath>..\..\..\LB\Core\Unbroken.LaunchBox.Plugins.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ObjectListView.Repack.NET6Plus" Version="2.9.5" />
+  </ItemGroup>
+
+</Project>

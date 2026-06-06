@@ -1,0 +1,275 @@
+// Hand-written specializations of the generated Dummy* classes — the few
+// members that need real (dummy) behavior: the fake catalog wiring and the
+// MessageBox "launch". Everything else stays inherited from the generated stub.
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using Unbroken.LaunchBox.Plugins;
+using Unbroken.LaunchBox.Plugins.Data;
+using LbApiHost.Generated;
+using LbApiHost.Host.Data;
+
+namespace LbApiHost.Host;
+
+/// <summary>A platform that actually returns its games.</summary>
+internal sealed class HostPlatform : DummyPlatform
+{
+    public List<IGame> GamesList { get; } = new();
+
+    public override IGame[] GetAllGames(bool includeHidden, bool includeBroken) => GamesList.ToArray();
+    public override int GetGameCount(bool includeHidden, bool includeBroken) => GamesList.Count;
+    public override bool HasGames(bool includeHidden, bool includeBroken) => GamesList.Count > 0;
+}
+
+/// <summary>DataManager backed by the in-memory dummy catalog.</summary>
+internal sealed class HostDataManager : DummyDataManager
+{
+    private readonly HostCatalog _cat;
+    public HostDataManager(HostCatalog cat) { _cat = cat; }
+
+    public override IGame[] GetAllGames() => _cat.Games.ToArray();
+    public override IPlatform[] GetAllPlatforms() => _cat.Platforms.ToArray();
+    public override IEmulator[] GetAllEmulators() => _cat.Emulators.ToArray();
+
+    public override IGame GetGameById(string id) => _cat.Games.FirstOrDefault(g => g.Id == id);
+    public override IEmulator GetEmulatorById(string id) => _cat.Emulators.FirstOrDefault(e => e.Id == id);
+    public override IPlatform GetPlatformByName(string name)
+        => _cat.Platforms.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    public override IList<IPlatform> GetRootPlatformsCategoriesPlaylists() => _cat.Platforms.ToList();
+
+    public override IGame AddNewGame(string title)
+    {
+        var g = new DummyGame { Id = Guid.NewGuid().ToString(), Title = title };
+        _cat.Games.Add(g);
+        return g;
+    }
+
+    public override void Save(bool wait) => Console.WriteLine($"[HostDataManager] Save(wait={wait}) — dummy no-op");
+    public override void ForceReload() => Console.WriteLine("[HostDataManager] ForceReload() — dummy no-op");
+}
+
+/// <summary>StateManager with desktop-ish defaults.</summary>
+internal sealed class HostStateManager : DummyStateManager
+{
+    public HostStateManager()
+    {
+        IsPremium = true;     // generated auto-props, settable
+        IsBigBox = false;
+        IsBigBoxLocked = false;
+    }
+
+    public override IPlatform GetSelectedPlatform()
+        => Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllPlatforms()?.FirstOrDefault();
+}
+
+/// <summary>BigBox view-model: launch routes through HostLaunch.</summary>
+internal sealed class HostBigBoxMainViewModel : DummyBigBoxMainViewModel
+{
+    public override void PlayGame(IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCommandLine)
+        => HostLaunch.Launch("BigBox", game, app, emulator, overrideCommandLine);
+}
+
+/// <summary>LaunchBox view-model: launch routes through HostLaunch.</summary>
+internal sealed class HostLaunchBoxMainViewModel : DummyLaunchBoxMainViewModel
+{
+    public override void PlayGame(IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCommandLine)
+        => HostLaunch.Launch("LaunchBox", game, app, emulator, overrideCommandLine);
+}
+
+/// <summary>
+/// The launch lifecycle, kept close to LaunchBox's: notify IGameLaunchingPlugin
+/// plugins, FREE the optional data tier (the "free RAM at launch" feature), run
+/// AutoRunBefore additional apps, launch the main target (through the emulator OR
+/// directly for PC/no-emulator games), then AutoRunAfter apps; finally notify exit
+/// and reload the optional tier. Relative paths resolve against the LB root, never
+/// the process CWD. With <see cref="DryRun"/> nothing is spawned (commands are just
+/// logged) — used to test the lifecycle without launching real processes.
+/// </summary>
+internal static class HostLaunch
+{
+    private static PluginRegistry _reg;
+    private static GameStore _store;
+    private static string _lbRoot;
+
+    /// <summary>When true, the launch logs the resolved commands instead of spawning.</summary>
+    public static bool DryRun;
+
+    /// <summary>Raised when a game launch BEGINS (on the caller's thread — usually the UI thread).</summary>
+    public static event Action<IGame> GameStarted;
+
+    /// <summary>Raised when the launched game has EXITED and optional data is reloaded (on a worker thread).</summary>
+    public static event Action<IGame> GameEnded;
+
+    public static void Configure(PluginRegistry reg, GameStore store, string lbRoot)
+    {
+        _reg = reg; _store = store; _lbRoot = lbRoot;
+    }
+
+    public static void Launch(string who, IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCmd)
+    {
+        if (game == null) return;
+        Console.WriteLine($"[launch/{who}] {game.Title}  emu={emulator?.Title ?? "(none)"}  app={app?.Name ?? "(none)"}{(DryRun ? "  (dry)" : "")}");
+
+        // 0. notify the GUI (it may show a "game running" screen / unload its list)
+        //    BEFORE DropOptional so freed memory is reclaimed by the drop's GC.
+        try { GameStarted?.Invoke(game); } catch { }
+
+        // 1. notify launching plugins
+        Fire(p => p.OnBeforeGameLaunching(game, app, emulator));
+
+        // 2. free the optional tier + trim the working set — the headline
+        //    "free RAM at launch" (GameStarted already unloaded the GUI list above,
+        //    so the trim returns those pages to the OS too).
+        try
+        {
+            Mem.Report("before drop (launch)");
+            _store?.DropOptional();
+            Mem.Trim();
+            Mem.Report("after drop+trim (launch)");
+        }
+        catch { }
+
+        // 3. run + wait on a worker thread so the UI/web stay responsive
+        var t = new Thread(() => RunAndWait(game, app, emulator, overrideCmd)) { IsBackground = true, Name = "LbApiHost-game" };
+        t.Start();
+    }
+
+    private static void RunAndWait(IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCmd)
+    {
+        try
+        {
+            Fire(p => p.OnAfterGameLaunched(game, app, emulator));
+
+            var addApps = SafeAddApps(game);
+
+            // AutoRunBefore additional apps (scripts, mounts, …).
+            foreach (var a in addApps.Where(a => a.AutoRunBefore))
+                RunProcess(a.ApplicationPath, a.CommandLine, emulator, game, a.UseEmulator, $"autorun-before \"{a.Name}\"");
+
+            // Main target: an explicit additional-app if one was passed, else the game.
+            var main = ResolveMain(game, app, emulator, overrideCmd);
+            if (DryRun)
+            {
+                Console.WriteLine(main.HasValue
+                    ? $"[launch/dry] main: \"{ResolvePath(main.Value.path)}\" {main.Value.args}"
+                    : $"[launch/dry] main: (nothing runnable for \"{game.Title}\")");
+                Thread.Sleep(2500); // hold so the "game running" state is observable while testing
+            }
+            else if (main.HasValue)
+                RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main");
+            else
+                System.Windows.Forms.MessageBox.Show(
+                    $"[dummy launch] {game.Title}\nPlatform: {game.Platform}\nApp: {game.ApplicationPath}\n\n(Close = game exited)",
+                    "LbApiHost — dummy game");
+
+            // AutoRunAfter additional apps (cleanup).
+            foreach (var a in addApps.Where(a => a.AutoRunAfter))
+                RunProcess(a.ApplicationPath, a.CommandLine, emulator, game, a.UseEmulator, $"autorun-after \"{a.Name}\"");
+        }
+        catch (Exception ex) { Console.WriteLine("[launch] error: " + ex.Message); }
+        finally
+        {
+            Fire(p => p.OnGameExited());
+            try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
+            // GUI: game over + data reloaded → reload its list and restore selection.
+            try { GameEnded?.Invoke(game); } catch { }
+        }
+    }
+
+    /// <summary>(path, args, useEmu) of the main thing to launch, or null if nothing runnable.</summary>
+    private static (string path, string args, bool useEmu)? ResolveMain(
+        IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCmd)
+    {
+        string targetPath = !string.IsNullOrEmpty(app?.ApplicationPath) ? app.ApplicationPath : game.ApplicationPath;
+        if (string.IsNullOrEmpty(targetPath)) return null;
+
+        // Use the emulator when the app says so, or (no app) whenever one resolved.
+        bool useEmu = app != null ? app.UseEmulator : emulator != null;
+        string cmd = overrideCmd ?? (app?.CommandLine ?? SafeGameCommandLine(game));
+        return (targetPath, cmd ?? "", useEmu);
+    }
+
+    /// <summary>Resolves the command, spawns (or logs in DryRun), waits for exit.</summary>
+    private static void RunProcess(string targetPath, string cmd, IEmulator emulator, IGame game, bool useEmu, string label)
+    {
+        if (string.IsNullOrEmpty(targetPath)) return;
+
+        string fileName, args;
+        if (useEmu && emulator != null && !string.IsNullOrEmpty(emulator.ApplicationPath))
+        {
+            string emuCmd = string.IsNullOrWhiteSpace(cmd) ? EmulatorCmdFor(emulator, game) : cmd;
+            fileName = ResolvePath(emulator.ApplicationPath);
+            args = (string.IsNullOrWhiteSpace(emuCmd) ? "" : emuCmd.Trim() + " ") + "\"" + ResolvePath(targetPath) + "\"";
+        }
+        else
+        {
+            fileName = ResolvePath(targetPath);   // direct launch (PC, TeknoParrot, scripts)
+            args = cmd?.Trim() ?? "";
+        }
+
+        if (DryRun) { Console.WriteLine($"[launch/dry] {label}: \"{fileName}\" {args}"); return; }
+
+        Console.WriteLine($"[launch] {label}: \"{fileName}\" {args}");
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = args,
+                UseShellExecute = false,
+                WorkingDirectory = SafeDir(fileName) ?? _lbRoot ?? AppContext.BaseDirectory,
+            };
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit();
+        }
+        catch (Exception ex) { Console.WriteLine($"[launch] {label} error: {ex.Message}"); }
+    }
+
+    private static string EmulatorCmdFor(IEmulator emulator, IGame game)
+    {
+        try
+        {
+            var eps = emulator.GetAllEmulatorPlatforms();
+            var ep = eps?.FirstOrDefault(x => string.Equals(x.Platform, game.Platform, StringComparison.OrdinalIgnoreCase))
+                  ?? eps?.FirstOrDefault(x => x.IsDefault);
+            return ep?.CommandLine ?? emulator.CommandLine ?? "";
+        }
+        catch { return ""; }
+    }
+
+    private static IEnumerable<IAdditionalApplication> SafeAddApps(IGame game)
+    {
+        try { return game.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>(); }
+        catch { return Array.Empty<IAdditionalApplication>(); }
+    }
+
+    private static string SafeGameCommandLine(IGame game)
+    {
+        try { return game.CommandLine ?? ""; } catch { return ""; }
+    }
+
+    private static string ResolvePath(string p)
+    {
+        if (string.IsNullOrEmpty(p) || Path.IsPathRooted(p)) return p;
+        try { return Path.GetFullPath(Path.Combine(_lbRoot ?? AppContext.BaseDirectory, p)); } catch { return p; }
+    }
+
+    private static string SafeDir(string fullPath)
+    {
+        try { return Path.GetDirectoryName(fullPath); } catch { return null; }
+    }
+
+    private static void Fire(Action<IGameLaunchingPlugin> a)
+    {
+        if (_reg == null) return;
+        foreach (var p in _reg.GameLaunching)
+        {
+            try { a(p); } catch (Exception ex) { Console.WriteLine("[launch] plugin error: " + ex.Message); }
+        }
+    }
+}

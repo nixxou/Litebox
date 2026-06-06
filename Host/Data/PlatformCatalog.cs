@@ -1,0 +1,205 @@
+// Loads LB\Data\Platforms.xml: platform definitions (metadata), their custom
+// media folders (<PlatformFolder>) and platform categories. Few entities
+// (hundreds), so plain objects with full fidelity — only Games need the compact
+// store. The PlatformFolder map is what makes custom image paths (e.g. MS-DOS
+// "Box - Front" -> Images\MS-DOS\Front) resolve correctly via the API.
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Xml.Linq;
+using Unbroken.LaunchBox.Plugins.Data;
+using LbApiHost.Generated;
+
+namespace LbApiHost.Host.Data;
+
+internal sealed class HostPlatform : DummyPlatform
+{
+    private readonly string _name;
+    private readonly Dictionary<string, string> _folders; // MediaType -> absolute FolderPath
+    private readonly string _imagesRoot;
+    private IGame[] _games = Array.Empty<IGame>();
+
+    public HostPlatform(string name, Dictionary<string, string> folders, string imagesRoot)
+    {
+        _name = name;
+        _folders = folders ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _imagesRoot = imagesRoot;
+    }
+
+    public void SetGames(IGame[] games) => _games = games ?? Array.Empty<IGame>();
+
+    // ── metadata (from Platforms.xml) ────────────────────────────────────────
+    public override string Name { get => _name; set { } }
+    public string DeveloperValue, ManufacturerValue, NotesValue, CategoryValue,
+                  CpuValue, MemoryValue, GraphicsValue, SoundValue, DisplayValue,
+                  MaxControllersValue, ScrapeAsValue, SortTitleValue, ImageTypeValue,
+                  VideoPathValue, BigBoxThemeValue, BigBoxViewValue;
+    public DateTime? ReleaseDateValue;
+    public bool HideInBigBoxValue;
+    // image-folder config fields
+    public string FrontImagesFolderValue, BackImagesFolderValue, ClearLogoImagesFolderValue,
+                  FanartImagesFolderValue, ScreenshotImagesFolderValue, BannerImagesFolderValue,
+                  SteamBannerImagesFolderValue, ManualsFolderValue, MusicFolderValue, VideosFolderValue, FolderValue;
+
+    public override string Developer { get => DeveloperValue ?? ""; set { } }
+    public override string Manufacturer { get => ManufacturerValue ?? ""; set { } }
+    public override string Notes { get => NotesValue ?? ""; set { } }
+    public override string Category { get => CategoryValue ?? ""; set { } }
+    public override string Cpu { get => CpuValue ?? ""; set { } }
+    public override string Memory { get => MemoryValue ?? ""; set { } }
+    public override string Graphics { get => GraphicsValue ?? ""; set { } }
+    public override string Sound { get => SoundValue ?? ""; set { } }
+    public override string Display { get => DisplayValue ?? ""; set { } }
+    public override string MaxControllers { get => MaxControllersValue ?? ""; set { } }
+    public override string ScrapeAs { get => ScrapeAsValue ?? ""; set { } }
+    public override string SortTitle { get => SortTitleValue ?? ""; set { } }
+    public override string ImageType { get => ImageTypeValue ?? ""; set { } }
+    public override string VideoPath { get => VideoPathValue ?? ""; set { } }
+    public override string BigBoxTheme { get => BigBoxThemeValue ?? ""; set { } }
+    public override string BigBoxView { get => BigBoxViewValue ?? ""; set { } }
+    public override Nullable<DateTime> ReleaseDate { get => ReleaseDateValue; set { } }
+    public override bool HideInBigBox { get => HideInBigBoxValue; set { } }
+    public override string Folder { get => FolderValue ?? ""; set { } }
+    public override string FrontImagesFolder { get => FrontImagesFolderValue ?? ""; set { } }
+    public override string BackImagesFolder { get => BackImagesFolderValue ?? ""; set { } }
+    public override string ClearLogoImagesFolder { get => ClearLogoImagesFolderValue ?? ""; set { } }
+    public override string FanartImagesFolder { get => FanartImagesFolderValue ?? ""; set { } }
+    public override string ScreenshotImagesFolder { get => ScreenshotImagesFolderValue ?? ""; set { } }
+    public override string BannerImagesFolder { get => BannerImagesFolderValue ?? ""; set { } }
+    public override string SteamBannerImagesFolder { get => SteamBannerImagesFolderValue ?? ""; set { } }
+    public override string ManualsFolder { get => ManualsFolderValue ?? ""; set { } }
+    public override string MusicFolder { get => MusicFolderValue ?? ""; set { } }
+    public override string VideosFolder { get => VideosFolderValue ?? ""; set { } }
+
+    // ── games ────────────────────────────────────────────────────────────────
+    public override IGame[] GetAllGames(bool includeHidden, bool includeBroken) => _games;
+    public override int GetGameCount(bool includeHidden, bool includeBroken) => _games.Length;
+    public override bool HasGames(bool includeHidden, bool includeBroken) => _games.Length > 0;
+
+    // ── media folders (custom paths honoured here) ───────────────────────────
+    public override IPlatformFolder GetPlatformFolderByImageType(string imageType)
+    {
+        string path = _folders.TryGetValue(imageType, out var p) && !string.IsNullOrWhiteSpace(p)
+            ? p
+            : Path.Combine(_imagesRoot, Sanitize(_name), Sanitize(imageType)); // default convention
+        return new DummyPlatformFolder { MediaType = imageType, Platform = _name, FolderPath = path };
+    }
+
+    public override IPlatformFolder[] GetAllPlatformFolders()
+        => _folders.Select(kv => (IPlatformFolder)new DummyPlatformFolder
+        { MediaType = kv.Key, Platform = _name, FolderPath = kv.Value }).ToArray();
+
+    // Minimal LB-style filename sanitize (matches the common case).
+    private static string Sanitize(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        foreach (var c in Path.GetInvalidFileNameChars()) s = s.Replace(c, '_');
+        return s.Replace('\'', '_').Trim();
+    }
+}
+
+internal sealed class HostPlatformCategory : DummyPlatformCategory
+{
+    private readonly string _name;
+    public HostPlatformCategory(string name) { _name = name; }
+    public override string Name { get => _name; set { } }
+    public string NotesValue, NestedNameValue;
+    public override string Notes { get => NotesValue ?? ""; set { } }
+    public override string NestedName { get => NestedNameValue ?? ""; set { } }
+}
+
+internal static class PlatformCatalog
+{
+    public static (List<HostPlatform> platforms, List<HostPlatformCategory> categories) Load(string dataDir, string imagesRoot)
+    {
+        var platforms = new List<HostPlatform>();
+        var categories = new List<HostPlatformCategory>();
+        string file = Path.Combine(dataDir, "Platforms.xml");
+        if (!File.Exists(file)) return (platforms, categories);
+
+        XDocument doc;
+        try { doc = XDocument.Load(file); } catch { return (platforms, categories); }
+        var root = doc.Root;
+        if (root == null) return (platforms, categories);
+
+        // LB root (parent of Images): <FolderPath> entries are RELATIVE to it
+        // (e.g. "Images\Nintendo 64\Box - Front"). Resolve against the LB root —
+        // NOT the process CWD — or every custom folder resolves under LB\Core.
+        string lbRoot = Path.GetDirectoryName(imagesRoot?.TrimEnd('\\', '/')) ?? imagesRoot;
+
+        // Folders grouped by platform name (paths stored ABSOLUTE).
+        var foldersByPlatform = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pf in root.Elements("PlatformFolder"))
+        {
+            string plat = (string)pf.Element("Platform");
+            string media = (string)pf.Element("MediaType");
+            string path = (string)pf.Element("FolderPath");
+            if (string.IsNullOrWhiteSpace(plat) || string.IsNullOrWhiteSpace(media) || string.IsNullOrWhiteSpace(path)) continue;
+            if (!Path.IsPathRooted(path))
+                path = Path.GetFullPath(Path.Combine(lbRoot, path));
+            if (!foldersByPlatform.TryGetValue(plat, out var map))
+                foldersByPlatform[plat] = map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            map[media] = path;
+        }
+
+        foreach (var pe in root.Elements("Platform"))
+        {
+            string name = (string)pe.Element("Name");
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            foldersByPlatform.TryGetValue(name, out var folders);
+            var hp = new HostPlatform(name, folders, imagesRoot)
+            {
+                DeveloperValue = (string)pe.Element("Developer"),
+                ManufacturerValue = (string)pe.Element("Manufacturer"),
+                NotesValue = (string)pe.Element("Notes"),
+                CategoryValue = (string)pe.Element("Category"),
+                CpuValue = (string)pe.Element("Cpu"),
+                MemoryValue = (string)pe.Element("Memory"),
+                GraphicsValue = (string)pe.Element("Graphics"),
+                SoundValue = (string)pe.Element("Sound"),
+                DisplayValue = (string)pe.Element("Display"),
+                MaxControllersValue = (string)pe.Element("MaxControllers"),
+                ScrapeAsValue = (string)pe.Element("ScrapeAs"),
+                SortTitleValue = (string)pe.Element("SortTitle"),
+                ImageTypeValue = (string)pe.Element("ImageType"),
+                VideoPathValue = (string)pe.Element("VideoPath"),
+                BigBoxThemeValue = (string)pe.Element("BigBoxTheme"),
+                BigBoxViewValue = (string)pe.Element("BigBoxView"),
+                ReleaseDateValue = ParseDate((string)pe.Element("ReleaseDate")),
+                HideInBigBoxValue = ((string)pe.Element("HideInBigBox") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
+                FolderValue = (string)pe.Element("Folder"),
+                FrontImagesFolderValue = (string)pe.Element("FrontImagesFolder"),
+                BackImagesFolderValue = (string)pe.Element("BackImagesFolder"),
+                ClearLogoImagesFolderValue = (string)pe.Element("ClearLogoImagesFolder"),
+                FanartImagesFolderValue = (string)pe.Element("FanartImagesFolder"),
+                ScreenshotImagesFolderValue = (string)pe.Element("ScreenshotImagesFolder"),
+                BannerImagesFolderValue = (string)pe.Element("BannerImagesFolder"),
+                SteamBannerImagesFolderValue = (string)pe.Element("SteamBannerImagesFolder"),
+                ManualsFolderValue = (string)pe.Element("ManualsFolder"),
+                MusicFolderValue = (string)pe.Element("MusicFolder"),
+                VideosFolderValue = (string)pe.Element("VideosFolder"),
+            };
+            platforms.Add(hp);
+        }
+
+        foreach (var ce in root.Elements("PlatformCategory"))
+        {
+            string name = (string)ce.Element("Name");
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            categories.Add(new HostPlatformCategory(name)
+            {
+                NotesValue = (string)ce.Element("Notes"),
+                NestedNameValue = (string)ce.Element("NestedName"),
+            });
+        }
+
+        Console.WriteLine($"[platcat] file={file} exists={File.Exists(file)} platforms={platforms.Count} categories={categories.Count} folders={foldersByPlatform.Count} rootChildren={root.Elements().Count()}");
+        return (platforms, categories);
+    }
+
+    private static DateTime? ParseDate(string s)
+        => DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var d) ? d : (DateTime?)null;
+}

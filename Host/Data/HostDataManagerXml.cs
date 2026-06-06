@@ -4,7 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Generated;
 
@@ -22,6 +24,10 @@ internal sealed class HostDataManagerXml : DummyDataManager
     private readonly Dictionary<string, IEmulator> _emulatorById;
     private readonly IPlaylist[] _playlists;
     private readonly Dictionary<string, IPlaylist> _playlistById;
+    private readonly List<object> _roots;   // tree roots (categories/platforms/playlists) from Parents.xml
+
+    /// <summary>Host-side tree roots for the GUI (objects: HostPlatform / HostPlatformCategory / HostPlaylist).</summary>
+    public IReadOnlyList<object> RootNodes => _roots;
 
     public HostDataManagerXml(GameStore store, string dataDir, string imagesRoot)
     {
@@ -73,7 +79,44 @@ internal sealed class HostDataManagerXml : DummyDataManager
         foreach (var pl in playlists)
             if (!string.IsNullOrEmpty(pl.PlaylistIdValue)) _playlistById[pl.PlaylistIdValue] = pl;
 
-        Console.WriteLine($"[HostDataManagerXml] playlists={_playlists.Length}");
+        // ── Category tree from Parents.xml (the LaunchBox-native hierarchy) ──
+        var catByName = new Dictionary<string, HostPlatformCategory>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in categories) if (!string.IsNullOrEmpty(c.Name)) catByName[c.Name] = c;
+        var plById = new Dictionary<string, HostPlaylist>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pl in playlists) if (!string.IsNullOrEmpty(pl.PlaylistIdValue)) plById[pl.PlaylistIdValue] = pl;
+
+        object ResolveNode(string platName, string playId, string catName)
+            => !string.IsNullOrEmpty(platName) ? (byName.TryGetValue(platName, out var p) ? (object)p : null)
+             : !string.IsNullOrEmpty(playId) ? (plById.TryGetValue(playId, out var pl) ? (object)pl : null)
+             : !string.IsNullOrEmpty(catName) ? (catByName.TryGetValue(catName, out var c) ? (object)c : null)
+             : null;
+
+        var hasParent = new HashSet<object>();
+        string parentsFile = Path.Combine(dataDir, "Parents.xml");
+        if (File.Exists(parentsFile))
+        {
+            try
+            {
+                foreach (var pe in XDocument.Load(parentsFile).Root.Elements("Parent"))
+                {
+                    var node = ResolveNode((string)pe.Element("PlatformName"), (string)pe.Element("PlaylistId"), (string)pe.Element("PlatformCategoryName"));
+                    if (node == null) continue;
+                    var parent = ResolveNode((string)pe.Element("ParentPlatformName"), (string)pe.Element("ParentPlaylistId"), (string)pe.Element("ParentPlatformCategoryName"));
+                    if (parent is HostPlatformCategory parentCat) { parentCat.AddChild(node); hasParent.Add(node); }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[HostDataManagerXml] Parents.xml: " + ex.Message); }
+        }
+        foreach (var c in categories) c.SortChildren();
+
+        // Roots = every category/platform/playlist that is not a child of a category.
+        var roots = new List<object>();
+        foreach (var c in categories) if (!hasParent.Contains(c)) roots.Add(c);
+        foreach (var p in byName.Values) if (!hasParent.Contains(p)) roots.Add(p);
+        foreach (var pl in playlists) if (!hasParent.Contains(pl)) roots.Add(pl);
+        _roots = roots.OrderBy(HostPlatformCategory.NodeName, StringComparer.OrdinalIgnoreCase).ToList();
+
+        Console.WriteLine($"[HostDataManagerXml] playlists={_playlists.Length} roots={_roots.Count}");
     }
 
     public override IGame[] GetAllGames() => _allGames;
@@ -86,6 +129,8 @@ internal sealed class HostDataManagerXml : DummyDataManager
     public override IPlatformCategory[] GetAllPlatformCategories() => _categories;
     public override IPlatformCategory GetPlatformCategoryByName(string name)
         => (name != null && _categoryByName.TryGetValue(name, out var c)) ? c : null;
+    // SDK API can only carry IPlatform; categories/playlists aren't IPlatform in this SDK,
+    // so this returns platforms only. The GUI uses RootNodes (the full object tree).
     public override IList<IPlatform> GetRootPlatformsCategoriesPlaylists() => _platforms.ToList();
 
     public override IEmulator[] GetAllEmulators() => _emulators;

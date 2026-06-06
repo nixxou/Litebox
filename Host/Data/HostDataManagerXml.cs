@@ -66,7 +66,7 @@ internal sealed class HostDataManagerXml : DummyDataManager
 
         // Playlists: manual ones resolve via GetGameById; auto-populate ones
         // evaluate their filters over the full game list.
-        var playlists = PlaylistCatalog.Load(dataDir);
+        var playlists = PlaylistCatalog.Load(dataDir, imagesRoot);
         foreach (var pl in playlists) { pl.SetResolver(GetGameById); pl.SetAllGamesProvider(() => _allGames); }
         _playlists = playlists.Cast<IPlaylist>().ToArray();
         _playlistById = new Dictionary<string, IPlaylist>(StringComparer.OrdinalIgnoreCase);

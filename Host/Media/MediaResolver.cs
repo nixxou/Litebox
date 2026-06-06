@@ -254,6 +254,30 @@ internal static class MediaResolver
         catch { return null; }
     }
 
+    /// <summary>
+    /// A platform/category/playlist image: &lt;imagesRoot&gt;\&lt;rootFolder&gt;\&lt;name&gt;\&lt;type&gt;\&lt;name&gt;.ext
+    /// (e.g. Images\Platforms\Nintendo 64\Banner\Nintendo 64.jpg). "" if none.
+    /// </summary>
+    public static string NamedImage(string imagesRoot, string rootFolder, string name, string typeFolder)
+    {
+        if (string.IsNullOrEmpty(imagesRoot) || string.IsNullOrEmpty(name)) return "";
+        string san = Sanitize(name);
+        string dir = Path.Combine(imagesRoot, rootFolder, san, typeFolder);
+        if (!Directory.Exists(dir)) return "";
+        foreach (var ext in new[] { ".png", ".jpg", ".jpeg" })
+        {
+            var f = Path.Combine(dir, san + ext);
+            if (File.Exists(f)) return f;
+        }
+        try
+        {
+            var any = Directory.EnumerateFiles(dir).FirstOrDefault(f => ImageExts.Contains(Path.GetExtension(f)));
+            if (any != null) return any;
+        }
+        catch { }
+        return "";
+    }
+
     // ── Core: best matching file in a single directory ───────────────────────
     private static string BestInDir(string dir, Guid id, string sani, HashSet<string> exts)
     {

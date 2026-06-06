@@ -12,11 +12,27 @@ using System.Linq;
 using System.Xml.Linq;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Generated;
+using LbApiHost.Host.Media;
 
 namespace LbApiHost.Host.Data;
 
 /// <summary>A single auto-populate rule (Value / FieldKey / ComparisonTypeKey).</summary>
 internal sealed record PlaylistFilterDef(string FieldKey, string ComparisonTypeKey, string Value);
+
+/// <summary>IPlaylistFilter over a PlaylistFilterDef (filters ARE applied in HostPlaylist;
+/// this exposes them to plugins, with a working GetMatches).</summary>
+internal sealed class HostPlaylistFilter : DummyPlaylistFilter
+{
+    private readonly PlaylistFilterDef _f;
+    private readonly string _playlistId;
+    public HostPlaylistFilter(PlaylistFilterDef f, string playlistId) { _f = f; _playlistId = playlistId; }
+
+    public override string PlaylistId { get => _playlistId ?? ""; set { } }
+    public override string Value { get => _f.Value ?? ""; set { } }
+    public override string FieldKey { get => _f.FieldKey ?? ""; set { } }
+    public override string ComparisonTypeKey { get => _f.ComparisonTypeKey ?? ""; set { } }
+    public override bool GetMatches(IGame game) => HostPlaylist.Match(game, _f);
+}
 
 internal sealed class HostPlaylistGame : DummyPlaylistGame
 {
@@ -48,6 +64,7 @@ internal sealed class HostPlaylist : DummyPlaylist
 
     public string PlaylistIdValue, NameValue, NestedNameValue, NotesValue, SortByValue, CategoryValue;
     public bool AutoPopulateValue, IncludeWithPlatformsValue;
+    public string ImagesRootValue;   // <LB>\Images, for playlist images
 
     public void Add(HostPlaylistGame g) => _games.Add(g);
     public void AddFilter(PlaylistFilterDef f) => _filters.Add(f);
@@ -70,6 +87,20 @@ internal sealed class HostPlaylist : DummyPlaylist
 
     public override IPlaylistGame[] GetAllPlaylistGames() => _games.Cast<IPlaylistGame>().ToArray();
 
+    public override IPlaylistFilter[] GetAllPlaylistFilters()
+        => _filters.Select(f => (IPlaylistFilter)new HostPlaylistFilter(f, PlaylistIdValue)).ToArray();
+
+    // ── Images (Images\Playlists\<name>\<type>\<name>.ext) ────────────────────
+    public override string ClearLogoImagePath => Img("Clear Logo");
+    public override string BannerImagePath => Img("Banner");
+    public override string BackgroundImagePath => Img("Fanart");
+    public override string DeviceImagePath => Img("Device");
+    public override string DefaultBoxImagePath => Img("Default Box");
+    public override string Default3DBoxImagePath => Img("Default 3D Box");
+    public override string DefaultCartImagePath => Img("Default Cart");
+    public override string Default3DCartImagePath => Img("Default 3D Cart");
+    private string Img(string type) => MediaResolver.NamedImage(ImagesRootValue, "Playlists", NameValue, type);
+
     public override IGame[] GetAllGames(bool sort)
     {
         // AutoPopulate: evaluate the filter rules over every game (AND of all rules).
@@ -87,9 +118,12 @@ internal sealed class HostPlaylist : DummyPlaylist
     private bool MatchesAllFilters(IGame g)
     {
         foreach (var f in _filters)
-            if (!Compare(Field(g, f.FieldKey), f.ComparisonTypeKey, f.Value)) return false;
+            if (!Match(g, f)) return false;
         return true;
     }
+
+    /// <summary>Evaluates a single filter rule against a game (used by HostPlaylistFilter too).</summary>
+    internal static bool Match(IGame g, PlaylistFilterDef f) => Compare(Field(g, f.FieldKey), f.ComparisonTypeKey, f.Value);
 
     private static string Field(IGame g, string key)
     {
@@ -142,7 +176,7 @@ internal sealed class HostPlaylist : DummyPlaylist
 
 internal static class PlaylistCatalog
 {
-    public static List<HostPlaylist> Load(string dataDir)
+    public static List<HostPlaylist> Load(string dataDir, string imagesRoot)
     {
         var result = new List<HostPlaylist>();
         string dir = Path.Combine(dataDir, "Playlists");
@@ -166,6 +200,7 @@ internal static class PlaylistCatalog
                 CategoryValue = (string)pe.Element("Category"),
                 AutoPopulateValue = ((string)pe.Element("AutoPopulate") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
                 IncludeWithPlatformsValue = ((string)pe.Element("IncludeWithPlatforms") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
+                ImagesRootValue = imagesRoot,
             };
 
             foreach (var pge in root.Elements("PlaylistGame"))

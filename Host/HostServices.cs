@@ -67,6 +67,15 @@ internal sealed class HostStateManager : DummyStateManager
 
     public override IPlatform GetSelectedPlatform()
         => Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllPlatforms()?.FirstOrDefault();
+
+    /// <summary>Set by the GUI so plugins can read the currently-selected games.</summary>
+    public static Func<IGame[]> SelectedGamesProvider;
+
+    public override IGame[] GetAllSelectedGames()
+    {
+        try { return SelectedGamesProvider?.Invoke() ?? Array.Empty<IGame>(); }
+        catch { return Array.Empty<IGame>(); }
+    }
 }
 
 /// <summary>BigBox view-model: launch routes through HostLaunch.</summary>

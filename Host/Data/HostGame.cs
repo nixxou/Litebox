@@ -176,6 +176,9 @@ internal sealed class HostGame : DummyGame
     public override IMount[] GetAllMounts()
         => _s.MountsFor(R.Id).Select(m => (IMount)new HostMount(m, R.Id.ToString())).ToArray();
 
+    public override ICustomField[] GetAllCustomFields()
+        => _s.CustomFieldsFor(R.Id).Select(c => (ICustomField)new HostCustomField(c, R.Id.ToString())).ToArray();
+
     // Run the game's Configuration Application (DOSBox-aware for DOSBox games).
     public override string Configure() => LbApiHost.Host.HostLaunch.RunConfigTool(this);
 
@@ -215,6 +218,18 @@ internal sealed class HostAdditionalApplication : DummyAdditionalApplication
     public override bool WaitForExit { get => _a.WaitForExit; set { } }
     public override bool SideA { get => _a.SideA; set { } }
     public override bool SideB { get => _a.SideB; set { } }
+}
+
+/// <summary>ICustomField over a CustomField record.</summary>
+internal sealed class HostCustomField : DummyCustomField
+{
+    private readonly CustomField _c;
+    private readonly string _gameId;
+    public HostCustomField(CustomField c, string gameId) { _c = c; _gameId = gameId; }
+
+    public override string GameId { get => _gameId; set { } }
+    public override string Name { get => _c.Name ?? ""; set { } }
+    public override string Value { get => _c.Value ?? ""; set { } }
 }
 
 /// <summary>IMount over a GameMount record (DOSBox additional mount).</summary>

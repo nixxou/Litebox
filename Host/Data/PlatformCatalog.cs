@@ -11,6 +11,7 @@ using System.Linq;
 using System.Xml.Linq;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Generated;
+using LbApiHost.Host.Media;
 
 namespace LbApiHost.Host.Data;
 
@@ -124,6 +125,17 @@ internal sealed class HostPlatform : DummyPlatform
         => _folders.Select(kv => (IPlatformFolder)new DummyPlatformFolder
         { MediaType = kv.Key, Platform = _name, FolderPath = kv.Value }).ToArray();
 
+    // ── Platform-level images (Images\Platforms\<name>\<type>\<name>.ext) ─────
+    public override string ClearLogoImagePath => Img("Clear Logo");
+    public override string BannerImagePath => Img("Banner");
+    public override string BackgroundImagePath => Img("Fanart");
+    public override string DeviceImagePath => Img("Device");
+    public override string DefaultBoxImagePath => Img("Default Box");
+    public override string Default3DBoxImagePath => Img("Default 3D Box");
+    public override string DefaultCartImagePath => Img("Default Cart");
+    public override string Default3DCartImagePath => Img("Default 3D Cart");
+    private string Img(string type) => MediaResolver.NamedImage(_imagesRoot, "Platforms", _name, type);
+
     // Minimal LB-style filename sanitize (matches the common case).
     private static string Sanitize(string s)
     {
@@ -136,11 +148,19 @@ internal sealed class HostPlatform : DummyPlatform
 internal sealed class HostPlatformCategory : DummyPlatformCategory
 {
     private readonly string _name;
-    public HostPlatformCategory(string name) { _name = name; }
+    private readonly string _imagesRoot;
+    public HostPlatformCategory(string name, string imagesRoot) { _name = name; _imagesRoot = imagesRoot; }
     public override string Name { get => _name; set { } }
     public string NotesValue, NestedNameValue;
     public override string Notes { get => NotesValue ?? ""; set { } }
     public override string NestedName { get => NestedNameValue ?? ""; set { } }
+
+    // Category images: Images\Platform Categories\<name>\<type>\<name>.ext
+    public override string ClearLogoImagePath => Img("Clear Logo");
+    public override string BannerImagePath => Img("Banner");
+    public override string BackgroundImagePath => Img("Fanart");
+    public override string DeviceImagePath => Img("Device");
+    private string Img(string type) => MediaResolver.NamedImage(_imagesRoot, "Platform Categories", _name, type);
 }
 
 internal static class PlatformCatalog
@@ -221,7 +241,7 @@ internal static class PlatformCatalog
         {
             string name = (string)ce.Element("Name");
             if (string.IsNullOrWhiteSpace(name)) continue;
-            categories.Add(new HostPlatformCategory(name)
+            categories.Add(new HostPlatformCategory(name, imagesRoot)
             {
                 NotesValue = (string)ce.Element("Notes"),
                 NestedNameValue = (string)ce.Element("NestedName"),

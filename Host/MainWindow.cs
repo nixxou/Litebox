@@ -167,7 +167,24 @@ internal sealed class MainWindow : Form
         // React to game launch start/end (for the running screen + during-game unload).
         HostLaunch.GameStarted += OnGameStarted;
         HostLaunch.GameEnded += OnGameEnded;
-        FormClosed += (_, _) => { HostLaunch.GameStarted -= OnGameStarted; HostLaunch.GameEnded -= OnGameEnded; };
+        FormClosed += (_, _) =>
+        {
+            HostLaunch.GameStarted -= OnGameStarted;
+            HostLaunch.GameEnded -= OnGameEnded;
+            HostStateManager.SelectedGamesProvider = null;
+        };
+
+        // Expose the current selection to plugins via IStateManager (UI-thread safe).
+        HostStateManager.SelectedGamesProvider = () =>
+        {
+            try
+            {
+                if (IsDisposed) return Array.Empty<IGame>();
+                if (InvokeRequired) return (IGame[])Invoke((Func<IGame[]>)(() => _games.SelectedObjects.OfType<IGame>().ToArray()));
+                return _games.SelectedObjects.OfType<IGame>().ToArray();
+            }
+            catch { return Array.Empty<IGame>(); }
+        };
 
         // ── Top menu: system-menu plugins ────────────────────────────────────
         var menu = new MenuStrip { Dock = DockStyle.Top, BackColor = Panel2, ForeColor = Fg, Renderer = new DarkRenderer() };

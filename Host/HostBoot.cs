@@ -177,6 +177,17 @@ internal static class HostBoot
                     if (g.UseScummVm) { nScumm++; scummEx ??= g; }
                 }
                 Console.WriteLine($"[apitest] UseDosBox games={nDos} UseScummVm games={nScumm}");
+                // quick-wins: playlist filters, platform images, custom fields
+                var apl = dm2.GetAllPlaylists()?.FirstOrDefault(p => p.AutoPopulate);
+                if (apl != null) Console.WriteLine($"[apitest] playlist \"{apl.Name}\" filters={apl.GetAllPlaylistFilters().Length}");
+                var aplat = dm2.GetPlatformByName("MS-DOS") ?? dm2.GetAllPlatforms().FirstOrDefault();
+                if (aplat != null) Console.WriteLine($"[apitest] platform \"{aplat.Name}\" banner='{aplat.BannerImagePath}' clearLogo='{aplat.ClearLogoImagePath}' bg='{aplat.BackgroundImagePath}'");
+                foreach (var gg in dm2.GetAllGames())
+                {
+                    var cf = gg.GetAllCustomFields();
+                    if (cf.Length > 0) { Console.WriteLine($"[apitest] customFields \"{gg.Title}\": " + string.Join(", ", cf.Select(c => $"{c.Name}={c.Value}"))); break; }
+                }
+
                 if (dosEx != null) Console.WriteLine($"[apitest] DosBox ex: \"{dosEx.Title}\" cfg='{dosEx.DosBoxConfigurationPath}' cmd='{dosEx.CommandLine}'");
                 if (scummEx != null) Console.WriteLine($"[apitest] ScummVM ex: \"{scummEx.Title}\" type='{scummEx.ScummVmGameType}' data='{scummEx.ScummVmGameDataFolderPath}'");
 

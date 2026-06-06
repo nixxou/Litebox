@@ -80,9 +80,11 @@ internal sealed class GameStore
     private readonly Dictionary<Guid, List<AddApp>> _addApps = new();
     private readonly Dictionary<Guid, List<AltName>> _altNames = new();
     private readonly Dictionary<Guid, List<GameMount>> _mounts = new();   // DOSBox additional mounts
+    private readonly Dictionary<Guid, List<CustomField>> _customFields = new();
     public IReadOnlyList<AddApp> AddAppsFor(Guid id) => _addApps.TryGetValue(id, out var l) ? l : (IReadOnlyList<AddApp>)Array.Empty<AddApp>();
     public IReadOnlyList<AltName> AltNamesFor(Guid id) => _altNames.TryGetValue(id, out var l) ? l : (IReadOnlyList<AltName>)Array.Empty<AltName>();
     public IReadOnlyList<GameMount> MountsFor(Guid id) => _mounts.TryGetValue(id, out var l) ? l : (IReadOnlyList<GameMount>)Array.Empty<GameMount>();
+    public IReadOnlyList<CustomField> CustomFieldsFor(Guid id) => _customFields.TryGetValue(id, out var l) ? l : (IReadOnlyList<CustomField>)Array.Empty<CustomField>();
 
     public int Count => Rows.Length;
     public string Str(int idx) => (idx > 0 && idx < Pool.Length) ? Pool[idx] : "";
@@ -125,7 +127,7 @@ internal sealed class GameStore
             {
                 if (reader.NodeType != XmlNodeType.Element) { reader.Read(); continue; }
                 string en = reader.Name;
-                if (en != "Game" && en != "AdditionalApplication" && en != "AlternateName" && en != "Mount") { reader.Read(); continue; }
+                if (en != "Game" && en != "AdditionalApplication" && en != "AlternateName" && en != "Mount" && en != "CustomField") { reader.Read(); continue; }
 
                 XElement g;
                 try { g = (XElement)XNode.ReadFrom(reader); } catch { reader.Read(); continue; }
@@ -171,6 +173,15 @@ internal sealed class GameStore
                             Filesystem = V("Filesystem"), MountType = V("MountType"),
                             Path = V("Path"), Type = V("Type"),
                         });
+                    }
+                    continue;
+                }
+                if (en == "CustomField")
+                {
+                    if (Guid.TryParse(V("GameID"), out var cgid))
+                    {
+                        if (!_customFields.TryGetValue(cgid, out var cl)) _customFields[cgid] = cl = new List<CustomField>();
+                        cl.Add(new CustomField { Name = V("Name"), Value = V("Value") });
                     }
                     continue;
                 }
@@ -388,4 +399,10 @@ internal sealed class GameMount
 {
     public char DriveLetter;
     public string Filesystem, MountType, Path, Type;
+}
+
+/// <summary>A game's custom field (name/value), from the Platform XML.</summary>
+internal sealed class CustomField
+{
+    public string Name, Value;
 }

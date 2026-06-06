@@ -165,6 +165,20 @@ internal static class HostBoot
                         break;
                     }
                 }
+                // extended fields: dump the first game + any DosBox/ScummVM game found
+                var g0 = dm2.GetAllGames().FirstOrDefault();
+                if (g0 != null)
+                    Console.WriteLine($"[apitest] ext \"{g0.Title}\": CommandLine='{g0.CommandLine}' Series='{g0.Series}' Source='{g0.Source}' ReleaseType='{g0.ReleaseType}' Devs=[{string.Join(",", g0.Developers)}] Genres=[{string.Join(",", g0.Genres)}] UseDosBox={g0.UseDosBox} UseScummVm={g0.UseScummVm} DateModified={g0.DateModified:yyyy-MM-dd}");
+                int nDos = 0, nScumm = 0;
+                IGame dosEx = null, scummEx = null;
+                foreach (var g in dm2.GetAllGames())
+                {
+                    if (g.UseDosBox) { nDos++; dosEx ??= g; }
+                    if (g.UseScummVm) { nScumm++; scummEx ??= g; }
+                }
+                Console.WriteLine($"[apitest] UseDosBox games={nDos} UseScummVm games={nScumm}");
+                if (dosEx != null) Console.WriteLine($"[apitest] DosBox ex: \"{dosEx.Title}\" cfg='{dosEx.DosBoxConfigurationPath}' cmd='{dosEx.CommandLine}'");
+                if (scummEx != null) Console.WriteLine($"[apitest] ScummVM ex: \"{scummEx.Title}\" type='{scummEx.ScummVmGameType}' data='{scummEx.ScummVmGameDataFolderPath}'");
             }
 
             if (args.Contains("--playlists"))

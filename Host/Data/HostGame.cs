@@ -77,6 +77,60 @@ internal sealed class HostGame : DummyGame
     // Tier 2 — may be unloaded (returns "" when dropped).
     public override string Notes { get => _s.NotesFor(_i) ?? ""; set { } }
 
+    // ── Extended fields (string-backed) ──────────────────────────────────────
+    public override string CommandLine { get => _s.Str(R.CommandLineIdx); set { } }
+    public override string ConfigurationCommandLine { get => _s.Str(R.ConfigCmdIdx); set { } }
+    public override string ConfigurationPath { get => _s.Str(R.ConfigPathIdx); set { } }
+    public override string DosBoxConfigurationPath { get => _s.Str(R.DosBoxCfgIdx); set { } }
+    public override string ScummVmGameDataFolderPath { get => _s.Str(R.ScummDataIdx); set { } }
+    public override string ScummVmGameType { get => _s.Str(R.ScummTypeIdx); set { } }
+    public override string Series { get => _s.Str(R.SeriesIdx); set { } }
+    public override string Source { get => _s.Str(R.SourceIdx); set { } }
+    public override string ReleaseType { get => _s.Str(R.ReleaseTypeIdx); set { } }
+    public override string RootFolder { get => _s.Str(R.RootFolderIdx); set { } }
+    public override string CloneOf { get => _s.Str(R.CloneOfIdx); set { } }
+    public override string Progress { get => _s.Str(R.ProgressIdx); set { } }
+    // Stored media-path overrides (the computed resolvers are the Get*Path methods below).
+    public override string VideoPath { get => _s.Str(R.VideoPathIdx); set { } }
+    public override string ThemeVideoPath { get => _s.Str(R.ThemeVideoPathIdx); set { } }
+    public override string ManualPath { get => _s.Str(R.ManualPathIdx); set { } }
+    public override string MusicPath { get => _s.Str(R.MusicPathIdx); set { } }
+
+    public override DateTime DateModified { get => R.DateModifiedTicks == 0 ? default : new DateTime(R.DateModifiedTicks); set { } }
+    public override float CommunityStarRating { get => R.CommunityStarRating; set { } }
+    public override float CommunityOrLocalStarRating { get => R.StarRatingFloat > 0 ? R.StarRatingFloat : R.CommunityStarRating; set { } }
+    public override int StartupLoadDelay { get => R.StartupLoadDelay; set { } }
+
+    // ── Extended fields (boolean flags, packed) ──────────────────────────────
+    public override bool UseDosBox { get => Flag(GFlags.UseDosBox); set { } }
+    public override bool UseScummVm { get => Flag(GFlags.UseScummVm); set { } }
+    public override bool ScummVmAspectCorrection { get => Flag(GFlags.ScummAspect); set { } }
+    public override bool ScummVmFullscreen { get => Flag(GFlags.ScummFull); set { } }
+    public override bool Portable { get => Flag(GFlags.Portable); set { } }
+    public override bool UseStartupScreen { get => Flag(GFlags.UseStartup); set { } }
+    public override bool OverrideDefaultStartupScreenSettings { get => Flag(GFlags.OverrideStartup); set { } }
+    public override bool HideAllNonExclusiveFullscreenWindows { get => Flag(GFlags.HideNonExclusive); set { } }
+    public override bool HideMouseCursorInGame { get => Flag(GFlags.HideMouse); set { } }
+    public override bool DisableShutdownScreen { get => Flag(GFlags.DisableShutdown); set { } }
+    public override bool AggressiveWindowHiding { get => Flag(GFlags.AggressiveHiding); set { } }
+
+    // ── Computed (no storage) ────────────────────────────────────────────────
+    public override string SortTitleOrTitle
+    { get { var s = _s.Str(R.SortTitleIdx); return s.Length > 0 ? s : _s.Str(R.TitleIdx); } set { } }
+    public override string[] PlayModes { get => Split(_s.Str(R.PlayModeIdx)); set { } }
+    public override string[] Developers { get => Split(_s.Str(R.DeveloperIdx)); set { } }
+    public override string[] Publishers { get => Split(_s.Str(R.PublisherIdx)); set { } }
+    public override string[] SeriesValues { get => Split(_s.Str(R.SeriesIdx)); set { } }
+    public override System.Collections.Concurrent.BlockingCollection<string> Genres
+    {
+        get { var bc = new System.Collections.Concurrent.BlockingCollection<string>(); foreach (var g in Split(_s.Str(R.GenresIdx))) bc.Add(g); return bc; }
+        set { }
+    }
+
+    private bool Flag(int bit) => (R.Flags & bit) != 0;
+    private static string[] Split(string s)
+        => string.IsNullOrEmpty(s) ? Array.Empty<string>() : s.Split(';').Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
+
     // ── Media (classic IO resolution; fast path via ExtendDB GameCache if ready) ──
     // These are COMPUTED in LaunchBox (not stored), so we resolve them on read.
     private string _plat => _s.Str(R.PlatformIdx);

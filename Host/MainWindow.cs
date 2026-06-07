@@ -1,6 +1,6 @@
 // The host GUI — a LaunchBox-like 3-pane layout (dark themed):
 //   LEFT   : source tree (All Games / Platforms / Playlists, incl. auto-playlists).
-//   CENTER : sortable, searchable game LIST (FastObjectListView, columns). Default
+//   CENTER : sortable, searchable game LIST (native GameListView, columns). Default
 //            order = CompareName (normalized title); a Sort combo + direction toggle
 //            and column-click let the user re-order. NOT thumbnails (toggle = later).
 //   RIGHT  : details of the selected game — clear logo + box art + metadata + notes.
@@ -68,6 +68,8 @@ internal sealed class MainWindow : Form
     private readonly HeroPanel _hero;            // fanart + clear logo (pulse) + rating + heart
     private readonly MediaPanel _media;          // main media (box → screenshots, click to switch)
     private readonly MediaStrip _strip;          // clickable mini-thumbnails under the main media (slim custom scrollbar)
+    private SplitContainer _outerSplit;          // left tree | (middle list + right details) — % persisted
+    private SplitContainer _innerSplit;          // middle list | right details — % persisted
     private Panel _detailHost;                    // scroll viewport hosting the detail grid (scrollbar when content overflows)
     private TableLayoutPanel _detailGrid;        // detail layout — sized by RelayoutDetail (fills viewport, or taller → scrolls)
     private double _mediaAspect = 16.0 / 9.0;    // reserved main-media area aspect (16:9 default, 2:3 poster option)
@@ -152,14 +154,17 @@ internal sealed class MainWindow : Form
         _poster = BuildPoster();
 
         var inner = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
+        inner.Panel1.BackColor = Panel;       // shows in the side margins around the centred poster grid
         inner.Panel1.Controls.Add(_poster);   // hidden until poster mode; same cell as the list
         inner.Panel1.Controls.Add(_games);
         inner.Panel2.Controls.Add(_detailHost);
+        inner.Panel1.Resize += (_, _) => LayoutPoster();   // keep the poster grid centred on resize
 
         var outer = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
         outer.Panel1.Controls.Add(_sources);
         outer.Panel2.Controls.Add(inner);
         Controls.Add(outer);
+        _outerSplit = outer; _innerSplit = inner;   // for splitter % persistence
 
         // ── Top toolbar ──────────────────────────────────────────────────────
         var bar = new ToolStrip
@@ -328,8 +333,15 @@ internal sealed class MainWindow : Form
 
         Load += (_, _) =>
         {
-            try { outer.SplitterDistance = 240; } catch { }
-            try { inner.SplitterDistance = Math.Max(300, inner.Width - 380); } catch { }
+            // Pane widths: restore the saved fractions (left tree, middle list) so the 3 panes scale
+            // proportionally with the window; fall back to fixed defaults on first run. outer first
+            // (sets inner's available width), then inner.
+            int leftPm = _cfg.GetInt("SplitLeftPermille", 0);
+            int midPm = _cfg.GetInt("SplitMidPermille", 0);
+            if (leftPm > 0) SetSplitFraction(outer, leftPm / 1000.0);
+            else try { outer.SplitterDistance = 240; } catch { }
+            if (midPm > 0) SetSplitFraction(inner, midPm / 1000.0);
+            else try { inner.SplitterDistance = Math.Max(300, inner.Width - 380); } catch { }
             RestoreColumnLayout();   // order / width / shown-hidden from the INI
             RestoreSort();           // last sort column + direction
             PopulateSources();       // build the tree
@@ -664,7 +676,29 @@ internal sealed class MainWindow : Form
         _cfg.SetBool("SortAsc", _ascending);
         _cfg.SetBool("MetaExpanded", _metaExpanded);
         _cfg.SetBool("VndbExpanded", _vndbExpanded);
+        SaveSplitters();
         _cfg.Save();
+    }
+
+    // Pane widths persisted as a fraction (per-mille) of each splitter's width, so they restore
+    // proportionally regardless of the window size at next launch.
+    private void SaveSplitters()
+    {
+        int Permille(SplitContainer sc) => sc != null && sc.Width > 0
+            ? Math.Max(0, Math.Min(1000, (int)Math.Round(sc.SplitterDistance * 1000.0 / sc.Width))) : 0;
+        int left = Permille(_outerSplit), mid = Permille(_innerSplit);
+        if (left > 0) _cfg.SetInt("SplitLeftPermille", left);
+        if (mid > 0) _cfg.SetInt("SplitMidPermille", mid);
+    }
+
+    private static void SetSplitFraction(SplitContainer sc, double frac)
+    {
+        if (sc == null || sc.Width <= 0) return;
+        int min = sc.Panel1MinSize;
+        int max = sc.Width - sc.Panel2MinSize - sc.SplitterWidth;
+        if (max <= min) return;
+        int d = Math.Max(min, Math.Min(max, (int)Math.Round(frac * sc.Width)));
+        try { sc.SplitterDistance = d; } catch { }
     }
 
     // Col.<key> = <width>,<visible 0/1>,<displayIndex or -1>
@@ -982,7 +1016,10 @@ internal sealed class MainWindow : Form
         _posterGeom = new ImageList { ColorDepth = ColorDepth.Depth32Bit, ImageSize = new Size(PCellW, PImgH + PLabelH) };
         var lv = new ListView
         {
-            Dock = DockStyle.Fill, View = View.LargeIcon, VirtualMode = true, OwnerDraw = true,
+            // NOT docked: LayoutPoster gives it a left margin of (leftover/2) and extends it to the
+            // panel's right edge — so icons (left-aligned) start at the centred position, the empty
+            // slack falls on the right, and the vertical scrollbar stays at the right edge.
+            Dock = DockStyle.None, View = View.LargeIcon, VirtualMode = true, OwnerDraw = true,
             BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None, MultiSelect = false,
             Visible = false, LargeImageList = _posterGeom, HideSelection = false, Scrollable = true,
         };
@@ -1009,7 +1046,32 @@ internal sealed class MainWindow : Form
         if (_poster == null) return;
         int n = 0; try { n = _games.VisibleGames.Count; } catch { }
         try { if (_poster.VirtualListSize != n) _poster.VirtualListSize = n; } catch { }
+        LayoutPoster();   // item count changed → vertical scrollbar may toggle → re-layout
         _poster.Invalidate();
+    }
+
+    // Position the poster ListView so the icon grid looks centred while the scrollbar stays at the
+    // right edge: left margin = leftover/2, width extends to the panel's right edge. Icons left-align
+    // → start at the centred position; the slack falls on the right; the scrollbar is at the far right.
+    private void LayoutPoster()
+    {
+        if (_poster == null || !_posterMode) return;
+        var parent = _poster.Parent; if (parent == null) return;
+        int pw = parent.ClientSize.Width, ph = parent.ClientSize.Height;
+        if (pw <= 0 || ph <= 0) return;
+        int strideX = PCellW + PGap, strideY = PImgH + PLabelH + PGap;
+        int count = _poster.VirtualListSize;
+        int sbw = SystemInformation.VerticalScrollBarWidth;
+
+        int cols0 = Math.Max(1, pw / strideX);
+        int rows = (count + cols0 - 1) / cols0;
+        bool scroll = (long)rows * strideY > ph;        // would the grid overflow vertically?
+        int effW = pw - (scroll ? sbw : 0);             // width usable for columns
+        int cols = Math.Max(1, effW / strideX);
+        int gridW = cols * strideX;
+        int left = Math.Max(0, (effW - gridW) / 2);     // shift right by half the slack
+        var b = new Rectangle(left, 0, pw - left, ph);  // extend to the right edge (scrollbar there)
+        if (_poster.Bounds != b) _poster.Bounds = b;
     }
 
     private void SetPosterMode(bool on)
@@ -1020,13 +1082,16 @@ internal sealed class MainWindow : Form
         if (on)
         {
             RefreshPoster();
+            _games.Visible = false;          // hide the list behind: the poster's left margin would reveal it
             _poster.Visible = true; _poster.BringToFront();
+            LayoutPoster();
             try { ApplyDarkScroll(_poster); } catch { }
             try { if (_poster.IsHandleCreated) EnableListViewDoubleBuffer(_poster); } catch { }   // SetWindowTheme can clear ex-styles
+            try { ActiveControl = _poster; _poster.Focus(); } catch { }
         }
         else
         {
-            _poster.Visible = false; _games.BringToFront();
+            _poster.Visible = false; _games.Visible = true; _games.BringToFront();
             try { ActiveControl = _games; _games.Focus(); } catch { }
         }
     }
@@ -1095,16 +1160,24 @@ internal sealed class MainWindow : Form
 
         float scale = (selected || hot) ? 1.045f : 1f;
         var img = PosterThumb(model);
-        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
         if (img != null)
         {
-            // contain: largest rect of the image's aspect that fits imgArea, then hover-scale.
-            float ir = (float)img.Width / img.Height, ar = (float)imgArea.Width / imgArea.Height;
-            int iw, ih;
-            if (ir > ar) { iw = imgArea.Width; ih = (int)(iw / ir); } else { ih = imgArea.Height; iw = (int)(ih * ir); }
-            iw = (int)(iw * scale); ih = (int)(ih * scale);
+            // img is PRE-SCALED to fit imgArea (done once at load), so the normal case draws it 1:1
+            // (NearestNeighbor = a fast pixel copy, no per-frame resample → smooth scroll). Only the
+            // hovered/selected tile is scaled up 1.045× (bicubic, one tile).
+            int iw = (int)(img.Width * scale), ih = (int)(img.Height * scale);
             int ix = imgArea.X + (imgArea.Width - iw) / 2, iy = imgArea.Bottom - ih; // bottom-align (posters sit on the label)
-            g.DrawImage(img, ix, iy, Math.Max(1, iw), Math.Max(1, ih));
+            if (scale == 1f)
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                g.DrawImage(img, ix, iy, img.Width, img.Height);
+            }
+            else
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(img, ix, iy, Math.Max(1, iw), Math.Max(1, ih));
+            }
         }
         else
         {
@@ -1138,6 +1211,26 @@ internal sealed class MainWindow : Form
         return null;
     }
 
+    // Scale src to the largest size that fits (maxW × maxH) keeping aspect — done ONCE (bicubic) so
+    // the poster can blit it 1:1 at scroll time instead of resampling every frame.
+    private static Image ScaleContain(Image src, int maxW, int maxH)
+    {
+        try
+        {
+            float ir = (float)src.Width / src.Height, ar = (float)maxW / maxH;
+            int w, h;
+            if (ir > ar) { w = maxW; h = Math.Max(1, (int)Math.Round(maxW / ir)); }
+            else { h = maxH; w = Math.Max(1, (int)Math.Round(maxH * ir)); }
+            var bmp = new Bitmap(w, h);
+            using var g = Graphics.FromImage(bmp);
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            g.DrawImage(src, 0, 0, w, h);
+            return bmp;
+        }
+        catch { return null; }   // caller disposes the source thumb → never hand it back; phantom instead
+    }
+
     private void LoadPosterThumb(IGame model, Guid id)
     {
         Image img = null;
@@ -1145,7 +1238,11 @@ internal sealed class MainWindow : Form
         {
             string src = DetailSource(model, "Front", () =>
                   Safe(() => model.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => model.Box3DImagePath));
-            if (!string.IsNullOrEmpty(src)) img = LoadThumbOrFull(src, keepAlpha: false);
+            if (!string.IsNullOrEmpty(src))
+            {
+                using var raw = LoadThumbOrFull(src, keepAlpha: false);
+                if (raw != null) img = ScaleContain(raw, PCellW, PImgH);   // pre-size to the cell once
+            }
         }
         catch { img = null; }
         try

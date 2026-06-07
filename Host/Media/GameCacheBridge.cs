@@ -34,6 +34,7 @@ internal static class GameCacheBridge
     private static PropertyInfo _gamesByUuidProp;
     private static MethodInfo _getBestImageOfType;
     private static MethodInfo _getBestImageTypeFirst;
+    private static MethodInfo _getAllImagesTypeFirst;
     private static MethodInfo _findVideos;
     private static MethodInfo _findAllVideos;
     private static PropertyInfo _imgFullPath;
@@ -135,6 +136,30 @@ internal static class GameCacheBridge
             return _imgFullPath?.GetValue(imgRef) as string;
         }
         catch { return null; }
+    }
+
+    /// <summary>All image paths for a REGROUPEMENT (GetAllImagesTypeFirst — same call the web
+    /// uses for fanart/screenshot lists), up to <paramref name="max"/>. Empty if unavailable.</summary>
+    public static List<string> AllImagesTypeFirst(string platformName, Guid id, string regroupement, int max)
+    {
+        var result = new List<string>();
+        Probe();
+        if (_gcType == null) return result;
+        try
+        {
+            var game = GameObj(platformName, id);
+            if (game == null) return result;
+            _getAllImagesTypeFirst ??= game.GetType().GetMethod("GetAllImagesTypeFirst", new[] { typeof(string), typeof(int) });
+            if (_getAllImagesTypeFirst?.Invoke(game, new object[] { regroupement, max }) is not IEnumerable list) return result;
+            foreach (var r in list)
+            {
+                if (r == null) continue;
+                _imgFullPath ??= r.GetType().GetProperty("FullPath");
+                if (_imgFullPath?.GetValue(r) is string s && !string.IsNullOrEmpty(s)) result.Add(s);
+            }
+        }
+        catch { }
+        return result;
     }
 
     /// <summary>First video path for a sub-dir (null = root) via the cache, or null.</summary>

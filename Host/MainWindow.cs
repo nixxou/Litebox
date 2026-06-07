@@ -53,13 +53,16 @@ internal sealed class MainWindow : Form
     private readonly ToolStripLabel _count;
 
     // right-hand details
-    private readonly PictureBox _logo;
+    private readonly HeroPanel _hero;            // fanart + clear logo (pulse) + rating + heart
     private readonly PictureBox _art;
     private readonly Label _title;
     private readonly Label _meta;
     private readonly TextBox _notes;
 
     private IGame[] _current = Array.Empty<IGame>();
+    private IGame _heroGame;        // game currently shown in the hero (for rate/favorite clicks)
+    private System.Windows.Forms.Timer _fanartTimer;                       // 0.5s debounce before fanart fade-in
+    private readonly Dictionary<string, string> _fanartPick = new();       // node/game key -> chosen fanart src (stable per session)
     private object _currentNode;   // selected tree node (for the right pane when no game is selected)
     private List<object> _treeRoots;   // tree roots (incl. AllNode) — for key lookup on restore
     private object _detailsShown;  // current right-pane subject (IGame or tree node)
@@ -107,7 +110,9 @@ internal sealed class MainWindow : Form
 
         _sources = BuildSourceTree();
 
-        var details = BuildDetails(out _logo, out _art, out _title, out _meta, out _notes);
+        var details = BuildDetails(out _hero, out _art, out _title, out _meta, out _notes);
+        _hero.RateClicked = v => RateHeroGame(v);
+        _hero.FavClicked = () => ToggleHeroFavorite();
 
         var inner = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
         inner.Panel1.Controls.Add(_games);
@@ -372,22 +377,22 @@ internal sealed class MainWindow : Form
     }
 
     // ── Right details construction ───────────────────────────────────────────
-    private Panel BuildDetails(out PictureBox logo, out PictureBox art, out Label title, out Label meta, out TextBox notes)
+    private Panel BuildDetails(out HeroPanel hero, out PictureBox art, out Label title, out Label meta, out TextBox notes)
     {
         var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
         tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
 
-        logo = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Panel };
+        hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         art = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Panel };
         title = new Label { Dock = DockStyle.Fill, AutoSize = false, Height = 28, ForeColor = Fg, Font = new Font("Segoe UI Semibold", 12f), TextAlign = ContentAlignment.MiddleLeft };
         meta = new Label { Dock = DockStyle.Fill, AutoSize = false, ForeColor = SubFg, TextAlign = ContentAlignment.TopLeft };
         notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
 
-        tlp.Controls.Add(logo, 0, 0);
+        tlp.Controls.Add(hero, 0, 0);
         tlp.Controls.Add(art, 0, 1);
         tlp.Controls.Add(title, 0, 2);
         tlp.Controls.Add(meta, 0, 3);
@@ -775,6 +780,7 @@ internal sealed class MainWindow : Form
     private void ShowDetails(IGame g)
     {
         _detailsShown = g;
+        _heroGame = g;
         // Same source selection as launchbox-web/bigbox-web: ClearLogo regroupement
         // for the logo, Front for the box art (via GameCache when ExtendDB is loaded
         // → same file → shared thumb cache; IO fallback otherwise).
@@ -786,7 +792,12 @@ internal sealed class MainWindow : Form
                 : Safe(() => g.ScreenshotImagePath));
         LoadImagesAsync(logoSrc, artSrc);
 
-        if (g == null) { _title.Text = ""; _meta.Text = ""; _notes.Text = ""; return; }
+        if (g == null) { _hero.SetNode(); _title.Text = ""; _meta.Text = ""; _notes.Text = ""; return; }
+
+        // Hero rating (user if set, else community) + favorite, then schedule the fanart.
+        double eff = Safe(() => g.CommunityOrLocalStarRating);
+        _hero.SetGame(eff, Safe(() => g.StarRatingFloat) > 0, Safe(() => g.Favorite));
+        ScheduleFanart(g, null);
 
         _title.Text = S(g.Title);
 
@@ -812,9 +823,12 @@ internal sealed class MainWindow : Form
     private void ShowNodeDetails(object node)
     {
         _detailsShown = node;
+        _heroGame = null;
+        _hero.SetNode();   // no rating/heart for a tree node
         if (node == null || node is AllNode)
         {
             LoadImagesAsync(null, null);
+            ScheduleFanart(null, null);
             _title.Text = node is AllNode ? "All Games" : "";
             _meta.Text = node is AllNode ? $"Total Games: {_current.Length}" : "";
             _notes.Text = "";
@@ -822,6 +836,7 @@ internal sealed class MainWindow : Form
         }
 
         LoadImagesAsync(NodeImage(node, clearLogo: true), NodeImage(node, clearLogo: false));
+        ScheduleFanart(null, node);
         _title.Text = HostPlatformCategory.NodeName(node);
 
         var bits = new List<string> { $"Total Games: {_current.Length}" };
@@ -867,6 +882,93 @@ internal sealed class MainWindow : Form
 
     private static string NonEmpty(string s) => string.IsNullOrEmpty(s) ? null : s;
 
+    // ── Hero fanart (random background, fades in after ~0.5s) ────────────────
+    private static readonly Random _rng = new();
+
+    // launchbox-web's schedulePosterFanart: ~0.5s debounce, then a random background
+    // fades in faintly behind the logo. The details token discards a stale load.
+    private void ScheduleFanart(IGame g, object node)
+    {
+        if (_fanartTimer != null) { _fanartTimer.Stop(); _fanartTimer.Dispose(); _fanartTimer = null; }
+        int token = _detailsLoadToken;
+        var t = new System.Windows.Forms.Timer { Interval = 500 };
+        _fanartTimer = t;
+        t.Tick += (_, _) =>
+        {
+            t.Stop(); t.Dispose();
+            if (ReferenceEquals(_fanartTimer, t)) _fanartTimer = null;
+            if (IsDisposed || token != _detailsLoadToken) return;
+            string src = ResolveFanartSrc(g, node);
+            if (string.IsNullOrEmpty(src)) { _hero.FadeOutFanart(); return; }
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var img = LoadThumbOrFull(src, keepAlpha: false);   // degraded jpg → light faint bg
+                if (img == null) return;
+                try
+                {
+                    if (!IsDisposed && token == _detailsLoadToken)
+                        BeginInvoke((Action)(() => { if (!IsDisposed && token == _detailsLoadToken) _hero.SetFanart(img); else img.Dispose(); }));
+                    else img.Dispose();
+                }
+                catch { img.Dispose(); }
+            });
+        };
+        t.Start();
+    }
+
+    // A random background (Background regroupement, else screenshots) for a game —
+    // stable per session so revisiting shows the same one; node background otherwise.
+    private string ResolveFanartSrc(IGame g, object node)
+    {
+        try
+        {
+            if (g != null)
+            {
+                string key = "G:" + S(Safe(() => g.Id));
+                if (_fanartPick.TryGetValue(key, out var cached)) return cached;
+                var list = new List<string>();
+                string plat = Safe(() => g.Platform);
+                if (!string.IsNullOrEmpty(plat) && GameCacheBridge.Ready(plat) && Guid.TryParse(S(Safe(() => g.Id)), out var id))
+                {
+                    list = GameCacheBridge.AllImagesTypeFirst(plat, id, "Background", 12);
+                    if (list.Count == 0) list = GameCacheBridge.AllImagesTypeFirst(plat, id, "Screenshots", 12);
+                }
+                if (list.Count == 0)
+                {
+                    var bg = Safe(() => g.BackgroundImagePath); if (!string.IsNullOrEmpty(bg)) list.Add(bg);
+                    if (list.Count == 0) { var sh = Safe(() => g.ScreenshotImagePath); if (!string.IsNullOrEmpty(sh)) list.Add(sh); }
+                }
+                if (list.Count == 0) return null;
+                string pick = list[_rng.Next(list.Count)];
+                _fanartPick[key] = pick;
+                return pick;
+            }
+            if (node != null && node is not AllNode)
+                return NonEmpty(NodeImage(node, clearLogo: false));
+        }
+        catch { }
+        return null;
+    }
+
+    // Hero interactivity: click a star → set the user rating; click the heart → toggle
+    // favorite. Both persist (DataManager.Save) and refresh the list row's cells.
+    private void RateHeroGame(int value)
+    {
+        var g = _heroGame; if (g == null) return;
+        Safe(() => { g.StarRatingFloat = value; _dm.Save(false); });
+        _hero.SetRating(value, isUser: true);
+        Safe(() => _games.RefreshObject(g));
+    }
+
+    private void ToggleHeroFavorite()
+    {
+        var g = _heroGame; if (g == null) return;
+        bool nv = !Safe(() => g.Favorite);
+        Safe(() => { g.Favorite = nv; _dm.Save(false); });
+        _hero.SetFavorite(nv);
+        Safe(() => _games.RefreshObject(g));
+    }
+
     // Generate/load the right-pane images OFF the UI thread (degraded thumbs from the
     // shared cache: logo=WebP w/ alpha, art=JPEG), so selecting a node/game never blocks
     // the game-list paint — only the cheap text is set synchronously. The token discards
@@ -874,7 +976,7 @@ internal sealed class MainWindow : Form
     private void LoadImagesAsync(string logoSrc, string artSrc)
     {
         int token = ++_detailsLoadToken;
-        SetImage(_logo, null);   // drop the previous subject's art right away
+        _hero.SetLogo(null);     // drop the previous subject's logo right away
         SetImage(_art, null);
         if (string.IsNullOrEmpty(logoSrc) && string.IsNullOrEmpty(artSrc)) return;
         System.Threading.Tasks.Task.Run(() =>
@@ -884,7 +986,7 @@ internal sealed class MainWindow : Form
             void Apply()
             {
                 if (IsDisposed || token != _detailsLoadToken) { logo?.Dispose(); art?.Dispose(); return; }
-                var ol = _logo.Image; _logo.Image = logo; ol?.Dispose();
+                _hero.SetLogo(logo);                       // hero owns + pulses the logo
                 var oa = _art.Image; _art.Image = art; oa?.Dispose();
             }
             try { if (!IsDisposed) BeginInvoke((Action)Apply); else { logo?.Dispose(); art?.Dispose(); } }
@@ -1289,6 +1391,227 @@ internal sealed class MainWindow : Form
                 : new[] { new Point(cx - s / 2, cy - s), new Point(cx + s / 2, cy), new Point(cx - s / 2, cy + s) }; // ▶
             g.DrawLines(pen, pts);
             g.SmoothingMode = oldMode;
+        }
+    }
+
+    // ── Hero panel: fanart bg + clear logo (pulse) + rating + heart ──────────
+    // launchbox-web-style top of the detail pane. Owner-drawn so the fanart can sit
+    // faintly behind a transparent clear logo (WinForms child controls can't do that).
+    private sealed class HeroPanel : Panel
+    {
+        private static readonly Color StarCommunity = Color.FromArgb(0x38, 0xD6, 0xE6);  // cyan
+        private static readonly Color StarUser      = Color.FromArgb(0xF6, 0xC3, 0x44);  // yellow
+        private static readonly Color StarEmpty     = Color.FromArgb(78, 255, 255, 255); // ~0.30 white
+        private static readonly Color HeartOn       = Color.FromArgb(0xFF, 0x4A, 0x4A);  // red
+        private static readonly Color HeartOff      = Color.FromArgb(140, 200, 200, 205);
+        private static readonly Color BoxBg         = Color.FromArgb(179, 45, 45, 50);   // ~0.70
+
+        private Image _logo, _fanart;
+        private bool _isGame, _favorite, _ratingIsUser;
+        private double _rating;
+        private double _fanartAlpha, _fanartTarget;
+        private float _logoScale = 1f, _pulseT = 1f;
+        private int _hoverStar = -1; private bool _hoverHeart;
+
+        private readonly System.Windows.Forms.Timer _fade = new() { Interval = 16 };
+        private readonly System.Windows.Forms.Timer _pulse = new() { Interval = 16 };
+        private readonly Rectangle[] _starRects = new Rectangle[5];
+        private Rectangle _heartRect;
+
+        public Action<int> RateClicked;   // 1..5
+        public Action FavClicked;
+
+        public HeroPanel()
+        {
+            DoubleBuffered = true;
+            ResizeRedraw = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+            _fade.Tick += (_, _) => StepFade();
+            _pulse.Tick += (_, _) => StepPulse();
+        }
+
+        public void SetGame(double rating, bool isUser, bool favorite)
+        { _isGame = true; _rating = rating; _ratingIsUser = isUser; _favorite = favorite; Invalidate(); }
+        public void SetNode()
+        { _isGame = false; _rating = 0; _favorite = false; _ratingIsUser = false; Invalidate(); }
+        public void SetRating(double rating, bool isUser) { _rating = rating; _ratingIsUser = isUser; Invalidate(); }
+        public void SetFavorite(bool fav) { _favorite = fav; Invalidate(); }
+
+        public void SetLogo(Image img)
+        {
+            var old = _logo; _logo = img; if (!ReferenceEquals(old, img)) old?.Dispose();
+            if (img != null) { _pulseT = 0f; _pulse.Start(); }   // pulse on appear
+            Invalidate();
+        }
+
+        public void SetFanart(Image img)
+        {
+            var old = _fanart; _fanart = img; if (!ReferenceEquals(old, img)) old?.Dispose();
+            _fanartAlpha = 0; _fanartTarget = img != null ? 0.28 : 0; _fade.Start(); Invalidate();
+        }
+        public void FadeOutFanart() { _fanartTarget = 0; _fade.Start(); }
+
+        private void StepFade()
+        {
+            const double step = 0.05;
+            if (_fanartAlpha < _fanartTarget) _fanartAlpha = Math.Min(_fanartTarget, _fanartAlpha + step);
+            else _fanartAlpha = Math.Max(_fanartTarget, _fanartAlpha - step);
+            if (Math.Abs(_fanartAlpha - _fanartTarget) < 0.001)
+            {
+                _fanartAlpha = _fanartTarget; _fade.Stop();
+                if (_fanartTarget == 0 && _fanart != null) { _fanart.Dispose(); _fanart = null; }
+            }
+            Invalidate();
+        }
+        private void StepPulse()
+        {
+            _pulseT += 0.06f;
+            if (_pulseT >= 1f) { _pulseT = 1f; _logoScale = 1f; _pulse.Stop(); }
+            else _logoScale = 1f + 0.06f * (float)Math.Sin(_pulseT * Math.PI);   // 1 → 1.06 → 1
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(Panel);
+            var rect = ClientRectangle;
+            bool haveFan = _fanart != null && _fanartAlpha > 0.01;
+            if (haveFan)
+            {
+                DrawCoverAlpha(g, _fanart, rect, (float)_fanartAlpha);
+                using var grad = new System.Drawing.Drawing2D.LinearGradientBrush(
+                    new Rectangle(rect.X, rect.Y, rect.Width, Math.Max(1, rect.Height)),
+                    Color.FromArgb(0, 0, 0, 0), Color.FromArgb(150, 0, 0, 0),
+                    System.Drawing.Drawing2D.LinearGradientMode.Vertical);
+                g.FillRectangle(grad, rect);
+            }
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+
+            int bottomBar = _isGame ? 30 : 6;
+            var logoArea = new Rectangle(10, 8, rect.Width - 20, rect.Height - 8 - bottomBar);
+            if (_logo != null && logoArea.Height > 8) DrawLogo(g, _logo, logoArea, _logoScale);
+            if (_isGame) DrawRatingAndHeart(g, rect);
+        }
+
+        private static void DrawCoverAlpha(Graphics g, Image img, Rectangle rect, float alpha)
+        {
+            float ir = (float)img.Width / img.Height, rr = (float)rect.Width / Math.Max(1, rect.Height);
+            int w, h;
+            if (ir > rr) { h = rect.Height; w = (int)(h * ir); } else { w = rect.Width; h = (int)(w / ir); }
+            int x = rect.X + (rect.Width - w) / 2, y = rect.Y + (rect.Height - h) / 2;
+            var cm = new System.Drawing.Imaging.ColorMatrix { Matrix33 = alpha };
+            using var ia = new System.Drawing.Imaging.ImageAttributes();
+            ia.SetColorMatrix(cm);
+            g.DrawImage(img, new Rectangle(x, y, w, h), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, ia);
+        }
+
+        private static void DrawLogo(Graphics g, Image img, Rectangle area, float scale)
+        {
+            int maxH = Math.Min(84, area.Height);
+            float ratio = Math.Min((float)area.Width / img.Width, (float)maxH / img.Height);
+            int w = Math.Max(1, (int)(img.Width * ratio * scale)), h = Math.Max(1, (int)(img.Height * ratio * scale));
+            int x = area.X + (area.Width - w) / 2, y = area.Y + (area.Height - h) / 2;
+            // Drop shadow: the logo's alpha silhouette in semi-transparent black, offset.
+            var shadow = new System.Drawing.Imaging.ColorMatrix(new[]
+            {
+                new float[]{0,0,0,0,0}, new float[]{0,0,0,0,0}, new float[]{0,0,0,0,0},
+                new float[]{0,0,0,0.5f,0}, new float[]{0,0,0,0,1},
+            });
+            using (var ia = new System.Drawing.Imaging.ImageAttributes())
+            {
+                ia.SetColorMatrix(shadow);
+                g.DrawImage(img, new Rectangle(x + 2, y + 3, w, h), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, ia);
+            }
+            g.DrawImage(img, x, y, w, h);
+        }
+
+        private void DrawRatingAndHeart(Graphics g, Rectangle rect)
+        {
+            using var numFont = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+            using var starFont = new Font("Segoe UI Symbol", 11f);
+            using var heartFont = new Font("Segoe UI Symbol", 12f);
+
+            int boxH = 22, y = rect.Bottom - boxH - 6, x = 10, pad = 7, starW = 15;
+            string num = _rating > 0 ? _rating.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) : "—";
+            var sf = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center };
+            int numW = (int)Math.Ceiling(g.MeasureString(num, numFont).Width) + 2;
+            int boxW = pad + numW + 4 + 5 * starW + pad;
+            var box = new Rectangle(x, y, boxW, boxH);
+            using (var b = new SolidBrush(BoxBg)) FillRound(g, box, 4, b);
+
+            using (var tb = new SolidBrush(Color.White))
+                g.DrawString(num, numFont, tb, new RectangleF(x + pad, y, numW, boxH), sf);
+
+            int filled = (int)Math.Round(_rating);
+            var fillColor = _ratingIsUser ? StarUser : StarCommunity;
+            int sx = x + pad + numW + 4;
+            for (int i = 0; i < 5; i++)
+            {
+                _starRects[i] = new Rectangle(sx + i * starW, y, starW, boxH);
+                Color c = _hoverStar >= 0 ? (i <= _hoverStar ? StarUser : StarEmpty)
+                                          : (i < filled ? fillColor : StarEmpty);
+                using var b = new SolidBrush(c);
+                g.DrawString("★", starFont, b, new RectangleF(sx + i * starW, y, starW, boxH), sf);
+            }
+
+            // Heart, to the right of the rating box.
+            int hx = box.Right + 8;
+            _heartRect = new Rectangle(hx, y, boxH, boxH);
+            using (var b = new SolidBrush(BoxBg)) FillRound(g, _heartRect, 4, b);
+            using (var hb = new SolidBrush(_favorite ? HeartOn : HeartOff))
+            using (var hsf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                g.DrawString("♥", heartFont, hb, _heartRect, hsf);
+        }
+
+        private static void FillRound(Graphics g, Rectangle r, int radius, Brush b)
+        {
+            using var path = new System.Drawing.Drawing2D.GraphicsPath();
+            int d = radius * 2;
+            path.AddArc(r.X, r.Y, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            g.FillPath(b, path);
+        }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            if (_isGame)
+            {
+                for (int i = 0; i < 5; i++)
+                    if (_starRects[i].Contains(e.Location)) { RateClicked?.Invoke(i + 1); return; }
+                if (_heartRect.Contains(e.Location)) { FavClicked?.Invoke(); return; }
+            }
+            base.OnMouseClick(e);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            if (_isGame)
+            {
+                int hs = -1;
+                for (int i = 0; i < 5; i++) if (_starRects[i].Contains(e.Location)) { hs = i; break; }
+                bool oh = _heartRect.Contains(e.Location);
+                Cursor = (hs >= 0 || oh) ? Cursors.Hand : Cursors.Default;
+                if (hs != _hoverStar || oh != _hoverHeart) { _hoverStar = hs; _hoverHeart = oh; Invalidate(); }
+            }
+            base.OnMouseMove(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            if (_hoverStar != -1 || _hoverHeart) { _hoverStar = -1; _hoverHeart = false; Invalidate(); }
+            Cursor = Cursors.Default;
+            base.OnMouseLeave(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { _fade.Dispose(); _pulse.Dispose(); _logo?.Dispose(); _fanart?.Dispose(); }
+            base.Dispose(disposing);
         }
     }
 

@@ -186,6 +186,14 @@ internal sealed class MainWindow : Form
         var miCache = new ToolStripMenuItem("Use the image cache (degraded thumbnails)")
         { CheckOnClick = true, Checked = _cfg.UseImageCache };
         miCache.CheckedChanged += (_, _) => { _cfg.UseImageCache = miCache.Checked; _useImageCache = miCache.Checked; _cfg.Save(); };
+        var miAspect = new ToolStripMenuItem("Use 16:9 for the main media (else poster ratio)")
+        { CheckOnClick = true, Checked = _cfg.Use169ForMainScreenshot };
+        miAspect.CheckedChanged += (_, _) =>
+        {
+            _cfg.Use169ForMainScreenshot = miAspect.Checked; _cfg.Save();
+            _mediaAspect = miAspect.Checked ? (16.0 / 9.0) : (2.0 / 3.0);   // apply live
+            UpdateMediaRowHeight();
+        };
         var miReadOnly = new ToolStripMenuItem("Read-only (never write to the LaunchBox files)")
         { CheckOnClick = true, Checked = _cfg.ReadOnly };
         miReadOnly.CheckedChanged += (_, _) =>
@@ -198,6 +206,7 @@ internal sealed class MainWindow : Form
         optBtn.DropDownItems.Add(miScreen);
         optBtn.DropDownItems.Add(miUnload);
         optBtn.DropDownItems.Add(miCache);
+        optBtn.DropDownItems.Add(miAspect);
         bar.Items.Add(optBtn);
 
         _count = new ToolStripLabel("") { ForeColor = SubFg, Alignment = ToolStripItemAlignment.Right };

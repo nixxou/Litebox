@@ -1,7 +1,8 @@
-// Native virtual ListView replacing FastObjectListView for the game list — SCROLL TEST build.
+// Native virtual ListView for the game list (replaces FastObjectListView — its rendering was the
+// scroll-lag cause; a native list scrolls smoothly).
 //
-// No owner-draw (native text rendering, the lightest per-paint path), no styling (the app's
-// global .NET 9 dark mode colours it). View.Details + VirtualMode + native LVS_EX_DOUBLEBUFFER,
+// No owner-draw (native text rendering, the lightest per-paint path). Light theming (alternating
+// rows + per-cell rating colour) is applied in RetrieveVirtualItem. View.Details + VirtualMode + native LVS_EX_DOUBLEBUFFER,
 // same family as the smooth poster. Reimplements the OLV conveniences MainWindow needs:
 // column model, sort by getter + direction, substring filter, selection by game identity,
 // header click → sort, header right-click → column chooser, drag-reorder, INI persistence.

@@ -16,6 +16,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using LbApiHost.Host.Gc;
 
 namespace LbApiHost.Host.Media;
 
@@ -66,8 +67,12 @@ internal static class GameCacheBridge
          : m is PropertyInfo p ? p.GetValue(target)
          : null;
 
+    /// <summary>True iff ExtendDB's GameCache TYPE is loaded (the plugin is present). When it is, we
+    /// prefer ExtendDB's cache and do NOT build/use the host one.</summary>
+    public static bool ExtendDbPresent { get { Probe(); return _gcType != null; } }
+
     /// <summary>True iff ExtendDB's GameCache is loaded, globally ready, and holds this platform.</summary>
-    public static bool Ready(string platformName)
+    private static bool ExtendReady(string platformName)
     {
         Probe();
         if (_gcType == null || string.IsNullOrEmpty(platformName)) return false;
@@ -82,6 +87,10 @@ internal static class GameCacheBridge
         }
         catch { return false; }
     }
+
+    /// <summary>A cache (ExtendDB's, else the host's) can answer for this platform.</summary>
+    public static bool Ready(string platformName)
+        => ExtendReady(platformName) || HostGameCache.Ready(platformName);
 
     private static object GameObj(string platformName, Guid id)
     {
@@ -98,8 +107,7 @@ internal static class GameCacheBridge
     /// <summary>Best image path of an exact LB image type via the cache, or null.</summary>
     public static string BestImage(string platformName, Guid id, string imageType)
     {
-        Probe();
-        if (_gcType == null) return null;
+        if (!ExtendReady(platformName)) return HostGameCache.BestImage(platformName, id, imageType);
         try
         {
             var game = GameObj(platformName, id);
@@ -121,8 +129,7 @@ internal static class GameCacheBridge
     /// cache key) matches. Null if unavailable.</summary>
     public static string BestImageTypeFirst(string platformName, Guid id, string regroupement)
     {
-        Probe();
-        if (_gcType == null) return null;
+        if (!ExtendReady(platformName)) return HostGameCache.BestImageTypeFirst(platformName, id, regroupement);
         try
         {
             var game = GameObj(platformName, id);
@@ -142,9 +149,8 @@ internal static class GameCacheBridge
     /// uses for fanart/screenshot lists), up to <paramref name="max"/>. Empty if unavailable.</summary>
     public static List<string> AllImagesTypeFirst(string platformName, Guid id, string regroupement, int max)
     {
+        if (!ExtendReady(platformName)) return HostGameCache.AllImagesTypeFirst(platformName, id, regroupement, max);
         var result = new List<string>();
-        Probe();
-        if (_gcType == null) return result;
         try
         {
             var game = GameObj(platformName, id);
@@ -165,8 +171,7 @@ internal static class GameCacheBridge
     /// <summary>First video path for a sub-dir (null = root) via the cache, or null.</summary>
     public static string Video(string platformName, Guid id, string subDir)
     {
-        Probe();
-        if (_gcType == null) return null;
+        if (!ExtendReady(platformName)) return HostGameCache.Video(platformName, id, subDir);
         try
         {
             var game = GameObj(platformName, id);
@@ -189,8 +194,7 @@ internal static class GameCacheBridge
     /// <summary>True if the game has any video at all (any sub-dir) via the cache.</summary>
     public static bool HasAnyVideo(string platformName, Guid id)
     {
-        Probe();
-        if (_gcType == null) return false;
+        if (!ExtendReady(platformName)) return HostGameCache.HasAnyVideo(platformName, id);
         try
         {
             var game = GameObj(platformName, id);

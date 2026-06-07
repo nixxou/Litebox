@@ -32,7 +32,7 @@ internal static class Program
     private const string BackupDir = "_litebox_backup";
 
     [STAThread]
-    static int Main()
+    static int Main(string[] args)
     {
         try
         {
@@ -44,7 +44,7 @@ internal static class Program
             {
                 if (!File.Exists(Path.Combine(exeDir, "Core", "LiteBox.exe")))
                     Deploy(exeDir, selfPath, copySelf: false);   // root copy present but host not deployed yet
-                LaunchHost(exeDir);
+                LaunchHost(exeDir, args);
                 return 0;
             }
 
@@ -62,7 +62,7 @@ internal static class Program
                 "A LiteBox.exe was placed at the LaunchBox root (run it to start LiteBox),\n" +
                 "along with \"LiteBox uninstall.bat\" to remove everything.",
                 "LiteBox — installation complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            LaunchHost(root);
+            LaunchHost(root, args);
             return 0;
         }
         catch (Exception ex)
@@ -147,21 +147,20 @@ internal static class Program
         }
     }
 
-    static void LaunchHost(string root)
+    static void LaunchHost(string root, string[] args)
     {
         string hostExe = Path.Combine(root, "Core", "LiteBox.exe");
         if (!File.Exists(hostExe)) throw new FileNotFoundException("Core\\LiteBox.exe not found after deployment.", hostExe);
-        // The host is a console-subsystem app: give it its OWN (hidden) console via ShellExecute so its
-        // Console.WriteLine stays valid (CreateNoWindow + inherited null handles would crash it), while
-        // the window stays invisible → transparent launch. Running Core\LiteBox.exe directly still shows
-        // the console (useful for debugging).
-        Process.Start(new ProcessStartInfo
+        // The host is a WinExe: launching it normally shows its GUI and NO console (transparent). Forward
+        // our args (e.g. --debug) so "LiteBox.exe --debug" at the root opens the host's console.
+        var psi = new ProcessStartInfo
         {
             FileName = hostExe,
             WorkingDirectory = root,   // host self-normalises CWD to the LB root anyway; set it explicitly to match
-            UseShellExecute = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-        });
+            UseShellExecute = false,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        Process.Start(psi);
     }
 
     static HashSet<string> ReadMarker(string core)

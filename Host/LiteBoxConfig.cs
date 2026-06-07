@@ -72,6 +72,8 @@ internal sealed class LiteBoxConfig
         _kv["ShowGameRunningScreen"] = "true";
         _kv["UnloadListDuringGame"] = "true";
         _kv["UseImageCache"] = "true";
+        _kv["UseGameCache"] = "true";
+        _kv["UnloadGameCacheDuringGame"] = "true";
         _kv["Use16:9ForMainScreenshot"] = "true";
         _kv["GameRunningText"] = "Game running...";
         _kv["GameRunningColor"] = "#0F0F12";
@@ -84,6 +86,9 @@ internal sealed class LiteBoxConfig
             sb.AppendLine("; ShowGameRunningScreen : show a fanart/colour screen while a game runs");
             sb.AppendLine("; UnloadListDuringGame  : free the game list while a game runs, reload after");
             sb.AppendLine("; UseImageCache         : use the shared degraded-thumbnail cache for UI images");
+            sb.AppendLine("; UseGameCache          : build & use an in-memory media cache (Everything-backed) when");
+            sb.AppendLine(";                          ExtendDB is NOT loaded (ExtendDB's own cache is preferred when present).");
+            sb.AppendLine("; UnloadGameCacheDuringGame : free the host game cache while a game runs, rebuild on exit.");
             sb.AppendLine("; Use16:9ForMainScreenshot : reserve a 16:9 area for the main media (true);");
             sb.AppendLine(";                            false reserves a poster-ratio (2:3) area instead.");
             sb.AppendLine("; GameRunningText       : message shown on the running screen");
@@ -92,6 +97,8 @@ internal sealed class LiteBoxConfig
             sb.AppendLine($"ShowGameRunningScreen={_kv["ShowGameRunningScreen"]}");
             sb.AppendLine($"UnloadListDuringGame={_kv["UnloadListDuringGame"]}");
             sb.AppendLine($"UseImageCache={_kv["UseImageCache"]}");
+            sb.AppendLine($"UseGameCache={_kv["UseGameCache"]}");
+            sb.AppendLine($"UnloadGameCacheDuringGame={_kv["UnloadGameCacheDuringGame"]}");
             sb.AppendLine($"Use16:9ForMainScreenshot={_kv["Use16:9ForMainScreenshot"]}");
             sb.AppendLine($"GameRunningText={_kv["GameRunningText"]}");
             sb.AppendLine($"GameRunningColor={_kv["GameRunningColor"]}");
@@ -121,6 +128,8 @@ internal sealed class LiteBoxConfig
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
     public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", true); set => SetBool("UnloadListDuringGame", value); }
     public bool UseImageCache         { get => GetBool("UseImageCache", true); set => SetBool("UseImageCache", value); }
+    public bool UseGameCache          { get => GetBool("UseGameCache", true); set => SetBool("UseGameCache", value); }
+    public bool UnloadGameCacheDuringGame { get => GetBool("UnloadGameCacheDuringGame", true); set => SetBool("UnloadGameCacheDuringGame", value); }
     // true → reserve a 16:9 area for the main media; false → a poster-ratio (2:3) area.
     public bool Use169ForMainScreenshot { get => GetBool("Use16:9ForMainScreenshot", true); set => SetBool("Use16:9ForMainScreenshot", value); }
     public string GameRunningText     => Get("GameRunningText", "Game running...");

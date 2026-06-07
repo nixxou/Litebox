@@ -140,6 +140,8 @@ internal static class HostLaunch
         {
             Mem.Report("before drop (launch)");
             _store?.DropOptional();
+            if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame)
+            { Gc.HostGameCache.ClearForMemory(); Console.WriteLine("[gamecache] cleared for game launch"); }
             Mem.Trim();
             Mem.Report("after drop+trim (launch)");
         }
@@ -200,6 +202,7 @@ internal static class HostLaunch
             if (!DryRun && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             Fire(p => p.OnGameExited());
             try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
+            try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) { Gc.HostGameCache.Reload(); Console.WriteLine("[gamecache] rebuilding after game exit"); } } catch { }
             // GUI: game over + data reloaded → reload its list and restore selection.
             try { GameEnded?.Invoke(game); } catch { }
         }

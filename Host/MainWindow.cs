@@ -928,8 +928,27 @@ internal sealed class MainWindow : Form
     // OLV coalesces SelectionChanged (fires ~½s after SetObjects), so a node
     // click would otherwise clear the pane just after ShowNodeDetails filled it.
     // When nothing is selected in the list, keep showing the current node.
+    //
+    // DEBOUNCE: holding an arrow key changes the selection many times/second (the list
+    // moves 1 game per press), and the full detail load (hero + fanart/media timers +
+    // async image loads + RelayoutDetail) per change backs up and lags scrolling. So we
+    // only load the detail pane once the selection settles (~110 ms idle). The list/poster
+    // scroll themselves stay instant; details just trail the cursor slightly.
+    private System.Windows.Forms.Timer _selDebounce;
     private void OnGameSelectionChanged()
     {
+        if (_selDebounce == null)
+        {
+            _selDebounce = new System.Windows.Forms.Timer { Interval = 110 };
+            _selDebounce.Tick += (_, _) => { _selDebounce.Stop(); ApplySelectionToDetails(); };
+        }
+        _selDebounce.Stop();
+        _selDebounce.Start();
+    }
+
+    private void ApplySelectionToDetails()
+    {
+        if (IsDisposed) return;
         if (_games.SelectedObject is IGame g) ShowDetails(g);
         else if (!ReferenceEquals(_detailsShown, _currentNode)) ShowNodeDetails(_currentNode);
     }
@@ -1366,6 +1385,7 @@ internal sealed class MainWindow : Form
             if (string.IsNullOrEmpty(src) && !haveSubject) { _hero.FadeOutFanart(); return; }
             System.Threading.Tasks.Task.Run(() =>
             {
+                if (IsDisposed || token != _detailsLoadToken) return;   // stale → don't decode
                 var img = !string.IsNullOrEmpty(src) ? LoadThumbOrFull(src, keepAlpha: false)   // degraded jpg → light faint bg
                                                      : LoadDefaultFanart();                      // no background → embedded default
                 if (img == null && haveSubject) img = LoadDefaultFanart();   // load failed → still try the default
@@ -1496,6 +1516,7 @@ internal sealed class MainWindow : Form
         if (string.IsNullOrEmpty(src)) { _media.SetImage(null); return; }
         System.Threading.Tasks.Task.Run(() =>
         {
+            if (IsDisposed || token != _detailsLoadToken) return;   // stale → don't decode
             var img = full ? LoadImage(src) : LoadThumbOrFull(src, keepAlpha: false);
             try
             {
@@ -1562,6 +1583,7 @@ internal sealed class MainWindow : Form
             _strip.Flow.Controls.Add(th);
             System.Threading.Tasks.Task.Run(() =>
             {
+                if (IsDisposed || token != _detailsLoadToken) return;   // stale → don't decode
                 var img = LoadThumbOrFull(captured, keepAlpha: false);
                 try
                 {
@@ -1629,7 +1651,11 @@ internal sealed class MainWindow : Form
         if (string.IsNullOrEmpty(logoSrc) && string.IsNullOrEmpty(artSrc)) { _hero.SetLogo(null); return; }
         System.Threading.Tasks.Task.Run(() =>
         {
+            // Cancel a stale load BEFORE decoding: when the selection moved on (token bumped),
+            // skip the Magick/GDI decode entirely so a held arrow key doesn't pile up decodes.
+            if (IsDisposed || token != _detailsLoadToken) return;
             var logo = LoadThumbOrFull(logoSrc, keepAlpha: true);   // clear logo → WebP/alpha
+            if (token != _detailsLoadToken) { logo?.Dispose(); return; }
             var art = LoadThumbOrFull(artSrc, keepAlpha: false);    // main media (box) DEGRADED, instant
             void Apply()
             {

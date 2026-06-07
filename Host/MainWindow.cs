@@ -1158,8 +1158,18 @@ internal sealed class MainWindow : Form
 
     private static void DarkScroll(Control c)
     {
-        void Apply() { try { SetWindowTheme(c.Handle, "DarkMode_Explorer", null); } catch { } }
-        if (c.IsHandleCreated) Apply(); else c.HandleCreated += (_, _) => Apply();
+        void Apply()
+        {
+            if (!c.IsHandleCreated) return;
+            try { SetWindowTheme(c.Handle, "DarkMode_Explorer", null); } catch { }
+        }
+        // Defer via BeginInvoke so it runs AFTER the control's own OnHandleCreated
+        // theming — ObjectListView re-applies the light "explorer" theme there, which
+        // would otherwise override a direct call (hence the list scrollbars stayed
+        // light while the plain TextBox went dark). Re-fires on every handle recreation
+        // (e.g. when columns are shown/hidden → RebuildColumns recreates the handle).
+        c.HandleCreated += (_, _) => { try { c.BeginInvoke((Action)Apply); } catch { } };
+        if (c.IsHandleCreated) { try { c.BeginInvoke((Action)Apply); } catch { } }
     }
 
     private void Safe(Action a)

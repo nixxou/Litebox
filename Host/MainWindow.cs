@@ -47,6 +47,18 @@ internal sealed class MainWindow : Form
 
     private readonly TreeListView _sources;
     private readonly FastObjectListView _games;
+    // Poster (grid) view — a native virtual ListView mirroring the OLV's displayed (sorted+filtered)
+    // order; owner-drawn box-art tiles. Toggled from the toolbar (list ⇄ poster).
+    private ListView _poster;
+    private ToolStripButton _posterBtn;
+    private bool _posterMode;
+    private ImageList _posterGeom;                 // empty; only its ImageSize drives the tile geometry
+    private int _posterHot = -1;                   // hovered tile index (for the hover grow)
+    private bool _posterRepaintPending;            // coalesces invalidations from async thumb loads
+    private readonly Dictionary<Guid, Image> _posterBmp = new();   // decoded box thumbs (visible-ish)
+    private readonly Queue<Guid> _posterBmpOrder = new();          // FIFO eviction order
+    private readonly HashSet<Guid> _posterLoading = new();         // in-flight thumb loads
+    private const int PCellW = 124, PImgH = 174, PLabelH = 38, PGap = 14;
     private readonly ToolStripTextBox _search;
     private readonly ToolStripComboBox _sortCombo;
     private readonly ToolStripButton _dirBtn;
@@ -136,7 +148,10 @@ internal sealed class MainWindow : Form
         _detailHost.Controls.Add(details);
         _detailHost.Resize += (_, _) => RelayoutDetail();
 
+        _poster = BuildPoster();
+
         var inner = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
+        inner.Panel1.Controls.Add(_poster);   // hidden until poster mode; same cell as the list
         inner.Panel1.Controls.Add(_games);
         inner.Panel2.Controls.Add(_detailHost);
 
@@ -176,7 +191,10 @@ internal sealed class MainWindow : Form
         bar.Items.Add(_dirBtn);
         bar.Items.Add(new ToolStripSeparator());
 
-        bar.Items.Add(new ToolStripButton("Thumbnails (soon)") { Enabled = false, ForeColor = SubFg });
+        var posterBtn = new ToolStripButton("Poster") { ForeColor = Fg, CheckOnClick = true, ToolTipText = "Toggle list / poster view" };
+        posterBtn.CheckedChanged += (_, _) => SetPosterMode(posterBtn.Checked);
+        _posterBtn = posterBtn;
+        bar.Items.Add(posterBtn);
         bar.Items.Add(new ToolStripSeparator());
         var genBtn = new ToolStripButton("Generate Image Cache")
         { ForeColor = Fg, ToolTipText = "Pre-generate the cached thumbnails (logo, box, screenshot) for every game" };
@@ -297,6 +315,7 @@ internal sealed class MainWindow : Form
             PopulateSources();       // build the tree
             RestoreSelection();      // last category + game
             try { ActiveControl = _games; _games.Focus(); } catch { }
+            if (_cfg.GetBool("PosterMode", false)) _posterBtn.Checked = true;   // → SetPosterMode(true)
         };
         // Final dark-scrollbar pass once everything (data, columns) is in place.
         Shown += (_, _) => { ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); RelayoutDetail(); };
@@ -947,6 +966,212 @@ internal sealed class MainWindow : Form
                 return Contains(S(g.Title), txt) || Contains(S(g.Platform), txt) || Contains(S(g.Developer), txt);
             });
         if (_count != null) _count.Text = $"{_games.GetItemCount()} / {_current.Length} games";
+        if (_posterMode) RefreshPoster();   // mirror the new displayed set in the grid
+    }
+
+    // ── Poster (grid) view ────────────────────────────────────────────────────
+    // A native virtual ListView in LargeIcon view, owner-drawn. It mirrors the OLV's displayed
+    // (sorted + filtered) order via GetModelObject(i)/GetItemCount(), so selection, sorting and
+    // filtering stay driven by the list. Box-art tiles are drawn "contain" (aspect kept), missing
+    // art shows a grey phantom rectangle (like LaunchBox desktop), and the hovered/selected tile
+    // grows slightly. Thumbs come from the shared cache, loaded lazily off the UI thread.
+    private ListView BuildPoster()
+    {
+        _posterGeom = new ImageList { ColorDepth = ColorDepth.Depth32Bit, ImageSize = new Size(PCellW, PImgH + PLabelH) };
+        var lv = new ListView
+        {
+            Dock = DockStyle.Fill, View = View.LargeIcon, VirtualMode = true, OwnerDraw = true,
+            BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None, MultiSelect = false,
+            Visible = false, LargeImageList = _posterGeom, HideSelection = false, Scrollable = true,
+        };
+        lv.RetrieveVirtualItem += (_, e) => e.Item = new ListViewItem("");
+        lv.DrawItem += DrawPosterItem;
+        lv.SelectedIndexChanged += (_, _) => OnPosterSelectionChanged();
+        lv.ItemActivate += (_, _) => LaunchSelected();
+        lv.MouseMove += OnPosterMouseMove;
+        lv.MouseLeave += (_, _) => { if (_posterHot != -1) { int o = _posterHot; _posterHot = -1; InvalidatePosterItem(o); } };
+        lv.HandleCreated += (_, _) => SetIconSpacing(lv, PCellW + PGap, PImgH + PLabelH + PGap);
+        lv.CacheVirtualItems += (_, _) => { };
+        return lv;
+    }
+
+    private IGame PosterModel(int displayIndex)
+    {
+        try { return displayIndex >= 0 && displayIndex < _games.GetItemCount() ? _games.GetModelObject(displayIndex) as IGame : null; }
+        catch { return null; }
+    }
+
+    private void RefreshPoster()
+    {
+        if (_poster == null) return;
+        int n = 0; try { n = _games.GetItemCount(); } catch { }
+        try { if (_poster.VirtualListSize != n) _poster.VirtualListSize = n; } catch { }
+        _poster.Invalidate();
+    }
+
+    private void SetPosterMode(bool on)
+    {
+        if (_posterMode == on || _poster == null) return;
+        _posterMode = on;
+        _cfg.SetBool("PosterMode", on); _cfg.Save();
+        if (on)
+        {
+            RefreshPoster();
+            _poster.Visible = true; _poster.BringToFront();
+            try { ApplyDarkScroll(_poster); } catch { }
+        }
+        else
+        {
+            _poster.Visible = false; _games.BringToFront();
+            try { ActiveControl = _games; _games.Focus(); } catch { }
+        }
+    }
+
+    private void OnPosterSelectionChanged()
+    {
+        if (_poster.SelectedIndices.Count == 0) return;
+        var m = PosterModel(_poster.SelectedIndices[0]);
+        if (m != null) _games.SelectObject(m, true);   // drives OnGameSelectionChanged → ShowDetails + persists LastGame
+    }
+
+    private void OnPosterMouseMove(object sender, MouseEventArgs e)
+    {
+        int idx = _poster.GetItemAt(e.X, e.Y)?.Index ?? -1;
+        if (idx != _posterHot)
+        {
+            int old = _posterHot; _posterHot = idx;
+            InvalidatePosterItem(old); InvalidatePosterItem(idx);
+        }
+    }
+
+    private void InvalidatePosterItem(int index)
+    {
+        if (index < 0 || _poster == null || !_poster.Visible) return;
+        try { if (index < _poster.VirtualListSize) _poster.RedrawItems(index, index, false); } catch { }
+    }
+
+    private void DrawPosterItem(object sender, DrawListViewItemEventArgs e)
+    {
+        var g = e.Graphics; var b = e.Bounds;
+        using (var bg = new SolidBrush(Panel)) g.FillRectangle(bg, b);
+        var model = PosterModel(e.ItemIndex);
+        if (model == null) return;
+
+        bool selected = e.Item != null && e.Item.Selected;
+        bool hot = e.ItemIndex == _posterHot;
+
+        // Cell content centred within the (spacing-padded) item bounds.
+        int cellX = b.X + (b.Width - PCellW) / 2;
+        int cellTop = b.Y + 4;
+        var imgArea = new Rectangle(cellX, cellTop, PCellW, PImgH);
+        var cardRect = new Rectangle(cellX - 6, cellTop - 4, PCellW + 12, PImgH + PLabelH + 8);
+
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        if (selected || hot)
+        {
+            using var hl = new SolidBrush(Color.FromArgb(selected ? 26 : 12, 255, 255, 255));
+            using var path = RoundRect(cardRect, 8);
+            g.FillPath(hl, path);
+        }
+
+        float scale = (selected || hot) ? 1.045f : 1f;
+        var img = PosterThumb(model);
+        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        if (img != null)
+        {
+            // contain: largest rect of the image's aspect that fits imgArea, then hover-scale.
+            float ir = (float)img.Width / img.Height, ar = (float)imgArea.Width / imgArea.Height;
+            int iw, ih;
+            if (ir > ar) { iw = imgArea.Width; ih = (int)(iw / ir); } else { ih = imgArea.Height; iw = (int)(ih * ir); }
+            iw = (int)(iw * scale); ih = (int)(ih * scale);
+            int ix = imgArea.X + (imgArea.Width - iw) / 2, iy = imgArea.Bottom - ih; // bottom-align (posters sit on the label)
+            g.DrawImage(img, ix, iy, Math.Max(1, iw), Math.Max(1, ih));
+        }
+        else
+        {
+            // phantom: grey rounded rectangle for missing box art (LaunchBox-desktop look).
+            int pw = (int)(PCellW * 0.78f * scale), ph = (int)(PImgH * 0.92f * scale);
+            var ph_r = new Rectangle(imgArea.X + (imgArea.Width - pw) / 2, imgArea.Bottom - ph, pw, ph);
+            using var pb = new SolidBrush(Color.FromArgb(65, 67, 75));
+            using var pp = RoundRect(ph_r, 10);
+            g.FillPath(pb, pp);
+        }
+
+        // Title + developer, centred, ellipsised.
+        var title = S(Safe(() => model.Title));
+        var dev = S(Safe(() => model.Developer));
+        var tRect = new Rectangle(cellX, imgArea.Bottom + 3, PCellW, 17);
+        var dRect = new Rectangle(cellX, imgArea.Bottom + 19, PCellW, 15);
+        TextRenderer.DrawText(g, title, Font, tRect, Fg,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        if (!string.IsNullOrEmpty(dev))
+            TextRenderer.DrawText(g, dev, Font, dRect, SubFg,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+    }
+
+    // Decoded box thumb for a game, or null (and an async load is kicked off). Bounded in memory.
+    private Image PosterThumb(IGame model)
+    {
+        if (!Guid.TryParse(S(Safe(() => model.Id)), out var id)) return null;
+        if (_posterBmp.TryGetValue(id, out var bmp)) return bmp;   // may be a null sentinel (no art)
+        if (_posterLoading.Add(id))
+            System.Threading.Tasks.Task.Run(() => LoadPosterThumb(model, id));
+        return null;
+    }
+
+    private void LoadPosterThumb(IGame model, Guid id)
+    {
+        Image img = null;
+        try
+        {
+            string src = DetailSource(model, "Front", () =>
+                  Safe(() => model.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => model.Box3DImagePath));
+            if (!string.IsNullOrEmpty(src)) img = LoadThumbOrFull(src, keepAlpha: false);
+        }
+        catch { img = null; }
+        try
+        {
+            if (IsDisposed) { img?.Dispose(); return; }
+            BeginInvoke((Action)(() =>
+            {
+                if (IsDisposed) { img?.Dispose(); return; }
+                _posterLoading.Remove(id);
+                _posterBmp[id] = img;            // null = "no art" sentinel (draw phantom, don't retry)
+                _posterBmpOrder.Enqueue(id);
+                while (_posterBmpOrder.Count > 600)
+                {
+                    var old = _posterBmpOrder.Dequeue();
+                    if (_posterBmp.TryGetValue(old, out var ob)) { ob?.Dispose(); _posterBmp.Remove(old); }
+                }
+                if (_posterMode && _poster.Visible && !_posterRepaintPending)
+                {
+                    _posterRepaintPending = true;
+                    BeginInvoke((Action)(() => { _posterRepaintPending = false; _poster.Invalidate(); }));
+                }
+            }));
+        }
+        catch { img?.Dispose(); }
+    }
+
+    // ── Win32: per-tile spacing (gap) for the LargeIcon poster grid ───────────
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    private static void SetIconSpacing(ListView lv, int cx, int cy)
+    {
+        const int LVM_FIRST = 0x1000, LVM_SETICONSPACING = LVM_FIRST + 53;
+        try { SendMessage(lv.Handle, LVM_SETICONSPACING, IntPtr.Zero, (IntPtr)((cy << 16) | (cx & 0xFFFF))); } catch { }
+    }
+
+    private static System.Drawing.Drawing2D.GraphicsPath RoundRect(Rectangle r, int radius)
+    {
+        var p = new System.Drawing.Drawing2D.GraphicsPath();
+        int d = Math.Max(2, radius * 2);
+        p.AddArc(r.X, r.Y, d, d, 180, 90);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
     }
 
     // ── Details rendering ────────────────────────────────────────────────────

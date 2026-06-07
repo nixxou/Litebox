@@ -235,9 +235,10 @@ internal static class Program
         sb.AppendLine("if exist \"%_ed%\\ExtendDB.dll\" set \"_other=1\"");
         sb.AppendLine("if not defined _other rmdir /s /q \"%_ed%\"");
         sb.AppendLine(":skip_edcache");
-        // Config / journal at the LB root.
+        // Config / journal / default whitelist (LiteBox-created).
         sb.AppendLine("del /q \"Core\\LiteBox.ini\" 2>nul");
         sb.AppendLine("del /q \"Core\\LiteBox.pending\" 2>nul");
+        sb.AppendLine("del /q \"Core\\whitelist.txt\" 2>nul");
         // The root launcher.
         sb.AppendLine("del /q \"LiteBox.exe\" 2>nul");
         sb.AppendLine("echo Done.");

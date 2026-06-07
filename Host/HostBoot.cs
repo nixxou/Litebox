@@ -75,6 +75,19 @@ internal static class HostBoot
             ?? Path.GetFullPath(Path.Combine(coreDir, "..", "Plugins"));
         string whitelistPath = Path.Combine(coreDir, "whitelist.txt");
 
+        // Default whitelist (ExtendDB) on first run — created only if absent, so user edits survive.
+        if (!File.Exists(whitelistPath))
+        {
+            try
+            {
+                File.WriteAllText(whitelistPath,
+                    "# LiteBox plugin whitelist — one plugin folder name per line (subfolders of <LB>\\Plugins)." + Environment.NewLine +
+                    "# Lines starting with # or ; are ignored." + Environment.NewLine +
+                    "ExtendDB" + Environment.NewLine);
+            }
+            catch { }
+        }
+
         var names = ReadWhitelist(whitelistPath);
         Console.WriteLine($"Whitelist ({whitelistPath}): [{string.Join(", ", names)}]");
         Console.WriteLine($"Plugins root: {pluginsRoot}");

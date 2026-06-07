@@ -37,13 +37,13 @@ internal sealed class HostGame : DummyGame
     public override string WikipediaUrl { get => _s.Str(R.WikipediaUrlIdx); set { } }
     public override string VideoUrl { get => _s.Str(R.VideoUrlIdx); set { } }
 
-    public override float StarRatingFloat { get => R.StarRatingFloat; set => _s.SetStarRating(_i, value); }
-    public override int StarRating { get => (int)Math.Round(R.StarRatingFloat); set => _s.SetStarRating(_i, value); }
+    public override float StarRatingFloat { get => R.StarRatingFloat; set => _s.JournalStarRating(_i, value); }
+    public override int StarRating { get => (int)Math.Round(R.StarRatingFloat); set => _s.JournalStarRating(_i, value); }
     public override int PlayCount { get => R.PlayCount; set { } }
     public override int PlayTime { get => R.PlayTime; set { } }
     public override int CommunityStarRatingTotalVotes { get => R.CommunityVotes; set { } }
 
-    public override bool Favorite { get => R.Favorite; set => _s.SetFavorite(_i, value); }
+    public override bool Favorite { get => R.Favorite; set => _s.JournalFavorite(_i, value); }
     public override bool Hide { get => R.Hide; set { } }
     public override bool Broken { get => R.Broken; set { } }
     public override bool Completed { get => R.Completed; set { } }

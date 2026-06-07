@@ -43,6 +43,7 @@ internal static class HostBoot
             sw.Stop();
             store.LogStats();
             Console.WriteLine($"Parsed XML in {sw.ElapsedMilliseconds} ms");
+            store.RecoverJournalOnLoad();   // apply any pending user-state (crash/kill or deferred-while-LB-up)
             Mem.Report("after store build");
             string dataDir = Path.GetFullPath(Path.Combine(platformsDir, ".."));     // ...\LB\Data
             lbRoot = Path.GetFullPath(Path.Combine(dataDir, ".."));                   // ...\LB
@@ -266,6 +267,9 @@ internal static class HostBoot
         ui.SetApartmentState(ApartmentState.STA);
         ui.Start();
         ui.Join();
+        // GUI closed → flush pending user-state to the XMLs if LaunchBox/BigBox aren't running
+        // (else the journal is kept and applied next time it's safe).
+        try { store?.FlushJournalIfSafe(); } catch { }
         return 0;
     }
 

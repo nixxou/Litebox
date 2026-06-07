@@ -890,6 +890,9 @@ internal sealed class MainWindow : Form
     private void ScheduleFanart(IGame g, object node)
     {
         if (_fanartTimer != null) { _fanartTimer.Stop(); _fanartTimer.Dispose(); _fanartTimer = null; }
+        // Leaving the previous selection → fade its fanart out now (the new one fades
+        // in ~0.5s later once resolved/loaded). Matches launchbox-web's fade-out.
+        _hero.FadeOutFanart();
         int token = _detailsLoadToken;
         var t = new System.Windows.Forms.Timer { Interval = 500 };
         _fanartTimer = t;
@@ -1453,7 +1456,9 @@ internal sealed class MainWindow : Form
 
         private void StepFade()
         {
-            const double step = 0.05;
+            // Fade-in quick (~100ms), fade-out gentler (~370ms) — asymmetric like the web,
+            // and short enough to finish within the 0.5s before the next fanart fades in.
+            double step = _fanartAlpha < _fanartTarget ? 0.045 : 0.012;
             if (_fanartAlpha < _fanartTarget) _fanartAlpha = Math.Min(_fanartTarget, _fanartAlpha + step);
             else _fanartAlpha = Math.Max(_fanartTarget, _fanartAlpha - step);
             if (Math.Abs(_fanartAlpha - _fanartTarget) < 0.001)

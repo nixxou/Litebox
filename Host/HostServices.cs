@@ -124,6 +124,22 @@ internal static class HostLaunch
     public static void Launch(string who, IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCmd)
     {
         if (game == null) return;
+
+        // Resolve the game's configured emulator when the caller passed none (LaunchBox does this).
+        // The web launch path (ExtendDB's GameLauncher) calls PlayGame(emulator=null), so without this
+        // the host would Process.Start the raw ROM instead of "emulator.exe <cmd> rom" — which also
+        // means an ExtendDB Harmony patch on Process.Start sees empty args and can't do its job.
+        if (emulator == null && app == null)
+        {
+            try
+            {
+                string emuId = game.EmulatorId;
+                if (!string.IsNullOrEmpty(emuId))
+                    emulator = PluginHelper.DataManager?.GetEmulatorById(emuId);
+            }
+            catch { }
+        }
+
         Console.WriteLine($"[launch/{who}] {game.Title}  emu={emulator?.Title ?? "(none)"}  app={app?.Name ?? "(none)"}{(DryRun ? "  (dry)" : "")}");
 
         // 0. notify the GUI (it may show a "game running" screen / unload its list)

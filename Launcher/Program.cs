@@ -225,6 +225,16 @@ internal static class Program
         sb.AppendLine("rmdir \"ThirdParty\\Everything\" 2>nul");
         sb.AppendLine("rmdir \"ThirdParty\\ExtendDB\" 2>nul");
         sb.AppendLine("rmdir \"ThirdParty\" 2>nul");
+        // Remove LiteBox's leftover thumb cache (Plugins\ExtendDB\cache) ONLY when the ExtendDB plugin
+        // is NOT installed — i.e. Plugins\ExtendDB contains nothing but the "cache" directory. Rigorous:
+        // any other entry (or an ExtendDB.dll) aborts the deletion so a real ExtendDB is never touched.
+        sb.AppendLine("set \"_ed=Plugins\\ExtendDB\"");
+        sb.AppendLine("if not exist \"%_ed%\\cache\\\" goto :skip_edcache");
+        sb.AppendLine("set \"_other=\"");
+        sb.AppendLine("for /f \"delims=\" %%X in ('dir /b \"%_ed%\" 2^>nul') do if /i not \"%%X\"==\"cache\" set \"_other=1\"");
+        sb.AppendLine("if exist \"%_ed%\\ExtendDB.dll\" set \"_other=1\"");
+        sb.AppendLine("if not defined _other rmdir /s /q \"%_ed%\"");
+        sb.AppendLine(":skip_edcache");
         // Config / journal at the LB root.
         sb.AppendLine("del /q \"Core\\LiteBox.ini\" 2>nul");
         sb.AppendLine("del /q \"Core\\LiteBox.pending\" 2>nul");

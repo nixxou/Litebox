@@ -88,6 +88,10 @@ internal sealed class GameStore
     private readonly HashSet<int> _journal = new();
     private string JournalPath => Path.Combine(AppContext.BaseDirectory, "LiteBox.pending");
 
+    /// <summary>Read-only mode (config, default true): NOTHING is ever written to disk — neither
+    /// the journal nor the Platform XMLs. Mutations update the in-memory Rows only, for this run.</summary>
+    public bool ReadOnly = true;
+
     // Per-game accessory entities (resident — needed for launch/disc selection).
     private readonly Dictionary<Guid, List<AddApp>> _addApps = new();
     private readonly Dictionary<Guid, List<AltName>> _altNames = new();
@@ -333,12 +337,13 @@ internal sealed class GameStore
     public void JournalPlayTime(int i, int addSeconds)
     { if (i < 0 || i >= Rows.Length || addSeconds <= 0) return; Rows[i].PlayTime += addSeconds; MarkJournal(i); }
 
-    private void MarkJournal(int i) { lock (_journal) _journal.Add(i); WriteJournalFile(); }
+    private void MarkJournal(int i) { if (ReadOnly) return; lock (_journal) _journal.Add(i); WriteJournalFile(); }
 
     // The journal is a tiny line-per-game file (guid|fav|rating|playcount|lastplayedticks|playtime),
     // written atomically (tmp → replace). Cheap to rewrite on every change.
     private void WriteJournalFile()
     {
+        if (ReadOnly) return;
         int[] js; lock (_journal) js = _journal.ToArray();
         try
         {
@@ -381,12 +386,14 @@ internal sealed class GameStore
             Console.WriteLine($"[store] recovered journal ({_journal.Count} game(s))");
         }
         catch (Exception ex) { Console.WriteLine("[store] journal recover: " + ex.Message); }
-        if (!IsLaunchBoxRunning()) FlushJournalToXml();   // safe → write now + delete journal
+        // Read-only → applied to memory only, never flushed (journal left untouched on disk).
+        if (!ReadOnly && !IsLaunchBoxRunning()) FlushJournalToXml();   // safe → write now + delete journal
     }
 
     /// <summary>At close: flush the journal to XML if safe, else keep it for next time.</summary>
     public void FlushJournalIfSafe()
     {
+        if (ReadOnly) return;                                       // never write in read-only
         if (IsLaunchBoxRunning()) { WriteJournalFile(); return; }   // LB/BB own the XMLs → defer
         FlushJournalToXml();
     }
@@ -409,6 +416,7 @@ internal sealed class GameStore
     /// <summary>Writes mutated rows back into their source Platform XML (atomic). Returns rows written.</summary>
     public int Flush()
     {
+        if (ReadOnly) { lock (_dirty) _dirty.Clear(); return 0; }   // read-only: no XML write at all
         int[] dirty;
         lock (_dirty) { if (_dirty.Count == 0) return 0; dirty = _dirty.ToArray(); _dirty.Clear(); }
         return WriteToXml(dirty);
@@ -417,6 +425,7 @@ internal sealed class GameStore
     // Shared atomic writer for the user-state fields (used by both Flush and the journal).
     private int WriteToXml(IEnumerable<int> indices)
     {
+        if (ReadOnly) return 0;
         var idxs = indices.Where(i => i >= 0 && i < Rows.Length).Distinct().ToArray();
         if (idxs.Length == 0) return 0;
         int written = 0;

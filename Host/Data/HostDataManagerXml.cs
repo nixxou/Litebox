@@ -29,6 +29,9 @@ internal sealed class HostDataManagerXml : DummyDataManager
     /// <summary>Host-side tree roots for the GUI (objects: HostPlatform / HostPlatformCategory / HostPlaylist).</summary>
     public IReadOnlyList<object> RootNodes => _roots;
 
+    /// <summary>Read-only mode passthrough to the store (GUI option). True = never write to disk.</summary>
+    public bool ReadOnly { get => _store?.ReadOnly ?? true; set { if (_store != null) _store.ReadOnly = value; } }
+
     public HostDataManagerXml(GameStore store, string dataDir, string imagesRoot)
     {
         _store = store;

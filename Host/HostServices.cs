@@ -252,9 +252,13 @@ internal static class HostLaunch
         string fileName, args;
         if (useEmu && emulator != null && !string.IsNullOrEmpty(emulator.ApplicationPath))
         {
-            string emuCmd = string.IsNullOrWhiteSpace(cmd) ? EmulatorCmdFor(emulator, game) : cmd;
+            var ep = ResolveEmulatorPlatform(emulator, game);
+            string emuCmd = !string.IsNullOrWhiteSpace(cmd) ? cmd
+                          : (SafeStr(() => ep?.CommandLine) is { Length: > 0 } pc ? pc : SafeStr(() => emulator.CommandLine));
             fileName = ResolvePath(emulator.ApplicationPath);
-            args = (string.IsNullOrWhiteSpace(emuCmd) ? "" : emuCmd.Trim() + " ") + "\"" + ResolvePath(targetPath) + "\"";
+            // ROM to pass: m3u (multi-disc) → auto-extracted file (archive) → the rom itself.
+            string rom = ResolveLaunchRomPath(game, emulator, ep, ResolvePath(targetPath), label);
+            args = BuildEmulatorArgs(emuCmd, rom, emulator);
         }
         else
         {
@@ -262,6 +266,172 @@ internal static class HostLaunch
             args = cmd?.Trim() ?? "";
         }
         Spawn(fileName, args, label);
+    }
+
+    /// <summary>The EmulatorPlatform matching the game's platform, else the emulator's default platform.</summary>
+    private static IEmulatorPlatform ResolveEmulatorPlatform(IEmulator emulator, IGame game)
+    {
+        try
+        {
+            var eps = emulator.GetAllEmulatorPlatforms();
+            return eps?.FirstOrDefault(x => string.Equals(x.Platform, SafeStr(() => game.Platform), StringComparison.OrdinalIgnoreCase))
+                ?? eps?.FirstOrDefault(x => x.IsDefault);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Formats the emulator command line + ROM token, honouring the LaunchBox emulator flags:
+    /// NoQuotes (no surrounding quotes), NoSpace (no space before the ROM), FileNameWithoutExtensionAndPath
+    /// (just the base name). Mirrors LB's "Sample Command".</summary>
+    private static string BuildEmulatorArgs(string emuCmd, string romPath, IEmulator emulator)
+    {
+        bool noQuotes = SafeBool(() => emulator.NoQuotes);
+        bool noSpace = SafeBool(() => emulator.NoSpace);
+        bool nameOnly = SafeBool(() => emulator.FileNameWithoutExtensionAndPath);
+
+        string token = nameOnly ? Path.GetFileNameWithoutExtension(romPath) : romPath;
+        if (!noQuotes) token = "\"" + token + "\"";
+        emuCmd = emuCmd?.Trim() ?? "";
+        return emuCmd.Length == 0 ? token : emuCmd + (noSpace ? "" : " ") + token;
+    }
+
+    /// <summary>Resolves the ROM path actually passed to the emulator: an auto-generated .m3u for a
+    /// multi-disc game (M3uDiscLoadEnabled), an extracted file for an archive (AutoExtract), else the ROM.</summary>
+    private static string ResolveLaunchRomPath(IGame game, IEmulator emulator, IEmulatorPlatform ep, string romAbs, string label)
+    {
+        try
+        {
+            if (ep != null && ep.M3uDiscLoadEnabled)
+            {
+                var m3u = TryBuildM3u(game);
+                if (!string.IsNullOrEmpty(m3u)) { Console.WriteLine($"[launch] {label}: m3u disc-load → \"{m3u}\""); return m3u; }
+            }
+        }
+        catch (Exception ex) { Console.WriteLine($"[launch] {label}: m3u build error: {ex.Message}"); }
+
+        try
+        {
+            bool autoExtract = (ep?.AutoExtract) ?? SafeBool(() => emulator.AutoExtract);
+            if (autoExtract && IsArchive(romAbs))
+            {
+                var extracted = TryExtractArchive(romAbs, label);
+                if (!string.IsNullOrEmpty(extracted)) return extracted;
+            }
+        }
+        catch (Exception ex) { Console.WriteLine($"[launch] {label}: auto-extract error: {ex.Message}"); }
+
+        return romAbs;
+    }
+
+    private static readonly string[] _archiveExts = { ".zip", ".7z", ".rar" };
+    private static bool IsArchive(string p)
+    { try { return _archiveExts.Contains(Path.GetExtension(p ?? "").ToLowerInvariant()); } catch { return false; } }
+
+    // Primary-file extension priority after extraction: disc descriptors first, then PC exe, then common
+    // ROM/disc image extensions; otherwise the first file alphabetically.
+    private static readonly string[] _romPriority =
+    {
+        ".m3u", ".cue", ".gdi", ".ccd", ".chd", ".exe",
+        ".iso", ".bin", ".img",
+        ".nds", ".3ds", ".gba", ".gb", ".gbc", ".nes", ".fds", ".sfc", ".smc", ".n64", ".z64", ".v64",
+        ".gen", ".md", ".smd", ".sms", ".gg", ".pce", ".ws", ".wsc", ".ngp", ".ngc", ".a26", ".a78",
+        ".lnx", ".col", ".int", ".vec", ".32x", ".rom", ".d64", ".adf", ".dsk", ".cdi", ".pbp",
+    };
+
+    /// <summary>Extracts an archive via LB's bundled 7-Zip (ExtendDB recognises this native call and
+    /// stays out of the way) into a temp dir (under LB if writable, else %TEMP%), and returns the
+    /// primary file to launch (by extension priority, else the first). Null on failure.</summary>
+    private static string TryExtractArchive(string archiveAbs, string label)
+    {
+        string sevenZip = ResolvePath(Path.Combine("ThirdParty", "7-Zip", "7z.exe"));
+        if (!File.Exists(sevenZip) || !File.Exists(archiveAbs)) return null;
+
+        string outDir = null;
+        string sub = Path.Combine("LiteBox", Sanitize(Path.GetFileNameWithoutExtension(archiveAbs)));
+        try { outDir = ResolvePath(Path.Combine("ThirdParty", "7-Zip", "Temp", sub)); Directory.CreateDirectory(outDir); }
+        catch { outDir = null; }
+        if (outDir == null)
+        {
+            try { outDir = Path.Combine(Path.GetTempPath(), sub); Directory.CreateDirectory(outDir); } catch { return null; }
+        }
+        try { foreach (var f in Directory.GetFiles(outDir, "*", SearchOption.AllDirectories)) File.Delete(f); } catch { }
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = sevenZip,
+                Arguments = $"x \"{archiveAbs}\" -o\"{outDir}\" -y",
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true,
+                WorkingDirectory = Path.GetDirectoryName(sevenZip) ?? outDir,
+            };
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(120000);
+        }
+        catch (Exception ex) { Console.WriteLine($"[launch] {label}: 7z error: {ex.Message}"); return null; }
+
+        var primary = PickPrimaryFile(outDir);
+        Console.WriteLine($"[launch] {label}: auto-extract \"{archiveAbs}\" → \"{primary ?? "<none>"}\"");
+        return primary;
+    }
+
+    private static string PickPrimaryFile(string dir)
+    {
+        string[] files;
+        try { files = Directory.GetFiles(dir, "*", SearchOption.AllDirectories); } catch { return null; }
+        if (files.Length == 0) return null;
+        foreach (var ext in _romPriority)
+        {
+            var hit = files.Where(f => Path.GetExtension(f).Equals(ext, StringComparison.OrdinalIgnoreCase))
+                           .OrderBy(f => f, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+            if (hit != null) return hit;
+        }
+        return files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).First();
+    }
+
+    /// <summary>Builds an .m3u listing the game's disc files (one absolute path per line, in disc order)
+    /// for a multi-disc game. Written under &lt;LB&gt;\Metadata\Temp\&lt;Title&gt;\&lt;GUID&gt;\ (so ExtendDB's
+    /// interception recognises it as the LB-native m3u and can reformulate it), else %TEMP%. Null if the
+    /// game isn't multi-disc.</summary>
+    private static string TryBuildM3u(IGame game)
+    {
+        var discs = new List<(int disc, string path)>();
+        try
+        {
+            foreach (var a in SafeAddApps(game))
+            {
+                int? d = SafeNullableInt(() => a.Disc);
+                string p = ResolvePath(SafeStr(() => a.ApplicationPath));
+                if (d.HasValue && !string.IsNullOrEmpty(p)) discs.Add((d.Value, p));
+            }
+        }
+        catch { }
+        // Ensure the game's own ROM (disc 1) is included even if no matching disc add-app exists.
+        string mainPath = ResolvePath(SafeStr(() => game.ApplicationPath));
+        if (!string.IsNullOrEmpty(mainPath) && !discs.Any(x => string.Equals(x.path, mainPath, StringComparison.OrdinalIgnoreCase)))
+            discs.Add((0, mainPath));
+
+        var ordered = discs.GroupBy(x => x.path, StringComparer.OrdinalIgnoreCase).Select(g => g.OrderBy(x => x.disc).First())
+                           .OrderBy(x => x.disc).Select(x => x.path).ToList();
+        if (ordered.Count < 2) return null;   // single disc → no m3u
+
+        string title = Sanitize(SafeStr(() => game.Title) is { Length: > 0 } t ? t : "game");
+        string gid = SafeStr(() => game.Id) is { Length: > 0 } g2 ? g2 : Guid.NewGuid().ToString("N");
+        string dir = null;
+        try { dir = ResolvePath(Path.Combine("Metadata", "Temp", title, gid)); Directory.CreateDirectory(dir); }
+        catch { dir = null; }
+        if (dir == null) { try { dir = Path.Combine(Path.GetTempPath(), "LiteBox", "m3u", gid); Directory.CreateDirectory(dir); } catch { return null; } }
+
+        string m3u = Path.Combine(dir, title + ".m3u");
+        try { File.WriteAllLines(m3u, ordered); return m3u; } catch { return null; }
+    }
+
+    private static string Sanitize(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "_";
+        foreach (var c in Path.GetInvalidFileNameChars()) s = s.Replace(c, '_');
+        return s.Trim().Length == 0 ? "_" : s.Trim();
     }
 
     /// <summary>
@@ -424,18 +594,6 @@ internal static class HostLaunch
         catch (Exception ex) { Console.WriteLine($"[launch] {label} error: {ex.Message}"); }
     }
 
-    private static string EmulatorCmdFor(IEmulator emulator, IGame game)
-    {
-        try
-        {
-            var eps = emulator.GetAllEmulatorPlatforms();
-            var ep = eps?.FirstOrDefault(x => string.Equals(x.Platform, game.Platform, StringComparison.OrdinalIgnoreCase))
-                  ?? eps?.FirstOrDefault(x => x.IsDefault);
-            return ep?.CommandLine ?? emulator.CommandLine ?? "";
-        }
-        catch { return ""; }
-    }
-
     private static IEnumerable<IAdditionalApplication> SafeAddApps(IGame game)
     {
         try { return game.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>(); }
@@ -449,6 +607,7 @@ internal static class HostLaunch
 
     private static bool SafeBool(Func<bool> f) { try { return f(); } catch { return false; } }
     private static string SafeStr(Func<string> f) { try { return f() ?? ""; } catch { return ""; } }
+    private static int? SafeNullableInt(Func<int?> f) { try { return f(); } catch { return null; } }
 
     private static string ResolvePath(string p)
     {

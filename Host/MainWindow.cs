@@ -61,8 +61,7 @@ internal sealed class MainWindow : Form
     private List<string> _mediaItems;            // current game's media sources (box first, then screenshots)
     private int _mediaSel;                        // selected media index
     private System.Windows.Forms.Timer _mediaTimer;   // 0.5s debounce: build strip + upgrade main to full
-    private readonly Label _title;
-    private readonly MetaCard _meta;             // platform pill + expandable game fields (or node text)
+    private readonly MetaCard _meta;             // title + platform + expandable game fields (or node text)
     private readonly TextBox _notes;
     private static bool _metaExpanded;           // remembered expand state of the platform meta card (session + INI)
     private readonly Dictionary<string, Image> _platIconCache = new(StringComparer.OrdinalIgnoreCase);
@@ -119,7 +118,7 @@ internal sealed class MainWindow : Form
 
         _sources = BuildSourceTree();
 
-        var details = BuildDetails(out _hero, out _media, out _strip, out _title, out _meta, out _notes);
+        var details = BuildDetails(out _hero, out _media, out _strip, out _meta, out _notes);
         _hero.RateClicked = v => RateHeroGame(v);
         _hero.FavClicked = () => ToggleHeroFavorite();
         _meta.ExpandedChanged = OnMetaExpandedToggled;
@@ -412,34 +411,32 @@ internal sealed class MainWindow : Form
 
     // ── Right details construction ───────────────────────────────────────────
     private Panel BuildDetails(out HeroPanel hero, out MediaPanel media, out MediaStrip strip,
-                               out Label title, out MetaCard meta, out TextBox notes)
+                               out MetaCard meta, out TextBox notes)
     {
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
         _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
 
-        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, ColumnCount = 1, RowCount = 6, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
-        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // title
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));    // meta (platform pill + expandable fields)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));    // meta card (title + platform + expandable fields, wraps)
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest)
         _detailGrid = tlp;
-        tlp.SizeChanged += (_, _) => UpdateMediaRowHeight();   // media area fills the pane width, height = width / aspect
+        tlp.SizeChanged += (_, _) => { UpdateMediaRowHeight(); UpdateMetaRowHeight(); };
 
         hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         media = new MediaPanel { Dock = DockStyle.Fill, BackColor = Panel };
         strip = new MediaStrip { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 4, 0, 4) };
-        title = new Label { Dock = DockStyle.Fill, AutoSize = false, Height = 28, ForeColor = Fg, Font = new Font("Segoe UI Semibold", 12f), TextAlign = ContentAlignment.MiddleLeft };
-        meta = new MetaCard { Dock = DockStyle.Fill, BackColor = Panel };
+        meta = new MetaCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
+        meta.SizeChanged += (_, _) => UpdateMetaRowHeight();   // re-measure wrapped height when the pane width changes
         notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
 
         tlp.Controls.Add(hero, 0, 0);
         tlp.Controls.Add(media, 0, 1);
         tlp.Controls.Add(strip, 0, 2);
-        tlp.Controls.Add(title, 0, 3);
-        tlp.Controls.Add(meta, 0, 4);
-        tlp.Controls.Add(notes, 0, 5);
+        tlp.Controls.Add(meta, 0, 3);
+        tlp.Controls.Add(notes, 0, 4);
         return tlp;
     }
 
@@ -461,13 +458,13 @@ internal sealed class MainWindow : Form
         { rs.SizeType = SizeType.Absolute; rs.Height = h; }
     }
 
-    // Size the meta row to the card's content (pill alone, or pill + expanded fields).
+    // Size the meta row to the card's wrapped content (title + platform, plus the fields when expanded).
     private void UpdateMetaRowHeight()
     {
         var tlp = _detailGrid;
-        if (tlp == null || _meta == null || tlp.RowStyles.Count < 5) return;
+        if (tlp == null || _meta == null || tlp.RowStyles.Count < 4) return;
         int h = _meta.DesiredHeight;
-        var rs = tlp.RowStyles[4];
+        var rs = tlp.RowStyles[3];
         if (rs.SizeType != SizeType.Absolute || Math.Abs(rs.Height - h) > 0.5)
         { rs.SizeType = SizeType.Absolute; rs.Height = h; }
     }
@@ -882,7 +879,7 @@ internal sealed class MainWindow : Form
             LoadImagesAsync(null, null);
             ScheduleFanart(null, null);
             ClearStrip();
-            _title.Text = ""; _meta.Clear(); _notes.Text = ""; UpdateMetaRowHeight();
+            _meta.Clear(); _notes.Text = ""; UpdateMetaRowHeight();
             return;
         }
 
@@ -901,9 +898,7 @@ internal sealed class MainWindow : Form
         ScheduleFanart(g, null);
         ScheduleMedia(g);   // 0.5s later: build the thumb strip + upgrade the main to full
 
-        _title.Text = S(g.Title);
-
-        // Platform → pill (icon + name + chevron); the rest are expandable rows.
+        // Title + platform live in the card; the rest are the expandable rows.
         var rows = new List<(string, string)>();
         void R(string label, string val) { if (!string.IsNullOrWhiteSpace(val)) rows.Add((label, val)); }
         R("Developer", S(g.Developer));
@@ -919,7 +914,7 @@ internal sealed class MainWindow : Form
         var versions = Safe(() => g.GetAllAdditionalApplications()?.Length);
         if (versions > 0) R("Versions", versions.ToString());
         R("File", Path.GetFileName(S(Safe(() => g.ApplicationPath))));
-        _meta.ShowGame(S(g.Platform), PlatformIconImage(S(g.Platform)), rows);
+        _meta.ShowGame(S(g.Title), S(g.Platform), PlatformIconImage(S(g.Platform)), rows);
         _meta.Expanded = _metaExpanded;   // honour the remembered expand state
         UpdateMetaRowHeight();
 
@@ -936,8 +931,7 @@ internal sealed class MainWindow : Form
             _hero.SetNode(node is AllNode ? "All Games" : "");   // no rating/heart for a node
             LoadImagesAsync(null, null);
             ScheduleFanart(null, node);   // AllNode → default fanart; null → empty pane (no fanart)
-            _title.Text = node is AllNode ? "All Games" : "";
-            if (node is AllNode) _meta.ShowText(new List<string> { $"Total Games: {_current.Length}" });
+            if (node is AllNode) _meta.ShowNode("All Games", new List<string> { $"Total Games: {_current.Length}" });
             else _meta.Clear();
             _notes.Text = "";
             UpdateMetaRowHeight();
@@ -948,7 +942,6 @@ internal sealed class MainWindow : Form
         LoadImagesAsync(NodeImage(node, clearLogo: true), NodeImage(node, clearLogo: false));
         ScheduleFanart(null, node);
         ClearStrip();   // nodes have no media strip
-        _title.Text = HostPlatformCategory.NodeName(node);
 
         var bits = new List<string> { $"Total Games: {_current.Length}" };
         if (node is IPlatform p)
@@ -958,7 +951,7 @@ internal sealed class MainWindow : Form
             Add("Manufacturer", Safe(() => p.Manufacturer));
             Add("Release", N(() => p.ReleaseDate?.Year)?.ToString());
         }
-        _meta.ShowText(bits);
+        _meta.ShowNode(HostPlatformCategory.NodeName(node) ?? "", bits);
         UpdateMetaRowHeight();
         _notes.Text = NodeNotes(node).Replace("\n", "\r\n");
     }
@@ -1697,25 +1690,27 @@ internal sealed class MainWindow : Form
         }
     }
 
-    // ── Main media zone: a reserved 16:9 area, image drawn keeping aspect ─────
-    // (posters get pillar-boxed). Owner-drawn so it adapts to the panel width and
-    // leaves a single place to later host a video instead of an image.
-    // Collapsible metadata card under the title. Game mode draws a rounded "pill"
-    // (platform icon + name + a rotating chevron, like the source tree); expanded, it
-    // lists the remaining fields one per line. Text mode draws plain lines (tree nodes).
-    // The expand state lives in MainWindow (_metaExpanded) so it carries across games.
+    // Metadata card under the media: a rounded box holding the title and the platform
+    // (icon + name + a rotating chevron, like the source tree). Clicking it expands the
+    // remaining fields, one "Label: value" per row. EVERYTHING word-wraps to as many lines
+    // as needed (title and every field, collapsed or expanded) — nothing is cut off. Tree
+    // nodes reuse it (title + plain wrapped lines, no chevron). Height is measured from the
+    // wrapped content at the current width; the expand state lives in MainWindow.
     private sealed class MetaCard : Panel
     {
         private enum Mode { None, Game, Text }
         private Mode _mode = Mode.None;
-        private string _platform = "";
+        private string _title = "", _platform = "";
         private Image _icon;                                   // not owned (cached by MainWindow)
         private (string label, string value)[] _rows = Array.Empty<(string, string)>();
         private string[] _lines = Array.Empty<string>();
         private bool _expanded;
-        private Rectangle _pillRect;
+        private readonly Font _titleFont = new Font("Segoe UI Semibold", 12f);
 
-        private const int PillH = 26, LineH = 20, Pad = 2, RowsGap = 4;
+        private const int Pad = 10, Gap = 6, IconSz = 18, ChevW = 16;
+        // Wrap to multiple lines; only a single over-long word gets ellipsised as a last resort.
+        private const TextFormatFlags Wrap =
+            TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.WordEllipsis | TextFormatFlags.Left | TextFormatFlags.Top;
 
         public Action ExpandedChanged;
 
@@ -1732,30 +1727,33 @@ internal sealed class MainWindow : Form
             set { if (_expanded != value) { _expanded = value; Invalidate(); } }
         }
 
-        public int DesiredHeight => _mode switch
+        public int DesiredHeight
         {
-            Mode.Game => Pad + PillH + (_expanded && _rows.Length > 0 ? RowsGap + _rows.Length * LineH : 0) + Pad,
-            Mode.Text => Pad + Math.Max(1, _lines.Length) * LineH + Pad,
-            _ => 0,
-        };
+            get
+            {
+                if (_mode == Mode.None) return 0;
+                if (ClientSize.Width < 40) return 64;   // not laid out yet → fallback; SizeChanged re-measures
+                return LayoutContent(null) + Pad;
+            }
+        }
 
-        public void ShowGame(string platform, Image icon, List<(string, string)> rows)
+        public void ShowGame(string title, string platform, Image icon, List<(string, string)> rows)
         {
-            _mode = Mode.Game; _platform = platform ?? ""; _icon = icon;
+            _mode = Mode.Game; _title = title ?? ""; _platform = platform ?? ""; _icon = icon;
             _rows = (rows ?? new List<(string, string)>()).ToArray();
             Invalidate();
         }
 
-        public void ShowText(List<string> lines)
+        public void ShowNode(string title, List<string> lines)
         {
-            _mode = Mode.Text; _icon = null;
+            _mode = Mode.Text; _title = title ?? ""; _icon = null; _platform = "";
             _lines = (lines ?? new List<string>()).ToArray();
             Invalidate();
         }
 
         public void Clear()
         {
-            _mode = Mode.None; _icon = null;
+            _mode = Mode.None; _icon = null; _title = "";
             _rows = Array.Empty<(string, string)>(); _lines = Array.Empty<string>();
             Invalidate();
         }
@@ -1763,53 +1761,89 @@ internal sealed class MainWindow : Form
         protected override void OnMouseClick(MouseEventArgs e)
         {
             base.OnMouseClick(e);
-            if (_mode == Mode.Game && _pillRect.Contains(e.Location))
-            {
-                _expanded = !_expanded;
-                Invalidate();
-                ExpandedChanged?.Invoke();
-            }
+            if (_mode == Mode.Game) { _expanded = !_expanded; Invalidate(); ExpandedChanged?.Invoke(); }
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            Cursor = (_mode == Mode.Game && _pillRect.Contains(e.Location)) ? Cursors.Hand : Cursors.Default;
+            Cursor = _mode == Mode.Game ? Cursors.Hand : Cursors.Default;
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
             g.Clear(BackColor);
-            if (_mode == Mode.Game) { DrawPill(g); if (_expanded) DrawRows(g); }
-            else if (_mode == Mode.Text) DrawLines(g);
+            if (_mode == Mode.None) return;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var box = new Rectangle(0, 0, Math.Max(1, ClientSize.Width - 1), Math.Max(1, ClientSize.Height - 1));
+            using (var path = Rounded(box, 8))
+            {
+                using var bg = new SolidBrush(Color.FromArgb(46, 46, 50)); g.FillPath(bg, path);
+                using var bd = new Pen(Color.FromArgb(64, 64, 68)); g.DrawPath(bd, path);
+            }
+            LayoutContent(g);
         }
 
-        private void DrawPill(Graphics g)
+        // Lays out (and draws when g != null) the title, platform row and fields/lines, all
+        // word-wrapped. Returns the y just past the last element (relative to the card top).
+        private int LayoutContent(Graphics g)
         {
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            const int iconSz = 18, chevW = 16, leftPad = 8, gap = 7, rightPad = 6;
-            string name = string.IsNullOrEmpty(_platform) ? "Unknown platform" : _platform;
-            var nameSz = TextRenderer.MeasureText(g, name, Font, new Size(int.MaxValue, PillH), TextFormatFlags.NoPadding);
-            int pillW = leftPad + (_icon != null ? iconSz + gap : 0) + nameSz.Width + gap + chevW + rightPad;
-            pillW = Math.Min(pillW, Math.Max(60, ClientSize.Width - 1));
-            _pillRect = new Rectangle(0, Pad, Math.Max(48, pillW), PillH);
+            int innerW = Math.Max(20, ClientSize.Width - 2 * Pad);
+            int x = Pad, y = Pad;
 
-            using (var path = Rounded(_pillRect, 7))
+            if (!string.IsNullOrEmpty(_title))
+                y += DrawWrapped(g, _title, _titleFont, Fg, x, y, innerW);
+
+            if (_mode == Mode.Game)
             {
-                using var bg = new SolidBrush(Color.FromArgb(48, 48, 52));
-                g.FillPath(bg, path);
-                using var bd = new Pen(Color.FromArgb(66, 66, 70));
-                g.DrawPath(bd, path);
+                y += Gap;
+                int chevCol = ChevW + 2;
+                int nameX = x + IconSz + 7;
+                int nameW = Math.Max(10, innerW - IconSz - 7 - chevCol);
+                string name = string.IsNullOrEmpty(_platform) ? "Unknown platform" : _platform;
+                if (g != null)
+                {
+                    if (_icon != null) g.DrawImage(_icon, x, y, IconSz, IconSz);
+                    DrawChevron(g, x + innerW - ChevW / 2, y + IconSz / 2, _expanded);
+                }
+                int nameH = DrawWrapped(g, name, Font, Fg, nameX, y, nameW);
+                y += Math.Max(IconSz, nameH);
+
+                if (_expanded && _rows.Length > 0)
+                {
+                    y += 4;
+                    foreach (var (label, value) in _rows)
+                    {
+                        string lbl = label + ":  ";
+                        var lblSz = TextRenderer.MeasureText(lbl, Font, new Size(int.MaxValue, 100), TextFormatFlags.NoPadding);
+                        if (g != null)
+                            TextRenderer.DrawText(g, lbl, Font, new Rectangle(x, y, lblSz.Width, lblSz.Height),
+                                SubFg, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPadding);
+                        int vx = x + lblSz.Width;
+                        int vh = DrawWrapped(g, value, Font, Fg, vx, y, Math.Max(20, innerW - lblSz.Width));
+                        y += Math.Max(lblSz.Height, vh) + 3;
+                    }
+                }
+            }
+            else // node text
+            {
+                y += Gap;
+                foreach (var line in _lines)
+                    y += DrawWrapped(g, line, Font, SubFg, x, y, innerW) + 2;
             }
 
-            int x = _pillRect.Left + leftPad;
-            int cy = _pillRect.Top + _pillRect.Height / 2;
-            if (_icon != null) { g.DrawImage(_icon, x, cy - iconSz / 2, iconSz, iconSz); x += iconSz + gap; }
-            int nameRight = _pillRect.Right - rightPad - chevW;
-            TextRenderer.DrawText(g, name, Font, new Rectangle(x, _pillRect.Top, Math.Max(10, nameRight - x), _pillRect.Height),
-                Fg, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-            DrawChevron(g, _pillRect.Right - rightPad - chevW / 2, cy, _expanded);
+            return y;
+        }
+
+        // Measures (g == null) or draws a word-wrapped block; returns its height.
+        private static int DrawWrapped(Graphics g, string text, Font font, Color color, int x, int y, int w)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            var size = TextRenderer.MeasureText(text, font, new Size(w, int.MaxValue), Wrap);
+            if (g != null)
+                TextRenderer.DrawText(g, text, font, new Rectangle(x, y, w, size.Height), color, Wrap);
+            return size.Height;
         }
 
         private static void DrawChevron(Graphics g, int cx, int cy, bool expanded)
@@ -1830,33 +1864,6 @@ internal sealed class MainWindow : Form
             g.SmoothingMode = old;
         }
 
-        private void DrawRows(Graphics g)
-        {
-            int y = Pad + PillH + RowsGap, x = 4;
-            foreach (var (label, value) in _rows)
-            {
-                string lbl = label + ":  ";
-                var lblSz = TextRenderer.MeasureText(g, lbl, Font, new Size(int.MaxValue, LineH), TextFormatFlags.NoPadding);
-                TextRenderer.DrawText(g, lbl, Font, new Rectangle(x, y, lblSz.Width, LineH),
-                    SubFg, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-                int vx = x + lblSz.Width;
-                TextRenderer.DrawText(g, value, Font, new Rectangle(vx, y, Math.Max(10, ClientSize.Width - vx - 4), LineH),
-                    Fg, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-                y += LineH;
-            }
-        }
-
-        private void DrawLines(Graphics g)
-        {
-            int y = Pad, x = 2;
-            foreach (var line in _lines)
-            {
-                TextRenderer.DrawText(g, line, Font, new Rectangle(x, y, Math.Max(10, ClientSize.Width - x - 4), LineH),
-                    SubFg, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-                y += LineH;
-            }
-        }
-
         private static System.Drawing.Drawing2D.GraphicsPath Rounded(Rectangle r, int radius)
         {
             var p = new System.Drawing.Drawing2D.GraphicsPath();
@@ -1868,6 +1875,8 @@ internal sealed class MainWindow : Form
             p.CloseFigure();
             return p;
         }
+
+        protected override void Dispose(bool disposing) { if (disposing) _titleFont.Dispose(); base.Dispose(disposing); }
     }
 
     // A mini-thumbnail in the media strip: owner-drawn so the image keeps its aspect on a

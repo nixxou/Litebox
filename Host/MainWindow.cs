@@ -322,6 +322,7 @@ internal sealed class MainWindow : Form
         var cLast  = Col("lastplayed", "Last Played", 100, r => Safe(() => (object)((IGame)r).LastPlayedDate), HorizontalAlignment.Right, visible: false);
         cLast.AspectToStringConverter = v => v is DateTime d ? d.ToString("yyyy-MM-dd") : "";
         var cDbId  = Col("dbid", "DB Id", 70, r => N(() => ((IGame)r).LaunchBoxDbId), HorizontalAlignment.Right, visible: false);
+        var cAppPath = Col("apppath", "Application Path", 300, r => S(((IGame)r).ApplicationPath), visible: false);
 
         // AllColumns holds every column; RebuildColumns shows only the IsVisible ones.
         // Order here = default display order (visible first), then optional columns.
@@ -329,7 +330,7 @@ internal sealed class MainWindow : Form
         {
             cName, cTitle, cPlat, cDev, cGenre, cYear, cRate, cFav, cPlays,
             cPub, cSeries, cRegion, cMode, cVer, cStatus, cSource, cRel, cEsrb, cComm, cVotes,
-            cDone, cBroken, cPort, cInst, cPlayers, cTime, cAdded, cMod, cLast, cDbId,
+            cDone, cBroken, cPort, cInst, cPlayers, cTime, cAdded, cMod, cLast, cDbId, cAppPath,
         });
         olv.RebuildColumns();
 

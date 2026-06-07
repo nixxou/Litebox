@@ -38,6 +38,9 @@ internal sealed class MainWindow : Form
 
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     private static extern int SetWindowTheme(IntPtr hWnd, string app, string idList);
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    private const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_FRAMECHANGED = 0x20;
 
     private readonly PluginRegistry _reg;
     private readonly IDataManager _dm;
@@ -237,6 +240,8 @@ internal sealed class MainWindow : Form
             RestoreSelection();      // last category + game
             try { ActiveControl = _games; _games.Focus(); } catch { }
         };
+        // Final dark-scrollbar pass once everything (data, columns) is in place.
+        Shown += (_, _) => { ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); };
     }
 
     // ── Game list construction ───────────────────────────────────────────────
@@ -252,6 +257,7 @@ internal sealed class MainWindow : Form
             SelectColumnsOnRightClick = true,       // right-click header → show/hide columns
             UseCellFormatEvents = true,             // per-cell colouring (user vs community rating)
         };
+        olv.UseExplorerTheme = false;   // stop OLV forcing the light "explorer" scrollbars
         olv.SelectedBackColor = Accent;
         olv.SelectedForeColor = Color.White;
         olv.HeaderFormatStyle = new HeaderFormatStyle();
@@ -387,7 +393,7 @@ internal sealed class MainWindow : Form
         {
             Dock = DockStyle.Fill, BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None,
             HeaderStyle = ColumnHeaderStyle.None, FullRowSelect = true, RowHeight = 26,
-            ShowGroups = false, UseFiltering = false,
+            ShowGroups = false, UseFiltering = false, UseExplorerTheme = false,
         };
         tlv.SelectedBackColor = Accent;
         tlv.SelectedForeColor = Color.White;
@@ -1158,18 +1164,24 @@ internal sealed class MainWindow : Form
 
     private static void DarkScroll(Control c)
     {
-        void Apply()
-        {
-            if (!c.IsHandleCreated) return;
-            try { SetWindowTheme(c.Handle, "DarkMode_Explorer", null); } catch { }
-        }
         // Defer via BeginInvoke so it runs AFTER the control's own OnHandleCreated
-        // theming — ObjectListView re-applies the light "explorer" theme there, which
-        // would otherwise override a direct call (hence the list scrollbars stayed
-        // light while the plain TextBox went dark). Re-fires on every handle recreation
-        // (e.g. when columns are shown/hidden → RebuildColumns recreates the handle).
-        c.HandleCreated += (_, _) => { try { c.BeginInvoke((Action)Apply); } catch { } };
-        if (c.IsHandleCreated) { try { c.BeginInvoke((Action)Apply); } catch { } }
+        // theming. Re-fires on every handle recreation (e.g. column show/hide).
+        c.HandleCreated += (_, _) => { try { c.BeginInvoke((Action)(() => ApplyDarkScroll(c))); } catch { } };
+        if (c.IsHandleCreated) { try { c.BeginInvoke((Action)(() => ApplyDarkScroll(c))); } catch { } }
+    }
+
+    private static void ApplyDarkScroll(Control c)
+    {
+        if (c == null || !c.IsHandleCreated) return;
+        try
+        {
+            SetWindowTheme(c.Handle, "DarkMode_Explorer", null);
+            // ObjectListView/ListView don't repaint their non-client scrollbars on a
+            // bare SetWindowTheme — force a frame-changed so the dark bars are drawn.
+            SetWindowPos(c.Handle, IntPtr.Zero, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+        catch { }
     }
 
     private void Safe(Action a)

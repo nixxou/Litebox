@@ -12,7 +12,17 @@
          namespaces are unchanged; only the produced assembly/file is renamed). -->
     <AssemblyName>LiteBox</AssemblyName>
     <RootNamespace>LbApiHost</RootNamespace>
+    <ApplicationIcon>litebox.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!-- The launcher is a separate project nested in Launcher\ — keep it out of the host's
+       default **/*.cs globbing (otherwise its sources + generated obj files double-compile here). -->
+  <ItemGroup>
+    <Compile Remove="Launcher\**" />
+    <EmbeddedResource Remove="Launcher\**" />
+    <None Remove="Launcher\**" />
+    <Content Remove="Launcher\**" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- The real LaunchBox plugin SDK — the exact interface contract we
@@ -42,6 +52,8 @@
   <ItemGroup>
     <!-- Fallback hero fanart, used when a game/node has no background of its own. -->
     <EmbeddedResource Include="defaultFanart.jpg" />
+    <!-- App/window icon (also embedded so the WinForms window + taskbar use the multi-size icon). -->
+    <EmbeddedResource Include="litebox.ico" />
   </ItemGroup>
 
 </Project>

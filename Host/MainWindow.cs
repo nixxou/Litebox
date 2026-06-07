@@ -988,6 +988,7 @@ internal sealed class MainWindow : Form
         lv.DrawItem += DrawPosterItem;
         lv.SelectedIndexChanged += (_, _) => OnPosterSelectionChanged();
         lv.ItemActivate += (_, _) => LaunchSelected();
+        lv.MouseUp += OnPosterMouseUp;   // right-click → same game context menu as the list
         lv.MouseMove += OnPosterMouseMove;
         lv.MouseLeave += (_, _) => { if (_posterHot != -1) { int o = _posterHot; _posterHot = -1; InvalidatePosterItem(o); } };
         lv.HandleCreated += (_, _) => { SetIconSpacing(lv, PCellW + PGap, PImgH + PLabelH + PGap); EnableListViewDoubleBuffer(lv); };
@@ -1033,6 +1034,18 @@ internal sealed class MainWindow : Form
         if (_poster.SelectedIndices.Count == 0) return;
         var m = PosterModel(_poster.SelectedIndices[0]);
         if (m != null) _games.SelectObject(m, true);   // drives OnGameSelectionChanged → ShowDetails + persists LastGame
+    }
+
+    private void OnPosterMouseUp(object sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Right) return;
+        var item = _poster.GetItemAt(e.X, e.Y);
+        if (item == null) return;
+        if (!item.Selected) { _poster.SelectedIndices.Clear(); _poster.SelectedIndices.Add(item.Index); }
+        var m = PosterModel(item.Index);
+        if (m == null) return;
+        var menu = BuildGameContextMenu(new[] { m });   // Play / Play With / Play Version + plugin game menus
+        if (menu.Items.Count > 0) menu.Show(_poster, e.Location);
     }
 
     private void OnPosterMouseMove(object sender, MouseEventArgs e)

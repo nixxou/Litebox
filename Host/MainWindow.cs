@@ -126,6 +126,7 @@ internal sealed class MainWindow : Form
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
         _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
         Text = "LiteBox";
+        try { using var ico = typeof(MainWindow).Assembly.GetManifestResourceStream("LbApiHost.litebox.ico"); if (ico != null) Icon = new Icon(ico); } catch { }
         ClientSize = new Size(1280, 800);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Bg;

@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    LiteBox launcher / installer. Produces LiteBox.exe (same name as the host, but lives at the
+    LaunchBox ROOT next to LaunchBox.exe — mirroring how LB\LaunchBox.exe launches LB\Core\LaunchBox.exe).
+
+    - Run from the LB root (Core\LaunchBox.exe next to it): just launches Core\LiteBox.exe.
+    - Run from anywhere else: asks for the ROOT LaunchBox.exe, extracts the embedded release zip into
+      <LB>\Core, copies itself to <LB>\LiteBox.exe, writes "LiteBox uninstall.bat", then launches.
+
+    Ship it as a self-contained single file so it runs before .NET is known to be present
+    (publish with: self-contained, RID win-x64, PublishSingleFile=true). See the repo deploy notes.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>LiteBox</AssemblyName>
+    <RootNamespace>LiteBoxLauncher</RootNamespace>
+    <ApplicationIcon>..\litebox.ico</ApplicationIcon>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <EnableComHosting>false</EnableComHosting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The maintained release package (project/ExtendDB/LiteBox-release.zip) — extracted into
+         <LB>\Core at install. Rebuild that zip before publishing the launcher to ship a fresh host. -->
+    <EmbeddedResource Include="..\..\LiteBox-release.zip">
+      <LogicalName>LiteBox.release.zip</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <Target Name="CheckReleaseZip" BeforeTargets="PrepareForBuild;BeforeCompile">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\..\..\LiteBox-release.zip')"
+           Text="LiteBox-release.zip not found at project/ExtendDB/ — refresh the release zip before building the launcher." />
+  </Target>
+
+</Project>

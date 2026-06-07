@@ -65,8 +65,45 @@ namespace LbApiHost.Host.Gc
         { try { var l = Game(plat, id)?.FindAllVideos(); return l != null && l.Count > 0; } catch { return false; } }
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
-        /// <summary>Build the cache (async; flips IsGlobalReady when done). No-op if disabled.</summary>
-        public static void Build() { try { if (Enabled) GameCache.Initialize(); } catch { } }
+        /// <summary>Build the cache (async; flips IsGlobalReady when done). No-op if disabled.
+        /// Logs whether Everything is active, and the element counts once the build finishes.</summary>
+        public static void Build()
+        {
+            try
+            {
+                if (!Enabled) return;
+                Console.WriteLine($"[gamecache] building host cache — Everything active = {EverythingBridge.IsEverythingAvailable()}");
+                GameCache.ReadyChanged -= OnReady;   // log counts on (re)build completion (idempotent subscribe)
+                GameCache.ReadyChanged += OnReady;
+                GameCache.Initialize();
+            }
+            catch { }
+        }
+
+        // Fired by GameCache when a platform (name) or the whole cache (null) becomes ready.
+        private static void OnReady(string platform)
+        {
+            if (platform != null) return;   // only on global-ready
+            try
+            {
+                int plats = 0; long games = 0, images = 0, videos = 0;
+                var ps = GameCache.Platforms;
+                if (ps != null)
+                    foreach (var kv in ps)
+                    {
+                        var p = kv.Value; if (p?.GamesByUUID == null) continue;
+                        plats++;
+                        foreach (var g in p.GamesByUUID.Values)
+                        {
+                            games++;
+                            if (g?.Images != null) images += g.Images.Length;
+                            if (g?.Videos != null) videos += g.Videos.Length;
+                        }
+                    }
+                Console.WriteLine($"[gamecache] host cache ready: {plats} platforms, {games} games, {images} images, {videos} videos");
+            }
+            catch { }
+        }
 
         /// <summary>Drop the whole cache to free memory (e.g. while a game runs).</summary>
         public static void ClearForMemory()

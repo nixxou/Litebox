@@ -192,6 +192,26 @@ internal static class MediaResolver
         { var d = MakeImageDetails(path, type, region); if (d != null) list.Add(d); }
     }
 
+    /// <summary>
+    /// All image paths for ONE exact image type, in LaunchBox-native order: region
+    /// priority first (root files last), then lowest "-NNN" suffix. Pure IO, so it
+    /// returns the same set whether or not ExtendDB's GameCache is active. Empty if none.
+    /// </summary>
+    public static List<string> AllOfType(string platformName, Guid id, string title, string imageType)
+    {
+        var result = new List<string>();
+        if (string.IsNullOrEmpty(platformName) || string.IsNullOrEmpty(imageType)) return result;
+        var plat = SafePlatform(platformName);
+        if (plat == null) return result;
+        string folder = SafeFolder(plat, imageType);
+        if (folder == null || !Directory.Exists(folder)) return result;
+        string sani = Sanitize(title);
+        foreach (var region in _regions)
+            result.AddRange(AllInDir(Path.Combine(folder, region), id, sani, ImageExts));
+        result.AddRange(AllInDir(folder, id, sani, ImageExts));   // root (no region) last
+        return result;
+    }
+
     private static IEnumerable<string> SafeSubdirs(string dir)
     {
         try { return Directory.EnumerateDirectories(dir); } catch { return Array.Empty<string>(); }

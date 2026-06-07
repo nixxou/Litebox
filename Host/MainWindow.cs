@@ -1116,22 +1116,41 @@ internal sealed class MainWindow : Form
         });
     }
 
-    // Media sources for a game: the box (Front) first, then the screenshots — same
-    // regroupement selection as the web (GameCache when ExtendDB is loaded; IO fallback).
+    // Media sources for a game, in display order: the box (the main image) first, then
+    // the title screenshot(s), the gameplay screenshots, and finally the fanart — each
+    // with the normal type/region priority. The lists are resolved IO-side
+    // (MediaResolver) so they're identical whether or not ExtendDB's GameCache is active;
+    // only the box uses the cache-or-IO "best" pick. NOTE: single extension point — a
+    // future video item would be inserted into this order.
+    private const int MaxMediaItems = 24;
     private static List<string> BuildMediaList(IGame g)
     {
         var items = new List<string>();
-        void Add(string s) { if (!string.IsNullOrEmpty(s) && !items.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) items.Add(s); }
+        void Add(string s)
+        {
+            if (items.Count >= MaxMediaItems) return;
+            if (!string.IsNullOrEmpty(s) && !items.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) items.Add(s);
+        }
+        void AddAll(IEnumerable<string> ss) { if (ss != null) foreach (var s in ss) Add(s); }
+
+        // 1. The box = the main image (best Front; cache when ready, else IO).
         Add(DetailSource(g, "Front", () =>
               Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => g.Box3DImagePath)));
-        try
+
+        string plat = Safe(() => g.Platform);
+        string title = S(Safe(() => g.Title));
+        if (!string.IsNullOrEmpty(plat) && Guid.TryParse(S(Safe(() => g.Id)), out var id))
         {
-            string plat = Safe(() => g.Platform);
-            if (!string.IsNullOrEmpty(plat) && GameCacheBridge.Ready(plat) && Guid.TryParse(S(Safe(() => g.Id)), out var id))
-                foreach (var s in GameCacheBridge.AllImagesTypeFirst(plat, id, "Screenshots", 10)) Add(s);
-            else Add(Safe(() => g.ScreenshotImagePath));
+            // 2. title screen → 3. gameplay → 4. fanart, all with type/region priority (IO, cache-independent).
+            AddAll(MediaResolver.AllOfType(plat, id, title, "Screenshot - Game Title"));
+            AddAll(MediaResolver.AllOfType(plat, id, title, "Screenshot - Gameplay"));
+            AddAll(MediaResolver.AllOfType(plat, id, title, "Fanart - Background"));
         }
-        catch { }
+        else
+        {
+            Add(Safe(() => g.ScreenshotImagePath));
+            Add(Safe(() => g.BackgroundImagePath));
+        }
         return items;
     }
 

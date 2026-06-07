@@ -786,22 +786,27 @@ internal sealed class MainWindow : Form
     {
         _detailsShown = g;
         _heroGame = g;
-        // Same source selection as launchbox-web/bigbox-web: ClearLogo regroupement
-        // for the logo, Front for the box art (via GameCache when ExtendDB is loaded
-        // → same file → shared thumb cache; IO fallback otherwise).
-        string logoSrc = g == null ? null : DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath));
-        string artSrc = g == null ? null
-            : DetailSource(g, "Front", () =>
-                  Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
-                : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
-                : Safe(() => g.ScreenshotImagePath));
-        LoadImagesAsync(logoSrc, artSrc);
+        if (g == null)
+        {
+            _hero.SetNode("");
+            LoadImagesAsync(null, null);
+            ScheduleFanart(null, null);
+            _title.Text = ""; _meta.Text = ""; _notes.Text = "";
+            return;
+        }
 
-        if (g == null) { _hero.SetNode(); _title.Text = ""; _meta.Text = ""; _notes.Text = ""; return; }
-
-        // Hero rating (user if set, else community) + favorite, then schedule the fanart.
+        // Source selection like launchbox-web/bigbox-web: ClearLogo regroupement for the
+        // logo, Front for the box (GameCache → same file → shared cache; IO fallback).
+        // SetGame (carrying the title fallback) runs BEFORE the async logo load so a game
+        // with no clear logo shows its title as text — with the same pulse.
+        string logoSrc = DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath));
+        string artSrc = DetailSource(g, "Front", () =>
+              Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
+            : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
+            : Safe(() => g.ScreenshotImagePath));
         double eff = Safe(() => g.CommunityOrLocalStarRating);
-        _hero.SetGame(eff, Safe(() => g.StarRatingFloat) > 0, Safe(() => g.Favorite));
+        _hero.SetGame(S(g.Title), eff, Safe(() => g.StarRatingFloat) > 0, Safe(() => g.Favorite));
+        LoadImagesAsync(logoSrc, artSrc);
         ScheduleFanart(g, null);
 
         _title.Text = S(g.Title);
@@ -829,9 +834,9 @@ internal sealed class MainWindow : Form
     {
         _detailsShown = node;
         _heroGame = null;
-        _hero.SetNode();   // no rating/heart for a tree node
         if (node == null || node is AllNode)
         {
+            _hero.SetNode(node is AllNode ? "All Games" : "");   // no rating/heart for a node
             LoadImagesAsync(null, null);
             ScheduleFanart(null, null);
             _title.Text = node is AllNode ? "All Games" : "";
@@ -840,6 +845,7 @@ internal sealed class MainWindow : Form
             return;
         }
 
+        _hero.SetNode(HostPlatformCategory.NodeName(node) ?? "");
         LoadImagesAsync(NodeImage(node, clearLogo: true), NodeImage(node, clearLogo: false));
         ScheduleFanart(null, node);
         _title.Text = HostPlatformCategory.NodeName(node);
@@ -1009,9 +1015,9 @@ internal sealed class MainWindow : Form
     private void LoadImagesAsync(string logoSrc, string artSrc)
     {
         int token = ++_detailsLoadToken;
-        _hero.SetLogo(null);     // drop the previous subject's logo right away
         SetImage(_art, null);
-        if (string.IsNullOrEmpty(logoSrc) && string.IsNullOrEmpty(artSrc)) return;
+        // No logo source at all → settle now so the title-text fallback shows.
+        if (string.IsNullOrEmpty(logoSrc) && string.IsNullOrEmpty(artSrc)) { _hero.SetLogo(null); return; }
         System.Threading.Tasks.Task.Run(() =>
         {
             var logo = LoadThumbOrFull(logoSrc, keepAlpha: true);   // clear logo → WebP/alpha
@@ -1440,6 +1446,8 @@ internal sealed class MainWindow : Form
         private static readonly Color BoxBg         = Color.FromArgb(179, 45, 45, 50);   // ~0.70
 
         private Image _logo, _fanart;
+        private string _logoText;       // fallback shown (with the same pulse) when there's no clear logo
+        private bool _logoReady;        // logo load settled (image set, or confirmed none → show text)
         private bool _isGame, _favorite, _ratingIsUser;
         private double _rating;
         private double _fanartAlpha, _fanartTarget;
@@ -1463,17 +1471,27 @@ internal sealed class MainWindow : Form
             _pulse.Tick += (_, _) => StepPulse();
         }
 
-        public void SetGame(double rating, bool isUser, bool favorite)
-        { _isGame = true; _rating = rating; _ratingIsUser = isUser; _favorite = favorite; Invalidate(); }
-        public void SetNode()
-        { _isGame = false; _rating = 0; _favorite = false; _ratingIsUser = false; Invalidate(); }
+        public void SetGame(string title, double rating, bool isUser, bool favorite)
+        { _isGame = true; _logoText = title; ClearLogoImage(); _rating = rating; _ratingIsUser = isUser; _favorite = favorite; Invalidate(); }
+        public void SetNode(string title)
+        { _isGame = false; _logoText = title; ClearLogoImage(); _rating = 0; _favorite = false; _ratingIsUser = false; Invalidate(); }
         public void SetRating(double rating, bool isUser) { _rating = rating; _ratingIsUser = isUser; Invalidate(); }
         public void SetFavorite(bool fav) { _favorite = fav; Invalidate(); }
 
+        // Clear the logo image WITHOUT pulsing (subject changed; the real content —
+        // image or text fallback — arrives via SetLogo and pulses then).
+        private void ClearLogoImage()
+        {
+            var old = _logo; _logo = null; old?.Dispose();
+            _logoReady = false; _pulse.Stop(); _logoScale = 1f;
+        }
+
+        // Final logo content: the image if non-null, else the text fallback. Pulses on appear.
         public void SetLogo(Image img)
         {
             var old = _logo; _logo = img; if (!ReferenceEquals(old, img)) old?.Dispose();
-            if (img != null) { _pulseT = 0f; _pulse.Start(); }   // pulse on appear
+            _logoReady = true;
+            _pulseT = 0f; _pulse.Start();   // pulse on appear (image OR text fallback)
             Invalidate();
         }
 
@@ -1526,7 +1544,11 @@ internal sealed class MainWindow : Form
 
             int bottomBar = _isGame ? 30 : 6;
             var logoArea = new Rectangle(10, 8, rect.Width - 20, rect.Height - 8 - bottomBar);
-            if (_logo != null && logoArea.Height > 8) DrawLogo(g, _logo, logoArea, _logoScale);
+            if (logoArea.Height > 8)
+            {
+                if (_logo != null) DrawLogo(g, _logo, logoArea, _logoScale);
+                else if (_logoReady && !string.IsNullOrEmpty(_logoText)) DrawLogoText(g, _logoText, logoArea, _logoScale);
+            }
             if (_isGame) DrawRatingAndHeart(g, rect);
         }
 
@@ -1560,6 +1582,23 @@ internal sealed class MainWindow : Form
                 g.DrawImage(img, new Rectangle(x + 2, y + 3, w, h), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, ia);
             }
             g.DrawImage(img, x, y, w, h);
+        }
+
+        // Text fallback when a game/node has no clear logo — bold, ~0.85 white, centered,
+        // drop-shadow + the same pulse scale (mirrors launchbox-web's .ps-logo-text).
+        private static void DrawLogoText(Graphics g, string text, Rectangle area, float scale)
+        {
+            using var f = new Font("Segoe UI Semibold", 16f, FontStyle.Bold);
+            using var sf = new StringFormat
+            { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
+            var st = g.Save();
+            float cx = area.X + area.Width / 2f, cy = area.Y + area.Height / 2f;
+            g.TranslateTransform(cx, cy); g.ScaleTransform(scale, scale); g.TranslateTransform(-cx, -cy);
+            using (var sh = new SolidBrush(Color.FromArgb(150, 0, 0, 0)))
+                g.DrawString(text, f, sh, new RectangleF(area.X + 1.5f, area.Y + 2.5f, area.Width, area.Height), sf);
+            using (var tb = new SolidBrush(Color.FromArgb(217, 255, 255, 255)))   // ~0.85 white
+                g.DrawString(text, f, tb, new RectangleF(area.X, area.Y, area.Width, area.Height), sf);
+            g.Restore(st);
         }
 
         private void DrawRatingAndHeart(Graphics g, Rectangle rect)

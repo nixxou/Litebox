@@ -892,7 +892,7 @@ internal sealed class MainWindow : Form
         {
             _hero.SetNode(node is AllNode ? "All Games" : "");   // no rating/heart for a node
             LoadImagesAsync(null, null);
-            ScheduleFanart(null, null);
+            ScheduleFanart(null, node);   // AllNode → default fanart; null → empty pane (no fanart)
             _title.Text = node is AllNode ? "All Games" : "";
             _meta.Text = node is AllNode ? $"Total Games: {_current.Length}" : "";
             _notes.Text = "";
@@ -967,12 +967,18 @@ internal sealed class MainWindow : Form
             t.Stop(); t.Dispose();
             if (ReferenceEquals(_fanartTimer, t)) _fanartTimer = null;
             if (IsDisposed || token != _detailsLoadToken) return;
+            // A "subject" is a game or any node (incl. All Games) — only the truly empty pane
+            // (no game, no node) shows no fanart. A subject without its own background falls
+            // back to the embedded default.
+            bool haveSubject = g != null || node != null;
             string src = ResolveFanartSrc(g, node);
-            if (string.IsNullOrEmpty(src)) { _hero.FadeOutFanart(); return; }
+            if (string.IsNullOrEmpty(src) && !haveSubject) { _hero.FadeOutFanart(); return; }
             System.Threading.Tasks.Task.Run(() =>
             {
-                var img = LoadThumbOrFull(src, keepAlpha: false);   // degraded jpg → light faint bg
-                if (img == null) return;
+                var img = !string.IsNullOrEmpty(src) ? LoadThumbOrFull(src, keepAlpha: false)   // degraded jpg → light faint bg
+                                                     : LoadDefaultFanart();                      // no background → embedded default
+                if (img == null && haveSubject) img = LoadDefaultFanart();   // load failed → still try the default
+                if (img == null) { try { if (!IsDisposed && token == _detailsLoadToken) BeginInvoke((Action)(() => { if (!IsDisposed && token == _detailsLoadToken) _hero.FadeOutFanart(); })); } catch { } return; }
                 try
                 {
                     if (!IsDisposed && token == _detailsLoadToken)
@@ -1017,6 +1023,34 @@ internal sealed class MainWindow : Form
         }
         catch { }
         return null;
+    }
+
+    // Embedded fallback fanart (defaultFanart.jpg) — used when the selected game/node has no
+    // background of its own. Bytes are cached once; each call returns a FRESH Bitmap because
+    // HeroPanel.SetFanart takes ownership and disposes it on fade-out.
+    private static byte[] _defaultFanartBytes;
+    private static byte[] DefaultFanartBytes()
+    {
+        if (_defaultFanartBytes != null) return _defaultFanartBytes;
+        try
+        {
+            var asm = typeof(MainWindow).Assembly;
+            string name = "LbApiHost.defaultFanart.jpg";
+            if (Array.IndexOf(asm.GetManifestResourceNames(), name) < 0)
+                name = Array.Find(asm.GetManifestResourceNames(), n => n.EndsWith("defaultFanart.jpg", StringComparison.OrdinalIgnoreCase));
+            if (name != null)
+                using (var s = asm.GetManifestResourceStream(name))
+                    if (s != null) { using var ms = new MemoryStream(); s.CopyTo(ms); _defaultFanartBytes = ms.ToArray(); }
+        }
+        catch { }
+        return _defaultFanartBytes ?? Array.Empty<byte>();
+    }
+    private static Image LoadDefaultFanart()
+    {
+        var b = DefaultFanartBytes();
+        if (b.Length == 0) return null;
+        try { using var ms = new MemoryStream(b); using var tmp = Image.FromStream(ms); return new Bitmap(tmp); }
+        catch { return null; }
     }
 
     // Hero interactivity: click a star → set the user rating; click the heart → toggle

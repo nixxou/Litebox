@@ -58,6 +58,9 @@ internal static class MediaResolver
     /// <summary>The LaunchBox Images root (or null before Init).</summary>
     public static string ImagesRoot => string.IsNullOrEmpty(_lbRoot) ? null : Path.Combine(_lbRoot, "Images");
 
+    /// <summary>The LaunchBox root (parent of Data/Images), or null before Init.</summary>
+    public static string LbRoot => _lbRoot;
+
     /// <summary>
     /// A node icon from the "Nostalgic Platform Icons" media pack (as launchbox-web uses):
     /// Images\Media Packs\Platform Icons\Nostalgic Platform Icons\&lt;subFolder&gt;\&lt;name&gt;.png.

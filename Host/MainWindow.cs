@@ -220,6 +220,24 @@ internal sealed class MainWindow : Form
         var miCache = new ToolStripMenuItem("Use the image cache (degraded thumbnails)")
         { CheckOnClick = true, Checked = _cfg.UseImageCache };
         miCache.CheckedChanged += (_, _) => { _cfg.UseImageCache = miCache.Checked; _useImageCache = miCache.Checked; _cfg.Save(); };
+        var miGameCache = new ToolStripMenuItem("Use game cache (when ExtendDB absent)")
+        { CheckOnClick = true, Checked = _cfg.UseGameCache };
+        miGameCache.CheckedChanged += (_, _) =>
+        {
+            _cfg.UseGameCache = miGameCache.Checked; _cfg.Save();
+            bool enable = miGameCache.Checked && !LbApiHost.Host.Media.GameCacheBridge.ExtendDbPresent;
+            if (enable && !LbApiHost.Host.Gc.HostGameCache.Enabled)
+            {
+                LbApiHost.Host.Gc.HostGameCache.Enabled = true;
+                try { LbApiHost.Host.Media.EverythingSupport.Init(LbApiHost.Host.Media.MediaResolver.LbRoot); } catch { }
+                LbApiHost.Host.Gc.HostGameCache.Build();
+            }
+            else if (!enable && LbApiHost.Host.Gc.HostGameCache.Enabled)
+            {
+                LbApiHost.Host.Gc.HostGameCache.Enabled = false;
+                LbApiHost.Host.Gc.HostGameCache.ClearForMemory();
+            }
+        };
         var miAspect = new ToolStripMenuItem("Use 16:9 for the main media (else poster ratio)")
         { CheckOnClick = true, Checked = _cfg.Use169ForMainScreenshot };
         miAspect.CheckedChanged += (_, _) =>
@@ -240,6 +258,7 @@ internal sealed class MainWindow : Form
         optBtn.DropDownItems.Add(miScreen);
         optBtn.DropDownItems.Add(miUnload);
         optBtn.DropDownItems.Add(miCache);
+        optBtn.DropDownItems.Add(miGameCache);
         optBtn.DropDownItems.Add(miAspect);
         bar.Items.Add(optBtn);
 

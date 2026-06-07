@@ -96,6 +96,27 @@ internal static class HostBoot
 
         EventBus.FirePluginInitialized(reg);
 
+        // ── Host GameCache (backported) ─────────────────────────────────────
+        // Build & use our own in-memory media cache ONLY when ExtendDB isn't providing one
+        // (ExtendDB's own GameCache is preferred when the plugin is loaded). Everything's native
+        // is deployed the same way as ExtendDB so the fast scan works standalone.
+        try
+        {
+            var gcCfg = LiteBoxConfig.LoadForExe();
+            LbApiHost.Host.Gc.HostGameCache.Enabled =
+                gcCfg.UseGameCache && lbRoot != null && !LbApiHost.Host.Media.GameCacheBridge.ExtendDbPresent;
+            LbApiHost.Host.Gc.HostGameCache.UnloadDuringGame = gcCfg.UnloadGameCacheDuringGame;
+            if (LbApiHost.Host.Gc.HostGameCache.Enabled)
+            {
+                LbApiHost.Host.Media.EverythingSupport.Init(lbRoot);   // deploy Everything64.dll if absent
+                Console.WriteLine("[gamecache] ExtendDB absent → building host GameCache");
+                LbApiHost.Host.Gc.HostGameCache.Build();               // async; flips IsGlobalReady when done
+            }
+            else if (gcCfg.UseGameCache)
+                Console.WriteLine("[gamecache] ExtendDB present → using ExtendDB's GameCache");
+        }
+        catch (Exception ex) { Console.WriteLine("[gamecache] init error: " + ex.Message); }
+
         for (int i = 0; i < reg.SystemMenus.Count; i++)
         {
             try

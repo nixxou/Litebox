@@ -25,6 +25,18 @@
       <HintPath>..\..\..\LB\Core\Unbroken.LaunchBox.Plugins.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- Magick.NET — compile-time only (Private=false): used ONLY to decode WebP
+         (clear logos) which GDI+ can't. At runtime it binds to the copy ExtendDB
+         already loaded; absent ExtendDB the decode is skipped gracefully. Never
+         copied / not pinned in deps.json — same version-agnostic pattern as the SDK. -->
+    <Reference Include="Magick.NET-Q16-AnyCPU">
+      <HintPath>..\..\..\LB\Plugins\ExtendDB\Magick.NET-Q16-AnyCPU.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Magick.NET.Core">
+      <HintPath>..\..\..\LB\Plugins\ExtendDB\Magick.NET.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

@@ -1707,7 +1707,7 @@ internal sealed class MainWindow : Form
         private bool _expanded;
         private readonly Font _titleFont = new Font("Segoe UI Semibold", 12f);
 
-        private const int Pad = 10, Gap = 6, IconSz = 18, ChevW = 16;
+        private const int Pad = 10, Gap = 6, IconSz = 18, ChevW = 16, VMargin = 4;   // VMargin = breathing room above/below the box
         // Wrap to multiple lines; only a single over-long word gets ellipsised as a last resort.
         private const TextFormatFlags Wrap =
             TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.WordEllipsis | TextFormatFlags.Left | TextFormatFlags.Top;
@@ -1733,7 +1733,7 @@ internal sealed class MainWindow : Form
             {
                 if (_mode == Mode.None) return 0;
                 if (ClientSize.Width < 40) return 64;   // not laid out yet → fallback; SizeChanged re-measures
-                return LayoutContent(null) + Pad;
+                return LayoutContent(null) + Pad + VMargin;   // content end + bottom pad + bottom margin
             }
         }
 
@@ -1776,7 +1776,7 @@ internal sealed class MainWindow : Form
             g.Clear(BackColor);
             if (_mode == Mode.None) return;
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            var box = new Rectangle(0, 0, Math.Max(1, ClientSize.Width - 1), Math.Max(1, ClientSize.Height - 1));
+            var box = new Rectangle(0, VMargin, Math.Max(1, ClientSize.Width - 1), Math.Max(1, ClientSize.Height - 2 * VMargin - 1));
             using (var path = Rounded(box, 8))
             {
                 using var bg = new SolidBrush(Color.FromArgb(46, 46, 50)); g.FillPath(bg, path);
@@ -1790,7 +1790,7 @@ internal sealed class MainWindow : Form
         private int LayoutContent(Graphics g)
         {
             int innerW = Math.Max(20, ClientSize.Width - 2 * Pad);
-            int x = Pad, y = Pad;
+            int x = Pad, y = VMargin + Pad;   // start below the top margin + box padding
 
             if (!string.IsNullOrEmpty(_title))
                 y += DrawWrapped(g, _title, _titleFont, Fg, x, y, innerW);

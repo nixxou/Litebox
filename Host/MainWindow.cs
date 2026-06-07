@@ -55,7 +55,7 @@ internal sealed class MainWindow : Form
     // right-hand details
     private readonly HeroPanel _hero;            // fanart + clear logo (pulse) + rating + heart
     private readonly MediaPanel _media;          // main media (box → screenshots, click to switch)
-    private readonly FlowLayoutPanel _strip;     // clickable mini-thumbnails under the main media
+    private readonly MediaStrip _strip;          // clickable mini-thumbnails under the main media (slim custom scrollbar)
     private TableLayoutPanel _detailGrid;        // detail layout — its media row is sized from the pane width
     private double _mediaAspect = 16.0 / 9.0;    // reserved main-media area aspect (16:9 default, 2:3 poster option)
     private List<string> _mediaItems;            // current game's media sources (box first, then screenshots)
@@ -269,7 +269,7 @@ internal sealed class MainWindow : Form
         DarkScroll(_games);
         DarkScroll(_sources);
         DarkScroll(_notes);
-        DarkScroll(_strip);
+        // _strip uses its own slim custom scrollbar (no native scrollbar to theme).
 
         Load += (_, _) =>
         {
@@ -407,7 +407,7 @@ internal sealed class MainWindow : Form
     }
 
     // ── Right details construction ───────────────────────────────────────────
-    private Panel BuildDetails(out HeroPanel hero, out MediaPanel media, out FlowLayoutPanel strip,
+    private Panel BuildDetails(out HeroPanel hero, out MediaPanel media, out MediaStrip strip,
                                out Label title, out Label meta, out TextBox notes)
     {
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
@@ -416,7 +416,7 @@ internal sealed class MainWindow : Form
         var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, ColumnCount = 1, RowCount = 6, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));    // mini-thumbnail strip (reserved)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
         tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // title
         tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // meta
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest)
@@ -425,7 +425,7 @@ internal sealed class MainWindow : Form
 
         hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         media = new MediaPanel { Dock = DockStyle.Fill, BackColor = Panel };
-        strip = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = true, Padding = new Padding(0, 4, 0, 4), Margin = new Padding(0, 4, 0, 4) };
+        strip = new MediaStrip { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 4, 0, 4) };
         title = new Label { Dock = DockStyle.Fill, AutoSize = false, Height = 28, ForeColor = Fg, Font = new Font("Segoe UI Semibold", 12f), TextAlign = ContentAlignment.MiddleLeft };
         meta = new Label { Dock = DockStyle.Fill, AutoSize = false, ForeColor = SubFg, TextAlign = ContentAlignment.TopLeft };
         notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
@@ -1167,7 +1167,8 @@ internal sealed class MainWindow : Form
                 Margin = new Padding(0, 0, 6, 0), Cursor = Cursors.Hand,
             };
             th.Click += (_, _) => SetMainMedia(captured, full: true, _detailsLoadToken);
-            _strip.Controls.Add(th);
+            th.MouseWheel += (_, e) => _strip.WheelScroll(e.Delta);   // wheel over a thumb scrolls the strip
+            _strip.Flow.Controls.Add(th);
             System.Threading.Tasks.Task.Run(() =>
             {
                 var img = LoadThumbOrFull(captured, keepAlpha: false);
@@ -1180,20 +1181,24 @@ internal sealed class MainWindow : Form
                 catch { img?.Dispose(); }
             });
         }
+        _strip.UpdateScroll();
         HighlightStrip();
     }
 
     private void ClearStrip()
     {
-        foreach (Control c in _strip.Controls) c.Dispose();   // MediaThumb disposes its own image
-        _strip.Controls.Clear();
+        foreach (Control c in _strip.Flow.Controls) c.Dispose();   // MediaThumb disposes its own image
+        _strip.Flow.Controls.Clear();
+        _strip.ResetScroll();
     }
 
     // Highlight the selected mini-thumb: a thin white border (no blue fill on the empty parts).
     private void HighlightStrip()
     {
-        for (int i = 0; i < _strip.Controls.Count; i++)
-            if (_strip.Controls[i] is MediaThumb th) th.Selected = (i == _mediaSel);
+        var ctrls = _strip.Flow.Controls;
+        for (int i = 0; i < ctrls.Count; i++)
+            if (ctrls[i] is MediaThumb th) th.Selected = (i == _mediaSel);
+        if (_mediaSel >= 0 && _mediaSel < ctrls.Count) _strip.ScrollIntoView(ctrls[_mediaSel]);
     }
 
     // ── Bulk cache pre-generation ────────────────────────────────────────────
@@ -1686,6 +1691,117 @@ internal sealed class MainWindow : Form
         }
 
         protected override void Dispose(bool disposing) { if (disposing) _img?.Dispose(); base.Dispose(disposing); }
+    }
+
+    // Horizontal viewport for the thumbnail strip with a SLIM custom scrollbar. The native
+    // FlowLayoutPanel scrollbar (~17px) overlapped the 52px thumbs in the row and isn't
+    // resizable; here the thumbs live in an inner auto-sized FlowLayoutPanel we offset
+    // horizontally (Flow.Left = -scroll), and a thin bar (~7px) is drawn/dragged at the
+    // bottom. Mouse wheel scrolls too (forwarded from the thumbs).
+    private sealed class MediaStrip : Panel
+    {
+        public readonly FlowLayoutPanel Flow;
+        private int _scrollX;
+        private const int BarH = 7;          // bar footprint — ~50% of the native ~14-17px
+        private bool _dragging, _hoverBar;
+
+        public MediaStrip()
+        {
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            Flow = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = false,
+                AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Location = new Point(0, 0), Margin = new Padding(0),
+            };
+            Controls.Add(Flow);
+            Flow.SizeChanged += (_, _) => Relayout();
+            Flow.MouseWheel += (_, e) => WheelScroll(e.Delta);
+        }
+
+        private int ContentW => Flow.PreferredSize.Width;
+        private int MaxScroll => Math.Max(0, ContentW - ClientSize.Width);
+        private bool NeedBar => MaxScroll > 0;
+        private int TrackTop => ClientSize.Height - BarH;
+
+        public void ResetScroll() { _scrollX = 0; Relayout(); }
+        public void UpdateScroll() => Relayout();
+        public void WheelScroll(int delta) => SetScroll(_scrollX - Math.Sign(delta) * 64);
+
+        protected override void OnBackColorChanged(EventArgs e) { base.OnBackColorChanged(e); Flow.BackColor = BackColor; }
+        protected override void OnResize(EventArgs e) { base.OnResize(e); Relayout(); }
+        protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); WheelScroll(e.Delta); }
+
+        private void SetScroll(int x)
+        {
+            x = Math.Max(0, Math.Min(MaxScroll, x));
+            if (x == _scrollX) return;
+            _scrollX = x; Relayout();
+        }
+
+        private void Relayout()
+        {
+            if (_scrollX > MaxScroll) _scrollX = MaxScroll;
+            Flow.Top = Math.Max(0, (ClientSize.Height - BarH - Flow.PreferredSize.Height) / 2);
+            Flow.Left = -_scrollX;
+            Invalidate();
+        }
+
+        // Reveal a thumbnail (child of Flow; its Left is in content coords).
+        public void ScrollIntoView(Control c)
+        {
+            if (c == null || c.Parent != Flow) return;
+            int vis = c.Left - _scrollX;
+            if (vis < 0) SetScroll(c.Left);
+            else if (vis + c.Width > ClientSize.Width) SetScroll(c.Left + c.Width - ClientSize.Width);
+        }
+
+        private void JumpToMouse(int mouseX)
+        {
+            int vw = ClientSize.Width;
+            int thumbW = Math.Max(24, (int)((long)vw * vw / Math.Max(1, ContentW)));
+            int travel = Math.Max(1, vw - thumbW);
+            int x = Math.Max(0, Math.Min(travel, mouseX - thumbW / 2));
+            SetScroll((int)((long)MaxScroll * x / travel));
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (NeedBar && e.Y >= TrackTop) { _dragging = true; Capture = true; JumpToMouse(e.X); }
+        }
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            bool hb = NeedBar && e.Y >= TrackTop;
+            if (hb != _hoverBar) { _hoverBar = hb; Invalidate(); }
+            if (_dragging) JumpToMouse(e.X);
+        }
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (_dragging) { _dragging = false; Capture = false; Invalidate(); }
+        }
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (_hoverBar) { _hoverBar = false; Invalidate(); }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(BackColor);
+            if (!NeedBar) return;
+            int vw = ClientSize.Width, y = TrackTop + 1, h = BarH - 2;
+            int thumbW = Math.Max(24, (int)((long)vw * vw / ContentW));
+            int travel = Math.Max(1, vw - thumbW);
+            int thumbX = MaxScroll > 0 ? (int)((long)travel * _scrollX / MaxScroll) : 0;
+            using (var tb = new SolidBrush(Color.FromArgb(42, 42, 46))) g.FillRectangle(tb, 0, y, vw, h);
+            var col = (_dragging || _hoverBar) ? Color.FromArgb(125, 125, 130) : Color.FromArgb(82, 82, 88);
+            using (var b = new SolidBrush(col)) g.FillRectangle(b, thumbX, y, thumbW, h);
+        }
     }
 
     private sealed class MediaPanel : Panel

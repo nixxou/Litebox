@@ -54,8 +54,10 @@ internal sealed class MainWindow : Form
 
     // right-hand details
     private readonly HeroPanel _hero;            // fanart + clear logo (pulse) + rating + heart
-    private readonly MediaPanel _media;          // 16:9 main media (box → screenshots, click to switch)
+    private readonly MediaPanel _media;          // main media (box → screenshots, click to switch)
     private readonly FlowLayoutPanel _strip;     // clickable mini-thumbnails under the main media
+    private TableLayoutPanel _detailGrid;        // detail layout — its media row is sized from the pane width
+    private double _mediaAspect = 16.0 / 9.0;    // reserved main-media area aspect (16:9 default, 2:3 poster option)
     private List<string> _mediaItems;            // current game's media sources (box first, then screenshots)
     private int _mediaSel;                        // selected media index
     private System.Windows.Forms.Timer _mediaTimer;   // 0.5s debounce: build strip + upgrade main to full
@@ -271,7 +273,7 @@ internal sealed class MainWindow : Form
             try { ActiveControl = _games; _games.Focus(); } catch { }
         };
         // Final dark-scrollbar pass once everything (data, columns) is in place.
-        Shown += (_, _) => { ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); };
+        Shown += (_, _) => { ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); UpdateMediaRowHeight(); };
     }
 
     // ── Game list construction ───────────────────────────────────────────────
@@ -399,13 +401,18 @@ internal sealed class MainWindow : Form
     private Panel BuildDetails(out HeroPanel hero, out MediaPanel media, out FlowLayoutPanel strip,
                                out Label title, out Label meta, out TextBox notes)
     {
+        // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
+        _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
+
         var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, ColumnCount = 1, RowCount = 6, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (16:9, aspect-preserving)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));    // mini-thumbnail strip (reserved)
         tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // title
         tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // meta
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest)
+        _detailGrid = tlp;
+        tlp.SizeChanged += (_, _) => UpdateMediaRowHeight();   // media area fills the pane width, height = width / aspect
 
         hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         media = new MediaPanel { Dock = DockStyle.Fill, BackColor = Panel };
@@ -421,6 +428,24 @@ internal sealed class MainWindow : Form
         tlp.Controls.Add(meta, 0, 4);
         tlp.Controls.Add(notes, 0, 5);
         return tlp;
+    }
+
+    // Size the main-media row from the current pane width so the area fills the width
+    // and keeps the configured aspect (16:9 or poster 2:3). Capped so the title/meta/
+    // notes still get room (matters mostly for the tall poster ratio).
+    private void UpdateMediaRowHeight()
+    {
+        var tlp = _detailGrid;
+        if (tlp == null || tlp.RowStyles.Count < 2) return;
+        int contentW = tlp.ClientSize.Width - tlp.Padding.Horizontal;
+        if (contentW < 40) return;
+        int h = (int)Math.Round(contentW / _mediaAspect);
+        int maxH = (int)(tlp.ClientSize.Height * 0.62);   // leave room for strip + title/meta/notes
+        if (maxH > 100 && h > maxH) h = maxH;
+        if (h < 90) h = 90;
+        var rs = tlp.RowStyles[1];
+        if (rs.SizeType != SizeType.Absolute || Math.Abs(rs.Height - h) > 0.5)
+        { rs.SizeType = SizeType.Absolute; rs.Height = h; }
     }
 
     // ── Sources (LaunchBox-native tree: categories ▸ platforms / playlists) ───
@@ -1074,20 +1099,20 @@ internal sealed class MainWindow : Form
         foreach (var src in items)
         {
             var captured = src;
-            var pb = new PictureBox
+            var th = new MediaThumb
             {
-                Width = 92, Height = 52, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Panel2,
+                Width = 92, Height = 52, BackColor = Panel,
                 Margin = new Padding(0, 0, 6, 0), Cursor = Cursors.Hand,
             };
-            pb.Click += (_, _) => SetMainMedia(captured, full: true, _detailsLoadToken);
-            _strip.Controls.Add(pb);
+            th.Click += (_, _) => SetMainMedia(captured, full: true, _detailsLoadToken);
+            _strip.Controls.Add(th);
             System.Threading.Tasks.Task.Run(() =>
             {
                 var img = LoadThumbOrFull(captured, keepAlpha: false);
                 try
                 {
                     if (!IsDisposed && token == _detailsLoadToken)
-                        BeginInvoke((Action)(() => { if (!pb.IsDisposed && token == _detailsLoadToken) { var old = pb.Image; pb.Image = img; old?.Dispose(); } else img?.Dispose(); }));
+                        BeginInvoke((Action)(() => { if (!th.IsDisposed && token == _detailsLoadToken) th.SetImage(img); else img?.Dispose(); }));
                     else img?.Dispose();
                 }
                 catch { img?.Dispose(); }
@@ -1098,15 +1123,15 @@ internal sealed class MainWindow : Form
 
     private void ClearStrip()
     {
-        foreach (Control c in _strip.Controls) { if (c is PictureBox p) p.Image?.Dispose(); c.Dispose(); }
+        foreach (Control c in _strip.Controls) c.Dispose();   // MediaThumb disposes its own image
         _strip.Controls.Clear();
     }
 
-    // Highlight the selected mini-thumb (accent background).
+    // Highlight the selected mini-thumb: a thin white border (no blue fill on the empty parts).
     private void HighlightStrip()
     {
         for (int i = 0; i < _strip.Controls.Count; i++)
-            _strip.Controls[i].BackColor = (i == _mediaSel) ? Accent : Panel2;
+            if (_strip.Controls[i] is MediaThumb th) th.Selected = (i == _mediaSel);
     }
 
     // ── Bulk cache pre-generation ────────────────────────────────────────────
@@ -1562,6 +1587,45 @@ internal sealed class MainWindow : Form
     // ── Main media zone: a reserved 16:9 area, image drawn keeping aspect ─────
     // (posters get pillar-boxed). Owner-drawn so it adapts to the panel width and
     // leaves a single place to later host a video instead of an image.
+    // A mini-thumbnail in the media strip: owner-drawn so the image keeps its aspect on a
+    // transparent (pane) background, and the selected one gets a thin white border (no blue
+    // selection fill bleeding onto the letterbox area).
+    private sealed class MediaThumb : Panel
+    {
+        private Image _img;
+        private bool _selected;
+        public MediaThumb()
+        {
+            DoubleBuffered = true; ResizeRedraw = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+        }
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool Selected { get => _selected; set { if (_selected != value) { _selected = value; Invalidate(); } } }
+        public void SetImage(Image img) { var old = _img; _img = img; if (!ReferenceEquals(old, img)) old?.Dispose(); Invalidate(); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(BackColor);
+            var rect = ClientRectangle;
+            if (_img != null)
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                float ir = (float)_img.Width / _img.Height, ar = (float)rect.Width / Math.Max(1, rect.Height);
+                int iw, ih;
+                if (ir > ar) { iw = rect.Width; ih = (int)(iw / ir); } else { ih = rect.Height; iw = (int)(ih * ir); }
+                g.DrawImage(_img, rect.X + (rect.Width - iw) / 2, rect.Y + (rect.Height - ih) / 2, Math.Max(1, iw), Math.Max(1, ih));
+            }
+            if (_selected)
+            {
+                using var p = new Pen(Color.White, 2f);
+                g.DrawRectangle(p, 1, 1, rect.Width - 2, rect.Height - 2);
+            }
+        }
+
+        protected override void Dispose(bool disposing) { if (disposing) _img?.Dispose(); base.Dispose(disposing); }
+    }
+
     private sealed class MediaPanel : Panel
     {
         private Image _img;
@@ -1575,19 +1639,14 @@ internal sealed class MainWindow : Form
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
-            g.Clear(Panel);
-            var rect = ClientRectangle;
-            // Reserved 16:9 area, centred, as large as fits.
-            int w = rect.Width, h = w * 9 / 16;
-            if (h > rect.Height) { h = rect.Height; w = h * 16 / 9; }
-            var area = new Rectangle(rect.X + (rect.Width - w) / 2, rect.Y + (rect.Height - h) / 2, Math.Max(1, w), Math.Max(1, h));
-            using (var b = new SolidBrush(Color.FromArgb(18, 18, 20))) g.FillRectangle(b, area);
+            g.Clear(BackColor);   // transparent: the panel IS the reserved area; letterbox = pane background, no dark box
             if (_img == null) return;
+            var rect = ClientRectangle;
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-            float ir = (float)_img.Width / _img.Height, ar = (float)area.Width / area.Height;
+            float ir = (float)_img.Width / _img.Height, ar = (float)rect.Width / Math.Max(1, rect.Height);
             int iw, ih;
-            if (ir > ar) { iw = area.Width; ih = (int)(iw / ir); } else { ih = area.Height; iw = (int)(ih * ir); }
-            g.DrawImage(_img, area.X + (area.Width - iw) / 2, area.Y + (area.Height - ih) / 2, Math.Max(1, iw), Math.Max(1, ih));
+            if (ir > ar) { iw = rect.Width; ih = (int)(iw / ir); } else { ih = rect.Height; iw = (int)(ih * ir); }
+            g.DrawImage(_img, rect.X + (rect.Width - iw) / 2, rect.Y + (rect.Height - ih) / 2, Math.Max(1, iw), Math.Max(1, ih));
         }
 
         protected override void Dispose(bool disposing)

@@ -990,7 +990,7 @@ internal sealed class MainWindow : Form
         lv.ItemActivate += (_, _) => LaunchSelected();
         lv.MouseMove += OnPosterMouseMove;
         lv.MouseLeave += (_, _) => { if (_posterHot != -1) { int o = _posterHot; _posterHot = -1; InvalidatePosterItem(o); } };
-        lv.HandleCreated += (_, _) => SetIconSpacing(lv, PCellW + PGap, PImgH + PLabelH + PGap);
+        lv.HandleCreated += (_, _) => { SetIconSpacing(lv, PCellW + PGap, PImgH + PLabelH + PGap); EnableListViewDoubleBuffer(lv); };
         lv.CacheVirtualItems += (_, _) => { };
         return lv;
     }
@@ -1019,6 +1019,7 @@ internal sealed class MainWindow : Form
             RefreshPoster();
             _poster.Visible = true; _poster.BringToFront();
             try { ApplyDarkScroll(_poster); } catch { }
+            try { if (_poster.IsHandleCreated) EnableListViewDoubleBuffer(_poster); } catch { }   // SetWindowTheme can clear ex-styles
         }
         else
         {
@@ -1160,6 +1161,14 @@ internal sealed class MainWindow : Form
     {
         const int LVM_FIRST = 0x1000, LVM_SETICONSPACING = LVM_FIRST + 53;
         try { SendMessage(lv.Handle, LVM_SETICONSPACING, IntPtr.Zero, (IntPtr)((cy << 16) | (cx & 0xFFFF))); } catch { }
+    }
+
+    // Native double-buffering for the owner-drawn ListView (kills the hover flicker; works with
+    // virtual mode + the dark explorer theme, unlike WinForms' DoubleBuffered on a native control).
+    private static void EnableListViewDoubleBuffer(ListView lv)
+    {
+        const int LVM_FIRST = 0x1000, LVM_SETEXTENDEDLISTVIEWSTYLE = LVM_FIRST + 54, LVS_EX_DOUBLEBUFFER = 0x00010000;
+        try { SendMessage(lv.Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, (IntPtr)LVS_EX_DOUBLEBUFFER, (IntPtr)LVS_EX_DOUBLEBUFFER); } catch { }
     }
 
     private static System.Drawing.Drawing2D.GraphicsPath RoundRect(Rectangle r, int radius)

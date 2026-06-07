@@ -139,7 +139,11 @@ internal static class Program
 
                 string target = Path.Combine(core, e.Name);
                 // Back up a pre-existing FOREIGN file once, so uninstall can restore LaunchBox's own.
-                if (File.Exists(target) && !prevOurs.Contains(e.Name))
+                // NEVER back up our own LiteBox.* files (LaunchBox never ships them) — otherwise a first
+                // install over an older marker-less LiteBox would "restore" the old ones on uninstall
+                // instead of removing them.
+                bool alwaysOurs = e.Name.StartsWith("LiteBox.", StringComparison.OrdinalIgnoreCase);
+                if (!alwaysOurs && File.Exists(target) && !prevOurs.Contains(e.Name))
                 {
                     Directory.CreateDirectory(backup);
                     string bpath = Path.Combine(backup, e.Name);

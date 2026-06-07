@@ -4,6 +4,13 @@ using System.Linq;
 using System.Runtime.Loader;
 using LbApiHost.Host;
 using LbApiHost.Tools;
+using System.Runtime.InteropServices;
+
+// The app is a WinExe (no console by default → transparent when launched by the launcher). Only
+// show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
+// else allocate a fresh one, and route Console.Out/Error to it.
+if (args.Contains("--debug") || args.Contains("--headless"))
+    DebugConsole.Enable();
 
 // Act like LaunchBox's root launcher: LiteBox.exe lives in <LB>\Core (so
 // ExtendDB's Process.MainModule-based paths — LBPath = grand-parent of the exe —
@@ -48,3 +55,23 @@ if (args.Contains("--gen-stubs"))
 
 // Default (no args, or --host): run the host GUI.
 return HostBoot.Run(args);
+
+// Console allocation for --debug / --headless (WinExe has no console otherwise).
+static class DebugConsole
+{
+    [DllImport("kernel32.dll")] private static extern bool AllocConsole();
+    [DllImport("kernel32.dll")] private static extern bool AttachConsole(int dwProcessId);
+    private const int ATTACH_PARENT_PROCESS = -1;
+
+    public static void Enable()
+    {
+        try
+        {
+            if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
+            var w = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
+            Console.SetOut(w);
+            Console.SetError(w);
+        }
+        catch { }
+    }
+}

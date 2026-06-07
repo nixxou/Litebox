@@ -180,6 +180,15 @@ internal sealed class MainWindow : Form
         var miCache = new ToolStripMenuItem("Use the image cache (degraded thumbnails)")
         { CheckOnClick = true, Checked = _cfg.UseImageCache };
         miCache.CheckedChanged += (_, _) => { _cfg.UseImageCache = miCache.Checked; _useImageCache = miCache.Checked; _cfg.Save(); };
+        var miReadOnly = new ToolStripMenuItem("Read-only (never write to the LaunchBox files)")
+        { CheckOnClick = true, Checked = _cfg.ReadOnly };
+        miReadOnly.CheckedChanged += (_, _) =>
+        {
+            _cfg.ReadOnly = miReadOnly.Checked; _cfg.Save();
+            if (_dm is HostDataManagerXml hdm) hdm.ReadOnly = miReadOnly.Checked;   // apply live
+        };
+        optBtn.DropDownItems.Add(miReadOnly);
+        optBtn.DropDownItems.Add(new ToolStripSeparator());
         optBtn.DropDownItems.Add(miScreen);
         optBtn.DropDownItems.Add(miUnload);
         optBtn.DropDownItems.Add(miCache);

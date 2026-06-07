@@ -68,6 +68,7 @@ internal sealed class LiteBoxConfig
     private void WriteTemplate()
     {
         // Seed defaults + comments so the file is self-documenting.
+        _kv["ReadOnly"] = "true";
         _kv["ShowGameRunningScreen"] = "true";
         _kv["UnloadListDuringGame"] = "true";
         _kv["UseImageCache"] = "true";
@@ -77,11 +78,14 @@ internal sealed class LiteBoxConfig
         {
             var sb = new StringBuilder();
             sb.AppendLine("; LiteBox configuration");
+            sb.AppendLine("; ReadOnly              : never write to the LaunchBox XMLs; favorites/ratings/play");
+            sb.AppendLine(";                         changes stay in memory for this run only. Set false to persist.");
             sb.AppendLine("; ShowGameRunningScreen : show a fanart/colour screen while a game runs");
             sb.AppendLine("; UnloadListDuringGame  : free the game list while a game runs, reload after");
             sb.AppendLine("; UseImageCache         : use the shared degraded-thumbnail cache for UI images");
             sb.AppendLine("; GameRunningText       : message shown on the running screen");
             sb.AppendLine("; GameRunningColor      : base colour (#RRGGBB) behind the fanart");
+            sb.AppendLine($"ReadOnly={_kv["ReadOnly"]}");
             sb.AppendLine($"ShowGameRunningScreen={_kv["ShowGameRunningScreen"]}");
             sb.AppendLine($"UnloadListDuringGame={_kv["UnloadListDuringGame"]}");
             sb.AppendLine($"UseImageCache={_kv["UseImageCache"]}");
@@ -109,6 +113,7 @@ internal sealed class LiteBoxConfig
     public void SetInt(string key, int val) => _kv[key] = val.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     // ── Typed options ────────────────────────────────────────────────────────
+    public bool ReadOnly              { get => GetBool("ReadOnly", true); set => SetBool("ReadOnly", value); }
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
     public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", true); set => SetBool("UnloadListDuringGame", value); }
     public bool UseImageCache         { get => GetBool("UseImageCache", true); set => SetBool("UseImageCache", value); }

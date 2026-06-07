@@ -43,6 +43,8 @@ internal static class HostBoot
             sw.Stop();
             store.LogStats();
             Console.WriteLine($"Parsed XML in {sw.ElapsedMilliseconds} ms");
+            store.ReadOnly = LiteBoxConfig.LoadForExe().ReadOnly;   // default true → never write to the XMLs
+            Console.WriteLine($"[store] ReadOnly = {store.ReadOnly}");
             store.RecoverJournalOnLoad();   // apply any pending user-state (crash/kill or deferred-while-LB-up)
             Mem.Report("after store build");
             string dataDir = Path.GetFullPath(Path.Combine(platformsDir, ".."));     // ...\LB\Data

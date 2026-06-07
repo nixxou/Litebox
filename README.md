@@ -1,6 +1,6 @@
 # LiteBox
 
-A lightweight, headless **host that implements the LaunchBox plugin API**
+A lightweight **host that implements the LaunchBox plugin API**
 (`Unbroken.LaunchBox.Plugins`) so LaunchBox plugins (e.g. ExtendDB and its web
 subsystem) can run **without the full LaunchBox.exe** — for a low-RAM web/kiosk
 setup. LiteBox loads all user data from LaunchBox's native XMLs and exposes it
@@ -12,15 +12,26 @@ through its own implementation of the API, with no dependency on any plugin.
   categories, emulators, playlists incl. auto-populate filters, additional
   applications, alternate names) into a memory-frugal two-tier store.
 - Resolves media (images/videos) the LaunchBox way — on-demand `Directory`
-  enumeration, with a fast path that delegates to ExtendDB's `GameCache` when it
-  is loaded and ready.
+  enumeration — with a fast in-memory cache path:
+  - delegates to **ExtendDB's `GameCache`** when that plugin is loaded and ready;
+  - otherwise builds its **own backported GameCache** (config-gated, optionally
+    backed by Voidtools **Everything** for instant file enumeration; falls back to
+    `Directory` when Everything isn't available).
 - Hosts LaunchBox plugins: injects `PluginHelper` services, fires
   `PluginInitialized`, exposes system/game menus, and launches games (emulator or
   direct) through `IGameLaunchingPlugin`.
-- WinForms GUI: 3-pane LaunchBox-like layout (source tree / sortable game list via
-  ObjectListView / details with art + notes), dark themed.
+- **WinForms GUI**, dark themed, 3-pane LaunchBox-like layout — **all native
+  controls, no external UI library**:
+  - source tree (`TreeView`): All Games / categories ▸ platforms / playlists;
+  - game list (`GameListView`, a native virtual `ListView`): sortable, searchable,
+    column show/hide (right-click the header), drag-reorder, all persisted;
+  - **poster (grid) view** toggle — owner-drawn box-art tiles, centred;
+  - details pane: clear logo + box/screenshot carousel, an expandable meta card,
+    VNDB tag pills, and notes.
 - Frees RAM while a game runs (drops the optional data tier + trims the working
-  set) and can show a "game running" screen.
+  set, optionally drops the host GameCache) and can show a "game running" screen.
+- Optional write-back: with `ReadOnly=false`, favorites/ratings/play stats are
+  journalled and written to the XMLs only when LaunchBox/BigBox aren't running.
 
 ## Requirements
 
@@ -31,26 +42,34 @@ through its own implementation of the API, with no dependency on any plugin.
 
 ## Build
 
-Open in the .NET 9 SDK and `dotnet build -c Debug`. The project references
-`Unbroken.LaunchBox.Plugins.dll` at compile time only (`Private=false`) — adjust
-the `HintPath` in `LbApiHost.csproj` to your `<LaunchBox>\Core\` copy. The SDK
-assembly is resolved at runtime from `Core`, so LiteBox is **version-agnostic**
-across LaunchBox versions.
+Open with the .NET 9 SDK and `dotnet build -c Release`. The project references
+`Unbroken.LaunchBox.Plugins.dll` and `Magick.NET` at compile time only
+(`Private=false`) — adjust the `HintPath`s in `LiteBox.csproj` to your install.
+Those assemblies are resolved at runtime from `Core` / the loaded ExtendDB copy,
+so LiteBox is **version-agnostic** across LaunchBox versions. There is **no
+external UI package** (the former ObjectListView dependency was removed; the game
+list and source tree are native WinForms controls).
 
 ## Deploy
 
-Publish self-contained and copy **only these 5 files** into `<LaunchBox>\Core`
-(everything else is provided by LaunchBox's runtime already there):
+Copy these files into `<LaunchBox>\Core` (everything else is provided by
+LaunchBox's runtime already there). This is exactly what the release zip ships:
 
-```
-dotnet publish -c Debug -r win-x64 --self-contained true -o publish-sc
-```
+Required (the app):
 
 - `LiteBox.exe`
 - `LiteBox.dll`
 - `LiteBox.deps.json`
 - `LiteBox.runtimeconfig.json`
-- `ObjectListView2022NET.dll`  ← the only external dependency
+
+Optional (extra standalone capabilities):
+
+- `Magick.NET-Q16-AnyCPU.dll`, `Magick.NET.Core.dll`,
+  `Magick.Native-Q16-x64.dll.api` — decode WebP clear logos that GDI+ can't.
+  Absent these (and ExtendDB), WebP logos simply don't render.
+- `Everything64.dll.api` — instant media enumeration for the host GameCache.
+  Auto-deploys to `<LaunchBox>\ThirdParty\Everything\Everything64.dll` on first
+  run; absent it (or the Everything service), the cache falls back to `Directory`.
 
 Optional: a `whitelist.txt` in `Core` (one plugin folder name per line, subfolders
 of `<LaunchBox>\Plugins`) to activate plugins; without it LiteBox runs standalone.
@@ -62,4 +81,18 @@ of `<LaunchBox>\Plugins`) to activate plugins; without it LiteBox runs standalon
 LiteBox.exe                 GUI (default)
 LiteBox.exe --headless      diagnostics (--playlists --mediatest --gcdump --drop --play --drylaunch)
 LiteBox.exe --plugins <dir> override the plugins root
+LiteBox.exe --library <dir> override the Platforms XML directory
 ```
+
+## Options (gear menu / `LiteBox.ini`)
+
+- **ReadOnly** (default **true**): never write to the LaunchBox XMLs; favorite /
+  rating / play changes stay in memory for the session. Set false to persist them
+  (journalled, written only when LB/BigBox aren't running).
+- **Show "game running" screen**, **Unload the list while a game runs**, **Use the
+  image cache** (degraded thumbnails).
+- **Use game cache** (when ExtendDB is absent) + **Unload game cache during game**.
+- **Use 16:9 for the main media** (else poster ratio).
+
+Pane widths, column layout (width / visibility / order), sort, selection and the
+list/poster mode are all remembered between runs.

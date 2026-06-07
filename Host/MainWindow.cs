@@ -54,7 +54,11 @@ internal sealed class MainWindow : Form
 
     // right-hand details
     private readonly HeroPanel _hero;            // fanart + clear logo (pulse) + rating + heart
-    private readonly PictureBox _art;
+    private readonly MediaPanel _media;          // 16:9 main media (box → screenshots, click to switch)
+    private readonly FlowLayoutPanel _strip;     // clickable mini-thumbnails under the main media
+    private List<string> _mediaItems;            // current game's media sources (box first, then screenshots)
+    private int _mediaSel;                        // selected media index
+    private System.Windows.Forms.Timer _mediaTimer;   // 0.5s debounce: build strip + upgrade main to full
     private readonly Label _title;
     private readonly Label _meta;
     private readonly TextBox _notes;
@@ -110,7 +114,7 @@ internal sealed class MainWindow : Form
 
         _sources = BuildSourceTree();
 
-        var details = BuildDetails(out _hero, out _art, out _title, out _meta, out _notes);
+        var details = BuildDetails(out _hero, out _media, out _strip, out _title, out _meta, out _notes);
         _hero.RateClicked = v => RateHeroGame(v);
         _hero.FavClicked = () => ToggleHeroFavorite();
 
@@ -254,6 +258,7 @@ internal sealed class MainWindow : Form
         DarkScroll(_games);
         DarkScroll(_sources);
         DarkScroll(_notes);
+        DarkScroll(_strip);
 
         Load += (_, _) =>
         {
@@ -391,26 +396,30 @@ internal sealed class MainWindow : Form
     }
 
     // ── Right details construction ───────────────────────────────────────────
-    private Panel BuildDetails(out HeroPanel hero, out PictureBox art, out Label title, out Label meta, out TextBox notes)
+    private Panel BuildDetails(out HeroPanel hero, out MediaPanel media, out FlowLayoutPanel strip,
+                               out Label title, out Label meta, out TextBox notes)
     {
-        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, ColumnCount = 1, RowCount = 6, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
-        tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (16:9, aspect-preserving)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));    // mini-thumbnail strip (reserved)
+        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // title
+        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // meta
+        tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest)
 
         hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
-        art = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Panel };
+        media = new MediaPanel { Dock = DockStyle.Fill, BackColor = Panel };
+        strip = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoScroll = true, Padding = new Padding(0, 4, 0, 4), Margin = new Padding(0, 4, 0, 4) };
         title = new Label { Dock = DockStyle.Fill, AutoSize = false, Height = 28, ForeColor = Fg, Font = new Font("Segoe UI Semibold", 12f), TextAlign = ContentAlignment.MiddleLeft };
         meta = new Label { Dock = DockStyle.Fill, AutoSize = false, ForeColor = SubFg, TextAlign = ContentAlignment.TopLeft };
         notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
 
         tlp.Controls.Add(hero, 0, 0);
-        tlp.Controls.Add(art, 0, 1);
-        tlp.Controls.Add(title, 0, 2);
-        tlp.Controls.Add(meta, 0, 3);
-        tlp.Controls.Add(notes, 0, 4);
+        tlp.Controls.Add(media, 0, 1);
+        tlp.Controls.Add(strip, 0, 2);
+        tlp.Controls.Add(title, 0, 3);
+        tlp.Controls.Add(meta, 0, 4);
+        tlp.Controls.Add(notes, 0, 5);
         return tlp;
     }
 
@@ -800,6 +809,7 @@ internal sealed class MainWindow : Form
             _hero.SetNode("");
             LoadImagesAsync(null, null);
             ScheduleFanart(null, null);
+            ClearStrip();
             _title.Text = ""; _meta.Text = ""; _notes.Text = "";
             return;
         }
@@ -817,6 +827,7 @@ internal sealed class MainWindow : Form
         _hero.SetGame(S(g.Title), eff, Safe(() => g.StarRatingFloat) > 0, Safe(() => g.Favorite));
         LoadImagesAsync(logoSrc, artSrc);
         ScheduleFanart(g, null);
+        ScheduleMedia(g);   // 0.5s later: build the thumb strip + upgrade the main to full
 
         _title.Text = S(g.Title);
 
@@ -857,6 +868,7 @@ internal sealed class MainWindow : Form
         _hero.SetNode(HostPlatformCategory.NodeName(node) ?? "");
         LoadImagesAsync(NodeImage(node, clearLogo: true), NodeImage(node, clearLogo: false));
         ScheduleFanart(null, node);
+        ClearStrip();   // nodes have no media strip
         _title.Text = HostPlatformCategory.NodeName(node);
 
         var bits = new List<string> { $"Total Games: {_current.Length}" };
@@ -992,6 +1004,111 @@ internal sealed class MainWindow : Form
         Safe(() => _games.RefreshObject(g));
     }
 
+    // ── Main media (16:9) + mini-thumbnail strip ─────────────────────────────
+    // Like launchbox-web's media carousel, but the main starts on the BOX (Front),
+    // not a screenshot — in the default list view we don't already see the box. The
+    // strip + the degraded→full upgrade of the main happen ~0.5s after selection.
+    private void ScheduleMedia(IGame g)
+    {
+        if (_mediaTimer != null) { _mediaTimer.Stop(); _mediaTimer.Dispose(); _mediaTimer = null; }
+        ClearStrip();   // reserve the strip space, empty, until the deferred load
+        int token = _detailsLoadToken;
+        var t = new System.Windows.Forms.Timer { Interval = 500 };
+        _mediaTimer = t;
+        t.Tick += (_, _) =>
+        {
+            t.Stop(); t.Dispose();
+            if (ReferenceEquals(_mediaTimer, t)) _mediaTimer = null;
+            if (IsDisposed || token != _detailsLoadToken) return;
+            var items = BuildMediaList(g);
+            _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
+            if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
+            PopulateStrip(items, token);
+        };
+        t.Start();
+    }
+
+    // Sets the main media. NOTE: single extension point — a future video item would be
+    // detected here and hosted in the 16:9 zone instead of an image.
+    private void SetMainMedia(string src, bool full, int token)
+    {
+        if (_mediaItems != null) { int ix = _mediaItems.FindIndex(s => string.Equals(s, src, StringComparison.OrdinalIgnoreCase)); if (ix >= 0) _mediaSel = ix; }
+        HighlightStrip();
+        if (string.IsNullOrEmpty(src)) { _media.SetImage(null); return; }
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var img = full ? LoadImage(src) : LoadThumbOrFull(src, keepAlpha: false);
+            try
+            {
+                if (!IsDisposed && token == _detailsLoadToken)
+                    BeginInvoke((Action)(() => { if (!IsDisposed && token == _detailsLoadToken) _media.SetImage(img); else img?.Dispose(); }));
+                else img?.Dispose();
+            }
+            catch { img?.Dispose(); }
+        });
+    }
+
+    // Media sources for a game: the box (Front) first, then the screenshots — same
+    // regroupement selection as the web (GameCache when ExtendDB is loaded; IO fallback).
+    private static List<string> BuildMediaList(IGame g)
+    {
+        var items = new List<string>();
+        void Add(string s) { if (!string.IsNullOrEmpty(s) && !items.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) items.Add(s); }
+        Add(DetailSource(g, "Front", () =>
+              Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => g.Box3DImagePath)));
+        try
+        {
+            string plat = Safe(() => g.Platform);
+            if (!string.IsNullOrEmpty(plat) && GameCacheBridge.Ready(plat) && Guid.TryParse(S(Safe(() => g.Id)), out var id))
+                foreach (var s in GameCacheBridge.AllImagesTypeFirst(plat, id, "Screenshots", 10)) Add(s);
+            else Add(Safe(() => g.ScreenshotImagePath));
+        }
+        catch { }
+        return items;
+    }
+
+    private void PopulateStrip(List<string> items, int token)
+    {
+        if (token != _detailsLoadToken) return;
+        ClearStrip();
+        foreach (var src in items)
+        {
+            var captured = src;
+            var pb = new PictureBox
+            {
+                Width = 92, Height = 52, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Panel2,
+                Margin = new Padding(0, 0, 6, 0), Cursor = Cursors.Hand,
+            };
+            pb.Click += (_, _) => SetMainMedia(captured, full: true, _detailsLoadToken);
+            _strip.Controls.Add(pb);
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var img = LoadThumbOrFull(captured, keepAlpha: false);
+                try
+                {
+                    if (!IsDisposed && token == _detailsLoadToken)
+                        BeginInvoke((Action)(() => { if (!pb.IsDisposed && token == _detailsLoadToken) { var old = pb.Image; pb.Image = img; old?.Dispose(); } else img?.Dispose(); }));
+                    else img?.Dispose();
+                }
+                catch { img?.Dispose(); }
+            });
+        }
+        HighlightStrip();
+    }
+
+    private void ClearStrip()
+    {
+        foreach (Control c in _strip.Controls) { if (c is PictureBox p) p.Image?.Dispose(); c.Dispose(); }
+        _strip.Controls.Clear();
+    }
+
+    // Highlight the selected mini-thumb (accent background).
+    private void HighlightStrip()
+    {
+        for (int i = 0; i < _strip.Controls.Count; i++)
+            _strip.Controls[i].BackColor = (i == _mediaSel) ? Accent : Panel2;
+    }
+
     // ── Bulk cache pre-generation ────────────────────────────────────────────
     // The 3 cached thumbnails per game, picked the SAME way as the detail pane /
     // the web: clear logo (WebP), box "Front" (JPEG), main screenshot (JPEG).
@@ -1024,18 +1141,18 @@ internal sealed class MainWindow : Form
     private void LoadImagesAsync(string logoSrc, string artSrc)
     {
         int token = ++_detailsLoadToken;
-        SetImage(_art, null);
+        _media.SetImage(null);
         // No logo source at all → settle now so the title-text fallback shows.
         if (string.IsNullOrEmpty(logoSrc) && string.IsNullOrEmpty(artSrc)) { _hero.SetLogo(null); return; }
         System.Threading.Tasks.Task.Run(() =>
         {
             var logo = LoadThumbOrFull(logoSrc, keepAlpha: true);   // clear logo → WebP/alpha
-            var art = LoadThumbOrFull(artSrc, keepAlpha: false);    // box art → JPEG
+            var art = LoadThumbOrFull(artSrc, keepAlpha: false);    // main media (box) DEGRADED, instant
             void Apply()
             {
                 if (IsDisposed || token != _detailsLoadToken) { logo?.Dispose(); art?.Dispose(); return; }
                 _hero.SetLogo(logo);                       // hero owns + pulses the logo
-                var oa = _art.Image; _art.Image = art; oa?.Dispose();
+                _media.SetImage(art);                      // degraded box now; upgraded to full after 0.5s
             }
             try { if (!IsDisposed) BeginInvoke((Action)Apply); else { logo?.Dispose(); art?.Dispose(); } }
             catch { logo?.Dispose(); art?.Dispose(); }
@@ -1439,6 +1556,44 @@ internal sealed class MainWindow : Form
                 : new[] { new Point(cx - s / 2, cy - s), new Point(cx + s / 2, cy), new Point(cx - s / 2, cy + s) }; // ▶
             g.DrawLines(pen, pts);
             g.SmoothingMode = oldMode;
+        }
+    }
+
+    // ── Main media zone: a reserved 16:9 area, image drawn keeping aspect ─────
+    // (posters get pillar-boxed). Owner-drawn so it adapts to the panel width and
+    // leaves a single place to later host a video instead of an image.
+    private sealed class MediaPanel : Panel
+    {
+        private Image _img;
+        public MediaPanel()
+        {
+            DoubleBuffered = true; ResizeRedraw = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+        }
+        public void SetImage(Image img) { var old = _img; _img = img; if (!ReferenceEquals(old, img)) old?.Dispose(); Invalidate(); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(Panel);
+            var rect = ClientRectangle;
+            // Reserved 16:9 area, centred, as large as fits.
+            int w = rect.Width, h = w * 9 / 16;
+            if (h > rect.Height) { h = rect.Height; w = h * 16 / 9; }
+            var area = new Rectangle(rect.X + (rect.Width - w) / 2, rect.Y + (rect.Height - h) / 2, Math.Max(1, w), Math.Max(1, h));
+            using (var b = new SolidBrush(Color.FromArgb(18, 18, 20))) g.FillRectangle(b, area);
+            if (_img == null) return;
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            float ir = (float)_img.Width / _img.Height, ar = (float)area.Width / area.Height;
+            int iw, ih;
+            if (ir > ar) { iw = area.Width; ih = (int)(iw / ir); } else { ih = area.Height; iw = (int)(ih * ir); }
+            g.DrawImage(_img, area.X + (area.Width - iw) / 2, area.Y + (area.Height - ih) / 2, Math.Max(1, iw), Math.Max(1, ih));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _img?.Dispose();
+            base.Dispose(disposing);
         }
     }
 

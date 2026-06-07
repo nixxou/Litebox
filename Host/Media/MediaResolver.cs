@@ -39,7 +39,7 @@ internal static class MediaResolver
     public static readonly string[] Marquee = { "Arcade - Marquee", "Banner" };
     public static readonly string[] Background = { "Fanart - Background" };
 
-    private static readonly HashSet<string> ImageExts = new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".webp" };
+    private static readonly HashSet<string> ImageExts = new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png" };
     private static readonly HashSet<string> VideoExts = new(StringComparer.OrdinalIgnoreCase) { ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".webm" };
     private static readonly HashSet<string> ManualExts = new(StringComparer.OrdinalIgnoreCase) { ".pdf", ".cbz", ".cbr", ".txt", ".htm", ".html" };
     private static readonly HashSet<string> MusicExts = new(StringComparer.OrdinalIgnoreCase) { ".mp3", ".ogg", ".wav", ".flac", ".m4a" };
@@ -287,7 +287,7 @@ internal static class MediaResolver
         string san = Sanitize(name);
         string dir = Path.Combine(imagesRoot, rootFolder, san, typeFolder);
         if (!Directory.Exists(dir)) return "";
-        foreach (var ext in new[] { ".png", ".jpg", ".jpeg", ".webp" })
+        foreach (var ext in new[] { ".png", ".jpg", ".jpeg" })
         {
             var f = Path.Combine(dir, san + ext);
             if (File.Exists(f)) return f;

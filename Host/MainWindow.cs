@@ -769,12 +769,16 @@ internal sealed class MainWindow : Form
     private void ShowDetails(IGame g)
     {
         _detailsShown = g;
-        string logoPath = g == null ? null : Safe(() => g.ClearLogoImagePath);
-        string artPath = g == null ? null
-            : (Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
-             : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
-             : Safe(() => g.ScreenshotImagePath));
-        LoadImagesAsync(logoPath, artPath);
+        // Same source selection as launchbox-web/bigbox-web: ClearLogo regroupement
+        // for the logo, Front for the box art (via GameCache when ExtendDB is loaded
+        // → same file → shared thumb cache; IO fallback otherwise).
+        string logoSrc = g == null ? null : DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath));
+        string artSrc = g == null ? null
+            : DetailSource(g, "Front", () =>
+                  Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
+                : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
+                : Safe(() => g.ScreenshotImagePath));
+        LoadImagesAsync(logoSrc, artSrc);
 
         if (g == null) { _title.Text = ""; _meta.Text = ""; _notes.Text = ""; return; }
 
@@ -857,20 +861,20 @@ internal sealed class MainWindow : Form
 
     private static string NonEmpty(string s) => string.IsNullOrEmpty(s) ? null : s;
 
-    // Decode the right-pane images OFF the UI thread so selecting a tree node
-    // (or a game) never blocks the game-list paint — only the cheap text is set
-    // synchronously. The token discards a stale decode if the selection changed
-    // before it finished.
-    private void LoadImagesAsync(string logoPath, string artPath)
+    // Generate/load the right-pane images OFF the UI thread (degraded thumbs from the
+    // shared cache: logo=WebP w/ alpha, art=JPEG), so selecting a node/game never blocks
+    // the game-list paint — only the cheap text is set synchronously. The token discards
+    // a stale load if the selection changed before it finished. Args are SOURCE paths.
+    private void LoadImagesAsync(string logoSrc, string artSrc)
     {
         int token = ++_detailsLoadToken;
         SetImage(_logo, null);   // drop the previous subject's art right away
         SetImage(_art, null);
-        if (string.IsNullOrEmpty(logoPath) && string.IsNullOrEmpty(artPath)) return;
+        if (string.IsNullOrEmpty(logoSrc) && string.IsNullOrEmpty(artSrc)) return;
         System.Threading.Tasks.Task.Run(() =>
         {
-            var logo = LoadImage(logoPath);
-            var art = LoadImage(artPath);
+            var logo = LoadThumbOrFull(logoSrc, keepAlpha: true);   // clear logo → WebP/alpha
+            var art = LoadThumbOrFull(artSrc, keepAlpha: false);    // box art → JPEG
             void Apply()
             {
                 if (IsDisposed || token != _detailsLoadToken) { logo?.Dispose(); art?.Dispose(); return; }
@@ -880,6 +884,35 @@ internal sealed class MainWindow : Form
             try { if (!IsDisposed) BeginInvoke((Action)Apply); else { logo?.Dispose(); art?.Dispose(); } }
             catch { logo?.Dispose(); art?.Dispose(); }
         });
+    }
+
+    // Degraded thumbnail from the shared ExtendDB cache; falls back to the full original
+    // when no thumb can be made (e.g. Magick absent in standalone). LoadImage handles the
+    // WebP the logo tier produces.
+    private static Image LoadThumbOrFull(string src, bool keepAlpha)
+    {
+        if (string.IsNullOrEmpty(src)) return null;
+        string thumb = null;
+        try { thumb = ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha); } catch { }
+        return LoadImage(thumb ?? src);
+    }
+
+    // Picks the SAME source image launchbox-web/bigbox-web would (GameCache regroupement)
+    // when ExtendDB is loaded — so the resolved file, and thus the shared thumb-cache key,
+    // matches. Falls back to LiteBox's IO resolution when the cache isn't available.
+    private static string DetailSource(IGame g, string regroupement, Func<string> ioFallback)
+    {
+        try
+        {
+            string plat = g.Platform;
+            if (!string.IsNullOrEmpty(plat) && GameCacheBridge.Ready(plat) && Guid.TryParse(g.Id, out var id))
+            {
+                var p = GameCacheBridge.BestImageTypeFirst(plat, id, regroupement);
+                if (!string.IsNullOrEmpty(p)) return p;
+            }
+        }
+        catch { }
+        return ioFallback();
     }
 
     private static void SetImage(PictureBox pb, string path)

@@ -33,6 +33,7 @@ internal static class GameCacheBridge
     // Per-instance-type method/prop caches (resolved lazily on first hit).
     private static PropertyInfo _gamesByUuidProp;
     private static MethodInfo _getBestImageOfType;
+    private static MethodInfo _getBestImageTypeFirst;
     private static MethodInfo _findVideos;
     private static MethodInfo _findAllVideos;
     private static PropertyInfo _imgFullPath;
@@ -105,6 +106,29 @@ internal static class GameCacheBridge
 
             _getBestImageOfType ??= game.GetType().GetMethod("GetBestImageOfType", new[] { typeof(string) });
             var imgRef = _getBestImageOfType?.Invoke(game, new object[] { imageType });
+            if (imgRef == null) return null;
+
+            _imgFullPath ??= imgRef.GetType().GetProperty("FullPath");
+            return _imgFullPath?.GetValue(imgRef) as string;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Best image path for a REGROUPEMENT (e.g. "ClearLogo", "Front",
+    /// "Screenshots", "Background") via the cache — same call launchbox-web/bigbox-web
+    /// use (GetBestImageTypeFirst), so the resolved file (and thus the shared thumb
+    /// cache key) matches. Null if unavailable.</summary>
+    public static string BestImageTypeFirst(string platformName, Guid id, string regroupement)
+    {
+        Probe();
+        if (_gcType == null) return null;
+        try
+        {
+            var game = GameObj(platformName, id);
+            if (game == null) return null;
+
+            _getBestImageTypeFirst ??= game.GetType().GetMethod("GetBestImageTypeFirst", new[] { typeof(string) });
+            var imgRef = _getBestImageTypeFirst?.Invoke(game, new object[] { regroupement });
             if (imgRef == null) return null;
 
             _imgFullPath ??= imgRef.GetType().GetProperty("FullPath");

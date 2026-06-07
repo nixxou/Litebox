@@ -39,11 +39,25 @@ internal static class Program
             string selfPath = Process.GetCurrentProcess().MainModule!.FileName;
             string exeDir = Path.GetDirectoryName(selfPath)!.TrimEnd('\\', '/');
 
+            // Silent install: --install "<LaunchBox root>" (deploy + write uninstall.bat, no UI, no launch).
+            int ii = Array.FindIndex(args, a => a.Equals("--install", StringComparison.OrdinalIgnoreCase));
+            if (ii >= 0 && ii + 1 < args.Length)
+            {
+                string r = args[ii + 1].TrimEnd('\\', '/');
+                if (!File.Exists(Path.Combine(r, "Core", "LaunchBox.exe")))
+                {
+                    MessageBox.Show("--install: not a LaunchBox root (no Core\\LaunchBox.exe): " + r, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return 1;
+                }
+                WriteUninstallBat(r, Deploy(r, selfPath, copySelf: true));
+                return 0;
+            }
+
             // Already sitting at a LaunchBox root? (Core\LaunchBox.exe next to me) → just launch.
             if (File.Exists(Path.Combine(exeDir, "Core", "LaunchBox.exe")))
             {
                 if (!File.Exists(Path.Combine(exeDir, "Core", "LiteBox.exe")))
-                    Deploy(exeDir, selfPath, copySelf: false);   // root copy present but host not deployed yet
+                    WriteUninstallBat(exeDir, Deploy(exeDir, selfPath, copySelf: false));   // host not deployed yet
                 LaunchHost(exeDir, args);
                 return 0;
             }
@@ -55,8 +69,7 @@ internal static class Program
             string root = AskLaunchBoxRoot();
             if (root == null) return 1;   // cancelled
 
-            Deploy(root, selfPath, copySelf: true);
-            WriteUninstallBat(root);
+            WriteUninstallBat(root, Deploy(root, selfPath, copySelf: true));
             MessageBox.Show(
                 $"LiteBox was installed into:\n{root}\n\n" +
                 "A LiteBox.exe was placed at the LaunchBox root (run it to start LiteBox),\n" +
@@ -106,7 +119,8 @@ internal static class Program
 
     // Extract the embedded release zip into <root>\Core (backing up any foreign file we'd overwrite),
     // record what we installed, and (optionally) copy this launcher to <root>\LiteBox.exe.
-    static void Deploy(string root, string selfPath, bool copySelf)
+    // Returns the list of Core file names installed (used to bake the uninstaller).
+    static List<string> Deploy(string root, string selfPath, bool copySelf)
     {
         string core = Path.Combine(root, "Core");
         Directory.CreateDirectory(core);
@@ -145,6 +159,7 @@ internal static class Program
             if (!string.Equals(Path.GetFullPath(selfPath), Path.GetFullPath(dst), StringComparison.OrdinalIgnoreCase))
                 File.Copy(selfPath, dst, overwrite: true);
         }
+        return installed;
     }
 
     static void LaunchHost(string root, string[] args)
@@ -184,7 +199,9 @@ internal static class Program
 
     // Generates "<root>\LiteBox uninstall.bat": restores backed-up foreign files, deletes ours, the
     // host's runtime-deployed ThirdParty natives, the config/journal, the root launcher, then self-deletes.
-    static void WriteUninstallBat(string root)
+    // The installed file list is BAKED IN here (not read from a runtime marker) so the uninstaller works
+    // regardless of whether the marker survived.
+    static void WriteUninstallBat(string root, IEnumerable<string> installed)
     {
         var sb = new StringBuilder();
         sb.AppendLine("@echo off");
@@ -193,10 +210,9 @@ internal static class Program
         sb.AppendLine("echo Uninstalling LiteBox...");
         sb.AppendLine("taskkill /IM LiteBox.exe /F >nul 2>&1");
         sb.AppendLine("ping -n 2 127.0.0.1 >nul");
-        // Restore-or-delete each Core file we installed (read from the marker).
-        sb.AppendLine($"if exist \"Core\\{Marker}\" (");
-        sb.AppendLine($"  for /f \"usebackq delims=\" %%F in (\"Core\\{Marker}\") do call :undo \"%%F\"");
-        sb.AppendLine(")");
+        // Restore-or-delete each Core file we installed (baked in at install time).
+        foreach (var f in installed)
+            sb.AppendLine($"call :undo \"{f}\"");
         sb.AppendLine($"rmdir /s /q \"Core\\{BackupDir}\" 2>nul");
         sb.AppendLine($"del /q \"Core\\{Marker}\" 2>nul");
         // ThirdParty natives the host deploys on first run (also re-created by ExtendDB if present).

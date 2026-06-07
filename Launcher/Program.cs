@@ -1,15 +1,18 @@
-// LiteBox launcher / installer (produces LiteBox.exe at the LaunchBox ROOT).
+// LiteBox launcher / installer (produces LiteBox.exe meant to live at the LaunchBox ROOT).
 //
 // Flow:
-//   • Already at a LaunchBox root (Core\LaunchBox.exe sits next to me) → launch Core\LiteBox.exe
-//     (deploying first if it isn't there yet). No UI.
+//   • Already at a LaunchBox root (Core\LaunchBox.exe sits next to me) → silently launch
+//     Core\LiteBox.exe (deploying first if it isn't there yet). No window, no prompt.
 //   • Otherwise → ask for the ROOT LaunchBox.exe (reject Core\LaunchBox.exe), extract the embedded
 //     release zip into <LB>\Core, copy myself to <LB>\LiteBox.exe, write "LiteBox uninstall.bat",
 //     then launch.
 //
-// Safety: any pre-existing Core file we'd overwrite that ISN'T one we installed before is backed up
-// to Core\_litebox_backup first; the uninstaller restores those and deletes the rest. The set of
-// files we install is recorded in Core\_litebox_files.txt.
+// We locate ourselves via Process.MainModule.FileName (the real exe path) — NOT AppContext.BaseDirectory,
+// which for a single-file build can point at a temp extraction folder.
+//
+// Safety: any pre-existing Core file we'd overwrite that ISN'T one we installed before is backed up to
+// Core\_litebox_backup first; the uninstaller restores those and deletes the rest. The set of files we
+// install is recorded in Core\_litebox_files.txt.
 
 using System;
 using System.Collections.Generic;
@@ -33,13 +36,14 @@ internal static class Program
     {
         try
         {
-            string exeDir = AppContext.BaseDirectory.TrimEnd('\\', '/');
+            string selfPath = Process.GetCurrentProcess().MainModule!.FileName;
+            string exeDir = Path.GetDirectoryName(selfPath)!.TrimEnd('\\', '/');
 
-            // Already sitting at a LaunchBox root? (Core\LaunchBox.exe next to me)
+            // Already sitting at a LaunchBox root? (Core\LaunchBox.exe next to me) → just launch.
             if (File.Exists(Path.Combine(exeDir, "Core", "LaunchBox.exe")))
             {
                 if (!File.Exists(Path.Combine(exeDir, "Core", "LiteBox.exe")))
-                    Deploy(exeDir, copySelf: false);   // root copy present but host not deployed yet
+                    Deploy(exeDir, selfPath, copySelf: false);   // root copy present but host not deployed yet
                 LaunchHost(exeDir);
                 return 0;
             }
@@ -51,19 +55,19 @@ internal static class Program
             string root = AskLaunchBoxRoot();
             if (root == null) return 1;   // cancelled
 
-            Deploy(root, copySelf: true);
+            Deploy(root, selfPath, copySelf: true);
             WriteUninstallBat(root);
             MessageBox.Show(
-                $"LiteBox a été installé dans :\n{root}\n\n" +
-                "Un LiteBox.exe a été créé à la racine (lance-le pour démarrer LiteBox),\n" +
-                "ainsi qu'un « LiteBox uninstall.bat » pour tout désinstaller.",
-                "LiteBox — installation terminée", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                $"LiteBox was installed into:\n{root}\n\n" +
+                "A LiteBox.exe was placed at the LaunchBox root (run it to start LiteBox),\n" +
+                "along with \"LiteBox uninstall.bat\" to remove everything.",
+                "LiteBox — installation complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
             LaunchHost(root);
             return 0;
         }
         catch (Exception ex)
         {
-            try { MessageBox.Show("Erreur du launcher LiteBox :\n\n" + ex, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); } catch { }
+            try { MessageBox.Show("LiteBox launcher error:\n\n" + ex, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); } catch { }
             return 1;
         }
     }
@@ -75,7 +79,7 @@ internal static class Program
         {
             using var dlg = new OpenFileDialog
             {
-                Title = "Sélectionne le LaunchBox.exe RACINE (pas celui du dossier Core)",
+                Title = "Select the ROOT LaunchBox.exe (not the one inside the Core folder)",
                 Filter = "LaunchBox.exe|LaunchBox.exe",
                 CheckFileExists = true,
             };
@@ -86,14 +90,14 @@ internal static class Program
 
             if (string.Equals(Path.GetFileName(dir), "Core", StringComparison.OrdinalIgnoreCase))
             {
-                MessageBox.Show("C'est le LaunchBox.exe du dossier Core. Choisis celui de la RACINE LaunchBox (un niveau au-dessus).",
-                    "Mauvais fichier", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("That's the LaunchBox.exe inside the Core folder. Pick the one at the LaunchBox ROOT (one level up).",
+                    "Wrong file", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 continue;
             }
             if (!File.Exists(Path.Combine(dir, "Core", "LaunchBox.exe")))
             {
-                MessageBox.Show("Ce dossier ne ressemble pas à une racine LaunchBox (il n'y a pas de Core\\LaunchBox.exe).",
-                    "Mauvais dossier", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("This folder doesn't look like a LaunchBox root (no Core\\LaunchBox.exe found next to it).",
+                    "Wrong folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 continue;
             }
             return dir;
@@ -102,7 +106,7 @@ internal static class Program
 
     // Extract the embedded release zip into <root>\Core (backing up any foreign file we'd overwrite),
     // record what we installed, and (optionally) copy this launcher to <root>\LiteBox.exe.
-    static void Deploy(string root, bool copySelf)
+    static void Deploy(string root, string selfPath, bool copySelf)
     {
         string core = Path.Combine(root, "Core");
         Directory.CreateDirectory(core);
@@ -111,7 +115,7 @@ internal static class Program
         var installed = new List<string>();
 
         using (var zs = Assembly.GetExecutingAssembly().GetManifestResourceStream(ZipResource)
-                        ?? throw new InvalidOperationException("Release zip embarqué introuvable."))
+                        ?? throw new InvalidOperationException("Embedded release zip not found."))
         using (var zip = new ZipArchive(zs, ZipArchiveMode.Read))
         {
             foreach (var e in zip.Entries)
@@ -137,22 +141,26 @@ internal static class Program
 
         if (copySelf)
         {
-            string self = Process.GetCurrentProcess().MainModule!.FileName;
             string dst = Path.Combine(root, "LiteBox.exe");
-            if (!string.Equals(Path.GetFullPath(self), Path.GetFullPath(dst), StringComparison.OrdinalIgnoreCase))
-                File.Copy(self, dst, overwrite: true);
+            if (!string.Equals(Path.GetFullPath(selfPath), Path.GetFullPath(dst), StringComparison.OrdinalIgnoreCase))
+                File.Copy(selfPath, dst, overwrite: true);
         }
     }
 
     static void LaunchHost(string root)
     {
         string hostExe = Path.Combine(root, "Core", "LiteBox.exe");
-        if (!File.Exists(hostExe)) throw new FileNotFoundException("Core\\LiteBox.exe introuvable après déploiement.", hostExe);
+        if (!File.Exists(hostExe)) throw new FileNotFoundException("Core\\LiteBox.exe not found after deployment.", hostExe);
+        // The host is a console-subsystem app: give it its OWN (hidden) console via ShellExecute so its
+        // Console.WriteLine stays valid (CreateNoWindow + inherited null handles would crash it), while
+        // the window stays invisible → transparent launch. Running Core\LiteBox.exe directly still shows
+        // the console (useful for debugging).
         Process.Start(new ProcessStartInfo
         {
             FileName = hostExe,
             WorkingDirectory = root,   // host self-normalises CWD to the LB root anyway; set it explicitly to match
-            UseShellExecute = false,
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
         });
     }
 
@@ -176,26 +184,34 @@ internal static class Program
     }
 
     // Generates "<root>\LiteBox uninstall.bat": restores backed-up foreign files, deletes ours, the
-    // runtime-deployed Everything DLL, the config/journal, the root launcher, then self-deletes.
+    // host's runtime-deployed ThirdParty natives, the config/journal, the root launcher, then self-deletes.
     static void WriteUninstallBat(string root)
     {
         var sb = new StringBuilder();
         sb.AppendLine("@echo off");
         sb.AppendLine("setlocal EnableExtensions");
         sb.AppendLine("cd /d \"%~dp0\"");
-        sb.AppendLine("echo Desinstallation de LiteBox...");
+        sb.AppendLine("echo Uninstalling LiteBox...");
         sb.AppendLine("taskkill /IM LiteBox.exe /F >nul 2>&1");
         sb.AppendLine("ping -n 2 127.0.0.1 >nul");
+        // Restore-or-delete each Core file we installed (read from the marker).
         sb.AppendLine($"if exist \"Core\\{Marker}\" (");
         sb.AppendLine($"  for /f \"usebackq delims=\" %%F in (\"Core\\{Marker}\") do call :undo \"%%F\"");
         sb.AppendLine(")");
         sb.AppendLine($"rmdir /s /q \"Core\\{BackupDir}\" 2>nul");
         sb.AppendLine($"del /q \"Core\\{Marker}\" 2>nul");
+        // ThirdParty natives the host deploys on first run (also re-created by ExtendDB if present).
         sb.AppendLine("del /q \"ThirdParty\\Everything\\Everything64.dll\" 2>nul");
+        sb.AppendLine("del /q \"ThirdParty\\ExtendDB\\Magick.Native-Q16-x64.dll\" 2>nul");
+        sb.AppendLine("rmdir \"ThirdParty\\Everything\" 2>nul");
+        sb.AppendLine("rmdir \"ThirdParty\\ExtendDB\" 2>nul");
+        sb.AppendLine("rmdir \"ThirdParty\" 2>nul");
+        // Config / journal at the LB root.
         sb.AppendLine("del /q \"Core\\LiteBox.ini\" 2>nul");
         sb.AppendLine("del /q \"Core\\LiteBox.pending\" 2>nul");
+        // The root launcher.
         sb.AppendLine("del /q \"LiteBox.exe\" 2>nul");
-        sb.AppendLine("echo Termine.");
+        sb.AppendLine("echo Done.");
         sb.AppendLine("pause");
         sb.AppendLine("(goto) 2>nul & del \"%~f0\"");
         sb.AppendLine(":undo");

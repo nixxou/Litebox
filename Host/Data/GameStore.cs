@@ -13,9 +13,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -74,8 +76,17 @@ internal sealed class GameStore
     // platform name -> source XML file (for write-back)
     private readonly Dictionary<string, string> _platformFile = new(StringComparer.OrdinalIgnoreCase);
 
-    // rows whose essential fields were mutated and not yet flushed to XML
+    // PLUGIN write-back set: rows a plugin changed via the IGame setters, flushed
+    // DIRECTLY (synchronously) by IDataManager.Save. (Today nothing marks it — our own
+    // user-state goes through the journal below — but it's the plugins' direct path.)
     private readonly HashSet<int> _dirty = new();
+
+    // OUR user-state journal (favorites / ratings / play count / last played / play time).
+    // Deferred: each change updates Rows + rewrites a tiny atomic journal file; the heavy
+    // Platform-XML rewrite happens only at a SAFE time (close / boot) and only when
+    // LaunchBox/BigBox are NOT running (they own the XMLs while alive).
+    private readonly HashSet<int> _journal = new();
+    private string JournalPath => Path.Combine(AppContext.BaseDirectory, "LiteBox.pending");
 
     // Per-game accessory entities (resident — needed for launch/disc selection).
     private readonly Dictionary<Guid, List<AddApp>> _addApps = new();
@@ -307,29 +318,109 @@ internal sealed class GameStore
         _notes = notes;
     }
 
-    // ── Mutations + write-back ───────────────────────────────────────────────
-    public void SetFavorite(int i, bool v)
+    // ── Our user-state mutations → JOURNAL (deferred, gated) ─────────────────
+    public void JournalFavorite(int i, bool v)
+    { if (i < 0 || i >= Rows.Length || Rows[i].Favorite == v) return; Rows[i].Favorite = v; MarkJournal(i); }
+
+    public void JournalStarRating(int i, float v)
+    { if (i < 0 || i >= Rows.Length || Math.Abs(Rows[i].StarRatingFloat - v) < 0.001f) return; Rows[i].StarRatingFloat = v; MarkJournal(i); }
+
+    /// <summary>A launch begins: bump play count + stamp last-played now.</summary>
+    public void JournalPlayStart(int i)
+    { if (i < 0 || i >= Rows.Length) return; Rows[i].PlayCount++; Rows[i].LastPlayedTicks = DateTime.Now.Ticks; MarkJournal(i); }
+
+    /// <summary>A launch ended: add the elapsed seconds to total play time.</summary>
+    public void JournalPlayTime(int i, int addSeconds)
+    { if (i < 0 || i >= Rows.Length || addSeconds <= 0) return; Rows[i].PlayTime += addSeconds; MarkJournal(i); }
+
+    private void MarkJournal(int i) { lock (_journal) _journal.Add(i); WriteJournalFile(); }
+
+    // The journal is a tiny line-per-game file (guid|fav|rating|playcount|lastplayedticks|playtime),
+    // written atomically (tmp → replace). Cheap to rewrite on every change.
+    private void WriteJournalFile()
     {
-        if (i < 0 || i >= Rows.Length || Rows[i].Favorite == v) return;
-        Rows[i].Favorite = v;
-        lock (_dirty) _dirty.Add(i);
+        int[] js; lock (_journal) js = _journal.ToArray();
+        try
+        {
+            if (js.Length == 0) { if (File.Exists(JournalPath)) File.Delete(JournalPath); return; }
+            var sb = new StringBuilder();
+            foreach (var i in js)
+            {
+                var r = Rows[i];
+                sb.Append(r.Id).Append('|')
+                  .Append(r.Favorite ? '1' : '0').Append('|')
+                  .Append(r.StarRatingFloat.ToString(CultureInfo.InvariantCulture)).Append('|')
+                  .Append(r.PlayCount.ToString(CultureInfo.InvariantCulture)).Append('|')
+                  .Append(r.LastPlayedTicks.ToString(CultureInfo.InvariantCulture)).Append('|')
+                  .Append(r.PlayTime.ToString(CultureInfo.InvariantCulture)).Append('\n');
+            }
+            AtomicWriteText(JournalPath, sb.ToString());
+        }
+        catch (Exception ex) { Console.WriteLine("[store] journal write: " + ex.Message); }
     }
 
-    public void SetStarRating(int i, float v)
+    /// <summary>At boot: re-apply a surviving journal to memory (UI correct), then flush to
+    /// XML if LaunchBox/BigBox aren't running (recovery after a kill, or a deferred batch
+    /// from a session where LB was up). If they're running, keep the journal for later.</summary>
+    public void RecoverJournalOnLoad()
     {
-        if (i < 0 || i >= Rows.Length || Math.Abs(Rows[i].StarRatingFloat - v) < 0.001f) return;
-        Rows[i].StarRatingFloat = v;
-        lock (_dirty) _dirty.Add(i);
+        if (!File.Exists(JournalPath)) return;
+        try
+        {
+            foreach (var line in File.ReadAllLines(JournalPath))
+            {
+                var p = line.Split('|');
+                if (p.Length < 6 || !Guid.TryParse(p[0], out var id) || !_byId.TryGetValue(id, out var i)) continue;
+                Rows[i].Favorite = p[1] == "1";
+                if (float.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var rt)) Rows[i].StarRatingFloat = rt;
+                if (int.TryParse(p[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var pc)) Rows[i].PlayCount = pc;
+                if (long.TryParse(p[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var lp)) Rows[i].LastPlayedTicks = lp;
+                if (int.TryParse(p[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var pt)) Rows[i].PlayTime = pt;
+                lock (_journal) _journal.Add(i);
+            }
+            Console.WriteLine($"[store] recovered journal ({_journal.Count} game(s))");
+        }
+        catch (Exception ex) { Console.WriteLine("[store] journal recover: " + ex.Message); }
+        if (!IsLaunchBoxRunning()) FlushJournalToXml();   // safe → write now + delete journal
     }
 
-    /// <summary>Writes mutated rows back into their source Platform XML. Returns rows written.</summary>
+    /// <summary>At close: flush the journal to XML if safe, else keep it for next time.</summary>
+    public void FlushJournalIfSafe()
+    {
+        if (IsLaunchBoxRunning()) { WriteJournalFile(); return; }   // LB/BB own the XMLs → defer
+        FlushJournalToXml();
+    }
+
+    private void FlushJournalToXml()
+    {
+        int[] js; lock (_journal) js = _journal.ToArray();
+        if (js.Length > 0) WriteToXml(js);
+        lock (_journal) _journal.Clear();
+        try { if (File.Exists(JournalPath)) File.Delete(JournalPath); } catch { }
+    }
+
+    public static bool IsLaunchBoxRunning()
+    {
+        try { return Process.GetProcessesByName("LaunchBox").Length > 0 || Process.GetProcessesByName("BigBox").Length > 0; }
+        catch { return false; }
+    }
+
+    // ── Plugin write-back (DIRECT, immediate, NOT gated) ─────────────────────
+    /// <summary>Writes mutated rows back into their source Platform XML (atomic). Returns rows written.</summary>
     public int Flush()
     {
         int[] dirty;
         lock (_dirty) { if (_dirty.Count == 0) return 0; dirty = _dirty.ToArray(); _dirty.Clear(); }
+        return WriteToXml(dirty);
+    }
 
+    // Shared atomic writer for the user-state fields (used by both Flush and the journal).
+    private int WriteToXml(IEnumerable<int> indices)
+    {
+        var idxs = indices.Where(i => i >= 0 && i < Rows.Length).Distinct().ToArray();
+        if (idxs.Length == 0) return 0;
         int written = 0;
-        foreach (var grp in dirty.GroupBy(i => Str(Rows[i].PlatformIdx)))
+        foreach (var grp in idxs.GroupBy(i => Str(Rows[i].PlatformIdx)))
         {
             if (!_platformFile.TryGetValue(grp.Key, out var file) || !File.Exists(file)) continue;
             try
@@ -339,14 +430,19 @@ internal sealed class GameStore
                 foreach (var ge in doc.Root.Elements("Game"))
                 {
                     if (!Guid.TryParse((string)ge.Element("ID"), out var id) || !want.TryGetValue(id, out var i)) continue;
-                    SetEl(ge, "Favorite", Rows[i].Favorite ? "true" : "false");
-                    SetEl(ge, "StarRatingFloat", Rows[i].StarRatingFloat.ToString(CultureInfo.InvariantCulture));
-                    SetEl(ge, "StarRating", ((int)Math.Round(Rows[i].StarRatingFloat)).ToString(CultureInfo.InvariantCulture));
+                    var r = Rows[i];
+                    SetEl(ge, "Favorite", r.Favorite ? "true" : "false");
+                    SetEl(ge, "StarRatingFloat", r.StarRatingFloat.ToString(CultureInfo.InvariantCulture));
+                    SetEl(ge, "StarRating", ((int)Math.Round(r.StarRatingFloat)).ToString(CultureInfo.InvariantCulture));
+                    SetEl(ge, "PlayCount", r.PlayCount.ToString(CultureInfo.InvariantCulture));
+                    SetEl(ge, "PlayTime", r.PlayTime.ToString(CultureInfo.InvariantCulture));
+                    if (r.LastPlayedTicks != 0)
+                        SetEl(ge, "LastPlayedDate", new DateTime(r.LastPlayedTicks, DateTimeKind.Local).ToString("o", CultureInfo.InvariantCulture));
                     written++;
                 }
-                doc.Save(file);
+                AtomicSave(doc, file);
             }
-            catch (Exception ex) { Console.WriteLine($"[store] flush error {file}: {ex.Message}"); }
+            catch (Exception ex) { Console.WriteLine($"[store] write error {file}: {ex.Message}"); }
         }
         return written;
     }
@@ -356,6 +452,29 @@ internal sealed class GameStore
         var e = parent.Element(name);
         if (e == null) parent.Add(new XElement(name, value));
         else e.Value = value;
+    }
+
+    // ── Atomic disk writes (tmp → replace) ───────────────────────────────────
+    private static void AtomicSave(XDocument doc, string file)
+    {
+        string tmp = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        doc.Save(tmp);
+        ReplaceAtomic(tmp, file);
+    }
+    private static void AtomicWriteText(string file, string text)
+    {
+        string tmp = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllText(tmp, text);
+        ReplaceAtomic(tmp, file);
+    }
+    private static void ReplaceAtomic(string tmp, string dest)
+    {
+        try
+        {
+            if (File.Exists(dest)) File.Replace(tmp, dest, null);
+            else File.Move(tmp, dest);
+        }
+        catch { try { File.Copy(tmp, dest, true); File.Delete(tmp); } catch { } }
     }
 
     // ── Stats ────────────────────────────────────────────────────────────────

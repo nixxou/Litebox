@@ -969,7 +969,7 @@ internal sealed class MainWindow : Form
     private void RateHeroGame(int value)
     {
         var g = _heroGame; if (g == null) return;
-        Safe(() => { g.StarRatingFloat = value; _dm.Save(false); });
+        Safe(() => g.StarRatingFloat = value);   // → journal (deferred, gated); no immediate XML write
         _hero.SetRating(value, isUser: true);
         Safe(() => _games.RefreshObject(g));
     }
@@ -978,7 +978,7 @@ internal sealed class MainWindow : Form
     {
         var g = _heroGame; if (g == null) return;
         bool nv = !Safe(() => g.Favorite);
-        Safe(() => { g.Favorite = nv; _dm.Save(false); });
+        Safe(() => g.Favorite = nv);             // → journal
         _hero.SetFavorite(nv);
         Safe(() => _games.RefreshObject(g));
     }

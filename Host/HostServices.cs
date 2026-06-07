@@ -152,6 +152,11 @@ internal static class HostLaunch
 
     private static void RunAndWait(IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCmd)
     {
+        // Play tracking (our user-state → journal): a real launch bumps play count +
+        // last-played now; on exit we add the elapsed seconds to play time. Skipped in DryRun.
+        int gi = GameIndex(game);
+        var sw = Stopwatch.StartNew();
+        if (!DryRun && gi >= 0) { try { _store.JournalPlayStart(gi); } catch { } }
         try
         {
             Fire(p => p.OnAfterGameLaunched(game, app, emulator));
@@ -192,11 +197,19 @@ internal static class HostLaunch
         catch (Exception ex) { Console.WriteLine("[launch] error: " + ex.Message); }
         finally
         {
+            if (!DryRun && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             Fire(p => p.OnGameExited());
             try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
             // GUI: game over + data reloaded → reload its list and restore selection.
             try { GameEnded?.Invoke(game); } catch { }
         }
+    }
+
+    /// <summary>Row index for a game (via the store's id map), or -1.</summary>
+    private static int GameIndex(IGame game)
+    {
+        try { return _store != null && Guid.TryParse(game?.Id, out var id) && _store.ById.TryGetValue(id, out var i) ? i : -1; }
+        catch { return -1; }
     }
 
     /// <summary>(path, args, useEmu) of the main thing to launch, or null if nothing runnable.</summary>

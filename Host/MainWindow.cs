@@ -56,7 +56,8 @@ internal sealed class MainWindow : Form
     private readonly HeroPanel _hero;            // fanart + clear logo (pulse) + rating + heart
     private readonly MediaPanel _media;          // main media (box → screenshots, click to switch)
     private readonly MediaStrip _strip;          // clickable mini-thumbnails under the main media (slim custom scrollbar)
-    private TableLayoutPanel _detailGrid;        // detail layout — its media row is sized from the pane width
+    private Panel _detailHost;                    // scroll viewport hosting the detail grid (scrollbar when content overflows)
+    private TableLayoutPanel _detailGrid;        // detail layout — sized by RelayoutDetail (fills viewport, or taller → scrolls)
     private double _mediaAspect = 16.0 / 9.0;    // reserved main-media area aspect (16:9 default, 2:3 poster option)
     private List<string> _mediaItems;            // current game's media sources (box first, then screenshots)
     private int _mediaSel;                        // selected media index
@@ -123,9 +124,17 @@ internal sealed class MainWindow : Form
         _hero.FavClicked = () => ToggleHeroFavorite();
         _meta.ExpandedChanged = OnMetaExpandedToggled;
 
+        // Scroll viewport: the detail grid normally fills it (notes absorbs the slack); when the
+        // content needs more than fits (e.g. the meta box expanded, or a short pane), the grid grows
+        // taller than the viewport and a vertical scrollbar appears — its width is reserved so it
+        // never overlaps the content (RelayoutDetail).
+        _detailHost = new Panel { Dock = DockStyle.Fill, BackColor = Panel, AutoScroll = true };
+        _detailHost.Controls.Add(details);
+        _detailHost.Resize += (_, _) => RelayoutDetail();
+
         var inner = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
         inner.Panel1.Controls.Add(_games);
-        inner.Panel2.Controls.Add(details);
+        inner.Panel2.Controls.Add(_detailHost);
 
         var outer = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
         outer.Panel1.Controls.Add(_sources);
@@ -195,7 +204,7 @@ internal sealed class MainWindow : Form
         {
             _cfg.Use169ForMainScreenshot = miAspect.Checked; _cfg.Save();
             _mediaAspect = miAspect.Checked ? (16.0 / 9.0) : (2.0 / 3.0);   // apply live
-            UpdateMediaRowHeight();
+            RelayoutDetail();
         };
         var miReadOnly = new ToolStripMenuItem("Read-only (never write to the LaunchBox files)")
         { CheckOnClick = true, Checked = _cfg.ReadOnly };
@@ -272,6 +281,7 @@ internal sealed class MainWindow : Form
         DarkScroll(_games);
         DarkScroll(_sources);
         DarkScroll(_notes);
+        DarkScroll(_detailHost);   // the detail pane's overflow scrollbar
         // _strip uses its own slim custom scrollbar (no native scrollbar to theme).
 
         Load += (_, _) =>
@@ -285,7 +295,7 @@ internal sealed class MainWindow : Form
             try { ActiveControl = _games; _games.Focus(); } catch { }
         };
         // Final dark-scrollbar pass once everything (data, columns) is in place.
-        Shown += (_, _) => { ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); UpdateMediaRowHeight(); };
+        Shown += (_, _) => { ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); RelayoutDetail(); };
     }
 
     // ── Game list construction ───────────────────────────────────────────────
@@ -416,20 +426,18 @@ internal sealed class MainWindow : Form
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
         _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
 
-        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Panel, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));    // meta card (title + platform + expandable fields, wraps)
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest)
         _detailGrid = tlp;
-        tlp.SizeChanged += (_, _) => { UpdateMediaRowHeight(); UpdateMetaRowHeight(); };
 
         hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         media = new MediaPanel { Dock = DockStyle.Fill, BackColor = Panel };
         strip = new MediaStrip { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 4, 0, 4) };
         meta = new MetaCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
-        meta.SizeChanged += (_, _) => UpdateMetaRowHeight();   // re-measure wrapped height when the pane width changes
         notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
 
         tlp.Controls.Add(hero, 0, 0);
@@ -440,39 +448,67 @@ internal sealed class MainWindow : Form
         return tlp;
     }
 
-    // Size the main-media row from the current pane width so the area fills the width
-    // and keeps the configured aspect (16:9 or poster 2:3). Capped so the title/meta/
-    // notes still get room (matters mostly for the tall poster ratio).
-    private void UpdateMediaRowHeight()
+    // Minimum height reserved for the notes box before the whole pane starts scrolling.
+    private const int MinNotesH = 60;
+
+    // Lay out the detail grid inside its scroll viewport. The media area fills the pane width
+    // (height = width / aspect, capped to part of the viewport) and the meta card is measured
+    // from its wrapped content. If hero + media + strip + meta + a minimum notes box fits the
+    // viewport, the grid fills it (notes absorbs the slack — no scrollbar). Otherwise the grid
+    // grows taller than the viewport and a vertical scrollbar appears; the grid width is reduced
+    // by the scrollbar width so it never overlaps the content.
+    private bool _inRelayout;
+    private void RelayoutDetail()
     {
-        var tlp = _detailGrid;
-        if (tlp == null || tlp.RowStyles.Count < 2) return;
-        int contentW = tlp.ClientSize.Width - tlp.Padding.Horizontal;
-        if (contentW < 40) return;
-        int h = (int)Math.Round(contentW / _mediaAspect);
-        int maxH = (int)(tlp.ClientSize.Height * 0.62);   // leave room for strip + title/meta/notes
-        if (maxH > 100 && h > maxH) h = maxH;
-        if (h < 90) h = 90;
-        var rs = tlp.RowStyles[1];
-        if (rs.SizeType != SizeType.Absolute || Math.Abs(rs.Height - h) > 0.5)
-        { rs.SizeType = SizeType.Absolute; rs.Height = h; }
+        var host = _detailHost; var tlp = _detailGrid;
+        if (host == null || tlp == null || tlp.RowStyles.Count < 5 || _inRelayout) return;
+        _inRelayout = true;
+        try { RelayoutDetailCore(host, tlp); }
+        finally { _inRelayout = false; }
     }
 
-    // Size the meta row to the card's wrapped content (title + platform, plus the fields when expanded).
-    private void UpdateMetaRowHeight()
+    private void RelayoutDetailCore(Panel host, TableLayoutPanel tlp)
     {
-        var tlp = _detailGrid;
-        if (tlp == null || _meta == null || tlp.RowStyles.Count < 4) return;
-        int h = _meta.DesiredHeight;
-        var rs = tlp.RowStyles[3];
-        if (rs.SizeType != SizeType.Absolute || Math.Abs(rs.Height - h) > 0.5)
-        { rs.SizeType = SizeType.Absolute; rs.Height = h; }
+        int sbw = SystemInformation.VerticalScrollBarWidth;
+        int hsbh = SystemInformation.HorizontalScrollBarHeight;
+        int fullW = host.ClientSize.Width + (host.VerticalScroll.Visible ? sbw : 0);     // width with NO vertical scrollbar
+        int viewH = host.ClientSize.Height + (host.HorizontalScroll.Visible ? hsbh : 0); // height with NO horizontal scrollbar
+        if (fullW < 80 || viewH < 80) return;
+        int padH = tlp.Padding.Horizontal, padV = tlp.Padding.Vertical;
+
+        // Minimum content height for a given grid width (media capped to the viewport).
+        int MinContent(int gridW, out int mediaH, out int metaH)
+        {
+            int colW = Math.Max(20, gridW - padH);
+            mediaH = (int)Math.Round(colW / _mediaAspect);
+            int cap = (int)(viewH * 0.62);
+            if (cap > 100 && mediaH > cap) mediaH = cap;
+            if (mediaH < 90) mediaH = 90;
+            metaH = _meta.HeightForWidth(colW);
+            return padV + 158 + mediaH + 72 + metaH + MinNotesH;
+        }
+
+        bool overflow = MinContent(fullW, out _, out _) > viewH;
+        int wantW = overflow ? Math.Max(80, fullW - sbw) : fullW;
+        int minContent = MinContent(wantW, out int media, out int meta);
+
+        var rsMedia = tlp.RowStyles[1];
+        if (rsMedia.SizeType != SizeType.Absolute || Math.Abs(rsMedia.Height - media) > 0.5) { rsMedia.SizeType = SizeType.Absolute; rsMedia.Height = media; }
+        var rsMeta = tlp.RowStyles[3];
+        if (rsMeta.SizeType != SizeType.Absolute || Math.Abs(rsMeta.Height - meta) > 0.5) { rsMeta.SizeType = SizeType.Absolute; rsMeta.Height = meta; }
+
+        // Drive the scroll range, then size the grid to the (possibly reduced) client width.
+        host.AutoScrollMinSize = new Size(0, overflow ? minContent : 0);
+        int gridW = host.ClientSize.Width;                         // reflects the scrollbar now
+        int gridH = overflow ? minContent : host.ClientSize.Height;
+        if (tlp.Bounds != new Rectangle(0, 0, gridW, gridH))
+            tlp.Bounds = new Rectangle(0, 0, gridW, gridH);
     }
 
     private void OnMetaExpandedToggled()
     {
         _metaExpanded = _meta.Expanded;   // remember for the next game (and persisted at close)
-        UpdateMetaRowHeight();
+        RelayoutDetail();
     }
 
     // Small platform icon (Nostalgic Platform Icons pack) for the meta pill; cached per platform.
@@ -879,7 +915,7 @@ internal sealed class MainWindow : Form
             LoadImagesAsync(null, null);
             ScheduleFanart(null, null);
             ClearStrip();
-            _meta.Clear(); _notes.Text = ""; UpdateMetaRowHeight();
+            _meta.Clear(); _notes.Text = ""; RelayoutDetail();
             return;
         }
 
@@ -916,7 +952,7 @@ internal sealed class MainWindow : Form
         R("File", Path.GetFileName(S(Safe(() => g.ApplicationPath))));
         _meta.ShowGame(S(g.Title), S(g.Platform), PlatformIconImage(S(g.Platform)), rows);
         _meta.Expanded = _metaExpanded;   // honour the remembered expand state
-        UpdateMetaRowHeight();
+        RelayoutDetail();
 
         _notes.Text = S(g.Notes).Replace("\n", "\r\n");
     }
@@ -934,7 +970,7 @@ internal sealed class MainWindow : Form
             if (node is AllNode) _meta.ShowNode("All Games", new List<string> { $"Total Games: {_current.Length}" });
             else _meta.Clear();
             _notes.Text = "";
-            UpdateMetaRowHeight();
+            RelayoutDetail();
             return;
         }
 
@@ -952,7 +988,7 @@ internal sealed class MainWindow : Form
             Add("Release", N(() => p.ReleaseDate?.Year)?.ToString());
         }
         _meta.ShowNode(HostPlatformCategory.NodeName(node) ?? "", bits);
-        UpdateMetaRowHeight();
+        RelayoutDetail();
         _notes.Text = NodeNotes(node).Replace("\n", "\r\n");
     }
 
@@ -1727,14 +1763,15 @@ internal sealed class MainWindow : Form
             set { if (_expanded != value) { _expanded = value; Invalidate(); } }
         }
 
-        public int DesiredHeight
+        public int DesiredHeight => HeightForWidth(ClientSize.Width);
+
+        // Wrapped height for a given card width (used to lay out the row before the control
+        // has that width — measurement must not depend on the control's current bounds).
+        public int HeightForWidth(int cardWidth)
         {
-            get
-            {
-                if (_mode == Mode.None) return 0;
-                if (ClientSize.Width < 40) return 64;   // not laid out yet → fallback; SizeChanged re-measures
-                return LayoutContent(null) + Pad + VMargin;   // content end + bottom pad + bottom margin
-            }
+            if (_mode == Mode.None) return 0;
+            if (cardWidth < 40) return 64;   // not laid out yet → fallback
+            return LayoutContent(null, cardWidth) + Pad + VMargin;   // content end + bottom pad + bottom margin
         }
 
         public void ShowGame(string title, string platform, Image icon, List<(string, string)> rows)
@@ -1782,14 +1819,14 @@ internal sealed class MainWindow : Form
                 using var bg = new SolidBrush(Color.FromArgb(46, 46, 50)); g.FillPath(bg, path);
                 using var bd = new Pen(Color.FromArgb(64, 64, 68)); g.DrawPath(bd, path);
             }
-            LayoutContent(g);
+            LayoutContent(g, ClientSize.Width);
         }
 
         // Lays out (and draws when g != null) the title, platform row and fields/lines, all
-        // word-wrapped. Returns the y just past the last element (relative to the card top).
-        private int LayoutContent(Graphics g)
+        // word-wrapped, for a given card width. Returns the y just past the last element.
+        private int LayoutContent(Graphics g, int cardWidth)
         {
-            int innerW = Math.Max(20, ClientSize.Width - 2 * Pad);
+            int innerW = Math.Max(20, cardWidth - 2 * Pad);
             int x = Pad, y = VMargin + Pad;   // start below the top margin + box padding
 
             if (!string.IsNullOrEmpty(_title))

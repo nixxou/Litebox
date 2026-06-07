@@ -172,6 +172,9 @@ internal sealed class MainWindow : Form
         // Persist layout / window / selection once, at close (not per change).
         FormClosing += (_, _) => { try { SaveAll(); } catch { } };
 
+        // Bring the window back on-screen if a monitor is unplugged while running.
+        try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged; } catch { }
+
         // React to game launch start/end (for the running screen + during-game unload).
         HostLaunch.GameStarted += OnGameStarted;
         HostLaunch.GameEnded += OnGameEnded;
@@ -179,6 +182,7 @@ internal sealed class MainWindow : Form
         {
             HostLaunch.GameStarted -= OnGameStarted;
             HostLaunch.GameEnded -= OnGameEnded;
+            try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
             HostStateManager.SelectedGamesProvider = null;
         };
 
@@ -490,23 +494,47 @@ internal sealed class MainWindow : Form
     private void RestoreWindowState()
     {
         int w = _cfg.GetInt("WinW", 0), h = _cfg.GetInt("WinH", 0);
-        if (w >= 400 && h >= 300)
+        var rect = new Rectangle(_cfg.GetInt("WinX", 0), _cfg.GetInt("WinY", 0), w, h);
+        // Safety: a monitor may have been unplugged since last run, leaving the
+        // saved bounds off-screen. Only honour them when the title bar is reachable
+        // on a CURRENT screen; otherwise keep the ctor defaults (centered, default
+        // size) — i.e. reset to the default position/size.
+        if (w >= 400 && h >= 300 && IsBoundsUsable(rect))
         {
-            var rect = new Rectangle(_cfg.GetInt("WinX", 0), _cfg.GetInt("WinY", 0), w, h);
-            if (IsOnAScreen(rect)) { StartPosition = FormStartPosition.Manual; Bounds = rect; }
-            else Size = new Size(w, h);
+            StartPosition = FormStartPosition.Manual;
+            Bounds = rect;
+            if (_cfg.GetBool("WinMax", false)) WindowState = FormWindowState.Maximized;
         }
-        if (_cfg.GetBool("WinMax", false)) WindowState = FormWindowState.Maximized;
     }
 
-    private static bool IsOnAScreen(Rectangle r)
+    // Usable only if a grabbable strip of the title bar lands on some current
+    // screen's working area (so the user can actually see and move the window).
+    private static bool IsBoundsUsable(Rectangle r)
     {
+        if (r.Width < 200 || r.Height < 150) return false;
+        var caption = new Rectangle(r.Left, r.Top, r.Width, 30);
         foreach (var sc in Screen.AllScreens)
         {
-            var i = Rectangle.Intersect(sc.WorkingArea, r);
-            if (i.Width >= 100 && i.Height >= 100) return true;
+            var i = Rectangle.Intersect(sc.WorkingArea, caption);
+            if (i.Width >= 120 && i.Height >= 8) return true;
         }
         return false;
+    }
+
+    // Monitor unplugged at runtime → if the window ended up off-screen, bring it
+    // back: normalize, clamp to the primary working area and recenter on it.
+    private void OnDisplaySettingsChanged(object sender, EventArgs e)
+    {
+        if (IsDisposed) return;
+        if (InvokeRequired) { try { BeginInvoke((Action)(() => OnDisplaySettingsChanged(sender, e))); } catch { } return; }
+        if (WindowState == FormWindowState.Minimized) return;
+        var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        if (IsBoundsUsable(b)) return;
+        var ps = Screen.PrimaryScreen; if (ps == null) return;
+        var wa = ps.WorkingArea;
+        if (WindowState == FormWindowState.Maximized) WindowState = FormWindowState.Normal;
+        Size = new Size(Math.Max(400, Math.Min(Width, wa.Width - 40)), Math.Max(300, Math.Min(Height, wa.Height - 40)));
+        Location = new Point(wa.Left + Math.Max(0, (wa.Width - Width) / 2), wa.Top + Math.Max(0, (wa.Height - Height) / 2));
     }
 
     private void RestoreSort()

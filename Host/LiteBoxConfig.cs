@@ -72,6 +72,7 @@ internal sealed class LiteBoxConfig
         _kv["ShowGameRunningScreen"] = "true";
         _kv["UnloadListDuringGame"] = "true";
         _kv["UseImageCache"] = "true";
+        _kv["Use16:9ForMainScreenshot"] = "true";
         _kv["GameRunningText"] = "Game running...";
         _kv["GameRunningColor"] = "#0F0F12";
         try
@@ -83,12 +84,15 @@ internal sealed class LiteBoxConfig
             sb.AppendLine("; ShowGameRunningScreen : show a fanart/colour screen while a game runs");
             sb.AppendLine("; UnloadListDuringGame  : free the game list while a game runs, reload after");
             sb.AppendLine("; UseImageCache         : use the shared degraded-thumbnail cache for UI images");
+            sb.AppendLine("; Use16:9ForMainScreenshot : reserve a 16:9 area for the main media (true);");
+            sb.AppendLine(";                            false reserves a poster-ratio (2:3) area instead.");
             sb.AppendLine("; GameRunningText       : message shown on the running screen");
             sb.AppendLine("; GameRunningColor      : base colour (#RRGGBB) behind the fanart");
             sb.AppendLine($"ReadOnly={_kv["ReadOnly"]}");
             sb.AppendLine($"ShowGameRunningScreen={_kv["ShowGameRunningScreen"]}");
             sb.AppendLine($"UnloadListDuringGame={_kv["UnloadListDuringGame"]}");
             sb.AppendLine($"UseImageCache={_kv["UseImageCache"]}");
+            sb.AppendLine($"Use16:9ForMainScreenshot={_kv["Use16:9ForMainScreenshot"]}");
             sb.AppendLine($"GameRunningText={_kv["GameRunningText"]}");
             sb.AppendLine($"GameRunningColor={_kv["GameRunningColor"]}");
             File.WriteAllText(_path, sb.ToString());
@@ -117,6 +121,8 @@ internal sealed class LiteBoxConfig
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
     public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", true); set => SetBool("UnloadListDuringGame", value); }
     public bool UseImageCache         { get => GetBool("UseImageCache", true); set => SetBool("UseImageCache", value); }
+    // true → reserve a 16:9 area for the main media; false → a poster-ratio (2:3) area.
+    public bool Use169ForMainScreenshot { get => GetBool("Use16:9ForMainScreenshot", true); set => SetBool("Use16:9ForMainScreenshot", value); }
     public string GameRunningText     => Get("GameRunningText", "Game running...");
     public Color GameRunningColor     => ParseColor(Get("GameRunningColor", "#0F0F12"), Color.FromArgb(15, 15, 18));
 

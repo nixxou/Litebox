@@ -84,6 +84,8 @@ internal sealed class HostGame : DummyGame
     public override string DosBoxConfigurationPath { get => _s.Str(R.DosBoxCfgIdx); set { } }
     // Host-internal (not an IGame member): a custom DOSBox.exe path overriding the bundle.
     public string CustomDosBoxVersionPath => _s.Str(R.CustomDosBoxIdx);
+    // Host-internal (not an IGame member): the RetroAchievements ROM hash from the XML (debug column).
+    public string RetroAchievementsHash => _s.Str(R.RaHashIdx);
     public override string ScummVmGameDataFolderPath { get => _s.Str(R.ScummDataIdx); set { } }
     public override string ScummVmGameType { get => _s.Str(R.ScummTypeIdx); set { } }
     public override string Series { get => _s.Str(R.SeriesIdx); set { } }

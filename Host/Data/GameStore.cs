@@ -41,6 +41,7 @@ internal struct GameRow
     public int CommandLineIdx, ConfigCmdIdx, ConfigPathIdx;
     public int DosBoxCfgIdx, CustomDosBoxIdx, ScummDataIdx, ScummTypeIdx;   // DosBox / ScummVM
     public int SeriesIdx, SourceIdx, ReleaseTypeIdx, RootFolderIdx, CloneOfIdx, ProgressIdx;
+    public int RaHashIdx;      // RetroAchievementsHash (debug column)
     public int VideoPathIdx, ThemeVideoPathIdx, ManualPathIdx, MusicPathIdx; // stored overrides
     public long DateModifiedTicks;
     public float CommunityStarRating;
@@ -236,6 +237,7 @@ internal sealed class GameStore
                     RootFolderIdx = Intern(V("RootFolder")),
                     CloneOfIdx = Intern(V("CloneOf")),
                     ProgressIdx = Intern(V("Progress")),
+                    RaHashIdx = Intern(V("RetroAchievementsHash")),
                     VideoPathIdx = Intern(V("VideoPath")),
                     ThemeVideoPathIdx = Intern(V("ThemeVideoPath")),
                     ManualPathIdx = Intern(V("ManualPath")),

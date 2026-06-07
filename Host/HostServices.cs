@@ -393,27 +393,50 @@ internal static class HostLaunch
     /// <summary>Builds an .m3u listing the game's disc files (one absolute path per line, in disc order)
     /// for a multi-disc game. Written under &lt;LB&gt;\Metadata\Temp\&lt;Title&gt;\&lt;GUID&gt;\ (so ExtendDB's
     /// interception recognises it as the LB-native m3u and can reformulate it), else %TEMP%. Null if the
-    /// game isn't multi-disc.</summary>
+    /// game isn't multi-disc.
+    ///
+    /// Disc set = the game's own ROM (disc 1) + every additional application that has an ApplicationPath
+    /// and isn't a setup/utility auto-run app. LB-native does NOT require the numeric &lt;Disc&gt; field —
+    /// most real multi-disc games only carry the disc number in the add-app name ("CD 1", "Disc 2"). So
+    /// ordering uses &lt;Disc&gt; when present, else the first integer in the name, else enumeration order.</summary>
     private static string TryBuildM3u(IGame game)
     {
-        var discs = new List<(int disc, string path)>();
+        // (discKey, nameNum, name, idx, path) — idx preserves enumeration order as the final tiebreaker.
+        var apps = new List<(int discKey, int nameNum, string name, int idx, string path)>();
         try
         {
+            int idx = 0;
             foreach (var a in SafeAddApps(game))
             {
-                int? d = SafeNullableInt(() => a.Disc);
+                int i = idx++;
+                // auto-run-before / -after apps are setup/utility steps, not discs
+                if (SafeBool(() => a.AutoRunBefore) || SafeBool(() => a.AutoRunAfter)) continue;
                 string p = ResolvePath(SafeStr(() => a.ApplicationPath));
-                if (d.HasValue && !string.IsNullOrEmpty(p)) discs.Add((d.Value, p));
+                if (string.IsNullOrEmpty(p)) continue;
+                int discKey = SafeNullableInt(() => a.Disc) ?? int.MaxValue;
+                string nm = SafeStr(() => a.Name);
+                apps.Add((discKey, FirstInt(nm), nm, i, p));
             }
         }
         catch { }
-        // Ensure the game's own ROM (disc 1) is included even if no matching disc add-app exists.
-        string mainPath = ResolvePath(SafeStr(() => game.ApplicationPath));
-        if (!string.IsNullOrEmpty(mainPath) && !discs.Any(x => string.Equals(x.path, mainPath, StringComparison.OrdinalIgnoreCase)))
-            discs.Add((0, mainPath));
 
-        var ordered = discs.GroupBy(x => x.path, StringComparer.OrdinalIgnoreCase).Select(g => g.OrderBy(x => x.disc).First())
-                           .OrderBy(x => x.disc).Select(x => x.path).ToList();
+        var orderedApps = apps
+            .OrderBy(e => e.discKey)
+            .ThenBy(e => e.nameNum)
+            .ThenBy(e => e.name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => e.idx)
+            .Select(e => e.path);
+
+        // The game's own ROM is disc 1 by convention → first; dedup keeps the first occurrence so a
+        // disc-1 add-app pointing at the same file doesn't double it.
+        var all = new List<string>();
+        string mainPath = ResolvePath(SafeStr(() => game.ApplicationPath));
+        if (!string.IsNullOrEmpty(mainPath)) all.Add(mainPath);
+        all.AddRange(orderedApps);
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<string>();
+        foreach (var p in all) if (seen.Add(p)) ordered.Add(p);
         if (ordered.Count < 2) return null;   // single disc → no m3u
 
         string title = Sanitize(SafeStr(() => game.Title) is { Length: > 0 } t ? t : "game");
@@ -432,6 +455,15 @@ internal static class HostLaunch
         if (string.IsNullOrEmpty(s)) return "_";
         foreach (var c in Path.GetInvalidFileNameChars()) s = s.Replace(c, '_');
         return s.Trim().Length == 0 ? "_" : s.Trim();
+    }
+
+    /// <summary>First run of digits in <paramref name="s"/> as an int ("CD 1" → 1, "Disc 2" → 2),
+    /// or int.MaxValue when there's none (sorts such entries last).</summary>
+    private static int FirstInt(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return int.MaxValue;
+        var m = System.Text.RegularExpressions.Regex.Match(s, @"\d+");
+        return m.Success && int.TryParse(m.Value, out var n) ? n : int.MaxValue;
     }
 
     /// <summary>

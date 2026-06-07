@@ -63,8 +63,10 @@ internal sealed class MainWindow : Form
     private int _mediaSel;                        // selected media index
     private System.Windows.Forms.Timer _mediaTimer;   // 0.5s debounce: build strip + upgrade main to full
     private readonly MetaCard _meta;             // title + platform + expandable game fields (or node text)
+    private readonly VndbCard _vndb;             // expandable box of coloured VNDB tags (content/tech/ero)
     private readonly TextBox _notes;
     private static bool _metaExpanded;           // remembered expand state of the platform meta card (session + INI)
+    private static bool _vndbExpanded;           // remembered expand state of the VNDB tags box (session + INI)
     private readonly Dictionary<string, Image> _platIconCache = new(StringComparer.OrdinalIgnoreCase);
 
     private IGame[] _current = Array.Empty<IGame>();
@@ -107,6 +109,7 @@ internal sealed class MainWindow : Form
         _cfg = LiteBoxConfig.LoadForExe();
         _useImageCache = _cfg.UseImageCache;
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
+        _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
         Text = "LiteBox";
         ClientSize = new Size(1280, 800);
         StartPosition = FormStartPosition.CenterScreen;
@@ -119,10 +122,11 @@ internal sealed class MainWindow : Form
 
         _sources = BuildSourceTree();
 
-        var details = BuildDetails(out _hero, out _media, out _strip, out _meta, out _notes);
+        var details = BuildDetails(out _hero, out _media, out _strip, out _meta, out _vndb, out _notes);
         _hero.RateClicked = v => RateHeroGame(v);
         _hero.FavClicked = () => ToggleHeroFavorite();
         _meta.ExpandedChanged = OnMetaExpandedToggled;
+        _vndb.ExpandedChanged = OnVndbExpandedToggled;
 
         // Scroll viewport: the detail grid normally fills it (notes absorbs the slack); when the
         // content needs more than fits (e.g. the meta box expanded, or a short pane), the grid grows
@@ -421,16 +425,17 @@ internal sealed class MainWindow : Form
 
     // ── Right details construction ───────────────────────────────────────────
     private Panel BuildDetails(out HeroPanel hero, out MediaPanel media, out MediaStrip strip,
-                               out MetaCard meta, out TextBox notes)
+                               out MetaCard meta, out VndbCard vndb, out TextBox notes)
     {
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
         _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
 
-        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 6, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));    // meta card (title + platform + expandable fields, wraps)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // VNDB tags box (0 when none; expandable)
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest)
         _detailGrid = tlp;
 
@@ -438,13 +443,15 @@ internal sealed class MainWindow : Form
         media = new MediaPanel { Dock = DockStyle.Fill, BackColor = Panel };
         strip = new MediaStrip { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 4, 0, 4) };
         meta = new MetaCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
+        vndb = new VndbCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
 
         tlp.Controls.Add(hero, 0, 0);
         tlp.Controls.Add(media, 0, 1);
         tlp.Controls.Add(strip, 0, 2);
         tlp.Controls.Add(meta, 0, 3);
-        tlp.Controls.Add(notes, 0, 4);
+        tlp.Controls.Add(vndb, 0, 4);
+        tlp.Controls.Add(notes, 0, 5);
         return tlp;
     }
 
@@ -461,7 +468,7 @@ internal sealed class MainWindow : Form
     private void RelayoutDetail()
     {
         var host = _detailHost; var tlp = _detailGrid;
-        if (host == null || tlp == null || tlp.RowStyles.Count < 5 || _inRelayout) return;
+        if (host == null || tlp == null || tlp.RowStyles.Count < 6 || _inRelayout) return;
         _inRelayout = true;
         try { RelayoutDetailCore(host, tlp); }
         finally { _inRelayout = false; }
@@ -477,7 +484,7 @@ internal sealed class MainWindow : Form
         int padH = tlp.Padding.Horizontal, padV = tlp.Padding.Vertical;
 
         // Minimum content height for a given grid width (media capped to the viewport).
-        int MinContent(int gridW, out int mediaH, out int metaH)
+        int MinContent(int gridW, out int mediaH, out int metaH, out int vndbH)
         {
             int colW = Math.Max(20, gridW - padH);
             mediaH = (int)Math.Round(colW / _mediaAspect);
@@ -485,17 +492,20 @@ internal sealed class MainWindow : Form
             if (cap > 100 && mediaH > cap) mediaH = cap;
             if (mediaH < 90) mediaH = 90;
             metaH = _meta.HeightForWidth(colW);
-            return padV + 158 + mediaH + 72 + metaH + MinNotesH;
+            vndbH = _vndb.HeightForWidth(colW);
+            return padV + 158 + mediaH + 72 + metaH + vndbH + MinNotesH;
         }
 
-        bool overflow = MinContent(fullW, out _, out _) > viewH;
+        bool overflow = MinContent(fullW, out _, out _, out _) > viewH;
         int wantW = overflow ? Math.Max(80, fullW - sbw) : fullW;
-        int minContent = MinContent(wantW, out int media, out int meta);
+        int minContent = MinContent(wantW, out int media, out int meta, out int vndb);
 
         var rsMedia = tlp.RowStyles[1];
         if (rsMedia.SizeType != SizeType.Absolute || Math.Abs(rsMedia.Height - media) > 0.5) { rsMedia.SizeType = SizeType.Absolute; rsMedia.Height = media; }
         var rsMeta = tlp.RowStyles[3];
         if (rsMeta.SizeType != SizeType.Absolute || Math.Abs(rsMeta.Height - meta) > 0.5) { rsMeta.SizeType = SizeType.Absolute; rsMeta.Height = meta; }
+        var rsVndb = tlp.RowStyles[4];
+        if (rsVndb.SizeType != SizeType.Absolute || Math.Abs(rsVndb.Height - vndb) > 0.5) { rsVndb.SizeType = SizeType.Absolute; rsVndb.Height = vndb; }
 
         // Drive the scroll range, then size the grid to the (possibly reduced) client width.
         host.AutoScrollMinSize = new Size(0, overflow ? minContent : 0);
@@ -509,6 +519,40 @@ internal sealed class MainWindow : Form
     {
         _metaExpanded = _meta.Expanded;   // remember for the next game (and persisted at close)
         RelayoutDetail();
+    }
+
+    private void OnVndbExpandedToggled()
+    {
+        _vndbExpanded = _vndb.Expanded;
+        RelayoutDetail();
+    }
+
+    // Split a GenresString into the plain LB genres and the VNDB tags. VNDB tags are appended
+    // to the genre field (same as launchbox-web) as "vndb-cont / X", "vndb-tech / Y",
+    // "vndb-ero / Z"; type 0 = content, 1 = tech, 2 = ero. Returned tags are grouped by type.
+    private static (string genres, List<(string name, int type)> vndb) ParseGenres(string genresString)
+    {
+        var reg = new List<string>();
+        var cont = new List<string>(); var tech = new List<string>(); var ero = new List<string>();
+        if (!string.IsNullOrEmpty(genresString))
+        {
+            const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+            static string Clean(string s, int n) => s.Substring(n).Trim().TrimStart('/').Trim();
+            foreach (var part in genresString.Split(';'))
+            {
+                var s = part.Trim();
+                if (s.Length == 0) continue;
+                if (s.StartsWith("vndb-cont", OIC)) { var t = Clean(s, 9); if (t.Length > 0) cont.Add(t); }
+                else if (s.StartsWith("vndb-tech", OIC)) { var t = Clean(s, 9); if (t.Length > 0) tech.Add(t); }
+                else if (s.StartsWith("vndb-ero", OIC)) { var t = Clean(s, 8); if (t.Length > 0) ero.Add(t); }
+                else reg.Add(s);
+            }
+        }
+        var vndb = new List<(string, int)>();
+        foreach (var c in cont) vndb.Add((c, 0));
+        foreach (var t in tech) vndb.Add((t, 1));
+        foreach (var e in ero) vndb.Add((e, 2));
+        return (string.Join("; ", reg), vndb);
     }
 
     // Small platform icon (Nostalgic Platform Icons pack) for the meta pill; cached per platform.
@@ -582,6 +626,7 @@ internal sealed class MainWindow : Form
         _cfg.Set("SortColumn", ColKey(sc) ?? "name");
         _cfg.SetBool("SortAsc", _ascending);
         _cfg.SetBool("MetaExpanded", _metaExpanded);
+        _cfg.SetBool("VndbExpanded", _vndbExpanded);
         _cfg.Save();
     }
 
@@ -915,7 +960,7 @@ internal sealed class MainWindow : Form
             LoadImagesAsync(null, null);
             ScheduleFanart(null, null);
             ClearStrip();
-            _meta.Clear(); _notes.Text = ""; RelayoutDetail();
+            _meta.Clear(); _vndb.Clear(); _notes.Text = ""; RelayoutDetail();
             return;
         }
 
@@ -937,9 +982,10 @@ internal sealed class MainWindow : Form
         // Title + platform live in the card; the rest are the expandable rows.
         var rows = new List<(string, string)>();
         void R(string label, string val) { if (!string.IsNullOrWhiteSpace(val)) rows.Add((label, val)); }
+        var (plainGenres, vndbTags) = ParseGenres(S(g.GenresString));
         R("Developer", S(g.Developer));
         R("Publisher", S(g.Publisher));
-        R("Genre", S(g.GenresString));
+        R("Genre", plainGenres);   // non-VNDB genres only; VNDB tags go to the box below
         R("Released", N(() => g.ReleaseYear)?.ToString());
         R("Players", S(g.PlayMode));
         var rating = Safe(() => g.StarRatingFloat);
@@ -952,6 +998,8 @@ internal sealed class MainWindow : Form
         R("File", Path.GetFileName(S(Safe(() => g.ApplicationPath))));
         _meta.ShowGame(S(g.Title), S(g.Platform), PlatformIconImage(S(g.Platform)), rows);
         _meta.Expanded = _metaExpanded;   // honour the remembered expand state
+        _vndb.SetTags(vndbTags);
+        _vndb.Expanded = _vndbExpanded;
         RelayoutDetail();
 
         _notes.Text = S(g.Notes).Replace("\n", "\r\n");
@@ -969,6 +1017,7 @@ internal sealed class MainWindow : Form
             ScheduleFanart(null, node);   // AllNode → default fanart; null → empty pane (no fanart)
             if (node is AllNode) _meta.ShowNode("All Games", new List<string> { $"Total Games: {_current.Length}" });
             else _meta.Clear();
+            _vndb.Clear();
             _notes.Text = "";
             RelayoutDetail();
             return;
@@ -988,6 +1037,7 @@ internal sealed class MainWindow : Form
             Add("Release", N(() => p.ReleaseDate?.Year)?.ToString());
         }
         _meta.ShowNode(HostPlatformCategory.NodeName(node) ?? "", bits);
+        _vndb.Clear();
         RelayoutDetail();
         _notes.Text = NodeNotes(node).Replace("\n", "\r\n");
     }
@@ -1914,6 +1964,154 @@ internal sealed class MainWindow : Form
         }
 
         protected override void Dispose(bool disposing) { if (disposing) _titleFont.Dispose(); base.Dispose(disposing); }
+    }
+
+    // Box of VNDB tags shown under the meta card (only when the game has any). Tags are small
+    // coloured pills grouped by type — content (blue), tech (teal), ero (rose) — matching the
+    // launchbox-web colours. Collapsed shows only the first line of pills plus a chevron; clicking
+    // expands to all pills (wrapped). Empty (no tags) → zero height. Mirrors MetaCard's box style.
+    private sealed class VndbCard : Panel
+    {
+        private (string name, int type)[] _tags = Array.Empty<(string, int)>();
+        private bool _expanded, _expandable;
+        public Action ExpandedChanged;
+
+        private const int Pad = 10, VMargin = 4, PillH = 20, PadX = 9, GapX = 6, GapY = 6, ChevW = 16;
+        // 0 = content (blue), 1 = tech (teal), 2 = ero (rose) — same hues as the web badges.
+        private static readonly Color[] PillBg = { Color.FromArgb(26, 26, 42), Color.FromArgb(26, 32, 32), Color.FromArgb(42, 10, 26) };
+        private static readonly Color[] PillFg = { Color.FromArgb(128, 144, 208), Color.FromArgb(96, 176, 160), Color.FromArgb(240, 112, 138) };
+        private static readonly Color[] PillBd = { Color.FromArgb(42, 48, 96), Color.FromArgb(42, 64, 64), Color.FromArgb(90, 16, 48) };
+
+        public VndbCard()
+        {
+            DoubleBuffered = true; ResizeRedraw = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+        }
+
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool Expanded { get => _expanded; set { if (_expanded != value) { _expanded = value; Invalidate(); } } }
+
+        public void SetTags(List<(string, int)> tags) { _tags = (tags ?? new List<(string, int)>()).ToArray(); Invalidate(); }
+        public void Clear() { _tags = Array.Empty<(string, int)>(); Invalidate(); }
+
+        public int DesiredHeight => HeightForWidth(ClientSize.Width);
+        public int HeightForWidth(int cardWidth)
+        {
+            if (_tags.Length == 0) return 0;
+            if (cardWidth < 40) return PillH + 2 * Pad + 2 * VMargin;
+            return LayoutPills(null, cardWidth) + Pad + VMargin;
+        }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            base.OnMouseClick(e);
+            if (_expandable) { _expanded = !_expanded; Invalidate(); ExpandedChanged?.Invoke(); }
+        }
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            Cursor = _expandable ? Cursors.Hand : Cursors.Default;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(BackColor);
+            if (_tags.Length == 0) return;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var box = new Rectangle(0, VMargin, Math.Max(1, ClientSize.Width - 1), Math.Max(1, ClientSize.Height - 2 * VMargin - 1));
+            using (var path = Rounded(box, 8))
+            {
+                using var bg = new SolidBrush(Color.FromArgb(46, 46, 50)); g.FillPath(bg, path);
+                using var bd = new Pen(Color.FromArgb(64, 64, 68)); g.DrawPath(bd, path);
+            }
+            LayoutPills(g, ClientSize.Width);
+        }
+
+        // Lay out (and draw when g != null) the tag pills for a given card width. Collapsed = first
+        // line only + chevron; expanded = wrapped. Sets _expandable. Returns bottom y.
+        private int LayoutPills(Graphics g, int cardWidth)
+        {
+            int innerW = Math.Max(20, cardWidth - 2 * Pad);
+            _expandable = !FitsOneLine(innerW);
+            bool collapsed = _expandable && !_expanded;
+            int chev = _expandable ? (ChevW + 4) : 0;
+            int x0 = Pad, top = VMargin + Pad;
+            int x = x0, y = top, curRight = x0 + innerW - chev;   // first line reserves chevron when expandable
+            int fullRight = x0 + innerW;
+            for (int i = 0; i < _tags.Length; i++)
+            {
+                var ts = TextRenderer.MeasureText(_tags[i].name, Font, new Size(int.MaxValue, PillH), TextFormatFlags.NoPadding);
+                int pw = ts.Width + 2 * PadX;
+                if (x > x0 && x + pw > curRight)
+                {
+                    if (collapsed) break;                 // collapsed → only the first line
+                    x = x0; y += PillH + GapY; curRight = fullRight;
+                }
+                if (pw > curRight - x0) pw = curRight - x0;   // clamp an over-wide single pill
+                if (g != null) DrawPill(g, new Rectangle(x, y, pw, PillH), _tags[i].name, _tags[i].type);
+                x += pw + GapX;
+            }
+            if (_expandable && g != null)
+                DrawChevron(g, x0 + innerW - ChevW / 2, top + PillH / 2, _expanded);
+            return y + PillH;
+        }
+
+        private bool FitsOneLine(int innerW)
+        {
+            int x = 0;
+            foreach (var (name, _) in _tags)
+            {
+                var ts = TextRenderer.MeasureText(name, Font, new Size(int.MaxValue, PillH), TextFormatFlags.NoPadding);
+                int pw = ts.Width + 2 * PadX;
+                if (x > 0) x += GapX;
+                if (x > 0 && x + pw > innerW) return false;
+                x += pw;
+            }
+            return true;
+        }
+
+        private void DrawPill(Graphics g, Rectangle r, string name, int type)
+        {
+            int t = (type >= 0 && type <= 2) ? type : 0;
+            using (var path = Rounded(r, PillH / 2))
+            {
+                using var bg = new SolidBrush(PillBg[t]); g.FillPath(bg, path);
+                using var bd = new Pen(PillBd[t]); g.DrawPath(bd, path);
+            }
+            TextRenderer.DrawText(g, name, Font, r, PillFg[t],
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+        }
+
+        private static void DrawChevron(Graphics g, int cx, int cy, bool expanded)
+        {
+            var old = g.SmoothingMode;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            const int s = 4;
+            using var pen = new Pen(Color.FromArgb(180, 180, 182), 1.8f)
+            {
+                StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                EndCap = System.Drawing.Drawing2D.LineCap.Round,
+                LineJoin = System.Drawing.Drawing2D.LineJoin.Round,
+            };
+            Point[] pts = expanded
+                ? new[] { new Point(cx - s, cy - s / 2), new Point(cx, cy + s / 2), new Point(cx + s, cy - s / 2) }
+                : new[] { new Point(cx - s / 2, cy - s), new Point(cx + s / 2, cy), new Point(cx - s / 2, cy + s) };
+            g.DrawLines(pen, pts);
+            g.SmoothingMode = old;
+        }
+
+        private static System.Drawing.Drawing2D.GraphicsPath Rounded(Rectangle r, int radius)
+        {
+            var p = new System.Drawing.Drawing2D.GraphicsPath();
+            int d = Math.Max(2, radius * 2);
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
     }
 
     // A mini-thumbnail in the media strip: owner-drawn so the image keeps its aspect on a

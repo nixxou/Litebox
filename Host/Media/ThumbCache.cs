@@ -18,10 +18,13 @@
 // search path there, so LiteBox works WITH or WITHOUT ExtendDB loaded.
 
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace LbApiHost.Host.Media;
 
@@ -73,25 +76,59 @@ internal static class ThumbCache
     }
 
     /// <summary>Path of a cached resized thumbnail for <paramref name="sourcePath"/>,
-    /// generating it on first use. keepAlpha=true → WebP w/ alpha (clear logos);
-    /// false → JPEG. Returns null on any failure (caller serves the original).
+    /// generating it synchronously on first use. keepAlpha=true → WebP w/ alpha (clear
+    /// logos); false → JPEG. Returns null on any failure (caller serves the original).
     /// A cache HIT needs no Magick; a MISS needs Magick (else returns null).</summary>
     public static string GetOrCreate(string sourcePath, int maxDim = DefaultMaxDim, bool keepAlpha = false)
+    {
+        var target = TargetFor(sourcePath, maxDim, keepAlpha);
+        if (target == null) return null;
+        if (File.Exists(target)) return target;        // shared cache HIT — no Magick needed
+        try { return Generate(sourcePath, target, maxDim, keepAlpha); }
+        catch { return null; }                          // missing Magick (standalone) → null
+    }
+
+    /// <summary>Cached thumbnail path if it ALREADY exists, else null. Never runs
+    /// Magick — instant, safe in a hot UI path.</summary>
+    public static string GetCachedOnly(string sourcePath, int maxDim = DefaultMaxDim, bool keepAlpha = false)
+    {
+        var target = TargetFor(sourcePath, maxDim, keepAlpha);
+        return (target != null && File.Exists(target)) ? target : null;
+    }
+
+    // ── Async generation queue ───────────────────────────────────────────────
+    // On a MISS the UI shows the full original immediately and enqueues the thumb
+    // here, so it exists (HIT) next time without ever blocking the display. Dedup
+    // by target path; bounded concurrency so a fast browse doesn't saturate the CPU.
+    private static readonly ConcurrentDictionary<string, byte> _pending = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly SemaphoreSlim _gate = new(Math.Max(1, Environment.ProcessorCount / 2));
+
+    /// <summary>Queue background generation of a thumbnail (no-op if it already
+    /// exists or is already queued). Fire-and-forget; never throws.</summary>
+    public static void EnqueueGenerate(string sourcePath, int maxDim = DefaultMaxDim, bool keepAlpha = false)
+    {
+        var target = TargetFor(sourcePath, maxDim, keepAlpha);
+        if (target == null || File.Exists(target)) return;
+        if (!_pending.TryAdd(target, 0)) return;        // already generating/queued
+        _ = Task.Run(async () =>
+        {
+            await _gate.WaitAsync().ConfigureAwait(false);
+            try { if (!File.Exists(target)) Generate(sourcePath, target, maxDim, keepAlpha); }
+            catch { }
+            finally { _gate.Release(); _pending.TryRemove(target, out _); }
+        });
+    }
+
+    // Resolve the on-disk thumbnail path (size-versioned key); null if the source
+    // is missing/unreadable. No Magick, no generation.
+    private static string TargetFor(string sourcePath, int maxDim, bool keepAlpha)
     {
         if (string.IsNullOrEmpty(sourcePath)) return null;
         long size;
         try { var fi = new FileInfo(sourcePath); if (!fi.Exists) return null; size = fi.Length; }
         catch { return null; }
-
-        string ext = keepAlpha ? ".webp" : ".jpg";
-        string target;
-        try { target = Path.Combine(Dir, KeyFor(sourcePath, size, maxDim, keepAlpha) + ext); }
+        try { return Path.Combine(Dir, KeyFor(sourcePath, size, maxDim, keepAlpha) + (keepAlpha ? ".webp" : ".jpg")); }
         catch { return null; }
-
-        if (File.Exists(target)) return target;       // shared cache HIT — no Magick needed
-
-        try { return Generate(sourcePath, target, maxDim, keepAlpha); }
-        catch { return null; }                          // missing Magick (standalone) → null
     }
 
     // Isolated so the JIT-time assembly-not-found (Magick absent) is caught by GetOrCreate.

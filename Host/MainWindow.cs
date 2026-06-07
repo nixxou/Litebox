@@ -886,15 +886,16 @@ internal sealed class MainWindow : Form
         });
     }
 
-    // Degraded thumbnail from the shared ExtendDB cache; falls back to the full original
-    // when no thumb can be made (e.g. Magick absent in standalone). LoadImage handles the
-    // WebP the logo tier produces.
+    // Cache HIT → the degraded thumbnail (light). MISS → show the FULL original right
+    // away (one decode, no wait) and queue the thumb generation in the background, so a
+    // fast browse never stalls on Magick and the thumb is ready (HIT) next time.
     private static Image LoadThumbOrFull(string src, bool keepAlpha)
     {
         if (string.IsNullOrEmpty(src)) return null;
-        string thumb = null;
-        try { thumb = ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha); } catch { }
-        return LoadImage(thumb ?? src);
+        var cached = ThumbCache.GetCachedOnly(src, ThumbCache.DefaultMaxDim, keepAlpha);
+        if (cached != null) return LoadImage(cached);
+        ThumbCache.EnqueueGenerate(src, ThumbCache.DefaultMaxDim, keepAlpha);   // background, for next time
+        return LoadImage(src);                                                  // full original, now
     }
 
     // Picks the SAME source image launchbox-web/bigbox-web would (GameCache regroupement)

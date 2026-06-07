@@ -155,6 +155,11 @@ internal sealed class MainWindow : Form
         bar.Items.Add(new ToolStripSeparator());
 
         bar.Items.Add(new ToolStripButton("Thumbnails (soon)") { Enabled = false, ForeColor = SubFg });
+        bar.Items.Add(new ToolStripSeparator());
+        var genBtn = new ToolStripButton("Generate Image Cache")
+        { ForeColor = Fg, ToolTipText = "Pre-generate the cached thumbnails (logo, box, screenshot) for every game" };
+        genBtn.Click += (_, _) => GenerateAllCachedImages();
+        bar.Items.Add(genBtn);
 
         // Options (gear) — right aligned.
         var optBtn = new ToolStripDropDownButton("⚙")
@@ -972,6 +977,31 @@ internal sealed class MainWindow : Form
         Safe(() => _games.RefreshObject(g));
     }
 
+    // ── Bulk cache pre-generation ────────────────────────────────────────────
+    // The 3 cached thumbnails per game, picked the SAME way as the detail pane /
+    // the web: clear logo (WebP), box "Front" (JPEG), main screenshot (JPEG).
+    private static string[] ResolveCacheSources(IGame g)
+    {
+        if (g == null) return null;
+        string logo = DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath));
+        string box = DetailSource(g, "Front", () =>
+              Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
+            : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
+            : Safe(() => g.ScreenshotImagePath));
+        string shot = DetailSource(g, "Screenshots", () =>
+              Safe(() => g.ScreenshotImagePath) is { Length: > 0 } s ? s
+            : Safe(() => g.BackgroundImagePath));
+        return new[] { logo, box, shot };
+    }
+
+    private void GenerateAllCachedImages()
+    {
+        var games = Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>();
+        if (games.Length == 0) return;
+        using var dlg = new GenerateCacheForm(games, ResolveCacheSources);
+        dlg.ShowDialog(this);
+    }
+
     // Generate/load the right-pane images OFF the UI thread (degraded thumbs from the
     // shared cache: logo=WebP w/ alpha, art=JPEG), so selecting a node/game never blocks
     // the game-list paint — only the cheap text is set synchronously. The token discards
@@ -1628,6 +1658,96 @@ internal sealed class MainWindow : Form
             DoubleBuffered = true;
             ResizeRedraw = true;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+        }
+    }
+
+    // ── Bulk image-cache generation modal ────────────────────────────────────
+    // Generates the per-game cached thumbnails in parallel (≤ min(4, cores)) with a
+    // progress bar keyed on the number of games. Cancellable; idempotent (cache HITs
+    // are skipped instantly, so re-running only fills the gaps).
+    private sealed class GenerateCacheForm : Form
+    {
+        private readonly IGame[] _games;
+        private readonly Func<IGame, string[]> _resolve;
+        private readonly ProgressBar _bar;
+        private readonly Label _label;
+        private readonly Button _cancel;
+        private readonly System.Threading.CancellationTokenSource _cts = new();
+        private int _done;
+
+        public GenerateCacheForm(IGame[] games, Func<IGame, string[]> resolve)
+        {
+            _games = games; _resolve = resolve;
+            Text = "Generate Image Cache";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false; ControlBox = false;
+            ClientSize = new Size(452, 116);
+            BackColor = Bg; ForeColor = Fg; Font = new Font("Segoe UI", 9f);
+
+            _label = new Label { Location = new Point(16, 14), Size = new Size(420, 20), ForeColor = Fg,
+                                 Text = $"Preparing…  0 / {games.Length}" };
+            _bar = new ProgressBar { Location = new Point(16, 42), Size = new Size(420, 18),
+                                     Minimum = 0, Maximum = Math.Max(1, games.Length), Style = ProgressBarStyle.Continuous };
+            _cancel = new Button { Location = new Point(346, 78), Size = new Size(90, 26), Text = "Cancel",
+                                   FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+            _cancel.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
+            _cancel.Click += (_, _) => { try { _cts.Cancel(); } catch { } _cancel.Enabled = false; _cancel.Text = "Cancelling…"; };
+            Controls.Add(_label); Controls.Add(_bar); Controls.Add(_cancel);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            int dop = Math.Min(4, Math.Max(1, Environment.ProcessorCount));
+            System.Threading.Tasks.Task.Run(() => RunGeneration(dop));
+        }
+
+        private void RunGeneration(int dop)
+        {
+            try
+            {
+                System.Threading.Tasks.Parallel.ForEach(_games,
+                    new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = dop, CancellationToken = _cts.Token },
+                    g =>
+                    {
+                        try
+                        {
+                            var s = _resolve(g);
+                            if (s != null)
+                            {
+                                if (!string.IsNullOrEmpty(s[0])) ThumbCache.GetOrCreate(s[0], ThumbCache.DefaultMaxDim, keepAlpha: true);
+                                if (!string.IsNullOrEmpty(s[1])) ThumbCache.GetOrCreate(s[1], ThumbCache.DefaultMaxDim, keepAlpha: false);
+                                if (!string.IsNullOrEmpty(s[2])) ThumbCache.GetOrCreate(s[2], ThumbCache.DefaultMaxDim, keepAlpha: false);
+                            }
+                        }
+                        catch { }
+                        Report(System.Threading.Interlocked.Increment(ref _done));
+                    });
+            }
+            catch (OperationCanceledException) { }
+            catch { }
+            Finish();
+        }
+
+        private void Report(int n)
+        {
+            if (IsDisposed) return;
+            try { BeginInvoke((Action)(() => { if (IsDisposed) return; _bar.Value = Math.Min(_bar.Maximum, n); _label.Text = $"Generating cached images…  {n} / {_games.Length}"; })); }
+            catch { }
+        }
+
+        private void Finish()
+        {
+            if (IsDisposed) return;
+            try { BeginInvoke((Action)(() => { if (!IsDisposed) { DialogResult = DialogResult.OK; Close(); } })); }
+            catch { }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { try { _cts.Cancel(); } catch { } _cts.Dispose(); }
+            base.Dispose(disposing);
         }
     }
 

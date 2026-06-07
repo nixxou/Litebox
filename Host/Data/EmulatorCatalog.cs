@@ -33,7 +33,7 @@ internal sealed class HostEmulator : DummyEmulator
     public HostEmulator(string id, IEmulatorPlatform[] platforms) { _id = id; _platforms = platforms; }
 
     public string TitleValue, ApplicationPathValue, CommandLineValue, DefaultPlatformValue;
-    public bool NoSpaceValue, NoQuotesValue;
+    public bool NoSpaceValue, NoQuotesValue, AutoExtractValue, FileNameOnlyValue;
 
     public override string Id { get => _id; set { } }
     public override string Title { get => TitleValue ?? ""; set { } }
@@ -42,6 +42,8 @@ internal sealed class HostEmulator : DummyEmulator
     public override string DefaultPlatform { get => DefaultPlatformValue ?? ""; set { } }
     public override bool NoSpace { get => NoSpaceValue; set { } }
     public override bool NoQuotes { get => NoQuotesValue; set { } }
+    public override bool AutoExtract { get => AutoExtractValue; set { } }
+    public override bool FileNameWithoutExtensionAndPath { get => FileNameOnlyValue; set { } }
 
     public override IEmulatorPlatform[] GetAllEmulatorPlatforms() => _platforms;
 }
@@ -91,6 +93,8 @@ internal static class EmulatorCatalog
                 DefaultPlatformValue = (string)ee.Element("DefaultPlatform"),
                 NoSpaceValue = ((string)ee.Element("NoSpace") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
                 NoQuotesValue = ((string)ee.Element("NoQuotes") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
+                AutoExtractValue = ((string)ee.Element("AutoExtract") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
+                FileNameOnlyValue = ((string)ee.Element("FileNameWithoutExtensionAndPath") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
             });
         }
 

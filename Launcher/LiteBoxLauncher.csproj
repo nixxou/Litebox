@@ -20,7 +20,9 @@
     <AssemblyName>LiteBox</AssemblyName>
     <RootNamespace>LiteBoxLauncher</RootNamespace>
     <ApplicationIcon>..\litebox.ico</ApplicationIcon>
-    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <!-- Do NOT self-extract everything to temp: that would make AppContext.BaseDirectory point at a
+         temp folder and break the "am I at the LaunchBox root?" check. We locate ourselves via
+         Process.MainModule.FileName regardless, but keep the single file lean. -->
     <EnableComHosting>false</EnableComHosting>
   </PropertyGroup>
 

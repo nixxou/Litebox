@@ -295,6 +295,11 @@ internal static class HostBoot
 #pragma warning disable WFO5001 // experimental .NET 9 dark mode (title bar + scrollbars)
                 try { Application.SetColorMode(SystemColorMode.Dark); } catch { }
 #pragma warning restore WFO5001
+                // Provide a WPF Application on this (STA) GUI thread so plugins that marshal work via
+                // System.Windows.Application.Current.Dispatcher work — notably ExtendDB's web GameLauncher,
+                // which BeginInvokes PlayGame onto that dispatcher (else: "no dispatcher"). We don't call
+                // its Run(); the WinForms message loop pumps the WPF Dispatcher queue (same-thread interop).
+                try { if (System.Windows.Application.Current == null) _ = new System.Windows.Application(); } catch (Exception ex) { Console.WriteLine("[gui] WPF Application init: " + ex.Message); }
                 Application.Run(new MainWindow(reg, dm));
             }
             catch (Exception ex) { Console.WriteLine("[gui] " + ex); }

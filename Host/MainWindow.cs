@@ -46,7 +46,7 @@ internal sealed class MainWindow : Form
     private readonly IDataManager _dm;
 
     private readonly TreeListView _sources;
-    private readonly FastObjectListView _games;
+    private readonly GameListView _games;
     // Poster (grid) view — a native virtual ListView mirroring the OLV's displayed (sorted+filtered)
     // order; owner-drawn box-art tiles. Toggled from the toolbar (list ⇄ poster).
     private ListView _poster;
@@ -90,7 +90,8 @@ internal sealed class MainWindow : Form
     private object _detailsShown;  // current right-pane subject (IGame or tree node)
     private int _detailsLoadToken; // guards async image loads against stale selections
     private bool _ascending = true;
-    private OLVColumn[] _sortColumns;   // parallel to SortLabels
+    private string[] _sortKeys;          // parallel to SortLabels (column keys; "name" = CompareName)
+    private string _curSortKey = "name"; // current sort key (header click can pick a non-combo column)
     private bool _suppressSort;
 
     private readonly LiteBoxConfig _cfg;
@@ -288,8 +289,8 @@ internal sealed class MainWindow : Form
             try
             {
                 if (IsDisposed) return Array.Empty<IGame>();
-                if (InvokeRequired) return (IGame[])Invoke((Func<IGame[]>)(() => _games.SelectedObjects.OfType<IGame>().ToArray()));
-                return _games.SelectedObjects.OfType<IGame>().ToArray();
+                if (InvokeRequired) return (IGame[])Invoke((Func<IGame[]>)(() => _games.SelectedGames));
+                return _games.SelectedGames;
             }
             catch { return Array.Empty<IGame>(); }
         };
@@ -340,125 +341,121 @@ internal sealed class MainWindow : Form
         Shown += (_, _) => { ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); RelayoutDetail(); };
     }
 
-    // ── Game list construction ───────────────────────────────────────────────
-    private FastObjectListView BuildGameList()
+    // ── Game list construction (native ListView — smooth scroll, dark themed) ──
+    private GameListView BuildGameList()
     {
-        var olv = new FastObjectListView
+        var lv = new GameListView
         {
-            Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true,
-            HeaderStyle = ColumnHeaderStyle.Clickable, BackColor = Panel, ForeColor = Fg,
-            BorderStyle = BorderStyle.None, RowHeight = 22, UseAlternatingBackColors = true,
-            AlternateRowBackColor = Row2, GridLines = false, ShowGroups = false, UseFiltering = true,
-            AllowColumnReorder = true,              // drag to reorder (persisted on close)
-            SelectColumnsOnRightClick = true,       // right-click header → show/hide columns
-            UseCellFormatEvents = true,             // per-cell colouring (user vs community rating)
+            Dock = DockStyle.Fill, Font = Font, BackColor = Panel, ForeColor = Fg,
+            Striped = true, RowBack = Panel, RowAlt = Row2, RowFore = Fg,
         };
-        olv.UseExplorerTheme = false;   // stop OLV forcing the light "explorer" scrollbars
-        olv.SelectedBackColor = Accent;
-        olv.SelectedForeColor = Color.White;
-        olv.HeaderFormatStyle = new HeaderFormatStyle();
-        olv.HeaderFormatStyle.SetBackColor(Panel2);
-        olv.HeaderFormatStyle.SetForeColor(Fg);
 
-        // key = stable INI identity (.Tag); never localise it.
-        OLVColumn Col(string key, string title, int w, AspectGetterDelegate get,
-                      HorizontalAlignment align = HorizontalAlignment.Left, bool visible = true)
-            => new OLVColumn(title, null) { Tag = key, Width = w, AspectGetter = get, TextAlign = align,
-                                            Sortable = true, Searchable = true, IsVisible = visible };
+        // key = stable INI identity; never localise it. sort = comparable value; text = displayed
+        // string; fore = optional per-cell colour (rating). visible = default visibility.
+        GameColumn Col(string key, string title, int w, Func<IGame, object> sort, Func<IGame, string> text,
+                       HorizontalAlignment align = HorizontalAlignment.Left, bool visible = true, Func<IGame, Color?> fore = null)
+            => lv.AddColumn(new GameColumn { Key = key, Title = title, Width = w, Visible = visible, Align = align, Sort = sort, Text = text, Fore = fore });
 
-        static string Check(object v) => v is bool b && b ? "✓" : "";
+        static string DateStr(object v) => v is DateTime d && d != default ? d.ToString("yyyy-MM-dd") : "";
 
-        // Hidden sort-only key column (normalized title) — the default sort.
-        var cName = Col("name", "Name", 0, r => CompareName((IGame)r), visible: false); cName.Searchable = false;
-
-        var cTitle = Col("title", "Title", 320, r => S(((IGame)r).Title));
-        var cPlat  = Col("platform", "Platform", 150, r => S(((IGame)r).Platform));
-        var cDev   = Col("developer", "Developer", 150, r => S(((IGame)r).Developer));
-        var cPub   = Col("publisher", "Publisher", 150, r => S(((IGame)r).Publisher), visible: false);
-        var cGenre = Col("genre", "Genre", 140, r => S(((IGame)r).GenresString));
-        var cSeries= Col("series", "Series", 130, r => S(((IGame)r).Series), visible: false);
-        var cRegion= Col("region", "Region", 90, r => S(((IGame)r).Region), visible: false);
-        var cMode  = Col("playmode", "Play Mode", 110, r => S(((IGame)r).PlayMode), visible: false);
-        var cVer   = Col("version", "Version", 90, r => S(((IGame)r).Version), visible: false);
-        var cStatus= Col("status", "Status", 90, r => S(((IGame)r).Status), visible: false);
-        var cSource= Col("source", "Source", 110, r => S(((IGame)r).Source), visible: false);
-        var cYear  = Col("year", "Year", 55, r => N(() => ((IGame)r).ReleaseYear), HorizontalAlignment.Right);
-        var cRel   = Col("releasedate", "Release Date", 100, r => Safe(() => (object)((IGame)r).ReleaseDate), HorizontalAlignment.Right, visible: false);
-        cRel.AspectToStringConverter = v => v is DateTime d ? d.ToString("yyyy-MM-dd") : "";
-
-        // Effective rating: user (StarRatingFloat) if set, else community — like
-        // launchbox-web / bigbox-web. Coloured per-cell in FormatCell below.
-        var cRate  = Col("rating", "Rating", 70, r => N(() => (double?)((IGame)r).CommunityOrLocalStarRating), HorizontalAlignment.Right);
-        cRate.AspectToStringConverter = v => v is double d && d > 0 ? d.ToString("0.#") + " ★" : "";
-        var cEsrb  = Col("esrb", "ESRB", 70, r => S(((IGame)r).Rating), visible: false);
-        var cComm  = Col("community", "Community", 80, r => N(() => (double?)((IGame)r).CommunityStarRating), HorizontalAlignment.Right, visible: false);
-        cComm.AspectToStringConverter = v => v is double d && d > 0 ? d.ToString("0.#") : "";
-        var cVotes = Col("votes", "Votes", 60, r => N(() => (int?)((IGame)r).CommunityStarRatingTotalVotes), HorizontalAlignment.Right, visible: false);
-
-        var cFav   = Col("fav", "Fav", 45, r => Safe(() => ((IGame)r).Favorite), HorizontalAlignment.Center);
-        cFav.AspectToStringConverter = v => v is bool b && b ? "★" : "";
+        Col("title", "Title", 320, g => S(Safe(() => g.Title)), g => S(Safe(() => g.Title)));
+        Col("platform", "Platform", 150, g => S(Safe(() => g.Platform)), g => S(Safe(() => g.Platform)));
+        Col("developer", "Developer", 150, g => S(Safe(() => g.Developer)), g => S(Safe(() => g.Developer)));
+        Col("publisher", "Publisher", 150, g => S(Safe(() => g.Publisher)), g => S(Safe(() => g.Publisher)), visible: false);
+        Col("genre", "Genre", 140, g => S(Safe(() => g.GenresString)), g => S(Safe(() => g.GenresString)));
+        Col("series", "Series", 130, g => S(Safe(() => g.Series)), g => S(Safe(() => g.Series)), visible: false);
+        Col("region", "Region", 90, g => S(Safe(() => g.Region)), g => S(Safe(() => g.Region)), visible: false);
+        Col("playmode", "Play Mode", 110, g => S(Safe(() => g.PlayMode)), g => S(Safe(() => g.PlayMode)), visible: false);
+        Col("version", "Version", 90, g => S(Safe(() => g.Version)), g => S(Safe(() => g.Version)), visible: false);
+        Col("status", "Status", 90, g => S(Safe(() => g.Status)), g => S(Safe(() => g.Status)), visible: false);
+        Col("source", "Source", 110, g => S(Safe(() => g.Source)), g => S(Safe(() => g.Source)), visible: false);
+        Col("year", "Year", 55, g => N(() => g.ReleaseYear), g => N(() => g.ReleaseYear)?.ToString() ?? "", HorizontalAlignment.Right);
+        Col("releasedate", "Release Date", 100, g => Safe(() => (object)g.ReleaseDate), g => DateStr(Safe(() => (object)g.ReleaseDate)), HorizontalAlignment.Right, visible: false);
+        // Effective rating: user (StarRatingFloat) if set, else community. Coloured per-cell: user amber, community grey.
+        Col("rating", "Rating", 70, g => N(() => (double?)g.CommunityOrLocalStarRating),
+            g => { var d = Safe(() => g.CommunityOrLocalStarRating); return d > 0 ? d.ToString("0.#") + " ★" : ""; }, HorizontalAlignment.Right,
+            fore: g => Safe(() => g.CommunityOrLocalStarRating) > 0 ? (Safe(() => g.StarRatingFloat) > 0 ? UserRating : CommRating) : (Color?)null);
+        Col("esrb", "ESRB", 70, g => S(Safe(() => g.Rating)), g => S(Safe(() => g.Rating)), visible: false);
+        Col("community", "Community", 80, g => N(() => (double?)g.CommunityStarRating),
+            g => { var d = Safe(() => g.CommunityStarRating); return d > 0 ? d.ToString("0.#") : ""; }, HorizontalAlignment.Right, visible: false);
+        Col("votes", "Votes", 60, g => N(() => (int?)g.CommunityStarRatingTotalVotes),
+            g => N(() => (int?)g.CommunityStarRatingTotalVotes)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
+        Col("fav", "Fav", 45, g => Safe(() => (object)g.Favorite), g => Safe(() => g.Favorite) ? "★" : "", HorizontalAlignment.Center);
 #pragma warning disable CS0618 // IGame.Completed is marked obsolete by the SDK but is still the Completed flag
-        var cDone  = Col("completed", "Done", 50, r => Safe(() => ((IGame)r).Completed), HorizontalAlignment.Center, visible: false);
+        Col("completed", "Done", 50, g => Safe(() => (object)g.Completed), g => Safe(() => g.Completed) ? "✓" : "", HorizontalAlignment.Center, visible: false);
 #pragma warning restore CS0618
-        cDone.AspectToStringConverter = Check;
-        var cBroken= Col("broken", "Broken", 55, r => Safe(() => ((IGame)r).Broken), HorizontalAlignment.Center, visible: false);
-        cBroken.AspectToStringConverter = Check;
-        var cPort  = Col("portable", "Portable", 60, r => Safe(() => ((IGame)r).Portable), HorizontalAlignment.Center, visible: false);
-        cPort.AspectToStringConverter = Check;
-        var cInst  = Col("installed", "Installed", 60, r => Safe(() => (object)((IGame)r).Installed), HorizontalAlignment.Center, visible: false);
-        cInst.AspectToStringConverter = v => v is bool b && b ? "✓" : "";
-        var cPlayers = Col("players", "Players", 60, r => N(() => ((IGame)r).MaxPlayers), HorizontalAlignment.Right, visible: false);
-        var cPlays = Col("plays", "Plays", 55, r => N(() => (int?)((IGame)r).PlayCount), HorizontalAlignment.Right);
-        var cTime  = Col("playtime", "Play Time", 80, r => Safe(() => (object)((IGame)r).PlayTime), HorizontalAlignment.Right, visible: false);
-        cTime.AspectToStringConverter = v => v is int s ? FormatPlayTime(s) : "";
-        var cAdded = Col("dateadded", "Date Added", 100, r => Safe(() => (object)((IGame)r).DateAdded), HorizontalAlignment.Right, visible: false);
-        cAdded.AspectToStringConverter = v => v is DateTime d && d != default ? d.ToString("yyyy-MM-dd") : "";
-        var cMod   = Col("datemodified", "Date Modified", 110, r => Safe(() => (object)((IGame)r).DateModified), HorizontalAlignment.Right, visible: false);
-        cMod.AspectToStringConverter = v => v is DateTime d && d != default ? d.ToString("yyyy-MM-dd") : "";
-        var cLast  = Col("lastplayed", "Last Played", 100, r => Safe(() => (object)((IGame)r).LastPlayedDate), HorizontalAlignment.Right, visible: false);
-        cLast.AspectToStringConverter = v => v is DateTime d ? d.ToString("yyyy-MM-dd") : "";
-        var cDbId  = Col("dbid", "DB Id", 70, r => N(() => ((IGame)r).LaunchBoxDbId), HorizontalAlignment.Right, visible: false);
-        var cAppPath = Col("apppath", "Application Path", 300, r => S(((IGame)r).ApplicationPath), visible: false);
-        // Debug: RetroAchievements ROM hash (host-internal field, not an IGame member).
-        var cRaHash = Col("rahash", "RA Hash", 240, r => r is HostGame hg ? hg.RetroAchievementsHash : "", visible: false);
+        Col("broken", "Broken", 55, g => Safe(() => (object)g.Broken), g => Safe(() => g.Broken) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("portable", "Portable", 60, g => Safe(() => (object)g.Portable), g => Safe(() => g.Portable) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("installed", "Installed", 60, g => Safe(() => (object)g.Installed), g => Safe(() => g.Installed == true) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("players", "Players", 60, g => N(() => g.MaxPlayers), g => N(() => g.MaxPlayers)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
+        Col("plays", "Plays", 55, g => N(() => (int?)g.PlayCount), g => { var p = Safe(() => g.PlayCount); return p > 0 ? p.ToString() : ""; }, HorizontalAlignment.Right);
+        Col("playtime", "Play Time", 80, g => Safe(() => (object)g.PlayTime), g => FormatPlayTime(Safe(() => g.PlayTime)), HorizontalAlignment.Right, visible: false);
+        Col("dateadded", "Date Added", 100, g => Safe(() => (object)g.DateAdded), g => DateStr(Safe(() => (object)g.DateAdded)), HorizontalAlignment.Right, visible: false);
+        Col("datemodified", "Date Modified", 110, g => Safe(() => (object)g.DateModified), g => DateStr(Safe(() => (object)g.DateModified)), HorizontalAlignment.Right, visible: false);
+        Col("lastplayed", "Last Played", 100, g => Safe(() => (object)g.LastPlayedDate), g => DateStr(Safe(() => (object)g.LastPlayedDate)), HorizontalAlignment.Right, visible: false);
+        Col("dbid", "DB Id", 70, g => N(() => g.LaunchBoxDbId), g => N(() => g.LaunchBoxDbId)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
+        Col("apppath", "Application Path", 300, g => S(Safe(() => g.ApplicationPath)), g => S(Safe(() => g.ApplicationPath)), visible: false);
+        Col("rahash", "RA Hash", 240, g => g is HostGame hg ? hg.RetroAchievementsHash : "", g => g is HostGame hg ? hg.RetroAchievementsHash : "", visible: false);
 
-        // AllColumns holds every column; RebuildColumns shows only the IsVisible ones.
-        // Order here = default display order (visible first), then optional columns.
-        olv.AllColumns.AddRange(new[]
+        lv.RebuildColumns();
+
+        _sortKeys = new[] { "name", "title", "platform", "developer", "year", "rating", "plays", "dateadded", "datemodified", "lastplayed" };
+
+        lv.SelectionChangedGame += OnGameSelectionChanged;
+        lv.GameActivated += LaunchSelected;
+        lv.GameRightClicked += OnGameRightClicked;
+        lv.ColumnClicked += OnHeaderColumnClicked;
+        lv.ColumnChooserRequested += ShowColumnChooser;
+        lv.ViewChanged += OnViewChanged;
+        return lv;
+    }
+
+    private void OnViewChanged()
+    {
+        if (_count != null) _count.Text = $"{_games.VisibleGames.Count} / {_games.TotalCount} games";
+        if (_posterMode) RefreshPoster();
+    }
+
+    private void OnGameRightClicked(IGame[] games, Point screen)
+    {
+        if (games == null || games.Length == 0) return;
+        var menu = BuildGameContextMenu(games);
+        if (menu.Items.Count > 0) menu.Show(screen);
+    }
+
+    private void OnHeaderColumnClicked(GameColumn col)
+    {
+        if (col == null) return;
+        bool same = string.Equals(_curSortKey, col.Key, StringComparison.OrdinalIgnoreCase);
+        _ascending = same ? !_ascending : true;
+        _dirBtn.Text = _ascending ? "▲" : "▼";
+        int idx = Array.IndexOf(_sortKeys, col.Key);
+        if (idx >= 0) { _suppressSort = true; try { _sortCombo.SelectedIndex = idx; } finally { _suppressSort = false; } }
+        DoSort(col.Key, _ascending);
+    }
+
+    private void ShowColumnChooser(Point screen)
+    {
+        var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
+        foreach (var c in _games.AllColumns)
         {
-            cName, cTitle, cPlat, cDev, cGenre, cYear, cRate, cFav, cPlays,
-            cPub, cSeries, cRegion, cMode, cVer, cStatus, cSource, cRel, cEsrb, cComm, cVotes,
-            cDone, cBroken, cPort, cInst, cPlayers, cTime, cAdded, cMod, cLast, cDbId, cAppPath, cRaHash,
-        });
-        olv.RebuildColumns();
-
-        // Parallel to SortLabels (see SortLabels): each entry maps to a column.
-        _sortColumns = new[] { cName, cTitle, cPlat, cDev, cYear, cRate, cPlays, cAdded, cMod, cLast };
-
-        // Per-cell rating colour: user rating in amber, community in muted grey.
-        olv.FormatCell += (_, e) =>
-        {
-            if (ReferenceEquals(e.Column, cRate) && !e.Item.Selected && e.Model is IGame g
-                && Safe(() => g.CommunityOrLocalStarRating) > 0)
-                e.SubItem.ForeColor = Safe(() => g.StarRatingFloat) > 0 ? UserRating : CommRating;
-        };
-
-        olv.SelectionChanged += (_, _) => OnGameSelectionChanged();
-        olv.ItemActivate += (_, _) => LaunchSelected();
-        olv.CellRightClick += OnCellRightClick;
-        olv.AfterSorting += (_, e) =>
-        {
-            if (_sortColumns == null) return;
-            _suppressSort = true;
-            try
+            var cc = c;
+            var it = new ToolStripMenuItem(c.Title) { CheckOnClick = true, Checked = c.Visible };
+            it.CheckedChanged += (_, _) =>
             {
-                int i = Array.IndexOf(_sortColumns, e.ColumnToSort);
-                if (i >= 0 && _sortCombo.SelectedIndex != i) _sortCombo.SelectedIndex = i;
-                if (e.SortOrder != SortOrder.None) { _ascending = e.SortOrder == SortOrder.Ascending; _dirBtn.Text = _ascending ? "▲" : "▼"; }
-            }
-            finally { _suppressSort = false; }
-        };
-        return olv;
+                if (!it.Checked && _games.AllColumns.Count(x => x.Visible) <= 1) { it.Checked = true; return; }
+                _games.SetColumnVisible(cc, it.Checked);
+            };
+            menu.Items.Add(it);
+        }
+        menu.Show(screen);
+    }
+
+    private Func<IGame, object> SortGetterFor(string key)
+    {
+        if (string.Equals(key, "name", StringComparison.OrdinalIgnoreCase)) return g => CompareName(g);
+        var col = _games.AllColumns.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
+        return col?.Sort ?? (g => CompareName(g));
     }
 
     // ── Right details construction ───────────────────────────────────────────
@@ -545,10 +542,14 @@ internal sealed class MainWindow : Form
         var rsVndb = tlp.RowStyles[4];
         if (rsVndb.SizeType != SizeType.Absolute || Math.Abs(rsVndb.Height - vndb) > 0.5) { rsVndb.SizeType = SizeType.Absolute; rsVndb.Height = vndb; }
 
-        // Drive the scroll range, then size the grid to the (possibly reduced) client width.
+        // Drive the scroll range, then size the grid to EXACTLY the width the meta/vndb were measured
+        // at (wantW). Using host.ClientSize.Width here is unsafe right after changing AutoScrollMinSize:
+        // it can still report the previous item's scrollbar state, so the card would render narrower
+        // than it was measured → an extra wrapped line overflows the box. wantW already accounts for
+        // the scrollbar, and equals the settled client width in both cases.
         host.AutoScrollMinSize = new Size(0, overflow ? minContent : 0);
-        int gridW = host.ClientSize.Width;                         // reflects the scrollbar now
-        int gridH = overflow ? minContent : host.ClientSize.Height;
+        int gridW = wantW;
+        int gridH = overflow ? minContent : viewH;
         if (tlp.Bounds != new Rectangle(0, 0, gridW, gridH))
             tlp.Bounds = new Rectangle(0, 0, gridW, gridH);
     }
@@ -650,18 +651,16 @@ internal sealed class MainWindow : Form
     }
 
     // ── Persistence (human-readable INI, written once at close) ──────────────
-    private static string ColKey(OLVColumn c) => c?.Tag as string;
-
     private void SaveAll()
     {
         SaveColumnLayout();
         SaveWindowState();
         _cfg.Set("LastCategory", NodeKey(_currentNode) ?? "*");
-        var g = _games.SelectedObject as IGame;
+        var g = _games.SelectedGame;
         _cfg.Set("LastGame", g != null ? S(Safe(() => g.Id)) : "");
-        var sc = (_sortColumns != null && _sortCombo.SelectedIndex >= 0 && _sortCombo.SelectedIndex < _sortColumns.Length)
-                 ? _sortColumns[_sortCombo.SelectedIndex] : null;
-        _cfg.Set("SortColumn", ColKey(sc) ?? "name");
+        string sortKey = (_sortKeys != null && _sortCombo.SelectedIndex >= 0 && _sortCombo.SelectedIndex < _sortKeys.Length)
+                         ? _sortKeys[_sortCombo.SelectedIndex] : "name";
+        _cfg.Set("SortColumn", sortKey);
         _cfg.SetBool("SortAsc", _ascending);
         _cfg.SetBool("MetaExpanded", _metaExpanded);
         _cfg.SetBool("VndbExpanded", _vndbExpanded);
@@ -671,42 +670,26 @@ internal sealed class MainWindow : Form
     // Col.<key> = <width>,<visible 0/1>,<displayIndex or -1>
     private void SaveColumnLayout()
     {
+        _games.SyncFromUi();
         foreach (var c in _games.AllColumns)
         {
-            var key = ColKey(c); if (key == null) continue;
-            int di = c.IsVisible ? c.DisplayIndex : -1;
-            _cfg.Set("Col." + key, $"{c.Width},{(c.IsVisible ? 1 : 0)},{di}");
+            int di = c.Visible ? c.SavedDisplayIndex : -1;
+            _cfg.Set("Col." + c.Key, $"{c.Width},{(c.Visible ? 1 : 0)},{di}");
         }
     }
 
     private void RestoreColumnLayout()
     {
-        var visible = new List<(OLVColumn col, int di)>();
         foreach (var c in _games.AllColumns)
         {
-            var key = ColKey(c); if (key == null) continue;
-            var v = _cfg.Get("Col." + key);
-            if (string.IsNullOrEmpty(v))
-            {
-                if (c.IsVisible) visible.Add((c, int.MaxValue)); // no saved entry → keep default, order last
-                continue;
-            }
+            var v = _cfg.Get("Col." + c.Key);
+            if (string.IsNullOrEmpty(v)) continue;   // no saved entry → keep the column's defaults
             var p = v.Split(',');
             if (p.Length >= 1 && int.TryParse(p[0], out var w) && w > 0) c.Width = w;
-            if (p.Length >= 2) c.IsVisible = p[1] == "1";
-            int di = (p.Length >= 3 && int.TryParse(p[2], out var d) && d >= 0) ? d : int.MaxValue;
-            if (c.IsVisible) visible.Add((c, di));
+            if (p.Length >= 2) c.Visible = p[1] == "1";
+            c.SavedDisplayIndex = (p.Length >= 3 && int.TryParse(p[2], out var d) && d >= 0) ? d : -1;
         }
-        try
-        {
-            _games.RebuildColumns();   // applies IsVisible (builds the Columns collection)
-            // RebuildColumns keeps each column's stale DisplayIndex, so set the
-            // display order explicitly. OrderBy is stable → equal/MaxValue di keep
-            // their AllColumns order.
-            var ordered = visible.OrderBy(o => o.di).Select(o => o.col).ToList();
-            for (int i = 0; i < ordered.Count; i++) ordered[i].DisplayIndex = i;
-        }
-        catch { }
+        try { _games.RebuildColumns(); } catch { }   // applies visibility + saved display order
     }
 
     private void SaveWindowState()
@@ -774,8 +757,9 @@ internal sealed class MainWindow : Form
         if (_dirBtn != null) _dirBtn.Text = _ascending ? "▲" : "▼";
         var key = _cfg.Get("SortColumn", "name");
         int idx = 0;
-        for (int i = 0; i < _sortColumns.Length; i++)
-            if (string.Equals(ColKey(_sortColumns[i]), key, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+        for (int i = 0; i < _sortKeys.Length; i++)
+            if (string.Equals(_sortKeys[i], key, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+        _curSortKey = _sortKeys[idx];
         _suppressSort = true;
         try { _sortCombo.SelectedIndex = idx; } finally { _suppressSort = false; }
     }
@@ -794,7 +778,7 @@ internal sealed class MainWindow : Form
         if (!string.IsNullOrEmpty(savedGame))
         {
             var g = _current.FirstOrDefault(x => string.Equals(Safe(() => x.Id), savedGame, StringComparison.OrdinalIgnoreCase));
-            if (g != null) { _games.SelectObject(g, true); _games.EnsureModelVisible(g); ShowDetails(g); }
+            if (g != null) { _games.SelectGame(g, true); ShowDetails(g); }
         }
     }
 
@@ -930,7 +914,7 @@ internal sealed class MainWindow : Form
     // When nothing is selected in the list, keep showing the current node.
     private void OnGameSelectionChanged()
     {
-        if (_games.SelectedObject is IGame g) ShowDetails(g);
+        if (_games.SelectedGame is IGame g) ShowDetails(g);
         else if (!ReferenceEquals(_detailsShown, _currentNode)) ShowNodeDetails(_currentNode);
     }
 
@@ -960,32 +944,31 @@ internal sealed class MainWindow : Form
     // ── Sort + filter ────────────────────────────────────────────────────────
     private void ApplySort()
     {
-        if (_games == null || _sortColumns == null) return;
+        if (_games == null || _sortKeys == null) return;
         int idx = _sortCombo != null && _sortCombo.SelectedIndex >= 0 ? _sortCombo.SelectedIndex : 0;
-        var col = _sortColumns[Math.Min(idx, _sortColumns.Length - 1)];
-        var order = _ascending ? SortOrder.Ascending : SortOrder.Descending;
+        DoSort(_sortKeys[Math.Min(idx, _sortKeys.Length - 1)], _ascending);
+    }
 
-        _games.PrimarySortColumn = col;
-        _games.PrimarySortOrder = order;
-        _games.SetObjects(_current);   // sorted through OLV by the chosen column's aspect
-        _games.Sort(col, order);
-        ApplyFilter();
-        // No game auto-selected: the right pane shows the selected tree node's info
-        // until the user clicks a game (then ShowDetails takes over).
+    private void DoSort(string key, bool asc)
+    {
+        if (_games == null) return;
+        _curSortKey = key;
+        _games.SortGetter = SortGetterFor(key);
+        _games.SortAscending = asc;
+        _games.SortGlyphColumn = _games.AllColumns.FirstOrDefault(c =>
+            c.Visible && string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
+        ApplyFilter();   // sets the filter predicate + rebuilds the view (single pass)
     }
 
     private void ApplyFilter()
     {
+        if (_games == null) return;
+        _games.Games = _current;
         string txt = _search?.Text;
-        _games.ModelFilter = string.IsNullOrWhiteSpace(txt)
-            ? null
-            : new ModelFilter(o =>
-            {
-                var g = (IGame)o;
-                return Contains(S(g.Title), txt) || Contains(S(g.Platform), txt) || Contains(S(g.Developer), txt);
-            });
-        if (_count != null) _count.Text = $"{_games.GetItemCount()} / {_current.Length} games";
-        if (_posterMode) RefreshPoster();   // mirror the new displayed set in the grid
+        _games.FilterPredicate = string.IsNullOrWhiteSpace(txt)
+            ? (Func<IGame, bool>)null
+            : g => Contains(S(Safe(() => g.Title)), txt) || Contains(S(Safe(() => g.Platform)), txt) || Contains(S(Safe(() => g.Developer)), txt);
+        _games.RebuildView();   // count + poster updated via ViewChanged
     }
 
     // ── Poster (grid) view ────────────────────────────────────────────────────
@@ -1017,14 +1000,14 @@ internal sealed class MainWindow : Form
 
     private IGame PosterModel(int displayIndex)
     {
-        try { return displayIndex >= 0 && displayIndex < _games.GetItemCount() ? _games.GetModelObject(displayIndex) as IGame : null; }
+        try { return _games.GameAt(displayIndex); }
         catch { return null; }
     }
 
     private void RefreshPoster()
     {
         if (_poster == null) return;
-        int n = 0; try { n = _games.GetItemCount(); } catch { }
+        int n = 0; try { n = _games.VisibleGames.Count; } catch { }
         try { if (_poster.VirtualListSize != n) _poster.VirtualListSize = n; } catch { }
         _poster.Invalidate();
     }
@@ -1052,7 +1035,10 @@ internal sealed class MainWindow : Form
     {
         if (_poster.SelectedIndices.Count == 0) return;
         var m = PosterModel(_poster.SelectedIndices[0]);
-        if (m != null) _games.SelectObject(m, true);   // drives OnGameSelectionChanged → ShowDetails + persists LastGame
+        // focus:false — keep keyboard focus on the poster (SelectGame(...,true) would steal it to the
+        // hidden list, freezing poster arrow navigation after the first move). Selection still updates
+        // _games → OnGameSelectionChanged → ShowDetails + persists LastGame.
+        if (m != null) _games.SelectGame(m, false);
     }
 
     private void OnPosterMouseUp(object sender, MouseEventArgs e)
@@ -1451,7 +1437,7 @@ internal sealed class MainWindow : Form
         var g = _heroGame; if (g == null) return;
         Safe(() => g.StarRatingFloat = value);   // → journal (deferred, gated); no immediate XML write
         _hero.SetRating(value, isUser: true);
-        Safe(() => _games.RefreshObject(g));
+        Safe(() => _games.RefreshGame(g));
     }
 
     private void ToggleHeroFavorite()
@@ -1460,7 +1446,7 @@ internal sealed class MainWindow : Form
         bool nv = !Safe(() => g.Favorite);
         Safe(() => g.Favorite = nv);             // → journal
         _hero.SetFavorite(nv);
-        Safe(() => _games.RefreshObject(g));
+        Safe(() => _games.RefreshGame(g));
     }
 
     // ── Main media (16:9) + mini-thumbnail strip ─────────────────────────────
@@ -1731,7 +1717,8 @@ internal sealed class MainWindow : Form
         if (_cfg.UnloadListDuringGame)
         {
             LoadImagesAsync(null, null);             // clears + invalidates any in-flight decode
-            _games.SetObjects(Array.Empty<IGame>()); // free the OLV row index during the game
+            _games.Games = Array.Empty<IGame>();     // free the row index during the game
+            _games.RebuildView();
         }
         if (_cfg.ShowGameRunningScreen) ShowRunningOverlay(g);
     }
@@ -1745,12 +1732,11 @@ internal sealed class MainWindow : Form
 
         if (_cfg.UnloadListDuringGame)
         {
-            _games.SetObjects(_current);   // data already reloaded by HostLaunch
-            ApplyFilter();
+            ApplyFilter();   // _current already reloaded by HostLaunch → Games = _current + rebuild
             IGame target = _resumeGameId == null ? null
                 : _current.FirstOrDefault(x => string.Equals(Safe(() => x.Id), _resumeGameId, StringComparison.OrdinalIgnoreCase));
-            if (target != null) { _games.SelectObject(target, true); _games.EnsureModelVisible(target); ShowDetails(target); }
-            else if (_games.GetItemCount() > 0) { _games.SelectedIndex = 0; }
+            if (target != null) { _games.SelectGame(target, true); ShowDetails(target); }
+            else if (_games.VisibleGames.Count > 0) { _games.SelectFirst(); }
         }
     }
 
@@ -1805,19 +1791,9 @@ internal sealed class MainWindow : Form
     // ── Launch + context menu ────────────────────────────────────────────────
     private void LaunchSelected()
     {
-        if (_games.SelectedObject is not IGame g) return;
+        if (_games.SelectedGame is not IGame g) return;
         var emu = Safe(() => _dm.GetEmulatorById(g.EmulatorId));
         Safe(() => PluginHelper.LaunchBoxMainViewModel.PlayGame(g, null, emu, null));
-    }
-
-    private void OnCellRightClick(object sender, CellRightClickEventArgs e)
-    {
-        if (e.Model is IGame clicked && !_games.IsSelected(clicked))
-            _games.SelectObject(clicked, true);
-        var games = _games.SelectedObjects.OfType<IGame>().ToArray();
-        if (games.Length == 0) return;
-        var menu = BuildGameContextMenu(games);
-        if (menu.Items.Count > 0) e.MenuStrip = menu;
     }
 
     private ContextMenuStrip BuildGameContextMenu(IGame[] games)

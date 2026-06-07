@@ -15,7 +15,6 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
-using BrightIdeasSoftware;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Host.Data;
@@ -45,7 +44,8 @@ internal sealed class MainWindow : Form
     private readonly PluginRegistry _reg;
     private readonly IDataManager _dm;
 
-    private readonly TreeListView _sources;
+    private readonly TreeView _sources;
+    private readonly Dictionary<object, TreeNode> _treeNodeMap = new();   // node object → its TreeNode (selection restore)
     private readonly GameListView _games;
     // Poster (grid) view — a native virtual ListView mirroring the OLV's displayed (sorted+filtered)
     // order; owner-drawn box-art tiles. Toggled from the toolbar (list ⇄ poster).
@@ -623,30 +623,18 @@ internal sealed class MainWindow : Form
     }
 
     // ── Sources (LaunchBox-native tree: categories ▸ platforms / playlists) ───
-    private TreeListView BuildSourceTree()
+    // Native TreeView. The modern rotating chevrons + dark selection/scrollbars come from the
+    // "DarkMode_Explorer" visual style (applied by ApplyDarkScroll), so no custom renderer is needed.
+    private TreeView BuildSourceTree()
     {
-        var tlv = new TreeListView
+        var tv = new TreeView
         {
             Dock = DockStyle.Fill, BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None,
-            HeaderStyle = ColumnHeaderStyle.None, FullRowSelect = true, RowHeight = 26,
-            ShowGroups = false, UseFiltering = false, UseExplorerTheme = false,
+            FullRowSelect = true, ShowLines = false, ShowPlusMinus = true, ShowRootLines = true,
+            HideSelection = false, ItemHeight = 26, ImageList = _treeIcons,
         };
-        tlv.SelectedBackColor = Accent;
-        tlv.SelectedForeColor = Color.White;
-        var col = new OLVColumn("", null)
-        {
-            FillsFreeSpace = true,
-            AspectGetter = x => x is AllNode ? "All Games" : HostPlatformCategory.NodeName(x),
-            ImageGetter = x => _nodeIconKey.TryGetValue(x, out var k) ? (object)k : "fb_plat",
-        };
-        tlv.Columns.Add(col);
-        tlv.SmallImageList = _treeIcons;
-        tlv.CanExpandGetter = x => x is HostPlatformCategory c && c.Children.Count > 0;
-        tlv.ChildrenGetter = x => (x is HostPlatformCategory c)
-            ? (System.Collections.IEnumerable)c.Children : Array.Empty<object>();
-        tlv.TreeColumnRenderer = new ChevronTreeRenderer();   // LaunchBox-style rotating chevron
-        tlv.SelectionChanged += (_, _) => LoadNode(tlv.SelectedObject);
-        return tlv;
+        tv.AfterSelect += (_, e) => { if (e.Node?.Tag != null) LoadNode(e.Node.Tag); };
+        return tv;
     }
 
     private void PopulateSources()
@@ -657,9 +645,28 @@ internal sealed class MainWindow : Form
 
         _treeRoots = roots;
         BuildTreeIcons(roots);
-        _sources.Roots = roots;
-        try { _sources.ExpandAll(); } catch { }
+        _treeNodeMap.Clear();
+        _sources.BeginUpdate();
+        try
+        {
+            _sources.Nodes.Clear();
+            foreach (var r in roots) _sources.Nodes.Add(BuildTreeNode(r));
+            _sources.ExpandAll();
+        }
+        finally { _sources.EndUpdate(); }
         // Selection (saved category/game) is restored by RestoreSelection().
+    }
+
+    // Build a TreeNode for a source object (Tag = the object), recursing into category children.
+    private TreeNode BuildTreeNode(object obj)
+    {
+        string text = obj is AllNode ? "All Games" : (HostPlatformCategory.NodeName(obj) ?? "");
+        string imgKey = _nodeIconKey.TryGetValue(obj, out var k) ? k : "fb_plat";
+        var tn = new TreeNode(text) { Tag = obj, ImageKey = imgKey, SelectedImageKey = imgKey };
+        _treeNodeMap[obj] = tn;
+        if (obj is HostPlatformCategory c)
+            foreach (var child in c.Children) tn.Nodes.Add(BuildTreeNode(child));
+        return tn;
     }
 
     // ── Persistence (human-readable INI, written once at close) ──────────────
@@ -804,9 +811,10 @@ internal sealed class MainWindow : Form
         var savedCat = _cfg.Get("LastCategory");
         if (!string.IsNullOrEmpty(savedCat)) node = FindNodeByKey(savedCat) ?? AllNode.Instance;
 
-        _sources.SelectedObject = node;   // visual; the coalesced event is a no-op via LoadNode's guard
+        // Select the node visually (AfterSelect → LoadNode); the explicit LoadNode below is then a
+        // no-op via its guard, but kept so a node with no TreeNode still fills the list.
+        if (_treeNodeMap.TryGetValue(node, out var tn)) { _sources.SelectedNode = tn; try { tn.EnsureVisible(); } catch { } }
         LoadNode(node);                   // synchronous fill (so the saved game can be selected right after)
-        try { _sources.EnsureModelVisible(node); } catch { }
 
         var savedGame = _cfg.Get("LastGame");
         if (!string.IsNullOrEmpty(savedGame))
@@ -2084,36 +2092,6 @@ internal sealed class MainWindow : Form
         catch (Exception ex) { MessageBox.Show(this, ex.ToString(), "Plugin error", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
     private static T Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }
-
-    // ── LaunchBox-style expansion chevron (▶ collapsed → ▼ expanded) ─────────
-    // Replaces ObjectListView's +/- box. The right→down flip reads as the
-    // small "rotation" LaunchBox shows when a category opens. Lines are off.
-    private sealed class ChevronTreeRenderer : TreeListView.TreeRenderer
-    {
-        private static readonly Color GlyphColor = Color.FromArgb(180, 180, 182);
-
-        public ChevronTreeRenderer() { IsShowLines = false; }
-
-        protected override void DrawExpansionGlyph(Graphics g, Rectangle r, bool isExpanded)
-        {
-            var oldMode = g.SmoothingMode;
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            int cx = r.Left + 9;                 // matches OLV's left-aligned glyph slot
-            int cy = r.Top + r.Height / 2;
-            const int s = 4;                     // chevron arm reach
-            using var pen = new Pen(GlyphColor, 1.8f)
-            {
-                StartCap = System.Drawing.Drawing2D.LineCap.Round,
-                EndCap = System.Drawing.Drawing2D.LineCap.Round,
-                LineJoin = System.Drawing.Drawing2D.LineJoin.Round,
-            };
-            Point[] pts = isExpanded
-                ? new[] { new Point(cx - s, cy - s / 2), new Point(cx, cy + s / 2), new Point(cx + s, cy - s / 2) } // ▼
-                : new[] { new Point(cx - s / 2, cy - s), new Point(cx + s / 2, cy), new Point(cx - s / 2, cy + s) }; // ▶
-            g.DrawLines(pen, pts);
-            g.SmoothingMode = oldMode;
-        }
-    }
 
     // Metadata card under the media: a rounded box holding the title and the platform
     // (icon + name + a rotating chevron, like the source tree). Clicking it expands the

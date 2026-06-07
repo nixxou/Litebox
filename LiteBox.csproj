@@ -40,10 +40,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ObjectListView.Repack.NET6Plus" Version="2.9.5" />
-  </ItemGroup>
-
-  <ItemGroup>
     <!-- Fallback hero fanart, used when a game/node has no background of its own. -->
     <EmbeddedResource Include="defaultFanart.jpg" />
   </ItemGroup>

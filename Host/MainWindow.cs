@@ -656,8 +656,8 @@ internal sealed class MainWindow : Form
     {
         try
         {
-            using var ms = new MemoryStream(File.ReadAllBytes(path));
-            using var src = Image.FromStream(ms);
+            using var src = LoadImage(path);   // WebP-aware (Magick) + GDI+ for the rest
+            if (src == null) return null;
             var bmp = new Bitmap(size, size);
             using var g = Graphics.FromImage(bmp);
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
@@ -895,11 +895,38 @@ internal sealed class MainWindow : Form
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
             var bytes = File.ReadAllBytes(path);
+            // GDI+ can't decode WebP (clear logos) → route those through Magick.NET.
+            if (IsWebp(bytes)) return LoadWebp(bytes);
             using var ms = new MemoryStream(bytes);
             using var tmp = Image.FromStream(ms);
             return new Bitmap(tmp);
         }
         catch { return null; }
+    }
+
+    private static bool IsWebp(byte[] b)
+        => b.Length >= 12 && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F'
+                          && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P';
+
+    // Optional dependency: Magick.NET is loaded by ExtendDB at runtime. The try/catch
+    // here (not inside DecodeWebpMagick) absorbs the assembly-not-found that would be
+    // thrown when JITing DecodeWebpMagick if Magick.NET is absent (standalone, no
+    // ExtendDB) → WebP logos simply don't render instead of crashing.
+    private static Image LoadWebp(byte[] bytes)
+    {
+        try { return DecodeWebpMagick(bytes); }
+        catch { return null; }
+    }
+
+    private static Image DecodeWebpMagick(byte[] bytes)
+    {
+        using var img = new ImageMagick.MagickImage(bytes);
+        // Png32 preserves the alpha channel so the transparent clear-logo background
+        // survives into the GDI+ Bitmap (the PictureBox draws over the dark panel).
+        var png = img.ToByteArray(ImageMagick.MagickFormat.Png32);
+        using var ms = new MemoryStream(png);
+        using var tmp = Image.FromStream(ms);
+        return new Bitmap(tmp);
     }
 
     // ── Game-running screen + during-game list unload ────────────────────────

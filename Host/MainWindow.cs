@@ -69,6 +69,7 @@ internal sealed class MainWindow : Form
     private bool _suppressSort;
 
     private readonly LiteBoxConfig _cfg;
+    private static bool _useImageCache = true;   // option: use the degraded thumb cache for UI images
 
     // "Game running" overlay + during-game unload state.
     private DoubleBufferedPanel _overlay;
@@ -93,6 +94,7 @@ internal sealed class MainWindow : Form
     {
         _reg = reg; _dm = dm;
         _cfg = LiteBoxConfig.LoadForExe();
+        _useImageCache = _cfg.UseImageCache;
         Text = "LiteBox";
         ClientSize = new Size(1280, 800);
         StartPosition = FormStartPosition.CenterScreen;
@@ -165,8 +167,12 @@ internal sealed class MainWindow : Form
         var miUnload = new ToolStripMenuItem("Unload the list while a game runs")
         { CheckOnClick = true, Checked = _cfg.UnloadListDuringGame };
         miUnload.CheckedChanged += (_, _) => { _cfg.UnloadListDuringGame = miUnload.Checked; _cfg.Save(); };
+        var miCache = new ToolStripMenuItem("Use the image cache (degraded thumbnails)")
+        { CheckOnClick = true, Checked = _cfg.UseImageCache };
+        miCache.CheckedChanged += (_, _) => { _cfg.UseImageCache = miCache.Checked; _useImageCache = miCache.Checked; _cfg.Save(); };
         optBtn.DropDownItems.Add(miScreen);
         optBtn.DropDownItems.Add(miUnload);
+        optBtn.DropDownItems.Add(miCache);
         bar.Items.Add(optBtn);
 
         _count = new ToolStripLabel("") { ForeColor = SubFg, Alignment = ToolStripItemAlignment.Right };
@@ -892,6 +898,7 @@ internal sealed class MainWindow : Form
     private static Image LoadThumbOrFull(string src, bool keepAlpha)
     {
         if (string.IsNullOrEmpty(src)) return null;
+        if (!_useImageCache) return LoadImage(src);   // option off → full original, no cache
         var cached = ThumbCache.GetCachedOnly(src, ThumbCache.DefaultMaxDim, keepAlpha);
         if (cached != null) return LoadImage(cached);
         ThumbCache.EnqueueGenerate(src, ThumbCache.DefaultMaxDim, keepAlpha);   // background, for next time

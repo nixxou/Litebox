@@ -69,7 +69,8 @@ internal sealed class LiteBoxConfig
     {
         // Seed defaults + comments so the file is self-documenting.
         _kv["ShowGameRunningScreen"] = "true";
-        _kv["UnloadListDuringGame"] = "false";
+        _kv["UnloadListDuringGame"] = "true";
+        _kv["UseImageCache"] = "true";
         _kv["GameRunningText"] = "Game running...";
         _kv["GameRunningColor"] = "#0F0F12";
         try
@@ -78,10 +79,12 @@ internal sealed class LiteBoxConfig
             sb.AppendLine("; LiteBox configuration");
             sb.AppendLine("; ShowGameRunningScreen : show a fanart/colour screen while a game runs");
             sb.AppendLine("; UnloadListDuringGame  : free the game list while a game runs, reload after");
+            sb.AppendLine("; UseImageCache         : use the shared degraded-thumbnail cache for UI images");
             sb.AppendLine("; GameRunningText       : message shown on the running screen");
             sb.AppendLine("; GameRunningColor      : base colour (#RRGGBB) behind the fanart");
             sb.AppendLine($"ShowGameRunningScreen={_kv["ShowGameRunningScreen"]}");
             sb.AppendLine($"UnloadListDuringGame={_kv["UnloadListDuringGame"]}");
+            sb.AppendLine($"UseImageCache={_kv["UseImageCache"]}");
             sb.AppendLine($"GameRunningText={_kv["GameRunningText"]}");
             sb.AppendLine($"GameRunningColor={_kv["GameRunningColor"]}");
             File.WriteAllText(_path, sb.ToString());
@@ -107,7 +110,8 @@ internal sealed class LiteBoxConfig
 
     // ── Typed options ────────────────────────────────────────────────────────
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
-    public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", false); set => SetBool("UnloadListDuringGame", value); }
+    public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", true); set => SetBool("UnloadListDuringGame", value); }
+    public bool UseImageCache         { get => GetBool("UseImageCache", true); set => SetBool("UseImageCache", value); }
     public string GameRunningText     => Get("GameRunningText", "Game running...");
     public Color GameRunningColor     => ParseColor(Get("GameRunningColor", "#0F0F12"), Color.FromArgb(15, 15, 18));
 

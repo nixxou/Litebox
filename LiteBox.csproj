@@ -49,6 +49,22 @@
       <HintPath>..\..\..\LB\Plugins\ExtendDB\Magick.NET.Core.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- SQLite for the write-back operation-log (Core\LiteBox.pending.db). Compile-time only
+         (Private=false): LaunchBox already ships Microsoft.Data.Sqlite + SQLitePCLRaw + the
+         e_sqlite3 native in LB\Core, so we bind to its copy at runtime and deploy nothing new
+         — same version-agnostic pattern as the SDK / Magick above. -->
+    <Reference Include="Microsoft.Data.Sqlite">
+      <HintPath>..\..\..\LB\Core\Microsoft.Data.Sqlite.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SQLitePCLRaw.core">
+      <HintPath>..\..\..\LB\Core\SQLitePCLRaw.core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SQLitePCLRaw.batteries_v2">
+      <HintPath>..\..\..\LB\Core\SQLitePCLRaw.batteries_v2.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

@@ -62,7 +62,8 @@ internal static class GFlags
 internal sealed class GameStore
 {
     public GameRow[] Rows = Array.Empty<GameRow>();
-    public string[] Pool = { "" };                 // index 0 = empty
+    public List<string> Pool = new() { "" };        // index 0 = empty; grows at runtime via InternRuntime
+    private Dictionary<string, int> _poolMap = new(StringComparer.Ordinal) { [""] = 0 };
     private string[] _notes;                        // tier 2 (droppable), index-aligned with Rows
     private string _platformsDir;
 
@@ -76,17 +77,13 @@ internal sealed class GameStore
     // platform name -> source XML file (for write-back)
     private readonly Dictionary<string, string> _platformFile = new(StringComparer.OrdinalIgnoreCase);
 
-    // PLUGIN write-back set: rows a plugin changed via the IGame setters, flushed
-    // DIRECTLY (synchronously) by IDataManager.Save. (Today nothing marks it — our own
-    // user-state goes through the journal below — but it's the plugins' direct path.)
-    private readonly HashSet<int> _dirty = new();
-
-    // OUR user-state journal (favorites / ratings / play count / last played / play time).
-    // Deferred: each change updates Rows + rewrites a tiny atomic journal file; the heavy
-    // Platform-XML rewrite happens only at a SAFE time (close / boot) and only when
-    // LaunchBox/BigBox are NOT running (they own the XMLs while alive).
-    private readonly HashSet<int> _journal = new();
-    private string JournalPath => Path.Combine(AppContext.BaseDirectory, "LiteBox.pending");
+    // Write-back operation log (WAL): every mutation (user-state OR plugin) is appended as an
+    // ordered event and flushed to the XMLs at a safe time. See OpLog. Opened in Load().
+    private OpLog _oplog;
+    private string _opDbOverride;   // set only by the self-test, to isolate from the real log
+    private string OpDbPath => _opDbOverride ?? Path.Combine(AppContext.BaseDirectory, "LiteBox.pending.db");
+    // Legacy positional journal (pre-WAL); migrated into the op-log + deleted on first boot.
+    private string LegacyJournalPath => Path.Combine(AppContext.BaseDirectory, "LiteBox.pending");
 
     /// <summary>Read-only mode (config, default true): NOTHING is ever written to disk — neither
     /// the journal nor the Platform XMLs. Mutations update the in-memory Rows only, for this run.</summary>
@@ -103,28 +100,36 @@ internal sealed class GameStore
     public IReadOnlyList<CustomField> CustomFieldsFor(Guid id) => _customFields.TryGetValue(id, out var l) ? l : (IReadOnlyList<CustomField>)Array.Empty<CustomField>();
 
     public int Count => Rows.Length;
-    public string Str(int idx) => (idx > 0 && idx < Pool.Length) ? Pool[idx] : "";
+    public string Str(int idx) => (idx > 0 && idx < Pool.Count) ? Pool[idx] : "";
+
+    /// <summary>Interns a string into the pool at runtime (write-back setters). Append-only;
+    /// orphaned old values are acceptable. Returns 0 for null/empty.</summary>
+    public int InternRuntime(string v)
+    {
+        if (string.IsNullOrEmpty(v)) return 0;
+        if (_poolMap.TryGetValue(v, out var idx)) return idx;
+        idx = Pool.Count; Pool.Add(v); _poolMap[v] = idx; return idx;
+    }
     public string NotesFor(int i) => (_notes != null && i >= 0 && i < _notes.Length) ? _notes[i] : null;
     public bool OptionalLoaded => _notes != null;
 
     // ── Load ────────────────────────────────────────────────────────────────
-    public static GameStore Load(string platformsDir)
+    public static GameStore Load(string platformsDir, string opDbPathOverride = null)
     {
-        var s = new GameStore { _platformsDir = platformsDir };
+        var s = new GameStore { _platformsDir = platformsDir, _opDbOverride = opDbPathOverride };
         s.Build(includeNotes: true);
+        s._oplog = OpLog.Open(s.OpDbPath);
         return s;
     }
 
+    /// <summary>Releases the op-log connection (clean shutdown / test teardown).</summary>
+    public void CloseLog() { try { _oplog?.Dispose(); } catch { } _oplog = null; }
+
     private void Build(bool includeNotes)
     {
-        var pool = new List<string> { "" };
-        var poolMap = new Dictionary<string, int>(StringComparer.Ordinal) { [""] = 0 };
-        int Intern(string v)
-        {
-            if (string.IsNullOrEmpty(v)) return 0;
-            if (poolMap.TryGetValue(v, out var idx)) return idx;
-            idx = pool.Count; pool.Add(v); poolMap[v] = idx; return idx;
-        }
+        Pool = new List<string> { "" };
+        _poolMap = new Dictionary<string, int>(StringComparer.Ordinal) { [""] = 0 };
+        int Intern(string v) => InternRuntime(v);
 
         var rows = new List<GameRow>(1024);
         var notes = includeNotes ? new List<string>(1024) : null;
@@ -288,7 +293,6 @@ internal sealed class GameStore
         }
 
         Rows = rows.ToArray();
-        Pool = pool.ToArray();
         _notes = notes?.ToArray();
     }
 
@@ -322,88 +326,98 @@ internal sealed class GameStore
         _notes = notes;
     }
 
-    // ── Our user-state mutations → JOURNAL (deferred, gated) ─────────────────
+    // ── Mutations → operation log (WAL) ──────────────────────────────────────
+    // Every setter updates the in-memory Row immediately (UI reflects the change) and, when not
+    // ReadOnly, appends a "modify" op. The XMLs are rewritten later, at a safe time (FlushOpsToXml).
+
     public void JournalFavorite(int i, bool v)
-    { if (i < 0 || i >= Rows.Length || Rows[i].Favorite == v) return; Rows[i].Favorite = v; MarkJournal(i); }
+    { if (i < 0 || i >= Rows.Length || Rows[i].Favorite == v) return; RecordModify(i, "Favorite", v ? "true" : "false"); }
 
     public void JournalStarRating(int i, float v)
-    { if (i < 0 || i >= Rows.Length || Math.Abs(Rows[i].StarRatingFloat - v) < 0.001f) return; Rows[i].StarRatingFloat = v; MarkJournal(i); }
+    { if (i < 0 || i >= Rows.Length || Math.Abs(Rows[i].StarRatingFloat - v) < 0.001f) return; RecordModify(i, "StarRatingFloat", v.ToString(CultureInfo.InvariantCulture)); }
 
     /// <summary>A launch begins: bump play count + stamp last-played now.</summary>
     public void JournalPlayStart(int i)
-    { if (i < 0 || i >= Rows.Length) return; Rows[i].PlayCount++; Rows[i].LastPlayedTicks = DateTime.Now.Ticks; MarkJournal(i); }
+    {
+        if (i < 0 || i >= Rows.Length) return;
+        RecordModify(i, "PlayCount", (Rows[i].PlayCount + 1).ToString(CultureInfo.InvariantCulture));
+        RecordModify(i, "LastPlayedDate", new DateTime(DateTime.Now.Ticks, DateTimeKind.Local).ToString("o", CultureInfo.InvariantCulture));
+    }
 
     /// <summary>A launch ended: add the elapsed seconds to total play time.</summary>
     public void JournalPlayTime(int i, int addSeconds)
-    { if (i < 0 || i >= Rows.Length || addSeconds <= 0) return; Rows[i].PlayTime += addSeconds; MarkJournal(i); }
+    { if (i < 0 || i >= Rows.Length || addSeconds <= 0) return; RecordModify(i, "PlayTime", (Rows[i].PlayTime + addSeconds).ToString(CultureInfo.InvariantCulture)); }
 
-    private void MarkJournal(int i) { if (ReadOnly) return; lock (_journal) _journal.Add(i); WriteJournalFile(); }
+    /// <summary>Generic IGame scalar write-back: <paramref name="xmlName"/> is the XML element name
+    /// (e.g. "Developer"), <paramref name="value"/> the serialized value ("" = clear). Updates memory
+    /// + logs the op. Unknown field names are ignored (logged once).</summary>
+    public void SetGameField(int i, string xmlName, string value)
+    { if (i < 0 || i >= Rows.Length || string.IsNullOrEmpty(xmlName)) return; RecordModify(i, xmlName, value ?? ""); }
 
-    // The journal is a tiny line-per-game file (guid|fav|rating|playcount|lastplayedticks|playtime),
-    // written atomically (tmp → replace). Cheap to rewrite on every change.
-    private void WriteJournalFile()
+    // Apply to memory (always, for UI) + append the op (only when persisting).
+    private void RecordModify(int i, string xmlName, string value)
     {
-        if (ReadOnly) return;
-        int[] js; lock (_journal) js = _journal.ToArray();
-        try
-        {
-            if (js.Length == 0) { if (File.Exists(JournalPath)) File.Delete(JournalPath); return; }
-            var sb = new StringBuilder();
-            foreach (var i in js)
-            {
-                var r = Rows[i];
-                sb.Append(r.Id).Append('|')
-                  .Append(r.Favorite ? '1' : '0').Append('|')
-                  .Append(r.StarRatingFloat.ToString(CultureInfo.InvariantCulture)).Append('|')
-                  .Append(r.PlayCount.ToString(CultureInfo.InvariantCulture)).Append('|')
-                  .Append(r.LastPlayedTicks.ToString(CultureInfo.InvariantCulture)).Append('|')
-                  .Append(r.PlayTime.ToString(CultureInfo.InvariantCulture)).Append('\n');
-            }
-            AtomicWriteText(JournalPath, sb.ToString());
-        }
-        catch (Exception ex) { Console.WriteLine("[store] journal write: " + ex.Message); }
+        ApplyFieldToRow(i, xmlName, value);
+        if (ReadOnly || _oplog == null) return;
+        _oplog.Append("modify", "Game", Rows[i].Id.ToString(), null, xmlName, value);
     }
 
-    /// <summary>At boot: re-apply a surviving journal to memory (UI correct), then flush to
-    /// XML if LaunchBox/BigBox aren't running (recovery after a kill, or a deferred batch
-    /// from a session where LB was up). If they're running, keep the journal for later.</summary>
+    private readonly HashSet<string> _warnedFields = new(StringComparer.Ordinal);
+    private void ApplyFieldToRow(int i, string xmlName, string value)
+    {
+        if (_gameFieldParsers.TryGetValue(xmlName, out var apply)) { try { apply(this, i, value); } catch { } }
+        else if (_warnedFields.Add(xmlName)) Console.WriteLine("[store] write-back: unmapped field '" + xmlName + "' (ignored)");
+    }
+
+    /// <summary>At boot: migrate any legacy journal, re-apply the surviving op-log to memory (UI
+    /// correct), then flush to XML if LaunchBox/BigBox aren't running. If they're running, keep the
+    /// log for later.</summary>
     public void RecoverJournalOnLoad()
     {
-        if (!File.Exists(JournalPath)) return;
+        MigrateLegacyJournal();
+        var ops = _oplog?.ReadAll();
+        if (ops != null && ops.Count > 0)
+        {
+            foreach (var op in ops)
+            {
+                if (op.OpType != "modify" || op.Entity != "Game") continue;
+                if (Guid.TryParse(op.Id, out var gid) && _byId.TryGetValue(gid, out var i))
+                    ApplyFieldToRow(i, op.Field, op.Value);
+            }
+            Console.WriteLine($"[store] recovered op-log ({ops.Count} op(s))");
+        }
+        if (!ReadOnly && !IsLaunchBoxRunning()) FlushOpsToXml();
+    }
+
+    // Old positional journal (guid|fav|rating|playcount|lastplayedticks|playtime): apply to memory,
+    // and when not ReadOnly re-emit as ops + delete the file. In ReadOnly it is left untouched.
+    private void MigrateLegacyJournal()
+    {
         try
         {
-            foreach (var line in File.ReadAllLines(JournalPath))
+            if (!File.Exists(LegacyJournalPath)) return;
+            foreach (var line in File.ReadAllLines(LegacyJournalPath))
             {
                 var p = line.Split('|');
                 if (p.Length < 6 || !Guid.TryParse(p[0], out var id) || !_byId.TryGetValue(id, out var i)) continue;
-                Rows[i].Favorite = p[1] == "1";
-                if (float.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var rt)) Rows[i].StarRatingFloat = rt;
-                if (int.TryParse(p[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var pc)) Rows[i].PlayCount = pc;
-                if (long.TryParse(p[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var lp)) Rows[i].LastPlayedTicks = lp;
-                if (int.TryParse(p[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var pt)) Rows[i].PlayTime = pt;
-                lock (_journal) _journal.Add(i);
+                RecordModify(i, "Favorite", p[1] == "1" ? "true" : "false");
+                RecordModify(i, "StarRatingFloat", p[2]);
+                RecordModify(i, "PlayCount", p[3]);
+                if (long.TryParse(p[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var lp) && lp != 0)
+                    RecordModify(i, "LastPlayedDate", new DateTime(lp, DateTimeKind.Local).ToString("o", CultureInfo.InvariantCulture));
+                RecordModify(i, "PlayTime", p[5]);
             }
-            Console.WriteLine($"[store] recovered journal ({_journal.Count} game(s))");
+            if (!ReadOnly) { File.Delete(LegacyJournalPath); Console.WriteLine("[store] migrated legacy journal → op-log"); }
         }
-        catch (Exception ex) { Console.WriteLine("[store] journal recover: " + ex.Message); }
-        // Read-only → applied to memory only, never flushed (journal left untouched on disk).
-        if (!ReadOnly && !IsLaunchBoxRunning()) FlushJournalToXml();   // safe → write now + delete journal
+        catch (Exception ex) { Console.WriteLine("[store] legacy journal migrate: " + ex.Message); }
     }
 
-    /// <summary>At close: flush the journal to XML if safe, else keep it for next time.</summary>
+    /// <summary>At close: flush the op-log to XML if safe, else keep it for next time.</summary>
     public void FlushJournalIfSafe()
     {
-        if (ReadOnly) return;                                       // never write in read-only
-        if (IsLaunchBoxRunning()) { WriteJournalFile(); return; }   // LB/BB own the XMLs → defer
-        FlushJournalToXml();
-    }
-
-    private void FlushJournalToXml()
-    {
-        int[] js; lock (_journal) js = _journal.ToArray();
-        if (js.Length > 0) WriteToXml(js);
-        lock (_journal) _journal.Clear();
-        try { if (File.Exists(JournalPath)) File.Delete(JournalPath); } catch { }
+        if (ReadOnly) return;                  // never write in read-only
+        if (IsLaunchBoxRunning()) return;      // LB/BB own the XMLs → keep the log
+        FlushOpsToXml();
     }
 
     public static bool IsLaunchBoxRunning()
@@ -412,70 +426,185 @@ internal sealed class GameStore
         catch { return false; }
     }
 
-    // ── Plugin write-back (DIRECT, immediate, NOT gated) ─────────────────────
-    /// <summary>Writes mutated rows back into their source Platform XML (atomic). Returns rows written.</summary>
+    /// <summary>Plugin Save() path: flush now if safe, returning the number of games written.</summary>
     public int Flush()
     {
-        if (ReadOnly) { lock (_dirty) _dirty.Clear(); return 0; }   // read-only: no XML write at all
-        int[] dirty;
-        lock (_dirty) { if (_dirty.Count == 0) return 0; dirty = _dirty.ToArray(); _dirty.Clear(); }
-        return WriteToXml(dirty);
+        if (ReadOnly || IsLaunchBoxRunning()) return 0;
+        return FlushOpsToXml();
     }
 
-    // Shared atomic writer for the user-state fields (used by both Flush and the journal).
-    private int WriteToXml(IEnumerable<int> indices)
+    // Group ops by target XML file, apply in seq order on the loaded DOM (preserving unknown
+    // fields), write each touched doc to .tmp, atomically swap ALL, then clear the log. WAL golden
+    // rule: NEVER clear before every swap succeeds. Returns the number of distinct games written.
+    private int FlushOpsToXml()
     {
-        if (ReadOnly) return 0;
-        var idxs = indices.Where(i => i >= 0 && i < Rows.Length).Distinct().ToArray();
-        if (idxs.Length == 0) return 0;
-        int written = 0;
-        foreach (var grp in idxs.GroupBy(i => Str(Rows[i].PlatformIdx)))
+        var ops = _oplog?.ReadAll();
+        if (ops == null || ops.Count == 0) return 0;
+
+        var docs = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
+        var index = new Dictionary<string, Dictionary<Guid, XElement>>(StringComparer.OrdinalIgnoreCase);
+        var touched = new HashSet<Guid>();
+
+        void EnsureDoc(string file)
         {
-            if (!_platformFile.TryGetValue(grp.Key, out var file) || !File.Exists(file)) continue;
+            if (docs.ContainsKey(file)) return;
+            var d = XDocument.Load(file);
+            docs[file] = d;
+            var byId = new Dictionary<Guid, XElement>();
+            foreach (var ge in d.Root.Elements("Game"))
+                if (Guid.TryParse((string)ge.Element("ID"), out var gid)) byId[gid] = ge;
+            index[file] = byId;
+        }
+
+        foreach (var op in ops)
+        {
             try
             {
-                var doc = XDocument.Load(file);
-                var want = grp.ToDictionary(i => Rows[i].Id);
-                foreach (var ge in doc.Root.Elements("Game"))
-                {
-                    if (!Guid.TryParse((string)ge.Element("ID"), out var id) || !want.TryGetValue(id, out var i)) continue;
-                    var r = Rows[i];
-                    SetEl(ge, "Favorite", r.Favorite ? "true" : "false");
-                    SetEl(ge, "StarRatingFloat", r.StarRatingFloat.ToString(CultureInfo.InvariantCulture));
-                    SetEl(ge, "StarRating", ((int)Math.Round(r.StarRatingFloat)).ToString(CultureInfo.InvariantCulture));
-                    SetEl(ge, "PlayCount", r.PlayCount.ToString(CultureInfo.InvariantCulture));
-                    SetEl(ge, "PlayTime", r.PlayTime.ToString(CultureInfo.InvariantCulture));
-                    if (r.LastPlayedTicks != 0)
-                        SetEl(ge, "LastPlayedDate", new DateTime(r.LastPlayedTicks, DateTimeKind.Local).ToString("o", CultureInfo.InvariantCulture));
-                    written++;
-                }
-                AtomicSave(doc, file);
+                if (op.Entity != "Game" || !Guid.TryParse(op.Id, out var gid)) continue;   // child entities: future
+                string file = FileForGame(gid);
+                if (file == null || !File.Exists(file)) continue;                           // unresolved → drop
+                EnsureDoc(file);
+                var ge = index[file].TryGetValue(gid, out var el) ? el : null;
+                if (op.OpType == "delete")
+                { if (ge != null) { ge.Remove(); index[file].Remove(gid); touched.Add(gid); } continue; }
+                if (op.OpType != "modify" || ge == null) continue;
+                ApplyModify(ge, op.Field, op.Value);
+                touched.Add(gid);
             }
-            catch (Exception ex) { Console.WriteLine($"[store] write error {file}: {ex.Message}"); }
+            catch (Exception ex) { Console.WriteLine("[store] apply op seq=" + op.Seq + ": " + ex.Message); }
         }
-        return written;
+
+        if (docs.Count == 0) { _oplog.Clear(); return 0; }
+
+        // Phase 1: write every touched doc to .tmp.
+        var swaps = new List<(string tmp, string file)>();
+        foreach (var kv in docs)
+        {
+            string tmp = kv.Key + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try { kv.Value.Save(tmp); swaps.Add((tmp, kv.Key)); }
+            catch (Exception ex) { Console.WriteLine("[store] save tmp " + kv.Key + ": " + ex.Message); }
+        }
+        // Phase 2: swap all .tmp → real file (atomic per file).
+        foreach (var (tmp, file) in swaps) ReplaceAtomic(tmp, file);
+        // Phase 3: ONLY now clear the log.
+        _oplog.Clear();
+
+        Console.WriteLine($"[store] flushed {touched.Count} game(s) across {docs.Count} file(s)");
+        return touched.Count;
     }
 
-    private static void SetEl(XElement parent, string name, string value)
+    private string FileForGame(Guid gid)
+    {
+        if (!_byId.TryGetValue(gid, out var i)) return null;
+        string plat = Str(Rows[i].PlatformIdx);
+        return _platformFile.TryGetValue(plat, out var f) ? f : null;
+    }
+
+    private static void ApplyModify(XElement ge, string field, string value)
+    {
+        if (string.IsNullOrEmpty(field)) return;
+        if (field == "StarRatingFloat")   // keep the StarRating/StarRatingFloat pair in sync
+        {
+            SetOrRemove(ge, "StarRatingFloat", value);
+            SetOrRemove(ge, "StarRating", string.IsNullOrEmpty(value)
+                ? "" : ((int)Math.Round(ParseFloat(value))).ToString(CultureInfo.InvariantCulture));
+            return;
+        }
+        SetOrRemove(ge, field, value);
+    }
+
+    // LB omits empty/default fields, so a cleared value removes the element rather than writing it empty.
+    private static void SetOrRemove(XElement parent, string name, string value)
     {
         var e = parent.Element(name);
-        if (e == null) parent.Add(new XElement(name, value));
-        else e.Value = value;
+        if (string.IsNullOrEmpty(value)) { e?.Remove(); return; }
+        if (e == null) parent.Add(new XElement(name, value)); else e.Value = value;
     }
 
-    // ── Atomic disk writes (tmp → replace) ───────────────────────────────────
-    private static void AtomicSave(XDocument doc, string file)
+    // XML element name → applies the value into Rows[i]. Used by setters (live) and replay (boot).
+    private static readonly Dictionary<string, Action<GameStore, int, string>> _gameFieldParsers = BuildParsers();
+
+    private static void SetFlag(GameStore s, int i, int bit, bool on)
+    { s.Rows[i].Flags = on ? (s.Rows[i].Flags | bit) : (s.Rows[i].Flags & ~bit); }
+
+    private static Dictionary<string, Action<GameStore, int, string>> BuildParsers()
     {
-        string tmp = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        doc.Save(tmp);
-        ReplaceAtomic(tmp, file);
+        var d = new Dictionary<string, Action<GameStore, int, string>>(StringComparer.Ordinal);
+        // strings
+        d["Title"]                     = (s, i, v) => s.Rows[i].TitleIdx = s.InternRuntime(v);
+        d["SortTitle"]                 = (s, i, v) => s.Rows[i].SortTitleIdx = s.InternRuntime(v);
+        d["ApplicationPath"]           = (s, i, v) => s.Rows[i].AppPathIdx = s.InternRuntime(v);
+        d["Emulator"]                  = (s, i, v) => s.Rows[i].EmulatorIdIdx = s.InternRuntime(v);
+        d["Developer"]                 = (s, i, v) => s.Rows[i].DeveloperIdx = s.InternRuntime(v);
+        d["Publisher"]                 = (s, i, v) => s.Rows[i].PublisherIdx = s.InternRuntime(v);
+        d["Genre"]                     = (s, i, v) => s.Rows[i].GenresIdx = s.InternRuntime(v);
+        d["Region"]                    = (s, i, v) => s.Rows[i].RegionIdx = s.InternRuntime(v);
+        d["Rating"]                    = (s, i, v) => s.Rows[i].RatingIdx = s.InternRuntime(v);
+        d["Status"]                    = (s, i, v) => s.Rows[i].StatusIdx = s.InternRuntime(v);
+        d["PlayMode"]                  = (s, i, v) => s.Rows[i].PlayModeIdx = s.InternRuntime(v);
+        d["Version"]                   = (s, i, v) => s.Rows[i].VersionIdx = s.InternRuntime(v);
+        d["WikipediaURL"]              = (s, i, v) => s.Rows[i].WikipediaUrlIdx = s.InternRuntime(v);
+        d["VideoUrl"]                  = (s, i, v) => s.Rows[i].VideoUrlIdx = s.InternRuntime(v);
+        d["CommandLine"]               = (s, i, v) => s.Rows[i].CommandLineIdx = s.InternRuntime(v);
+        d["ConfigurationCommandLine"]  = (s, i, v) => s.Rows[i].ConfigCmdIdx = s.InternRuntime(v);
+        d["ConfigurationPath"]         = (s, i, v) => s.Rows[i].ConfigPathIdx = s.InternRuntime(v);
+        d["DosBoxConfigurationPath"]   = (s, i, v) => s.Rows[i].DosBoxCfgIdx = s.InternRuntime(v);
+        d["CustomDosBoxVersionPath"]   = (s, i, v) => s.Rows[i].CustomDosBoxIdx = s.InternRuntime(v);
+        d["ScummVMGameDataFolderPath"] = (s, i, v) => s.Rows[i].ScummDataIdx = s.InternRuntime(v);
+        d["ScummVMGameType"]           = (s, i, v) => s.Rows[i].ScummTypeIdx = s.InternRuntime(v);
+        d["Series"]                    = (s, i, v) => s.Rows[i].SeriesIdx = s.InternRuntime(v);
+        d["Source"]                    = (s, i, v) => s.Rows[i].SourceIdx = s.InternRuntime(v);
+        d["ReleaseType"]               = (s, i, v) => s.Rows[i].ReleaseTypeIdx = s.InternRuntime(v);
+        d["RootFolder"]                = (s, i, v) => s.Rows[i].RootFolderIdx = s.InternRuntime(v);
+        d["CloneOf"]                   = (s, i, v) => s.Rows[i].CloneOfIdx = s.InternRuntime(v);
+        d["Progress"]                  = (s, i, v) => s.Rows[i].ProgressIdx = s.InternRuntime(v);
+        d["RetroAchievementsHash"]     = (s, i, v) => s.Rows[i].RaHashIdx = s.InternRuntime(v);
+        d["VideoPath"]                 = (s, i, v) => s.Rows[i].VideoPathIdx = s.InternRuntime(v);
+        d["ThemeVideoPath"]            = (s, i, v) => s.Rows[i].ThemeVideoPathIdx = s.InternRuntime(v);
+        d["ManualPath"]                = (s, i, v) => s.Rows[i].ManualPathIdx = s.InternRuntime(v);
+        d["MusicPath"]                 = (s, i, v) => s.Rows[i].MusicPathIdx = s.InternRuntime(v);
+        d["Notes"]                     = (s, i, v) => { if (s._notes != null && i < s._notes.Length) s._notes[i] = v; };
+        // numerics
+        d["StarRatingFloat"]           = (s, i, v) => s.Rows[i].StarRatingFloat = ParseFloat(v);
+        d["StarRating"]                = (s, i, v) => s.Rows[i].StarRatingFloat = ParseFloat(v);
+        d["PlayCount"]                 = (s, i, v) => s.Rows[i].PlayCount = ParseInt(v, 0);
+        d["PlayTime"]                  = (s, i, v) => s.Rows[i].PlayTime = ParseInt(v, 0);
+        d["CommunityStarRatingTotalVotes"] = (s, i, v) => s.Rows[i].CommunityVotes = ParseInt(v, 0);
+        d["CommunityStarRating"]       = (s, i, v) => s.Rows[i].CommunityStarRating = ParseFloat(v);
+        d["DatabaseID"]                = (s, i, v) => s.Rows[i].LaunchBoxDbId = ParseInt(v, -1);
+        d["MaxPlayers"]                = (s, i, v) => s.Rows[i].MaxPlayers = ParseInt(v, -1);
+        d["StartupLoadDelay"]          = (s, i, v) => s.Rows[i].StartupLoadDelay = ParseInt(v, 0);
+        // dates
+        d["DateAdded"]                 = (s, i, v) => s.Rows[i].DateAddedTicks = ParseTicks(v);
+        d["DateModified"]              = (s, i, v) => s.Rows[i].DateModifiedTicks = ParseTicks(v);
+        d["LastPlayedDate"]            = (s, i, v) => s.Rows[i].LastPlayedTicks = ParseTicks(v);
+        d["ReleaseDate"]               = (s, i, v) =>
+        {
+            s.Rows[i].ReleaseDateTicks = ParseTicks(v);
+            s.Rows[i].ReleaseYear = s.Rows[i].ReleaseDateTicks != 0 ? new DateTime(s.Rows[i].ReleaseDateTicks).Year : -1;
+        };
+        // bools
+        d["Favorite"]                  = (s, i, v) => s.Rows[i].Favorite = ParseBool(v);
+        d["Hide"]                      = (s, i, v) => s.Rows[i].Hide = ParseBool(v);
+        d["Broken"]                    = (s, i, v) => s.Rows[i].Broken = ParseBool(v);
+        d["Completed"]                 = (s, i, v) => s.Rows[i].Completed = ParseBool(v);
+        d["Installed"]                 = (s, i, v) => s.Rows[i].Installed = ParseTri(v);
+        // packed flags
+        d["UseDosBox"]                 = (s, i, v) => SetFlag(s, i, GFlags.UseDosBox, ParseBool(v));
+        d["UseScummVM"]                = (s, i, v) => SetFlag(s, i, GFlags.UseScummVm, ParseBool(v));
+        d["ScummVMAspectCorrection"]   = (s, i, v) => SetFlag(s, i, GFlags.ScummAspect, ParseBool(v));
+        d["ScummVMFullscreen"]         = (s, i, v) => SetFlag(s, i, GFlags.ScummFull, ParseBool(v));
+        d["Portable"]                  = (s, i, v) => SetFlag(s, i, GFlags.Portable, ParseBool(v));
+        d["UseStartupScreen"]          = (s, i, v) => SetFlag(s, i, GFlags.UseStartup, ParseBool(v));
+        d["OverrideDefaultStartupScreenSettings"] = (s, i, v) => SetFlag(s, i, GFlags.OverrideStartup, ParseBool(v));
+        d["HideAllNonExclusiveFullscreenWindows"] = (s, i, v) => SetFlag(s, i, GFlags.HideNonExclusive, ParseBool(v));
+        d["HideMouseCursorInGame"]     = (s, i, v) => SetFlag(s, i, GFlags.HideMouse, ParseBool(v));
+        d["DisableShutdownScreen"]     = (s, i, v) => SetFlag(s, i, GFlags.DisableShutdown, ParseBool(v));
+        d["AggressiveWindowHiding"]    = (s, i, v) => SetFlag(s, i, GFlags.AggressiveHiding, ParseBool(v));
+        return d;
     }
-    private static void AtomicWriteText(string file, string text)
-    {
-        string tmp = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        File.WriteAllText(tmp, text);
-        ReplaceAtomic(tmp, file);
-    }
+
+    // ── Atomic disk write (tmp → replace) ────────────────────────────────────
     private static void ReplaceAtomic(string tmp, string dest)
     {
         try
@@ -492,7 +621,7 @@ internal sealed class GameStore
         long rowBytes = (long)Rows.Length * System.Runtime.InteropServices.Marshal.SizeOf<GameRow>();
         long poolChars = Pool.Sum(s => (long)(s?.Length ?? 0));
         long notesChars = _notes?.Sum(s => (long)(s?.Length ?? 0)) ?? 0;
-        Console.WriteLine($"[store] games={Rows.Length} platforms={_byPlatform.Count} pool={Pool.Length} entries (~{poolChars * 2 / 1048576.0:F1}MB chars) " +
+        Console.WriteLine($"[store] games={Rows.Length} platforms={_byPlatform.Count} pool={Pool.Count} entries (~{poolChars * 2 / 1048576.0:F1}MB chars) " +
                           $"rows~{rowBytes / 1048576.0:F1}MB notes~{notesChars * 2 / 1048576.0:F1}MB ({(_notes == null ? "dropped" : "loaded")})");
     }
 

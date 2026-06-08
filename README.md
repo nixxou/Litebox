@@ -30,8 +30,14 @@ through its own implementation of the API, with no dependency on any plugin.
     VNDB tag pills, and notes.
 - Frees RAM while a game runs (drops the optional data tier + trims the working
   set, optionally drops the host GameCache) and can show a "game running" screen.
-- Optional write-back: with `ReadOnly=false`, favorites/ratings/play stats are
-  journalled and written to the XMLs only when LaunchBox/BigBox aren't running.
+- Optional write-back: with `ReadOnly=false`, plugin/UI edits to a game (any of the
+  ~60 modelled `IGame` fields — title, metadata, dates, flags, plus favorites /
+  ratings / play stats) are recorded to an append-only operation log
+  (`Core\LiteBox.pending.db`, SQLite) and applied to the Platform XMLs at a safe time
+  (`Save()`, close, or next boot) — only when LaunchBox/BigBox aren't running, since
+  they own the XMLs while alive. Edits are surgical (only the touched nodes change;
+  unknown/unmodelled fields are preserved) and crash-safe (idempotent replay; the log
+  is cleared only after every file is durably swapped).
 
 ## Requirements
 
@@ -82,13 +88,14 @@ LiteBox.exe                 GUI (default)
 LiteBox.exe --headless      diagnostics (--playlists --mediatest --gcdump --drop --play --drylaunch)
 LiteBox.exe --plugins <dir> override the plugins root
 LiteBox.exe --library <dir> override the Platforms XML directory
+LiteBox.exe --selftest-writeback  round-trips the write-back op-log on temp files (no live data)
 ```
 
 ## Options (gear menu / `LiteBox.ini`)
 
-- **ReadOnly** (default **true**): never write to the LaunchBox XMLs; favorite /
-  rating / play changes stay in memory for the session. Set false to persist them
-  (journalled, written only when LB/BigBox aren't running).
+- **ReadOnly** (default **true**): never write to the LaunchBox XMLs; edits stay in
+  memory for the session. Set false to persist them via the operation log (see
+  write-back above) — applied to the XMLs only when LB/BigBox aren't running.
 - **Show "game running" screen**, **Unload the list while a game runs**, **Use the
   image cache** (degraded thumbnails).
 - **Use game cache** (when ExtendDB is absent) + **Unload game cache during game**.

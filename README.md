@@ -51,6 +51,11 @@ through its own implementation of the API, with no dependency on any plugin.
   is durably swapped). Before each write the pristine originals of just the affected files
   are zipped to `<LB>\Backups\LiteBox\` (sub-paths preserved; 50 most recent kept) — a
   targeted alternative to LB's full Data backups.
+- Beyond the SDK: the official `IGame` exposes only a subset of the `<Game>` XML. Since LiteBox
+  owns the data layer it doesn't bridle plugins to that subset — `HostGame` implements the public
+  `ILiteBoxGame { GetField / SetField / ExtraFieldNames }`, giving read/write access to **every**
+  field LB writes (GogAppId, Origin/Android/Missing/RetroAchievements, pause-screen scripts, …).
+  Use it typed (LiteBox-native plugin) or by reflection on the public methods (a cross-LB plugin).
 
 ## Requirements
 

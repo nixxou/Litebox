@@ -5,6 +5,7 @@
 // each instead of a full IGame.
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using Unbroken.LaunchBox.Plugins.Data;
@@ -13,11 +14,21 @@ using LbApiHost.Host.Media;
 
 namespace LbApiHost.Host.Data;
 
-internal sealed class HostGame : DummyGame
+internal sealed class HostGame : DummyGame, ILiteBoxGame
 {
     private readonly GameStore _s;
     private readonly int _i;
     public HostGame(GameStore s, int i) { _s = s; _i = i; }
+
+    // ── ILiteBoxGame: generic access to EVERY <Game> field, incl. those IGame doesn't expose ──
+    public string GetField(string xmlElementName) => _s.GetExtraField(R.Id, xmlElementName);
+    public void SetField(string xmlElementName, string value)
+    {
+        if (string.IsNullOrEmpty(xmlElementName)) return;
+        if (xmlElementName == "Platform" && !_s.IsAddedGame(R.Id)) { _s.MoveGamePlatform(_i, value); return; }
+        _s.SetGameField(_i, xmlElementName, value);   // modelled → typed store, else → sparse extra
+    }
+    public IReadOnlyCollection<string> ExtraFieldNames => _s.ExtraFieldNames(R.Id);
 
     private ref readonly GameRow R => ref _s.Rows[_i];
 

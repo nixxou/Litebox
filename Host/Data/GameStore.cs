@@ -84,6 +84,21 @@ internal sealed class GameStore
     private readonly HashSet<Guid> _addedIds = new();
     public bool IsAddedGame(Guid id) => _addedIds.Contains(id);
 
+    // Sparse store of <Game> fields NOT modelled by GameRow / IGame (Gog*, Android*, Missing*,
+    // RetroAchievements*, pause AHK, …). Most games have none. Read/written generically via
+    // ILiteBoxGame; persisted as ordinary modify ops. Modelled field names are skipped here.
+    private readonly Dictionary<Guid, Dictionary<string, string>> _extra = new();
+    // Lazy (NOT a field initializer) — _gameFieldParsers is declared later in the file, so a static
+    // field initializer here would run first and see it null.
+    private static HashSet<string> _modeledNamesCache;
+    private static HashSet<string> ModeledNames => _modeledNamesCache ??= new HashSet<string>(_gameFieldParsers.Keys, StringComparer.Ordinal) { "ID" };
+
+    public string GetExtraField(Guid id, string name)
+        => _extra.TryGetValue(id, out var m) && m.TryGetValue(name, out var v) ? (v ?? "") : "";
+    public IReadOnlyCollection<string> ExtraFieldNames(Guid id)
+        => _extra.TryGetValue(id, out var m) ? (IReadOnlyCollection<string>)m.Keys : Array.Empty<string>();
+    public bool IsModeledField(string name) => ModeledNames.Contains(name);
+
     // Write-back operation log (WAL): every mutation (user-state OR plugin) is appended as an
     // ordered event and flushed to the XMLs at a safe time. See OpLog. Opened in Load().
     private OpLog _oplog;
@@ -299,6 +314,19 @@ internal sealed class GameStore
                 notes?.Add(V("Notes"));
                 _byId[id] = i;
 
+                // Stash non-modelled <Game> child elements (Gog*, Android*, Missing*, RetroAchievements*, …)
+                // sparsely, so ILiteBoxGame can read/write the full field set without bloating GameRow.
+                Dictionary<string, string> extra = null;
+                foreach (var ce in g.Elements())
+                {
+                    string en2 = ce.Name.LocalName;
+                    if (ModeledNames.Contains(en2)) continue;
+                    string ev = ce.Value;
+                    if (string.IsNullOrEmpty(ev)) continue;
+                    (extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[en2] = ev;
+                }
+                if (extra != null) _extra[id] = extra;
+
                 string plat = V("Platform") ?? "";
                 if (!_byPlatform.TryGetValue(plat, out var list)) _byPlatform[plat] = list = new List<int>();
                 list.Add(i);
@@ -376,11 +404,14 @@ internal sealed class GameStore
         _oplog.Append("modify", "Game", Rows[i].Id.ToString(), null, xmlName, value);
     }
 
-    private readonly HashSet<string> _warnedFields = new(StringComparer.Ordinal);
     private void ApplyFieldToRow(int i, string xmlName, string value)
     {
-        if (_gameFieldParsers.TryGetValue(xmlName, out var apply)) { try { apply(this, i, value); } catch { } }
-        else if (_warnedFields.Add(xmlName)) Console.WriteLine("[store] write-back: unmapped field '" + xmlName + "' (ignored)");
+        if (_gameFieldParsers.TryGetValue(xmlName, out var apply)) { try { apply(this, i, value); } catch { } return; }
+        // non-IGame field → sparse extra store ("" clears it). Flushes via the same modify op path.
+        var id = Rows[i].Id;
+        if (string.IsNullOrEmpty(value)) { if (_extra.TryGetValue(id, out var m0)) m0.Remove(xmlName); return; }
+        if (!_extra.TryGetValue(id, out var m)) _extra[id] = m = new Dictionary<string, string>(StringComparer.Ordinal);
+        m[xmlName] = value;
     }
 
     /// <summary>At boot: migrate any legacy journal, re-apply the surviving op-log to memory (UI

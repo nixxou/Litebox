@@ -31,6 +31,7 @@ internal static class WriteBackSelfTest
             fails += TestRoundTrip(platformsDir);
             fails += TestChildEntities(platformsDir);
             fails += TestGameAddDelete(platformsDir);
+            fails += TestEmulators(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
         finally { try { Directory.Delete(temp, true); } catch { } }
@@ -200,6 +201,48 @@ internal static class WriteBackSelfTest
         var doc2 = XDocument.Load(newFile);
         bool gone = !doc2.Root.Elements("Game").Any(e => (string)e.Element("ID") == gid.ToString());
         f += Check("delete: added game removed from file", del && gone);
+        return f;
+    }
+
+    private static int TestEmulators(string platformsDir)
+    {
+        int f = 0;
+        string dataDir = Path.GetDirectoryName(platformsDir);
+        var emuId = Guid.NewGuid().ToString();
+        string emuFile = Path.Combine(dataDir, "Emulators.xml");
+        File.WriteAllText(emuFile,
+            "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
+            $"  <Emulator><ID>{emuId}</ID><Title>RetroArch</Title><ApplicationPath>ra.exe</ApplicationPath></Emulator>\n" +
+            $"  <EmulatorPlatform><Emulator>{emuId}</Emulator><Platform>MS-DOS</Platform><CommandLine>-L old</CommandLine></EmulatorPlatform>\n" +
+            "</LaunchBox>\n");
+
+        var store = GameStore.Load(platformsDir, Path.Combine(dataDir, "emu.pending.db"));
+        store.ReadOnly = false;
+        var dm = new HostDataManagerXml(store, dataDir, Path.Combine(dataDir, "..", "Images")) { ReadOnly = false };
+
+        var emu = dm.GetEmulatorById(emuId);
+        f += Check("emu: found", emu != null);
+        if (emu == null) { store.CloseLog(); return f; }
+        emu.Title = "RetroArch (edited)";
+        emu.CommandLine = "-L global";
+        emu.EnableHardcoreAchievements = true;
+        emu.GetAllEmulatorPlatforms()[0].CommandLine = "-L core2";       // edit existing per-platform cmd
+        var ep = emu.AddNewEmulatorPlatform(); ep.Platform = "SNES"; ep.CommandLine = "-L snes"; ep.M3uDiscLoadEnabled = true;
+        var ne = dm.AddNewEmulator(); ne.Title = "Standalone"; ne.ApplicationPath = "stand.exe";
+        dm.Save(true);
+        store.CloseLog();
+
+        var doc = XDocument.Load(emuFile);
+        var ee = doc.Root.Elements("Emulator").FirstOrDefault(e => (string)e.Element("ID") == emuId);
+        f += Check("emu: modify (Title/CommandLine/flag)", ee != null
+            && (string)ee.Element("Title") == "RetroArch (edited)"
+            && (string)ee.Element("CommandLine") == "-L global"
+            && (string)ee.Element("EnableHardcoreAchievements") == "true");
+        var eps = doc.Root.Elements("EmulatorPlatform").Where(e => (string)e.Element("Emulator") == emuId).ToList();
+        f += Check("emu: existing platform edited + new platform added", eps.Count == 2
+            && eps.Any(e => (string)e.Element("Platform") == "MS-DOS" && (string)e.Element("CommandLine") == "-L core2")
+            && eps.Any(e => (string)e.Element("Platform") == "SNES" && (string)e.Element("M3uDiscLoadEnabled") == "true"));
+        f += Check("emu: AddNewEmulator persisted", doc.Root.Elements("Emulator").Any(e => (string)e.Element("Title") == "Standalone" && (string)e.Element("ApplicationPath") == "stand.exe"));
         return f;
     }
 

@@ -20,7 +20,7 @@ internal sealed class HostDataManagerXml : DummyDataManager
     private readonly Dictionary<string, IPlatform> _platformByName;
     private readonly IPlatformCategory[] _categories;
     private readonly Dictionary<string, IPlatformCategory> _categoryByName;
-    private readonly IEmulator[] _emulators;
+    private readonly List<IEmulator> _emulators;
     private readonly Dictionary<string, IEmulator> _emulatorById;
     private readonly IPlaylist[] _playlists;
     private readonly Dictionary<string, IPlaylist> _playlistById;
@@ -68,9 +68,10 @@ internal sealed class HostDataManagerXml : DummyDataManager
         _platforms = byName.Values.Cast<IPlatform>().ToArray();
         _platformByName = byName.ToDictionary(kv => kv.Key, kv => (IPlatform)kv.Value, StringComparer.OrdinalIgnoreCase);
 
-        // Emulators.
+        // Emulators (attach the store so setters / AddNew / TryRemove route through the op-log).
         var emus = EmulatorCatalog.Load(dataDir);
-        _emulators = emus.Cast<IEmulator>().ToArray();
+        foreach (var e in emus) e.Attach(_store);
+        _emulators = emus.Cast<IEmulator>().ToList();
         _emulatorById = emus.ToDictionary(e => e.Id, e => (IEmulator)e, StringComparer.OrdinalIgnoreCase);
 
         // Playlists: manual ones resolve via GetGameById; auto-populate ones
@@ -151,9 +152,28 @@ internal sealed class HostDataManagerXml : DummyDataManager
     // so this returns platforms only. The GUI uses RootNodes (the full object tree).
     public override IList<IPlatform> GetRootPlatformsCategoriesPlaylists() => _platforms.ToList();
 
-    public override IEmulator[] GetAllEmulators() => _emulators;
+    public override IEmulator[] GetAllEmulators() => _emulators.ToArray();
     public override IEmulator GetEmulatorById(string id)
         => (id != null && _emulatorById.TryGetValue(id, out var e)) ? e : null;
+
+    public override IEmulator AddNewEmulator()
+    {
+        string id = Guid.NewGuid().ToString();
+        var e = new HostEmulator(id, new Dictionary<string, string>(StringComparer.Ordinal) { ["ID"] = id }, new List<HostEmulatorPlatform>());
+        e.Attach(_store);
+        _emulators.Add(e);
+        _emulatorById[id] = e;
+        _store?.RecordEntityAdd("Emulator", id);
+        return e;
+    }
+
+    public override bool TryRemoveEmulator(IEmulator emulator)
+    {
+        if (emulator == null || string.IsNullOrEmpty(emulator.Id)) return false;
+        _emulatorById.Remove(emulator.Id);
+        _store?.RecordEntityDelete("Emulator", emulator.Id);
+        return true;
+    }
 
     public override IPlaylist[] GetAllPlaylists() => _playlists;
     public override IPlaylist GetPlaylistById(string id)

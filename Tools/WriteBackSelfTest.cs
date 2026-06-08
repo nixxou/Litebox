@@ -37,6 +37,7 @@ internal static class WriteBackSelfTest
             fails += TestPlaylists(platformsDir);
             fails += TestExtraFields(platformsDir);
             fails += TestSubEntities(platformsDir);
+            fails += TestTier2DropReloadAddMove(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
         finally { try { Directory.Delete(temp, true); } catch { } }
@@ -451,6 +452,42 @@ internal static class WriteBackSelfTest
         f += Check("sub: SetSubEntities persisted + other sub-entity intact",
             d2.Root.Elements("ModelSettings").Any(e => (string)e.Element("ModelType") == "bluray")
             && d2.Root.Elements("GameControllerSupport").Any(e => (string)e.Element("ControllerId") == "ctrl-1"));
+        return f;
+    }
+
+    private static int TestTier2DropReloadAddMove(string platformsDir)
+    {
+        int f = 0;
+        string dataDir = Path.GetDirectoryName(platformsDir);
+        var movId = Guid.NewGuid();
+        string xml = Path.Combine(platformsDir, "T2.xml");
+        File.WriteAllText(xml, "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
+            $"  <Game><ID>{movId}</ID><Title>Mover</Title><Platform>T2A</Platform><Notes>movnotes</Notes></Game>\n" +
+            "</LaunchBox>\n");
+
+        var store = GameStore.Load(platformsDir, Path.Combine(dataDir, "t2.pending.db"));
+        store.ReadOnly = false;
+
+        // ADD a new game (un-flushed) with Tier-1 (Developer) + Tier-2 (Notes, extra) data.
+        int idx = store.AddGameRow("Added", out var addId);
+        var add = new HostGame(store, idx);
+        add.Platform = "T2A"; add.Developer = "Dev"; add.Notes = "addnotes"; add.SetField("GogAppId", "g-add");
+        // MOVE the existing game to another platform (un-flushed) — same object, Platform changes.
+        var mov = new HostGame(store, store.ById[movId]);
+        mov.Platform = "T2B";
+
+        store.DropOptional();      // simulate game launch
+        store.ReloadOptional();    // simulate return
+
+        f += Check("tier2/add: added game still present (Tier-1 row kept)", store.ById.ContainsKey(addId));
+        var addBack = new HostGame(store, store.ById[addId]);
+        f += Check("tier2/add: Tier-1 field intact (Developer)", addBack.Developer == "Dev");
+        f += Check("tier2/add: Tier-2 Notes restored", addBack.Notes == "addnotes");
+        f += Check("tier2/add: Tier-2 extra restored", addBack.GetField("GogAppId") == "g-add");
+        var movBack = new HostGame(store, store.ById[movId]);
+        f += Check("tier2/move: same game, new platform kept", movBack.Platform == "T2B");
+        f += Check("tier2/move: Notes intact", movBack.Notes == "movnotes");
+        store.CloseLog();
         return f;
     }
 

@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback"))
+if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback"))
     DebugConsole.Enable();
 
 // Act like LaunchBox's root launcher: LiteBox.exe lives in <LB>\Core (so
@@ -56,6 +56,10 @@ if (args.Contains("--gen-stubs"))
 // Write-back round-trip test (temp files only — never touches real LB data / pending db).
 if (args.Contains("--selftest-writeback"))
     return WriteBackSelfTest.Run();
+
+// Seed real write-back changes across Platform XMLs via the plugin API (for the LB-ingestion test).
+if (args.Contains("--seed-writeback"))
+    return WriteBackSeed.Run(args);
 
 // Default (no args, or --host): run the host GUI.
 return HostBoot.Run(args);

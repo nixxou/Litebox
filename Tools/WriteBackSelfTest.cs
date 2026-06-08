@@ -7,6 +7,7 @@
 
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Xml.Linq;
 using LbApiHost.Host.Data;
 
@@ -21,7 +22,8 @@ internal static class WriteBackSelfTest
         try
         {
             Directory.CreateDirectory(temp);
-            string platformsDir = Path.Combine(temp, "Platforms");
+            // Mirror the LB layout (temp\Data\Platforms) so backups derive into temp\Backups\LiteBox.
+            string platformsDir = Path.Combine(temp, "Data", "Platforms");
             Directory.CreateDirectory(platformsDir);
 
             fails += TestOpLog(temp);
@@ -91,6 +93,24 @@ internal static class WriteBackSelfTest
         f += Check("cleared Notes removed", e1?.Element("Notes") == null);
         f += Check("untouched game intact", (string)e2?.Element("Developer") == "Two");
         f += Check("no .tmp leftovers", Directory.GetFiles(platformsDir, "*.tmp").Length == 0);
+
+        // Backup: a zip of the pristine originals under <LB>\Backups\LiteBox, sub-path preserved.
+        string dataRoot = Path.GetDirectoryName(platformsDir);
+        string backupDir = Path.Combine(Path.GetDirectoryName(dataRoot), "Backups", "LiteBox");
+        var zips = Directory.Exists(backupDir) ? Directory.GetFiles(backupDir, "*.zip") : Array.Empty<string>();
+        f += Check("backup zip created", zips.Length == 1);
+        if (zips.Length == 1)
+        {
+            using var za = ZipFile.OpenRead(zips[0]);
+            var entry = za.GetEntry("Platforms/TestPlat.xml");      // Data-relative sub-path kept
+            f += Check("backup keeps Data-relative subpath", entry != null);
+            if (entry != null)
+            {
+                using var sr = new StreamReader(entry.Open());
+                string original = sr.ReadToEnd();
+                f += Check("backup holds pristine original", original.Contains("OldDev") && original.Contains("<Notes>old</Notes>"));
+            }
+        }
         return f;
     }
 

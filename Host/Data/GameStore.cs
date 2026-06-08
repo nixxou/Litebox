@@ -16,6 +16,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Xml;
@@ -476,6 +477,9 @@ internal sealed class GameStore
 
         if (docs.Count == 0) { _oplog.Clear(); return 0; }
 
+        // Snapshot the pristine originals (still untouched on disk) before any swap.
+        BackupBeforeWrite(docs.Keys);
+
         // Phase 1: write every touched doc to .tmp.
         var swaps = new List<(string tmp, string file)>();
         foreach (var kv in docs)
@@ -498,6 +502,56 @@ internal sealed class GameStore
         if (!_byId.TryGetValue(gid, out var i)) return null;
         string plat = Str(Rows[i].PlatformIdx);
         return _platformFile.TryGetValue(plat, out var f) ? f : null;
+    }
+
+    // Before overwriting any XML, snapshot the pristine originals into a small timestamped zip —
+    // ONLY the dirty files, with their sub-path relative to <LB>\Data preserved (so identically
+    // named files in different folders don't collide). Lives under <LB>\Backups\LiteBox. Unlike
+    // LB's automatic backups this is targeted (a few KB), not a full Data dump. Best-effort:
+    // any failure is logged and skipped — a backup problem must never block the write.
+    private void BackupBeforeWrite(ICollection<string> files)
+    {
+        if (files == null || files.Count == 0) return;
+        try
+        {
+            string dataRoot = Path.GetDirectoryName(_platformsDir);                       // <LB>\Data
+            string lbRoot = dataRoot != null ? Path.GetDirectoryName(dataRoot) : null;    // <LB>
+            if (string.IsNullOrEmpty(dataRoot) || string.IsNullOrEmpty(lbRoot)) return;
+            string dir = Path.Combine(lbRoot, "Backups", "LiteBox");
+            Directory.CreateDirectory(dir);
+
+            var now = DateTime.Now;
+            string zipPath = Path.Combine(dir, $"LiteBox Data Backup {now:yyyy-MM-dd HH-mm-ss}.zip");
+            int n = 1;
+            while (File.Exists(zipPath))   // two flushes in the same second
+                zipPath = Path.Combine(dir, $"LiteBox Data Backup {now:yyyy-MM-dd HH-mm-ss} ({n++}).zip");
+
+            int added = 0;
+            using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+                foreach (var f in files)
+                {
+                    if (!File.Exists(f)) continue;
+                    string rel = Path.GetRelativePath(dataRoot, f).Replace('\\', '/');
+                    zip.CreateEntryFromFile(f, rel, CompressionLevel.Optimal);
+                    added++;
+                }
+
+            PruneBackups(dir, 50);
+            Console.WriteLine($"[store] backed up {added} file(s) → {zipPath}");
+        }
+        catch (Exception ex) { Console.WriteLine("[store] backup skipped: " + ex.Message); }
+    }
+
+    private static void PruneBackups(string dir, int keep)
+    {
+        try
+        {
+            var files = Directory.GetFiles(dir, "LiteBox Data Backup *.zip");
+            if (files.Length <= keep) return;
+            Array.Sort(files, StringComparer.OrdinalIgnoreCase);   // timestamped name sorts chronologically
+            for (int i = 0; i < files.Length - keep; i++) { try { File.Delete(files[i]); } catch { } }
+        }
+        catch { }
     }
 
     private static void ApplyModify(XElement ge, string field, string value)

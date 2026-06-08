@@ -37,7 +37,9 @@ through its own implementation of the API, with no dependency on any plugin.
   (`Save()`, close, or next boot) — only when LaunchBox/BigBox aren't running, since
   they own the XMLs while alive. Edits are surgical (only the touched nodes change;
   unknown/unmodelled fields are preserved) and crash-safe (idempotent replay; the log
-  is cleared only after every file is durably swapped).
+  is cleared only after every file is durably swapped). Before each write the pristine
+  originals of just the affected files are zipped to `<LB>\Backups\LiteBox\` (sub-paths
+  preserved; 50 most recent kept) — a targeted alternative to LB's full Data backups.
 
 ## Requirements
 

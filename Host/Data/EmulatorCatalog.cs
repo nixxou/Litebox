@@ -16,8 +16,10 @@ using LbApiHost.Generated;
 
 namespace LbApiHost.Host.Data;
 
-internal sealed class HostEmulatorPlatform : DummyEmulatorPlatform
+internal sealed class HostEmulatorPlatform : DummyEmulatorPlatform, ILiteBoxFields
 {
+    private static readonly HashSet<string> _modeled = new(StringComparer.Ordinal)
+    { "Emulator", "Platform", "CommandLine", "Default", "M3uDiscLoadEnabled", "AutoExtract" };
     private readonly Dictionary<string, string> _f;   // xml element name -> value
     private HostEmulator _owner;
     public HostEmulatorPlatform(Dictionary<string, string> f) { _f = f; }
@@ -27,6 +29,12 @@ internal sealed class HostEmulatorPlatform : DummyEmulatorPlatform
     private string G(string k) => _f.TryGetValue(k, out var v) ? v ?? "" : "";
     private bool GB(string k) => string.Equals(G(k), "true", StringComparison.OrdinalIgnoreCase);
     private void S(string k, string v) { _f[k] = v ?? ""; _owner?.RecordPlatforms(); }
+
+    // ── ILiteBoxFields: every field round-trips (the dict already holds them all) ──
+    public string GetField(string xmlElementName) => G(xmlElementName);
+    public void SetField(string xmlElementName, string value)
+    { if (string.IsNullOrEmpty(xmlElementName)) return; if (string.IsNullOrEmpty(value)) _f.Remove(xmlElementName); else _f[xmlElementName] = value; _owner?.RecordPlatforms(); }
+    public IReadOnlyCollection<string> ExtraFieldNames => _f.Keys.Where(k => !_modeled.Contains(k)).ToList();
 
     public override string EmulatorId { get => G("Emulator"); set => S("Emulator", value); }
     public override string Platform { get => G("Platform"); set => S("Platform", value); }
@@ -40,8 +48,16 @@ internal sealed class HostEmulatorPlatform : DummyEmulatorPlatform
     }
 }
 
-internal sealed class HostEmulator : DummyEmulator
+internal sealed class HostEmulator : DummyEmulator, ILiteBoxFields
 {
+    private static readonly HashSet<string> _modeled = new(StringComparer.Ordinal)
+    {
+        "ID", "ApplicationPath", "CommandLine", "DefaultPlatform", "Title", "NoQuotes", "NoSpace", "HideConsole",
+        "FileNameWithoutExtensionAndPath", "AutoHotkeyScript", "PauseAutoHotkeyScript", "ResumeAutoHotkeyScript",
+        "ResetAutoHotkeyScript", "SaveStateAutoHotkeyScript", "LoadStateAutoHotkeyScript", "SwapDiscsAutoHotkeyScript",
+        "ExitAutoHotkeyScript", "AutoExtract", "UseStartupScreen", "HideAllNonExclusiveFullscreenWindows",
+        "StartupLoadDelay", "HideMouseCursorInGame", "DisableShutdownScreen", "AggressiveWindowHiding", "EnableHardcoreAchievements",
+    };
     private readonly string _id;
     private readonly Dictionary<string, string> _f;
     private readonly List<HostEmulatorPlatform> _platforms;
@@ -55,6 +71,13 @@ internal sealed class HostEmulator : DummyEmulator
     private int GI(string k) => int.TryParse(G(k), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : 0;
     private void S(string k, string v) { _f[k] = v ?? ""; _store?.RecordEntityModify("Emulator", _id, k, v ?? ""); }
     private void SB(string k, bool v) => S(k, v ? "true" : "false");
+
+    // ── ILiteBoxFields: every emulator field (incl. UsePauseScreen, SkipVersionCheck, … which the
+    // SDK IEmulator doesn't expose) round-trips — the dict already holds them all. ──
+    public string GetField(string xmlElementName) => G(xmlElementName);
+    public void SetField(string xmlElementName, string value)
+    { if (string.IsNullOrEmpty(xmlElementName) || xmlElementName == "ID") return; if (string.IsNullOrEmpty(value)) _f.Remove(xmlElementName); else _f[xmlElementName] = value; _store?.RecordEntityModify("Emulator", _id, xmlElementName, value ?? ""); }
+    public IReadOnlyCollection<string> ExtraFieldNames => _f.Keys.Where(k => !_modeled.Contains(k)).ToList();
 
     /// <summary>Re-serialise this emulator's whole platform collection and log a replace op.</summary>
     internal void RecordPlatforms()

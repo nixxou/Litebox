@@ -1,32 +1,38 @@
-// Public escape-hatch interface so plugins can reach EVERY <Game> XML field, including the ~47
-// LaunchBox writes but does NOT expose on the SDK's IGame (GogAppId, Origin*, Android*, Missing*,
-// RetroAchievements*, the pause-screen AutoHotkey scripts, …). LaunchBox itself uses richer internal
-// classes; LiteBox owns the data layer, so it doesn't bridle plugins to the SDK subset.
+// Public escape-hatch so plugins can reach EVERY XML field of an entity, including the ones
+// LaunchBox writes but does NOT expose on its SDK interfaces (IGame/IEmulator/IPlatform/…). Examples:
+// a game's GogAppId/Origin*/Android*/Missing*/RetroAchievements*; an emulator's UsePauseScreen /
+// SuspendProcessOnPause / SkipVersionCheck / LoginToCheevoOnGameLaunch; etc. LaunchBox itself uses
+// richer internal classes — LiteBox owns the data layer, so it doesn't bridle plugins to the subset.
 //
 // How plugins use it:
-//   • A LiteBox-native plugin: `if (game is ILiteBoxGame x) x.SetField("GogAppId", "123");`
+//   • A LiteBox-native plugin: `if (entity is ILiteBoxFields x) x.SetField("UsePauseScreen", "true");`
 //   • A cross-LaunchBox plugin (e.g. ExtendDB, which must also run under real LB and can't hard-
 //     reference LiteBox) reflects the same public methods by name:
-//       game.GetType().GetMethod("SetField", new[]{typeof(string),typeof(string)})?.Invoke(game, …)
+//       entity.GetType().GetMethod("SetField", new[]{typeof(string),typeof(string)})?.Invoke(entity, …)
 //
-// Writes go through the same op-log as the typed setters (persisted to the Platform XML, surgical,
-// crash-safe). For fields IGame already exposes, prefer the typed properties — SetField/GetField
-// also handle them, but GetField is primarily the reader for the non-IGame fields.
+// Writes go through the same op-log as the typed setters (persisted to the XML, surgical, crash-safe).
+// For fields the SDK interface already exposes, prefer the typed property; SetField also handles them.
 
 using System.Collections.Generic;
 
 namespace LbApiHost;
 
-public interface ILiteBoxGame
+/// <summary>Generic full-field access implemented by every LiteBox host entity (game, emulator,
+/// emulator-platform, platform, category, playlist).</summary>
+public interface ILiteBoxFields
 {
-    /// <summary>Reads a raw XML field value by element name (e.g. "GogAppId"). For fields IGame
-    /// exposes, prefer the typed property; this returns "" for an absent/unset field.</summary>
+    /// <summary>Reads a raw XML field by element name. Returns "" for an absent field. For fields the
+    /// SDK interface exposes, prefer the typed property.</summary>
     string GetField(string xmlElementName);
 
-    /// <summary>Writes a raw XML field by element name. Works for ANY field — those modelled by IGame
-    /// (routed to the typed store) and those it doesn't expose (persisted verbatim). "" clears it.</summary>
+    /// <summary>Writes a raw XML field by element name — any field, whether the SDK interface exposes
+    /// it or not. "" clears it. Persisted to the XML via the op-log.</summary>
     void SetField(string xmlElementName, string value);
 
-    /// <summary>The non-IGame field names currently present for this game (the extras LB wrote).</summary>
+    /// <summary>The field names NOT exposed by the SDK interface that are currently present on this
+    /// entity (the extras LaunchBox wrote).</summary>
     IReadOnlyCollection<string> ExtraFieldNames { get; }
 }
+
+/// <summary>Marker for games (kept for game-typed casts); identical shape to <see cref="ILiteBoxFields"/>.</summary>
+public interface ILiteBoxGame : ILiteBoxFields { }

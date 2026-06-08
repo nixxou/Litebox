@@ -30,6 +30,7 @@ internal static class WriteBackSelfTest
             fails += TestOpLog(temp);
             fails += TestRoundTrip(platformsDir);
             fails += TestChildEntities(platformsDir);
+            fails += TestGameAddDelete(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
         finally { try { Directory.Delete(temp, true); } catch { } }
@@ -157,6 +158,48 @@ internal static class WriteBackSelfTest
         bool stillThere = doc2.Root.Elements("AdditionalApplication").Any(e => (string)e.Element("GameID") == gid.ToString());
         f += Check("child: remove → node gone, CustomField kept", removed && !stillThere
             && doc2.Root.Elements("CustomField").Any(e => (string)e.Element("GameID") == gid.ToString()));
+        return f;
+    }
+
+    private static int TestGameAddDelete(string platformsDir)
+    {
+        int f = 0;
+        // Add a brand-new game on a platform with no existing file → the file must be created.
+        var store = GameStore.Load(platformsDir, Path.Combine(platformsDir, "..", "add.pending.db"));
+        store.ReadOnly = false;
+        int idx = store.AddGameRow("Brand New Game", out var gid);
+        var hg = new HostGame(store, idx);
+        hg.Platform = "NewConsole";
+        hg.Developer = "Acme";
+        hg.ReleaseDate = new DateTime(1999, 1, 1);
+        hg.Favorite = true;
+        store.Flush();
+        store.CloseLog();
+
+        string newFile = Path.Combine(platformsDir, "NewConsole.xml");
+        f += Check("add: new platform file created", File.Exists(newFile));
+        if (File.Exists(newFile))
+        {
+            var doc = XDocument.Load(newFile);
+            var ge = doc.Root.Elements("Game").FirstOrDefault(e => (string)e.Element("ID") == gid.ToString());
+            f += Check("add: <Game> node created", ge != null);
+            f += Check("add: fields written", ge != null
+                && (string)ge.Element("Title") == "Brand New Game"
+                && (string)ge.Element("Platform") == "NewConsole"
+                && (string)ge.Element("Developer") == "Acme"
+                && (string)ge.Element("Favorite") == "true"
+                && ((string)ge.Element("ReleaseDate"))?.StartsWith("1999-01-01") == true);
+        }
+
+        // Reload (the new game is now a normal game) and delete it.
+        var store2 = GameStore.Load(platformsDir, Path.Combine(platformsDir, "..", "add2.pending.db"));
+        store2.ReadOnly = false;
+        bool del = store2.DeleteGameRow(gid);
+        store2.Flush();
+        store2.CloseLog();
+        var doc2 = XDocument.Load(newFile);
+        bool gone = !doc2.Root.Elements("Game").Any(e => (string)e.Element("ID") == gid.ToString());
+        f += Check("delete: added game removed from file", del && gone);
         return f;
     }
 

@@ -105,6 +105,22 @@ internal sealed class GameStore
     // exposes none of them. gameId -> elementType -> list of field maps.
     private readonly Dictionary<Guid, Dictionary<string, List<Dictionary<string, string>>>> _subEntities = new();
 
+    // Stash a game's non-modelled <Game> fields (Gog*/Android*/Missing*/RetroAchievements*/pause/…)
+    // sparsely & pooled. Shared by Build and ReloadOptional (Tier-2 reload).
+    private void CaptureExtra(Guid id, XElement g)
+    {
+        Dictionary<string, string> extra = null;
+        foreach (var ce in g.Elements())
+        {
+            string en2 = ce.Name.LocalName;
+            if (ModeledNames.Contains(en2)) continue;
+            string ev = ce.Value;
+            if (string.IsNullOrEmpty(ev)) continue;
+            (extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[Pooled(en2)] = Pooled(ev);
+        }
+        if (extra != null) _extra[id] = extra;
+    }
+
     private void CaptureSubEntity(string type, XElement el)
     {
         string gidStr = (string)(el.Element("GameId") ?? el.Element("GameID"));
@@ -382,18 +398,7 @@ internal sealed class GameStore
                 notes?.Add(V("Notes"));
                 _byId[id] = i;
 
-                // Stash non-modelled <Game> child elements (Gog*, Android*, Missing*, RetroAchievements*, …)
-                // sparsely, so ILiteBoxGame can read/write the full field set without bloating GameRow.
-                Dictionary<string, string> extra = null;
-                foreach (var ce in g.Elements())
-                {
-                    string en2 = ce.Name.LocalName;
-                    if (ModeledNames.Contains(en2)) continue;
-                    string ev = ce.Value;
-                    if (string.IsNullOrEmpty(ev)) continue;
-                    (extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[Pooled(en2)] = Pooled(ev);
-                }
-                if (extra != null) _extra[id] = extra;
+                CaptureExtra(id, g);   // non-modelled <Game> fields → Tier-2 _extra (droppable)
 
                 string plat = V("Platform") ?? "";
                 if (!_byPlatform.TryGetValue(plat, out var list)) _byPlatform[plat] = list = new List<int>();
@@ -411,10 +416,13 @@ internal sealed class GameStore
     public void DropOptional()
     {
         _notes = null;
+        _extra.Clear();         // full-field cache (Missing*/Gog*/…) — non-essential during a game
+        _subEntities.Clear();   // ModelSettings / GameControllerSupport / … — likewise
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
     }
 
-    /// <summary>Re-read the optional tier from the XMLs (after a game exits).</summary>
+    /// <summary>Re-read the optional tier from the XMLs (after a game exits): Notes + the full-field
+    /// extras + the per-game sub-entities.</summary>
     public void ReloadOptional()
     {
         if (_notes != null) return;
@@ -426,11 +434,18 @@ internal sealed class GameStore
             if (!reader.ReadToFollowing("LaunchBox")) continue;
             while (!reader.EOF)
             {
-                if (reader.NodeType != XmlNodeType.Element || reader.Name != "Game") { reader.Read(); continue; }
+                if (reader.NodeType != XmlNodeType.Element) { reader.Read(); continue; }
+                if (reader.Name != "Game")
+                {
+                    if (reader.Depth == 0) { reader.Read(); continue; }   // <LaunchBox> root → descend
+                    try { CaptureSubEntity(reader.Name, (XElement)XNode.ReadFrom(reader)); } catch { reader.Read(); }
+                    continue;
+                }
                 XElement g;
                 try { g = (XElement)XNode.ReadFrom(reader); } catch { reader.Read(); continue; }
-                if (Guid.TryParse(g.Element("ID")?.Value, out var id) && _byId.TryGetValue(id, out var i))
-                    notes[i] = g.Element("Notes")?.Value;
+                if (!Guid.TryParse(g.Element("ID")?.Value, out var id) || !_byId.TryGetValue(id, out var i)) continue;
+                notes[i] = g.Element("Notes")?.Value;
+                CaptureExtra(id, g);
             }
         }
         _notes = notes;

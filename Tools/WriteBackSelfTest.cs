@@ -35,6 +35,7 @@ internal static class WriteBackSelfTest
             fails += TestPlatforms(platformsDir);
             fails += TestGameMove(platformsDir);
             fails += TestPlaylists(platformsDir);
+            fails += TestExtraFields(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
         finally { try { Directory.Delete(temp, true); } catch { } }
@@ -354,6 +355,37 @@ internal static class WriteBackSelfTest
         string nfile = Path.Combine(plDir, "Brand New List.xml");
         f += Check("playlist: AddNewPlaylist created file+node", File.Exists(nfile)
             && XDocument.Load(nfile).Root.Elements("Playlist").Any(e => (string)e.Element("Name") == "Brand New List" && (string)e.Element("Notes") == "fresh"));
+        return f;
+    }
+
+    private static int TestExtraFields(string platformsDir)
+    {
+        int f = 0;
+        var gid = Guid.NewGuid();
+        string xml = Path.Combine(platformsDir, "ExtraPlat.xml");
+        File.WriteAllText(xml, "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
+            $"  <Game><ID>{gid}</ID><Title>Extra</Title><Platform>ExtraPlat</Platform>" +
+            "<GogAppId>oldgog</GogAppId><MissingVideo>true</MissingVideo></Game>\n" +
+            "</LaunchBox>\n");
+
+        var store = GameStore.Load(platformsDir, Path.Combine(platformsDir, "..", "extra.pending.db"));
+        store.ReadOnly = false;
+        if (!store.ById.TryGetValue(gid, out var i)) { Check("extra: game found", false); store.CloseLog(); return 1; }
+        var lg = (ILiteBoxGame)new HostGame(store, i);
+        f += Check("extra: read non-IGame field loaded from XML", lg.GetField("GogAppId") == "oldgog");
+        f += Check("extra: ExtraFieldNames lists non-IGame fields", lg.ExtraFieldNames.Contains("GogAppId") && lg.ExtraFieldNames.Contains("MissingVideo"));
+        lg.SetField("GogAppId", "newgog");                 // non-IGame, existing
+        lg.SetField("RetroAchievementsId", "777");         // non-IGame, new
+        lg.SetField("Developer", "ViaSetField");           // IGame field via the generic setter
+        store.Flush();
+        store.CloseLog();
+
+        var ge = XDocument.Load(xml).Root.Elements("Game").FirstOrDefault(e => (string)e.Element("ID") == gid.ToString());
+        f += Check("extra: non-IGame writes + IGame write + preserved", ge != null
+            && (string)ge.Element("GogAppId") == "newgog"
+            && (string)ge.Element("RetroAchievementsId") == "777"
+            && (string)ge.Element("Developer") == "ViaSetField"
+            && (string)ge.Element("MissingVideo") == "true");
         return f;
     }
 

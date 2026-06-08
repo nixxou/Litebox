@@ -34,5 +34,16 @@ public interface ILiteBoxFields
     IReadOnlyCollection<string> ExtraFieldNames { get; }
 }
 
-/// <summary>Marker for games (kept for game-typed casts); identical shape to <see cref="ILiteBoxFields"/>.</summary>
-public interface ILiteBoxGame : ILiteBoxFields { }
+/// <summary>Games add access to their per-game sub-entities that LaunchBox writes as separate top-level
+/// elements and the SDK doesn't expose at all — ModelSettings (3D box/cart display override),
+/// GameControllerSupport, GameSave, and any future type. Each row is a raw field map (element name →
+/// value); SetSubEntities replaces the whole collection for that type and persists it.</summary>
+public interface ILiteBoxGame : ILiteBoxFields
+{
+    /// <summary>Sub-entity element types present for this game (e.g. "ModelSettings").</summary>
+    IReadOnlyCollection<string> SubEntityTypes { get; }
+    /// <summary>The rows of a sub-entity type for this game (raw field maps).</summary>
+    IReadOnlyList<IReadOnlyDictionary<string, string>> GetSubEntities(string elementType);
+    /// <summary>Replaces this game's sub-entities of <paramref name="elementType"/> and persists them.</summary>
+    void SetSubEntities(string elementType, IEnumerable<IReadOnlyDictionary<string, string>> rows);
+}

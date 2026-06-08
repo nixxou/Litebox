@@ -29,6 +29,10 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
         _s.SetGameField(_i, xmlElementName, value);   // modelled → typed store, else → sparse extra
     }
     public IReadOnlyCollection<string> ExtraFieldNames => _s.ExtraFieldNames(R.Id);
+    // Per-game sub-entities LB writes as separate elements (ModelSettings / GameControllerSupport / …).
+    public IReadOnlyCollection<string> SubEntityTypes => _s.SubEntityTypes(R.Id);
+    public IReadOnlyList<IReadOnlyDictionary<string, string>> GetSubEntities(string elementType) => _s.GetSubEntities(R.Id, elementType);
+    public void SetSubEntities(string elementType, IEnumerable<IReadOnlyDictionary<string, string>> rows) => _s.SetSubEntities(R.Id, elementType, rows);
 
     private ref readonly GameRow R => ref _s.Rows[_i];
 

@@ -36,6 +36,7 @@ internal static class WriteBackSelfTest
             fails += TestGameMove(platformsDir);
             fails += TestPlaylists(platformsDir);
             fails += TestExtraFields(platformsDir);
+            fails += TestSubEntities(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
         finally { try { Directory.Delete(temp, true); } catch { } }
@@ -396,6 +397,46 @@ internal static class WriteBackSelfTest
             && (string)ge.Element("RetroAchievementsId") == "777"
             && (string)ge.Element("Developer") == "ViaSetField"
             && (string)ge.Element("MissingVideo") == "true");
+        return f;
+    }
+
+    private static int TestSubEntities(string platformsDir)
+    {
+        int f = 0;
+        var gid = Guid.NewGuid();
+        string xml = Path.Combine(platformsDir, "SubPlat.xml");
+        File.WriteAllText(xml, "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
+            $"  <Game><ID>{gid}</ID><Title>SubHost</Title><Platform>SubPlat</Platform><Developer>Old</Developer></Game>\n" +
+            $"  <ModelSettings><GameId>{gid}</GameId><ModelType>dvd</ModelType><UseFullScanImages>true</UseFullScanImages></ModelSettings>\n" +
+            $"  <GameControllerSupport><GameId>{gid}</GameId><ControllerId>ctrl-1</ControllerId><SupportLevel>1</SupportLevel></GameControllerSupport>\n" +
+            "</LaunchBox>\n");
+
+        // Phase 1: modify the GAME only → the sub-entities must survive untouched (preservation).
+        var s1 = GameStore.Load(platformsDir, Path.Combine(platformsDir, "..", "sub1.pending.db"));
+        s1.ReadOnly = false;
+        if (!s1.ById.TryGetValue(gid, out var i1)) { Check("sub: game found", false); s1.CloseLog(); return 1; }
+        var hg1 = new HostGame(s1, i1);
+        f += Check("sub: types listed", hg1.SubEntityTypes.Contains("ModelSettings") && hg1.SubEntityTypes.Contains("GameControllerSupport"));
+        f += Check("sub: read ModelSettings.ModelType", hg1.GetSubEntities("ModelSettings").FirstOrDefault()?["ModelType"] == "dvd");
+        hg1.Favorite = true;
+        s1.Flush(); s1.CloseLog();
+        var d1 = XDocument.Load(xml);
+        f += Check("sub: preserved on game-only write", (string)d1.Root.Element("Game").Element("Favorite") == "true"
+            && d1.Root.Elements("ModelSettings").Any(e => (string)e.Element("GameId") == gid.ToString() && (string)e.Element("ModelType") == "dvd")
+            && d1.Root.Elements("GameControllerSupport").Any(e => (string)e.Element("ControllerId") == "ctrl-1"));
+
+        // Phase 2: edit a sub-entity via SetSubEntities → persisted; the other type stays intact.
+        var s2 = GameStore.Load(platformsDir, Path.Combine(platformsDir, "..", "sub2.pending.db"));
+        s2.ReadOnly = false;
+        var hg2 = new HostGame(s2, s2.ById[gid]);
+        var rows = hg2.GetSubEntities("ModelSettings").Select(r => r.ToDictionary(kv => kv.Key, kv => kv.Value)).ToList();
+        rows[0]["ModelType"] = "bluray";
+        hg2.SetSubEntities("ModelSettings", rows);
+        s2.Flush(); s2.CloseLog();
+        var d2 = XDocument.Load(xml);
+        f += Check("sub: SetSubEntities persisted + other sub-entity intact",
+            d2.Root.Elements("ModelSettings").Any(e => (string)e.Element("ModelType") == "bluray")
+            && d2.Root.Elements("GameControllerSupport").Any(e => (string)e.Element("ControllerId") == "ctrl-1"));
         return f;
     }
 

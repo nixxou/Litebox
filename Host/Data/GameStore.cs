@@ -110,7 +110,7 @@ internal sealed class GameStore
         string gidStr = (string)(el.Element("GameId") ?? el.Element("GameID"));
         if (!Guid.TryParse(gidStr, out var sgid)) return;   // only per-game sub-entities
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var c in el.Elements()) map[c.Name.LocalName] = c.Value;
+        foreach (var c in el.Elements()) map[Pooled(c.Name.LocalName)] = Pooled(c.Value);
         if (!_subEntities.TryGetValue(sgid, out var byType)) _subEntities[sgid] = byType = new(StringComparer.Ordinal);
         if (!byType.TryGetValue(type, out var lst)) byType[type] = lst = new();
         lst.Add(map);
@@ -195,6 +195,10 @@ internal sealed class GameStore
         if (_poolMap.TryGetValue(v, out var idx)) return idx;
         idx = Pool.Count; Pool.Add(v); _poolMap[v] = idx; return idx;
     }
+
+    /// <summary>Returns the shared/pooled instance of a string (dedups the highly-repetitive extra
+    /// field names + values like "true"/"false" so they don't blow up memory across many games).</summary>
+    public string Pooled(string s) => string.IsNullOrEmpty(s) ? s : Pool[InternRuntime(s)];
     public string NotesFor(int i) => (_notes != null && i >= 0 && i < _notes.Length) ? _notes[i] : null;
     public bool OptionalLoaded => _notes != null;
 
@@ -387,7 +391,7 @@ internal sealed class GameStore
                     if (ModeledNames.Contains(en2)) continue;
                     string ev = ce.Value;
                     if (string.IsNullOrEmpty(ev)) continue;
-                    (extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[en2] = ev;
+                    (extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[Pooled(en2)] = Pooled(ev);
                 }
                 if (extra != null) _extra[id] = extra;
 
@@ -475,7 +479,7 @@ internal sealed class GameStore
         var id = Rows[i].Id;
         if (string.IsNullOrEmpty(value)) { if (_extra.TryGetValue(id, out var m0)) m0.Remove(xmlName); return; }
         if (!_extra.TryGetValue(id, out var m)) _extra[id] = m = new Dictionary<string, string>(StringComparer.Ordinal);
-        m[xmlName] = value;
+        m[Pooled(xmlName)] = Pooled(value);
     }
 
     /// <summary>At boot: migrate any legacy journal, re-apply the surviving op-log to memory (UI
@@ -1303,6 +1307,15 @@ internal sealed class GameStore
         long notesChars = _notes?.Sum(s => (long)(s?.Length ?? 0)) ?? 0;
         Console.WriteLine($"[store] games={Rows.Length} platforms={_byPlatform.Count} pool={Pool.Count} entries (~{poolChars * 2 / 1048576.0:F1}MB chars) " +
                           $"rows~{rowBytes / 1048576.0:F1}MB notes~{notesChars * 2 / 1048576.0:F1}MB ({(_notes == null ? "dropped" : "loaded")})");
+
+        // Footprint of the newer full-field / sub-entity stores (the bits that grew memory).
+        int exGames = _extra.Count; long exEntries = 0, exChars = 0;
+        foreach (var m in _extra.Values) { exEntries += m.Count; foreach (var kv in m) exChars += (kv.Key?.Length ?? 0) + (kv.Value?.Length ?? 0); }
+        int seGames = _subEntities.Count; long seEntries = 0, seChars = 0;
+        foreach (var byType in _subEntities.Values) foreach (var lst in byType.Values) foreach (var rec in lst) { seEntries += rec.Count; foreach (var kv in rec) seChars += (kv.Key?.Length ?? 0) + (kv.Value?.Length ?? 0); }
+        // Strings are pooled (shared), so the real cost is the dict structure (~32 B/field) not the chars.
+        Console.WriteLine($"[store] extra: {exGames} games, {exEntries} fields (strings pooled; ~{exEntries * 32 / 1048576.0:F1}MB dict overhead)  " +
+                          $"subEntities: {seGames} games, {seEntries} fields");
     }
 
     // ── Parsers ──────────────────────────────────────────────────────────────

@@ -389,6 +389,12 @@ internal static class WriteBackSelfTest
         f += Check("extra: dropped at launch (Tier-2)", lg.GetField("GogAppId") == "" && lg.ExtraFieldNames.Count == 0);
         store.ReloadOptional();
         f += Check("extra: reloaded after exit", lg.GetField("GogAppId") == "oldgog");
+        // An UN-FLUSHED todo edit (only in the op-log, not yet on disk) must survive drop/reload:
+        // ReloadOptional re-reads pristine XML, then re-overlays the pending ops for the dropped tier.
+        lg.SetField("OriginAppId", "pending-123");
+        store.DropOptional();
+        store.ReloadOptional();
+        f += Check("extra: un-flushed todo op re-overlaid after reload", lg.GetField("OriginAppId") == "pending-123");
         lg.SetField("GogAppId", "newgog");                 // non-IGame, existing
         lg.SetField("RetroAchievementsId", "777");         // non-IGame, new
         lg.SetField("Developer", "ViaSetField");           // IGame field via the generic setter

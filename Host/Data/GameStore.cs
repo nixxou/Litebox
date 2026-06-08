@@ -406,6 +406,10 @@ internal sealed class GameStore
                 {
                     if (Guid.TryParse(op.Id, out var dg)) { _byId.Remove(dg); _addedIds.Remove(dg); }
                 }
+                else if (op.Entity == "Game" && op.OpType == "move")
+                {
+                    if (Guid.TryParse(op.Id, out var mg) && _byId.TryGetValue(mg, out var mi)) MoveInMemory(mi, op.Value);
+                }
                 else if (op.OpType == "replace" && IsChildEntity(op.Entity))
                 {
                     if (Guid.TryParse(op.ParentId, out var pgid)) ApplyChildReplace(op.Entity, pgid, op.Value);
@@ -526,6 +530,23 @@ internal sealed class GameStore
                     {
                         if (addedFields.Remove(gid)) { addedOrder.Remove(gid); continue; }       // added then deleted → no node
                         deletedExisting.Add((gid, op.Value));                                    // op.Value = platform
+                        continue;
+                    }
+                    if (op.OpType == "move")   // op.Field = old platform, op.Value = new platform
+                    {
+                        if (addedFields.TryGetValue(gid, out var afld)) { afld["Platform"] = op.Value; continue; } // not yet on disk
+                        string oldFile = _platformFile.TryGetValue(op.Field ?? "", out var of) ? of : null;
+                        string newFile = PlatformFile(op.Value);
+                        if (newFile == null) continue;
+                        XElement node = null;
+                        if (oldFile != null && File.Exists(oldFile)) { EnsureDoc(oldFile); if (index[oldFile].TryGetValue(gid, out node)) { node.Remove(); index[oldFile].Remove(gid); } }
+                        EnsureDoc(newFile);
+                        if (node == null) continue;                                              // already moved / not found
+                        SetOrRemove(node, "Platform", op.Value);
+                        if (index[newFile].TryGetValue(gid, out var dup)) { dup.Remove(); index[newFile].Remove(gid); }
+                        docs[newFile].Root.Add(node);
+                        index[newFile][gid] = node;
+                        touched.Add(gid);
                         continue;
                     }
                 }
@@ -678,6 +699,30 @@ internal sealed class GameStore
         _byId[id] = idx;
         _addedIds.Add(id);
         return idx;
+    }
+
+    /// <summary>Moves an existing game to another platform: updates memory (+ the per-platform index)
+    /// and logs a "move" op (field = old platform, value = new) so the flush relocates the &lt;Game&gt;
+    /// node between Platform files, preserving all its fields.</summary>
+    public void MoveGamePlatform(int i, string newPlatform)
+    {
+        if (i < 0 || i >= Rows.Length) return;
+        string old = Str(Rows[i].PlatformIdx);
+        newPlatform ??= "";
+        if (string.Equals(old, newPlatform, StringComparison.OrdinalIgnoreCase)) return;
+        MoveInMemory(i, newPlatform);
+        if (!ReadOnly && _oplog != null) _oplog.Append("move", "Game", Rows[i].Id.ToString(), null, old, newPlatform);
+    }
+
+    // Memory + per-platform index only (used by MoveGamePlatform and by boot replay, which must not re-log).
+    private void MoveInMemory(int i, string newPlatform)
+    {
+        string old = Str(Rows[i].PlatformIdx);
+        if (string.Equals(old, newPlatform, StringComparison.OrdinalIgnoreCase)) return;
+        if (_byPlatform.TryGetValue(old, out var ol)) ol.Remove(i);
+        Rows[i].PlatformIdx = InternRuntime(newPlatform);
+        if (!_byPlatform.TryGetValue(newPlatform, out var nl)) _byPlatform[newPlatform] = nl = new List<int>();
+        if (!nl.Contains(i)) nl.Add(i);
     }
 
     /// <summary>Removes a game in memory and logs a "delete" op (carrying its platform so the flush

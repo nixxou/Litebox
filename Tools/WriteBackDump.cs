@@ -33,6 +33,13 @@ internal static class WriteBackDump
             Console.WriteLine($"[dump]   IGame.Developer='{g.Developer}'  Favorite={g.Favorite}  StarRating={g.StarRating}");
             Console.WriteLine($"[dump]   non-IGame fields stored ({extra.Count}):");
             foreach (var f in extra) Console.WriteLine($"[dump]      {f} = {lf.GetField(f)}");
+            var lg = (ILiteBoxGame)g;
+            foreach (var t in lg.SubEntityTypes)
+            {
+                Console.WriteLine($"[dump]   sub-entity <{t}>:");
+                foreach (var row in lg.GetSubEntities(t))
+                    Console.WriteLine("[dump]      { " + string.Join(", ", row.Select(kv => kv.Key + "=" + kv.Value)) + " }");
+            }
         }
         store.CloseLog();
         if (shown == 0) Console.WriteLine("[dump] no game matched '" + needle + "'");

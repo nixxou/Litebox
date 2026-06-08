@@ -99,6 +99,63 @@ internal sealed class GameStore
         => _extra.TryGetValue(id, out var m) ? (IReadOnlyCollection<string>)m.Keys : Array.Empty<string>();
     public bool IsModeledField(string name) => ModeledNames.Contains(name);
 
+    // ── Generic per-game sub-entities (ModelSettings / GameControllerSupport / GameSave / future) ──
+    // Top-level XML elements that carry a GameId/GameID and aren't one of the typed child entities.
+    // Captured raw (ordered field maps) so they round-trip and stay accessible, even though the SDK
+    // exposes none of them. gameId -> elementType -> list of field maps.
+    private readonly Dictionary<Guid, Dictionary<string, List<Dictionary<string, string>>>> _subEntities = new();
+
+    private void CaptureSubEntity(string type, XElement el)
+    {
+        string gidStr = (string)(el.Element("GameId") ?? el.Element("GameID"));
+        if (!Guid.TryParse(gidStr, out var sgid)) return;   // only per-game sub-entities
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var c in el.Elements()) map[c.Name.LocalName] = c.Value;
+        if (!_subEntities.TryGetValue(sgid, out var byType)) _subEntities[sgid] = byType = new(StringComparer.Ordinal);
+        if (!byType.TryGetValue(type, out var lst)) byType[type] = lst = new();
+        lst.Add(map);
+    }
+
+    public IReadOnlyCollection<string> SubEntityTypes(Guid gid)
+        => _subEntities.TryGetValue(gid, out var m) ? (IReadOnlyCollection<string>)m.Keys : Array.Empty<string>();
+    public IReadOnlyList<IReadOnlyDictionary<string, string>> GetSubEntities(Guid gid, string type)
+        => _subEntities.TryGetValue(gid, out var m) && m.TryGetValue(type, out var l)
+            ? l.ConvertAll(d => (IReadOnlyDictionary<string, string>)d)
+            : (IReadOnlyList<IReadOnlyDictionary<string, string>>)Array.Empty<IReadOnlyDictionary<string, string>>();
+    public void SetSubEntities(Guid gid, string type, IEnumerable<IReadOnlyDictionary<string, string>> rows)
+    {
+        if (string.IsNullOrEmpty(type)) return;
+        var list = rows == null ? new List<Dictionary<string, string>>()
+            : rows.Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+        if (!_subEntities.TryGetValue(gid, out var m)) _subEntities[gid] = m = new(StringComparer.Ordinal);
+        m[type] = list;
+        if (ReadOnly || _oplog == null) return;
+        _oplog.Append("replace", type, null, gid.ToString(), null, JsonSerializer.Serialize(list));
+    }
+
+    // Memory rebuild from a generic sub-entity replace op (boot replay).
+    private void ApplySubEntityReplaceToMemory(Guid gid, string type, string json)
+    {
+        List<Dictionary<string, string>> list;
+        try { list = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
+        if (!_subEntities.TryGetValue(gid, out var m)) _subEntities[gid] = m = new(StringComparer.Ordinal);
+        m[type] = list;
+    }
+
+    // DOM apply: drop the game's existing <type> sub-entities, re-emit from JSON (field order as stored).
+    private static void ApplySubEntityReplaceToDoc(XDocument doc, string type, string gameId, string json)
+    {
+        foreach (var e in doc.Root.Elements(type).Where(e => (string)(e.Element("GameId") ?? e.Element("GameID")) == gameId).ToList()) e.Remove();
+        List<Dictionary<string, string>> list;
+        try { list = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
+        foreach (var rec in list)
+        {
+            var el = new XElement(type);
+            foreach (var kv in rec) if (!string.IsNullOrEmpty(kv.Value)) el.Add(new XElement(kv.Key, kv.Value));
+            doc.Root.Add(el);
+        }
+    }
+
     // Write-back operation log (WAL): every mutation (user-state OR plugin) is appended as an
     // ordered event and flushed to the XMLs at a safe time. See OpLog. Opened in Load().
     private OpLog _oplog;
@@ -176,7 +233,14 @@ internal sealed class GameStore
             {
                 if (reader.NodeType != XmlNodeType.Element) { reader.Read(); continue; }
                 string en = reader.Name;
-                if (en != "Game" && en != "AdditionalApplication" && en != "AlternateName" && en != "Mount" && en != "CustomField") { reader.Read(); continue; }
+                if (en != "Game" && en != "AdditionalApplication" && en != "AlternateName" && en != "Mount" && en != "CustomField")
+                {
+                    if (reader.Depth == 0) { reader.Read(); continue; }   // <LaunchBox> root → descend, don't slurp
+                    // Unknown per-game sub-entity (ModelSettings / GameControllerSupport / GameSave / future)
+                    // — capture raw so LiteBox neither loses nor hides it. Skip non-game-linked elements.
+                    try { CaptureSubEntity(en, (XElement)XNode.ReadFrom(reader)); } catch { reader.Read(); }
+                    continue;
+                }
 
                 XElement g;
                 try { g = (XElement)XNode.ReadFrom(reader); } catch { reader.Read(); continue; }
@@ -446,6 +510,10 @@ internal sealed class GameStore
                 {
                     if (Guid.TryParse(op.ParentId, out var pgid)) ApplyChildReplace(op.Entity, pgid, op.Value);
                 }
+                else if (op.OpType == "replace" && Guid.TryParse(op.ParentId, out var sg) && _byId.ContainsKey(sg))
+                {
+                    ApplySubEntityReplaceToMemory(sg, op.Entity, op.Value);   // generic per-game sub-entity
+                }
             }
             Console.WriteLine($"[store] recovered op-log ({ops.Count} op(s))");
         }
@@ -638,6 +706,15 @@ internal sealed class GameStore
                         try { list = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(op.Value) ?? new(); } catch { list = new(); }
                         foreach (var rec in list) pdoc.Root.Add(BuildElement(op.Entity, rec, order));
                     }
+                }
+                else if (op.OpType == "replace" && Guid.TryParse(op.ParentId, out var subgid))
+                {
+                    // Generic per-game sub-entity (ModelSettings / GameControllerSupport / GameSave / future).
+                    string file = FileForGame(subgid);
+                    if (file == null || !File.Exists(file)) continue;
+                    EnsureDoc(file);
+                    ApplySubEntityReplaceToDoc(docs[file], op.Entity, op.ParentId, op.Value);
+                    touched.Add(subgid);
                 }
             }
             catch (Exception ex) { Console.WriteLine("[store] apply op seq=" + op.Seq + ": " + ex.Message); }

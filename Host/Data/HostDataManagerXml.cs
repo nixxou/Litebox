@@ -23,7 +23,7 @@ internal sealed class HostDataManagerXml : DummyDataManager
     private readonly Dictionary<string, IPlatformCategory> _categoryByName;
     private readonly List<IEmulator> _emulators;
     private readonly Dictionary<string, IEmulator> _emulatorById;
-    private readonly IPlaylist[] _playlists;
+    private readonly List<IPlaylist> _playlists;
     private readonly Dictionary<string, IPlaylist> _playlistById;
     private readonly List<object> _roots;   // tree roots (categories/platforms/playlists) from Parents.xml
 
@@ -81,8 +81,8 @@ internal sealed class HostDataManagerXml : DummyDataManager
         // Playlists: manual ones resolve via GetGameById; auto-populate ones
         // evaluate their filters over the full game list.
         var playlists = PlaylistCatalog.Load(dataDir, imagesRoot);
-        foreach (var pl in playlists) { pl.SetResolver(GetGameById); pl.SetAllGamesProvider(() => _allGames); }
-        _playlists = playlists.Cast<IPlaylist>().ToArray();
+        foreach (var pl in playlists) { pl.SetResolver(GetGameById); pl.SetAllGamesProvider(() => _allGames); pl.Attach(_store); }
+        _playlists = playlists.Cast<IPlaylist>().ToList();
         _playlistById = new Dictionary<string, IPlaylist>(StringComparer.OrdinalIgnoreCase);
         foreach (var pl in playlists)
             if (!string.IsNullOrEmpty(pl.PlaylistIdValue)) _playlistById[pl.PlaylistIdValue] = pl;
@@ -124,7 +124,7 @@ internal sealed class HostDataManagerXml : DummyDataManager
         foreach (var pl in playlists) if (!hasParent.Contains(pl)) roots.Add(pl);
         _roots = roots.OrderBy(HostPlatformCategory.NodeName, StringComparer.OrdinalIgnoreCase).ToList();
 
-        Console.WriteLine($"[HostDataManagerXml] playlists={_playlists.Length} roots={_roots.Count}");
+        Console.WriteLine($"[HostDataManagerXml] playlists={_playlists.Count} roots={_roots.Count}");
     }
 
     public override IGame[] GetAllGames() => _allGames.ToArray();
@@ -213,9 +213,31 @@ internal sealed class HostDataManagerXml : DummyDataManager
         return true;
     }
 
-    public override IPlaylist[] GetAllPlaylists() => _playlists;
+    public override IPlaylist[] GetAllPlaylists() => _playlists.ToArray();
     public override IPlaylist GetPlaylistById(string id)
         => (id != null && _playlistById.TryGetValue(id, out var pl)) ? pl : null;
+
+    public override IPlaylist AddNewPlaylist(string name)
+    {
+        string id = Guid.NewGuid().ToString();
+        var pl = new HostPlaylist { PlaylistIdValue = id, NameValue = name, FileValue = _store?.PlaylistFileFor(name), ImagesRootValue = _imagesRoot };
+        pl.SetResolver(GetGameById);
+        pl.SetAllGamesProvider(() => _allGames);
+        pl.Attach(_store);
+        _playlists.Add(pl);
+        _playlistById[id] = pl;
+        _store?.RecordPlaylistAdd(id, pl.FileValue);
+        if (!string.IsNullOrEmpty(name)) _store?.RecordPlaylistModify(id, pl.FileValue, "Name", name);
+        return pl;
+    }
+
+    public override bool TryRemovePlaylist(IPlaylist playlist)
+    {
+        if (playlist == null || string.IsNullOrEmpty(playlist.PlaylistId)) return false;
+        _playlistById.Remove(playlist.PlaylistId);
+        _store?.RecordPlaylistDelete(playlist.PlaylistId, (playlist as HostPlaylist)?.FileValue);
+        return true;
+    }
 
     public override void Save(bool wait)
     {

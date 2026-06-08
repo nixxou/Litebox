@@ -34,6 +34,7 @@ internal static class WriteBackSelfTest
             fails += TestEmulators(platformsDir);
             fails += TestPlatforms(platformsDir);
             fails += TestGameMove(platformsDir);
+            fails += TestPlaylists(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
         finally { try { Directory.Delete(temp, true); } catch { } }
@@ -311,6 +312,48 @@ internal static class WriteBackSelfTest
             f += Check("move: in new file, Platform + fields preserved", ge != null
                 && (string)ge.Element("Platform") == "MoveB" && (string)ge.Element("Developer") == "KeepMe" && (string)ge.Element("Title") == "Mover");
         }
+        return f;
+    }
+
+    private static int TestPlaylists(string platformsDir)
+    {
+        int f = 0;
+        string dataDir = Path.GetDirectoryName(platformsDir);
+        string plDir = Path.Combine(dataDir, "Playlists");
+        Directory.CreateDirectory(plDir);
+        var pid = Guid.NewGuid().ToString();
+        string pfile = Path.Combine(plDir, "Manual.xml");
+        File.WriteAllText(pfile, "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
+            $"  <Playlist><PlaylistId>{pid}</PlaylistId><Name>OldList</Name></Playlist>\n" +
+            $"  <PlaylistGame><PlaylistId>{pid}</PlaylistId><GameId>g-1</GameId><GameTitle>One</GameTitle></PlaylistGame>\n" +
+            "</LaunchBox>\n");
+
+        var store = GameStore.Load(platformsDir, Path.Combine(dataDir, "pl.pending.db"));
+        store.ReadOnly = false;
+        var dm = new HostDataManagerXml(store, dataDir, Path.Combine(dataDir, "..", "Images")) { ReadOnly = false };
+
+        // Several IPlaylist members are get-only on the SDK interface; set via the concrete type to
+        // exercise the write-back machinery (a real plugin reaches the interface-settable subset).
+        var pl = dm.GetPlaylistById(pid) as HostPlaylist;
+        f += Check("playlist: found", pl != null);
+        if (pl == null) { store.CloseLog(); return f; }
+        pl.Name = "NewList"; pl.Notes = "plnotes"; pl.SortBy = "Title";
+        var pg = (HostPlaylistGame)pl.AddNewPlaylistGame(); pg.GameId = "g-2"; pg.GameTitle = "Two";
+        var npl = (HostPlaylist)dm.AddNewPlaylist("Brand New List"); npl.Notes = "fresh";
+        dm.Save(true);
+        store.CloseLog();
+
+        var doc = XDocument.Load(pfile);
+        var pe = doc.Root.Element("Playlist");
+        f += Check("playlist: modify (Name/Notes/SortBy)", pe != null
+            && (string)pe.Element("Name") == "NewList" && (string)pe.Element("Notes") == "plnotes" && (string)pe.Element("SortBy") == "Title");
+        var pgs = doc.Root.Elements("PlaylistGame").ToList();
+        f += Check("playlist: game added (now 2)", pgs.Count == 2
+            && pgs.Any(e => (string)e.Element("GameId") == "g-2" && (string)e.Element("GameTitle") == "Two")
+            && pgs.Any(e => (string)e.Element("GameId") == "g-1"));
+        string nfile = Path.Combine(plDir, "Brand New List.xml");
+        f += Check("playlist: AddNewPlaylist created file+node", File.Exists(nfile)
+            && XDocument.Load(nfile).Root.Elements("Playlist").Any(e => (string)e.Element("Name") == "Brand New List" && (string)e.Element("Notes") == "fresh"));
         return f;
     }
 

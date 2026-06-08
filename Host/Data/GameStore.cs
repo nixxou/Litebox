@@ -479,7 +479,7 @@ internal sealed class GameStore
         void EnsureDoc(string file)
         {
             if (docs.ContainsKey(file)) return;
-            var d = XDocument.Load(file);
+            var d = File.Exists(file) ? XDocument.Load(file) : new XDocument(new XElement("LaunchBox"));
             docs[file] = d;
             var byId = new Dictionary<Guid, XElement>();
             foreach (var ge in d.Root.Elements("Game"))
@@ -500,6 +500,8 @@ internal sealed class GameStore
         Dictionary<string, Dictionary<string, string>> TLAdded(string e) => tlAdded.TryGetValue(e, out var m) ? m : (tlAdded[e] = new(StringComparer.OrdinalIgnoreCase));
         List<string> TLOrder(string e) => tlOrder.TryGetValue(e, out var l) ? l : (tlOrder[e] = new());
         List<string> TLDeleted(string e) => tlDeleted.TryGetValue(e, out var l) ? l : (tlDeleted[e] = new());
+        // Playlists are one-per-file (the op carries the file in ParentId); whole-file deletes deferred.
+        var playlistDeletes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var op in ops)
         {
@@ -584,6 +586,27 @@ internal sealed class GameStore
                     EnsureDoc(file);
                     ApplyCollectionReplaceToDoc(docs[file], "EmulatorPlatform", "Emulator", op.ParentId, _emuPlatOrder, op.Value);
                 }
+                else if (op.Entity == "Playlist" || op.Entity == "PlaylistGame" || op.Entity == "PlaylistFilter")
+                {
+                    string file = op.ParentId;                       // playlist ops carry their source file
+                    if (string.IsNullOrEmpty(file)) continue;
+                    if (op.Entity == "Playlist" && op.OpType == "delete") { playlistDeletes.Add(file); continue; }
+                    EnsureDoc(file);
+                    var pdoc = docs[file];
+                    if (op.Entity == "Playlist")
+                    {
+                        var pnode = FindOrCreatePlaylist(pdoc, op.Id);
+                        if (op.OpType == "modify") SetOrRemove(pnode, op.Field, op.Value);   // "add" just ensures the node
+                    }
+                    else if (op.OpType == "replace")   // PlaylistGame / PlaylistFilter — one playlist per file
+                    {
+                        foreach (var e in pdoc.Root.Elements(op.Entity).ToList()) e.Remove();
+                        var order = op.Entity == "PlaylistGame" ? _playlistGameOrder : _playlistFilterOrder;
+                        List<Dictionary<string, string>> list;
+                        try { list = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(op.Value) ?? new(); } catch { list = new(); }
+                        foreach (var rec in list) pdoc.Root.Add(BuildElement(op.Entity, rec, order));
+                    }
+                }
             }
             catch (Exception ex) { Console.WriteLine("[store] apply op seq=" + op.Seq + ": " + ex.Message); }
         }
@@ -641,7 +664,9 @@ internal sealed class GameStore
                     catch (Exception ex) { Console.WriteLine($"[store] delete {e} {id}: {ex.Message}"); }
         }
 
-        if (docs.Count == 0) { _oplog.Clear(); return 0; }
+        // Deleted playlists are whole-file removals — don't write those files.
+        foreach (var df in playlistDeletes) docs.Remove(df);
+        if (docs.Count == 0 && playlistDeletes.Count == 0) { _oplog.Clear(); return 0; }
 
         // Snapshot the pristine originals (still untouched on disk) before any swap.
         BackupBeforeWrite(docs.Keys);
@@ -656,6 +681,9 @@ internal sealed class GameStore
         }
         // Phase 2: swap all .tmp → real file (atomic per file).
         foreach (var (tmp, file) in swaps) ReplaceAtomic(tmp, file);
+        // Phase 2b: whole-file playlist deletes.
+        foreach (var df in playlistDeletes)
+            try { if (File.Exists(df)) File.Delete(df); } catch (Exception ex) { Console.WriteLine("[store] delete playlist file " + df + ": " + ex.Message); }
         // Phase 3: ONLY now clear the log.
         _oplog.Clear();
 
@@ -1009,6 +1037,33 @@ internal sealed class GameStore
         "ImageType", "SortTitle", "LastGameId", "BigBoxView", "BigBoxTheme", "HideInBigBox",
     };
     private static readonly string[] _platformCategoryAddOrder = { "Name", "NestedName", "Notes", "VideoPath", "SortTitle", "HideInBigBox" };
+    private static readonly string[] _playlistGameOrder = { "GameId", "LaunchBoxDbId", "GameTitle", "GameFileName", "GamePlatform", "ManualOrder" };
+    private static readonly string[] _playlistFilterOrder = { "Value", "FieldKey", "ComparisonTypeKey" };
+
+    // Playlists live one-per-file under Data\Playlists\; ops carry the source file in ParentId.
+    public void RecordPlaylistModify(string playlistId, string file, string field, string value)
+    { if (!ReadOnly && _oplog != null) _oplog.Append("modify", "Playlist", playlistId, file, field, value); }
+    public void RecordPlaylistAdd(string playlistId, string file)
+    { if (!ReadOnly && _oplog != null) _oplog.Append("add", "Playlist", playlistId, file, null, null); }
+    public void RecordPlaylistDelete(string playlistId, string file)
+    { if (!ReadOnly && _oplog != null) _oplog.Append("delete", "Playlist", playlistId, file, null, null); }
+    public void RecordPlaylistChildReplace(string entity, string playlistId, string file, string json)
+    { if (!ReadOnly && _oplog != null) _oplog.Append("replace", entity, playlistId, file, null, json); }
+    /// <summary>The conventional file for a new playlist: Data\Playlists\&lt;sanitised name&gt;.xml.</summary>
+    public string PlaylistFileFor(string name)
+    {
+        if (DataDir == null) return null;
+        string n = string.IsNullOrEmpty(name) ? "Playlist" : name;
+        foreach (var c in Path.GetInvalidFileNameChars()) n = n.Replace(c, '_');
+        return Path.Combine(DataDir, "Playlists", n + ".xml");
+    }
+
+    private static XElement FindOrCreatePlaylist(XDocument d, string pid)
+    {
+        var n = d.Root.Elements("Playlist").FirstOrDefault(e => (string)e.Element("PlaylistId") == pid);
+        if (n == null) { n = new XElement("Playlist", new XElement("PlaylistId", pid)); d.Root.Add(n); }
+        return n;
+    }
 
     private static XElement BuildElement(string name, Dictionary<string, string> fld, string[] order)
     {

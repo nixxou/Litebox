@@ -1,7 +1,8 @@
 # Build output
 bin/
 obj/
-publish-sc/
+publish*/
+Launcher/publish*/
 
 # IDE
 .vs/

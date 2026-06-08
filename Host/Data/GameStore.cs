@@ -19,6 +19,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -99,6 +100,12 @@ internal sealed class GameStore
     public IReadOnlyList<AltName> AltNamesFor(Guid id) => _altNames.TryGetValue(id, out var l) ? l : (IReadOnlyList<AltName>)Array.Empty<AltName>();
     public IReadOnlyList<GameMount> MountsFor(Guid id) => _mounts.TryGetValue(id, out var l) ? l : (IReadOnlyList<GameMount>)Array.Empty<GameMount>();
     public IReadOnlyList<CustomField> CustomFieldsFor(Guid id) => _customFields.TryGetValue(id, out var l) ? l : (IReadOnlyList<CustomField>)Array.Empty<CustomField>();
+
+    // Mutable list accessors for child-entity write-back (create the list on demand).
+    internal List<AddApp> AddAppsMutable(Guid id) => _addApps.TryGetValue(id, out var l) ? l : (_addApps[id] = new List<AddApp>());
+    internal List<AltName> AltNamesMutable(Guid id) => _altNames.TryGetValue(id, out var l) ? l : (_altNames[id] = new List<AltName>());
+    internal List<GameMount> MountsMutable(Guid id) => _mounts.TryGetValue(id, out var l) ? l : (_mounts[id] = new List<GameMount>());
+    internal List<CustomField> CustomFieldsMutable(Guid id) => _customFields.TryGetValue(id, out var l) ? l : (_customFields[id] = new List<CustomField>());
 
     public int Count => Rows.Length;
     public string Str(int idx) => (idx > 0 && idx < Pool.Count) ? Pool[idx] : "";
@@ -381,9 +388,15 @@ internal sealed class GameStore
         {
             foreach (var op in ops)
             {
-                if (op.OpType != "modify" || op.Entity != "Game") continue;
-                if (Guid.TryParse(op.Id, out var gid) && _byId.TryGetValue(gid, out var i))
-                    ApplyFieldToRow(i, op.Field, op.Value);
+                if (op.OpType == "modify" && op.Entity == "Game")
+                {
+                    if (Guid.TryParse(op.Id, out var gid) && _byId.TryGetValue(gid, out var i))
+                        ApplyFieldToRow(i, op.Field, op.Value);
+                }
+                else if (op.OpType == "replace" && IsChildEntity(op.Entity))
+                {
+                    if (Guid.TryParse(op.ParentId, out var pgid)) ApplyChildReplace(op.Entity, pgid, op.Value);
+                }
             }
             Console.WriteLine($"[store] recovered op-log ({ops.Count} op(s))");
         }
@@ -461,16 +474,28 @@ internal sealed class GameStore
         {
             try
             {
-                if (op.Entity != "Game" || !Guid.TryParse(op.Id, out var gid)) continue;   // child entities: future
-                string file = FileForGame(gid);
-                if (file == null || !File.Exists(file)) continue;                           // unresolved → drop
-                EnsureDoc(file);
-                var ge = index[file].TryGetValue(gid, out var el) ? el : null;
-                if (op.OpType == "delete")
-                { if (ge != null) { ge.Remove(); index[file].Remove(gid); touched.Add(gid); } continue; }
-                if (op.OpType != "modify" || ge == null) continue;
-                ApplyModify(ge, op.Field, op.Value);
-                touched.Add(gid);
+                if (op.Entity == "Game")
+                {
+                    if (!Guid.TryParse(op.Id, out var gid)) continue;
+                    string file = FileForGame(gid);
+                    if (file == null || !File.Exists(file)) continue;                       // unresolved → drop
+                    EnsureDoc(file);
+                    var ge = index[file].TryGetValue(gid, out var el) ? el : null;
+                    if (op.OpType == "delete")
+                    { if (ge != null) { ge.Remove(); index[file].Remove(gid); touched.Add(gid); } continue; }
+                    if (op.OpType != "modify" || ge == null) continue;
+                    ApplyModify(ge, op.Field, op.Value);
+                    touched.Add(gid);
+                }
+                else if (IsChildEntity(op.Entity) && op.OpType == "replace")
+                {
+                    if (!Guid.TryParse(op.ParentId, out var pgid)) continue;
+                    string file = FileForGame(pgid);
+                    if (file == null || !File.Exists(file)) continue;
+                    EnsureDoc(file);
+                    ApplyChildReplaceToDoc(docs[file], op.Entity, op.ParentId, op.Value);
+                    touched.Add(pgid);
+                }
             }
             catch (Exception ex) { Console.WriteLine("[store] apply op seq=" + op.Seq + ": " + ex.Message); }
         }
@@ -502,6 +527,117 @@ internal sealed class GameStore
         if (!_byId.TryGetValue(gid, out var i)) return null;
         string plat = Str(Rows[i].PlatformIdx);
         return _platformFile.TryGetValue(plat, out var f) ? f : null;
+    }
+
+    // ── Child-entity write-back (AdditionalApplication / AlternateName / Mount / CustomField) ──
+    // A game's child collection is the source of truth: any add/remove/edit records a single
+    // "replace" op carrying the whole current collection as JSON. On flush we drop every existing
+    // <Entity> with that GameID and re-emit from the JSON in canonical field order. Naturally
+    // idempotent (replace = last-write-wins), and sidesteps the lack of stable IDs on alt-names /
+    // mounts / custom fields. Caller mutates the in-memory list first, then calls this.
+    private static readonly string[] _childEntities = { "AdditionalApplication", "AlternateName", "Mount", "CustomField" };
+    internal static bool IsChildEntity(string e) => Array.IndexOf(_childEntities, e) >= 0;
+
+    internal static readonly Dictionary<string, string[]> ChildFieldOrder = new(StringComparer.Ordinal)
+    {
+        ["AdditionalApplication"] = new[] { "Id", "GameID", "ApplicationPath", "Name", "CommandLine", "Developer", "Publisher", "Region", "Version", "Status", "EmulatorId", "Disc", "Priority", "PlayCount", "PlayTime", "AutoRunBefore", "AutoRunAfter", "UseEmulator", "UseDosBox", "WaitForExit", "SideA", "SideB" },
+        ["AlternateName"] = new[] { "GameID", "Name", "Region" },
+        ["Mount"] = new[] { "GameID", "DriveLetter", "Filesystem", "MountType", "Path", "Type" },
+        ["CustomField"] = new[] { "GameID", "Name", "Value" },
+    };
+
+    /// <summary>Records the current (already-mutated) child collection of <paramref name="entity"/> for
+    /// game <paramref name="gid"/> as a single replace op. Always usable in-memory; persists only when not ReadOnly.</summary>
+    public void RecordChildReplace(Guid gid, string entity)
+    {
+        if (ReadOnly || _oplog == null) return;
+        _oplog.Append("replace", entity, null, gid.ToString(), null, SerializeChildren(entity, gid));
+    }
+
+    private static string CB(bool v) => v ? "true" : "false";
+    private string SerializeChildren(string entity, Guid gid)
+    {
+        var list = new List<Dictionary<string, string>>();
+        string g = gid.ToString();
+        switch (entity)
+        {
+            case "AdditionalApplication":
+                foreach (var a in AddAppsFor(gid))
+                    list.Add(new Dictionary<string, string>
+                    {
+                        ["Id"] = a.Id, ["GameID"] = g, ["ApplicationPath"] = a.ApplicationPath, ["Name"] = a.Name,
+                        ["CommandLine"] = a.CommandLine, ["Developer"] = a.Developer, ["Publisher"] = a.Publisher,
+                        ["Region"] = a.Region, ["Version"] = a.Version, ["Status"] = a.Status, ["EmulatorId"] = a.EmulatorId,
+                        ["Disc"] = a.Disc?.ToString(CultureInfo.InvariantCulture),
+                        ["Priority"] = a.Priority.ToString(CultureInfo.InvariantCulture),
+                        ["PlayCount"] = a.PlayCount.ToString(CultureInfo.InvariantCulture),
+                        ["PlayTime"] = a.PlayTime.ToString(CultureInfo.InvariantCulture),
+                        ["AutoRunBefore"] = CB(a.AutoRunBefore), ["AutoRunAfter"] = CB(a.AutoRunAfter),
+                        ["UseEmulator"] = CB(a.UseEmulator), ["UseDosBox"] = CB(a.UseDosBox), ["WaitForExit"] = CB(a.WaitForExit),
+                        ["SideA"] = CB(a.SideA), ["SideB"] = CB(a.SideB),
+                    });
+                break;
+            case "AlternateName":
+                foreach (var a in AltNamesFor(gid)) list.Add(new() { ["GameID"] = g, ["Name"] = a.Name, ["Region"] = a.Region });
+                break;
+            case "Mount":
+                foreach (var m in MountsFor(gid)) list.Add(new() { ["GameID"] = g, ["DriveLetter"] = m.DriveLetter.ToString(), ["Filesystem"] = m.Filesystem, ["MountType"] = m.MountType, ["Path"] = m.Path, ["Type"] = m.Type });
+                break;
+            case "CustomField":
+                foreach (var c in CustomFieldsFor(gid)) list.Add(new() { ["GameID"] = g, ["Name"] = c.Name, ["Value"] = c.Value });
+                break;
+        }
+        return JsonSerializer.Serialize(list);
+    }
+
+    /// <summary>Rebuilds the in-memory child list of <paramref name="entity"/> for <paramref name="gid"/>
+    /// from a replace op's JSON (used at boot replay).</summary>
+    public void ApplyChildReplace(string entity, Guid gid, string json)
+    {
+        List<Dictionary<string, string>> list;
+        try { list = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
+        string G(Dictionary<string, string> d, string k) => d.TryGetValue(k, out var v) ? v : null;
+        switch (entity)
+        {
+            case "AdditionalApplication":
+                _addApps[gid] = list.Select(r => new AddApp
+                {
+                    Id = G(r, "Id"), ApplicationPath = G(r, "ApplicationPath"), Name = G(r, "Name"), CommandLine = G(r, "CommandLine"),
+                    Developer = G(r, "Developer"), Publisher = G(r, "Publisher"), Region = G(r, "Region"), Version = G(r, "Version"),
+                    Status = G(r, "Status"), EmulatorId = G(r, "EmulatorId"), Disc = ParseIntN(G(r, "Disc")), Priority = ParseInt(G(r, "Priority"), 0),
+                    PlayCount = ParseInt(G(r, "PlayCount"), 0), PlayTime = ParseInt(G(r, "PlayTime"), 0),
+                    AutoRunBefore = ParseBool(G(r, "AutoRunBefore")), AutoRunAfter = ParseBool(G(r, "AutoRunAfter")),
+                    UseEmulator = ParseBool(G(r, "UseEmulator")), UseDosBox = ParseBool(G(r, "UseDosBox")), WaitForExit = ParseBool(G(r, "WaitForExit")),
+                    SideA = ParseBool(G(r, "SideA")), SideB = ParseBool(G(r, "SideB")),
+                }).ToList();
+                break;
+            case "AlternateName":
+                _altNames[gid] = list.Select(r => new AltName { Name = G(r, "Name"), Region = G(r, "Region") }).ToList();
+                break;
+            case "Mount":
+                _mounts[gid] = list.Select(r => { var dl = G(r, "DriveLetter"); return new GameMount { DriveLetter = !string.IsNullOrEmpty(dl) ? char.ToUpperInvariant(dl[0]) : 'C', Filesystem = G(r, "Filesystem"), MountType = G(r, "MountType"), Path = G(r, "Path"), Type = G(r, "Type") }; }).ToList();
+                break;
+            case "CustomField":
+                _customFields[gid] = list.Select(r => new CustomField { Name = G(r, "Name"), Value = G(r, "Value") }).ToList();
+                break;
+        }
+    }
+
+    // Apply a child replace op onto a loaded DOM: drop existing <entity> for this GameID, re-emit.
+    private static void ApplyChildReplaceToDoc(XDocument doc, string entity, string gameId, string json)
+    {
+        foreach (var e in doc.Root.Elements(entity).Where(e => (string)e.Element("GameID") == gameId).ToList()) e.Remove();
+        List<Dictionary<string, string>> list;
+        try { list = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
+        var order = ChildFieldOrder[entity];
+        foreach (var rec in list)
+        {
+            var el = new XElement(entity);
+            foreach (var fld in order)
+                if (rec.TryGetValue(fld, out var v) && !string.IsNullOrEmpty(v))
+                    el.Add(new XElement(fld, v));
+            doc.Root.Add(el);
+        }
     }
 
     // Before overwriting any XML, snapshot the pristine originals into a small timestamped zip —

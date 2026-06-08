@@ -385,6 +385,10 @@ internal static class WriteBackSelfTest
         var lg = (ILiteBoxGame)new HostGame(store, i);
         f += Check("extra: read non-IGame field loaded from XML", lg.GetField("GogAppId") == "oldgog");
         f += Check("extra: ExtraFieldNames lists non-IGame fields", lg.ExtraFieldNames.Contains("GogAppId") && lg.ExtraFieldNames.Contains("MissingVideo"));
+        store.DropOptional();
+        f += Check("extra: dropped at launch (Tier-2)", lg.GetField("GogAppId") == "" && lg.ExtraFieldNames.Count == 0);
+        store.ReloadOptional();
+        f += Check("extra: reloaded after exit", lg.GetField("GogAppId") == "oldgog");
         lg.SetField("GogAppId", "newgog");                 // non-IGame, existing
         lg.SetField("RetroAchievementsId", "777");         // non-IGame, new
         lg.SetField("Developer", "ViaSetField");           // IGame field via the generic setter
@@ -418,6 +422,10 @@ internal static class WriteBackSelfTest
         var hg1 = new HostGame(s1, i1);
         f += Check("sub: types listed", hg1.SubEntityTypes.Contains("ModelSettings") && hg1.SubEntityTypes.Contains("GameControllerSupport"));
         f += Check("sub: read ModelSettings.ModelType", hg1.GetSubEntities("ModelSettings").FirstOrDefault()?["ModelType"] == "dvd");
+        s1.DropOptional();
+        f += Check("sub: dropped at launch (Tier-2)", hg1.SubEntityTypes.Count == 0);
+        s1.ReloadOptional();
+        f += Check("sub: reloaded after exit", hg1.SubEntityTypes.Contains("ModelSettings") && hg1.GetSubEntities("ModelSettings").FirstOrDefault()?["ModelType"] == "dvd");
         hg1.Favorite = true;
         s1.Flush(); s1.CloseLog();
         var d1 = XDocument.Load(xml);

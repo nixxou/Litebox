@@ -15,10 +15,11 @@ namespace LbApiHost.Host.Data;
 internal sealed class HostDataManagerXml : DummyDataManager
 {
     private readonly GameStore _store;
+    private readonly string _imagesRoot;
     private readonly List<IGame> _allGames;   // index-aligned with store.Rows; AddNewGame appends
-    private readonly IPlatform[] _platforms;
+    private readonly List<IPlatform> _platforms;
     private readonly Dictionary<string, IPlatform> _platformByName;
-    private readonly IPlatformCategory[] _categories;
+    private readonly List<IPlatformCategory> _categories;
     private readonly Dictionary<string, IPlatformCategory> _categoryByName;
     private readonly List<IEmulator> _emulators;
     private readonly Dictionary<string, IEmulator> _emulatorById;
@@ -35,14 +36,16 @@ internal sealed class HostDataManagerXml : DummyDataManager
     public HostDataManagerXml(GameStore store, string dataDir, string imagesRoot)
     {
         _store = store;
+        _imagesRoot = imagesRoot;
 
         // Game wrappers (thin) built once.
         _allGames = new List<IGame>(store.Count);
         for (int i = 0; i < store.Count; i++) _allGames.Add(new HostGame(store, i));
 
-        // Platforms + categories from Platforms.xml.
+        // Platforms + categories from Platforms.xml (attach the store so setters write back).
         var (platforms, categories) = PlatformCatalog.Load(dataDir, imagesRoot);
-        _categories = categories.Cast<IPlatformCategory>().ToArray();
+        foreach (var c in categories) c.Attach(_store);
+        _categories = categories.Cast<IPlatformCategory>().ToList();
         _categoryByName = new Dictionary<string, IPlatformCategory>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in _categories) { var n = c?.Name; if (!string.IsNullOrEmpty(n)) _categoryByName[n] = c; }
 
@@ -58,14 +61,15 @@ internal sealed class HostDataManagerXml : DummyDataManager
                 byName[kv.Key] = new HostPlatform(kv.Key, null, imagesRoot);
         }
 
-        // Link games into each platform.
+        // Link games into each platform + attach the store (write-back).
         foreach (var p in byName.Values)
         {
             var idxs = store.ByPlatform.TryGetValue(p.Name, out var list) ? list : null;
             p.SetGames(idxs != null ? idxs.Select(i => _allGames[i]).ToArray() : Array.Empty<IGame>());
+            p.Attach(_store);
         }
 
-        _platforms = byName.Values.Cast<IPlatform>().ToArray();
+        _platforms = byName.Values.Cast<IPlatform>().ToList();
         _platformByName = byName.ToDictionary(kv => kv.Key, kv => (IPlatform)kv.Value, StringComparer.OrdinalIgnoreCase);
 
         // Emulators (attach the store so setters / AddNew / TryRemove route through the op-log).
@@ -142,15 +146,49 @@ internal sealed class HostDataManagerXml : DummyDataManager
         return game != null && Guid.TryParse(game.Id, out var gid) && _store.DeleteGameRow(gid);
     }
 
-    public override IPlatform[] GetAllPlatforms() => _platforms;
+    public override IPlatform[] GetAllPlatforms() => _platforms.ToArray();
     public override IPlatform GetPlatformByName(string name)
         => (name != null && _platformByName.TryGetValue(name, out var p)) ? p : null;
-    public override IPlatformCategory[] GetAllPlatformCategories() => _categories;
+    public override IPlatformCategory[] GetAllPlatformCategories() => _categories.ToArray();
     public override IPlatformCategory GetPlatformCategoryByName(string name)
         => (name != null && _categoryByName.TryGetValue(name, out var c)) ? c : null;
     // SDK API can only carry IPlatform; categories/playlists aren't IPlatform in this SDK,
     // so this returns platforms only. The GUI uses RootNodes (the full object tree).
     public override IList<IPlatform> GetRootPlatformsCategoriesPlaylists() => _platforms.ToList();
+
+    public override IPlatform AddNewPlatform(string name)
+    {
+        var p = new HostPlatform(name ?? "", null, _imagesRoot);
+        p.Attach(_store);
+        if (!string.IsNullOrEmpty(name)) _platformByName[name] = p;
+        _platforms.Add(p);
+        _store?.RecordEntityAdd("Platform", name ?? "");
+        return p;
+    }
+    public override bool TryRemovePlatform(IPlatform platform)
+    {
+        if (platform == null || string.IsNullOrEmpty(platform.Name)) return false;
+        _platformByName.Remove(platform.Name);
+        _store?.RecordEntityDelete("Platform", platform.Name);
+        return true;
+    }
+
+    public override IPlatformCategory AddNewPlatformCategory(string name)
+    {
+        var c = new HostPlatformCategory(name ?? "", _imagesRoot);
+        c.Attach(_store);
+        if (!string.IsNullOrEmpty(name)) _categoryByName[name] = c;
+        _categories.Add(c);
+        _store?.RecordEntityAdd("PlatformCategory", name ?? "");
+        return c;
+    }
+    public override bool TryRemovePlatformCategory(IPlatformCategory platformCategory)
+    {
+        if (platformCategory == null || string.IsNullOrEmpty(platformCategory.Name)) return false;
+        _categoryByName.Remove(platformCategory.Name);
+        _store?.RecordEntityDelete("PlatformCategory", platformCategory.Name);
+        return true;
+    }
 
     public override IEmulator[] GetAllEmulators() => _emulators.ToArray();
     public override IEmulator GetEmulatorById(string id)

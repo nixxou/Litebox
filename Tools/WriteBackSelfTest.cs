@@ -33,6 +33,7 @@ internal static class WriteBackSelfTest
             fails += TestGameAddDelete(platformsDir);
             fails += TestEmulators(platformsDir);
             fails += TestPlatforms(platformsDir);
+            fails += TestGameMove(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
         finally { try { Directory.Delete(temp, true); } catch { } }
@@ -281,6 +282,35 @@ internal static class WriteBackSelfTest
         f += Check("cat: modify (Notes/SortTitle)", ce != null && (string)ce.Element("Notes") == "catnotes" && (string)ce.Element("SortTitle") == "ZZ");
         f += Check("plat: AddNewPlatform persisted", doc.Root.Elements("Platform").Any(e => (string)e.Element("Name") == "Brand New Platform" && (string)e.Element("Developer") == "Acme"));
         f += Check("cat: AddNewPlatformCategory persisted", doc.Root.Elements("PlatformCategory").Any(e => (string)e.Element("Name") == "Brand New Cat" && (string)e.Element("Notes") == "newcat"));
+        return f;
+    }
+
+    private static int TestGameMove(string platformsDir)
+    {
+        int f = 0;
+        var gid = Guid.NewGuid();
+        string aFile = Path.Combine(platformsDir, "MoveA.xml");
+        File.WriteAllText(aFile, "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
+            $"  <Game><ID>{gid}</ID><Title>Mover</Title><Platform>MoveA</Platform><Developer>KeepMe</Developer></Game>\n" +
+            "</LaunchBox>\n");
+
+        var store = GameStore.Load(platformsDir, Path.Combine(platformsDir, "..", "move.pending.db"));
+        store.ReadOnly = false;
+        if (!store.ById.TryGetValue(gid, out var i)) { Check("move: game found", false); store.CloseLog(); return 1; }
+        new HostGame(store, i).Platform = "MoveB";   // existing game → relocate node
+        store.Flush();
+        store.CloseLog();
+
+        string bFile = Path.Combine(platformsDir, "MoveB.xml");
+        var aDoc = XDocument.Load(aFile);
+        f += Check("move: gone from old platform file", !aDoc.Root.Elements("Game").Any(e => (string)e.Element("ID") == gid.ToString()));
+        f += Check("move: new platform file created", File.Exists(bFile));
+        if (File.Exists(bFile))
+        {
+            var ge = XDocument.Load(bFile).Root.Elements("Game").FirstOrDefault(e => (string)e.Element("ID") == gid.ToString());
+            f += Check("move: in new file, Platform + fields preserved", ge != null
+                && (string)ge.Element("Platform") == "MoveB" && (string)ge.Element("Developer") == "KeepMe" && (string)ge.Element("Title") == "Mover");
+        }
         return f;
     }
 

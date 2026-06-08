@@ -24,10 +24,13 @@ internal sealed class HostGame : DummyGame
     public override string Id { get => R.Id.ToString(); set { } }
     public override string Title { get => _s.Str(R.TitleIdx); set => _s.SetGameField(_i, "Title", value); }
     public override string SortTitle { get => _s.Str(R.SortTitleIdx); set => _s.SetGameField(_i, "SortTitle", value); }
-    // Platform is settable on a freshly-added game (its node is created in the right file at flush).
-    // For an EXISTING game, changing it would require moving the <Game> node across Platform files —
-    // deferred — so it stays a no-op there.
-    public override string Platform { get => _s.Str(R.PlatformIdx); set { if (_s.IsAddedGame(R.Id)) _s.SetGameField(_i, "Platform", value); } }
+    // Platform: on an added game it's a normal field (node created in the right file at flush); on an
+    // existing game it relocates the <Game> node between Platform files (MoveGamePlatform).
+    public override string Platform
+    {
+        get => _s.Str(R.PlatformIdx);
+        set { if (_s.IsAddedGame(R.Id)) _s.SetGameField(_i, "Platform", value); else _s.MoveGamePlatform(_i, value); }
+    }
     public override string ApplicationPath { get => _s.Str(R.AppPathIdx); set => _s.SetGameField(_i, "ApplicationPath", value); }
     public override string EmulatorId { get => _s.Str(R.EmulatorIdIdx); set => _s.SetGameField(_i, "Emulator", value); }
     public override string Developer { get => _s.Str(R.DeveloperIdx); set => _s.SetGameField(_i, "Developer", value); }

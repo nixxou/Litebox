@@ -21,6 +21,7 @@ internal static class WriteBackDump
         if (!Directory.Exists(platformsDir)) { Console.WriteLine("[dump] platforms dir not found: " + platformsDir); return 1; }
 
         var store = GameStore.Load(platformsDir);   // ReadOnly stays true → no writes
+        store.LogStats();                            // memory footprint, incl. extra/sub-entity stores
         int shown = 0;
         for (int i = 0; i < store.Count && shown < 10; i++)
         {

@@ -488,6 +488,10 @@ internal sealed class GameStore
         var addedFields = new Dictionary<Guid, Dictionary<string, string>>();
         var addedOrder = new List<Guid>();
         var deletedExisting = new List<(Guid id, string platform)>();
+        // Same scheme for emulators (string-keyed by ID, in Emulators.xml).
+        var addedEmu = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        var addedEmuOrder = new List<string>();
+        var deletedEmu = new List<string>();
 
         foreach (var op in ops)
         {
@@ -530,6 +534,31 @@ internal sealed class GameStore
                     ApplyChildReplaceToDoc(docs[file], op.Entity, op.ParentId, op.Value);
                     touched.Add(pgid);
                 }
+                else if (op.Entity == "Emulator")
+                {
+                    string file = EmulatorsFile;
+                    if (file == null || !File.Exists(file) || string.IsNullOrEmpty(op.Id)) continue;
+                    EnsureDoc(file);
+                    if (op.OpType == "add")
+                    { if (!addedEmu.ContainsKey(op.Id)) { addedEmu[op.Id] = new() { ["ID"] = op.Id }; addedEmuOrder.Add(op.Id); } continue; }
+                    if (op.OpType == "modify")
+                    {
+                        if (addedEmu.TryGetValue(op.Id, out var efld))
+                        { if (string.IsNullOrEmpty(op.Value)) efld.Remove(op.Field); else efld[op.Field] = op.Value; continue; }
+                        var ee = FindByChild(docs[file], "Emulator", "ID", op.Id);
+                        if (ee != null) ApplyModify(ee, op.Field, op.Value);
+                        continue;
+                    }
+                    if (op.OpType == "delete")
+                    { if (addedEmu.Remove(op.Id)) addedEmuOrder.Remove(op.Id); else deletedEmu.Add(op.Id); continue; }
+                }
+                else if (op.Entity == "EmulatorPlatform" && op.OpType == "replace")
+                {
+                    string file = EmulatorsFile;
+                    if (file == null || !File.Exists(file) || string.IsNullOrEmpty(op.ParentId)) continue;
+                    EnsureDoc(file);
+                    ApplyCollectionReplaceToDoc(docs[file], "EmulatorPlatform", "Emulator", op.ParentId, _emuPlatOrder, op.Value);
+                }
             }
             catch (Exception ex) { Console.WriteLine("[store] apply op seq=" + op.Seq + ": " + ex.Message); }
         }
@@ -563,6 +592,23 @@ internal sealed class GameStore
                 if (index[file].TryGetValue(gid, out var ge)) { ge.Remove(); index[file].Remove(gid); touched.Add(gid); }
             }
             catch (Exception ex) { Console.WriteLine("[store] delete game " + gid + ": " + ex.Message); }
+        }
+
+        // Create added emulators / delete removed ones (Emulators.xml).
+        if ((addedEmuOrder.Count > 0 || deletedEmu.Count > 0) && EmulatorsFile != null && File.Exists(EmulatorsFile))
+        {
+            EnsureDoc(EmulatorsFile);
+            var edoc = docs[EmulatorsFile];
+            foreach (var id in addedEmuOrder)
+                try { FindByChild(edoc, "Emulator", "ID", id)?.Remove(); edoc.Root.Add(BuildElement("Emulator", addedEmu[id], _emulatorAddOrder)); }
+                catch (Exception ex) { Console.WriteLine("[store] add emulator " + id + ": " + ex.Message); }
+            foreach (var id in deletedEmu)
+                try
+                {
+                    FindByChild(edoc, "Emulator", "ID", id)?.Remove();
+                    foreach (var ep in edoc.Root.Elements("EmulatorPlatform").Where(e => (string)e.Element("Emulator") == id).ToList()) ep.Remove();
+                }
+                catch (Exception ex) { Console.WriteLine("[store] delete emulator " + id + ": " + ex.Message); }
         }
 
         if (docs.Count == 0) { _oplog.Clear(); return 0; }
@@ -859,13 +905,57 @@ internal sealed class GameStore
     {
         if (fld.TryGetValue("StarRatingFloat", out var srf) && !string.IsNullOrEmpty(srf) && !fld.ContainsKey("StarRating"))
             fld["StarRating"] = ((int)Math.Round(ParseFloat(srf))).ToString(CultureInfo.InvariantCulture);
-        var el = new XElement("Game");
+        return BuildElement("Game", fld, _gameAddOrder);
+    }
+
+    // ── Top-level non-game entity write-back (Emulator, later Platform/Category/Playlist) ─────
+    // These live as keyed <Entity> nodes in a single file; we record/apply modify/add/delete by key,
+    // and ID-less collections (EmulatorPlatform) via the same "replace" pattern as child entities.
+    private string DataDir => Path.GetDirectoryName(_platformsDir);
+    private string EmulatorsFile => DataDir != null ? Path.Combine(DataDir, "Emulators.xml") : null;
+
+    public void RecordEntityModify(string entity, string id, string field, string value)
+    { if (!ReadOnly && _oplog != null) _oplog.Append("modify", entity, id, null, field, value); }
+    public void RecordEntityAdd(string entity, string id)
+    { if (!ReadOnly && _oplog != null) _oplog.Append("add", entity, id, null, null, null); }
+    public void RecordEntityDelete(string entity, string id)
+    { if (!ReadOnly && _oplog != null) _oplog.Append("delete", entity, id, null, null, null); }
+    /// <summary>Replace the whole &lt;EmulatorPlatform&gt; collection of one emulator (its rows have no
+    /// stable ID). <paramref name="json"/> is a list of field maps.</summary>
+    public void RecordEntityReplace(string entity, string parentId, string json)
+    { if (!ReadOnly && _oplog != null) _oplog.Append("replace", entity, null, parentId, null, json); }
+
+    private static readonly string[] _emulatorAddOrder =
+    {
+        "ApplicationPath", "CommandLine", "DefaultPlatform", "ID", "Title", "NoQuotes", "NoSpace", "HideConsole",
+        "FileNameWithoutExtensionAndPath", "AutoHotkeyScript", "AutoExtract", "UseStartupScreen",
+        "HideAllNonExclusiveFullscreenWindows", "StartupLoadDelay", "HideMouseCursorInGame", "DisableShutdownScreen",
+        "AggressiveWindowHiding", "PauseAutoHotkeyScript", "ResumeAutoHotkeyScript", "LoadStateAutoHotkeyScript",
+        "SaveStateAutoHotkeyScript", "ResetAutoHotkeyScript", "SwapDiscsAutoHotkeyScript", "ExitAutoHotkeyScript",
+        "EnableHardcoreAchievements",
+    };
+    private static readonly string[] _emuPlatOrder = { "Emulator", "Platform", "CommandLine", "Default", "M3uDiscLoadEnabled", "AutoExtract" };
+
+    private static XElement BuildElement(string name, Dictionary<string, string> fld, string[] order)
+    {
+        var el = new XElement(name);
         var emitted = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var f in _gameAddOrder)
+        foreach (var f in order)
             if (fld.TryGetValue(f, out var v) && !string.IsNullOrEmpty(v)) { el.Add(new XElement(f, v)); emitted.Add(f); }
         foreach (var kv in fld)
             if (!emitted.Contains(kv.Key) && !string.IsNullOrEmpty(kv.Value)) el.Add(new XElement(kv.Key, kv.Value));
         return el;
+    }
+
+    private static XElement FindByChild(XDocument doc, string elem, string childName, string childValue)
+        => doc.Root.Elements(elem).FirstOrDefault(e => (string)e.Element(childName) == childValue);
+
+    private static void ApplyCollectionReplaceToDoc(XDocument doc, string elem, string keyChild, string keyValue, string[] order, string json)
+    {
+        foreach (var e in doc.Root.Elements(elem).Where(e => (string)e.Element(keyChild) == keyValue).ToList()) e.Remove();
+        List<Dictionary<string, string>> list;
+        try { list = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
+        foreach (var rec in list) doc.Root.Add(BuildElement(elem, rec, order));
     }
 
     // XML element name → applies the value into Rows[i]. Used by setters (live) and replay (boot).

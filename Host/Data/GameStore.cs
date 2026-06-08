@@ -7,9 +7,12 @@
 //   doesn't even scan it. This is what keeps IGame functional during a game
 //   launch (the launching plugin reads Title/ApplicationPath/EmulatorId here).
 //
-// Tier 2 (optional, droppable): `Notes` text in a separate string[] that can be
-//   dropped at game launch (DropOptional) and reloaded after (ReloadOptional /
-//   lazy re-parse). Wikipedia/Video URLs are short → kept in the pool.
+// Tier 2 (optional, droppable): `Notes` text in a separate string[], the non-modelled
+//   <Game> fields (_extra), and the display-only per-game sub-entities (ModelSettings,
+//   GameControllerSupport) — all dropped at game launch (DropOptional) and reloaded
+//   after (ReloadOptional / lazy re-parse). Wikipedia/Video URLs are short → kept in the
+//   pool. EXCEPTION: the GameSave sub-entity is Tier-1 (resident), since a launch /
+//   save-sync plugin may read or write it while the game runs (see _tier1SubEntities).
 
 using System;
 using System.Collections.Generic;
@@ -105,6 +108,12 @@ internal sealed class GameStore
     // exposes none of them. gameId -> elementType -> list of field maps.
     private readonly Dictionary<Guid, Dictionary<string, List<Dictionary<string, string>>>> _subEntities = new();
 
+    // Sub-entity types that may be needed WHILE a game runs (a launch / save-sync plugin reads or
+    // writes the game's <GameSave>) → kept resident (Tier-1), never freed by DropOptional. The rest
+    // (ModelSettings, GameControllerSupport, …) are display-only and stay Tier-2 (droppable).
+    private static readonly HashSet<string> _tier1SubEntities = new(StringComparer.Ordinal) { "GameSave" };
+    internal static bool IsTier1SubEntity(string type) => _tier1SubEntities.Contains(type);
+
     // Stash a game's non-modelled <Game> fields (Gog*/Android*/Missing*/RetroAchievements*/pause/…)
     // sparsely & pooled. Shared by Build and ReloadOptional (Tier-2 reload).
     private void CaptureExtra(Guid id, XElement g)
@@ -121,8 +130,12 @@ internal sealed class GameStore
         if (extra != null) _extra[id] = extra;
     }
 
-    private void CaptureSubEntity(string type, XElement el)
+    private void CaptureSubEntity(string type, XElement el, bool reload = false)
     {
+        // On a Tier-2 reload the Tier-1 sub-entities (GameSave) were never dropped — they are still
+        // resident (possibly with un-flushed edits), so re-reading them from disk would duplicate /
+        // clobber. Skip them here; the initial Build (reload == false) captures them normally.
+        if (reload && IsTier1SubEntity(type)) return;
         string gidStr = (string)(el.Element("GameId") ?? el.Element("GameID"));
         if (!Guid.TryParse(gidStr, out var sgid)) return;   // only per-game sub-entities
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -416,9 +429,24 @@ internal sealed class GameStore
     public void DropOptional()
     {
         _notes = null;
-        _extra.Clear();         // full-field cache (Missing*/Gog*/…) — non-essential during a game
-        _subEntities.Clear();   // ModelSettings / GameControllerSupport / … — likewise
+        _extra.Clear();             // full-field cache (Missing*/Gog*/…) — non-essential during a game
+        DropOptionalSubEntities();  // ModelSettings / GameControllerSupport / … — but KEEP GameSave (Tier-1)
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+    }
+
+    // Free every per-game sub-entity except the Tier-1 types (GameSave), which a launch / save-sync
+    // plugin may need while the game runs. Leaves the GameSave maps resident; drops the display-only rest.
+    private void DropOptionalSubEntities()
+    {
+        if (_subEntities.Count == 0) return;
+        List<Guid> emptied = null;
+        foreach (var kv in _subEntities)
+        {
+            var byType = kv.Value;
+            foreach (var t in byType.Keys.Where(t => !IsTier1SubEntity(t)).ToList()) byType.Remove(t);
+            if (byType.Count == 0) (emptied ??= new List<Guid>()).Add(kv.Key);
+        }
+        if (emptied != null) foreach (var g in emptied) _subEntities.Remove(g);
     }
 
     /// <summary>Re-read the optional tier from the XMLs (after a game exits): Notes + the full-field
@@ -438,7 +466,7 @@ internal sealed class GameStore
                 if (reader.Name != "Game")
                 {
                     if (reader.Depth == 0) { reader.Read(); continue; }   // <LaunchBox> root → descend
-                    try { CaptureSubEntity(reader.Name, (XElement)XNode.ReadFrom(reader)); } catch { reader.Read(); }
+                    try { CaptureSubEntity(reader.Name, (XElement)XNode.ReadFrom(reader), reload: true); } catch { reader.Read(); }
                     continue;
                 }
                 XElement g;
@@ -468,12 +496,12 @@ internal sealed class GameStore
                 if (Guid.TryParse(op.Id, out var gid) && _byId.TryGetValue(gid, out var i))
                     ApplyFieldToRow(i, op.Field, op.Value);                       // Notes -> _notes, extra -> _extra
             }
-            else if (op.OpType == "replace" && !IsChildEntity(op.Entity)
+            else if (op.OpType == "replace" && !IsChildEntity(op.Entity) && !IsTier1SubEntity(op.Entity)
                      && Guid.TryParse(op.ParentId, out var sg) && _byId.ContainsKey(sg))
             {
-                ApplySubEntityReplaceToMemory(sg, op.Entity, op.Value);           // sub-entities are dropped
+                ApplySubEntityReplaceToMemory(sg, op.Entity, op.Value);           // dropped sub-entities only
             }
-            // add / delete / move / child-entity replace / modelled-field modify → Tier-1, skip.
+            // add / delete / move / child-entity replace / modelled-field modify / GameSave → Tier-1, skip.
         }
     }
 

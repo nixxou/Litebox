@@ -41,6 +41,18 @@ internal sealed class MainWindow : Form
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
     private const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_FRAMECHANGED = 0x20;
 
+    // Caption (title-bar) colouring — Windows 11 (build 22000+) only; a harmless no-op error on Win10
+    // (there the warning banner below the caption is the visible cue instead).
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+    private const int DWMWA_CAPTION_COLOR = 35, DWMWA_TEXT_COLOR = 36;
+    private static int ColorRef(Color c) => c.R | (c.G << 8) | (c.B << 16);   // COLORREF = 0x00BBGGRR
+
+    // Forced read-only because another LiteBox instance is already running (only one may write the
+    // LB XMLs / op-log). Drives the warning caption + banner and the locked options. See InstanceGuard.
+    private readonly bool _secondInstance;
+    private static readonly Color WarnBg = Color.FromArgb(170, 60, 0);   // warning amber/orange
+
     private readonly PluginRegistry _reg;
     private readonly IDataManager _dm;
 
@@ -122,10 +134,13 @@ internal sealed class MainWindow : Form
     {
         _reg = reg; _dm = dm;
         _cfg = LiteBoxConfig.LoadForExe();
+        _secondInstance = InstanceGuard.AnotherInstanceRunning;
         _useImageCache = _cfg.UseImageCache;
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
         _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
-        Text = "LiteBox";
+        Text = _secondInstance
+            ? "LiteBox — READ-ONLY (another instance is open — changes won't be saved)"
+            : "LiteBox";
         try { using var ico = typeof(MainWindow).Assembly.GetManifestResourceStream("LbApiHost.litebox.ico"); if (ico != null) Icon = new Icon(ico); } catch { }
         ClientSize = new Size(1280, 800);
         StartPosition = FormStartPosition.CenterScreen;
@@ -215,6 +230,11 @@ internal sealed class MainWindow : Form
             DisplayStyle = ToolStripItemDisplayStyle.Text, ShowDropDownArrow = false,
             Font = new Font("Segoe UI Symbol", 11f),
         };
+        if (_secondInstance)   // options locked while a 2nd instance forces read-only
+        {
+            optBtn.Enabled = false;
+            optBtn.ToolTipText = "Options locked — another LiteBox instance is open (read-only)";
+        }
         ((ToolStripDropDownMenu)optBtn.DropDown).Renderer = new DarkRenderer();
         optBtn.DropDown.BackColor = Panel2;
         optBtn.DropDown.ForeColor = Fg;
@@ -323,6 +343,23 @@ internal sealed class MainWindow : Form
         Controls.Add(menu);
         MainMenuStrip = menu;
 
+        // Second-instance warning: a coloured banner at the very top of the client area (added last →
+        // docks closest to the caption). On Win11 the caption itself is also tinted (OnHandleCreated);
+        // on Win10 the caption colour API is a no-op so this banner is the visible cue.
+        if (_secondInstance)
+        {
+            var warn = new Label
+            {
+                Dock = DockStyle.Top, Height = 26, AutoSize = false,
+                BackColor = WarnBg, ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter, Padding = new Padding(8, 0, 8, 0),
+                Text = "⚠  READ-ONLY — another LiteBox instance is already open. " +
+                       "Your changes won't be saved and the options are locked.",
+            };
+            Controls.Add(warn);
+        }
+
         _sortCombo.SelectedIndex = 0; // default = CompareName
 
         // Dark native scrollbars (Win10/11 explorer dark theme).
@@ -352,6 +389,19 @@ internal sealed class MainWindow : Form
         };
         // Final dark-scrollbar pass once everything (data, columns) is in place.
         Shown += (_, _) => { ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); RelayoutDetail(); };
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (!_secondInstance) return;
+        try   // tint the native caption (Win11+); silently ignored on Win10
+        {
+            int cap = ColorRef(WarnBg), txt = ColorRef(Color.White);
+            DwmSetWindowAttribute(Handle, DWMWA_CAPTION_COLOR, ref cap, sizeof(int));
+            DwmSetWindowAttribute(Handle, DWMWA_TEXT_COLOR, ref txt, sizeof(int));
+        }
+        catch { }
     }
 
     // ── Game list construction (native ListView — smooth scroll, dark themed) ──

@@ -28,6 +28,7 @@ internal static class HostBoot
     {
         string coreDir = AppContext.BaseDirectory;
         Mem.Report("startup");
+        InstanceGuard.Probe();   // a 2nd LiteBox must not also write the XMLs / op-log (forces read-only below)
 
         // ── Real data: LaunchBox Platform XMLs (authoritative, no ExtendDB dep) ──
         IDataManager dm;
@@ -43,7 +44,10 @@ internal static class HostBoot
             sw.Stop();
             store.LogStats();
             Console.WriteLine($"Parsed XML in {sw.ElapsedMilliseconds} ms");
-            store.ReadOnly = LiteBoxConfig.LoadForExe().ReadOnly;   // default true → never write to the XMLs
+            bool cfgReadOnly = LiteBoxConfig.LoadForExe().ReadOnly;   // default true → never write to the XMLs
+            store.ReadOnly = cfgReadOnly || InstanceGuard.AnotherInstanceRunning;
+            if (InstanceGuard.AnotherInstanceRunning)
+                Console.WriteLine("[store] another LiteBox instance is running → read-only enforced (in-memory; LiteBox.ini untouched)");
             Console.WriteLine($"[store] ReadOnly = {store.ReadOnly}");
             store.RecoverJournalOnLoad();   // apply any pending user-state (crash/kill or deferred-while-LB-up)
             Mem.Report("after store build");

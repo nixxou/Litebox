@@ -45,7 +45,7 @@ internal static class WriteBackSeed
             .Take(8)
             .ToList();
 
-        Console.WriteLine($"[seed] seeding {perPlatform.Count} game(s):");
+        Console.WriteLine($"[seed] modifying {perPlatform.Count} game(s):");
         foreach (var g in perPlatform)
         {
             // A visible user-state field + a metadata field + a numeric field. Notes/MaxPlayers are
@@ -56,6 +56,23 @@ internal static class WriteBackSeed
             g.Notes = marker + " — write-back ingestion test";
             Console.WriteLine($"[seed]   {g.Platform,-28} {g.Id}  {Trunc(g.Title, 40)}");
         }
+
+        // Child-entity ADD on the first existing game (additional app + custom field).
+        var host0 = perPlatform[0];
+        var capp = host0.AddNewAdditionalApplication();
+        capp.Name = "WB Disc 2"; capp.ApplicationPath = @"roms\wb-disc2.cue"; capp.Disc = 2;
+        var ccf = host0.AddNewCustomField(); ccf.Name = "LBWB-Test"; ccf.Value = marker;
+        Console.WriteLine($"[seed] added child entities (additional app + custom field) to {host0.Platform} / {Trunc(host0.Title, 30)}");
+
+        // Game ADD on the first existing platform, with its own additional app.
+        string newPlat = host0.Platform;
+        var ng = dm.AddNewGame("LiteBox Added Game " + marker);
+        ng.Platform = newPlat;
+        ng.Developer = "LiteBox WB";
+        ng.ApplicationPath = @"roms\litebox-added.zip";
+        ng.Notes = marker;
+        var nga = ng.AddNewAdditionalApplication(); nga.Name = "Disc 1"; nga.ApplicationPath = @"roms\added-d1.cue"; nga.Disc = 1;
+        Console.WriteLine($"[seed] NEWGAME {ng.Id} on {newPlat}");
 
         dm.Save(true);          // → store.Flush() → FlushOpsToXml (LB not running → writes now)
         store.CloseLog();

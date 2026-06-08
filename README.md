@@ -30,16 +30,24 @@ through its own implementation of the API, with no dependency on any plugin.
     VNDB tag pills, and notes.
 - Frees RAM while a game runs (drops the optional data tier + trims the working
   set, optionally drops the host GameCache) and can show a "game running" screen.
-- Optional write-back: with `ReadOnly=false`, plugin/UI edits to a game (any of the
-  ~60 modelled `IGame` fields — title, metadata, dates, flags, plus favorites /
-  ratings / play stats) are recorded to an append-only operation log
-  (`Core\LiteBox.pending.db`, SQLite) and applied to the Platform XMLs at a safe time
-  (`Save()`, close, or next boot) — only when LaunchBox/BigBox aren't running, since
-  they own the XMLs while alive. Edits are surgical (only the touched nodes change;
-  unknown/unmodelled fields are preserved) and crash-safe (idempotent replay; the log
-  is cleared only after every file is durably swapped). Before each write the pristine
-  originals of just the affected files are zipped to `<LB>\Backups\LiteBox\` (sub-paths
-  preserved; 50 most recent kept) — a targeted alternative to LB's full Data backups.
+- Optional write-back: with `ReadOnly=false`, plugin/UI changes persist to the Platform
+  XMLs via an append-only operation log (`Core\LiteBox.pending.db`, SQLite), applied at a
+  safe time (`Save()`, close, or next boot) — only when LaunchBox/BigBox aren't running,
+  since they own the XMLs while alive. Supported:
+  - **Edit a game** — any of the ~60 modelled `IGame` fields (title, metadata, dates,
+    flags, favorites / ratings / play stats).
+  - **Child entities** — add / remove / edit a game's additional applications (discs),
+    custom fields, mounts and alternate names.
+  - **Add / delete a game** — `AddNewGame` (creates the `<Game>` node, and a new
+    `Platforms\<name>.xml` if that platform has none yet) and `TryRemoveGame`.
+
+  Edits are surgical (only the touched nodes change; unknown/unmodelled fields are
+  preserved), validated against LaunchBox (it ingests the rewritten files without
+  complaint), and crash-safe (idempotent replay; the log is cleared only after every file
+  is durably swapped). Before each write the pristine originals of just the affected files
+  are zipped to `<LB>\Backups\LiteBox\` (sub-paths preserved; 50 most recent kept) — a
+  targeted alternative to LB's full Data backups. Not yet wired: editing emulators /
+  platforms / playlists / categories, and moving a game across platforms.
 
 ## Requirements
 

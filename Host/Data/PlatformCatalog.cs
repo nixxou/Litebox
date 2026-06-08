@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
@@ -31,12 +32,16 @@ internal sealed class HostPlatform : DummyPlatform
 
     public void SetGames(IGame[] games) => _games = games ?? Array.Empty<IGame>();
 
-    // ── metadata (from Platforms.xml) ────────────────────────────────────────
+    // ── metadata (from Platforms.xml) — setters route through the op-log (keyed by Name) ──────
+    private GameStore _store;
+    internal void Attach(GameStore s) => _store = s;
+    private void Rec(string field, string value) => _store?.RecordEntityModify("Platform", _name, field, value);
+
     public override string Name { get => _name; set { } }
     public string DeveloperValue, ManufacturerValue, NotesValue, CategoryValue,
-                  CpuValue, MemoryValue, GraphicsValue, SoundValue, DisplayValue,
-                  MaxControllersValue, ScrapeAsValue, SortTitleValue, ImageTypeValue,
-                  VideoPathValue, BigBoxThemeValue, BigBoxViewValue;
+                  CpuValue, MemoryValue, GraphicsValue, SoundValue, DisplayValue, MediaValue,
+                  MaxControllersValue, ScrapeAsValue, SortTitleValue, NestedNameValue, LastGameIdValue,
+                  ImageTypeValue, VideoPathValue, BigBoxThemeValue, BigBoxViewValue;
     public DateTime? ReleaseDateValue;
     public bool HideInBigBoxValue;
     // image-folder config fields
@@ -44,35 +49,38 @@ internal sealed class HostPlatform : DummyPlatform
                   FanartImagesFolderValue, ScreenshotImagesFolderValue, BannerImagesFolderValue,
                   SteamBannerImagesFolderValue, ManualsFolderValue, MusicFolderValue, VideosFolderValue, FolderValue;
 
-    public override string Developer { get => DeveloperValue ?? ""; set { } }
-    public override string Manufacturer { get => ManufacturerValue ?? ""; set { } }
-    public override string Notes { get => NotesValue ?? ""; set { } }
-    public override string Category { get => CategoryValue ?? ""; set { } }
-    public override string Cpu { get => CpuValue ?? ""; set { } }
-    public override string Memory { get => MemoryValue ?? ""; set { } }
-    public override string Graphics { get => GraphicsValue ?? ""; set { } }
-    public override string Sound { get => SoundValue ?? ""; set { } }
-    public override string Display { get => DisplayValue ?? ""; set { } }
-    public override string MaxControllers { get => MaxControllersValue ?? ""; set { } }
-    public override string ScrapeAs { get => ScrapeAsValue ?? ""; set { } }
-    public override string SortTitle { get => SortTitleValue ?? ""; set { } }
-    public override string ImageType { get => ImageTypeValue ?? ""; set { } }
-    public override string VideoPath { get => VideoPathValue ?? ""; set { } }
-    public override string BigBoxTheme { get => BigBoxThemeValue ?? ""; set { } }
-    public override string BigBoxView { get => BigBoxViewValue ?? ""; set { } }
-    public override Nullable<DateTime> ReleaseDate { get => ReleaseDateValue; set { } }
-    public override bool HideInBigBox { get => HideInBigBoxValue; set { } }
-    public override string Folder { get => FolderValue ?? ""; set { } }
-    public override string FrontImagesFolder { get => FrontImagesFolderValue ?? ""; set { } }
-    public override string BackImagesFolder { get => BackImagesFolderValue ?? ""; set { } }
-    public override string ClearLogoImagesFolder { get => ClearLogoImagesFolderValue ?? ""; set { } }
-    public override string FanartImagesFolder { get => FanartImagesFolderValue ?? ""; set { } }
-    public override string ScreenshotImagesFolder { get => ScreenshotImagesFolderValue ?? ""; set { } }
-    public override string BannerImagesFolder { get => BannerImagesFolderValue ?? ""; set { } }
-    public override string SteamBannerImagesFolder { get => SteamBannerImagesFolderValue ?? ""; set { } }
-    public override string ManualsFolder { get => ManualsFolderValue ?? ""; set { } }
-    public override string MusicFolder { get => MusicFolderValue ?? ""; set { } }
-    public override string VideosFolder { get => VideosFolderValue ?? ""; set { } }
+    public override string Developer { get => DeveloperValue ?? ""; set { DeveloperValue = value; Rec("Developer", value); } }
+    public override string Manufacturer { get => ManufacturerValue ?? ""; set { ManufacturerValue = value; Rec("Manufacturer", value); } }
+    public override string Notes { get => NotesValue ?? ""; set { NotesValue = value; Rec("Notes", value); } }
+    public override string Category { get => CategoryValue ?? ""; set { CategoryValue = value; Rec("Category", value); } }
+    public override string Cpu { get => CpuValue ?? ""; set { CpuValue = value; Rec("Cpu", value); } }
+    public override string Memory { get => MemoryValue ?? ""; set { MemoryValue = value; Rec("Memory", value); } }
+    public override string Graphics { get => GraphicsValue ?? ""; set { GraphicsValue = value; Rec("Graphics", value); } }
+    public override string Sound { get => SoundValue ?? ""; set { SoundValue = value; Rec("Sound", value); } }
+    public override string Display { get => DisplayValue ?? ""; set { DisplayValue = value; Rec("Display", value); } }
+    public override string Media { get => MediaValue ?? ""; set { MediaValue = value; Rec("Media", value); } }
+    public override string MaxControllers { get => MaxControllersValue ?? ""; set { MaxControllersValue = value; Rec("MaxControllers", value); } }
+    public override string ScrapeAs { get => ScrapeAsValue ?? ""; set { ScrapeAsValue = value; Rec("ScrapeAs", value); } }
+    public override string SortTitle { get => SortTitleValue ?? ""; set { SortTitleValue = value; Rec("SortTitle", value); } }
+    public override string NestedName { get => NestedNameValue ?? ""; set { NestedNameValue = value; Rec("NestedName", value); } }
+    public override string LastGameId { get => LastGameIdValue ?? ""; set { LastGameIdValue = value; Rec("LastGameId", value); } }
+    public override string ImageType { get => ImageTypeValue ?? ""; set { ImageTypeValue = value; Rec("ImageType", value); } }
+    public override string VideoPath { get => VideoPathValue ?? ""; set { VideoPathValue = value; Rec("VideoPath", value); } }
+    public override string BigBoxTheme { get => BigBoxThemeValue ?? ""; set { BigBoxThemeValue = value; Rec("BigBoxTheme", value); } }
+    public override string BigBoxView { get => BigBoxViewValue ?? ""; set { BigBoxViewValue = value; Rec("BigBoxView", value); } }
+    public override Nullable<DateTime> ReleaseDate { get => ReleaseDateValue; set { ReleaseDateValue = value; Rec("ReleaseDate", value.HasValue ? value.Value.ToString("o", CultureInfo.InvariantCulture) : ""); } }
+    public override bool HideInBigBox { get => HideInBigBoxValue; set { HideInBigBoxValue = value; Rec("HideInBigBox", value ? "true" : "false"); } }
+    public override string Folder { get => FolderValue ?? ""; set { FolderValue = value; Rec("Folder", value); } }
+    public override string FrontImagesFolder { get => FrontImagesFolderValue ?? ""; set { FrontImagesFolderValue = value; Rec("FrontImagesFolder", value); } }
+    public override string BackImagesFolder { get => BackImagesFolderValue ?? ""; set { BackImagesFolderValue = value; Rec("BackImagesFolder", value); } }
+    public override string ClearLogoImagesFolder { get => ClearLogoImagesFolderValue ?? ""; set { ClearLogoImagesFolderValue = value; Rec("ClearLogoImagesFolder", value); } }
+    public override string FanartImagesFolder { get => FanartImagesFolderValue ?? ""; set { FanartImagesFolderValue = value; Rec("FanartImagesFolder", value); } }
+    public override string ScreenshotImagesFolder { get => ScreenshotImagesFolderValue ?? ""; set { ScreenshotImagesFolderValue = value; Rec("ScreenshotImagesFolder", value); } }
+    public override string BannerImagesFolder { get => BannerImagesFolderValue ?? ""; set { BannerImagesFolderValue = value; Rec("BannerImagesFolder", value); } }
+    public override string SteamBannerImagesFolder { get => SteamBannerImagesFolderValue ?? ""; set { SteamBannerImagesFolderValue = value; Rec("SteamBannerImagesFolder", value); } }
+    public override string ManualsFolder { get => ManualsFolderValue ?? ""; set { ManualsFolderValue = value; Rec("ManualsFolder", value); } }
+    public override string MusicFolder { get => MusicFolderValue ?? ""; set { MusicFolderValue = value; Rec("MusicFolder", value); } }
+    public override string VideosFolder { get => VideosFolderValue ?? ""; set { VideosFolderValue = value; Rec("VideosFolder", value); } }
 
     // ── games ────────────────────────────────────────────────────────────────
     public override IGame[] GetAllGames(bool includeHidden, bool includeBroken)
@@ -149,11 +157,18 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory
 {
     private readonly string _name;
     private readonly string _imagesRoot;
+    private GameStore _store;
+    internal void Attach(GameStore s) => _store = s;
+    private void Rec(string field, string value) => _store?.RecordEntityModify("PlatformCategory", _name, field, value);
     public HostPlatformCategory(string name, string imagesRoot) { _name = name; _imagesRoot = imagesRoot; }
     public override string Name { get => _name; set { } }
-    public string NotesValue, NestedNameValue;
-    public override string Notes { get => NotesValue ?? ""; set { } }
-    public override string NestedName { get => NestedNameValue ?? ""; set { } }
+    public string NotesValue, NestedNameValue, VideoPathValue, SortTitleValue;
+    public bool HideInBigBoxValue;
+    public override string Notes { get => NotesValue ?? ""; set { NotesValue = value; Rec("Notes", value); } }
+    public override string NestedName { get => NestedNameValue ?? ""; set { NestedNameValue = value; Rec("NestedName", value); } }
+    public override string VideoPath { get => VideoPathValue ?? ""; set { VideoPathValue = value; Rec("VideoPath", value); } }
+    public override string SortTitle { get => SortTitleValue ?? ""; set { SortTitleValue = value; Rec("SortTitle", value); } }
+    public override bool HideInBigBox { get => HideInBigBoxValue; set { HideInBigBoxValue = value; Rec("HideInBigBox", value ? "true" : "false"); } }
 
     // Category images: Images\Platform Categories\<name>\<type>\<name>.ext
     public override string ClearLogoImagePath => Img("Clear Logo");
@@ -252,9 +267,12 @@ internal static class PlatformCatalog
                 GraphicsValue = (string)pe.Element("Graphics"),
                 SoundValue = (string)pe.Element("Sound"),
                 DisplayValue = (string)pe.Element("Display"),
+                MediaValue = (string)pe.Element("Media"),
                 MaxControllersValue = (string)pe.Element("MaxControllers"),
                 ScrapeAsValue = (string)pe.Element("ScrapeAs"),
                 SortTitleValue = (string)pe.Element("SortTitle"),
+                NestedNameValue = (string)pe.Element("NestedName"),
+                LastGameIdValue = (string)pe.Element("LastGameId"),
                 ImageTypeValue = (string)pe.Element("ImageType"),
                 VideoPathValue = (string)pe.Element("VideoPath"),
                 BigBoxThemeValue = (string)pe.Element("BigBoxTheme"),
@@ -284,6 +302,9 @@ internal static class PlatformCatalog
             {
                 NotesValue = (string)ce.Element("Notes"),
                 NestedNameValue = (string)ce.Element("NestedName"),
+                VideoPathValue = (string)ce.Element("VideoPath"),
+                SortTitleValue = (string)ce.Element("SortTitle"),
+                HideInBigBoxValue = ((string)ce.Element("HideInBigBox") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
             });
         }
 

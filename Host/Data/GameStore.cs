@@ -488,10 +488,14 @@ internal sealed class GameStore
         var addedFields = new Dictionary<Guid, Dictionary<string, string>>();
         var addedOrder = new List<Guid>();
         var deletedExisting = new List<(Guid id, string platform)>();
-        // Same scheme for emulators (string-keyed by ID, in Emulators.xml).
-        var addedEmu = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-        var addedEmuOrder = new List<string>();
-        var deletedEmu = new List<string>();
+        // Keyed top-level entities (Emulator by ID in Emulators.xml; Platform / PlatformCategory by
+        // Name in Platforms.xml) — per-entity accumulators for adds/deletes.
+        var tlAdded = new Dictionary<string, Dictionary<string, Dictionary<string, string>>>(StringComparer.Ordinal);
+        var tlOrder = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var tlDeleted = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        Dictionary<string, Dictionary<string, string>> TLAdded(string e) => tlAdded.TryGetValue(e, out var m) ? m : (tlAdded[e] = new(StringComparer.OrdinalIgnoreCase));
+        List<string> TLOrder(string e) => tlOrder.TryGetValue(e, out var l) ? l : (tlOrder[e] = new());
+        List<string> TLDeleted(string e) => tlDeleted.TryGetValue(e, out var l) ? l : (tlDeleted[e] = new());
 
         foreach (var op in ops)
         {
@@ -534,23 +538,23 @@ internal sealed class GameStore
                     ApplyChildReplaceToDoc(docs[file], op.Entity, op.ParentId, op.Value);
                     touched.Add(pgid);
                 }
-                else if (op.Entity == "Emulator")
+                else if (IsTopLevelEntity(op.Entity))
                 {
-                    string file = EmulatorsFile;
-                    if (file == null || !File.Exists(file) || string.IsNullOrEmpty(op.Id)) continue;
-                    EnsureDoc(file);
+                    var (tfile, tkey, _) = TopLevelSpec(op.Entity);
+                    if (tfile == null || !File.Exists(tfile) || string.IsNullOrEmpty(op.Id)) continue;
+                    EnsureDoc(tfile);
                     if (op.OpType == "add")
-                    { if (!addedEmu.ContainsKey(op.Id)) { addedEmu[op.Id] = new() { ["ID"] = op.Id }; addedEmuOrder.Add(op.Id); } continue; }
+                    { var m = TLAdded(op.Entity); if (!m.ContainsKey(op.Id)) { m[op.Id] = new(StringComparer.Ordinal) { [tkey] = op.Id }; TLOrder(op.Entity).Add(op.Id); } continue; }
                     if (op.OpType == "modify")
                     {
-                        if (addedEmu.TryGetValue(op.Id, out var efld))
-                        { if (string.IsNullOrEmpty(op.Value)) efld.Remove(op.Field); else efld[op.Field] = op.Value; continue; }
-                        var ee = FindByChild(docs[file], "Emulator", "ID", op.Id);
-                        if (ee != null) ApplyModify(ee, op.Field, op.Value);
+                        var m = TLAdded(op.Entity);
+                        if (m.TryGetValue(op.Id, out var tfld)) { if (string.IsNullOrEmpty(op.Value)) tfld.Remove(op.Field); else tfld[op.Field] = op.Value; continue; }
+                        var node = FindByChild(docs[tfile], op.Entity, tkey, op.Id);
+                        if (node != null) ApplyModify(node, op.Field, op.Value);
                         continue;
                     }
                     if (op.OpType == "delete")
-                    { if (addedEmu.Remove(op.Id)) addedEmuOrder.Remove(op.Id); else deletedEmu.Add(op.Id); continue; }
+                    { var m = TLAdded(op.Entity); if (m.Remove(op.Id)) TLOrder(op.Entity).Remove(op.Id); else TLDeleted(op.Entity).Add(op.Id); continue; }
                 }
                 else if (op.Entity == "EmulatorPlatform" && op.OpType == "replace")
                 {
@@ -594,21 +598,26 @@ internal sealed class GameStore
             catch (Exception ex) { Console.WriteLine("[store] delete game " + gid + ": " + ex.Message); }
         }
 
-        // Create added emulators / delete removed ones (Emulators.xml).
-        if ((addedEmuOrder.Count > 0 || deletedEmu.Count > 0) && EmulatorsFile != null && File.Exists(EmulatorsFile))
+        // Create / delete keyed top-level entities (Emulator / Platform / PlatformCategory).
+        foreach (var e in tlOrder.Keys.Concat(tlDeleted.Keys).Distinct().ToList())
         {
-            EnsureDoc(EmulatorsFile);
-            var edoc = docs[EmulatorsFile];
-            foreach (var id in addedEmuOrder)
-                try { FindByChild(edoc, "Emulator", "ID", id)?.Remove(); edoc.Root.Add(BuildElement("Emulator", addedEmu[id], _emulatorAddOrder)); }
-                catch (Exception ex) { Console.WriteLine("[store] add emulator " + id + ": " + ex.Message); }
-            foreach (var id in deletedEmu)
-                try
-                {
-                    FindByChild(edoc, "Emulator", "ID", id)?.Remove();
-                    foreach (var ep in edoc.Root.Elements("EmulatorPlatform").Where(e => (string)e.Element("Emulator") == id).ToList()) ep.Remove();
-                }
-                catch (Exception ex) { Console.WriteLine("[store] delete emulator " + id + ": " + ex.Message); }
+            var (tfile, tkey, torder) = TopLevelSpec(e);
+            if (tfile == null || !File.Exists(tfile)) continue;
+            EnsureDoc(tfile);
+            var tdoc = docs[tfile];
+            if (tlOrder.TryGetValue(e, out var addList))
+                foreach (var id in addList)
+                    try { FindByChild(tdoc, e, tkey, id)?.Remove(); tdoc.Root.Add(BuildElement(e, tlAdded[e][id], torder)); }
+                    catch (Exception ex) { Console.WriteLine($"[store] add {e} {id}: {ex.Message}"); }
+            if (tlDeleted.TryGetValue(e, out var delList))
+                foreach (var id in delList)
+                    try
+                    {
+                        FindByChild(tdoc, e, tkey, id)?.Remove();
+                        if (e == "Emulator")   // also drop the emulator's per-platform rows
+                            foreach (var ep in tdoc.Root.Elements("EmulatorPlatform").Where(x => (string)x.Element("Emulator") == id).ToList()) ep.Remove();
+                    }
+                    catch (Exception ex) { Console.WriteLine($"[store] delete {e} {id}: {ex.Message}"); }
         }
 
         if (docs.Count == 0) { _oplog.Clear(); return 0; }
@@ -913,6 +922,17 @@ internal sealed class GameStore
     // and ID-less collections (EmulatorPlatform) via the same "replace" pattern as child entities.
     private string DataDir => Path.GetDirectoryName(_platformsDir);
     private string EmulatorsFile => DataDir != null ? Path.Combine(DataDir, "Emulators.xml") : null;
+    private string PlatformsFile => DataDir != null ? Path.Combine(DataDir, "Platforms.xml") : null;
+
+    // Keyed top-level entities → (file, key child element, canonical field order for adds).
+    internal static bool IsTopLevelEntity(string e) => e == "Emulator" || e == "Platform" || e == "PlatformCategory";
+    private (string file, string key, string[] order) TopLevelSpec(string entity) => entity switch
+    {
+        "Emulator" => (EmulatorsFile, "ID", _emulatorAddOrder),
+        "Platform" => (PlatformsFile, "Name", _platformAddOrder),
+        "PlatformCategory" => (PlatformsFile, "Name", _platformCategoryAddOrder),
+        _ => (null, null, null),
+    };
 
     public void RecordEntityModify(string entity, string id, string field, string value)
     { if (!ReadOnly && _oplog != null) _oplog.Append("modify", entity, id, null, field, value); }
@@ -935,6 +955,15 @@ internal sealed class GameStore
         "EnableHardcoreAchievements",
     };
     private static readonly string[] _emuPlatOrder = { "Emulator", "Platform", "CommandLine", "Default", "M3uDiscLoadEnabled", "AutoExtract" };
+    private static readonly string[] _platformAddOrder =
+    {
+        "Name", "NestedName", "ReleaseDate", "Developer", "Manufacturer", "Cpu", "Memory", "Graphics", "Sound",
+        "Display", "Media", "MaxControllers", "Folder", "Notes", "VideosFolder", "FrontImagesFolder",
+        "BackImagesFolder", "ClearLogoImagesFolder", "FanartImagesFolder", "ScreenshotImagesFolder",
+        "BannerImagesFolder", "SteamBannerImagesFolder", "ManualsFolder", "MusicFolder", "ScrapeAs", "VideoPath",
+        "ImageType", "SortTitle", "LastGameId", "BigBoxView", "BigBoxTheme", "HideInBigBox",
+    };
+    private static readonly string[] _platformCategoryAddOrder = { "Name", "NestedName", "Notes", "VideoPath", "SortTitle", "HideInBigBox" };
 
     private static XElement BuildElement(string name, Dictionary<string, string> fld, string[] order)
     {

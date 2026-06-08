@@ -32,6 +32,7 @@ internal static class WriteBackSelfTest
             fails += TestChildEntities(platformsDir);
             fails += TestGameAddDelete(platformsDir);
             fails += TestEmulators(platformsDir);
+            fails += TestPlatforms(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
         finally { try { Directory.Delete(temp, true); } catch { } }
@@ -243,6 +244,43 @@ internal static class WriteBackSelfTest
             && eps.Any(e => (string)e.Element("Platform") == "MS-DOS" && (string)e.Element("CommandLine") == "-L core2")
             && eps.Any(e => (string)e.Element("Platform") == "SNES" && (string)e.Element("M3uDiscLoadEnabled") == "true"));
         f += Check("emu: AddNewEmulator persisted", doc.Root.Elements("Emulator").Any(e => (string)e.Element("Title") == "Standalone" && (string)e.Element("ApplicationPath") == "stand.exe"));
+        return f;
+    }
+
+    private static int TestPlatforms(string platformsDir)
+    {
+        int f = 0;
+        string dataDir = Path.GetDirectoryName(platformsDir);
+        string pfile = Path.Combine(dataDir, "Platforms.xml");
+        File.WriteAllText(pfile,
+            "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
+            "  <Platform><Name>TestPlat</Name><Developer>OldDev</Developer></Platform>\n" +
+            "  <PlatformCategory><Name>TestCat</Name><Notes>old</Notes></PlatformCategory>\n" +
+            "</LaunchBox>\n");
+
+        var store = GameStore.Load(platformsDir, Path.Combine(dataDir, "plat.pending.db"));
+        store.ReadOnly = false;
+        var dm = new HostDataManagerXml(store, dataDir, Path.Combine(dataDir, "..", "Images")) { ReadOnly = false };
+
+        var p = dm.GetPlatformByName("TestPlat");
+        f += Check("plat: found", p != null);
+        if (p == null) { store.CloseLog(); return f; }
+        p.Developer = "NewDev"; p.Notes = "platnotes"; p.Media = "Cartridge";
+        var c = dm.GetPlatformCategoryByName("TestCat");
+        if (c != null) { c.Notes = "catnotes"; c.SortTitle = "ZZ"; }
+        var np = dm.AddNewPlatform("Brand New Platform"); np.Developer = "Acme"; np.Manufacturer = "AcmeCorp";
+        var nc = dm.AddNewPlatformCategory("Brand New Cat"); nc.Notes = "newcat";
+        dm.Save(true);
+        store.CloseLog();
+
+        var doc = XDocument.Load(pfile);
+        var pe = doc.Root.Elements("Platform").FirstOrDefault(e => (string)e.Element("Name") == "TestPlat");
+        f += Check("plat: modify (Developer/Notes/Media)", pe != null
+            && (string)pe.Element("Developer") == "NewDev" && (string)pe.Element("Notes") == "platnotes" && (string)pe.Element("Media") == "Cartridge");
+        var ce = doc.Root.Elements("PlatformCategory").FirstOrDefault(e => (string)e.Element("Name") == "TestCat");
+        f += Check("cat: modify (Notes/SortTitle)", ce != null && (string)ce.Element("Notes") == "catnotes" && (string)ce.Element("SortTitle") == "ZZ");
+        f += Check("plat: AddNewPlatform persisted", doc.Root.Elements("Platform").Any(e => (string)e.Element("Name") == "Brand New Platform" && (string)e.Element("Developer") == "Acme"));
+        f += Check("cat: AddNewPlatformCategory persisted", doc.Root.Elements("PlatformCategory").Any(e => (string)e.Element("Name") == "Brand New Cat" && (string)e.Element("Notes") == "newcat"));
         return f;
     }
 

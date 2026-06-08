@@ -58,6 +58,10 @@ through its own implementation of the API, with no dependency on any plugin.
   every field LB writes (a game's GogAppId/Origin/Android/Missing/RetroAchievements; an emulator's
   UsePauseScreen/SkipVersionCheck/LoginToCheevoOnGameLaunch; etc.). Use it typed (LiteBox-native
   plugin) or by reflection on the public method names (a cross-LB plugin like ExtendDB).
+  Games also expose their per-game **sub-objects** that LB writes as separate elements and the SDK
+  hides entirely — `ModelSettings` (3D box/cart display override, ~14 options), `GameControllerSupport`,
+  `GameSave`, and any future type — via `ILiteBoxGame.SubEntityTypes / GetSubEntities / SetSubEntities`
+  (captured generically, round-tripped, and preserved on any write).
 
 ## Requirements
 

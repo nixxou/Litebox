@@ -420,6 +420,7 @@ internal static class WriteBackSelfTest
             $"  <Game><ID>{gid}</ID><Title>SubHost</Title><Platform>SubPlat</Platform><Developer>Old</Developer></Game>\n" +
             $"  <ModelSettings><GameId>{gid}</GameId><ModelType>dvd</ModelType><UseFullScanImages>true</UseFullScanImages></ModelSettings>\n" +
             $"  <GameControllerSupport><GameId>{gid}</GameId><ControllerId>ctrl-1</ControllerId><SupportLevel>1</SupportLevel></GameControllerSupport>\n" +
+            $"  <GameSave><GameId>{gid}</GameId><CloudId>save-99</CloudId></GameSave>\n" +
             "</LaunchBox>\n");
 
         // Phase 1: modify the GAME only → the sub-entities must survive untouched (preservation).
@@ -429,10 +430,15 @@ internal static class WriteBackSelfTest
         var hg1 = new HostGame(s1, i1);
         f += Check("sub: types listed", hg1.SubEntityTypes.Contains("ModelSettings") && hg1.SubEntityTypes.Contains("GameControllerSupport"));
         f += Check("sub: read ModelSettings.ModelType", hg1.GetSubEntities("ModelSettings").FirstOrDefault()?["ModelType"] == "dvd");
+        f += Check("sub: GameSave read before drop", hg1.GetSubEntities("GameSave").FirstOrDefault()?["CloudId"] == "save-99");
         s1.DropOptional();
-        f += Check("sub: dropped at launch (Tier-2)", hg1.SubEntityTypes.Count == 0);
+        f += Check("sub: display-only types dropped at launch (Tier-2)",
+            !hg1.SubEntityTypes.Contains("ModelSettings") && !hg1.SubEntityTypes.Contains("GameControllerSupport"));
+        f += Check("sub: GameSave KEPT resident at launch (Tier-1)",
+            hg1.SubEntityTypes.Contains("GameSave") && hg1.GetSubEntities("GameSave").FirstOrDefault()?["CloudId"] == "save-99");
         s1.ReloadOptional();
         f += Check("sub: reloaded after exit", hg1.SubEntityTypes.Contains("ModelSettings") && hg1.GetSubEntities("ModelSettings").FirstOrDefault()?["ModelType"] == "dvd");
+        f += Check("sub: GameSave not duplicated after reload", hg1.GetSubEntities("GameSave").Count == 1);
         hg1.Favorite = true;
         s1.Flush(); s1.CloseLog();
         var d1 = XDocument.Load(xml);

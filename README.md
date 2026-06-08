@@ -30,6 +30,8 @@ through its own implementation of the API, with no dependency on any plugin.
     VNDB tag pills, and notes.
 - Frees RAM while a game runs (drops the optional data tier + trims the working
   set, optionally drops the host GameCache) and can show a "game running" screen.
+  The `GameSave` sub-object is kept resident through the launch (a save-sync plugin may
+  read/write it while the game runs); the display-only optional data is dropped.
 - Optional write-back: with `ReadOnly=false`, plugin/UI changes persist to the Platform
   XMLs via an append-only operation log (`Core\LiteBox.pending.db`, SQLite), applied at a
   safe time (`Save()`, close, or next boot) — only when LaunchBox/BigBox aren't running,
@@ -61,7 +63,9 @@ through its own implementation of the API, with no dependency on any plugin.
   Games also expose their per-game **sub-objects** that LB writes as separate elements and the SDK
   hides entirely — `ModelSettings` (3D box/cart display override, ~14 options), `GameControllerSupport`,
   `GameSave`, and any future type — via `ILiteBoxGame.SubEntityTypes / GetSubEntities / SetSubEntities`
-  (captured generically, round-tripped, and preserved on any write).
+  (captured generically, round-tripped, and preserved on any write). `GameSave` is treated as
+  resident (Tier-1) so it stays available during a game launch; the display-only ones
+  (`ModelSettings`, `GameControllerSupport`) ride the droppable optional tier.
 
 ## Requirements
 
@@ -120,6 +124,10 @@ LiteBox.exe --selftest-writeback  round-trips the write-back op-log on temp file
 - **ReadOnly** (default **true**): never write to the LaunchBox XMLs; edits stay in
   memory for the session. Set false to persist them via the operation log (see
   write-back above) — applied to the XMLs only when LB/BigBox aren't running.
+  **Second instance:** if another LiteBox is already running, the new instance is forced
+  read-only for the session (only one instance may own the XMLs / op-log). The change is
+  in-memory only — `LiteBox.ini` is left untouched — and the window makes it explicit: a
+  warning-coloured caption (Win11) + a banner, and the options menu is locked.
 - **Show "game running" screen**, **Unload the list while a game runs**, **Use the
   image cache** (degraded thumbnails).
 - **Use game cache** (when ExtendDB is absent) + **Unload game cache during game**.

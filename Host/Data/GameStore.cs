@@ -79,6 +79,11 @@ internal sealed class GameStore
     // platform name -> source XML file (for write-back)
     private readonly Dictionary<string, string> _platformFile = new(StringComparer.OrdinalIgnoreCase);
 
+    // Games created this session via AddNewGame (their <Game> node is created at flush, not edited
+    // in place). Their Platform field is settable (no cross-file move concern — the node is new).
+    private readonly HashSet<Guid> _addedIds = new();
+    public bool IsAddedGame(Guid id) => _addedIds.Contains(id);
+
     // Write-back operation log (WAL): every mutation (user-state OR plugin) is appended as an
     // ordered event and flushed to the XMLs at a safe time. See OpLog. Opened in Load().
     private OpLog _oplog;
@@ -386,12 +391,20 @@ internal sealed class GameStore
         var ops = _oplog?.ReadAll();
         if (ops != null && ops.Count > 0)
         {
-            foreach (var op in ops)
+            foreach (var op in ops)   // seq order: an "add" precedes its field "modify"s
             {
-                if (op.OpType == "modify" && op.Entity == "Game")
+                if (op.Entity == "Game" && op.OpType == "add")
+                {
+                    if (Guid.TryParse(op.Id, out var ag)) AddGameRowForReplay(ag);
+                }
+                else if (op.Entity == "Game" && op.OpType == "modify")
                 {
                     if (Guid.TryParse(op.Id, out var gid) && _byId.TryGetValue(gid, out var i))
                         ApplyFieldToRow(i, op.Field, op.Value);
+                }
+                else if (op.Entity == "Game" && op.OpType == "delete")
+                {
+                    if (Guid.TryParse(op.Id, out var dg)) { _byId.Remove(dg); _addedIds.Remove(dg); }
                 }
                 else if (op.OpType == "replace" && IsChildEntity(op.Entity))
                 {
@@ -470,6 +483,12 @@ internal sealed class GameStore
             index[file] = byId;
         }
 
+        // Added games: their <Game> node is created at the end from the accumulated field ops
+        // (op-driven, so a partial-crash replay rebuilds the same node). Order preserved.
+        var addedFields = new Dictionary<Guid, Dictionary<string, string>>();
+        var addedOrder = new List<Guid>();
+        var deletedExisting = new List<(Guid id, string platform)>();
+
         foreach (var op in ops)
         {
             try
@@ -477,15 +496,30 @@ internal sealed class GameStore
                 if (op.Entity == "Game")
                 {
                     if (!Guid.TryParse(op.Id, out var gid)) continue;
-                    string file = FileForGame(gid);
-                    if (file == null || !File.Exists(file)) continue;                       // unresolved → drop
-                    EnsureDoc(file);
-                    var ge = index[file].TryGetValue(gid, out var el) ? el : null;
+                    if (op.OpType == "add")
+                    {
+                        if (!addedFields.ContainsKey(gid)) { addedFields[gid] = new() { ["ID"] = gid.ToString() }; addedOrder.Add(gid); }
+                        continue;
+                    }
+                    if (op.OpType == "modify")
+                    {
+                        if (addedFields.TryGetValue(gid, out var fld))                          // field of an added game
+                        { if (string.IsNullOrEmpty(op.Value)) fld.Remove(op.Field); else fld[op.Field] = op.Value; continue; }
+                        string file = FileForGame(gid);                                          // existing game
+                        if (file == null || !File.Exists(file)) continue;
+                        EnsureDoc(file);
+                        var ge = index[file].TryGetValue(gid, out var el) ? el : null;
+                        if (ge == null) continue;
+                        ApplyModify(ge, op.Field, op.Value);
+                        touched.Add(gid);
+                        continue;
+                    }
                     if (op.OpType == "delete")
-                    { if (ge != null) { ge.Remove(); index[file].Remove(gid); touched.Add(gid); } continue; }
-                    if (op.OpType != "modify" || ge == null) continue;
-                    ApplyModify(ge, op.Field, op.Value);
-                    touched.Add(gid);
+                    {
+                        if (addedFields.Remove(gid)) { addedOrder.Remove(gid); continue; }       // added then deleted → no node
+                        deletedExisting.Add((gid, op.Value));                                    // op.Value = platform
+                        continue;
+                    }
                 }
                 else if (IsChildEntity(op.Entity) && op.OpType == "replace")
                 {
@@ -498,6 +532,37 @@ internal sealed class GameStore
                 }
             }
             catch (Exception ex) { Console.WriteLine("[store] apply op seq=" + op.Seq + ": " + ex.Message); }
+        }
+
+        // Create added games (resolve/create the platform file, replace any same-id node → idempotent).
+        foreach (var gid in addedOrder)
+        {
+            try
+            {
+                var fld = addedFields[gid];
+                string file = PlatformFile(fld.TryGetValue("Platform", out var p) ? p : null);
+                if (file == null) continue;
+                EnsureDoc(file);
+                if (index[file].TryGetValue(gid, out var old)) { old.Remove(); index[file].Remove(gid); }
+                var el = BuildGameElement(fld);
+                docs[file].Root.Add(el);
+                index[file][gid] = el;
+                touched.Add(gid);
+            }
+            catch (Exception ex) { Console.WriteLine("[store] add game " + gid + ": " + ex.Message); }
+        }
+
+        // Delete existing games (platform from the delete op → its file).
+        foreach (var (gid, platform) in deletedExisting)
+        {
+            try
+            {
+                string file = !string.IsNullOrEmpty(platform) && _platformFile.TryGetValue(platform, out var f) ? f : FileForGame(gid);
+                if (file == null || !File.Exists(file)) continue;
+                EnsureDoc(file);
+                if (index[file].TryGetValue(gid, out var ge)) { ge.Remove(); index[file].Remove(gid); touched.Add(gid); }
+            }
+            catch (Exception ex) { Console.WriteLine("[store] delete game " + gid + ": " + ex.Message); }
         }
 
         if (docs.Count == 0) { _oplog.Clear(); return 0; }
@@ -527,6 +592,68 @@ internal sealed class GameStore
         if (!_byId.TryGetValue(gid, out var i)) return null;
         string plat = Str(Rows[i].PlatformIdx);
         return _platformFile.TryGetValue(plat, out var f) ? f : null;
+    }
+
+    // ── Game add / delete (Palier 3) ─────────────────────────────────────────
+    /// <summary>Creates a new in-memory game row (grows the compact store) and logs an "add" op.
+    /// The &lt;Game&gt; node itself is created at flush time from the accumulated field ops. Returns
+    /// the new row index; <paramref name="id"/> is the minted GUID (reused on replay → idempotent).</summary>
+    public int AddGameRow(string title, out Guid id)
+    {
+        id = Guid.NewGuid();
+        int idx = GrowRow(id);
+        Rows[idx].TitleIdx = InternRuntime(title);
+        if (!ReadOnly && _oplog != null)
+        {
+            _oplog.Append("add", "Game", id.ToString(), null, null, null);
+            _oplog.Append("modify", "Game", id.ToString(), null, "Title", title);
+        }
+        return idx;
+    }
+
+    // Replay path: recreate an added game's row from an "add" op (no re-logging).
+    private void AddGameRowForReplay(Guid id) { if (!_byId.ContainsKey(id)) GrowRow(id); }
+
+    private int GrowRow(Guid id)
+    {
+        int idx = Rows.Length;
+        Array.Resize(ref Rows, idx + 1);
+        Rows[idx] = new GameRow { Id = id, LaunchBoxDbId = -1, MaxPlayers = -1, ReleaseYear = -1 };
+        if (_notes != null) { Array.Resize(ref _notes, idx + 1); _notes[idx] = null; }
+        _byId[id] = idx;
+        _addedIds.Add(id);
+        return idx;
+    }
+
+    /// <summary>Removes a game in memory and logs a "delete" op (carrying its platform so the flush
+    /// can find the file). Returns false if unknown.</summary>
+    public bool DeleteGameRow(Guid id)
+    {
+        if (!_byId.TryGetValue(id, out var i)) return false;
+        string platform = Str(Rows[i].PlatformIdx);
+        _byId.Remove(id);
+        _addedIds.Remove(id);
+        if (!ReadOnly && _oplog != null) _oplog.Append("delete", "Game", id.ToString(), null, "Platform", platform);
+        return true;
+    }
+
+    /// <summary>The XML file for a platform; for a brand-new platform, creates an empty skeleton
+    /// &lt;LaunchBox/&gt; file under the Platforms dir and remembers it. Null only on failure.</summary>
+    private string PlatformFile(string platform)
+    {
+        if (string.IsNullOrEmpty(platform)) platform = "Unknown";
+        if (_platformFile.TryGetValue(platform, out var f)) return f;
+        try
+        {
+            string name = platform;
+            foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            string path = Path.Combine(_platformsDir, name + ".xml");
+            if (!File.Exists(path))
+                File.WriteAllText(path, "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n</LaunchBox>");
+            _platformFile[platform] = path;
+            return path;
+        }
+        catch (Exception ex) { Console.WriteLine("[store] PlatformFile failed for '" + platform + "': " + ex.Message); return null; }
     }
 
     // ── Child-entity write-back (AdditionalApplication / AlternateName / Mount / CustomField) ──
@@ -711,6 +838,36 @@ internal sealed class GameStore
         if (e == null) parent.Add(new XElement(name, value)); else e.Value = value;
     }
 
+    // Canonical-ish field order for a newly created <Game> (modelled fields; LB tolerates order).
+    private static readonly string[] _gameAddOrder =
+    {
+        "ID", "Title", "SortTitle", "Platform", "ApplicationPath", "Emulator", "Developer", "Publisher",
+        "Genre", "Region", "Rating", "Status", "PlayMode", "Version", "Series", "Source", "ReleaseType",
+        "RootFolder", "CloneOf", "Progress", "WikipediaURL", "VideoUrl", "Notes", "CommandLine",
+        "ConfigurationCommandLine", "ConfigurationPath", "DosBoxConfigurationPath", "CustomDosBoxVersionPath",
+        "ScummVMGameDataFolderPath", "ScummVMGameType", "VideoPath", "ThemeVideoPath", "ManualPath", "MusicPath",
+        "RetroAchievementsHash", "DateAdded", "DateModified", "ReleaseDate", "LastPlayedDate", "StarRatingFloat",
+        "StarRating", "CommunityStarRating", "CommunityStarRatingTotalVotes", "DatabaseID", "MaxPlayers",
+        "StartupLoadDelay", "PlayCount", "PlayTime", "Favorite", "Hide", "Broken", "Completed", "Installed",
+        "Portable", "UseDosBox", "UseScummVM", "ScummVMAspectCorrection", "ScummVMFullscreen", "UseStartupScreen",
+        "OverrideDefaultStartupScreenSettings", "HideAllNonExclusiveFullscreenWindows", "HideMouseCursorInGame",
+        "DisableShutdownScreen", "AggressiveWindowHiding",
+    };
+
+    // Builds a fresh <Game> element from an added game's accumulated field map, in canonical order.
+    private static XElement BuildGameElement(Dictionary<string, string> fld)
+    {
+        if (fld.TryGetValue("StarRatingFloat", out var srf) && !string.IsNullOrEmpty(srf) && !fld.ContainsKey("StarRating"))
+            fld["StarRating"] = ((int)Math.Round(ParseFloat(srf))).ToString(CultureInfo.InvariantCulture);
+        var el = new XElement("Game");
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var f in _gameAddOrder)
+            if (fld.TryGetValue(f, out var v) && !string.IsNullOrEmpty(v)) { el.Add(new XElement(f, v)); emitted.Add(f); }
+        foreach (var kv in fld)
+            if (!emitted.Contains(kv.Key) && !string.IsNullOrEmpty(kv.Value)) el.Add(new XElement(kv.Key, kv.Value));
+        return el;
+    }
+
     // XML element name → applies the value into Rows[i]. Used by setters (live) and replay (boot).
     private static readonly Dictionary<string, Action<GameStore, int, string>> _gameFieldParsers = BuildParsers();
 
@@ -722,6 +879,7 @@ internal sealed class GameStore
         var d = new Dictionary<string, Action<GameStore, int, string>>(StringComparer.Ordinal);
         // strings
         d["Title"]                     = (s, i, v) => s.Rows[i].TitleIdx = s.InternRuntime(v);
+        d["Platform"]                  = (s, i, v) => s.Rows[i].PlatformIdx = s.InternRuntime(v);   // settable on added games only
         d["SortTitle"]                 = (s, i, v) => s.Rows[i].SortTitleIdx = s.InternRuntime(v);
         d["ApplicationPath"]           = (s, i, v) => s.Rows[i].AppPathIdx = s.InternRuntime(v);
         d["Emulator"]                  = (s, i, v) => s.Rows[i].EmulatorIdIdx = s.InternRuntime(v);

@@ -15,7 +15,7 @@ namespace LbApiHost.Host.Data;
 internal sealed class HostDataManagerXml : DummyDataManager
 {
     private readonly GameStore _store;
-    private readonly IGame[] _allGames;
+    private readonly List<IGame> _allGames;   // index-aligned with store.Rows; AddNewGame appends
     private readonly IPlatform[] _platforms;
     private readonly Dictionary<string, IPlatform> _platformByName;
     private readonly IPlatformCategory[] _categories;
@@ -37,8 +37,8 @@ internal sealed class HostDataManagerXml : DummyDataManager
         _store = store;
 
         // Game wrappers (thin) built once.
-        _allGames = new IGame[store.Count];
-        for (int i = 0; i < store.Count; i++) _allGames[i] = new HostGame(store, i);
+        _allGames = new List<IGame>(store.Count);
+        for (int i = 0; i < store.Count; i++) _allGames.Add(new HostGame(store, i));
 
         // Platforms + categories from Platforms.xml.
         var (platforms, categories) = PlatformCatalog.Load(dataDir, imagesRoot);
@@ -122,9 +122,24 @@ internal sealed class HostDataManagerXml : DummyDataManager
         Console.WriteLine($"[HostDataManagerXml] playlists={_playlists.Length} roots={_roots.Count}");
     }
 
-    public override IGame[] GetAllGames() => _allGames;
+    public override IGame[] GetAllGames() => _allGames.ToArray();
     public override IGame GetGameById(string id)
         => (Guid.TryParse(id, out var g) && _store.ById.TryGetValue(g, out var i)) ? _allGames[i] : null;
+
+    public override IGame AddNewGame(string title)
+    {
+        int idx = _store.AddGameRow(title ?? "", out _);   // grows the store + logs an "add" op
+        var g = new HostGame(_store, idx);
+        _allGames.Add(g);                                  // stays index-aligned (idx == old count)
+        return g;
+    }
+
+    public override bool TryRemoveGame(IGame game)
+    {
+        // Removes from the store (logs a "delete" op); the wrapper stays in _allGames to keep index
+        // alignment — GetGameById returns null for it immediately, the list refreshes on next load.
+        return game != null && Guid.TryParse(game.Id, out var gid) && _store.DeleteGameRow(gid);
+    }
 
     public override IPlatform[] GetAllPlatforms() => _platforms;
     public override IPlatform GetPlatformByName(string name)

@@ -294,6 +294,9 @@ internal sealed class HostAdditionalApplication : DummyAdditionalApplication
     public override bool WaitForExit { get => _a.WaitForExit; set { _a.WaitForExit = value; Rec(); } }
     public override bool SideA { get => _a.SideA; set { _a.SideA = value; Rec(); } }
     public override bool SideB { get => _a.SideB; set { _a.SideB = value; Rec(); } }
+    public override DateTime? ReleaseDate { get => _a.ReleaseDate; set { _a.ReleaseDate = value; Rec(); } }
+    public override DateTime? LastPlayed { get => _a.LastPlayed; set { _a.LastPlayed = value; Rec(); } }
+    public override bool? Installed { get => _a.Installed; set { _a.Installed = value; Rec(); } }
 }
 
 /// <summary>ICustomField over a CustomField record.</summary>

@@ -216,7 +216,7 @@ internal static class WriteBackSelfTest
         string emuFile = Path.Combine(dataDir, "Emulators.xml");
         File.WriteAllText(emuFile,
             "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
-            $"  <Emulator><ID>{emuId}</ID><Title>RetroArch</Title><ApplicationPath>ra.exe</ApplicationPath></Emulator>\n" +
+            $"  <Emulator><ID>{emuId}</ID><Title>RetroArch</Title><ApplicationPath>ra.exe</ApplicationPath><SkipVersionCheck>true</SkipVersionCheck></Emulator>\n" +
             $"  <EmulatorPlatform><Emulator>{emuId}</Emulator><Platform>MS-DOS</Platform><CommandLine>-L old</CommandLine></EmulatorPlatform>\n" +
             "</LaunchBox>\n");
 
@@ -230,6 +230,9 @@ internal static class WriteBackSelfTest
         emu.Title = "RetroArch (edited)";
         emu.CommandLine = "-L global";
         emu.EnableHardcoreAchievements = true;
+        var ef = (ILiteBoxFields)emu;   // fields IEmulator doesn't expose
+        f += Check("emu extra: read non-IEmulator field (SkipVersionCheck)", ef.GetField("SkipVersionCheck") == "true");
+        ef.SetField("UsePauseScreen", "true");
         emu.GetAllEmulatorPlatforms()[0].CommandLine = "-L core2";       // edit existing per-platform cmd
         var ep = emu.AddNewEmulatorPlatform(); ep.Platform = "SNES"; ep.CommandLine = "-L snes"; ep.M3uDiscLoadEnabled = true;
         var ne = dm.AddNewEmulator(); ne.Title = "Standalone"; ne.ApplicationPath = "stand.exe";
@@ -247,6 +250,8 @@ internal static class WriteBackSelfTest
             && eps.Any(e => (string)e.Element("Platform") == "MS-DOS" && (string)e.Element("CommandLine") == "-L core2")
             && eps.Any(e => (string)e.Element("Platform") == "SNES" && (string)e.Element("M3uDiscLoadEnabled") == "true"));
         f += Check("emu: AddNewEmulator persisted", doc.Root.Elements("Emulator").Any(e => (string)e.Element("Title") == "Standalone" && (string)e.Element("ApplicationPath") == "stand.exe"));
+        f += Check("emu extra: non-IEmulator write persisted + preserved", ee != null
+            && (string)ee.Element("UsePauseScreen") == "true" && (string)ee.Element("SkipVersionCheck") == "true");
         return f;
     }
 
@@ -257,7 +262,7 @@ internal static class WriteBackSelfTest
         string pfile = Path.Combine(dataDir, "Platforms.xml");
         File.WriteAllText(pfile,
             "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
-            "  <Platform><Name>TestPlat</Name><Developer>OldDev</Developer></Platform>\n" +
+            "  <Platform><Name>TestPlat</Name><Developer>OldDev</Developer><LocalDbParsed>true</LocalDbParsed></Platform>\n" +
             "  <PlatformCategory><Name>TestCat</Name><Notes>old</Notes></PlatformCategory>\n" +
             "</LaunchBox>\n");
 
@@ -269,6 +274,9 @@ internal static class WriteBackSelfTest
         f += Check("plat: found", p != null);
         if (p == null) { store.CloseLog(); return f; }
         p.Developer = "NewDev"; p.Notes = "platnotes"; p.Media = "Cartridge";
+        var pf2 = (ILiteBoxFields)p;   // fields IPlatform doesn't expose
+        f += Check("plat extra: read non-IPlatform field (LocalDbParsed)", pf2.GetField("LocalDbParsed") == "true");
+        pf2.SetField("DisableAutoImport", "true");
         var c = dm.GetPlatformCategoryByName("TestCat");
         if (c != null) { c.Notes = "catnotes"; c.SortTitle = "ZZ"; }
         var np = dm.AddNewPlatform("Brand New Platform"); np.Developer = "Acme"; np.Manufacturer = "AcmeCorp";
@@ -284,6 +292,8 @@ internal static class WriteBackSelfTest
         f += Check("cat: modify (Notes/SortTitle)", ce != null && (string)ce.Element("Notes") == "catnotes" && (string)ce.Element("SortTitle") == "ZZ");
         f += Check("plat: AddNewPlatform persisted", doc.Root.Elements("Platform").Any(e => (string)e.Element("Name") == "Brand New Platform" && (string)e.Element("Developer") == "Acme"));
         f += Check("cat: AddNewPlatformCategory persisted", doc.Root.Elements("PlatformCategory").Any(e => (string)e.Element("Name") == "Brand New Cat" && (string)e.Element("Notes") == "newcat"));
+        f += Check("plat extra: non-IPlatform write persisted + preserved", pe != null
+            && (string)pe.Element("DisableAutoImport") == "true" && (string)pe.Element("LocalDbParsed") == "true");
         return f;
     }
 

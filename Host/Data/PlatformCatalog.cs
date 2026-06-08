@@ -16,12 +16,33 @@ using LbApiHost.Host.Media;
 
 namespace LbApiHost.Host.Data;
 
-internal sealed class HostPlatform : DummyPlatform
+internal sealed class HostPlatform : DummyPlatform, ILiteBoxFields
 {
+    internal static readonly HashSet<string> Modeled = new(StringComparer.Ordinal)
+    {
+        "Name", "Developer", "Manufacturer", "Notes", "Category", "Cpu", "Memory", "Graphics", "Sound", "Display",
+        "Media", "MaxControllers", "ScrapeAs", "SortTitle", "NestedName", "LastGameId", "ImageType", "VideoPath",
+        "BigBoxTheme", "BigBoxView", "ReleaseDate", "HideInBigBox", "Folder", "FrontImagesFolder", "BackImagesFolder",
+        "ClearLogoImagesFolder", "FanartImagesFolder", "ScreenshotImagesFolder", "BannerImagesFolder",
+        "SteamBannerImagesFolder", "ManualsFolder", "MusicFolder", "VideosFolder",
+    };
     private readonly string _name;
     private readonly Dictionary<string, string> _folders; // MediaType -> absolute FolderPath
     private readonly string _imagesRoot;
     private IGame[] _games = Array.Empty<IGame>();
+    private Dictionary<string, string> _extra;            // non-modelled <Platform> fields
+    internal void SetExtra(Dictionary<string, string> e) => _extra = e;
+
+    // ── ILiteBoxFields: read/write the platform fields the SDK IPlatform doesn't expose ──
+    public string GetField(string xmlElementName) => _extra != null && _extra.TryGetValue(xmlElementName, out var v) ? (v ?? "") : "";
+    public void SetField(string xmlElementName, string value)
+    {
+        if (string.IsNullOrEmpty(xmlElementName)) return;
+        if (string.IsNullOrEmpty(value)) _extra?.Remove(xmlElementName);
+        else (_extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[xmlElementName] = value;
+        Rec(xmlElementName, value);
+    }
+    public IReadOnlyCollection<string> ExtraFieldNames => _extra != null ? (IReadOnlyCollection<string>)_extra.Keys : Array.Empty<string>();
 
     public HostPlatform(string name, Dictionary<string, string> folders, string imagesRoot)
     {
@@ -153,17 +174,32 @@ internal sealed class HostPlatform : DummyPlatform
     }
 }
 
-internal sealed class HostPlatformCategory : DummyPlatformCategory
+internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFields
 {
+    internal static readonly HashSet<string> Modeled = new(StringComparer.Ordinal)
+    { "Name", "NestedName", "Notes", "VideoPath", "SortTitle", "HideInBigBox" };
     private readonly string _name;
     private readonly string _imagesRoot;
     private GameStore _store;
+    private Dictionary<string, string> _extra;
     internal void Attach(GameStore s) => _store = s;
+    internal void SetExtra(Dictionary<string, string> e) => _extra = e;
     private void Rec(string field, string value) => _store?.RecordEntityModify("PlatformCategory", _name, field, value);
     public HostPlatformCategory(string name, string imagesRoot) { _name = name; _imagesRoot = imagesRoot; }
     public override string Name { get => _name; set { } }
     public string NotesValue, NestedNameValue, VideoPathValue, SortTitleValue;
     public bool HideInBigBoxValue;
+
+    // ── ILiteBoxFields ──
+    public string GetField(string xmlElementName) => _extra != null && _extra.TryGetValue(xmlElementName, out var v) ? (v ?? "") : "";
+    public void SetField(string xmlElementName, string value)
+    {
+        if (string.IsNullOrEmpty(xmlElementName)) return;
+        if (string.IsNullOrEmpty(value)) _extra?.Remove(xmlElementName);
+        else (_extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[xmlElementName] = value;
+        Rec(xmlElementName, value);
+    }
+    public IReadOnlyCollection<string> ExtraFieldNames => _extra != null ? (IReadOnlyCollection<string>)_extra.Keys : Array.Empty<string>();
     public override string Notes { get => NotesValue ?? ""; set { NotesValue = value; Rec("Notes", value); } }
     public override string NestedName { get => NestedNameValue ?? ""; set { NestedNameValue = value; Rec("NestedName", value); } }
     public override string VideoPath { get => VideoPathValue ?? ""; set { VideoPathValue = value; Rec("VideoPath", value); } }
@@ -291,6 +327,16 @@ internal static class PlatformCatalog
                 MusicFolderValue = (string)pe.Element("MusicFolder"),
                 VideosFolderValue = (string)pe.Element("VideosFolder"),
             };
+            Dictionary<string, string> pex = null;
+            foreach (var ce in pe.Elements())
+            {
+                string n = ce.Name.LocalName;
+                if (HostPlatform.Modeled.Contains(n)) continue;
+                string val = ce.Value;
+                if (string.IsNullOrEmpty(val)) continue;
+                (pex ??= new Dictionary<string, string>(StringComparer.Ordinal))[n] = val;
+            }
+            if (pex != null) hp.SetExtra(pex);
             platforms.Add(hp);
         }
 
@@ -298,14 +344,25 @@ internal static class PlatformCatalog
         {
             string name = (string)ce.Element("Name");
             if (string.IsNullOrWhiteSpace(name)) continue;
-            categories.Add(new HostPlatformCategory(name, imagesRoot)
+            var hc = new HostPlatformCategory(name, imagesRoot)
             {
                 NotesValue = (string)ce.Element("Notes"),
                 NestedNameValue = (string)ce.Element("NestedName"),
                 VideoPathValue = (string)ce.Element("VideoPath"),
                 SortTitleValue = (string)ce.Element("SortTitle"),
                 HideInBigBoxValue = ((string)ce.Element("HideInBigBox") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
-            });
+            };
+            Dictionary<string, string> cex = null;
+            foreach (var cce in ce.Elements())
+            {
+                string n = cce.Name.LocalName;
+                if (HostPlatformCategory.Modeled.Contains(n)) continue;
+                string val = cce.Value;
+                if (string.IsNullOrEmpty(val)) continue;
+                (cex ??= new Dictionary<string, string>(StringComparer.Ordinal))[n] = val;
+            }
+            if (cex != null) hc.SetExtra(cex);
+            categories.Add(hc);
         }
 
         Console.WriteLine($"[platcat] file={file} exists={File.Exists(file)} platforms={platforms.Count} categories={categories.Count} folders={foldersByPlatform.Count} rootChildren={root.Elements().Count()}");

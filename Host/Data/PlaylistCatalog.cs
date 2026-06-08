@@ -61,15 +61,33 @@ internal sealed class HostPlaylistGame : DummyPlaylistGame
     public override IGame GetActualGame() => _resolve?.Invoke(GameIdValue);
 }
 
-internal sealed class HostPlaylist : DummyPlaylist
+internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
 {
     private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+    internal static readonly HashSet<string> Modeled = new(StringComparer.Ordinal)
+    {
+        "PlaylistId", "Name", "NestedName", "Notes", "SortBy", "Category", "VideoPath", "ImageType", "SortTitle",
+        "LastGameId", "BigBoxView", "BigBoxTheme", "AutoPopulate", "IncludeWithPlatforms", "HideInBigBox",
+    };
 
     private readonly List<HostPlaylistGame> _games = new();
     private readonly List<PlaylistFilterDef> _filters = new();
     private Func<string, IGame> _resolve;
     private Func<IEnumerable<IGame>> _allGames;
     private GameStore _store;
+    private Dictionary<string, string> _extra;
+    internal void SetExtra(Dictionary<string, string> e) => _extra = e;
+
+    // ── ILiteBoxFields: read/write playlist fields the SDK IPlaylist doesn't expose ──
+    public string GetField(string xmlElementName) => _extra != null && _extra.TryGetValue(xmlElementName, out var v) ? (v ?? "") : "";
+    public void SetField(string xmlElementName, string value)
+    {
+        if (string.IsNullOrEmpty(xmlElementName)) return;
+        if (string.IsNullOrEmpty(value)) _extra?.Remove(xmlElementName);
+        else (_extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[xmlElementName] = value;
+        Rec(xmlElementName, value);
+    }
+    public IReadOnlyCollection<string> ExtraFieldNames => _extra != null ? (IReadOnlyCollection<string>)_extra.Keys : Array.Empty<string>();
 
     public string PlaylistIdValue, NameValue, NestedNameValue, NotesValue, SortByValue, CategoryValue,
                   VideoPathValue, ImageTypeValue, SortTitleValue, LastGameIdValue, BigBoxViewValue, BigBoxThemeValue;
@@ -260,6 +278,17 @@ internal static class PlaylistCatalog
                 ImagesRootValue = imagesRoot,
                 FileValue = file,
             };
+
+            Dictionary<string, string> plex = null;
+            foreach (var pce in pe.Elements())
+            {
+                string n = pce.Name.LocalName;
+                if (HostPlaylist.Modeled.Contains(n)) continue;
+                string val = pce.Value;
+                if (string.IsNullOrEmpty(val)) continue;
+                (plex ??= new Dictionary<string, string>(StringComparer.Ordinal))[n] = val;
+            }
+            if (plex != null) pl.SetExtra(plex);
 
             foreach (var pge in root.Elements("PlaylistGame"))
             {

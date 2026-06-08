@@ -449,6 +449,32 @@ internal sealed class GameStore
             }
         }
         _notes = notes;
+        // The reload read pristine XML — overlay only the un-flushed todo ops that touch the DROPPED
+        // tier (Notes / extra fields / sub-entities). Tier-1 ops (add/delete/move, modelled-field
+        // modifies) already live in GameRow/_byId which were never dropped, so we skip them.
+        var pending = _oplog?.ReadAll();
+        if (pending != null && pending.Count > 0) ReplayOptionalTierOps(pending);
+    }
+
+    // Re-apply ONLY the pending ops affecting the droppable Tier-2 (Notes, non-modelled extra fields,
+    // per-game sub-entities). Skips everything that lives in the always-resident Tier-1.
+    private void ReplayOptionalTierOps(List<Op> ops)
+    {
+        foreach (var op in ops)
+        {
+            if (op.Entity == "Game" && op.OpType == "modify")
+            {
+                if (op.Field != "Notes" && IsModeledField(op.Field)) continue;   // modelled = Tier-1, not dropped
+                if (Guid.TryParse(op.Id, out var gid) && _byId.TryGetValue(gid, out var i))
+                    ApplyFieldToRow(i, op.Field, op.Value);                       // Notes -> _notes, extra -> _extra
+            }
+            else if (op.OpType == "replace" && !IsChildEntity(op.Entity)
+                     && Guid.TryParse(op.ParentId, out var sg) && _byId.ContainsKey(sg))
+            {
+                ApplySubEntityReplaceToMemory(sg, op.Entity, op.Value);           // sub-entities are dropped
+            }
+            // add / delete / move / child-entity replace / modelled-field modify → Tier-1, skip.
+        }
     }
 
     // ── Mutations → operation log (WAL) ──────────────────────────────────────
@@ -506,37 +532,33 @@ internal sealed class GameStore
         var ops = _oplog?.ReadAll();
         if (ops != null && ops.Count > 0)
         {
-            foreach (var op in ops)   // seq order: an "add" precedes its field "modify"s
-            {
-                if (op.Entity == "Game" && op.OpType == "add")
-                {
-                    if (Guid.TryParse(op.Id, out var ag)) AddGameRowForReplay(ag);
-                }
-                else if (op.Entity == "Game" && op.OpType == "modify")
-                {
-                    if (Guid.TryParse(op.Id, out var gid) && _byId.TryGetValue(gid, out var i))
-                        ApplyFieldToRow(i, op.Field, op.Value);
-                }
-                else if (op.Entity == "Game" && op.OpType == "delete")
-                {
-                    if (Guid.TryParse(op.Id, out var dg)) { _byId.Remove(dg); _addedIds.Remove(dg); }
-                }
-                else if (op.Entity == "Game" && op.OpType == "move")
-                {
-                    if (Guid.TryParse(op.Id, out var mg) && _byId.TryGetValue(mg, out var mi)) MoveInMemory(mi, op.Value);
-                }
-                else if (op.OpType == "replace" && IsChildEntity(op.Entity))
-                {
-                    if (Guid.TryParse(op.ParentId, out var pgid)) ApplyChildReplace(op.Entity, pgid, op.Value);
-                }
-                else if (op.OpType == "replace" && Guid.TryParse(op.ParentId, out var sg) && _byId.ContainsKey(sg))
-                {
-                    ApplySubEntityReplaceToMemory(sg, op.Entity, op.Value);   // generic per-game sub-entity
-                }
-            }
+            ReplayOpsToMemory(ops);
             Console.WriteLine($"[store] recovered op-log ({ops.Count} op(s))");
         }
         if (!ReadOnly && !IsLaunchBoxRunning()) FlushOpsToXml();
+    }
+
+    /// <summary>Re-applies every pending op-log entry to the in-memory model. Used at boot recovery
+    /// AND after a Tier-2 reload (so un-flushed edits/adds/deletes survive a game-launch drop+reload —
+    /// the reload re-reads pristine XML, then this overlays the pending todo). Fully idempotent: adds
+    /// are guarded, modifies/replaces are last-write-wins, deletes/moves no-op if already applied.</summary>
+    private void ReplayOpsToMemory(List<Op> ops)
+    {
+        foreach (var op in ops)   // seq order: an "add" precedes its field "modify"s
+        {
+            if (op.Entity == "Game" && op.OpType == "add")
+            { if (Guid.TryParse(op.Id, out var ag)) AddGameRowForReplay(ag); }
+            else if (op.Entity == "Game" && op.OpType == "modify")
+            { if (Guid.TryParse(op.Id, out var gid) && _byId.TryGetValue(gid, out var i)) ApplyFieldToRow(i, op.Field, op.Value); }
+            else if (op.Entity == "Game" && op.OpType == "delete")
+            { if (Guid.TryParse(op.Id, out var dg)) { _byId.Remove(dg); _addedIds.Remove(dg); } }
+            else if (op.Entity == "Game" && op.OpType == "move")
+            { if (Guid.TryParse(op.Id, out var mg) && _byId.TryGetValue(mg, out var mi)) MoveInMemory(mi, op.Value); }
+            else if (op.OpType == "replace" && IsChildEntity(op.Entity))
+            { if (Guid.TryParse(op.ParentId, out var pgid)) ApplyChildReplace(op.Entity, pgid, op.Value); }
+            else if (op.OpType == "replace" && Guid.TryParse(op.ParentId, out var sg) && _byId.ContainsKey(sg))
+            { ApplySubEntityReplaceToMemory(sg, op.Entity, op.Value); }   // generic per-game sub-entity
+        }
     }
 
     // Old positional journal (guid|fav|rating|playcount|lastplayedticks|playtime): apply to memory,

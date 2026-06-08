@@ -33,21 +33,24 @@ through its own implementation of the API, with no dependency on any plugin.
 - Optional write-back: with `ReadOnly=false`, plugin/UI changes persist to the Platform
   XMLs via an append-only operation log (`Core\LiteBox.pending.db`, SQLite), applied at a
   safe time (`Save()`, close, or next boot) — only when LaunchBox/BigBox aren't running,
-  since they own the XMLs while alive. Supported:
-  - **Edit a game** — any of the ~60 modelled `IGame` fields (title, metadata, dates,
-    flags, favorites / ratings / play stats).
-  - **Child entities** — add / remove / edit a game's additional applications (discs),
-    custom fields, mounts and alternate names.
-  - **Add / delete a game** — `AddNewGame` (creates the `<Game>` node, and a new
-    `Platforms\<name>.xml` if that platform has none yet) and `TryRemoveGame`.
+  since they own the XMLs while alive. Full `IDataManager` write parity — every entity
+  type can be edited, added and removed:
+  - **Games** — any modelled `IGame` field; add (`AddNewGame`, creating a new
+    `Platforms\<name>.xml` if needed) / delete; move across platforms (relocates the
+    `<Game>` node between files); child entities (additional applications/discs, custom
+    fields, mounts, alternate names) add/remove/edit.
+  - **Emulators** — every `IEmulator` field + per-platform command lines
+    (`EmulatorPlatform`); add / delete.
+  - **Platforms & platform categories** — every field; add / delete.
+  - **Playlists** — fields, member games (`PlaylistGame`), auto-populate rules
+    (`PlaylistFilter`); add (new file) / delete (whole file).
 
   Edits are surgical (only the touched nodes change; unknown/unmodelled fields are
   preserved), validated against LaunchBox (it ingests the rewritten files without
   complaint), and crash-safe (idempotent replay; the log is cleared only after every file
   is durably swapped). Before each write the pristine originals of just the affected files
   are zipped to `<LB>\Backups\LiteBox\` (sub-paths preserved; 50 most recent kept) — a
-  targeted alternative to LB's full Data backups. Not yet wired: editing emulators /
-  platforms / playlists / categories, and moving a game across platforms.
+  targeted alternative to LB's full Data backups.
 
 ## Requirements
 

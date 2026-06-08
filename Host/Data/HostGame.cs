@@ -182,18 +182,71 @@ internal sealed class HostGame : DummyGame
         return videoType; // "Trailer" / "Theme" / "Marquee" / "Recordings"
     }
 
-    // Accessory entities (resident — additional apps are needed for launch).
+    // Accessory entities (resident — additional apps are needed for launch). Add/remove/edit are
+    // wired through the op-log (replace-collection ops) so they persist to the Platform XML.
     public override IAdditionalApplication[] GetAllAdditionalApplications()
-        => _s.AddAppsFor(R.Id).Select(a => (IAdditionalApplication)new HostAdditionalApplication(a, R.Id.ToString())).ToArray();
+        => _s.AddAppsFor(R.Id).Select(a => (IAdditionalApplication)new HostAdditionalApplication(_s, a, R.Id)).ToArray();
+    public override IAdditionalApplication AddNewAdditionalApplication()
+    {
+        var a = new AddApp { Id = Guid.NewGuid().ToString() };
+        _s.AddAppsMutable(R.Id).Add(a);
+        _s.RecordChildReplace(R.Id, "AdditionalApplication");
+        return new HostAdditionalApplication(_s, a, R.Id);
+    }
+    public override bool TryRemoveAdditionalApplication(IAdditionalApplication app)
+    {
+        int n = _s.AddAppsMutable(R.Id).RemoveAll(x => x.Id == app?.Id);
+        if (n > 0) _s.RecordChildReplace(R.Id, "AdditionalApplication");
+        return n > 0;
+    }
 
     public override IAlternateName[] GetAllAlternateNames()
-        => _s.AltNamesFor(R.Id).Select(a => (IAlternateName)new HostAlternateName(a, R.Id.ToString())).ToArray();
+        => _s.AltNamesFor(R.Id).Select(a => (IAlternateName)new HostAlternateName(_s, a, R.Id)).ToArray();
+    public override IAlternateName AddNewAlternateName()
+    {
+        var a = new AltName();
+        _s.AltNamesMutable(R.Id).Add(a);
+        _s.RecordChildReplace(R.Id, "AlternateName");
+        return new HostAlternateName(_s, a, R.Id);
+    }
+    public override bool TryRemoveAlternateNames(IAlternateName alternateName)
+    {
+        int n = _s.AltNamesMutable(R.Id).RemoveAll(x => x.Name == alternateName?.Name && x.Region == alternateName?.Region);
+        if (n > 0) _s.RecordChildReplace(R.Id, "AlternateName");
+        return n > 0;
+    }
 
     public override IMount[] GetAllMounts()
-        => _s.MountsFor(R.Id).Select(m => (IMount)new HostMount(m, R.Id.ToString())).ToArray();
+        => _s.MountsFor(R.Id).Select(m => (IMount)new HostMount(_s, m, R.Id)).ToArray();
+    public override IMount AddNewMount()
+    {
+        var m = new GameMount { DriveLetter = 'C' };
+        _s.MountsMutable(R.Id).Add(m);
+        _s.RecordChildReplace(R.Id, "Mount");
+        return new HostMount(_s, m, R.Id);
+    }
+    public override bool TryRemoveMount(IMount mount)
+    {
+        int n = _s.MountsMutable(R.Id).RemoveAll(x => x.Path == mount?.Path && x.DriveLetter == (mount?.DriveLetter ?? '\0'));
+        if (n > 0) _s.RecordChildReplace(R.Id, "Mount");
+        return n > 0;
+    }
 
     public override ICustomField[] GetAllCustomFields()
-        => _s.CustomFieldsFor(R.Id).Select(c => (ICustomField)new HostCustomField(c, R.Id.ToString())).ToArray();
+        => _s.CustomFieldsFor(R.Id).Select(c => (ICustomField)new HostCustomField(_s, c, R.Id)).ToArray();
+    public override ICustomField AddNewCustomField()
+    {
+        var c = new CustomField();
+        _s.CustomFieldsMutable(R.Id).Add(c);
+        _s.RecordChildReplace(R.Id, "CustomField");
+        return new HostCustomField(_s, c, R.Id);
+    }
+    public override bool TryRemoveCustomField(ICustomField customField)
+    {
+        int n = _s.CustomFieldsMutable(R.Id).RemoveAll(x => x.Name == customField?.Name && x.Value == customField?.Value);
+        if (n > 0) _s.RecordChildReplace(R.Id, "CustomField");
+        return n > 0;
+    }
 
     // Run the game's Configuration Application (DOSBox-aware for DOSBox games).
     public override string Configure() => LbApiHost.Host.HostLaunch.RunConfigTool(this);
@@ -205,72 +258,81 @@ internal sealed class HostGame : DummyGame
         => MediaResolver.AllImages(_plat, R.Id, _title, imageType).ToArray();
 }
 
-/// <summary>IAdditionalApplication over an AddApp record.</summary>
+/// <summary>IAdditionalApplication over an AddApp record. Setters mutate the record and record a
+/// replace-collection op (the whole list is the source of truth).</summary>
 internal sealed class HostAdditionalApplication : DummyAdditionalApplication
 {
+    private readonly GameStore _s;
     private readonly AddApp _a;
-    private readonly string _gameId;
-    public HostAdditionalApplication(AddApp a, string gameId) { _a = a; _gameId = gameId; }
+    private readonly Guid _gid;
+    public HostAdditionalApplication(GameStore s, AddApp a, Guid gid) { _s = s; _a = a; _gid = gid; }
+    private void Rec() => _s.RecordChildReplace(_gid, "AdditionalApplication");
 
-    public override string Id { get => _a.Id ?? ""; set { } }
-    public override string GameId { get => _gameId; set { } }
-    public override string ApplicationPath { get => _a.ApplicationPath ?? ""; set { } }
-    public override string Name { get => _a.Name ?? ""; set { } }
-    public override string CommandLine { get => _a.CommandLine ?? ""; set { } }
-    public override string Developer { get => _a.Developer ?? ""; set { } }
-    public override string Publisher { get => _a.Publisher ?? ""; set { } }
-    public override string Region { get => _a.Region ?? ""; set { } }
-    public override string Version { get => _a.Version ?? ""; set { } }
-    public override string Status { get => _a.Status ?? ""; set { } }
-    public override string EmulatorId { get => _a.EmulatorId ?? ""; set { } }
-    public override int? Disc { get => _a.Disc; set { } }
-    public override int Priority { get => _a.Priority; set { } }
-    public override int PlayCount { get => _a.PlayCount; set { } }
-    public override int PlayTime { get => _a.PlayTime; set { } }
-    public override bool AutoRunBefore { get => _a.AutoRunBefore; set { } }
-    public override bool AutoRunAfter { get => _a.AutoRunAfter; set { } }
-    public override bool UseEmulator { get => _a.UseEmulator; set { } }
-    public override bool UseDosBox { get => _a.UseDosBox; set { } }
-    public override bool WaitForExit { get => _a.WaitForExit; set { } }
-    public override bool SideA { get => _a.SideA; set { } }
-    public override bool SideB { get => _a.SideB; set { } }
+    public override string Id { get => _a.Id ?? ""; set { _a.Id = value; Rec(); } }
+    public override string GameId { get => _gid.ToString(); set { } }
+    public override string ApplicationPath { get => _a.ApplicationPath ?? ""; set { _a.ApplicationPath = value; Rec(); } }
+    public override string Name { get => _a.Name ?? ""; set { _a.Name = value; Rec(); } }
+    public override string CommandLine { get => _a.CommandLine ?? ""; set { _a.CommandLine = value; Rec(); } }
+    public override string Developer { get => _a.Developer ?? ""; set { _a.Developer = value; Rec(); } }
+    public override string Publisher { get => _a.Publisher ?? ""; set { _a.Publisher = value; Rec(); } }
+    public override string Region { get => _a.Region ?? ""; set { _a.Region = value; Rec(); } }
+    public override string Version { get => _a.Version ?? ""; set { _a.Version = value; Rec(); } }
+    public override string Status { get => _a.Status ?? ""; set { _a.Status = value; Rec(); } }
+    public override string EmulatorId { get => _a.EmulatorId ?? ""; set { _a.EmulatorId = value; Rec(); } }
+    public override int? Disc { get => _a.Disc; set { _a.Disc = value; Rec(); } }
+    public override int Priority { get => _a.Priority; set { _a.Priority = value; Rec(); } }
+    public override int PlayCount { get => _a.PlayCount; set { _a.PlayCount = value; Rec(); } }
+    public override int PlayTime { get => _a.PlayTime; set { _a.PlayTime = value; Rec(); } }
+    public override bool AutoRunBefore { get => _a.AutoRunBefore; set { _a.AutoRunBefore = value; Rec(); } }
+    public override bool AutoRunAfter { get => _a.AutoRunAfter; set { _a.AutoRunAfter = value; Rec(); } }
+    public override bool UseEmulator { get => _a.UseEmulator; set { _a.UseEmulator = value; Rec(); } }
+    public override bool UseDosBox { get => _a.UseDosBox; set { _a.UseDosBox = value; Rec(); } }
+    public override bool WaitForExit { get => _a.WaitForExit; set { _a.WaitForExit = value; Rec(); } }
+    public override bool SideA { get => _a.SideA; set { _a.SideA = value; Rec(); } }
+    public override bool SideB { get => _a.SideB; set { _a.SideB = value; Rec(); } }
 }
 
 /// <summary>ICustomField over a CustomField record.</summary>
 internal sealed class HostCustomField : DummyCustomField
 {
+    private readonly GameStore _s;
     private readonly CustomField _c;
-    private readonly string _gameId;
-    public HostCustomField(CustomField c, string gameId) { _c = c; _gameId = gameId; }
+    private readonly Guid _gid;
+    public HostCustomField(GameStore s, CustomField c, Guid gid) { _s = s; _c = c; _gid = gid; }
+    private void Rec() => _s.RecordChildReplace(_gid, "CustomField");
 
-    public override string GameId { get => _gameId; set { } }
-    public override string Name { get => _c.Name ?? ""; set { } }
-    public override string Value { get => _c.Value ?? ""; set { } }
+    public override string GameId { get => _gid.ToString(); set { } }
+    public override string Name { get => _c.Name ?? ""; set { _c.Name = value; Rec(); } }
+    public override string Value { get => _c.Value ?? ""; set { _c.Value = value; Rec(); } }
 }
 
 /// <summary>IMount over a GameMount record (DOSBox additional mount).</summary>
 internal sealed class HostMount : DummyMount
 {
+    private readonly GameStore _s;
     private readonly GameMount _m;
-    private readonly string _gameId;
-    public HostMount(GameMount m, string gameId) { _m = m; _gameId = gameId; }
+    private readonly Guid _gid;
+    public HostMount(GameStore s, GameMount m, Guid gid) { _s = s; _m = m; _gid = gid; }
+    private void Rec() => _s.RecordChildReplace(_gid, "Mount");
 
-    public override string GameId { get => _gameId; set { } }
-    public override char DriveLetter { get => _m.DriveLetter; set { } }
-    public override string Filesystem { get => _m.Filesystem ?? ""; set { } }
-    public override string MountType { get => _m.MountType ?? ""; set { } }
-    public override string Path { get => _m.Path ?? ""; set { } }
-    public override string Type { get => _m.Type ?? ""; set { } }
+    public override string GameId { get => _gid.ToString(); set { } }
+    public override char DriveLetter { get => _m.DriveLetter; set { _m.DriveLetter = value; Rec(); } }
+    public override string Filesystem { get => _m.Filesystem ?? ""; set { _m.Filesystem = value; Rec(); } }
+    public override string MountType { get => _m.MountType ?? ""; set { _m.MountType = value; Rec(); } }
+    public override string Path { get => _m.Path ?? ""; set { _m.Path = value; Rec(); } }
+    public override string Type { get => _m.Type ?? ""; set { _m.Type = value; Rec(); } }
 }
 
 /// <summary>IAlternateName over an AltName record.</summary>
 internal sealed class HostAlternateName : DummyAlternateName
 {
+    private readonly GameStore _s;
     private readonly AltName _a;
-    private readonly string _gameId;
-    public HostAlternateName(AltName a, string gameId) { _a = a; _gameId = gameId; }
+    private readonly Guid _gid;
+    public HostAlternateName(GameStore s, AltName a, Guid gid) { _s = s; _a = a; _gid = gid; }
+    private void Rec() => _s.RecordChildReplace(_gid, "AlternateName");
 
-    public override string GameId { get => _gameId; set { } }
-    public override string Name { get => _a.Name ?? ""; set { } }
-    public override string Region { get => _a.Region ?? ""; set { } }
+    public override string GameId { get => _gid.ToString(); set { } }
+    public override string Name { get => _a.Name ?? ""; set { _a.Name = value; Rec(); } }
+    public override string Region { get => _a.Region ?? ""; set { _a.Region = value; Rec(); } }
 }

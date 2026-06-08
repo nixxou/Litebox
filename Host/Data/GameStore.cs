@@ -182,6 +182,7 @@ internal sealed class GameStore
                             AutoRunBefore = ParseBool(V("AutoRunBefore")), AutoRunAfter = ParseBool(V("AutoRunAfter")),
                             UseEmulator = ParseBool(V("UseEmulator")), UseDosBox = ParseBool(V("UseDosBox")),
                             WaitForExit = ParseBool(V("WaitForExit")), SideA = ParseBool(V("SideA")), SideB = ParseBool(V("SideB")),
+                            ReleaseDate = ParseDateN(V("ReleaseDate")), LastPlayed = ParseDateN(V("LastPlayed")), Installed = ParseBoolN(V("Installed")),
                         });
                     }
                     continue;
@@ -795,7 +796,7 @@ internal sealed class GameStore
 
     internal static readonly Dictionary<string, string[]> ChildFieldOrder = new(StringComparer.Ordinal)
     {
-        ["AdditionalApplication"] = new[] { "Id", "GameID", "ApplicationPath", "Name", "CommandLine", "Developer", "Publisher", "Region", "Version", "Status", "EmulatorId", "Disc", "Priority", "PlayCount", "PlayTime", "AutoRunBefore", "AutoRunAfter", "UseEmulator", "UseDosBox", "WaitForExit", "SideA", "SideB" },
+        ["AdditionalApplication"] = new[] { "Id", "GameID", "ApplicationPath", "Name", "CommandLine", "Developer", "Publisher", "Region", "Version", "Status", "EmulatorId", "Disc", "Priority", "PlayCount", "PlayTime", "AutoRunBefore", "AutoRunAfter", "UseEmulator", "UseDosBox", "WaitForExit", "SideA", "SideB", "ReleaseDate", "LastPlayed", "Installed" },
         ["AlternateName"] = new[] { "GameID", "Name", "Region" },
         ["Mount"] = new[] { "GameID", "DriveLetter", "Filesystem", "MountType", "Path", "Type" },
         ["CustomField"] = new[] { "GameID", "Name", "Value" },
@@ -830,6 +831,9 @@ internal sealed class GameStore
                         ["AutoRunBefore"] = CB(a.AutoRunBefore), ["AutoRunAfter"] = CB(a.AutoRunAfter),
                         ["UseEmulator"] = CB(a.UseEmulator), ["UseDosBox"] = CB(a.UseDosBox), ["WaitForExit"] = CB(a.WaitForExit),
                         ["SideA"] = CB(a.SideA), ["SideB"] = CB(a.SideB),
+                        ["ReleaseDate"] = a.ReleaseDate?.ToString("o", CultureInfo.InvariantCulture),
+                        ["LastPlayed"] = a.LastPlayed?.ToString("o", CultureInfo.InvariantCulture),
+                        ["Installed"] = a.Installed.HasValue ? CB(a.Installed.Value) : null,
                     });
                 break;
             case "AlternateName":
@@ -864,6 +868,7 @@ internal sealed class GameStore
                     AutoRunBefore = ParseBool(G(r, "AutoRunBefore")), AutoRunAfter = ParseBool(G(r, "AutoRunAfter")),
                     UseEmulator = ParseBool(G(r, "UseEmulator")), UseDosBox = ParseBool(G(r, "UseDosBox")), WaitForExit = ParseBool(G(r, "WaitForExit")),
                     SideA = ParseBool(G(r, "SideA")), SideB = ParseBool(G(r, "SideB")),
+                    ReleaseDate = ParseDateN(G(r, "ReleaseDate")), LastPlayed = ParseDateN(G(r, "LastPlayed")), Installed = ParseBoolN(G(r, "Installed")),
                 }).ToList();
                 break;
             case "AlternateName":
@@ -1195,6 +1200,8 @@ internal sealed class GameStore
     // ── Parsers ──────────────────────────────────────────────────────────────
     private static int ParseInt(string s, int def) => int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : def;
     private static int? ParseIntN(string s) => int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : (int?)null;
+    private static bool? ParseBoolN(string s) => string.IsNullOrWhiteSpace(s) ? (bool?)null : s.Equals("true", StringComparison.OrdinalIgnoreCase);
+    private static DateTime? ParseDateN(string s) => DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var d) ? d : (DateTime?)null;
     private static float ParseFloat(string s) => float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : 0f;
     private static bool ParseBool(string s) => s != null && s.Equals("true", StringComparison.OrdinalIgnoreCase);
     private static byte ParseTri(string s) => s == null ? (byte)0 : (s.Equals("true", StringComparison.OrdinalIgnoreCase) ? (byte)2 : (byte)1);
@@ -1212,6 +1219,8 @@ internal sealed class AddApp
     public int? Disc;
     public int Priority, PlayCount, PlayTime;
     public bool AutoRunBefore, AutoRunAfter, UseEmulator, UseDosBox, WaitForExit, SideA, SideB;
+    public DateTime? ReleaseDate, LastPlayed;
+    public bool? Installed;
 }
 
 /// <summary>A game's alternate (regional) name, from the Platform XML.</summary>

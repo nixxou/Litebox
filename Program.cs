@@ -57,6 +57,10 @@ if (args.Contains("--gen-stubs"))
 if (args.Contains("--dump-ctors"))
     return CtorDump.Run();
 
+// Empirical probe of the RetroArch integration plugin's command-line behaviour.
+if (args.Contains("--probe-emuplugin"))
+    return EmuPluginProbe.Run();
+
 // Write-back round-trip test (temp files only — never touches real LB data / pending db).
 if (args.Contains("--selftest-writeback"))
     return WriteBackSelfTest.Run();

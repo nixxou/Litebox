@@ -53,6 +53,10 @@ if (args.Contains("--dump-api"))
 if (args.Contains("--gen-stubs"))
     return StubGen.Run(ProjPath(Path.Combine("Generated", "Dummies.g.cs")));
 
+// Ctor visibility of the EmulatorPlugin arg classes (can the host `new` them?).
+if (args.Contains("--dump-ctors"))
+    return CtorDump.Run();
+
 // Write-back round-trip test (temp files only — never touches real LB data / pending db).
 if (args.Contains("--selftest-writeback"))
     return WriteBackSelfTest.Run();

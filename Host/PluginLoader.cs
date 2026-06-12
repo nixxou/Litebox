@@ -26,6 +26,12 @@ internal sealed class PluginRegistry
     public List<IGameLaunchingPlugin> GameLaunching { get; } = new();
     public List<IGameConfiguringPlugin> GameConfiguring { get; } = new();
     public List<IBigBoxThemeElementPlugin> ThemeElements { get; } = new();
+    /// <summary>Emulator-integration plugins (RetroArch/Dolphin/MAME "LaunchBox
+    /// Integration" DLLs): subclasses of the PUBLIC SDK abstract class
+    /// <see cref="EmulatorPlugin"/>. The host only CALLS their public contract
+    /// (install/update, bios files, launch preparation, cores…) — their DLLs run
+    /// untouched, exactly as under LaunchBox.</summary>
+    public List<EmulatorPlugin> EmulatorPlugins { get; } = new();
 }
 
 internal static class PluginLoader
@@ -97,7 +103,8 @@ internal static class PluginLoader
         typeof(IGameMultiMenuItemPlugin).IsAssignableFrom(t) ||
         typeof(IGameLaunchingPlugin).IsAssignableFrom(t) ||
         typeof(IGameConfiguringPlugin).IsAssignableFrom(t) ||
-        typeof(IBigBoxThemeElementPlugin).IsAssignableFrom(t);
+        typeof(IBigBoxThemeElementPlugin).IsAssignableFrom(t) ||
+        typeof(EmulatorPlugin).IsAssignableFrom(t);
 
     private static void Register(PluginRegistry reg, object inst)
     {
@@ -109,6 +116,7 @@ internal static class PluginLoader
         if (inst is IGameLaunchingPlugin gl) reg.GameLaunching.Add(gl);
         if (inst is IGameConfiguringPlugin gc) reg.GameConfiguring.Add(gc);
         if (inst is IBigBoxThemeElementPlugin te) reg.ThemeElements.Add(te);
+        if (inst is EmulatorPlugin ep) reg.EmulatorPlugins.Add(ep);
     }
 
     private static IEnumerable<string> Roles(object inst)
@@ -120,6 +128,7 @@ internal static class PluginLoader
         if (inst is IGameLaunchingPlugin) yield return "launching";
         if (inst is IGameConfiguringPlugin) yield return "configuring";
         if (inst is IBigBoxThemeElementPlugin) yield return "themeelement";
+        if (inst is EmulatorPlugin) yield return "emulator";
     }
 
     private static void AddResolver(List<string> dirs)

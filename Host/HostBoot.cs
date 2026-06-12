@@ -111,6 +111,7 @@ internal static class HostBoot
         HostLaunch.DryRun = args.Contains("--drylaunch");
         HostLaunch.Configure(reg, store, lbRoot);
         Pause.PauseManager.Configure(LiteBoxConfig.LoadForExe(), lbRoot);   // pause screens (hotkey + suspend + AHK)
+        EmuPlugins.Configure(reg);   // emulator-integration plugins (RetroArch/Dolphin/… DLLs)
 
         EventBus.FirePluginInitialized(reg);
 

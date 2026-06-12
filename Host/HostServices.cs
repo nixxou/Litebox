@@ -275,9 +275,17 @@ internal static class HostLaunch
             string emuCmd = !string.IsNullOrWhiteSpace(cmd) ? cmd
                           : (SafeStr(() => ep?.CommandLine) is { Length: > 0 } pc ? pc : SafeStr(() => emulator.CommandLine));
             fileName = ResolvePath(emulator.ApplicationPath);
+            // Integration-plugin fixups on the emulator's command line (per-exe
+            // normalisation the plugin knows about, e.g. RetroArch core paths).
+            emuCmd = EmuPlugins.NormalizeCommandLine(emulator, emuCmd ?? "", fileName);
             // ROM to pass: m3u (multi-disc) → auto-extracted file (archive) → the rom itself.
             string rom = ResolveLaunchRomPath(game, emulator, ep, ResolvePath(targetPath), label);
             args = BuildEmulatorArgs(emuCmd, rom, emulator);
+            // PrepareEmulatorForLaunch: the integration plugin may rewrite the
+            // final command line right before the spawn (what LB does silently).
+            // Main launch only — autorun helpers aren't emulator launches.
+            if (label == "main" && game != null)
+                args = EmuPlugins.PrepareForLaunch(emulator, game, null, args);
         }
         else
         {

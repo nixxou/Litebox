@@ -239,13 +239,99 @@ internal sealed class LaunchButtons : Panel
     }
 
     // ── ROM pick / clear ──────────────────────────────────────────────
+    // Quick dropdown modelled on LB-Web's buildLbRomSubmenu: ✕ Clear, the last
+    // launched ROM (↻), ALL favourites (★), then up to RomQuickMax pure-priority
+    // entries, then "More…" which opens the advanced picker (sortable table).
+    private const int RomQuickMax = 7;
+
+    private sealed record RomEntry(string FileName, long Size, bool IsFavorite, bool IsLastPlayed);
+
     private void OnRomClick()
     {
         if (_game == null || !RomAppliesFor(_selVerAppId, CurrentEmuId())) return;
-        var chosen = RomBridge.PickRomModal(_game, _selVerAppId);   // opens the picker in selection mode
+
+        var entries = FetchEntries();
+        if (entries == null || entries.Count == 0) { OpenAdvancedPicker(); return; }   // no quick data → straight to the table
+
+        var menu = NewMenu();
+
+        // ✕ Clear — drop the pick AND ignore last-played (pure priority), like the web.
+        var clear = new ToolStripMenuItem("✕  Clear");
+        clear.Click += (_, _) => { _selRom = null; _forcePriority = true; Refresh2(); };
+        menu.Items.Add(clear);
+        menu.Items.Add(new ToolStripSeparator());
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Push(RomEntry e, string glyph)
+        {
+            if (e == null || !seen.Add(e.FileName)) return;
+            var it = new ToolStripMenuItem(glyph + e.FileName) { Checked = string.Equals(_selRom, e.FileName, StringComparison.OrdinalIgnoreCase) };
+            it.Click += (_, _) => { _selRom = e.FileName; _forcePriority = false; Refresh2(); };
+            menu.Items.Add(it);
+        }
+
+        // 1. last launched ROM (lastLaunch, else the most recently played).
+        RomEntry last = null;
+        if (!string.IsNullOrEmpty(_lastRomEntry))
+            last = entries.FirstOrDefault(e => string.Equals(e.FileName, _lastRomEntry, StringComparison.OrdinalIgnoreCase));
+        last ??= entries.FirstOrDefault(e => e.IsLastPlayed);
+        if (last != null) Push(last, "↻ ");
+
+        // 2. all favourites.
+        foreach (var e in entries.Where(e => e.IsFavorite)) Push(e, "★ ");
+
+        // 3. up to RomQuickMax in pure priority (neither last, fav, nor played).
+        int prio = 0;
+        foreach (var e in entries)
+        {
+            if (prio >= RomQuickMax) break;
+            if (e.IsFavorite || e.IsLastPlayed || seen.Contains(e.FileName)) continue;
+            Push(e, "");
+            prio++;
+        }
+
+        // More… → the advanced picker (full sortable/filterable table).
+        if (entries.Count > seen.Count)
+        {
+            menu.Items.Add(new ToolStripSeparator());
+            var more = new ToolStripMenuItem("More…  (" + entries.Count + ")");
+            more.Click += (_, _) => OpenAdvancedPicker();
+            menu.Items.Add(more);
+        }
+
+        menu.Show(_rom, new Point(0, 0), ToolStripDropDownDirection.AboveLeft);
+    }
+
+    private void OpenAdvancedPicker()
+    {
+        if (_game == null) return;
+        var chosen = RomBridge.PickRomModal(_game, _selVerAppId);   // selection mode ("Select", not Play)
         if (chosen == null) return;                                  // cancelled
         _selRom = chosen; _forcePriority = false;
         Refresh2();
+    }
+
+    private List<RomEntry>? FetchEntries()
+    {
+        try
+        {
+            var json = RomBridge.GetArchiveEntriesJson(_game!, _selVerAppId);
+            if (string.IsNullOrEmpty(json)) return null;
+            using var doc = JsonDocument.Parse(json!);
+            if (!doc.RootElement.TryGetProperty("entries", out var arr) || arr.ValueKind != JsonValueKind.Array) return null;
+            var list = new List<RomEntry>();
+            foreach (var e in arr.EnumerateArray())
+            {
+                var name = e.TryGetProperty("fileName", out var n) ? n.GetString() : null;
+                if (string.IsNullOrEmpty(name)) continue;
+                long size = e.TryGetProperty("size", out var s) && s.ValueKind == JsonValueKind.Number ? s.GetInt64() : 0;
+                bool fav = e.TryGetProperty("isFavorite", out var f) && f.ValueKind == JsonValueKind.True;
+                bool lp = e.TryGetProperty("isLastPlayed", out var l) && l.ValueKind == JsonValueKind.True;
+                list.Add(new RomEntry(name!, size, fav, lp));
+            }
+            return list;
+        }
+        catch { return null; }
     }
 
     private void OnRomClear()

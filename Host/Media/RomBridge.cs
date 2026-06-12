@@ -26,7 +26,7 @@ internal static class RomBridge
     private static bool _probed;
     private static Type _t;
     private static PropertyInfo _featureEnabled;
-    private static MethodInfo _getInfo, _pick, _arm;
+    private static MethodInfo _getInfo, _pick, _arm, _entries;
 
     private static void Probe()
     {
@@ -43,6 +43,7 @@ internal static class RomBridge
             _getInfo = _t.GetMethod("GetLaunchInfoJson", F, null, new[] { typeof(IGame) }, null);
             _pick = _t.GetMethod("PickRomModal", F, null, new[] { typeof(IGame), typeof(string) }, null);
             _arm = _t.GetMethod("ArmSelectedRom", F, null, new[] { typeof(IGame), typeof(string), typeof(string), typeof(bool) }, null);
+            _entries = _t.GetMethod("GetArchiveEntriesJson", F, null, new[] { typeof(IGame), typeof(string) }, null);
         }
         catch { }
     }
@@ -80,5 +81,15 @@ internal static class RomBridge
         Probe();
         try { return _arm != null && (bool)_arm.Invoke(null, new object[] { game, appId, entry, forcePriority }); }
         catch { return false; }
+    }
+
+    /// <summary>Sorted + decorated archive entries JSON
+    /// ({ entries: [{fileName,size,isFavorite,isLastPlayed}] }) — feeds the quick
+    /// ROM dropdown. Null when unavailable.</summary>
+    public static string GetArchiveEntriesJson(IGame game, string appId)
+    {
+        Probe();
+        try { return _entries?.Invoke(null, new object[] { game, appId }) as string; }
+        catch { return null; }
     }
 }

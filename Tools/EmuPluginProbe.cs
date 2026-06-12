@@ -40,7 +40,52 @@ internal static class EmuPluginProbe
             return null;
         };
         SurveyAll(pluginsRoot);
+        ProbeMatching(pluginsRoot);
         return RunCore(Path.Combine(pluginsRoot, "RetroArch LaunchBox Integration"));
+    }
+
+    /// <summary>How does each plugin's GetApplicableEmulators MATCH? Feed it dummy
+    /// emulators shaped like the real ones (title + relative/absolute path) and
+    /// print what it claims — and any exception (the facade swallows them).</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void ProbeMatching(string pluginsRoot)
+    {
+        Console.WriteLine("== MATCHING: GetApplicableEmulators per plugin ==");
+        var emus = new[]
+        {
+            new LbApiHost.Generated.DummyEmulator { Id = "e1", Title = "Dolphin", ApplicationPath = @"Emulators\Dolphin\Dolphin.exe" },
+            new LbApiHost.Generated.DummyEmulator { Id = "e2", Title = "Dolphin", ApplicationPath = Path.Combine(LbRoot, @"Emulators\Dolphin\Dolphin.exe") },
+            new LbApiHost.Generated.DummyEmulator { Id = "e3", Title = "ScummVM", ApplicationPath = @"Emulators\ScummVM\scummvm.exe" },
+            new LbApiHost.Generated.DummyEmulator { Id = "e4", Title = "ScummVM", ApplicationPath = Path.Combine(LbRoot, @"Emulators\ScummVM\scummvm.exe") },
+            new LbApiHost.Generated.DummyEmulator { Id = "e5", Title = "RetroArch", ApplicationPath = @"Emulators\RetroArch\retroarch.exe" },
+        };
+        foreach (var dir in Directory.GetDirectories(pluginsRoot).Where(d => d.Contains("LaunchBox Integration")).OrderBy(d => d))
+        {
+            foreach (var dll in Directory.GetFiles(dir, "*.dll"))
+            {
+                System.Reflection.Assembly asm;
+                try { asm = AssemblyLoadContext.Default.LoadFromAssemblyPath(dll); } catch { continue; }
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException ex) { types = ex.Types.Where(t => t != null).ToArray()!; }
+                catch { continue; }
+                foreach (var t in types)
+                {
+                    if (t == null || t.IsAbstract || !typeof(EmulatorPlugin).IsAssignableFrom(t)) continue;
+                    EmulatorPlugin inst;
+                    try { inst = (EmulatorPlugin)Activator.CreateInstance(t)!; } catch { continue; }
+                    Console.Write($"  {t.Name}: ");
+                    try
+                    {
+                        var claimed = inst.GetApplicableEmulators(emus)?.ToList() ?? new List<Unbroken.LaunchBox.Plugins.Data.IEmulator>();
+                        Console.WriteLine(claimed.Count == 0 ? "(none)"
+                            : string.Join(", ", claimed.Select(c => { try { return c.Id + "/" + c.Title; } catch { return "?"; } })));
+                    }
+                    catch (Exception ex) { Console.WriteLine("<threw: " + (ex.InnerException?.Message ?? ex.Message) + ">"); }
+                }
+            }
+        }
+        Console.WriteLine();
     }
 
     /// <summary>Comparative survey: every installed "* LaunchBox Integration"

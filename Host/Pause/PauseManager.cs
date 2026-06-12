@@ -73,8 +73,12 @@ internal static class PauseManager
     {
         if (proc == null || emulator == null) return;
         if (_cfg != null && !_cfg.GetBool("PauseEnabled", true)) return;
-        if (!FieldBool(emulator, "UsePauseScreen", true))
-        { Console.WriteLine("[pause] UsePauseScreen=false for this emulator — pause screen off"); return; }
+        // Per-game pause override (LaunchedGame snapshot, captured pre-drop) wins
+        // over the emulator's setting — exactly LB's Edit Game pause panel.
+        var snap0 = LaunchedGame.Current;
+        bool usePause = snap0 is { PauseOverride: true } ? snap0.PauseUse : FieldBool(emulator, "UsePauseScreen", true);
+        if (!usePause)
+        { Console.WriteLine("[pause] pause screen disabled (game/emulator setting) — off"); return; }
 
         lock (_lock)
         {
@@ -141,8 +145,10 @@ internal static class PauseManager
         var p = AhkScript.RunOneOff(FieldStr(_emu!, "PauseAutoHotkeyScript"), _lbRoot);
         if (p != null) { try { p.WaitForExit(1500); } catch { } }
 
-        // 2. Freeze (default ON, like LB).
-        if (FieldBool(_emu!, "SuspendProcessOnPause", true))
+        // 2. Freeze (default ON, like LB; per-game override wins).
+        var snapS = LaunchedGame.Current;
+        bool doSuspend = snapS is { PauseOverride: true } ? snapS.PauseSuspend : FieldBool(_emu!, "SuspendProcessOnPause", true);
+        if (doSuspend)
         {
             try { if (_proc is { HasExited: false }) { NtSuspendProcess(_proc.Handle); _suspended = true; } }
             catch (Exception ex) { Console.WriteLine("[pause] suspend failed: " + ex.Message); }
@@ -161,11 +167,13 @@ internal static class PauseManager
             ClearLogoPath = snap?.ClearLogoPath,
             BoxFrontPath = snap?.BoxFrontPath,
             SessionStartUtc = snap?.LaunchedAtUtc ?? DateTime.UtcNow,
+            CanViewManual = !string.IsNullOrEmpty(snap?.ManualPath),
             CanSaveState = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "SaveStateAutoHotkeyScript")),
             CanLoadState = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "LoadStateAutoHotkeyScript")),
             CanReset = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "ResetAutoHotkeyScript")),
             CanSwapDiscs = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "SwapDiscsAutoHotkeyScript")),
-            ForcefulActivation = FieldBool(_emu!, "ForcefulPauseScreenActivation", true),
+            ForcefulActivation = snap is { PauseOverride: true } ? snap.PauseForceful : FieldBool(_emu!, "ForcefulPauseScreenActivation", true),
+            EmulatorMainWindow = EmulatorWindow(),
             OnAction = a => System.Threading.Tasks.Task.Run(() => OnScreenAction(a)),
         };
         UiThread.Invoke(() =>
@@ -204,6 +212,19 @@ internal static class PauseManager
                     ResumeLocked();
                     break;
 
+                case PauseAction.ViewManual:
+                    // The game STAYS paused (LB behaviour) — just open the manual in
+                    // the default viewer; the overlay yields TopMost while unfocused
+                    // (see the screen's Deactivate handler) so the viewer is readable.
+                    try
+                    {
+                        var man = LaunchedGame.Current?.ManualPath;
+                        if (!string.IsNullOrEmpty(man) && System.IO.File.Exists(man))
+                            Process.Start(new ProcessStartInfo(man) { UseShellExecute = true });
+                    }
+                    catch (Exception ex) { Console.WriteLine("[pause] manual open failed: " + ex.Message); }
+                    break;
+
                 case PauseAction.SaveState:   RunActionScript("SaveStateAutoHotkeyScript"); break;
                 case PauseAction.LoadState:   RunActionScript("LoadStateAutoHotkeyScript"); break;
                 case PauseAction.Reset:       RunActionScript("ResetAutoHotkeyScript"); break;
@@ -226,26 +247,43 @@ internal static class PauseManager
         AhkScript.RunOneOff(script, _lbRoot);
     }
 
+    // LB's default exit-game behaviour when the emulator has no custom exit
+    // script: send Escape to the (focused) emulator — most emulators (RetroArch,
+    // …) quit on it; the kill-tree below stays as the fallback. RetroArch's
+    // pushed comment spells this out: "no custom exit script is necessary …
+    // since it already uses the Escape key by default".
+    private const string DefaultExitScript = "Send {Escape}";
+
     private static void ExitGameLocked()
     {
         Console.WriteLine("[pause] exit game requested");
         ResumeLocked(runResumeScript: false, refocus: true);
 
         var exitScript = FieldStr(_emu!, "ExitAutoHotkeyScript");
+        if (AhkScript.IsScriptEmpty(exitScript)) exitScript = DefaultExitScript;
         bool graceful = false;
-        if (!AhkScript.IsScriptEmpty(exitScript))
-        {
-            try { Thread.Sleep(200); } catch { }
-            AhkScript.RunOneOff(exitScript, _lbRoot);
-            try { graceful = _proc!.WaitForExit(5000); } catch { }
-            if (graceful) Console.WriteLine("[pause] emulator closed by the exit script");
-        }
-        if (!graceful)
+        try { Thread.Sleep(200); } catch { }   // let the emulator settle into the foreground
+        AhkScript.RunOneOff(exitScript, _lbRoot);
+        try { graceful = _proc!.WaitForExit(5000); } catch { }
+        if (graceful) Console.WriteLine("[pause] emulator closed by the exit script");
+        else
         {
             try { if (_proc is { HasExited: false }) { _proc.Kill(entireProcessTree: true); Console.WriteLine("[pause] emulator killed"); } }
             catch (Exception ex) { Console.WriteLine("[pause] kill failed: " + ex.Message); }
         }
         // HostLaunch's WaitForExit returns → its finally runs Disarm + cleanup.
+    }
+
+    /// <summary>The emulator's main window handle, or Zero. Works on a suspended
+    /// process too — the window still exists, only its threads are frozen.</summary>
+    private static IntPtr EmulatorWindow()
+    {
+        try
+        {
+            if (_proc is { HasExited: false }) { _proc.Refresh(); return _proc.MainWindowHandle; }
+        }
+        catch { }
+        return IntPtr.Zero;
     }
 
     private static void FocusEmulator()

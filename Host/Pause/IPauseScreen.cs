@@ -20,6 +20,7 @@ namespace LbApiHost.Host.Pause;
 internal enum PauseAction
 {
     Resume,
+    ViewManual,
     SaveState,
     LoadState,
     Reset,
@@ -41,10 +42,15 @@ internal sealed class PauseContext
     public string? BoxFrontPath;   // small box accent
     public DateTime SessionStartUtc;
     // Per-action availability (an action shows only when its AHK script is non-empty;
-    // Resume and ExitGame are always available).
+    // Resume and ExitGame are always available; ViewManual when the game has one).
     public bool CanSaveState, CanLoadState, CanReset, CanSwapDiscs;
+    public bool CanViewManual;
     // Forceful activation (emulator field): keep stealing focus until the screen has it.
     public bool ForcefulActivation;
+    /// <summary>The emulator's main window — the screen opens on ITS monitor
+    /// (multi-monitor: the overlay must cover the game, not the primary).
+    /// IntPtr.Zero → primary monitor fallback.</summary>
+    public IntPtr EmulatorMainWindow;
     /// <summary>Invoked (on the screen's UI thread) when the user picks an action.
     /// The manager closes the screen itself — the screen must not self-close first.</summary>
     public Action<PauseAction>? OnAction;

@@ -30,6 +30,14 @@ internal sealed class LaunchedGame
     public string? FanartPath;
     public string? ClearLogoPath;
     public string? BoxFrontPath;
+    public string? ManualPath;   // pause screen "View Manual"
+
+    // Per-GAME pause-screen overrides (<OverrideDefaultPauseScreenSettings> +
+    // the three toggles on the <Game> element). The game's _extra fields are
+    // Tier-2 (dropped at launch), so they MUST be captured here. When
+    // PauseOverride is false the emulator-level settings apply.
+    public bool PauseOverride;
+    public bool PauseUse, PauseSuspend, PauseForceful;
 
     /// <summary>The game currently running, or null. Set by HostLaunch at launch,
     /// cleared in its exit finally.</summary>
@@ -60,11 +68,28 @@ internal sealed class LaunchedGame
                 lg.FanartPath = FirstOrNull(MediaResolver.AllOfType(plat, id, lg.Title, "Fanart - Background"));
                 lg.ClearLogoPath = MediaResolver.Image(plat, id, lg.Title, MediaResolver.ClearLogo);
                 lg.BoxFrontPath = MediaResolver.Image(plat, id, lg.Title, MediaResolver.Front);
+                lg.ManualPath = MediaResolver.Manual(plat, id, lg.Title);
             }
             // IGame property fallbacks (also cover non-GUID ids).
             lg.FanartPath ??= NonEmpty(Safe(() => game.BackgroundImagePath)) ?? NonEmpty(Safe(() => game.ScreenshotImagePath));
             lg.ClearLogoPath ??= NonEmpty(Safe(() => game.ClearLogoImagePath));
             lg.BoxFrontPath ??= NonEmpty(Safe(() => game.FrontImagePath)) ?? NonEmpty(Safe(() => game.Box3DImagePath));
+            lg.ManualPath ??= NonEmpty(Safe(() => game.ManualPath));
+
+            // Per-game pause overrides (read via ILiteBoxFields — these XML fields
+            // aren't on the SDK IGame, and the backing _extra dict is dropped at launch).
+            try
+            {
+                if (game is LbApiHost.ILiteBoxFields lf
+                    && string.Equals(lf.GetField("OverrideDefaultPauseScreenSettings"), "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    lg.PauseOverride = true;
+                    lg.PauseUse = string.Equals(lf.GetField("UsePauseScreen"), "true", StringComparison.OrdinalIgnoreCase);
+                    lg.PauseSuspend = string.Equals(lf.GetField("SuspendProcessOnPause"), "true", StringComparison.OrdinalIgnoreCase);
+                    lg.PauseForceful = string.Equals(lf.GetField("ForcefulPauseScreenActivation"), "true", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch { }
 
             Current = lg;
             Console.WriteLine($"[launched] snapshot \"{lg.Title}\" fanart={(lg.FanartPath != null ? "yes" : "no")} logo={(lg.ClearLogoPath != null ? "yes" : "no")} box={(lg.BoxFrontPath != null ? "yes" : "no")}");

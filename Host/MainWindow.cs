@@ -236,11 +236,15 @@ internal sealed class MainWindow : Form
         genBtn.Click += (_, _) => GenerateAllCachedImages();
         bar.Items.Add(genBtn);
 
-        // Options (gear) — right aligned.
-        var optBtn = new ToolStripDropDownButton("⚙")
+        // Options (gear) — right aligned. Opens the sectioned options window
+        // (Host/Options): the old per-toggle dropdown grew past what a menu
+        // can carry, and the window's option model lets each setting migrate
+        // to its final storage (INI vs LB Settings/emulator/game) later
+        // without touching the UI.
+        var optBtn = new ToolStripButton("⚙")
         {
             ForeColor = Fg, ToolTipText = "Options", Alignment = ToolStripItemAlignment.Right,
-            DisplayStyle = ToolStripItemDisplayStyle.Text, ShowDropDownArrow = false,
+            DisplayStyle = ToolStripItemDisplayStyle.Text,
             Font = new Font("Segoe UI Symbol", 11f),
         };
         if (_secondInstance)   // options locked while a 2nd instance forces read-only
@@ -248,58 +252,7 @@ internal sealed class MainWindow : Form
             optBtn.Enabled = false;
             optBtn.ToolTipText = "Options locked — another LiteBox instance is open (read-only)";
         }
-        ((ToolStripDropDownMenu)optBtn.DropDown).Renderer = new DarkRenderer();
-        optBtn.DropDown.BackColor = Panel2;
-        optBtn.DropDown.ForeColor = Fg;
-        var miScreen = new ToolStripMenuItem("Show \"game running\" screen on launch")
-        { CheckOnClick = true, Checked = _cfg.ShowGameRunningScreen };
-        miScreen.CheckedChanged += (_, _) => { _cfg.ShowGameRunningScreen = miScreen.Checked; _cfg.Save(); };
-        var miUnload = new ToolStripMenuItem("Unload the list while a game runs")
-        { CheckOnClick = true, Checked = _cfg.UnloadListDuringGame };
-        miUnload.CheckedChanged += (_, _) => { _cfg.UnloadListDuringGame = miUnload.Checked; _cfg.Save(); };
-        var miCache = new ToolStripMenuItem("Use the image cache (degraded thumbnails)")
-        { CheckOnClick = true, Checked = _cfg.UseImageCache };
-        miCache.CheckedChanged += (_, _) => { _cfg.UseImageCache = miCache.Checked; _useImageCache = miCache.Checked; _cfg.Save(); };
-        var miGameCache = new ToolStripMenuItem("Use game cache (when ExtendDB absent)")
-        { CheckOnClick = true, Checked = _cfg.UseGameCache };
-        miGameCache.CheckedChanged += (_, _) =>
-        {
-            _cfg.UseGameCache = miGameCache.Checked; _cfg.Save();
-            bool enable = miGameCache.Checked && !LbApiHost.Host.Media.GameCacheBridge.ExtendDbPresent;
-            if (enable && !LbApiHost.Host.Gc.HostGameCache.Enabled)
-            {
-                LbApiHost.Host.Gc.HostGameCache.Enabled = true;
-                try { LbApiHost.Host.Media.EverythingSupport.Init(LbApiHost.Host.Media.MediaResolver.LbRoot); } catch { }
-                LbApiHost.Host.Gc.HostGameCache.Build();
-            }
-            else if (!enable && LbApiHost.Host.Gc.HostGameCache.Enabled)
-            {
-                LbApiHost.Host.Gc.HostGameCache.Enabled = false;
-                LbApiHost.Host.Gc.HostGameCache.ClearForMemory();
-            }
-        };
-        var miAspect = new ToolStripMenuItem("Use 16:9 for the main media (else poster ratio)")
-        { CheckOnClick = true, Checked = _cfg.Use169ForMainScreenshot };
-        miAspect.CheckedChanged += (_, _) =>
-        {
-            _cfg.Use169ForMainScreenshot = miAspect.Checked; _cfg.Save();
-            _mediaAspect = miAspect.Checked ? (16.0 / 9.0) : (2.0 / 3.0);   // apply live
-            RelayoutDetail();
-        };
-        var miReadOnly = new ToolStripMenuItem("Read-only (never write to the LaunchBox files)")
-        { CheckOnClick = true, Checked = _cfg.ReadOnly };
-        miReadOnly.CheckedChanged += (_, _) =>
-        {
-            _cfg.ReadOnly = miReadOnly.Checked; _cfg.Save();
-            if (_dm is HostDataManagerXml hdm) hdm.ReadOnly = miReadOnly.Checked;   // apply live
-        };
-        optBtn.DropDownItems.Add(miReadOnly);
-        optBtn.DropDownItems.Add(new ToolStripSeparator());
-        optBtn.DropDownItems.Add(miScreen);
-        optBtn.DropDownItems.Add(miUnload);
-        optBtn.DropDownItems.Add(miCache);
-        optBtn.DropDownItems.Add(miGameCache);
-        optBtn.DropDownItems.Add(miAspect);
+        optBtn.Click += (_, _) => { using var w = BuildOptionsWindow(); w.ShowDialog(this); };
         bar.Items.Add(optBtn);
 
         _count = new ToolStripLabel("") { ForeColor = SubFg, Alignment = ToolStripItemAlignment.Right };
@@ -980,6 +933,78 @@ internal sealed class MainWindow : Form
 
     // Monitor unplugged at runtime → if the window ended up off-screen, bring it
     // back: normalize, clamp to the primary working area and recenter on it.
+    // ── Global options window ────────────────────────────────────────────────
+    // Sections + option bindings (Host/Options). Storage today = LiteBox.ini;
+    // the Pause options are slated to migrate to the LB-wide settings layer
+    // (LB-compatible) — only their Get/Set bindings will change.
+    private Options.OptionsWindow BuildOptionsWindow()
+    {
+        var w = new Options.OptionsWindow("LiteBox — Options");
+        w.ApplyFinished = () => _cfg.Save();
+
+        w.AddSection("General", new[]
+        {
+            Options.OptionItem.Toggle("General", "Read-only (never write to the LaunchBox files)",
+                () => _cfg.ReadOnly, v => _cfg.ReadOnly = v,
+                "When on, every editor that writes to the LaunchBox XMLs stays locked. LiteBox.ini itself is always writable.",
+                applyLive: () => { if (_dm is HostDataManagerXml hdm) hdm.ReadOnly = _cfg.ReadOnly; }),
+            Options.OptionItem.Toggle("General", "Show \"game running\" screen on launch",
+                () => _cfg.ShowGameRunningScreen, v => _cfg.ShowGameRunningScreen = v),
+            Options.OptionItem.Toggle("General", "Unload the game list while a game runs",
+                () => _cfg.UnloadListDuringGame, v => _cfg.UnloadListDuringGame = v,
+                "Frees the list's memory during the game and reloads it on exit."),
+        });
+
+        w.AddSection("Display", new[]
+        {
+            Options.OptionItem.Toggle("Display", "Use 16:9 for the main media (else poster ratio)",
+                () => _cfg.Use169ForMainScreenshot, v => _cfg.Use169ForMainScreenshot = v,
+                applyLive: () => { _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0); RelayoutDetail(); }),
+            Options.OptionItem.Toggle("Display", "Use the image cache (degraded thumbnails)",
+                () => _cfg.UseImageCache, v => _cfg.UseImageCache = v,
+                applyLive: () => _useImageCache = _cfg.UseImageCache),
+            Options.OptionItem.Toggle("Display", "Use game cache (when ExtendDB absent)",
+                () => _cfg.UseGameCache, v => _cfg.UseGameCache = v,
+                "Builds an in-memory media cache (Everything-backed) when the ExtendDB plugin isn't loaded.",
+                applyLive: ApplyGameCacheOption),
+            Options.OptionItem.Toggle("Display", "Unload the game cache while a game runs",
+                () => _cfg.UnloadGameCacheDuringGame, v => _cfg.UnloadGameCacheDuringGame = v),
+        });
+
+        w.AddSection("Pause screen", new[]
+        {
+            Options.OptionItem.Toggle("Pause", "Enable pause screens",
+                () => _cfg.GetBool("PauseEnabled", true), v => _cfg.SetBool("PauseEnabled", v),
+                "Master switch. Each emulator (and each game) can still opt out individually."),
+            Options.OptionItem.Text("Pause", "Pause hotkey",
+                () => _cfg.Get("PauseHotkey", "Pause"), v => _cfg.Set("PauseHotkey", v),
+                "Global hotkey opening the pause screen, e.g. Pause, F12, Ctrl+F12, Ctrl+Shift+P. Applies to the next launch."),
+            Options.OptionItem.Choice("Pause", "Pause mode", new[] { "legacy", "advanced" },
+                () => _cfg.Get("PauseMode", "legacy"), v => _cfg.Set("PauseMode", v),
+                "legacy = LaunchBox-style native overlay. advanced = LiteBox WebView mode (not implemented yet — falls back to legacy)."),
+        });
+
+        return w;
+    }
+
+    /// <summary>Live-apply for the "Use game cache" toggle (same behaviour the old
+    /// gear menu item had): build or release the host cache, ExtendDB preferred.</summary>
+    private void ApplyGameCacheOption()
+    {
+        bool enable = _cfg.UseGameCache && !LbApiHost.Host.Media.GameCacheBridge.ExtendDbPresent;
+        if (enable && !LbApiHost.Host.Gc.HostGameCache.Enabled)
+        {
+            LbApiHost.Host.Gc.HostGameCache.Enabled = true;
+            try { LbApiHost.Host.Media.EverythingSupport.Init(LbApiHost.Host.Media.MediaResolver.LbRoot); } catch { }
+            LbApiHost.Host.Gc.HostGameCache.Build();
+        }
+        else if (!enable && LbApiHost.Host.Gc.HostGameCache.Enabled)
+        {
+            LbApiHost.Host.Gc.HostGameCache.Enabled = false;
+            LbApiHost.Host.Gc.HostGameCache.ClearForMemory();
+        }
+    }
+
     private void OnDisplaySettingsChanged(object sender, EventArgs e)
     {
         if (IsDisposed) return;

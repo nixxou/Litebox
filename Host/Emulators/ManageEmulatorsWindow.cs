@@ -49,10 +49,17 @@ internal sealed class ManageEmulatorsWindow : Form
         var footer = new Panel { Dock = DockStyle.Bottom, Height = 44, BackColor = Panel2 };
         var edit = Btn("Edit…", new Point(12, 8));
         edit.Click += (_, _) => EditSelected();
+        // Update All: every plugin-managed emulator with a newer installable
+        // version gets InstallEmulator run sequentially (per-emulator progress
+        // dialog). Add/Delete intentionally absent (daily tool, no heavy edits).
+        var updAll = Btn("Update All", new Point(116, 8));
+        updAll.Enabled = !readOnly;
+        if (readOnly) updAll.Text = "Update All 🔒";
+        updAll.Click += (_, _) => UpdateAll();
         var close = Btn("Close", new Point(0, 8));
         close.Click += (_, _) => Close();
         footer.Resize += (_, _) => close.Left = footer.ClientSize.Width - close.Width - 12;
-        footer.Controls.Add(edit); footer.Controls.Add(close);
+        footer.Controls.Add(edit); footer.Controls.Add(updAll); footer.Controls.Add(close);
 
         Controls.Add(_list);
         Controls.Add(footer);
@@ -83,11 +90,16 @@ internal sealed class ManageEmulatorsWindow : Form
         }
 
         // Version + plugin status, async (GetCurrentVersion may probe the exe).
+        // SNAPSHOT the items on the UI thread first — enumerating _list.Items
+        // from the worker is a cross-thread access that can die mid-loop.
+        var snapshot = _list.Items.Cast<ListViewItem>()
+            .Where(i => i.Tag is IEmulator)
+            .Select(i => (item: i, emu: (IEmulator)i.Tag!))
+            .ToList();
         System.Threading.Tasks.Task.Run(() =>
         {
-            foreach (ListViewItem item in _list.Items)
+            foreach (var (item, e) in snapshot)
             {
-                if (item.Tag is not IEmulator e) continue;
                 var plugin = EmuPlugins.ForEmulator(e);
                 string ver = plugin != null ? (EmuPlugins.CurrentVersion(e) ?? "") : "";
                 try
@@ -109,6 +121,38 @@ internal sealed class ManageEmulatorsWindow : Form
         if (_list.SelectedItems.Count == 0 || _list.SelectedItems[0].Tag is not IEmulator e) return;
         EditEmulatorWindow.Open(e, _readOnly, this, _lbRoot);
         Fill();   // labels may have changed
+    }
+
+    /// <summary>Sequentially update every plugin-managed emulator whose latest
+    /// installable version differs from the current one.</summary>
+    private void UpdateAll()
+    {
+        var work = new List<(EmulatorPlugin plugin, IEmulator emu, string version, string title)>();
+        foreach (ListViewItem item in _list.Items)
+        {
+            if (item.Tag is not IEmulator e) continue;
+            var plugin = EmuPlugins.ForEmulator(e);
+            if (plugin == null) continue;
+            string? cur = EmuPlugins.CurrentVersion(e);
+            EmulatorControllerVersion? latest = null;
+            try { latest = plugin.GetInstallableVersions()?.FirstOrDefault(); } catch { }
+            var id = Safe(() => latest?.Identifier);
+            var label = Safe(() => latest?.Label) ?? id;
+            if (id == null) continue;
+            bool upToDate = cur != null && (cur == id || cur == label);
+            if (!upToDate) work.Add((plugin, e, id!, Safe(() => e.Title) ?? "?"));
+        }
+        if (work.Count == 0)
+        {
+            MessageBox.Show(this, "Every plugin-managed emulator is up to date.", "Update All", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        var namesList = string.Join("\n", work.Select(w => "  • " + w.title + "  →  " + w.version));
+        if (MessageBox.Show(this, $"Update {work.Count} emulator(s)?\n\n{namesList}", "Update All",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        foreach (var (plugin, e, version, _) in work)
+            EditEmulatorWindow.RunInstall(plugin, e, version, this);
+        Fill();
     }
 
     private static Button Btn(string text, Point loc) => new()

@@ -163,8 +163,8 @@ internal static class EditEmulatorWindow
     }
 
     /// <summary>InstallEmulator with a modal progress dialog (the plugin reports
-    /// progress + honours cancellation).</summary>
-    private static void RunInstall(EmulatorPlugin plugin, IEmulator emu, string version, Form? owner)
+    /// progress + honours cancellation). Shared with Manage Emulators' Update All.</summary>
+    internal static void RunInstall(EmulatorPlugin plugin, IEmulator emu, string version, Form? owner)
     {
         bool cancelled = false;
         var dlg = new Form
@@ -240,25 +240,57 @@ internal static class EditEmulatorWindow
         grid.DefaultCellStyle.ForeColor = Fg;
         grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 122, 204);
 
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Associated Platform", Width = 230 });
+        // Platform column = editable combo seeded with every known platform (the
+        // library's + the ones already referenced by this emulator's rows); free
+        // text stays allowed via EditingControlShowing → DropDown style.
+        var platCol = new DataGridViewComboBoxColumn
+        {
+            HeaderText = "Associated Platform", Width = 230,
+            FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox,
+        };
+        var known = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        try { foreach (var pl in PluginHelper.DataManager?.GetAllPlatforms() ?? Array.Empty<IPlatform>()) { var n = Safe(() => pl.Name); if (!string.IsNullOrEmpty(n)) known.Add(n!); } } catch { }
+        foreach (var ep0 in emu.GetAllEmulatorPlatforms() ?? Array.Empty<IEmulatorPlatform>())
+        { var n = Safe(() => ep0.Platform); if (!string.IsNullOrEmpty(n)) known.Add(n!); }
+        foreach (var n in known) platCol.Items.Add(n);
+        grid.Columns.Add(platCol);
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Default Command-Line Parameters", Width = 280 });
         grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Default", Width = 64 });
-        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Extract ROMs", Width = 90, ThreeState = true });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Extract ROMs", Width = 90 });
         grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Use M3U", Width = 70 });
+
+        // Free-text platform entry: switch the editing combo to DropDown and accept
+        // values not in Items (register them on validation so commit never DataErrors).
+        grid.EditingControlShowing += (_, e) =>
+        { if (grid.CurrentCell?.ColumnIndex == 0 && e.Control is ComboBox cb) { cb.DropDownStyle = ComboBoxStyle.DropDown; cb.AutoCompleteMode = AutoCompleteMode.SuggestAppend; cb.AutoCompleteSource = AutoCompleteSource.ListItems; } };
+        grid.CellValidating += (_, e) =>
+        {
+            if (e.ColumnIndex != 0) return;
+            var v = e.FormattedValue as string ?? "";
+            if (v.Length > 0 && !platCol.Items.Contains(v)) platCol.Items.Add(v);
+        };
+        grid.DataError += (_, e) => e.ThrowException = false;
+
+        // The per-platform AutoExtract is NULLABLE in the data model (null =
+        // inherit the emulator-level setting). The UI shows a plain on/off
+        // checkbox like LB; the loaded null state is remembered per row so an
+        // UNTOUCHED unchecked box keeps inheriting instead of forcing "false".
+        var loadedExtract = new Dictionary<DataGridViewRow, bool?>();
 
         var rows = emu.GetAllEmulatorPlatforms()?.ToList() ?? new List<IEmulatorPlatform>();
         foreach (var ep in rows)
         {
-            object extract = Safe(() => ep.AutoExtract) switch { true => CheckState.Checked, false => CheckState.Unchecked, null => CheckState.Indeterminate };
+            bool? ax = Safe(() => ep.AutoExtract);
             int i = grid.Rows.Add(Safe(() => ep.Platform) ?? "", Safe(() => ep.CommandLine) ?? "",
-                                  Safe(() => ep.IsDefault), extract, Safe(() => ep.M3uDiscLoadEnabled));
+                                  Safe(() => ep.IsDefault), ax == true, Safe(() => ep.M3uDiscLoadEnabled));
             grid.Rows[i].Tag = ep;
+            loadedExtract[grid.Rows[i]] = ax;
         }
 
         var hint = new Label
         {
             Dock = DockStyle.Bottom, Height = 34, ForeColor = SubFg, BackColor = Bg,
-            Text = "Extract ROMs is three-state: checked / unchecked / indeterminate = inherit the emulator-level setting.  New row at the bottom adds a platform; Delete removes the selected row.",
+            Text = "An unchecked, untouched Extract ROMs keeps inheriting the emulator-level setting.  New row at the bottom adds a platform; Delete removes the selected row.",
             Font = new Font("Segoe UI", 8.25f), Padding = new Padding(4, 2, 0, 0),
         };
         p.Controls.Add(grid); p.Controls.Add(hint);
@@ -279,9 +311,11 @@ internal static class EditEmulatorWindow
                 Set(() => ep.Platform = platform);
                 Set(() => ep.CommandLine = (row.Cells[1].Value as string ?? "").Trim());
                 Set(() => ep.IsDefault = row.Cells[2].Value is true or CheckState.Checked);
-                var st = row.Cells[3].Value;
-                bool? ax = st is CheckState cs ? (cs == CheckState.Indeterminate ? (bool?)null : cs == CheckState.Checked)
-                          : st is bool b ? b : null;
+                // Two-state checkbox over a nullable field: an unchecked box that
+                // LOADED as null (inherit) and was never checked stays null.
+                bool isChecked = row.Cells[3].Value is true or CheckState.Checked;
+                bool? loaded = loadedExtract.TryGetValue(row, out var lv) ? lv : null;
+                bool? ax = isChecked ? true : (loaded == null ? (bool?)null : false);
                 Set(() => ep.AutoExtract = ax);
                 Set(() => ep.M3uDiscLoadEnabled = row.Cells[4].Value is true or CheckState.Checked);
             }

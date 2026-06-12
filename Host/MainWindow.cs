@@ -255,6 +255,16 @@ internal sealed class MainWindow : Form
         optBtn.Click += (_, _) => { using var w = BuildOptionsWindow(); w.ShowDialog(this); };
         bar.Items.Add(optBtn);
 
+        // Manage Emulators (full per-emulator config; read-only honours the lock).
+        var emusBtn = new ToolStripButton("Emulators") { ForeColor = Fg, ToolTipText = "Manage Emulators" };
+        emusBtn.Click += (_, _) =>
+        {
+            bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? true;
+            using var w = new Emulators.ManageEmulatorsWindow(ro, LbApiHost.Host.Media.MediaResolver.LbRoot ?? "");
+            w.ShowDialog(this);
+        };
+        bar.Items.Add(emusBtn);
+
         _count = new ToolStripLabel("") { ForeColor = SubFg, Alignment = ToolStripItemAlignment.Right };
         bar.Items.Add(_count);
 

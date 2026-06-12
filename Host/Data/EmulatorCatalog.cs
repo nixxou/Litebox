@@ -118,6 +118,13 @@ internal sealed class HostEmulator : DummyEmulator, ILiteBoxFields
         RecordPlatforms();
         return ep;
     }
+
+    public override bool TryRemoveEmulatorPlatform(IEmulatorPlatform emulatorPlatform)
+    {
+        if (emulatorPlatform is not HostEmulatorPlatform hep || !_platforms.Remove(hep)) return false;
+        RecordPlatforms();
+        return true;
+    }
 }
 
 internal static class EmulatorCatalog

@@ -198,7 +198,13 @@ internal static class HostLaunch
             {
                 var main = ResolveMain(game, app, emulator, overrideCmd);
                 if (main.HasValue)
+                {
+                    // Emulator "Running AutoHotkey Script" — started right before the
+                    // emulator spawn, killed on game exit (see AhkScript / LB parity).
+                    if (!DryRun && main.Value.useEmu && emulator != null)
+                        AhkScript.StartGameScript(SafeStr(() => emulator.AutoHotkeyScript), _lbRoot);
                     RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main");
+                }
                 else if (!DryRun)
                     System.Windows.Forms.MessageBox.Show(
                         $"[dummy launch] {game.Title}\nPlatform: {game.Platform}\nApp: {game.ApplicationPath}\n\n(Close = game exited)",
@@ -215,6 +221,7 @@ internal static class HostLaunch
         catch (Exception ex) { Console.WriteLine("[launch] error: " + ex.Message); }
         finally
         {
+            AhkScript.KillGameScript();   // running script dies with the game (LB parity)
             if (!DryRun && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             Fire(p => p.OnGameExited());
             try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }

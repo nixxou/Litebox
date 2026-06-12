@@ -32,6 +32,14 @@ internal sealed class PauseContext
 {
     public string GameTitle = "";
     public string Platform = "";
+    public string Developer = "";
+    public int ReleaseYear;
+    // Cosmetics, from the LaunchedGame snapshot (paths stay valid during the game —
+    // only the in-memory caches were dropped at launch).
+    public string? FanartPath;     // low-opacity background
+    public string? ClearLogoPath;  // shown instead of the title text when present
+    public string? BoxFrontPath;   // small box accent
+    public DateTime SessionStartUtc;
     // Per-action availability (an action shows only when its AHK script is non-empty;
     // Resume and ExitGame are always available).
     public bool CanSaveState, CanLoadState, CanReset, CanSwapDiscs;

@@ -142,7 +142,12 @@ internal static class HostLaunch
 
         Console.WriteLine($"[launch/{who}] {game.Title}  emu={emulator?.Title ?? "(none)"}  app={app?.Name ?? "(none)"}{(DryRun ? "  (dry)" : "")}");
 
-        // 0. notify the GUI (it may show a "game running" screen / unload its list)
+        // 0. snapshot the launched game BEFORE anything is dropped — in-game
+        //    surfaces (pause screen fanart/logo/session time) read this, never
+        //    the store / cache (both are freed below).
+        LaunchedGame.Capture(game);
+
+        // 0b. notify the GUI (it may show a "game running" screen / unload its list)
         //    BEFORE DropOptional so freed memory is reclaimed by the drop's GC.
         try { GameStarted?.Invoke(game); } catch { }
 
@@ -228,6 +233,7 @@ internal static class HostLaunch
         {
             Pause.PauseManager.Disarm();  // hotkey off + resume a still-frozen process + close the screen
             AhkScript.KillGameScript();   // running script dies with the game (LB parity)
+            LaunchedGame.Clear();
             if (!DryRun && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             Fire(p => p.OnGameExited());
             try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }

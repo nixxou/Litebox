@@ -148,11 +148,19 @@ internal static class PauseManager
             catch (Exception ex) { Console.WriteLine("[pause] suspend failed: " + ex.Message); }
         }
 
-        // 3. Screen.
+        // 3. Screen. Cosmetics come from the LaunchedGame snapshot (captured before
+        //    the launch memory drop) — never from the store / cache.
+        var snap = LaunchedGame.Current;
         var ctx = new PauseContext
         {
-            GameTitle = Safe(() => _game?.Title) ?? "",
-            Platform = Safe(() => _game?.Platform) ?? "",
+            GameTitle = snap?.Title ?? Safe(() => _game?.Title) ?? "",
+            Platform = snap?.Platform ?? Safe(() => _game?.Platform) ?? "",
+            Developer = snap?.Developer ?? "",
+            ReleaseYear = snap?.ReleaseYear ?? 0,
+            FanartPath = snap?.FanartPath,
+            ClearLogoPath = snap?.ClearLogoPath,
+            BoxFrontPath = snap?.BoxFrontPath,
+            SessionStartUtc = snap?.LaunchedAtUtc ?? DateTime.UtcNow,
             CanSaveState = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "SaveStateAutoHotkeyScript")),
             CanLoadState = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "LoadStateAutoHotkeyScript")),
             CanReset = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "ResetAutoHotkeyScript")),

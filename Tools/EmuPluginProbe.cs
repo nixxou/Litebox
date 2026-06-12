@@ -26,18 +26,59 @@ internal static class EmuPluginProbe
     /// references EmulatorPlugin, which needs the SDK resolvable at method entry).</summary>
     public static int Run()
     {
-        var pluginDir = Path.Combine(LbRoot, "Plugins", "RetroArch LaunchBox Integration");
+        var pluginsRoot = Path.Combine(LbRoot, "Plugins");
         var core = Path.Combine(LbRoot, "Core");
+        var probeDirs = new List<string> { core };
+        try { probeDirs.AddRange(Directory.GetDirectories(pluginsRoot).Where(d => d.Contains("LaunchBox Integration"))); } catch { }
         AssemblyLoadContext.Default.Resolving += (ctx, name) =>
         {
-            foreach (var d in new[] { pluginDir, core })
+            foreach (var d in probeDirs)
             {
                 var p = Path.Combine(d, name.Name + ".dll");
                 if (File.Exists(p)) return ctx.LoadFromAssemblyPath(p);
             }
             return null;
         };
-        return RunCore(pluginDir);
+        SurveyAll(pluginsRoot);
+        return RunCore(Path.Combine(pluginsRoot, "RetroArch LaunchBox Integration"));
+    }
+
+    /// <summary>Comparative survey: every installed "* LaunchBox Integration"
+    /// plugin — which EmulatorPlugin members it OVERRIDES (DeclaredOnly) and which
+    /// extra interfaces it implements. The empirical diff matrix for V3.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void SurveyAll(string pluginsRoot)
+    {
+        Console.WriteLine("== SURVEY: installed integration plugins ==");
+        foreach (var dir in Directory.GetDirectories(pluginsRoot).Where(d => d.Contains("LaunchBox Integration")).OrderBy(d => d))
+        {
+            foreach (var dll in Directory.GetFiles(dir, "*.dll"))
+            {
+                System.Reflection.Assembly asm;
+                try { asm = AssemblyLoadContext.Default.LoadFromAssemblyPath(dll); } catch { continue; }
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException ex) { types = ex.Types.Where(t => t != null).ToArray()!; }
+                catch { continue; }
+                foreach (var t in types)
+                {
+                    if (t == null || t.IsAbstract || !typeof(EmulatorPlugin).IsAssignableFrom(t)) continue;
+                    EmulatorPlugin? inst = null;
+                    try { inst = (EmulatorPlugin)Activator.CreateInstance(t)!; } catch { }
+                    string emuName = "?"; try { emuName = inst?.EmulatorName ?? "?"; } catch { }
+                    var ifaces = t.GetInterfaces()
+                        .Where(i => i.Namespace?.StartsWith("Unbroken") == true)
+                        .Select(i => i.Name);
+                    var overrides = t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly)
+                        .Where(m => !m.IsSpecialName && m.Name != "Equals" && m.Name != "GetHashCode" && m.Name != "ToString")
+                        .Select(m => m.Name).Distinct().OrderBy(n => n);
+                    Console.WriteLine($"\n  [{Path.GetFileName(dir)}]  {t.Name}  EmulatorName=\"{emuName}\"");
+                    Console.WriteLine($"    interfaces: {string.Join(", ", ifaces)}");
+                    Console.WriteLine($"    overrides : {string.Join(", ", overrides)}");
+                }
+            }
+        }
+        Console.WriteLine();
     }
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]

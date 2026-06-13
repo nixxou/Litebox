@@ -234,6 +234,9 @@ internal static class HostLaunch
         int gi = GameIndex(game);
         var sw = Stopwatch.StartNew();
         if (!DryRun && gi >= 0) { try { _store.JournalPlayStart(gi); } catch { } }
+        // LiteBox's own last-launch history (emulator + version). Dual-written on EVERY launch — even
+        // when ExtendDB is loaded — so the history survives disabling the plugin (ROM stays ExtendDB's).
+        if (!DryRun) { try { _store.RecordLaunch(SafeStr(() => game.Id), SafeStr(() => emulator?.Id), SafeStr(() => app?.Id)); } catch { } }
         try
         {
             Fire(p => p.OnAfterGameLaunched(game, app, emulator));

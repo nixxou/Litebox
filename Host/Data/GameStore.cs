@@ -529,6 +529,18 @@ internal sealed class GameStore
     public void JournalPlayTime(int i, int addSeconds)
     { if (i < 0 || i >= Rows.Length || addSeconds <= 0) return; RecordModify(i, "PlayTime", (Rows[i].PlayTime + addSeconds).ToString(CultureInfo.InvariantCulture)); }
 
+    /// <summary>Record the emulator/version a game was just launched with, in LiteBox's OWN history
+    /// (op-log db, table launch_history — SAME schema as ExtendDB's, ROM left NULL). Written on EVERY
+    /// launch (even when ExtendDB is loaded, so disabling the plugin keeps the history) and regardless
+    /// of ReadOnly (this is LiteBox state, not LaunchBox write-back).</summary>
+    public void RecordLaunch(string gameId, string emulatorId, string additionalAppId)
+    { _oplog?.RecordLaunch(gameId, emulatorId, additionalAppId); }
+
+    /// <summary>LiteBox's last (emulatorId, additionalAppId) for a game, or null. Used as the fallback
+    /// for the launch-button initial selection when ExtendDB isn't loaded.</summary>
+    public (string emulatorId, string additionalAppId)? GetLastLaunch(string gameId)
+    { return _oplog?.GetLastLaunch(gameId); }
+
     /// <summary>Generic IGame scalar write-back: <paramref name="xmlName"/> is the XML element name
     /// (e.g. "Developer"), <paramref name="value"/> the serialized value ("" = clear). Updates memory
     /// + logs the op. Unknown field names are ignored (logged once).</summary>

@@ -61,7 +61,13 @@ internal sealed class OpLog : IDisposable
                     "CREATE TABLE IF NOT EXISTS ops(" +
                     " seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL," +
                     " op TEXT NOT NULL, entity TEXT NOT NULL, id TEXT, parent_id TEXT," +
-                    " field TEXT, value TEXT);";
+                    " field TEXT, value TEXT);" +
+                    // LiteBox's own last-launch history — SAME schema as ExtendDB's launch_history so the
+                    // two are interchangeable. Persistent (NOT cleared with the ops on flush). LiteBox
+                    // never tracks the ROM, so extracted_rom_path stays NULL here.
+                    "CREATE TABLE IF NOT EXISTS launch_history(" +
+                    " game_id TEXT NOT NULL PRIMARY KEY, additional_app_id TEXT, emulator_id TEXT," +
+                    " extracted_rom_path TEXT, last_launched_utc TEXT NOT NULL);";
                 cmd.ExecuteNonQuery();
             }
             log._insert = log._conn.CreateCommand();
@@ -185,6 +191,51 @@ internal sealed class OpLog : IDisposable
             }
             catch (Exception ex) { Console.WriteLine("[oplog] clear failed: " + ex.Message); }
         }
+    }
+
+    // ── LiteBox launch history (separate from the ops table; survives flush/Clear) ──────────
+    /// <summary>Upsert the last emulator/version used for a game (LiteBox's own copy; ROM left NULL).
+    /// NOT gated by ReadOnly — this is LiteBox state, not LaunchBox write-back. No-op when disabled.</summary>
+    public void RecordLaunch(string gameId, string emulatorId, string additionalAppId)
+    {
+        if (!Enabled || string.IsNullOrEmpty(gameId)) return;
+        lock (_lock)
+        {
+            try
+            {
+                using var cmd = _conn.CreateCommand();
+                cmd.CommandText =
+                    "INSERT OR REPLACE INTO launch_history(game_id, additional_app_id, emulator_id, extracted_rom_path, last_launched_utc) " +
+                    "VALUES($g,$a,$e,NULL,$t)";
+                cmd.Parameters.AddWithValue("$g", gameId);
+                cmd.Parameters.AddWithValue("$a", (object)additionalAppId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$e", (object)emulatorId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("o"));
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex) { Console.WriteLine("[oplog] launch record failed: " + ex.Message); }
+        }
+    }
+
+    /// <summary>The last (emulatorId, additionalAppId) recorded for a game, or null if none. Either
+    /// field may be null (= default emulator / Base version).</summary>
+    public (string emulatorId, string additionalAppId)? GetLastLaunch(string gameId)
+    {
+        if (!Enabled || string.IsNullOrEmpty(gameId)) return null;
+        lock (_lock)
+        {
+            try
+            {
+                using var cmd = _conn.CreateCommand();
+                cmd.CommandText = "SELECT emulator_id, additional_app_id FROM launch_history WHERE game_id=$g";
+                cmd.Parameters.AddWithValue("$g", gameId);
+                using var r = cmd.ExecuteReader();
+                if (r.Read())
+                    return (r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1));
+            }
+            catch (Exception ex) { Console.WriteLine("[oplog] launch get failed: " + ex.Message); }
+        }
+        return null;
     }
 
     private static string Str(SqliteDataReader r, int i) => r.IsDBNull(i) ? null : r.GetString(i);

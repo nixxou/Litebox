@@ -54,6 +54,11 @@ internal sealed class HostDataManagerXml : DummyDataManager
     /// appmanifest and writes back via the op-log. Fail-soft.</summary>
     public int SyncStoreInstallStates(bool quiet = false) { try { return StoreInstallStateSync.Sync(_store, quiet); } catch { return 0; } }
 
+    /// <summary>LiteBox's own last (emulatorId, additionalAppId) for a game — the fallback the launch
+    /// buttons use for their initial selection when ExtendDB isn't loaded. Null if none recorded.</summary>
+    public (string emulatorId, string additionalAppId)? GetLastLaunch(string gameId)
+    { try { return _store?.GetLastLaunch(gameId); } catch { return null; } }
+
     /// <summary>LaunchBox's global settings (LB\Data\Settings.xml), lazily loaded.</summary>
     public LbSettingsStore LbSettings => _lbSettings ??= new LbSettingsStore(_dataDir, _store);
     private LbSettingsStore _lbSettings;

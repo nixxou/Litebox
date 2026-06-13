@@ -35,6 +35,7 @@ internal sealed class LaunchButtons : Panel
     private readonly Button _play, _caret, _version, _rom;
     private readonly Action<IGame, IAdditionalApplication?, IEmulator?> _playGame;
     private readonly Action<IGame>? _storeLaunch;   // installed GOG/Steam game → store launch lifecycle
+    private readonly Func<IGame, (string? emuId, string? appId)?>? _lastLaunchFallback;   // LiteBox history (used when ExtendDB absent)
 
     // Current subject + choices.
     private IGame? _game;
@@ -56,10 +57,12 @@ internal sealed class LaunchButtons : Panel
     // button that drives the client via a URI (no emulator / version / ROM).
     private StoreKind _storeKind;
 
-    public LaunchButtons(Action<IGame, IAdditionalApplication?, IEmulator?> playGame, Action<IGame>? storeLaunch = null)
+    public LaunchButtons(Action<IGame, IAdditionalApplication?, IEmulator?> playGame, Action<IGame>? storeLaunch = null,
+        Func<IGame, (string? emuId, string? appId)?>? lastLaunchFallback = null)
     {
         _playGame = playGame;
         _storeLaunch = storeLaunch;
+        _lastLaunchFallback = lastLaunchFallback;
         Dock = DockStyle.Bottom;
         BackColor = Bg;
         Padding = new Padding(10, 6, 10, 8);
@@ -141,6 +144,12 @@ internal sealed class LaunchButtons : Panel
         // ExtendDB ROM layer (in-process, reflection — no HTTP).
         _romFeature = RomBridge.Available;
         if (_romFeature) ParseLaunchInfo(RomBridge.GetLaunchInfoJson(game));
+        else if (_lastLaunchFallback != null)
+        {
+            // No ExtendDB → fall back to LiteBox's own last-launch history (emulator + version; no ROM).
+            var lb = Safe(() => _lastLaunchFallback(game));
+            if (lb != null) { _lastEmuId = lb.Value.emuId; _lastVerAppId = lb.Value.appId; }
+        }
 
         // Initial selection: last launch (ExtendDB) → default → first.
         _selEmu = ResolveInitialEmu();

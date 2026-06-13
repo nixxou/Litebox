@@ -68,27 +68,6 @@ internal static class LbGlobalOptions
                 "Only when the startup screen is disabled."),
         }, readOnly);
 
-        w.AddSection("LB · Debugging", new[]
-        {
-            B("Enable Debug Logs", "DebugLog", true,
-                "LaunchBox writes log files to LaunchBox\\Logs on each startup. LiteBox has its own debug log."),
-        }, readOnly);
-
-        w.AddSection("LB · Notifications", new[]
-        {
-            OptionItem.Choice("n", "Notification System",
-                new[] { "LaunchBox Notifications", "Windows Notifications", "Message Boxes" },
-                () => s.Get("NotificationType", "0"), v => s.Set("NotificationType", v),
-                "What system LaunchBox uses to display notifications.")
-                .Values("0", "1", "2").Tag(noImpact: true),
-        }, readOnly);
-
-        w.AddSection("LB · Automated Imports", new[]
-        {
-            B("Enable Automatic ROM Imports", "EnableRomAutoImports", true,
-                "LaunchBox scans for new ROMs on startup and while open."),
-        }, readOnly);
-
         w.AddSection("LB · Startup Applications", BuildStartupAppsPanel(s, readOnly, out var applyStartupApps),
             readOnly ? null : applyStartupApps);
 
@@ -102,48 +81,22 @@ internal static class LbGlobalOptions
                 .Tag(noImpact: true),
         }, readOnly);
 
-        w.AddSection("LB · Updates", new[]
-        {
-            B("Check for Updates on Startup", "CheckForUpdates", true),
-            B("Automatically Download Updates in the Background", "BackgroundUpdateDownloads", true),
-            B("Update to Beta Releases", "BetaUpgrades", true),
-        }, readOnly);
-
-        w.AddSection("LB · Video Playback", new[]
-        {
-            OptionItem.Choice("v", "Video playback engine",
-                new[] { "Windows Media Player", "FFmpeg" },
-                () => s.Get("VideoPlaybackEngine", "Windows Media Player"), v => s.Set("VideoPlaybackEngine", v))
-                .Tag(noImpact: true),
-        }, readOnly);
-
-        w.AddSection("LB · Backups", new[]
-        {
-            B("Automatically back up the LaunchBox XML data files", "AutoBackup", true,
-                "LaunchBox backs up Data\\ to Backups\\ on its own startup/shutdown (up to 25 kept). " +
-                "LiteBox makes its own pre-write backups independently of this."),
-        }, readOnly);
-
         w.AddSection("LB · Region Priorities", BuildRegionPrioritiesPanel(s, readOnly, out var applyRegions),
             readOnly ? null : applyRegions);
 
         w.AddSection("LB · Auto-Import Media", BuildAutoImportMediaPanel(s, readOnly, out var applyMedia),
             readOnly ? null : applyMedia);
 
-        w.AddSection("LB · Search", new[]
-        {
-            B("Enable LaunchBox Metadata Search", "EnableLocalDBSearch", true),
-            B("Upload Star Ratings to the LaunchBox Games Database", "UploadStarRatings", true),
-            B("Use Community Star Ratings when Filtering or Arranging", "ConsiderCommunityStarRatings", true),
-            OptionItem.Text("s", "Minimum number of community ratings in order to use",
-                () => s.Get("MinimumCommunityRatingCountBeforeConsidering", "5"),
-                v => s.Set("MinimumCommunityRatingCountBeforeConsidering", v))
-                .Tag(noImpact: true),
-            OptionItem.Toggle("s", "Use Advanced Search Syntax",
-                () => !s.GetBool("UseOldSearchSyntax"), v => s.SetBool("UseOldSearchSyntax", !v),
-                "Filter switches in the search bar (e.g. genre: Action).")
-                .Tag(noImpact: true),
-        }, readOnly);
+        // All media priority lists live under ONE section with internal tabs
+        // (LB has ~10 separate sub-pages; we fold them into tabs to cut clutter).
+        w.AddSection("LB · Media Priorities", BuildMediaPrioritiesPanel(s, readOnly, out var applyPrio),
+            readOnly ? null : applyPrio);
+
+        // LB "Integrations" branch, tabbed. None drive LiteBox today (it doesn't run
+        // these integrations) — they round-trip to Settings.xml for LaunchBox, and the
+        // credentials sit here for a future LiteBox feature (notably RetroAchievements).
+        w.AddSection("LB · Integrations", BuildIntegrationsPanel(s, readOnly, out var applyInteg),
+            readOnly ? null : applyInteg);
     }
 
     // ── Startup Applications grid (LB parity; LiteBox LAUNCHES the LaunchBox-
@@ -413,6 +366,271 @@ internal static class LbGlobalOptions
                 }
             }
             if (changed) s.SetImageTypes(all);
+        };
+        return panel;
+    }
+
+    // Video media types (LB's Video Priorities catalog).
+    private static readonly string[] _videoTypes = { "Theme Video", "Video Snap", "Recording", "Trailer", "Marquee" };
+
+    // The 10 LB media priority lists (tab title, Settings field, default order CSV).
+    private static readonly (string tab, string field, string defaults, bool video)[] _mediaPriorities =
+    {
+        ("Box Front", "FrontImageTypePriorities", "GOG Poster,Steam Poster,Epic Games Poster,Amazon Poster,Box - Front,Box - Front - Reconstructed,Advertisement Flyer - Front,Origin Poster,Uplay Thumbnail,Fanart - Box - Front,Poster,Square,Steam Banner", false),
+        ("Box Back", "BackImageTypePriorities", "Box - Back,Box - Back - Reconstructed,Advertisement Flyer - Back,Fanart - Box - Back", false),
+        ("3D Box", "Box3dImageTypePriorities", "Box - 3D", false),
+        ("Cart Front", "CartFrontImageTypePriorities", "Cart - Front,Fanart - Cart - Front,Disc,Fanart - Disc", false),
+        ("Cart Back", "CartBackImageTypePriorities", "Cart - Back,Fanart - Cart - Back", false),
+        ("3D Cart", "Cart3dImageTypePriorities", "Cart - 3D", false),
+        ("Background", "BackgroundImageTypePriorities", "Epic Games Background,Uplay Background,Origin Background,Amazon Background,Fanart - Background", false),
+        ("Marquee", "MarqueeImageTypePriorities", "Arcade - Marquee,Banner,Steam Banner", false),
+        ("Screenshot", "ScreenshotsImageTypePriorities", "Screenshot - Gameplay,Screenshot - Game Title,Screenshot - Game Select,Screenshot - High Scores,Screenshot - Game Over,Steam Screenshot,GOG Screenshot,Epic Games Screenshot,Origin Screenshot,Amazon Screenshot", false),
+        ("Video", "VideoTypePriorities", "Theme Video,Video Snap,Recording,Trailer", true),
+    };
+
+    /// <summary>The full image-type universe = hardcoded catalog ∪ live ImageTypeSettings.
+    /// Driving the lists off this (not the static catalog alone) means a type a future
+    /// LB version records is offered, not silently missing.</summary>
+    private static string[] ImageCatalog(LbSettingsStore s)
+    {
+        var list = _mediaCatalog.Select(c => c.type).ToList();
+        var seen = new HashSet<string>(list, StringComparer.OrdinalIgnoreCase);
+        foreach (var it in s.ImageTypes) if (it.ImageType.Length > 0 && seen.Add(it.ImageType)) list.Add(it.ImageType);
+        return list.ToArray();
+    }
+
+    /// <summary>A dark, owner-drawn TabControl (the OS draws tabs light otherwise).</summary>
+    private static TabControl NewDarkTabControl()
+    {
+        var tabs = new TabControl
+        {
+            Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed, Multiline = true,
+            BackColor = Color.FromArgb(30, 30, 30), ForeColor = Color.FromArgb(222, 222, 222),
+            SizeMode = TabSizeMode.Normal, Padding = new Point(14, 4),
+        };
+        tabs.DrawItem += (_, e) =>
+        {
+            if (e.Index < 0 || e.Index >= tabs.TabPages.Count) return;
+            bool sel = e.Index == tabs.SelectedIndex;
+            using var bg = new SolidBrush(sel ? Color.FromArgb(0, 122, 204) : Color.FromArgb(45, 45, 48));
+            e.Graphics.FillRectangle(bg, e.Bounds);
+            TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, tabs.Font, e.Bounds,
+                sel ? Color.White : Color.FromArgb(222, 222, 222),
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        };
+        return tabs;
+    }
+
+    // One tabbed section hosting all media priority lists.
+    private static Control BuildMediaPrioritiesPanel(LbSettingsStore s, bool readOnly, out Action apply)
+    {
+        var imgCatalog = ImageCatalog(s);
+        var applies = new List<Action>();
+        var tabs = NewDarkTabControl();
+        foreach (var (tab, field, defaults, video) in _mediaPriorities)
+        {
+            var page = new TabPage(tab) { BackColor = Color.FromArgb(30, 30, 30), Padding = new Padding(2) };
+            var panel = BuildPriorityPanel(s, field, video ? _videoTypes : imgCatalog, defaults, readOnly, out var ap);
+            panel.Dock = DockStyle.Fill;
+            page.Controls.Add(panel);
+            tabs.TabPages.Add(page);
+            applies.Add(ap);
+        }
+        apply = () => { foreach (var a in applies) a(); };
+        return tabs;
+    }
+
+    // ── LB "Integrations" branch (tabbed). All NoImpact on LiteBox today; round-trip
+    //    to Settings.xml for LaunchBox, credentials kept for future LiteBox use. ──
+    private static Control BuildIntegrationsPanel(LbSettingsStore s, bool readOnly, out Action apply)
+    {
+        var Bg = Color.FromArgb(30, 30, 30);
+        var Fg = Color.FromArgb(222, 222, 222);
+        var Panel2 = Color.FromArgb(45, 45, 48);
+        var applies = new List<Action>();
+
+        CheckBox Chk(string t, bool v, Point loc) => new() { Text = t, Location = loc, AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = v, Enabled = !readOnly };
+        Label Lbl(string t, Point loc) => new() { Text = t, Location = loc, AutoSize = true, ForeColor = Fg, BackColor = Bg };
+        TextBox Txt(string v, Point loc, int w, bool pwd = false) => new() { Text = v, Location = loc, Width = w, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly, UseSystemPasswordChar = pwd };
+        Button Browse(Point loc, Action onClick)
+        {
+            var b = new Button { Text = "Browse…", Location = loc, Size = new Size(84, 24), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f), Enabled = !readOnly };
+            b.Click += (_, _) => onClick();
+            return b;
+        }
+        // Bind a checkbox to a bool field (optionally inverted) on apply.
+        void BindChk(CheckBox cb, string field, bool invert = false)
+            => applies.Add(() => { bool nv = invert ? !cb.Checked : cb.Checked; if (nv != s.GetBool(field)) s.SetBool(field, nv); });
+        void BindTxt(TextBox tb, string field)
+            => applies.Add(() => { if (tb.Text != s.Get(field)) s.Set(field, tb.Text); });
+
+        var tabs = NewDarkTabControl();
+        TabPage Page(string t) { var p = new TabPage(t) { BackColor = Bg, Padding = new Padding(12) }; tabs.TabPages.Add(p); return p; }
+
+        // ── DOSBox ──
+        {
+            var p = Page("DOSBox");
+            var c1 = Chk("Show all DOSBox commands", s.GetBool("ShowCommands"), new Point(4, 8));
+            var c2 = Chk("Don't exit DOSBox when exiting games", !s.GetBool("ExitDosBox"), new Point(4, 34));
+            var c3 = Chk("Pause before each command", s.GetBool("PauseBeforeCommands"), new Point(4, 60));
+            var c4 = Chk("Pause before exiting DOSBox", s.GetBool("PauseBeforeExit"), new Point(4, 86));
+            p.Controls.AddRange(new Control[] { c1, c2, c3, c4 });
+            BindChk(c1, "ShowCommands"); BindChk(c2, "ExitDosBox", invert: true); BindChk(c3, "PauseBeforeCommands"); BindChk(c4, "PauseBeforeExit");
+        }
+
+        // ── EmuMovies ──
+        {
+            var p = Page("EmuMovies");
+            p.Controls.Add(Lbl("User ID", new Point(4, 8)));
+            var user = Txt(s.Get("EmuMoviesUserId"), new Point(4, 28), 280); p.Controls.Add(user);
+            p.Controls.Add(Lbl("Password", new Point(4, 60)));
+            var pwd = Txt(s.Get("EmuMoviesPassword"), new Point(4, 80), 280, pwd: true); p.Controls.Add(pwd);
+            BindTxt(user, "EmuMoviesUserId"); BindTxt(pwd, "EmuMoviesPassword");
+        }
+
+        // ── GOG ──
+        {
+            var p = Page("GOG");
+            p.Controls.Add(Lbl("Profile Name", new Point(4, 8)));
+            var prof = Txt(s.Get("GogProfileName"), new Point(4, 28), 280); p.Controls.Add(prof);
+            var galaxy = Chk("Launch games through GOG Galaxy client (when possible)", s.GetBool("GogLaunchWithClient"), new Point(4, 64));
+            p.Controls.Add(galaxy);
+            BindTxt(prof, "GogProfileName"); BindChk(galaxy, "GogLaunchWithClient");
+        }
+
+        // ── LEDBlinky ──
+        {
+            var p = Page("LEDBlinky");
+            var en = Chk("Enable LEDBlinky", s.GetBool("EnableLedBlinky"), new Point(4, 8));
+            p.Controls.Add(en);
+            p.Controls.Add(Lbl("Path to LEDBlinky.exe file", new Point(4, 38)));
+            var path = Txt(s.Get("LedBlinkyPath"), new Point(4, 58), 480); p.Controls.Add(path);
+            p.Controls.Add(Browse(new Point(490, 57), () => { using var d = new OpenFileDialog { Filter = "LEDBlinky (LEDBlinky.exe)|LEDBlinky.exe|Executables (*.exe)|*.exe" }; if (d.ShowDialog() == DialogResult.OK) path.Text = d.FileName; }));
+            var ss = Chk("Don't start screensaver when entering attract mode", s.GetBool("LedBlinkyDontStartScreensaver"), new Point(4, 92));
+            var adv = Chk("Use advanced logic for LEDBlinky filters lists in Big Box (primarily for addon devices)", s.GetBool("LedBlinkyUseAdvanced"), new Point(4, 118));
+            p.Controls.AddRange(new Control[] { ss, adv });
+            BindChk(en, "EnableLedBlinky"); BindTxt(path, "LedBlinkyPath"); BindChk(ss, "LedBlinkyDontStartScreensaver"); BindChk(adv, "LedBlinkyUseAdvanced");
+        }
+
+        // ── MAME ──
+        {
+            var p = Page("MAME");
+            var dl = Chk("Download MAME Community Leaderboards from the LaunchBox Games Database", s.GetBool("DownloadMameCommunityHighScores"), new Point(4, 8));
+            var ul = Chk("Upload Your MAME High Scores to the LaunchBox Games Database Community Leaderboards", s.GetBool("UploadMameCommunityHighScores"), new Point(4, 34));
+            p.Controls.AddRange(new Control[] { dl, ul });
+            BindChk(dl, "DownloadMameCommunityHighScores"); BindChk(ul, "UploadMameCommunityHighScores");
+        }
+
+        // ── RetroAchievements ── (the integration most likely to be wired into LiteBox later)
+        {
+            var p = Page("RetroAchievements");
+            p.Controls.Add(Lbl("Username", new Point(4, 8)));
+            var user = Txt(s.Get("RetroAchievementsUsername"), new Point(4, 28), 280); p.Controls.Add(user);
+            p.Controls.Add(Lbl("Password", new Point(4, 60)));
+            var pwd = Txt(s.Get("RetroAchievementsPassword"), new Point(4, 80), 280, pwd: true); p.Controls.Add(pwd);
+            p.Controls.Add(Lbl("API Key", new Point(4, 112)));
+            var key = Txt(s.Get("RetroAchievementsApiKey"), new Point(4, 132), 380); p.Controls.Add(key);
+            // Username/API key/password round-trip; the login Token is LB-managed — never touched.
+            BindTxt(user, "RetroAchievementsUsername"); BindTxt(pwd, "RetroAchievementsPassword"); BindTxt(key, "RetroAchievementsApiKey");
+        }
+
+        // ── Steam ──
+        {
+            var p = Page("Steam");
+            p.Controls.Add(Lbl("Steam Custom URL  (https://steamcommunity.com/id/…)", new Point(4, 8)));
+            var url = Txt(s.Get("SteamUserName"), new Point(4, 28), 360); p.Controls.Add(url);
+            p.Controls.Add(Lbl("API Key", new Point(4, 60)));
+            var key = Txt(s.Get("SteamApiKey"), new Point(4, 80), 380); p.Controls.Add(key);
+            BindTxt(url, "SteamUserName"); BindTxt(key, "SteamApiKey");
+        }
+
+        // ── OBS Studio ──
+        {
+            var p = Page("OBS Studio");
+            var auto = Chk("Automatically add OBS Studio recordings to LaunchBox games", s.GetBool("AutoAddObsRecordings"), new Point(4, 8));
+            p.Controls.Add(auto);
+            p.Controls.Add(Lbl("OBS Studio Video Recordings Folder", new Point(4, 38)));
+            var folder = Txt(s.Get("ObsRecordingsFolder"), new Point(4, 58), 480); p.Controls.Add(folder);
+            p.Controls.Add(Browse(new Point(490, 57), () => { using var d = new FolderBrowserDialog(); if (d.ShowDialog() == DialogResult.OK) folder.Text = d.SelectedPath; }));
+            var ensure = Chk("Make sure OBS Studio is running before launching games", s.GetBool("StartObsWithGames"), new Point(4, 92));
+            p.Controls.Add(ensure);
+            p.Controls.Add(Lbl("OBS Studio Executable Path", new Point(4, 122)));
+            var exe = Txt(s.Get("ObsExePath"), new Point(4, 142), 480); p.Controls.Add(exe);
+            p.Controls.Add(Browse(new Point(490, 141), () => { using var d = new OpenFileDialog { Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*" }; if (d.ShowDialog() == DialogResult.OK) exe.Text = d.FileName; }));
+            BindChk(auto, "AutoAddObsRecordings"); BindTxt(folder, "ObsRecordingsFolder"); BindChk(ensure, "StartObsWithGames"); BindTxt(exe, "ObsExePath");
+        }
+
+        var host = new Panel { BackColor = Bg };
+        var note = new Label
+        {
+            Dock = DockStyle.Top, Height = 22,
+            Text = "No impact on LiteBox yet — stored for LaunchBox (and reusable when LiteBox grows these features).",
+            ForeColor = Color.FromArgb(225, 95, 95), BackColor = Bg,
+            Font = new Font("Segoe UI", 8.25f, FontStyle.Italic),
+        };
+        host.Controls.Add(tabs);
+        host.Controls.Add(note);
+        tabs.BringToFront();
+        apply = () => { foreach (var a in applies) a(); };
+        return host;
+    }
+
+    // ── Generic media priority list (checklist + Move Up/Down + Revert to Default) ──
+    // Stores a CSV of the CHECKED types in priority order. Display = checked first
+    // (stored order), then the remaining catalog types alphabetically (LB layout).
+    // Tolerant of unknown types: a stored type not in the catalog is kept (checked)
+    // and written back, so a future LB type is never dropped.
+    private static Control BuildPriorityPanel(LbSettingsStore s, string field, string[] catalog, string defaults, bool readOnly, out Action apply)
+    {
+        var panel = new Panel { BackColor = Color.FromArgb(30, 30, 30) };
+        var list = new CheckedListBox
+        {
+            Dock = DockStyle.Fill, BackColor = Color.FromArgb(37, 37, 38), ForeColor = Color.FromArgb(222, 222, 222),
+            BorderStyle = BorderStyle.FixedSingle, CheckOnClick = true, IntegralHeight = false, Enabled = !readOnly,
+        };
+
+        void Populate(IEnumerable<string> orderedChecked)
+        {
+            // Keep EVERY checked entry, even one absent from the catalog — an unknown
+            // type stored by a future LB stays visible (checked) and round-trips.
+            var chk = orderedChecked.Select(x => x.Trim()).Where(x => x.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            list.Items.Clear();
+            foreach (var t in chk) list.Items.Add(t, true);
+            foreach (var t in catalog.Where(t => !chk.Contains(t, StringComparer.OrdinalIgnoreCase))
+                                     .OrderBy(t => t, StringComparer.OrdinalIgnoreCase))
+                list.Items.Add(t, false);
+        }
+        Populate(s.Get(field).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
+
+        var right = new Panel { Dock = DockStyle.Right, Width = 150, BackColor = Color.FromArgb(30, 30, 30) };
+        var up = MoveBtn("Move Selected Up", 4);
+        var down = MoveBtn("Move Selected Down", 38);
+        var revert = MoveBtn("Revert to Default", 76);
+        up.Enabled = down.Enabled = revert.Enabled = !readOnly;
+        void Move(int delta)
+        {
+            int i = list.SelectedIndex, j = i + delta;
+            if (i < 0 || j < 0 || j >= list.Items.Count) return;
+            var item = list.Items[i]; bool c = list.GetItemChecked(i);
+            list.Items.RemoveAt(i); list.Items.Insert(j, item); list.SetItemChecked(j, c); list.SelectedIndex = j;
+        }
+        up.Click += (_, _) => Move(-1);
+        down.Click += (_, _) => Move(1);
+        revert.Click += (_, _) => Populate(defaults.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
+        right.Controls.Add(up); right.Controls.Add(down); right.Controls.Add(revert);
+
+        panel.Controls.Add(list);
+        panel.Controls.Add(right);
+        list.BringToFront();
+
+        apply = () =>
+        {
+            var picked = new List<string>();
+            for (int i = 0; i < list.Items.Count; i++)
+                if (list.GetItemChecked(i)) picked.Add(list.Items[i].ToString());
+            var joined = string.Join(",", picked);
+            if (joined != s.Get(field)) s.Set(field, joined);
         };
         return panel;
     }

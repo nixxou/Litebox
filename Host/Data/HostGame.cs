@@ -21,7 +21,9 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
     public HostGame(GameStore s, int i) { _s = s; _i = i; }
 
     // ── ILiteBoxGame: generic access to EVERY <Game> field, incl. those IGame doesn't expose ──
-    public string GetField(string xmlElementName) => _s.GetExtraField(R.Id, xmlElementName);
+    // GogAppId is a modelled store field (not in the sparse _extra), so serve it from the row.
+    public string GetField(string xmlElementName) =>
+        xmlElementName == "GogAppId" ? _s.Str(R.GogAppIdIdx) : _s.GetExtraField(R.Id, xmlElementName);
     public void SetField(string xmlElementName, string value)
     {
         if (string.IsNullOrEmpty(xmlElementName)) return;

@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets"))
+if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync"))
     DebugConsole.Enable();
 
 // Act like LaunchBox's root launcher: LiteBox.exe lives in <LB>\Core (so
@@ -95,6 +95,17 @@ if (args.Contains("--seed-writeback"))
 // Read-only: dump the non-IGame fields LiteBox exposes for games matching a title substring.
 if (args.Contains("--dump-extra"))
     return WriteBackDump.Run(args);
+
+// Read-only: reconcile GOG/Steam install state against the clients' local DBs and dump before/after.
+if (args.Contains("--store-sync"))
+{
+    System.Runtime.Loader.AssemblyLoadContext.Default.Resolving += (ctx, name) =>
+    {
+        var p = Path.Combine(@"C:\Users\mehdi\source\repos\scrapper-project\LB\Core", name.Name + ".dll");
+        return File.Exists(p) ? ctx.LoadFromAssemblyPath(p) : null;
+    };
+    return StoreSyncDump.Run(args);
+}
 
 // Default (no args, or --host): run the host GUI.
 return HostBoot.Run(args);

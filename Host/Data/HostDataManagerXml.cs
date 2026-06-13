@@ -48,6 +48,12 @@ internal sealed class HostDataManagerXml : DummyDataManager
     /// "Settings" ops (Settings.xml).</summary>
     public void FlushLbSettingsIfSafe() { try { _store?.FlushLbSettingsJournalIfSafe(); } catch { } }
 
+    /// <summary>Reconcile GOG/Steam games' Installed flag (and the GOG ApplicationPath)
+    /// against the clients' local state — LiteBox runs without LaunchBox.exe, so nothing
+    /// else flips these when a store game is (un)installed. Reads Galaxy's DB / Steam's
+    /// appmanifest and writes back via the op-log. Fail-soft.</summary>
+    public int SyncStoreInstallStates(bool quiet = false) { try { return StoreInstallStateSync.Sync(_store, quiet); } catch { return 0; } }
+
     /// <summary>LaunchBox's global settings (LB\Data\Settings.xml), lazily loaded.</summary>
     public LbSettingsStore LbSettings => _lbSettings ??= new LbSettingsStore(_dataDir, _store);
     private LbSettingsStore _lbSettings;

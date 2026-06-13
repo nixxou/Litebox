@@ -17,6 +17,7 @@
 #nullable enable
 
 using System.Text.Json;
+using LbApiHost.Host.Data;
 using LbApiHost.Host.Media;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -27,11 +28,13 @@ internal sealed class LaunchButtons : Panel
     private static readonly Color Bg      = Color.FromArgb(37, 37, 38);
     private static readonly Color PlayCol = Color.FromArgb(50, 110, 65);
     private static readonly Color CaretCol= Color.FromArgb(40, 90, 55);
+    private static readonly Color InstallCol = Color.FromArgb(150, 134, 48); // muted mustard (store "Install")
     private static readonly Color SubCol  = Color.FromArgb(60, 60, 70);   // duller than Play (Version/ROM)
     private static readonly Color Fg      = Color.FromArgb(230, 230, 230);
 
     private readonly Button _play, _caret, _version, _rom;
     private readonly Action<IGame, IAdditionalApplication?, IEmulator?> _playGame;
+    private readonly Action<IGame>? _storeLaunch;   // installed GOG/Steam game → store launch lifecycle
 
     // Current subject + choices.
     private IGame? _game;
@@ -49,9 +52,14 @@ internal sealed class LaunchButtons : Panel
     private string? _lastEmuId, _lastVerAppId, _lastRomEntry;
     private bool _romFeature;   // ExtendDB present + feature on
 
-    public LaunchButtons(Action<IGame, IAdditionalApplication?, IEmulator?> playGame)
+    // Store game (GOG / Steam): the launch group collapses to a single Install/Play
+    // button that drives the client via a URI (no emulator / version / ROM).
+    private StoreKind _storeKind;
+
+    public LaunchButtons(Action<IGame, IAdditionalApplication?, IEmulator?> playGame, Action<IGame>? storeLaunch = null)
     {
         _playGame = playGame;
+        _storeLaunch = storeLaunch;
         Dock = DockStyle.Bottom;
         BackColor = Bg;
         Padding = new Padding(10, 6, 10, 8);
@@ -102,8 +110,14 @@ internal sealed class LaunchButtons : Panel
         _emuAutoExtract.Clear(); _verIsArchive.Clear();
         _mainPathIsArchive = false; _lastEmuId = _lastVerAppId = _lastRomEntry = null;
         _selRom = null; _forcePriority = false; _selVerAppId = null; _selEmu = 0;
+        _storeKind = StoreKind.None;
 
         if (game == null) { Visible = false; return; }
+
+        // Store games (GOG / Steam) bypass the emulator/version/ROM layer entirely:
+        // a single Install/Play button drives the client via a URI (see Refresh2 / OnPlay).
+        _storeKind = StoreSupport.KindOf(game);
+        if (_storeKind != StoreKind.None) { Visible = true; Refresh2(); return; }
 
         // Emulators (default first), via the SDK.
         var defaultId = Safe(() => game.EmulatorId);
@@ -171,7 +185,22 @@ internal sealed class LaunchButtons : Panel
     // ── Painting the labels / visibility ──────────────────────────────
     private void Refresh2()
     {
+        // Store game: one button — "▶ Play (<store>)" when installed, "↓ Install on <store>" otherwise.
+        if (_storeKind != StoreKind.None)
+        {
+            bool installed = Safe(() => _game?.Installed) == true;
+            string store = _storeKind switch { StoreKind.Gog => "GOG", StoreKind.Steam => "Steam", StoreKind.Epic => "Epic", _ => "Store" };
+            _play.Text = installed ? "▶  Play (" + store + ")" : "↓  Install on " + store;
+            _play.BackColor = installed ? PlayCol : InstallCol;   // muted yellow for Install
+            _caret.Visible = false;
+            _version.Visible = false;
+            _rom.Visible = false;
+            Height = Padding.Vertical + 38;   // just the play row
+            return;
+        }
+
         var emu = CurrentEmu();
+        _play.BackColor = PlayCol;   // reset (a previous store game may have left it Install-yellow)
         _play.Text = emu != null ? "▶  Play with " + (Safe(() => emu.Title) ?? "Emulator") : "▶  Play";
         _caret.Visible = _emus.Count > 1;
 
@@ -345,10 +374,54 @@ internal sealed class LaunchButtons : Panel
     private void OnPlay()
     {
         if (_game == null) return;
+
+        // Store game: Play the installed game (ShellExecute its ApplicationPath — a GOG .lnk
+        // or steam://rungameid URI) or, if not installed, fire the client's Install URI.
+        if (_storeKind != StoreKind.None) { OnStorePlay(); return; }
+
         // Arm the ROM selection in ExtendDB BEFORE launching (the hook applies it).
         if (_romFeature && RomAppliesFor(_selVerAppId, CurrentEmuId()) && (!string.IsNullOrEmpty(_selRom) || _forcePriority))
             RomBridge.ArmSelectedRom(_game, _selVerAppId, _selRom, _forcePriority);
         _playGame(_game, CurrentVersionApp(), CurrentEmu());   // CurrentEmu null → host resolves the default
+    }
+
+    // ── Store launch / install ────────────────────────────────────────
+    private void OnStorePlay()
+    {
+        bool installed = Safe(() => _game?.Installed) == true;
+        var appPath = Safe(() => _game?.ApplicationPath) ?? "";
+        if (installed)
+        {
+            // Route through the store launch lifecycle (running screen + play-time + exit watch).
+            // Fall back to a plain ShellOpen if no launcher was wired (e.g. a non-GUI host).
+            if (_storeLaunch != null) _storeLaunch(_game!);
+            else if (!StoreSupport.ShellOpen(appPath))
+                MessageBox.Show("Couldn't launch this game. Is it still installed?",
+                    "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        // Not installed → delegate the install to the store client via its URI.
+        var gogAppId = (_game as ILiteBoxGame)?.GetField("GogAppId");
+        var steamAppId = StoreSupport.SteamAppId(appPath);
+        var epicAppName = StoreSupport.EpicAppName(appPath);
+        var uri = StoreSupport.InstallUri(_storeKind, gogAppId, steamAppId, epicAppName);
+        if (string.IsNullOrEmpty(uri) || !StoreSupport.ShellOpen(uri))
+        {
+            MessageBox.Show("Couldn't start the install. Make sure the GOG Galaxy / Steam / Epic client is installed.",
+                "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        // The client now owns the install; LiteBox re-detects state on next launch / refresh.
+        string msg = _storeKind switch
+        {
+            StoreKind.Gog   => "Opening GOG Galaxy — click Install there to download the game.",
+            StoreKind.Steam => "Opening Steam's install dialog.",
+            StoreKind.Epic  => "Opening the Epic Games Launcher — click Install there to download the game.",
+            _               => "Opening the store client.",
+        };
+        MessageBox.Show(msg + "\nLiteBox will pick up the installed game once it's done (it re-checks automatically).",
+            "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // ── launch-info JSON (HostRomBridge) ──────────────────────────────

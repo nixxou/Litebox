@@ -48,6 +48,7 @@ internal struct GameRow
     public int CommandLineIdx, ConfigCmdIdx, ConfigPathIdx;
     public int DosBoxCfgIdx, CustomDosBoxIdx, ScummDataIdx, ScummTypeIdx;   // DosBox / ScummVM
     public int SeriesIdx, SourceIdx, ReleaseTypeIdx, RootFolderIdx, CloneOfIdx, ProgressIdx;
+    public int GogAppIdIdx;    // GOG product id (store integration); 0 = none
     public int RaHashIdx;      // RetroAchievementsHash (debug column)
     public int VideoPathIdx, ThemeVideoPathIdx, ManualPathIdx, MusicPathIdx; // stored overrides
     public long DateModifiedTicks;
@@ -379,6 +380,7 @@ internal sealed class GameStore
                     ScummTypeIdx = Intern(V("ScummVMGameType")),
                     SeriesIdx = Intern(V("Series")),
                     SourceIdx = Intern(V("Source")),
+                    GogAppIdIdx = Intern(V("GogAppId")),
                     ReleaseTypeIdx = Intern(V("ReleaseType")),
                     RootFolderIdx = Intern(V("RootFolder")),
                     CloneOfIdx = Intern(V("CloneOf")),
@@ -1365,6 +1367,7 @@ internal sealed class GameStore
         d["ScummVMGameType"]           = (s, i, v) => s.Rows[i].ScummTypeIdx = s.InternRuntime(v);
         d["Series"]                    = (s, i, v) => s.Rows[i].SeriesIdx = s.InternRuntime(v);
         d["Source"]                    = (s, i, v) => s.Rows[i].SourceIdx = s.InternRuntime(v);
+        d["GogAppId"]                  = (s, i, v) => s.Rows[i].GogAppIdIdx = s.InternRuntime(v);
         d["ReleaseType"]               = (s, i, v) => s.Rows[i].ReleaseTypeIdx = s.InternRuntime(v);
         d["RootFolder"]                = (s, i, v) => s.Rows[i].RootFolderIdx = s.InternRuntime(v);
         d["CloneOf"]                   = (s, i, v) => s.Rows[i].CloneOfIdx = s.InternRuntime(v);

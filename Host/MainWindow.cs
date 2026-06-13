@@ -104,6 +104,11 @@ internal sealed class MainWindow : Form
 
     private IGame[] _current = Array.Empty<IGame>();
     private IGame _heroGame;        // game currently shown in the hero (for rate/favorite clicks)
+    private long _lastStoreSyncTick;   // debounce for the focus-regained store re-sync (Environment.TickCount64)
+    private System.Windows.Forms.Timer _storePollTimer;   // active install-state poll while a store game is selected
+    private volatile bool _storeLostFocus;       // LiteBox lost the foreground since the current store launch
+    private volatile bool _storeRegainedFocus;   // …and has since regained it (store running-screen exit signal)
+    private volatile bool _gameRunning;          // a game is launching/running → pause store status refresh
     private System.Windows.Forms.Timer _fanartTimer;                       // 0.5s debounce before fanart fade-in
     private readonly Dictionary<string, string> _fanartPick = new();       // node/game key -> chosen fanart src (stable per session)
     private object _currentNode;   // selected tree node (for the right pane when no game is selected)
@@ -156,9 +161,25 @@ internal sealed class MainWindow : Form
         Font = new Font("Segoe UI", 9f);
         RestoreWindowState();   // size / position / maximized from the INI (overrides the defaults)
 
+        // Reconcile GOG/Steam install state before building the list — LiteBox runs without
+        // LaunchBox.exe, so this is what flips Installed / sets the GOG .lnk ApplicationPath.
+        StoreTrace.Log("==== LiteBox boot — initial store sync ====");
+        if ((_dm as HostDataManagerXml)?.SyncStoreInstallStates() > 0)
+            (_dm as HostDataManagerXml)?.FlushIfSafe();   // persist the correction now (no-op if LB is running)
+        _lastStoreSyncTick = Environment.TickCount64;
+        // Re-reconcile whenever LiteBox regains focus — the user installs/uninstalls in GOG Galaxy /
+        // Steam (another window) and comes back; this picks it up live, no restart needed (debounced).
+        Activated += (_, _) => OnActivatedStoreResync();
+        Deactivate += (_, _) => _storeLostFocus = true;   // store running-screen: track foreground loss
+        // While a GOG/Steam game is selected, actively poll the client install-state so an
+        // uninstall (or a delayed DB write the focus check missed) flips the button within ~1.5s.
+        _storePollTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+        _storePollTimer.Tick += (_, _) => StorePollTick();
+
         _games = BuildGameList();
 
         _sources = BuildSourceTree();
+        LogParentalState("boot (after tree)");
 
         var details = BuildDetails(out _hero, out _media, out _strip, out _meta, out _vndb, out _notes);
         _hero.RateClicked = v => RateHeroGame(v);
@@ -184,8 +205,9 @@ internal sealed class MainWindow : Form
         // outside the scrolling detail grid). _detailHost (Fill) is added FIRST so
         // the bottom panel reserves its space and the grid fills the rest.
         inner.Panel2.Controls.Add(_detailHost);
-        _launchButtons = new LaunchButtons((g, app, emu) =>
-            Safe(() => PluginHelper.LaunchBoxMainViewModel.PlayGame(g, app, emu, null)));
+        _launchButtons = new LaunchButtons(
+            (g, app, emu) => Safe(() => PluginHelper.LaunchBoxMainViewModel.PlayGame(g, app, emu, null)),
+            StoreLaunch);   // GOG/Steam: running screen + exit watch
         inner.Panel2.Controls.Add(_launchButtons);
         inner.Panel1.Resize += (_, _) => LayoutPoster();   // keep the poster grid centred on resize
 
@@ -542,6 +564,18 @@ internal sealed class MainWindow : Form
             RefreshExtendDbIndicators();
         }
         catch { }
+    }
+
+    // Diagnostic: snapshot the parental-control state (boot + on demand) into litebox-store.log.
+    private void LogParentalState(string when)
+    {
+        try
+        {
+            StoreTrace.Log($"PARENTAL [{when}] present={ParentalBridge.Present} enabled={ParentalBridge.Enabled} " +
+                           $"locked={ParentalBridge.Locked} active={ParentalBridge.Active} forceAll={ParentalBridge.ForceAll} " +
+                           $"hiddenPlatforms=[{string.Join(", ", _parentalHiddenPlatforms)}]");
+        }
+        catch (Exception ex) { StoreTrace.Log("PARENTAL EX: " + ex.Message); }
     }
 
     // True when a tree node (platform / category / playlist) must be hidden by parental control.
@@ -1597,6 +1631,78 @@ internal sealed class MainWindow : Form
         return p;
     }
 
+    // Focus-regained: re-reconcile store install state (debounced) so an install/uninstall done in
+    // GOG Galaxy / Steam while LiteBox stayed open is reflected without a restart. Persists the change
+    // when safe and rebuilds the current game's Install/Play button — only if something actually changed.
+    // Store running-screen exit signal: once LiteBox has lost the foreground (game took over) and then
+    // regained it, the game is considered closed (the process watcher reads this for short launches).
+    private void StoreLaunch(IGame g)
+    {
+        _storeLostFocus = false;
+        _storeRegainedFocus = false;
+        try { HostLaunch.LaunchStore(g, () => _storeRegainedFocus, _cfg.KillStoreLauncherAfterGame); } catch { }
+    }
+
+    private void OnActivatedStoreResync()
+    {
+        if (_storeLostFocus) _storeRegainedFocus = true;   // foreground came back after the game took it
+        if (_gameRunning) return;                          // don't re-sync store status while a game runs
+        try
+        {
+            if (_dm is not HostDataManagerXml hdm) return;
+            long now = Environment.TickCount64;
+            if (now - _lastStoreSyncTick < 1500) { StoreTrace.Log("activated: skipped (debounce)"); return; }   // ignore rapid re-activations
+            _lastStoreSyncTick = now;
+            StoreTrace.Log($"activated: re-sync (sel='{S(_heroGame?.Title)}')");
+            int changed = hdm.SyncStoreInstallStates();
+            if (changed <= 0) return;
+            hdm.FlushIfSafe();   // persist Installed / ApplicationPath now (no-op if LaunchBox is running)
+            if (_heroGame != null && StoreSupport.KindOf(_heroGame) != StoreKind.None)
+            {
+                _launchButtons?.ShowFor(_heroGame, SafeEmulatorsForPlatform(S(_heroGame.Platform)), SafeAddApps(_heroGame));
+                StoreTrace.Log($"activated: rebuilt button for '{S(_heroGame.Title)}' installed={Safe(() => _heroGame.Installed) == true}");
+            }
+        }
+        catch (Exception ex) { StoreTrace.Log("activated EX: " + ex.Message); }
+    }
+
+    // Run the poll only while a store game is the current subject (cheap: the whole reconcile is
+    // ~15-25ms; the read is skipped when minimized). Stop it for non-store games / tree nodes.
+    private void SetStorePoll(bool on)
+    {
+        if (_storePollTimer == null) return;
+        if (on) { if (!_storePollTimer.Enabled) { _storePollTimer.Start(); StoreTrace.Log($"poll START (sel='{S(_heroGame?.Title)}')"); } }
+        else if (_storePollTimer.Enabled) { _storePollTimer.Stop(); StoreTrace.Log("poll STOP"); }
+    }
+
+    private void StorePollTick()
+    {
+        try
+        {
+            if (_gameRunning) return;   // paused during a game launch/run
+            if (WindowState == FormWindowState.Minimized) { StoreTrace.Log("poll tick: skipped (minimized)"); return; }
+            var g = _heroGame;
+            if (g == null || StoreSupport.KindOf(g) == StoreKind.None) { StoreTrace.Log("poll tick: not a store game → stop"); SetStorePoll(false); return; }
+            if (_dm is not HostDataManagerXml hdm) return;
+            long now = Environment.TickCount64;
+            if (now - _lastStoreSyncTick < 1000) { StoreTrace.Log("poll tick: skipped (debounce)"); return; }   // de-dupe vs the focus-regained sync
+            _lastStoreSyncTick = now;
+            bool before = Safe(() => g.Installed) == true;
+            StoreTrace.Log($"poll tick: sel='{S(g.Title)}' kind={StoreSupport.KindOf(g)} installedBefore={before}");
+            int changed = hdm.SyncStoreInstallStates(quiet: true);
+            bool after = Safe(() => g.Installed) == true;
+            StoreTrace.Log($"poll tick: changed={changed} installedAfter={after}");
+            if (changed <= 0) return;
+            hdm.FlushIfSafe();
+            if (_heroGame != null && StoreSupport.KindOf(_heroGame) != StoreKind.None)
+            {
+                _launchButtons?.ShowFor(_heroGame, SafeEmulatorsForPlatform(S(_heroGame.Platform)), SafeAddApps(_heroGame));
+                StoreTrace.Log($"poll tick: REBUILT button for '{S(_heroGame.Title)}' installed={Safe(() => _heroGame.Installed) == true}");
+            }
+        }
+        catch (Exception ex) { StoreTrace.Log("poll tick EX: " + ex.Message); }
+    }
+
     // ── Details rendering ────────────────────────────────────────────────────
     private void ShowDetails(IGame g)
     {
@@ -1610,6 +1716,7 @@ internal sealed class MainWindow : Form
             ClearStrip();
             _meta.Clear(); _vndb.Clear(); _notes.Text = ""; RelayoutDetail();
             _launchButtons?.HideGame();
+            SetStorePoll(false);
             return;
         }
 
@@ -1656,6 +1763,17 @@ internal sealed class MainWindow : Form
         // Launch buttons (Play / Version / ROM) — reuses the same SDK enumeration
         // as the right-click menu; the ROM tier lights up only when ExtendDB is loaded.
         _launchButtons?.ShowFor(g, SafeEmulatorsForPlatform(S(g.Platform)), SafeAddApps(g));
+        SetStorePoll(StoreSupport.KindOf(g) != StoreKind.None);   // poll only for GOG/Steam games
+
+        // Diagnostic: why is this game visible under parental control?
+        try
+        {
+            string plat = S(Safe(() => g.Platform));
+            StoreTrace.Log($"DETAIL '{S(g.Title)}' plat='{plat}' rating='{S(Safe(() => g.Rating))}' " +
+                           $"active={ParentalBridge.Active} ratingAllowed={ParentalBridge.IsRatingAllowed(S(Safe(() => g.Rating)))} " +
+                           $"platHidden={(plat.Length > 0 && _parentalHiddenPlatforms.Contains(plat))} hidesGame={ParentalHidesGame(g)}");
+        }
+        catch { }
     }
 
     // Right pane when a TREE node (category / platform / playlist / All) is selected.
@@ -1664,6 +1782,7 @@ internal sealed class MainWindow : Form
         _detailsShown = node;
         _heroGame = null;
         _launchButtons?.HideGame();   // launch group is game-only
+        SetStorePoll(false);
         if (node == null || node is AllNode)
         {
             _hero.SetNode(node is AllNode ? "All Games" : "");   // no rating/heart for a node
@@ -2177,6 +2296,8 @@ internal sealed class MainWindow : Form
         if (InvokeRequired) { try { BeginInvoke((Action)(() => OnGameStarted(g))); } catch { } return; }
 
         _resumeGameId = g != null ? Safe(() => g.Id) : null;
+        _gameRunning = true;
+        SetStorePoll(false);   // pause the install-state poll while the game runs (client DB may be mid-write)
 
         if (_cfg.UnloadListDuringGame)
         {
@@ -2192,6 +2313,8 @@ internal sealed class MainWindow : Form
         if (IsDisposed) return;
         if (InvokeRequired) { try { BeginInvoke((Action)(() => OnGameEnded(g))); } catch { } return; }
 
+        _gameRunning = false;   // game over → store status refresh may resume
+
         HideRunningOverlay();
 
         if (_cfg.UnloadListDuringGame)
@@ -2202,14 +2325,17 @@ internal sealed class MainWindow : Form
             if (target != null) { _games.SelectGame(target, true); ShowDetails(target); }
             else if (_games.VisibleGames.Count > 0) { _games.SelectFirst(); }
         }
+        // Resume the poll if a store game is the current subject (covers UnloadListDuringGame off too).
+        SetStorePoll(_heroGame != null && StoreSupport.KindOf(_heroGame) != StoreKind.None);
     }
 
     private void ShowRunningOverlay(IGame g)
     {
         if (_overlay == null)
         {
-            _overlay = new DoubleBufferedPanel { Dock = DockStyle.Fill };
+            _overlay = new DoubleBufferedPanel { Dock = DockStyle.Fill, Cursor = Cursors.Hand };
             _overlay.Paint += PaintOverlay;
+            _overlay.Click += (_, _) => HideRunningOverlay();   // safety net: click to dismiss if it ever lingers
             Controls.Add(_overlay);
         }
         _overlayImg?.Dispose();

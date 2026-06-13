@@ -173,6 +173,60 @@ internal static class HostLaunch
         t.Start();
     }
 
+    /// <summary>Launch a GOG/Steam game the store way: ShellExecute its ApplicationPath (a GOG .lnk or a
+    /// steam:// URI) — the store client owns the process, so there's no Process to WaitForExit on. We
+    /// still run the GUI lifecycle (running screen via GameStarted, play-time, GameEnded) and detect
+    /// exit by watching the game's install folder for its process (StoreProcessWatcher).</summary>
+    public static void LaunchStore(IGame game, Func<bool> regainedFocus = null, bool killLauncherAfter = false)
+    {
+        if (game == null) return;
+        var kind = StoreSupport.KindOf(game);
+        if (kind == StoreKind.None) return;
+        string target = SafeStr(() => game.ApplicationPath);
+        if (string.IsNullOrEmpty(target)) return;
+        string installDir = StoreSupport.ResolveInstallDir(kind, game);
+        Console.WriteLine($"[store-launch] {SafeStr(() => game.Title)} target={target} dir={installDir ?? "(unknown)"}");
+        StoreTrace.Log($"store-launch START '{SafeStr(() => game.Title)}' kind={kind} dir={installDir ?? "(unknown)"} killLauncher={killLauncherAfter}");
+
+        LaunchedGame.Capture(game);                    // before any GUI unload, like the emulator path
+        try { GameStarted?.Invoke(game); } catch { }   // GUI shows the running screen + unloads its list
+
+        var t = new Thread(() => RunStoreAndWait(game, kind, target, installDir, regainedFocus, killLauncherAfter))
+        { IsBackground = true, Name = "LbApiHost-store" };
+        t.Start();
+    }
+
+    private static void RunStoreAndWait(IGame game, StoreKind kind, string target, string installDir, Func<bool> regainedFocus, bool killLauncherAfter)
+    {
+        int gi = GameIndex(game);
+        var sw = Stopwatch.StartNew();
+        bool seen = false;
+        // Snapshot the store client's PIDs BEFORE launching so we can later kill only the one this launch
+        // starts (a client already open is left alone).
+        var clientsBefore = killLauncherAfter ? StoreProcessWatcher.SnapshotClients(kind) : null;
+        try
+        {
+            if (DryRun) { Thread.Sleep(2500); return; }
+            if (!StoreSupport.ShellOpen(target)) { Console.WriteLine("[store-launch] ShellOpen failed: " + target); StoreTrace.Log("store-launch ShellOpen FAILED"); return; }
+            if (gi >= 0) { try { _store.JournalPlayStart(gi); } catch { } }
+            sw.Restart();
+            StoreTrace.Log("store-launch ShellOpen ok — watching for game process…");
+            seen = StoreProcessWatcher.WaitForGame(installDir, regainedFocus);   // process ≥60s→exit, else wait for focus
+            StoreTrace.Log($"store-launch watch done: seen={seen} elapsed={(int)sw.Elapsed.TotalSeconds}s");
+        }
+        catch (Exception ex) { Console.WriteLine("[store-launch] error: " + ex.Message); StoreTrace.Log("store-launch EX: " + ex.Message); }
+        finally
+        {
+            if (killLauncherAfter && !DryRun) { try { StoreProcessWatcher.KillClientsStartedSince(kind, clientsBefore); } catch { } }
+            LaunchedGame.Clear();
+            StoreTrace.Log("store-launch END → GameEnded (hide running screen)");
+            // Record play time only if the game process was actually observed (else the launch likely
+            // failed, or we couldn't track it — don't bill the watcher's wait as play time).
+            if (!DryRun && seen && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
+            try { GameEnded?.Invoke(game); } catch { }   // GUI hides the running screen + reloads its list
+        }
+    }
+
     private static void RunAndWait(IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCmd)
     {
         // Play tracking (our user-state → journal): a real launch bumps play count +

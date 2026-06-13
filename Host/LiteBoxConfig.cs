@@ -71,6 +71,7 @@ internal sealed class LiteBoxConfig
         _kv["ReadOnly"] = "true";
         _kv["ShowGameRunningScreen"] = "true";
         _kv["UnloadListDuringGame"] = "true";
+        _kv["KillStoreLauncherAfterGame"] = "false";
         _kv["UseImageCache"] = "true";
         _kv["UseGameCache"] = "true";
         _kv["UnloadGameCacheDuringGame"] = "true";
@@ -85,6 +86,9 @@ internal sealed class LiteBoxConfig
             sb.AppendLine(";                         changes stay in memory for this run only. Set false to persist.");
             sb.AppendLine("; ShowGameRunningScreen : show a fanart/colour screen while a game runs");
             sb.AppendLine("; UnloadListDuringGame  : free the game list while a game runs, reload after");
+        sb.AppendLine("; KillStoreLauncherAfterGame : when a GOG/Steam game exits, close the store client");
+        sb.AppendLine(";                         (GalaxyClient/Steam) ONLY IF this launch started it (a client you");
+        sb.AppendLine(";                         already had open is left alone). Off by default.");
             sb.AppendLine("; UseImageCache         : use the shared degraded-thumbnail cache for UI images");
             sb.AppendLine("; UseGameCache          : build & use an in-memory media cache (Everything-backed) when");
             sb.AppendLine(";                          ExtendDB is NOT loaded (ExtendDB's own cache is preferred when present).");
@@ -96,6 +100,7 @@ internal sealed class LiteBoxConfig
             sb.AppendLine($"ReadOnly={_kv["ReadOnly"]}");
             sb.AppendLine($"ShowGameRunningScreen={_kv["ShowGameRunningScreen"]}");
             sb.AppendLine($"UnloadListDuringGame={_kv["UnloadListDuringGame"]}");
+            sb.AppendLine($"KillStoreLauncherAfterGame={_kv["KillStoreLauncherAfterGame"]}");
             sb.AppendLine($"UseImageCache={_kv["UseImageCache"]}");
             sb.AppendLine($"UseGameCache={_kv["UseGameCache"]}");
             sb.AppendLine($"UnloadGameCacheDuringGame={_kv["UnloadGameCacheDuringGame"]}");
@@ -127,6 +132,8 @@ internal sealed class LiteBoxConfig
     public bool ReadOnly              { get => GetBool("ReadOnly", true); set => SetBool("ReadOnly", value); }
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
     public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", true); set => SetBool("UnloadListDuringGame", value); }
+    // Close the GOG/Steam client after a store game exits — but only the one THIS launch started.
+    public bool KillStoreLauncherAfterGame { get => GetBool("KillStoreLauncherAfterGame", false); set => SetBool("KillStoreLauncherAfterGame", value); }
     public bool UseImageCache         { get => GetBool("UseImageCache", true); set => SetBool("UseImageCache", value); }
     public bool UseGameCache          { get => GetBool("UseGameCache", true); set => SetBool("UseGameCache", value); }
     public bool UnloadGameCacheDuringGame { get => GetBool("UnloadGameCacheDuringGame", true); set => SetBool("UnloadGameCacheDuringGame", value); }

@@ -53,6 +53,7 @@ internal static class ParentalBridge
     private static PropertyInfo _configProp;   // ParentalControlManager.Config
     private static PropertyInfo _lockedProp;   // ParentalControlManager.LaunchBoxLocked
     private static MethodInfo _showLockDialog;  // ParentalLockPopupForm.ShowFor(IWin32Window)
+    private static MethodInfo _modulesOn;       // ExtendDB.Modules.On(string key)
 
     // ── Snapshot (filled by Refresh) ──────────────────────────────────────────
     private static bool _snap;          // a snapshot has been taken at least once
@@ -83,6 +84,15 @@ internal static class ParentalBridge
 
             _configProp = _mgrType.GetProperty("Config", SP);
             _lockedProp = _mgrType.GetProperty("LaunchBoxLocked", SP);
+
+            // Module gate: ExtendDB.Modules.On("parental"). When the parental
+            // MODULE is disabled the subsystem is off regardless of the config
+            // switches (LaunchBoxEnabled / PIN), so the host must treat parental
+            // as absent — same as launchbox-web. The string overload avoids
+            // reflecting the Module enum value. Absent on older plugins → null,
+            // treated as "on" (back-compat) in Refresh.
+            var modulesType = asm.GetType("ExtendDB.Modules");
+            _modulesOn = modulesType?.GetMethod("On", SP, null, new[] { typeof(string) }, null);
 
             // The lock/unlock popup (with PIN gate) — same entry the parental hotkey uses in LB.
             var popup = asm.GetType("ExtendDB.ParentalLockPopupForm");
@@ -135,7 +145,20 @@ internal static class ParentalBridge
             Type ct = cfg.GetType();
             bool lbEnabled = ReadBool(ct, cfg, "LaunchBoxEnabled");
             bool bbEnabled = ReadBool(ct, cfg, "BigBoxEnabled");
-            _enabled = lbEnabled || bbEnabled;
+
+            // Parental MODULE gate. Disabling the module fully disengages parental
+            // (mirrors ExtendDB's own FilteringActiveLaunchBox / WebParentalState).
+            // Default true when the accessor is missing (older plugin) so existing
+            // setups keep working.
+            bool moduleOn = true;
+            try
+            {
+                if (_modulesOn != null)
+                    moduleOn = _modulesOn.Invoke(null, new object[] { "parental" }) is bool mb && mb;
+            }
+            catch { moduleOn = true; }
+
+            _enabled = moduleOn && (lbEnabled || bbEnabled);
             _forceWeb = ReadBool(ct, cfg, "LaunchBoxForceWeb");
             _locked = _lockedProp != null && _lockedProp.GetValue(null) is bool b && b;
             _hotKey = ct.GetField("HotKey")?.GetValue(cfg) is int hk ? hk : 0;

@@ -99,47 +99,27 @@ internal static class StoreInstallStateSync
     }
 
     // ── GOG: galaxy-2.0.db InstalledBaseProducts ────────────────────────────
-    // ok=true ONLY if we successfully opened and queried the DB (so an empty map means "really nothing
-    // installed"). ok=false on any failure (DB absent, locked, copy/open error) → caller leaves GOG alone.
+    // Result cache on top of the SHARED GalaxyDb snapshot. ok=true only when we
+    // actually have an authoritative map (so empty ⇒ "really nothing installed").
+    // While the source DB + -wal are unchanged (Galaxy idle/closed — the common
+    // case) we return the previous map with ZERO query and ZERO copy; a real
+    // (un)install changes the signature → re-query, and GalaxyDb re-copies the DB
+    // only then (that copy shared with any other galaxy reader, e.g. achievements).
+    private static string? _gogSig;
+    private static Dictionary<string, string>? _gogResult;
+
     private static Dictionary<string, string> ReadGogInstalled(out bool ok)
     {
         ok = false;
+        var src = GalaxyDb.SourceDbPath();
+        if (src == null) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // GOG not installed
+
+        string sig = GalaxyDb.Sig(src);
+        if (_gogResult != null && sig == _gogSig) { ok = true; return _gogResult; }   // nothing changed
+
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        try
+        bool got = GalaxyDb.Read(con =>
         {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                                   "GOG.com", "Galaxy", "storage");
-            var src = Path.Combine(dir, "galaxy-2.0.db");
-            if (!File.Exists(src)) return map;   // GOG not installed → ok stays false (don't touch GOG games)
-            // Snapshot db + WAL to a throwaway temp copy. Delete stale temp copies first so a failed
-            // copy can't leave us reading last run's snapshot.
-            //  • Copy the -wal (Galaxy commits (un)installs there long before it checkpoints the main .db).
-            //  • Do NOT copy the -shm: Galaxy keeps the WAL index in shared memory and the on-disk -shm
-            //    LAGS, so a copied -shm pins SQLite to a stale frame position and it misses the newest
-            //    (un)install. With no -shm, opening ReadWrite forces a full WAL recovery (rebuild the
-            //    index by scanning the entire -wal) → we read the live state.
-            var tmp = Path.Combine(Path.GetTempPath(), "litebox-galaxy-2.0.db");
-            foreach (var suf in new[] { "", "-wal", "-shm" })
-                try { if (File.Exists(tmp + suf)) File.Delete(tmp + suf); } catch { }
-            bool copiedMain = false, copiedWal = false;
-            try { File.Copy(src, tmp, true); copiedMain = true; } catch { }
-            bool srcHasWal = File.Exists(src + "-wal");
-            if (srcHasWal) try { File.Copy(src + "-wal", tmp + "-wal", true); copiedWal = true; } catch { }
-            // Bail as "unknown" (ok=false) if we couldn't snapshot the main db, OR the source has a WAL
-            // we failed to copy — reading the main db without its WAL would report a stale state.
-            if (!copiedMain || !File.Exists(tmp) || (srcHasWal && !copiedWal)) return map;
-            try { SQLitePCL.Batteries_V2.Init(); } catch { }
-            // Pooling=false is REQUIRED: Microsoft.Data.Sqlite pools connections by default, so a
-            // Dispose()d connection keeps the SQLite handle (and the temp db/-wal/-shm files) OPEN.
-            // On the next poll the delete+recopy of the temp -wal then silently fails (files locked),
-            // pinning us to the FIRST snapshot forever. Pooling=false makes Dispose truly close the
-            // handle so each poll re-snapshots cleanly. ReadWrite (on the throwaway copy) lets SQLite
-            // recover the WAL — a ReadOnly conn can't write the -shm WAL reads need and reads stale.
-            using var con = new Microsoft.Data.Sqlite.SqliteConnection(
-                new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = tmp, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWrite, Pooling = false }.ToString());
-            con.Open();
-            // Force the full WAL to be merged so the read can't see a partial frame range.
-            try { using var ck = con.CreateCommand(); ck.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)"; ck.ExecuteNonQuery(); } catch { }
             using var cmd = con.CreateCommand();
             cmd.CommandText = "SELECT productId, installationPath FROM InstalledBaseProducts";
             using var r = cmd.ExecuteReader();
@@ -149,9 +129,12 @@ internal static class StoreInstallStateSync
                 var path = r.IsDBNull(1) ? "" : r.GetString(1);
                 if (!string.IsNullOrEmpty(pid)) map[pid!] = path;
             }
-            ok = true;   // query succeeded — the map is authoritative
-        }
-        catch (Exception ex) { ok = false; Console.WriteLine("[storesync] GOG read: " + ex.Message); }
+        });
+        if (!got) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        ok = true;
+        _gogResult = map;
+        _gogSig = sig;
         return map;
     }
 

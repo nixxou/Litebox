@@ -72,6 +72,8 @@ internal sealed class LiteBoxConfig
         _kv["ShowGameRunningScreen"] = "true";
         _kv["UnloadListDuringGame"] = "true";
         _kv["KillStoreLauncherAfterGame"] = "false";
+        _kv["KillStoreLauncherEvenIfPreRunning"] = "false";
+        _kv["KillStoreLauncherAfterInstall"] = "false";
         _kv["StoreExitFocusFallback"] = "false";
         _kv["UseImageCache"] = "true";
         _kv["UseGameCache"] = "true";
@@ -87,9 +89,16 @@ internal sealed class LiteBoxConfig
             sb.AppendLine(";                         changes stay in memory for this run only. Set false to persist.");
             sb.AppendLine("; ShowGameRunningScreen : show a fanart/colour screen while a game runs");
             sb.AppendLine("; UnloadListDuringGame  : free the game list while a game runs, reload after");
-        sb.AppendLine("; KillStoreLauncherAfterGame : when a GOG/Steam game exits, close the store client");
-        sb.AppendLine(";                         (GalaxyClient/Steam) ONLY IF this launch started it (a client you");
-        sb.AppendLine(";                         already had open is left alone). Off by default.");
+        sb.AppendLine("; KillStoreLauncherAfterGame : when a GOG/Steam/Epic/Ubisoft game exits, close the store");
+        sb.AppendLine(";                         client (GalaxyClient/Steam/EpicGamesLauncher/UbisoftConnect) ONLY IF");
+        sb.AppendLine(";                         this launch started it (a client you already had open is left alone,");
+        sb.AppendLine(";                         unless KillStoreLauncherEvenIfPreRunning is on). Off by default.");
+        sb.AppendLine("; KillStoreLauncherEvenIfPreRunning : with KillStoreLauncher* on, ALSO close the store client");
+        sb.AppendLine(";                         when it was ALREADY running before the launch (default off = only");
+        sb.AppendLine(";                         close an instance LiteBox itself started).");
+        sb.AppendLine("; KillStoreLauncherAfterInstall : also close the store client once an install you triggered");
+        sb.AppendLine(";                         from LiteBox has FINISHED (the game is detected fully installed).");
+        sb.AppendLine(";                         Off by default. Respects KillStoreLauncherEvenIfPreRunning.");
         sb.AppendLine("; StoreExitFocusFallback: how to detect a GOG/Steam/Epic game has EXITED. Default (false)");
         sb.AppendLine(";                         uses ONLY the game's process under its install folder — robust,");
         sb.AppendLine(";                         works on a 2nd monitor. Set true to ALSO fall back to the window-");
@@ -107,6 +116,8 @@ internal sealed class LiteBoxConfig
             sb.AppendLine($"ShowGameRunningScreen={_kv["ShowGameRunningScreen"]}");
             sb.AppendLine($"UnloadListDuringGame={_kv["UnloadListDuringGame"]}");
             sb.AppendLine($"KillStoreLauncherAfterGame={_kv["KillStoreLauncherAfterGame"]}");
+            sb.AppendLine($"KillStoreLauncherEvenIfPreRunning={_kv["KillStoreLauncherEvenIfPreRunning"]}");
+            sb.AppendLine($"KillStoreLauncherAfterInstall={_kv["KillStoreLauncherAfterInstall"]}");
             sb.AppendLine($"StoreExitFocusFallback={_kv["StoreExitFocusFallback"]}");
             sb.AppendLine($"UseImageCache={_kv["UseImageCache"]}");
             sb.AppendLine($"UseGameCache={_kv["UseGameCache"]}");
@@ -139,8 +150,13 @@ internal sealed class LiteBoxConfig
     public bool ReadOnly              { get => GetBool("ReadOnly", true); set => SetBool("ReadOnly", value); }
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
     public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", true); set => SetBool("UnloadListDuringGame", value); }
-    // Close the GOG/Steam client after a store game exits — but only the one THIS launch started.
+    // Close the GOG/Steam/Epic/Ubisoft client after a store game exits — by default only the instance
+    // THIS launch started (see KillStoreLauncherEvenIfPreRunning to override).
     public bool KillStoreLauncherAfterGame { get => GetBool("KillStoreLauncherAfterGame", false); set => SetBool("KillStoreLauncherAfterGame", value); }
+    // With a KillStoreLauncher* option on, also close the client when it was already running before the launch.
+    public bool KillStoreLauncherEvenIfPreRunning { get => GetBool("KillStoreLauncherEvenIfPreRunning", false); set => SetBool("KillStoreLauncherEvenIfPreRunning", value); }
+    // Also close the store client once an install triggered from LiteBox has finished (game fully installed).
+    public bool KillStoreLauncherAfterInstall { get => GetBool("KillStoreLauncherAfterInstall", false); set => SetBool("KillStoreLauncherAfterInstall", value); }
     // Store-game exit detection: false (default) = install-folder process only; true = also use the
     // window-focus fallback when no install-folder process is ever seen (older, flakier).
     public bool StoreExitFocusFallback { get => GetBool("StoreExitFocusFallback", false); set => SetBool("StoreExitFocusFallback", value); }

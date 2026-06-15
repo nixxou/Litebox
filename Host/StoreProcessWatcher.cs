@@ -28,6 +28,7 @@ internal static class StoreProcessWatcher
         StoreKind.Gog   => new[] { "GalaxyClient" },
         StoreKind.Steam => new[] { "steam" },
         StoreKind.Epic  => new[] { "EpicGamesLauncher" },
+        StoreKind.Uplay => new[] { "UbisoftConnect", "upc" },
         _               => Array.Empty<string>(),
     };
 
@@ -55,6 +56,19 @@ internal static class StoreProcessWatcher
                     if (!before.Contains(p.Id)) { p.Kill(); StoreTrace.Log($"killed store launcher {name} pid={p.Id}"); }
                 }
                 catch (Exception ex) { StoreTrace.Log($"kill {name} pid={p.Id} failed: {ex.Message}"); }
+                finally { try { p.Dispose(); } catch { } }
+            }
+    }
+
+    /// <summary>Kill ALL of the store's client processes — including one the user already had running
+    /// before the launch. Used when KillStoreLauncherEvenIfPreRunning is set.</summary>
+    public static void KillAllClients(StoreKind kind)
+    {
+        foreach (var name in ClientNames(kind))
+            foreach (var p in Process.GetProcessesByName(name))
+            {
+                try { p.Kill(); StoreTrace.Log($"killed store launcher {name} pid={p.Id} (all)"); }
+                catch (Exception ex) { StoreTrace.Log($"kill-all {name} pid={p.Id} failed: {ex.Message}"); }
                 finally { try { p.Dispose(); } catch { } }
             }
     }
@@ -193,6 +207,16 @@ internal static class StoreProcessWatcher
                 + (hits.Count > 0 ? ": " + string.Join(" | ", hits.GetRange(0, Math.Min(hits.Count, 6))) : ""));
         }
         catch (Exception ex) { StoreTrace.Log("watch-diag error: " + ex.Message); }
+    }
+
+    /// <summary>True if any running process's image lives under <paramref name="installDir"/> right now
+    /// (the game is running). Used to abort a post-install client kill if the user launches the game during
+    /// the grace window.</summary>
+    public static bool AnyProcessUnder(string? installDir)
+    {
+        if (string.IsNullOrWhiteSpace(installDir)) return false;
+        string dir = installDir!.TrimEnd('\\', '/') + "\\";
+        return FirstPidUnder(dir) != -1;
     }
 
     /// <summary>Full system sweep: returns the PID of the first process whose image lives under

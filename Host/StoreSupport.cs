@@ -21,7 +21,7 @@ using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host;
 
-internal enum StoreKind { None, Gog, Steam, Epic }
+internal enum StoreKind { None, Gog, Steam, Epic, Uplay }
 
 internal static class StoreSupport
 {
@@ -29,6 +29,7 @@ internal static class StoreSupport
         => string.Equals(source, "GOG", StringComparison.OrdinalIgnoreCase) ? StoreKind.Gog
          : string.Equals(source, "Steam", StringComparison.OrdinalIgnoreCase) ? StoreKind.Steam
          : string.Equals(source, "Epic Games", StringComparison.OrdinalIgnoreCase) ? StoreKind.Epic
+         : string.Equals(source, "Uplay", StringComparison.OrdinalIgnoreCase) ? StoreKind.Uplay
          : StoreKind.None;
 
     public static StoreKind KindOf(IGame? game)
@@ -65,6 +66,19 @@ internal static class StoreSupport
         return rest.Length > 0 ? rest : null;
     }
 
+    /// <summary>Extracts the Ubisoft Connect game id from "uplay://launch/{id}" (same number as the
+    /// registry Installs subkey name).</summary>
+    public static string? UplayId(string? applicationPath)
+    {
+        if (string.IsNullOrEmpty(applicationPath)) return null;
+        const string marker = "launch/";
+        int i = applicationPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (i < 0) return null;
+        var rest = applicationPath.Substring(i + marker.Length).Trim();
+        int end = 0; while (end < rest.Length && char.IsDigit(rest[end])) end++;
+        return end > 0 ? rest.Substring(0, end) : null;
+    }
+
     /// <summary>The game's on-disk install folder, used to watch its process for exit (the running
     /// screen). GOG: the folder of the "Launch *.lnk" ApplicationPath. Steam: resolved from the
     /// appmanifest. Null if it can't be determined.</summary>
@@ -92,17 +106,23 @@ internal static class StoreSupport
                 var appName = EpicAppName(game?.ApplicationPath);
                 return appName == null ? null : StoreInstallStateSync.EpicInstallDir(appName);
             }
+            if (kind == StoreKind.Uplay)
+            {
+                var id = UplayId(game?.ApplicationPath);
+                return id == null ? null : StoreInstallStateSync.UplayInstallDir(id);
+            }
         }
         catch { }
         return null;
     }
 
     /// <summary>The store URI that triggers an install for an uninstalled game (delegated to the client).</summary>
-    public static string? InstallUri(StoreKind kind, string? gogAppId, string? steamAppId, string? epicAppName = null) => kind switch
+    public static string? InstallUri(StoreKind kind, string? gogAppId, string? steamAppId, string? epicAppName = null, string? uplayId = null) => kind switch
     {
         StoreKind.Gog when !string.IsNullOrWhiteSpace(gogAppId) => "goggalaxy://openGameView/" + gogAppId!.Trim(),
         StoreKind.Steam when !string.IsNullOrWhiteSpace(steamAppId) => "steam://install/" + steamAppId!.Trim(),
         StoreKind.Epic when !string.IsNullOrWhiteSpace(epicAppName) => "com.epicgames.launcher://apps/" + epicAppName!.Trim() + "?action=install",
+        StoreKind.Uplay when !string.IsNullOrWhiteSpace(uplayId) => "uplay://install/" + uplayId!.Trim(),
         _ => null,
     };
 

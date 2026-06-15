@@ -177,7 +177,7 @@ internal static class HostLaunch
     /// steam:// URI) — the store client owns the process, so there's no Process to WaitForExit on. We
     /// still run the GUI lifecycle (running screen via GameStarted, play-time, GameEnded) and detect
     /// exit by watching the game's install folder for its process (StoreProcessWatcher).</summary>
-    public static void LaunchStore(IGame game, Func<bool> regainedFocus = null, bool killLauncherAfter = false)
+    public static void LaunchStore(IGame game, Func<bool> regainedFocus = null, bool killLauncherAfter = false, bool killEvenIfPreRunning = false)
     {
         if (game == null) return;
         var kind = StoreSupport.KindOf(game);
@@ -186,24 +186,24 @@ internal static class HostLaunch
         if (string.IsNullOrEmpty(target)) return;
         string installDir = StoreSupport.ResolveInstallDir(kind, game);
         Console.WriteLine($"[store-launch] {SafeStr(() => game.Title)} target={target} dir={installDir ?? "(unknown)"}");
-        StoreTrace.Log($"store-launch START '{SafeStr(() => game.Title)}' kind={kind} dir={installDir ?? "(unknown)"} killLauncher={killLauncherAfter}");
+        StoreTrace.Log($"store-launch START '{SafeStr(() => game.Title)}' kind={kind} dir={installDir ?? "(unknown)"} killLauncher={killLauncherAfter} evenIfPreRunning={killEvenIfPreRunning}");
 
         LaunchedGame.Capture(game);                    // before any GUI unload, like the emulator path
         try { GameStarted?.Invoke(game); } catch { }   // GUI shows the running screen + unloads its list
 
-        var t = new Thread(() => RunStoreAndWait(game, kind, target, installDir, regainedFocus, killLauncherAfter))
+        var t = new Thread(() => RunStoreAndWait(game, kind, target, installDir, regainedFocus, killLauncherAfter, killEvenIfPreRunning))
         { IsBackground = true, Name = "LbApiHost-store" };
         t.Start();
     }
 
-    private static void RunStoreAndWait(IGame game, StoreKind kind, string target, string installDir, Func<bool> regainedFocus, bool killLauncherAfter)
+    private static void RunStoreAndWait(IGame game, StoreKind kind, string target, string installDir, Func<bool> regainedFocus, bool killLauncherAfter, bool killEvenIfPreRunning = false)
     {
         int gi = GameIndex(game);
         var sw = Stopwatch.StartNew();
         bool seen = false;
         // Snapshot the store client's PIDs BEFORE launching so we can later kill only the one this launch
-        // starts (a client already open is left alone).
-        var clientsBefore = killLauncherAfter ? StoreProcessWatcher.SnapshotClients(kind) : null;
+        // starts. Skipped when killEvenIfPreRunning is set (we then kill ALL clients regardless).
+        var clientsBefore = (killLauncherAfter && !killEvenIfPreRunning) ? StoreProcessWatcher.SnapshotClients(kind) : null;
         try
         {
             if (DryRun) { Thread.Sleep(2500); return; }
@@ -222,7 +222,15 @@ internal static class HostLaunch
         catch (Exception ex) { Console.WriteLine("[store-launch] error: " + ex.Message); StoreTrace.Log("store-launch EX: " + ex.Message); }
         finally
         {
-            if (killLauncherAfter && !DryRun) { try { StoreProcessWatcher.KillClientsStartedSince(kind, clientsBefore); } catch { } }
+            if (killLauncherAfter && !DryRun)
+            {
+                try
+                {
+                    if (killEvenIfPreRunning) StoreProcessWatcher.KillAllClients(kind);
+                    else StoreProcessWatcher.KillClientsStartedSince(kind, clientsBefore);
+                }
+                catch { }
+            }
             LaunchedGame.Clear();
             StoreTrace.Log("store-launch END → GameEnded (hide running screen)");
             // Record play time only if the game process was actually observed (else the launch likely
@@ -231,6 +239,80 @@ internal static class HostLaunch
             Fire(p => p.OnGameExited());                  // ExtendDB: reopen the kiosk (mirror RunAndWait)
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
         }
+    }
+
+    // ── Store install (delegate to the client) + optional "close client when done" watcher ──
+    private const int InstallPollSeconds = 15;   // how often to re-check install-state
+    private const int InstallWatchHours  = 8;    // give up watching after this (big downloads); never kill on timeout
+    private const int InstallKillGraceSeconds = 5; // after "installed" is detected, wait this long before closing the client
+
+    /// <summary>Trigger a store game's install via the client's URI (the client owns the download). When
+    /// <paramref name="killAfterInstall"/> is set, spawn a background watcher that closes the store client
+    /// once the game is detected FULLY installed (respecting <paramref name="killEvenIfPreRunning"/>).
+    /// Returns true if the install URI was launched.</summary>
+    public static bool InstallStore(IGame game, bool killAfterInstall = false, bool killEvenIfPreRunning = false)
+    {
+        if (game == null) return false;
+        var kind = StoreSupport.KindOf(game);
+        if (kind == StoreKind.None) return false;
+        string appPath = SafeStr(() => game.ApplicationPath) ?? "";
+        string gogAppId = (game as ILiteBoxGame)?.GetField("GogAppId");
+        var uri = StoreSupport.InstallUri(kind, gogAppId, StoreSupport.SteamAppId(appPath),
+                                          StoreSupport.EpicAppName(appPath), StoreSupport.UplayId(appPath));
+        if (string.IsNullOrEmpty(uri)) return false;
+
+        // Snapshot BEFORE firing the URI so a later "started-since" kill targets the instance this install
+        // opens (skipped when we'll kill all clients anyway).
+        var before = (killAfterInstall && !killEvenIfPreRunning) ? StoreProcessWatcher.SnapshotClients(kind) : null;
+        StoreTrace.Log($"store-install '{SafeStr(() => game.Title)}' kind={kind} uri={uri} killAfterInstall={killAfterInstall} evenIfPreRunning={killEvenIfPreRunning}");
+        if (!StoreSupport.ShellOpen(uri)) return false;
+
+        if (killAfterInstall && !DryRun)
+        {
+            var t = new Thread(() => WatchInstallThenKill(game, kind, killEvenIfPreRunning, before))
+            { IsBackground = true, Name = "LbApiHost-store-install" };
+            t.Start();
+        }
+        return true;
+    }
+
+    /// <summary>Poll until the game is confirmed FULLY installed, then close the store client. Bounded so a
+    /// cancelled / stalled install never leaks the thread; on timeout we leave the client open (we never
+    /// kill an install we couldn't confirm finished — that would abort an in-progress download).</summary>
+    private static void WatchInstallThenKill(IGame game, StoreKind kind, bool killEvenIfPreRunning, HashSet<int> before)
+    {
+        var deadline = DateTime.UtcNow.AddHours(InstallWatchHours);
+        StoreTrace.Log($"install-watch START '{SafeStr(() => game.Title)}' kind={kind}");
+        try
+        {
+            // Sleep-then-check: a freshly-triggered install isn't installed yet, and the first tick gives
+            // the client time to register the download before we ever test "installed".
+            while (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(InstallPollSeconds * 1000);
+                bool installed = false;
+                try { installed = StoreInstallStateSync.IsGameInstalled(game); } catch { }
+                if (installed)
+                {
+                    // Grace delay: let the client finish its post-install bookkeeping (final state write,
+                    // shortcuts, the "installed" UI) before we close it. BUT if the user launches the game
+                    // during this window, abort the kill — the client may be needed to run it.
+                    string dir = StoreSupport.ResolveInstallDir(kind, game);
+                    StoreTrace.Log($"install-watch: game now installed → closing client in {InstallKillGraceSeconds}s (unless the game starts)");
+                    for (int i = 0; i < InstallKillGraceSeconds; i++)
+                    {
+                        Thread.Sleep(1000);
+                        if (StoreProcessWatcher.AnyProcessUnder(dir))
+                        { StoreTrace.Log("install-watch: game launched during grace → kill cancelled"); return; }
+                    }
+                    if (killEvenIfPreRunning) StoreProcessWatcher.KillAllClients(kind);
+                    else StoreProcessWatcher.KillClientsStartedSince(kind, before);
+                    return;
+                }
+            }
+            StoreTrace.Log("install-watch: timed out — leaving client open (install not confirmed)");
+        }
+        catch (Exception ex) { StoreTrace.Log("install-watch error: " + ex.Message); }
     }
 
     private static void RunAndWait(IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCmd)

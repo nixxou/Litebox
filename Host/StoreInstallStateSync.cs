@@ -18,6 +18,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LbApiHost.Host.Data;
+using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host;
 
@@ -32,12 +33,58 @@ internal static class StoreInstallStateSync
         catch (Exception ex) { Console.WriteLine("[storesync] failed: " + ex.Message); return 0; }
     }
 
+    /// <summary>Is THIS single store game currently FULLY installed? Uses the same per-store readers as
+    /// <see cref="Sync"/> (so it respects Steam StateFullyInstalled, Epic bIsIncompleteInstall=false, the
+    /// GOG galaxy map, and the Ubisoft registry InstallDir). false for a non-store game or one whose
+    /// client state can't be read. Used by the post-install "close client when done" watcher.</summary>
+    public static bool IsGameInstalled(IGame game)
+    {
+        if (game == null) return false;
+        try
+        {
+            switch (StoreSupport.KindOf(game))
+            {
+                case StoreKind.Gog:
+                {
+                    var id = (game as ILiteBoxGame)?.GetField("GogAppId")?.Trim();
+                    if (string.IsNullOrEmpty(id)) return false;
+                    var map = ReadGogInstalled(out bool ok);
+                    return ok && map.ContainsKey(id!);
+                }
+                case StoreKind.Steam:
+                {
+                    var appid = StoreSupport.SteamAppId(game.ApplicationPath);
+                    if (appid == null) return false;
+                    var set = ReadSteamInstalled(out bool ok);
+                    return ok && set.Contains(appid);
+                }
+                case StoreKind.Epic:
+                {
+                    var appName = StoreSupport.EpicAppName(game.ApplicationPath);
+                    if (appName == null) return false;
+                    var map = ReadEpicInstalled(out bool ok);
+                    return ok && map.ContainsKey(appName);
+                }
+                case StoreKind.Uplay:
+                {
+                    var id = StoreSupport.UplayId(game.ApplicationPath);
+                    if (id == null) return false;
+                    var map = ReadUplayInstalled(out bool ok);
+                    return ok && map.ContainsKey(id);
+                }
+                default: return false;
+            }
+        }
+        catch { return false; }
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]   // typed Sqlite refs isolated for soft-fail JIT
     private static int SyncCore(GameStore store, bool quiet)
     {
         var gog = ReadGogInstalled(out bool gogOk);      // gogAppId(string) → installationPath
         var steam = ReadSteamInstalled(out bool steamOk); // set of installed steam appids
         var epic = ReadEpicInstalled(out bool epicOk);   // epic appName → InstallLocation (complete installs)
+        var uplay = ReadUplayInstalled(out bool uplayOk); // uplay id → InstallDir (registry)
         int changed = 0;
 
         // CRITICAL: only act on a store whose client state we actually READ. If the GOG DB / Steam
@@ -91,10 +138,21 @@ internal static class StoreInstallStateSync
                 { store.SetGameField(i, "Installed", installed ? "true" : "false"); changed++; StoreTrace.Log($"EPIC '{store.Str(store.Rows[i].TitleIdx)}' [{appName}] Installed {curInstalled}->{installed}"); }
                 // Epic ApplicationPath is the constant launch URI regardless of install state — unchanged.
             }
+            else if (kind == StoreKind.Uplay)
+            {
+                if (!uplayOk) continue;
+                var id = StoreSupport.UplayId(store.Str(store.Rows[i].AppPathIdx));
+                if (id == null) continue;
+                bool curInstalled = store.Rows[i].Installed == 2;
+                bool installed = uplay.ContainsKey(id);
+                if (installed != curInstalled)
+                { store.SetGameField(i, "Installed", installed ? "true" : "false"); changed++; StoreTrace.Log($"UPLAY '{store.Str(store.Rows[i].TitleIdx)}' [{id}] Installed {curInstalled}->{installed}"); }
+                // Uplay ApplicationPath is uplay://launch/{id} regardless of install state — unchanged.
+            }
         }
-        StoreTrace.Log($"sync gog(ok={gogOk},n={gog.Count}) steam(ok={steamOk},n={steam.Count}) epic(ok={epicOk},n={epic.Count}) changed={changed}");
-        if (!quiet || changed > 0 || !gogOk || !steamOk || !epicOk)
-            Console.WriteLine($"[storesync] gog(ok={gogOk},n={gog.Count}) steam(ok={steamOk},n={steam.Count}) epic(ok={epicOk},n={epic.Count}) fieldsChanged={changed}");
+        StoreTrace.Log($"sync gog(ok={gogOk},n={gog.Count}) steam(ok={steamOk},n={steam.Count}) epic(ok={epicOk},n={epic.Count}) uplay(ok={uplayOk},n={uplay.Count}) changed={changed}");
+        if (!quiet || changed > 0 || !gogOk || !steamOk || !epicOk || !uplayOk)
+            Console.WriteLine($"[storesync] gog(ok={gogOk},n={gog.Count}) steam(ok={steamOk},n={steam.Count}) epic(ok={epicOk},n={epic.Count}) uplay(ok={uplayOk},n={uplay.Count}) fieldsChanged={changed}");
         return changed;
     }
 
@@ -275,6 +333,51 @@ internal static class StoreInstallStateSync
     {
         var map = ReadEpicInstalled(out _);
         return map.TryGetValue(appName, out var loc) && Directory.Exists(loc) ? loc : null;
+    }
+
+    // ── Ubisoft Connect (Uplay): registry Installs\{id}\InstallDir ──────────
+    // Ubisoft Connect (ex-Uplay) is a 32-bit app → it writes its install records
+    // under WOW6432Node; we read the 32-bit registry view explicitly. A game is
+    // installed when its {id} subkey's InstallDir points to an existing folder
+    // (id = the number in uplay://launch/{id}). ok=true once Connect itself is
+    // present (so an empty map = nothing installed); absent → ok=false → caller
+    // leaves Uplay games alone. The ApplicationPath (uplay://launch/{id}) is
+    // constant regardless of install state — only the Installed flag flips.
+    private static Dictionary<string, string> ReadUplayInstalled(out bool ok)
+    {
+        ok = false;
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var hklm32 = Microsoft.Win32.RegistryKey.OpenBaseKey(
+                Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry32);
+            using var launcher = hklm32.OpenSubKey(@"SOFTWARE\Ubisoft\Launcher");
+            if (launcher == null) return map;          // Ubisoft Connect not installed → leave Uplay games alone
+            ok = true;                                  // Connect present → authoritative
+            using var installs = launcher.OpenSubKey("Installs");
+            if (installs == null) return map;           // no Ubisoft game installed yet
+            foreach (var id in installs.GetSubKeyNames())
+            {
+                try
+                {
+                    using var gk = installs.OpenSubKey(id);
+                    var dir = gk?.GetValue("InstallDir") as string;
+                    if (string.IsNullOrWhiteSpace(dir)) continue;
+                    var norm = dir!.Replace('/', '\\');
+                    if (Directory.Exists(norm)) map[id] = norm;   // only count truly-present installs
+                }
+                catch { }
+            }
+        }
+        catch (Exception ex) { ok = false; Console.WriteLine("[storesync] Uplay read: " + ex.Message); }
+        return map;
+    }
+
+    /// <summary>The Ubisoft Connect install folder for a uplay id (registry InstallDir), or null. For the exit watcher.</summary>
+    public static string? UplayInstallDir(string id)
+    {
+        var map = ReadUplayInstalled(out _);
+        return map.TryGetValue(id, out var dir) && Directory.Exists(dir) ? dir : null;
     }
 
     // {AppDataPath}\Manifests — AppDataPath from the EGL registry key, else the ProgramData default.

@@ -61,6 +61,7 @@ internal static class ParentalBridge
     private static bool _enabled;       // LaunchBoxEnabled || BigBoxEnabled
     private static bool _locked;        // LaunchBoxLocked
     private static bool _forceWeb;      // LaunchBoxForceWeb
+    private static bool _blockInstall;  // BlockInstallWhenLocked (gate store installs behind the PIN)
     private static bool _whitelist;     // Mode == Whitelist
     private static int _hotKey;         // ParentalControlConfig.HotKey (WinForms Keys value; 0 = none)
     private static Regex[] _ruleRegex = Array.Empty<Regex>();
@@ -129,7 +130,7 @@ internal static class ParentalBridge
         Probe();
         _snap = true;
         _present = false;
-        _enabled = _locked = _forceWeb = _whitelist = false;
+        _enabled = _locked = _forceWeb = _whitelist = _blockInstall = false;
         _hotKey = 0;
         _ruleRegex = Array.Empty<Regex>();
         _hiddenOn = new(StringComparer.OrdinalIgnoreCase);
@@ -160,6 +161,7 @@ internal static class ParentalBridge
 
             _enabled = moduleOn && (lbEnabled || bbEnabled);
             _forceWeb = ReadBool(ct, cfg, "LaunchBoxForceWeb");
+            _blockInstall = ReadBool(ct, cfg, "BlockInstallWhenLocked");   // gate store installs behind the PIN
             _locked = _lockedProp != null && _lockedProp.GetValue(null) is bool b && b;
             _hotKey = ct.GetField("HotKey")?.GetValue(cfg) is int hk ? hk : 0;
 
@@ -214,6 +216,10 @@ internal static class ParentalBridge
 
     /// <summary>True when the "force web" block-all is in effect (hide EVERY game, any rating).</summary>
     public static bool ForceAll { get { EnsureSnapshot(); return Active && _forceWeb; } }
+
+    /// <summary>True when installing a store game must be gated behind the PIN (active + locked +
+    /// the BlockInstallWhenLocked option). The store Install button shows the unlock dialog first.</summary>
+    public static bool InstallNeedsUnlock { get { EnsureSnapshot(); return _present && _enabled && _locked && _blockInstall; } }
 
     /// <summary>True when a game with this ESRB/age rating should be VISIBLE. Allow-all when inactive.</summary>
     public static bool IsRatingAllowed(string rating)

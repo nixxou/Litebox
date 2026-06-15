@@ -410,6 +410,15 @@ internal sealed class LaunchButtons : Panel
             return;
         }
 
+        // Parental: when locked AND the BlockInstallWhenLocked option is set, gate the install
+        // behind the PIN — show the unlock dialog first and bail if the user didn't unlock.
+        if (ParentalBridge.InstallNeedsUnlock)
+        {
+            ParentalBridge.ShowLockDialog(FindForm());
+            ParentalBridge.Refresh();                        // re-read lock state after the dialog
+            if (ParentalBridge.InstallNeedsUnlock) return;   // still locked (cancel / wrong PIN) → abort
+        }
+
         // Not installed → delegate the install to the store client via its URI.
         var gogAppId = (_game as ILiteBoxGame)?.GetField("GogAppId");
         var steamAppId = StoreSupport.SteamAppId(appPath);

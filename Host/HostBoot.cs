@@ -116,6 +116,11 @@ internal static class HostBoot
 
         EventBus.FirePluginInitialized(reg);
 
+        // Let ExtendDB's Similar-Games viewer jump to an owned game in-host (instead of
+        // opening a web page). No-op if ExtendDB is absent / too old. The callback finds
+        // the MainWindow lazily, so registering here (before the window exists) is fine.
+        Media.HostGameNavBridge.Register();
+
         // ── Host GameCache (backported) ─────────────────────────────────────
         // Build & use our own in-memory media cache ONLY when ExtendDB isn't providing one
         // (ExtendDB's own GameCache is preferred when the plugin is loaded). Everything's native

@@ -1130,6 +1130,48 @@ internal sealed class MainWindow : Form
         }
     }
 
+    /// <summary>
+    /// Navigates to / selects the game whose IGame.Id is <paramref name="gameId"/>.
+    /// If the game isn't in the currently-loaded list, jumps to the "All" node first
+    /// (so any owned game is reachable regardless of the current tree filter), then
+    /// selects it and shows its details. Returns false when the id is unknown.
+    /// Called by HostGameNavBridge for ExtendDB's Similar-Games viewer.
+    /// </summary>
+    public bool SelectGameById(string gameId)
+    {
+        if (string.IsNullOrEmpty(gameId)) return false;
+
+        IGame game = null;
+        try
+        {
+            var all = _dm?.GetAllGames();
+            if (all != null)
+                game = all.FirstOrDefault(x => string.Equals(Safe(() => x.Id), gameId, StringComparison.OrdinalIgnoreCase));
+        }
+        catch { }
+        if (game == null) return false;
+
+        try
+        {
+            if (Array.IndexOf(_current, game) < 0)
+            {
+                // Not in the current view → switch to "All" (mirrors RestoreSelection:
+                // visual select + a direct synchronous LoadNode so the list is filled).
+                if (_treeNodeMap.TryGetValue(AllNode.Instance, out var tn))
+                {
+                    _sources.SelectedNode = tn;
+                    try { tn.EnsureVisible(); } catch { }
+                }
+                LoadNode(AllNode.Instance);
+            }
+            _games.SelectGame(game, true);
+            ShowDetails(game);
+            try { Activate(); BringToFront(); } catch { }
+            return true;
+        }
+        catch { return false; }
+    }
+
     /// <summary>Stable key for a tree node, persisted as LastCategory.</summary>
     private static string NodeKey(object node)
     {

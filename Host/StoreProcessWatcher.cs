@@ -209,16 +209,6 @@ internal static class StoreProcessWatcher
         catch (Exception ex) { StoreTrace.Log("watch-diag error: " + ex.Message); }
     }
 
-    /// <summary>True if any running process's image lives under <paramref name="installDir"/> right now
-    /// (the game is running). Used to abort a post-install client kill if the user launches the game during
-    /// the grace window.</summary>
-    public static bool AnyProcessUnder(string? installDir)
-    {
-        if (string.IsNullOrWhiteSpace(installDir)) return false;
-        string dir = installDir!.TrimEnd('\\', '/') + "\\";
-        return FirstPidUnder(dir) != -1;
-    }
-
     /// <summary>Full system sweep: returns the PID of the first process whose image lives under
     /// <paramref name="dirWithSep"/>, or -1 if none. Expensive (enumerates every process) — only used
     /// while hunting for the game, never once a PID is locked on.</summary>

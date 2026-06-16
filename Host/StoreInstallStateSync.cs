@@ -18,7 +18,6 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LbApiHost.Host.Data;
-using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host;
 
@@ -31,51 +30,6 @@ internal static class StoreInstallStateSync
         if (store == null) return 0;
         try { return SyncCore(store, quiet); }
         catch (Exception ex) { Console.WriteLine("[storesync] failed: " + ex.Message); return 0; }
-    }
-
-    /// <summary>Is THIS single store game currently FULLY installed? Uses the same per-store readers as
-    /// <see cref="Sync"/> (so it respects Steam StateFullyInstalled, Epic bIsIncompleteInstall=false, the
-    /// GOG galaxy map, and the Ubisoft registry InstallDir). false for a non-store game or one whose
-    /// client state can't be read. Used by the post-install "close client when done" watcher.</summary>
-    public static bool IsGameInstalled(IGame game)
-    {
-        if (game == null) return false;
-        try
-        {
-            switch (StoreSupport.KindOf(game))
-            {
-                case StoreKind.Gog:
-                {
-                    var id = (game as ILiteBoxGame)?.GetField("GogAppId")?.Trim();
-                    if (string.IsNullOrEmpty(id)) return false;
-                    var map = ReadGogInstalled(out bool ok);
-                    return ok && map.ContainsKey(id!);
-                }
-                case StoreKind.Steam:
-                {
-                    var appid = StoreSupport.SteamAppId(game.ApplicationPath);
-                    if (appid == null) return false;
-                    var set = ReadSteamInstalled(out bool ok);
-                    return ok && set.Contains(appid);
-                }
-                case StoreKind.Epic:
-                {
-                    var appName = StoreSupport.EpicAppName(game.ApplicationPath);
-                    if (appName == null) return false;
-                    var map = ReadEpicInstalled(out bool ok);
-                    return ok && map.ContainsKey(appName);
-                }
-                case StoreKind.Uplay:
-                {
-                    var id = StoreSupport.UplayId(game.ApplicationPath);
-                    if (id == null) return false;
-                    var map = ReadUplayInstalled(out bool ok);
-                    return ok && map.ContainsKey(id);
-                }
-                default: return false;
-            }
-        }
-        catch { return false; }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]   // typed Sqlite refs isolated for soft-fail JIT

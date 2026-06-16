@@ -208,8 +208,7 @@ internal sealed class MainWindow : Form
         _launchButtons = new LaunchButtons(
             (g, app, emu) => Safe(() => PluginHelper.LaunchBoxMainViewModel.PlayGame(g, app, emu, null)),
             StoreLaunch,   // GOG/Steam: running screen + exit watch
-            g => (_dm as HostDataManagerXml)?.GetLastLaunch(Safe(() => g.Id)),   // launch-button initial selection fallback (no ExtendDB)
-            g => HostLaunch.InstallStore(g, _cfg.KillStoreLauncherAfterInstall, _cfg.KillStoreLauncherEvenIfPreRunning));   // store install (+optional close-on-done)
+            g => (_dm as HostDataManagerXml)?.GetLastLaunch(Safe(() => g.Id)));   // launch-button initial selection fallback (no ExtendDB)
         inner.Panel2.Controls.Add(_launchButtons);
         inner.Panel1.Resize += (_, _) => LayoutPoster();   // keep the poster grid centred on resize
 
@@ -1023,14 +1022,9 @@ internal sealed class MainWindow : Form
                 + "(a client you already had running is left alone). Applies to the next launch."),
             Options.OptionItem.Toggle("General", "Store games: close the client even if it was already running",
                 () => _cfg.KillStoreLauncherEvenIfPreRunning, v => _cfg.KillStoreLauncherEvenIfPreRunning = v,
-                "Only matters when a 'close the store client' option is on. Off (default): leave a client "
+                "Only matters when 'close the store client on game exit' is on. Off (default): leave a client "
                 + "you already had open before the launch. On: close it too (kill ALL of that store's client "
                 + "processes, not just the one LiteBox started)."),
-            Options.OptionItem.Toggle("General", "Store games: close the store client after an install",
-                () => _cfg.KillStoreLauncherAfterInstall, v => _cfg.KillStoreLauncherAfterInstall = v,
-                "Off (default): after you trigger an install from LiteBox, the store client stays open. "
-                + "On: LiteBox watches the install and closes the client once the game is fully installed "
-                + "(it never closes mid-download). Respects the 'even if already running' option."),
         });
 
         w.AddSection("Display", new[]

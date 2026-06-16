@@ -35,7 +35,6 @@ internal sealed class LaunchButtons : Panel
     private readonly Button _play, _caret, _version, _rom;
     private readonly Action<IGame, IAdditionalApplication?, IEmulator?> _playGame;
     private readonly Action<IGame>? _storeLaunch;   // installed GOG/Steam game → store launch lifecycle
-    private readonly Func<IGame, bool>? _storeInstall;   // not-installed store game → trigger install (+optional close-on-done)
     private readonly Func<IGame, (string? emuId, string? appId)?>? _lastLaunchFallback;   // LiteBox history (used when ExtendDB absent)
 
     // Current subject + choices.
@@ -59,11 +58,10 @@ internal sealed class LaunchButtons : Panel
     private StoreKind _storeKind;
 
     public LaunchButtons(Action<IGame, IAdditionalApplication?, IEmulator?> playGame, Action<IGame>? storeLaunch = null,
-        Func<IGame, (string? emuId, string? appId)?>? lastLaunchFallback = null, Func<IGame, bool>? storeInstall = null)
+        Func<IGame, (string? emuId, string? appId)?>? lastLaunchFallback = null)
     {
         _playGame = playGame;
         _storeLaunch = storeLaunch;
-        _storeInstall = storeInstall;
         _lastLaunchFallback = lastLaunchFallback;
         Dock = DockStyle.Bottom;
         BackColor = Bg;
@@ -421,19 +419,11 @@ internal sealed class LaunchButtons : Panel
             if (ParentalBridge.InstallNeedsUnlock) return;   // still locked (cancel / wrong PIN) → abort
         }
 
-        // Not installed → delegate the install to the store client (it owns the download). Routed through
-        // the host so the optional "close the client once the install finishes" watcher can run; falls back
-        // to a direct URI ShellOpen if no installer was wired.
-        bool started;
-        if (_storeInstall != null) started = _storeInstall(_game!);
-        else
-        {
-            var gogAppId = (_game as ILiteBoxGame)?.GetField("GogAppId");
-            var uri = StoreSupport.InstallUri(_storeKind, gogAppId, StoreSupport.SteamAppId(appPath),
-                                              StoreSupport.EpicAppName(appPath), StoreSupport.UplayId(appPath));
-            started = !string.IsNullOrEmpty(uri) && StoreSupport.ShellOpen(uri);
-        }
-        if (!started)
+        // Not installed → delegate the install to the store client via its URI (the client owns the download).
+        var gogAppId = (_game as ILiteBoxGame)?.GetField("GogAppId");
+        var uri = StoreSupport.InstallUri(_storeKind, gogAppId, StoreSupport.SteamAppId(appPath),
+                                          StoreSupport.EpicAppName(appPath), StoreSupport.UplayId(appPath));
+        if (string.IsNullOrEmpty(uri) || !StoreSupport.ShellOpen(uri))
         {
             MessageBox.Show("Couldn't start the install. Make sure the GOG Galaxy / Steam / Epic / Ubisoft client is installed.",
                 "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);

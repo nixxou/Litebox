@@ -198,7 +198,7 @@ internal sealed class LaunchButtons : Panel
         if (_storeKind != StoreKind.None)
         {
             bool installed = Safe(() => _game?.Installed) == true;
-            string store = _storeKind switch { StoreKind.Gog => "GOG", StoreKind.Steam => "Steam", StoreKind.Epic => "Epic", StoreKind.Uplay => "Ubisoft", _ => "Store" };
+            string store = _storeKind switch { StoreKind.Gog => "GOG", StoreKind.Steam => "Steam", StoreKind.Epic => "Epic", StoreKind.Uplay => "Ubisoft", StoreKind.Ea => "EA", _ => "Store" };
             _play.Text = installed ? "▶  Play (" + store + ")" : "↓  Install on " + store;
             _play.BackColor = installed ? PlayCol : InstallCol;   // muted yellow for Install
             _caret.Visible = false;
@@ -422,10 +422,10 @@ internal sealed class LaunchButtons : Panel
         // Not installed → delegate the install to the store client via its URI (the client owns the download).
         var gogAppId = (_game as ILiteBoxGame)?.GetField("GogAppId");
         var uri = StoreSupport.InstallUri(_storeKind, gogAppId, StoreSupport.SteamAppId(appPath),
-                                          StoreSupport.EpicAppName(appPath), StoreSupport.UplayId(appPath));
+                                          StoreSupport.EpicAppName(appPath), StoreSupport.UplayId(appPath), StoreSupport.EaId(appPath));
         if (string.IsNullOrEmpty(uri) || !StoreSupport.ShellOpen(uri))
         {
-            MessageBox.Show("Couldn't start the install. Make sure the GOG Galaxy / Steam / Epic / Ubisoft client is installed.",
+            MessageBox.Show("Couldn't start the install. Make sure the GOG Galaxy / Steam / Epic / Ubisoft / EA client is installed.",
                 "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
@@ -436,6 +436,7 @@ internal sealed class LaunchButtons : Panel
             StoreKind.Steam => "Opening Steam's install dialog.",
             StoreKind.Epic  => "Opening the Epic Games Launcher — click Install there to download the game.",
             StoreKind.Uplay => "Opening Ubisoft Connect — click Install there to download the game.",
+            StoreKind.Ea    => "Opening the EA app — click Install there to download the game.",
             _               => "Opening the store client.",
         };
         MessageBox.Show(msg + "\nLiteBox will pick up the installed game once it's done (it re-checks automatically).",

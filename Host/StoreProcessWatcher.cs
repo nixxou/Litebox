@@ -29,6 +29,7 @@ internal static class StoreProcessWatcher
         StoreKind.Steam => new[] { "steam" },
         StoreKind.Epic  => new[] { "EpicGamesLauncher" },
         StoreKind.Uplay => new[] { "UbisoftConnect", "upc" },
+        StoreKind.Ea    => new[] { "EADesktop" },
         _               => Array.Empty<string>(),
     };
 

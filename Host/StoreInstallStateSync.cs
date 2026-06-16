@@ -39,6 +39,7 @@ internal static class StoreInstallStateSync
         var steam = ReadSteamInstalled(out bool steamOk); // set of installed steam appids
         var epic = ReadEpicInstalled(out bool epicOk);   // epic appName → InstallLocation (complete installs)
         var uplay = ReadUplayInstalled(out bool uplayOk); // uplay id → InstallDir (registry)
+        var ea = ReadEaInstalled(out bool eaOk);          // ea contentId → install folder (installerdata.xml)
         int changed = 0;
 
         // CRITICAL: only act on a store whose client state we actually READ. If the GOG DB / Steam
@@ -103,10 +104,21 @@ internal static class StoreInstallStateSync
                 { store.SetGameField(i, "Installed", installed ? "true" : "false"); changed++; StoreTrace.Log($"UPLAY '{store.Str(store.Rows[i].TitleIdx)}' [{id}] Installed {curInstalled}->{installed}"); }
                 // Uplay ApplicationPath is uplay://launch/{id} regardless of install state — unchanged.
             }
+            else if (kind == StoreKind.Ea)
+            {
+                if (!eaOk) continue;
+                var id = StoreSupport.EaId(store.Str(store.Rows[i].AppPathIdx));
+                if (id == null) continue;
+                bool curInstalled = store.Rows[i].Installed == 2;
+                bool installed = ea.ContainsKey(id);
+                if (installed != curInstalled)
+                { store.SetGameField(i, "Installed", installed ? "true" : "false"); changed++; StoreTrace.Log($"EA '{store.Str(store.Rows[i].TitleIdx)}' [{id}] Installed {curInstalled}->{installed}"); }
+                // EA ApplicationPath is ea://{id} regardless of install state — unchanged.
+            }
         }
-        StoreTrace.Log($"sync gog(ok={gogOk},n={gog.Count}) steam(ok={steamOk},n={steam.Count}) epic(ok={epicOk},n={epic.Count}) uplay(ok={uplayOk},n={uplay.Count}) changed={changed}");
-        if (!quiet || changed > 0 || !gogOk || !steamOk || !epicOk || !uplayOk)
-            Console.WriteLine($"[storesync] gog(ok={gogOk},n={gog.Count}) steam(ok={steamOk},n={steam.Count}) epic(ok={epicOk},n={epic.Count}) uplay(ok={uplayOk},n={uplay.Count}) fieldsChanged={changed}");
+        StoreTrace.Log($"sync gog(ok={gogOk},n={gog.Count}) steam(ok={steamOk},n={steam.Count}) epic(ok={epicOk},n={epic.Count}) uplay(ok={uplayOk},n={uplay.Count}) ea(ok={eaOk},n={ea.Count}) changed={changed}");
+        if (!quiet || changed > 0 || !gogOk || !steamOk || !epicOk || !uplayOk || !eaOk)
+            Console.WriteLine($"[storesync] gog(ok={gogOk},n={gog.Count}) steam(ok={steamOk},n={steam.Count}) epic(ok={epicOk},n={epic.Count}) uplay(ok={uplayOk},n={uplay.Count}) ea(ok={eaOk},n={ea.Count}) fieldsChanged={changed}");
         return changed;
     }
 
@@ -331,6 +343,68 @@ internal static class StoreInstallStateSync
     public static string? UplayInstallDir(string id)
     {
         var map = ReadUplayInstalled(out _);
+        return map.TryGetValue(id, out var dir) && Directory.Exists(dir) ? dir : null;
+    }
+
+    // ── EA app (EA Desktop): contentId → install folder, from per-game manifests ──────
+    // Each installed game sits under the EA games root (machine.downloadinplacedir in
+    // C:\ProgramData\EA Desktop\machine.ini; default C:\Program Files\EA Games) with a
+    // <game>\__Installer\installerdata.xml whose <contentID> entries are the EA offer ids
+    // (== the id in ea://{id}). The folder/file vanish on uninstall, so this reflects REAL
+    // install state (the Origin Games\{id} registry key is ownership and persists, so it's
+    // not used). Legacy Origin (ProgramData\Origin\LocalContent\*.mfst) is EOL (Apr 2025).
+    // ok=true once EA Desktop itself is present (machine.ini), so an empty map = nothing
+    // installed; absent → ok=false → caller leaves EA games alone. ApplicationPath
+    // (ea://{id}) is constant regardless of install state — only the Installed flag flips.
+    private static Dictionary<string, string> ReadEaInstalled(out bool ok)
+    {
+        ok = false;
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            if (!File.Exists(@"C:\ProgramData\EA Desktop\machine.ini")) return map;   // EA app not installed
+            ok = true;
+            var root = EaGamesRoot();
+            if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) return map;     // present, nothing installed
+            foreach (var dir in Directory.EnumerateDirectories(root))
+            {
+                try
+                {
+                    var xml = Path.Combine(dir, "__Installer", "installerdata.xml");
+                    if (!File.Exists(xml)) continue;
+                    foreach (Match m in Regex.Matches(File.ReadAllText(xml), "<contentID>(\\d+)</contentID>"))
+                        map[m.Groups[1].Value] = dir;
+                }
+                catch { }
+            }
+        }
+        catch (Exception ex) { ok = false; Console.WriteLine("[storesync] EA read: " + ex.Message); }
+        return map;
+    }
+
+    // EA Desktop's games install root: machine.downloadinplacedir, or the default EA Games dir.
+    private static string EaGamesRoot()
+    {
+        try
+        {
+            const string ini = @"C:\ProgramData\EA Desktop\machine.ini";
+            const string key = "machine.downloadinplacedir=";
+            if (File.Exists(ini))
+                foreach (var line in File.ReadAllLines(ini))
+                {
+                    var t = line.Trim();
+                    if (t.StartsWith(key, StringComparison.OrdinalIgnoreCase))
+                        return t.Substring(key.Length).Trim();
+                }
+        }
+        catch { }
+        return @"C:\Program Files\EA Games";
+    }
+
+    /// <summary>The EA install folder for a content id, or null. For the exit watcher.</summary>
+    public static string? EaInstallDir(string id)
+    {
+        var map = ReadEaInstalled(out _);
         return map.TryGetValue(id, out var dir) && Directory.Exists(dir) ? dir : null;
     }
 

@@ -141,6 +141,24 @@ internal sealed class LiteBoxConfig
         => int.TryParse(Get(key), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : def;
     public void SetInt(string key, int val) => _kv[key] = val.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
+    // ── Enabled plugins (replaces whitelist.txt) ───────────────────────────────
+    // Comma-separated folder names under <LB>\Plugins. KEY ABSENT (null) means
+    // "never configured" → the host defaults to enabling every folder present.
+    // An empty value means "none enabled".
+    public System.Collections.Generic.List<string> GetEnabledPluginsOrNull()
+    {
+        if (!_kv.ContainsKey("EnabledPlugins")) return null;
+        var list = new System.Collections.Generic.List<string>();
+        foreach (var p in (Get("EnabledPlugins") ?? "").Split(','))
+        {
+            var t = p.Trim();
+            if (t.Length > 0) list.Add(t);
+        }
+        return list;
+    }
+    public void SetEnabledPlugins(System.Collections.Generic.IEnumerable<string> names)
+        => Set("EnabledPlugins", string.Join(",", names));
+
     // ── Typed options ────────────────────────────────────────────────────────
     public bool ReadOnly              { get => GetBool("ReadOnly", true); set => SetBool("ReadOnly", value); }
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }

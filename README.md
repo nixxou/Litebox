@@ -105,8 +105,10 @@ Optional (extra standalone capabilities):
   Auto-deploys to `<LaunchBox>\ThirdParty\Everything\Everything64.dll` on first
   run; absent it (or the Everything service), the cache falls back to `Directory`.
 
-Optional: a `whitelist.txt` in `Core` (one plugin folder name per line, subfolders
-of `<LaunchBox>\Plugins`) to activate plugins; without it LiteBox runs standalone.
+Plugins are chosen in **Options ▸ Plugins** (a checklist of the subfolders of
+`<LaunchBox>\Plugins`); the selection is saved to `LiteBox.ini` and applied at the
+next restart. Until you change it, LiteBox enables every plugin folder it finds (a
+DLL in an immediate subfolder is enough — e.g. `Plugins\ExtendDB\ExtendDB.dll`).
 `LiteBox.ini` (config) is auto-created next to the exe on first run.
 
 ## Run
@@ -132,6 +134,26 @@ LiteBox.exe --selftest-writeback  round-trips the write-back op-log on temp file
   image cache** (degraded thumbnails).
 - **Use game cache** (when ExtendDB is absent) + **Unload game cache during game**.
 - **Use 16:9 for the main media** (else poster ratio).
+
+The options window also carries **LaunchBox-replica categories** that round-trip to
+LaunchBox's own `Settings.xml` (real LB field names, so LB/BigBox stay in sync):
+
+- **Plugins** — checklist of the `<LaunchBox>\Plugins` subfolders to load; applied
+  at the next restart (see *Deploy* above).
+- **LB · Gameplay** — three tabs that drive LiteBox's own game-launch screens:
+  - *Game Startup* — the startup ("NOW LOADING…") screen and the matching end
+    ("GAME OVER") screen (min display times, hide cursor);
+  - *Game Pause* — the pause screen + a **rebindable pause key**;
+  - *Screen Capture* — a **screenshot hotkey** that saves a PNG of the game's
+    monitor to `<LaunchBox>\Screenshots`.
+
+  The pause and screenshot keys are click-to-capture combo fields (Esc clears) and
+  are registered as **global hotkeys** — they fire even while the emulator has
+  focus. Gameplay changes apply on the next game launch. (Theme pickers are omitted
+  — LiteBox has no themes.)
+- **LB · Integrations** — LaunchBox-parity toggles such as the **DOSBox** command
+  options (show commands / don't exit / pause before each command / before exit),
+  honoured by LiteBox's built-in DOSBox launch.
 
 Pane widths, column layout (width / visibility / order), sort, selection and the
 list/poster mode are all remembered between runs.

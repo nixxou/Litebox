@@ -24,6 +24,26 @@ namespace LbApiHost.Host;
 
 internal static class HostBoot
 {
+    /// <summary>The resolved &lt;LB&gt;\Plugins root, captured at boot so the
+    /// Options → Plugins section lists the same folders the host loads from.</summary>
+    public static string PluginsRoot { get; private set; }
+
+    /// <summary>Immediate subfolder names of <paramref name="root"/> (plugin folders),
+    /// sorted case-insensitively. Empty when the root is missing/unreadable.</summary>
+    public static List<string> ListPluginFolders(string root)
+    {
+        var list = new List<string>();
+        try
+        {
+            if (Directory.Exists(root))
+                foreach (var d in Directory.GetDirectories(root))
+                    list.Add(Path.GetFileName(d));
+        }
+        catch { }
+        list.Sort(StringComparer.OrdinalIgnoreCase);
+        return list;
+    }
+
     public static int Run(string[] args)
     {
         string coreDir = AppContext.BaseDirectory;
@@ -74,34 +94,32 @@ internal static class HostBoot
         Console.WriteLine($"PluginHelper wired. DataManager={dm.GetType().Name} games={dm.GetAllGames().Length} platforms={dm.GetAllPlatforms().Length} categories={dm.GetAllPlatformCategories().Length} emulators={dm.GetAllEmulators().Length} playlists={dm.GetAllPlaylists().Length}");
         Mem.Report("after wrappers+inject");
 
-        // ── Plugins (whitelist-driven) ──────────────────────────────────────
+        // ── Plugins (config-driven; edited in Options → Plugins) ────────────
+        // The enabled set lives in LiteBox.ini (EnabledPlugins=A,B,…). KEY ABSENT
+        // (first run / not configured) → enable EVERY folder present under
+        // <LB>\Plugins (ExtendDB + the base LaunchBox plugins). Changes apply on
+        // the next start (plugins are loaded once, here, before the UI exists).
         string pluginsRoot = GetArg(args, "--plugins")
             ?? Path.GetFullPath(Path.Combine(coreDir, "..", "Plugins"));
-        string whitelistPath = Path.Combine(coreDir, "whitelist.txt");
+        PluginsRoot = pluginsRoot;   // exposed to the Options "Plugins" section
 
-        // Default whitelist (ExtendDB) on first run — created only if absent, so user edits survive.
-        if (!File.Exists(whitelistPath))
-        {
-            try
-            {
-                File.WriteAllText(whitelistPath,
-                    "# LiteBox plugin whitelist — one plugin folder name per line (subfolders of <LB>\\Plugins)." + Environment.NewLine +
-                    "# Lines starting with # or ; are ignored." + Environment.NewLine +
-                    "ExtendDB" + Environment.NewLine);
-            }
-            catch { }
-        }
+        var pluginCfg = LiteBoxConfig.LoadForExe();
+        var enabled = pluginCfg.GetEnabledPluginsOrNull();
+        List<string> names = enabled ?? ListPluginFolders(pluginsRoot);
 
-        var names = ReadWhitelist(whitelistPath);
-        Console.WriteLine($"Whitelist ({whitelistPath}): [{string.Join(", ", names)}]");
+        // Retire the obsolete whitelist.txt — selection moved to Options → Plugins.
+        try { var wl = Path.Combine(coreDir, "whitelist.txt"); if (File.Exists(wl)) File.Delete(wl); } catch { }
+
         Console.WriteLine($"Plugins root: {pluginsRoot}");
+        Console.WriteLine($"Enabled plugins: [{string.Join(", ", names)}]"
+            + (enabled == null ? "  (default: all present)" : ""));
 
         var pluginDirs = new List<string>();
         foreach (var nm in names)
         {
             var d = Path.Combine(pluginsRoot, nm);
             if (Directory.Exists(d)) pluginDirs.Add(d);
-            else Console.WriteLine($"  ! whitelisted plugin folder not found: {d}");
+            else Console.WriteLine($"  ! enabled plugin folder not found: {d}");
         }
 
         var reg = PluginLoader.LoadFrom(pluginDirs);
@@ -111,6 +129,8 @@ internal static class HostBoot
         HostLaunch.DryRun = args.Contains("--drylaunch");
         HostLaunch.Configure(reg, store, lbRoot);
         Pause.PauseManager.Configure(LiteBoxConfig.LoadForExe(), lbRoot);   // pause screens (hotkey + suspend + AHK)
+        Gameplay.GameScreens.Configure(lbRoot);    // startup ("NOW LOADING…") + end ("GAME OVER") screens
+        Gameplay.ScreenCapture.Configure(lbRoot);  // screenshot hotkey
         EmuPlugins.Configure(reg);   // emulator-integration plugins (RetroArch/Dolphin/… DLLs)
         DependencyCheck.Configure(LiteBoxConfig.LoadForExe(), lbRoot);   // pre-launch bios/dependency check
 
@@ -334,22 +354,6 @@ internal static class HostBoot
         return 0;
     }
 
-    private static List<string> ReadWhitelist(string path)
-    {
-        var list = new List<string>();
-        if (!File.Exists(path))
-        {
-            Console.WriteLine($"  ! whitelist.txt not found at {path} — no plugins will be activated.");
-            return list;
-        }
-        foreach (var raw in File.ReadAllLines(path))
-        {
-            var line = raw.Trim();
-            if (line.Length == 0 || line[0] == '#' || line[0] == ';') continue;
-            list.Add(line);
-        }
-        return list;
-    }
 
     private static string GetArg(string[] args, string flag)
     {

@@ -97,6 +97,97 @@ internal static class LbGlobalOptions
         // credentials sit here for a future LiteBox feature (notably RetroAchievements).
         w.AddSection("LB · Integrations", BuildIntegrationsPanel(s, readOnly, out var applyInteg),
             readOnly ? null : applyInteg);
+
+        // LB "Gameplay" branch (Game Startup / Game Pause / Screen Capture), tabbed.
+        // These DO drive LiteBox (startup/end/pause overlays + screenshot hotkey).
+        w.AddSection("LB · Gameplay", BuildGameplayPanel(s, readOnly, out var applyGameplay),
+            readOnly ? null : applyGameplay);
+    }
+
+    // ── LB "Gameplay" branch: the startup / pause / screen-capture options that
+    //    LiteBox actually honours. Screen toggles + times + cosmetics round-trip to
+    //    Settings.xml (LB-owned field names); the two HOTKEYS live in LiteBox.ini
+    //    (combo-capable, unlike LB's single WPF-Key int). Theme pickers are omitted
+    //    (LiteBox has no themes). Changes apply on the next game launch. ──
+    private static Control BuildGameplayPanel(LbSettingsStore s, bool readOnly, out Action apply)
+    {
+        var Bg = Color.FromArgb(30, 30, 30);
+        var Fg = Color.FromArgb(222, 222, 222);
+        var Dim = Color.FromArgb(150, 150, 152);
+        var Panel2 = Color.FromArgb(45, 45, 48);
+        var applies = new List<Action>();
+        var ini = LiteBoxConfig.LoadForExe();   // PauseHotkey / ScreenCaptureKey live here
+        bool iniDirty = false;
+
+        CheckBox Chk(string t, bool v, Point loc) => new() { Text = t, Location = loc, AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = v, Enabled = !readOnly };
+        Label Lbl(string t, Point loc, Color? c = null) => new() { Text = t, Location = loc, AutoSize = true, ForeColor = c ?? Fg, BackColor = Bg };
+        TextBox Txt(string v, Point loc, int w) => new() { Text = v, Location = loc, Width = w, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly };
+        HotkeyCaptureBox Hk(string v, Point loc, int w) => new(v) { Location = loc, Width = w, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly };
+        void BindChk(CheckBox cb, string field) => applies.Add(() => { if (cb.Checked != s.GetBool(field)) s.SetBool(field, cb.Checked); });
+        void BindTxt(TextBox tb, string field) => applies.Add(() => { if (tb.Text != s.Get(field)) s.Set(field, tb.Text); });
+        void BindIniHk(HotkeyCaptureBox hb, string key) => applies.Add(() => { if (hb.HotkeyValue != ini.Get(key)) { ini.Set(key, hb.HotkeyValue); iniDirty = true; } });
+
+        var tabs = NewDarkTabControl();
+        TabPage Page(string t) { var p = new TabPage(t) { BackColor = Bg, Padding = new Padding(12) }; tabs.TabPages.Add(p); return p; }
+
+        // ── Game Startup (governs the startup "NOW LOADING…" AND end "GAME OVER" screens) ──
+        {
+            var p = Page("Game Startup");
+            var use = Chk("Use Game Startup Screen", s.GetBool("UseStartupScreen", true), new Point(4, 8));
+            p.Controls.Add(use);
+            p.Controls.Add(Lbl("(also shows the end “GAME OVER” screen)", new Point(28, 30), Dim));
+            p.Controls.Add(Lbl("Minimum Startup Screen Display Time (ms)", new Point(4, 64)));
+            var st = Txt(s.Get("MinimumStartupScreenDisplayTime", "1000"), new Point(320, 61), 90); p.Controls.Add(st);
+            p.Controls.Add(Lbl("Minimum Shutdown Screen Display Time (ms)", new Point(4, 96)));
+            var sh = Txt(s.Get("MinimumShutdownScreenDisplayTime", "1000"), new Point(320, 93), 90); p.Controls.Add(sh);
+            var hc = Chk("Hide Mouse Cursor on Startup Screens", s.GetBool("HideMouseCursorOnStartupScreens", true), new Point(4, 128));
+            p.Controls.Add(hc);
+            BindChk(use, "UseStartupScreen"); BindTxt(st, "MinimumStartupScreenDisplayTime");
+            BindTxt(sh, "MinimumShutdownScreenDisplayTime"); BindChk(hc, "HideMouseCursorOnStartupScreens");
+        }
+
+        // ── Game Pause ──
+        {
+            var p = Page("Game Pause");
+            var use = Chk("Use Game Pause Screen", s.GetBool("UsePauseScreen", true), new Point(4, 8));
+            p.Controls.Add(use);
+            p.Controls.Add(Lbl("Pause Key", new Point(4, 40)));
+            var pk = Hk(ini.Get("PauseHotkey", "Pause"), new Point(120, 37), 220); p.Controls.Add(pk);
+            p.Controls.Add(Lbl("click, then press a key/combo", new Point(348, 40), Dim));
+            var fade = Chk("Enable Fading", s.GetBool("PauseScreenFading", true), new Point(4, 76));
+            var mute = Chk("Mute Audio During Transitions", s.GetBool("PauseScreenMuting", true), new Point(4, 102));
+            p.Controls.AddRange(new Control[] { fade, mute });
+            BindChk(use, "UsePauseScreen"); BindIniHk(pk, "PauseHotkey");
+            BindChk(fade, "PauseScreenFading"); BindChk(mute, "PauseScreenMuting");
+        }
+
+        // ── Screen Capture ──
+        {
+            var p = Page("Screen Capture");
+            p.Controls.Add(Lbl("Screen Capture Key", new Point(4, 12)));
+            var sc = Hk(ini.Get("ScreenCaptureKey", ""), new Point(150, 9), 220); p.Controls.Add(sc);
+            p.Controls.Add(Lbl("click, then press a key/combo  (empty = disabled)", new Point(378, 12), Dim));
+            p.Controls.Add(Lbl("Saves a PNG of the game's monitor to <LB>\\Screenshots.", new Point(4, 44), Dim));
+            BindIniHk(sc, "ScreenCaptureKey");
+        }
+
+        // Footer note: gameplay changes take effect on the next game launch.
+        var note = new Label
+        {
+            Dock = DockStyle.Bottom, Height = 24, ForeColor = Dim, BackColor = Bg,
+            Font = new Font("Segoe UI", 8.25f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft,
+            Text = "These options apply to the next game launch.",
+        };
+        var host = new Panel { BackColor = Bg };
+        host.Controls.Add(tabs);
+        host.Controls.Add(note);
+
+        apply = () =>
+        {
+            foreach (var a in applies) a();
+            if (iniDirty) { try { ini.Save(); } catch { } }
+        };
+        return host;
     }
 
     // ── Startup Applications grid (LB parity; LiteBox LAUNCHES the LaunchBox-
@@ -471,7 +562,7 @@ internal static class LbGlobalOptions
         {
             var p = Page("DOSBox");
             var c1 = Chk("Show all DOSBox commands", s.GetBool("ShowCommands"), new Point(4, 8));
-            var c2 = Chk("Don't exit DOSBox when exiting games", !s.GetBool("ExitDosBox"), new Point(4, 34));
+            var c2 = Chk("Don't exit DOSBox when exiting games", !s.GetBool("ExitDosBox", true), new Point(4, 34));
             var c3 = Chk("Pause before each command", s.GetBool("PauseBeforeCommands"), new Point(4, 60));
             var c4 = Chk("Pause before exiting DOSBox", s.GetBool("PauseBeforeExit"), new Point(4, 86));
             p.Controls.AddRange(new Control[] { c1, c2, c3, c4 });

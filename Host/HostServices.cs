@@ -214,6 +214,7 @@ internal static class HostLaunch
             // OnGameExited) to tear down + REOPEN the BigBox-web kiosk around a
             // store game; without OnGameExited the kiosk never comes back.
             Fire(p => p.OnAfterGameLaunched(game, null, null));
+            if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current);   // "NOW LOADING…"
             sw.Restart();
             StoreTrace.Log("store-launch ShellOpen ok — watching for game process…");
             seen = StoreProcessWatcher.WaitForGame(installDir, regainedFocus);   // process-under-install-dir; focus only if opted in
@@ -231,12 +232,15 @@ internal static class HostLaunch
                 }
                 catch { }
             }
+            Gameplay.GameScreens.Close();
+            var endSnap = LaunchedGame.Current;          // capture cosmetics before clearing
             LaunchedGame.Clear();
             StoreTrace.Log("store-launch END → GameEnded (hide running screen)");
             // Record play time only if the game process was actually observed (else the launch likely
             // failed, or we couldn't track it — don't bill the watcher's wait as play time).
             if (!DryRun && seen && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             Fire(p => p.OnGameExited());                  // ExtendDB: reopen the kiosk (mirror RunAndWait)
+            if (!DryRun) Gameplay.GameScreens.ShowEndBlocking(endSnap);   // "GAME OVER"
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
         }
     }
@@ -275,6 +279,7 @@ internal static class HostLaunch
         try
         {
             Fire(p => p.OnAfterGameLaunched(game, app, emulator));
+            if (!DryRun) Gameplay.ScreenCapture.Arm();   // screenshot hotkey active during the game
 
             var addApps = SafeAddApps(game);
 
@@ -312,6 +317,9 @@ internal static class HostLaunch
                     Action<Process> onSpawned = (main.Value.useEmu && emulator != null)
                         ? p => Pause.PauseManager.Arm(p, emulator, game)
                         : null;
+                    // Startup screen ("NOW LOADING…") — shown just before the emulator
+                    // spawns, auto-closed after the min display time (non-blocking).
+                    if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current);
                     RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main", onSpawned);
                 }
                 else if (!DryRun)
@@ -331,10 +339,15 @@ internal static class HostLaunch
         finally
         {
             Pause.PauseManager.Disarm();  // hotkey off + resume a still-frozen process + close the screen
+            Gameplay.ScreenCapture.Disarm();
+            Gameplay.GameScreens.Close(); // drop any lingering startup overlay
             AhkScript.KillGameScript();   // running script dies with the game (LB parity)
+            var endSnap = LaunchedGame.Current;   // capture cosmetics before clearing (end screen needs them)
             LaunchedGame.Clear();
             if (!DryRun && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             Fire(p => p.OnGameExited());
+            // End screen ("GAME OVER") — held for the min display time before the UI reloads.
+            if (!DryRun) Gameplay.GameScreens.ShowEndBlocking(endSnap);
             try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
             try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) { Gc.HostGameCache.Reload(); Console.WriteLine("[gamecache] rebuilding after game exit"); } } catch { }
             // GUI: game over + data reloaded → reload its list and restore selection.

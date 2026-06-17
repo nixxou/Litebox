@@ -994,6 +994,80 @@ internal sealed class MainWindow : Form
     // Sections + option bindings (Host/Options). Storage today = LiteBox.ini;
     // the Pause options are slated to migrate to the LB-wide settings layer
     // (LB-compatible) — only their Get/Set bindings will change.
+    // Options → Plugins : a checkbox per folder under <LB>\Plugins. Replaces
+    // whitelist.txt. Default (never configured) = every present folder checked.
+    // Changes are written to LiteBox.ini and take effect on the next start
+    // (plugins load once at boot), so we warn on Apply when the set changed.
+    private (Control panel, Action apply) BuildPluginsSection()
+    {
+        var Bg   = Color.FromArgb(30, 30, 30);
+        var Fg   = Color.FromArgb(222, 222, 222);
+        var SubFg = Color.FromArgb(150, 150, 152);
+        var Warn = Color.FromArgb(225, 175, 95);
+
+        var panel = new Panel { BackColor = Bg, Dock = DockStyle.Fill };
+
+        var flow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false,
+            AutoScroll = true, BackColor = Bg, Padding = new Padding(0, 6, 0, 0),
+        };
+
+        var note = new Label
+        {
+            Dock = DockStyle.Top, AutoSize = false, Height = 52, ForeColor = Warn, BackColor = Bg,
+            Padding = new Padding(2, 2, 2, 8), Font = new Font("Segoe UI", 9f, FontStyle.Italic),
+            Text = "Plugins to load (subfolders of " + (HostBoot.PluginsRoot ?? @"<LB>\Plugins") + ").\r\n"
+                 + "Changes apply on the next LiteBox restart.",
+        };
+
+        string root = HostBoot.PluginsRoot ?? "";
+        var folders = HostBoot.ListPluginFolders(root);
+        var enabled = _cfg.GetEnabledPluginsOrNull();          // null ⇒ all (never configured)
+        bool defaultAll = enabled == null;
+        var enabledSet = new HashSet<string>(enabled ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+
+        var checks = new List<CheckBox>();
+        if (folders.Count == 0)
+        {
+            flow.Controls.Add(new Label { AutoSize = true, ForeColor = SubFg, Margin = new Padding(2, 6, 2, 2),
+                Text = "No plugin folders found in " + root });
+        }
+        foreach (var f in folders)
+        {
+            var cb = new CheckBox
+            {
+                Text = f, AutoSize = true, ForeColor = Fg, Margin = new Padding(2, 5, 2, 5),
+                Checked = defaultAll || enabledSet.Contains(f),
+            };
+            checks.Add(cb);
+            flow.Controls.Add(cb);
+        }
+
+        panel.Controls.Add(flow);
+        panel.Controls.Add(note);   // Dock=Top → sits above the Fill flow
+
+        var initial = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var cb in checks) if (cb.Checked) initial.Add(cb.Text);
+
+        Action apply = () =>
+        {
+            var sel = new List<string>();
+            foreach (var cb in checks) if (cb.Checked) sel.Add(cb.Text);
+            _cfg.SetEnabledPlugins(sel);   // persisted by OptionsWindow.ApplyFinished → _cfg.Save()
+
+            var now = new HashSet<string>(sel, StringComparer.OrdinalIgnoreCase);
+            if (!now.SetEquals(initial))
+            {
+                MessageBox.Show(this,
+                    "The enabled plugins have changed.\nRestart LiteBox to apply.",
+                    "LiteBox — Plugins", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                initial.Clear(); initial.UnionWith(now);   // don't repeat on a 2nd Apply
+            }
+        };
+        return (panel, apply);
+    }
+
     private Options.OptionsWindow BuildOptionsWindow()
     {
         var w = new Options.OptionsWindow("LiteBox — Options");
@@ -1026,6 +1100,9 @@ internal sealed class MainWindow : Form
                 + "you already had open before the launch. On: close it too (kill ALL of that store's client "
                 + "processes, not just the one LiteBox started)."),
         });
+
+        var (pluginsPanel, applyPlugins) = BuildPluginsSection();
+        w.AddSection("Plugins", pluginsPanel, applyPlugins);
 
         w.AddSection("Display", new[]
         {

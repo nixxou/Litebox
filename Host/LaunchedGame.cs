@@ -39,6 +39,12 @@ internal sealed class LaunchedGame
     public bool PauseOverride;
     public bool PauseUse, PauseSuspend, PauseForceful;
 
+    // Per-GAME startup/end-screen overrides (LB "Override Default Startup Screen
+    // Settings" on the Game). StartupMinMs = -1 ⇒ "use the global value".
+    public bool StartupOverride;
+    public bool StartupUse, StartupHideCursor, ShutdownDisabled;
+    public int StartupMinMs = -1;
+
     /// <summary>The game currently running, or null. Set by HostLaunch at launch,
     /// cleared in its exit finally.</summary>
     public static LaunchedGame? Current { get; private set; }
@@ -87,6 +93,21 @@ internal sealed class LaunchedGame
                     lg.PauseUse = string.Equals(lf.GetField("UsePauseScreen"), "true", StringComparison.OrdinalIgnoreCase);
                     lg.PauseSuspend = string.Equals(lf.GetField("SuspendProcessOnPause"), "true", StringComparison.OrdinalIgnoreCase);
                     lg.PauseForceful = string.Equals(lf.GetField("ForcefulPauseScreenActivation"), "true", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch { }
+
+            // Per-game startup/end-screen override (LB "Override Default Startup Screen Settings").
+            try
+            {
+                if (game is LbApiHost.ILiteBoxFields lf2
+                    && string.Equals(lf2.GetField("OverrideDefaultStartupScreenSettings"), "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    lg.StartupOverride = true;
+                    lg.StartupUse = string.Equals(lf2.GetField("UseStartupScreen"), "true", StringComparison.OrdinalIgnoreCase);
+                    lg.StartupHideCursor = string.Equals(lf2.GetField("HideMouseCursorInGame"), "true", StringComparison.OrdinalIgnoreCase);
+                    lg.ShutdownDisabled = string.Equals(lf2.GetField("DisableShutdownScreen"), "true", StringComparison.OrdinalIgnoreCase);
+                    lg.StartupMinMs = int.TryParse(lf2.GetField("StartupLoadDelay"), out var ld) ? ld : -1;
                 }
             }
             catch { }

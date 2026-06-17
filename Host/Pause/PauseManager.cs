@@ -72,7 +72,9 @@ internal static class PauseManager
     public static void Arm(Process proc, IEmulator emulator, IGame game)
     {
         if (proc == null || emulator == null) return;
-        if (_cfg != null && !_cfg.GetBool("PauseEnabled", true)) return;
+        // Global master switch now lives in Settings.xml (LB · Gameplay → Use Game
+        // Pause Screen); read fresh so an options change applies to the next launch.
+        if (!Gameplay.GameplaySettings.PauseEnabledGlobal()) return;
         // Per-game pause override (LaunchedGame snapshot, captured pre-drop) wins
         // over the emulator's setting — exactly LB's Edit Game pause panel.
         var snap0 = LaunchedGame.Current;
@@ -86,7 +88,7 @@ internal static class PauseManager
             _proc = proc; _emu = emulator; _game = game;
             _paused = _suspended = false;
 
-            var (mod, vk, label) = ParseHotkey(_cfg?.Get("PauseHotkey", "Pause") ?? "Pause");
+            var (mod, vk, label) = ParseHotkey(Gameplay.GameplaySettings.PauseKey());
             UiThread.Invoke(() =>
             {
                 _hkWin = new HotkeyWindow(OnHotkey);

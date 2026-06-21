@@ -66,10 +66,26 @@ internal sealed class MainWindow : Form
     private bool _posterMode;
     private ImageList _posterGeom;                 // empty; only its ImageSize drives the tile geometry
     private int _posterHot = -1;                   // hovered tile index (for the hover grow)
-    private bool _posterRepaintPending;            // coalesces invalidations from async thumb loads
     private readonly Dictionary<Guid, Image> _posterBmp = new();   // decoded box thumbs (visible-ish)
     private readonly Queue<Guid> _posterBmpOrder = new();          // FIFO eviction order
-    private readonly HashSet<Guid> _posterLoading = new();         // in-flight thumb loads
+    // Fully composited tile (box image + title + developer text, baked once) — at paint time the grid
+    // just BLITS this instead of re-rendering text+image per tile per frame (which froze a held scroll).
+    private readonly Dictionary<Guid, IntPtr> _posterTileHbm = new();   // GDI HBITMAP per composited tile (fast BitBlt)
+    private readonly Queue<Guid> _posterTileOrder = new();
+    private SolidBrush _panelBrush;                                 // cached bg brush (no per-tile alloc)
+    private IntPtr _posterMemDC;                                    // shared memory DC for BitBlt/StretchBlt
+    // Poster thumb loading: a small BOUNDED worker pool draining a LIFO deque (newest/visible tiles
+    // first), with BATCHED completion (one UI marshal drains all ready thumbs). Replaces the per-tile
+    // Task.Run that, on a fast scroll, spawned hundreds of parallel decodes whose individual BeginInvoke
+    // completions flooded — and froze — the UI thread until the key was released.
+    private readonly LinkedList<(IGame g, Guid id)> _posterReq = new();  // pending requests (front = newest)
+    private readonly HashSet<Guid> _posterPending = new();               // queued/loading/awaiting-apply (dedup)
+    private readonly Queue<(Guid id, Image img)> _posterDone = new();    // loaded, awaiting batched apply
+    private readonly object _posterQLock = new();                        // guards _posterReq/_posterPending/_posterDone/workers
+    private int _posterActiveWorkers;
+    private bool _posterDrainPending;              // coalesces the batched apply+invalidate
+    private static readonly int PosterMaxWorkers = Math.Max(1, Math.Min(3, Environment.ProcessorCount - 1));
+    private const int PosterReqCap = 64;           // cap pending requests; drop oldest (scrolled-past) beyond this
     private const int PCellW = 124, PImgH = 174, PLabelH = 38, PGap = 14;
     private readonly ToolStripTextBox _search;
     private readonly ToolStripComboBox _sortCombo;
@@ -115,6 +131,12 @@ internal sealed class MainWindow : Form
     private List<object> _treeRoots;   // tree roots (incl. AllNode) — for key lookup on restore
     private object _detailsShown;  // current right-pane subject (IGame or tree node)
     private int _detailsLoadToken; // guards async image loads against stale selections
+    // Serialized, latest-wins detail loader (replaces the per-selection parallel loads that flooded
+    // the UI thread and froze the list while an arrow key was held).
+    private IGame _detailWant;             // latest game whose detail is wanted (guarded by _detailLock)
+    private bool _detailRunning;           // a loader task is currently active (guarded by _detailLock)
+    private readonly object _detailLock = new();
+    private volatile bool _closing;        // form is closing → the loader bails before its blocking Invoke
     private bool _ascending = true;
     private string[] _sortKeys;          // parallel to SortLabels (column keys; "name" = CompareName)
     private string _curSortKey = "name"; // current sort key (header click can pick a non-combo column)
@@ -321,7 +343,8 @@ internal sealed class MainWindow : Form
         bar.Items.Add(_extDbInd);
 
         // Persist layout / window / selection once, at close (not per change).
-        FormClosing += (_, _) => { try { SaveAll(); } catch { } };
+        // _closing lets the serialized detail loader bail before its blocking Invoke once the pump ends.
+        FormClosing += (_, _) => { _closing = true; try { SaveAll(); } catch { } };
 
         // Bring the window back on-screen if a monitor is unplugged while running.
         try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged; } catch { }
@@ -1408,7 +1431,11 @@ internal sealed class MainWindow : Form
     // When nothing is selected in the list, keep showing the current node.
     private void OnGameSelectionChanged()
     {
-        if (_games.SelectedGame is IGame g) ShowDetails(g);
+        // Hand the selection to the serialized loader instead of loading on the UI thread (or spawning
+        // one parallel load per row — which floods the UI thread with image-decode continuations and
+        // freezes the list while an arrow key is held). The loader shows the base thumb tracking the
+        // scroll (one image at a time, latest-wins) and lands the full detail pane once it settles.
+        if (_games.SelectedGame is IGame g) RequestDetail(g);
         else if (!ReferenceEquals(_detailsShown, _currentNode)) ShowNodeDetails(_currentNode);
     }
 
@@ -1605,78 +1632,249 @@ internal sealed class MainWindow : Form
     private void DrawPosterItem(object sender, DrawListViewItemEventArgs e)
     {
         var g = e.Graphics; var b = e.Bounds;
-        using (var bg = new SolidBrush(Panel)) g.FillRectangle(bg, b);
+        _panelBrush ??= new SolidBrush(Panel);
+        g.FillRectangle(_panelBrush, b);                  // gaps around the tile
         var model = PosterModel(e.ItemIndex);
         if (model == null) return;
+        if (!Guid.TryParse(S(Safe(() => model.Id)), out var id)) return;
 
         bool selected = e.Item != null && e.Item.Selected;
         bool hot = e.ItemIndex == _posterHot;
-
-        // Cell content centred within the (spacing-padded) item bounds.
         int cellX = b.X + (b.Width - PCellW) / 2;
         int cellTop = b.Y + 4;
-        var imgArea = new Rectangle(cellX, cellTop, PCellW, PImgH);
-        var cardRect = new Rectangle(cellX - 6, cellTop - 4, PCellW + 12, PImgH + PLabelH + 8);
 
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        // The whole tile (image + text) is composited ONCE and cached; the hot path is just a blit.
+        IntPtr hbm = GetPosterTileHbm(model, id);
+        int th = PImgH + PLabelH;
         if (selected || hot)
         {
-            using var hl = new SolidBrush(Color.FromArgb(selected ? 26 : 12, 255, 255, 255));
-            using var path = RoundRect(cardRect, 8);
-            g.FillPath(hl, path);
-        }
-
-        float scale = (selected || hot) ? 1.045f : 1f;
-        var img = PosterThumb(model);
-        if (img != null)
-        {
-            // img is PRE-SCALED to fit imgArea (done once at load), so the normal case draws it 1:1
-            // (NearestNeighbor = a fast pixel copy, no per-frame resample → smooth scroll). Only the
-            // hovered/selected tile is scaled up 1.045× (bicubic, one tile).
-            int iw = (int)(img.Width * scale), ih = (int)(img.Height * scale);
-            int ix = imgArea.X + (imgArea.Width - iw) / 2, iy = imgArea.Bottom - ih; // bottom-align (posters sit on the label)
-            if (scale == 1f)
+            var cardRect = new Rectangle(cellX - 6, cellTop - 4, PCellW + 12, th + 8);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (var hl = new SolidBrush(Color.FromArgb(selected ? 26 : 12, 255, 255, 255)))
+            using (var path = RoundRect(cardRect, 8))
+                g.FillPath(hl, path);
+            if (hbm != IntPtr.Zero)   // grow the selected/hot tile 1.045× (StretchBlt, one tile)
             {
-                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-                g.DrawImage(img, ix, iy, img.Width, img.Height);
-            }
-            else
-            {
-                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                g.DrawImage(img, ix, iy, Math.Max(1, iw), Math.Max(1, ih));
+                int sw = (int)(PCellW * 1.045f), sh = (int)(th * 1.045f);
+                BlitTile(g, hbm, cellX + (PCellW - sw) / 2, cellTop + (th - sh) / 2, sw, sh);
             }
         }
-        else
+        else if (hbm != IntPtr.Zero)
         {
-            // phantom: grey rounded rectangle for missing box art (LaunchBox-desktop look).
-            int pw = (int)(PCellW * 0.78f * scale), ph = (int)(PImgH * 0.92f * scale);
-            var ph_r = new Rectangle(imgArea.X + (imgArea.Width - pw) / 2, imgArea.Bottom - ph, pw, ph);
-            using var pb = new SolidBrush(Color.FromArgb(65, 67, 75));
-            using var pp = RoundRect(ph_r, 10);
-            g.FillPath(pb, pp);
+            BlitTile(g, hbm, cellX, cellTop, PCellW, th);   // fast native 1:1 copy — the hot path
         }
-
-        // Title + developer, centred, ellipsised.
-        var title = S(Safe(() => model.Title));
-        var dev = S(Safe(() => model.Developer));
-        var tRect = new Rectangle(cellX, imgArea.Bottom + 3, PCellW, 17);
-        var dRect = new Rectangle(cellX, imgArea.Bottom + 19, PCellW, 15);
-        TextRenderer.DrawText(g, title, Font, tRect, Fg,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-        if (!string.IsNullOrEmpty(dev))
-            TextRenderer.DrawText(g, dev, Font, dRect, SubFg,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
     }
 
-    // Decoded box thumb for a game, or null (and an async load is kicked off). Bounded in memory.
-    private Image PosterThumb(IGame model)
+    // ── GDI BitBlt: copying a prepared tile via GDI is ~10× faster than GDI+ DrawImage (~100µs/tile),
+    // which was saturating the UI thread during a held poster scroll. ──────────
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hgdiobj);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr hdc);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdc, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, int rop);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool StretchBlt(IntPtr hdc, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, int cx1, int cy1, int rop);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern int SetStretchBltMode(IntPtr hdc, int mode);
+    private const int SRCCOPY = 0x00CC0020, HALFTONE = 4;
+
+    private void BlitTile(Graphics g, IntPtr hbm, int x, int y, int w, int h)
     {
-        if (!Guid.TryParse(S(Safe(() => model.Id)), out var id)) return null;
-        if (_posterBmp.TryGetValue(id, out var bmp)) return bmp;   // may be a null sentinel (no art)
-        if (_posterLoading.Add(id))
-            System.Threading.Tasks.Task.Run(() => LoadPosterThumb(model, id));
+        if (_posterMemDC == IntPtr.Zero) _posterMemDC = CreateCompatibleDC(IntPtr.Zero);
+        IntPtr hdc = g.GetHdc();
+        try
+        {
+            IntPtr oldObj = SelectObject(_posterMemDC, hbm);
+            if (w == PCellW && h == PImgH + PLabelH) BitBlt(hdc, x, y, w, h, _posterMemDC, 0, 0, SRCCOPY);
+            else { SetStretchBltMode(hdc, HALFTONE); StretchBlt(hdc, x, y, w, h, _posterMemDC, 0, 0, PCellW, PImgH + PLabelH, SRCCOPY); }
+            SelectObject(_posterMemDC, oldObj);
+        }
+        finally { g.ReleaseHdc(hdc); }
+    }
+
+    // Composite a tile (box image or phantom + title + developer) into a GDI bitmap ONCE; painted by
+    // BitBlt. Rebuilt only when the box thumb arrives (DrainPosterDone drops the stale tile). Returns
+    // the cached HBITMAP (IntPtr.Zero on failure).
+    private IntPtr GetPosterTileHbm(IGame model, Guid id)
+    {
+        if (_posterTileHbm.TryGetValue(id, out var cachedHbm)) return cachedHbm;
+        IntPtr hbm = IntPtr.Zero;
+        try
+        {
+            using var tile = new Bitmap(PCellW, PImgH + PLabelH);   // opaque (cleared to Panel) → GDI text renders fine
+            using (var tg = Graphics.FromImage(tile))
+            {
+                tg.Clear(Panel);
+                var imgArea = new Rectangle(0, 0, PCellW, PImgH);
+                var img = PosterThumbSync(model, id);         // sync decode if the thumb is on disk; else null + async
+                if (img != null)
+                {
+                    int ix = imgArea.X + (imgArea.Width - img.Width) / 2, iy = imgArea.Bottom - img.Height;
+                    tg.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                    tg.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                    tg.DrawImage(img, ix, iy, img.Width, img.Height);
+                }
+                else
+                {
+                    tg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    int pw = (int)(PCellW * 0.78f), ph = (int)(PImgH * 0.92f);
+                    var ph_r = new Rectangle((PCellW - pw) / 2, imgArea.Bottom - ph, pw, ph);
+                    using var pb = new SolidBrush(Color.FromArgb(65, 67, 75));
+                    using var pp = RoundRect(ph_r, 10);
+                    tg.FillPath(pb, pp);
+                }
+                var title = S(Safe(() => model.Title));
+                var dev = S(Safe(() => model.Developer));
+                var tRect = new Rectangle(0, PImgH + 3, PCellW, 17);
+                var dRect = new Rectangle(0, PImgH + 19, PCellW, 15);
+                TextRenderer.DrawText(tg, title, Font, tRect, Fg,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                if (!string.IsNullOrEmpty(dev))
+                    TextRenderer.DrawText(tg, dev, Font, dRect, SubFg,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            }
+            hbm = tile.GetHbitmap();   // GDI copy for BitBlt (must DeleteObject on evict)
+        }
+        catch { }
+        _posterTileHbm[id] = hbm;
+        _posterTileOrder.Enqueue(id);
+        while (_posterTileOrder.Count > 600)
+        {
+            var old = _posterTileOrder.Dequeue();
+            if (_posterTileHbm.TryGetValue(old, out var oh)) { if (oh != IntPtr.Zero) DeleteObject(oh); _posterTileHbm.Remove(old); }
+        }
+        return hbm;
+    }
+
+    // Drop a cached composited tile so it rebuilds (e.g. once its box thumb finishes loading).
+    private void InvalidatePosterTile(Guid id)
+    {
+        if (_posterTileHbm.TryGetValue(id, out var h)) { if (h != IntPtr.Zero) DeleteObject(h); _posterTileHbm.Remove(id); }
+    }
+
+    // Decoded box thumb for a tile. When the thumb file is ALREADY on disk (the common case once browsed
+    // once) it decodes it SYNCHRONOUSLY here — so the tile is composited once WITH its image and never
+    // triggers an async load → DrainPosterDone Invalidate. That async path is what produced the full-grid
+    // repaint storm that froze a held scroll in big views. Only a genuinely uncached thumb falls back to async.
+    private Image PosterThumbSync(IGame model, Guid id)
+    {
+        if (_posterBmp.TryGetValue(id, out var bmp)) return bmp;   // already decoded (may be a null sentinel)
+        if (_useImageCache)
+        {
+            string src = DetailSource(model, "Front", () =>
+                  Safe(() => model.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => model.Box3DImagePath));
+            string cachedFile = string.IsNullOrEmpty(src) ? null
+                : ThumbCache.GetCachedOnly(src, ThumbCache.DefaultMaxDim, keepAlpha: false);   // instant: no Magick
+            if (cachedFile != null)
+            {
+                Image img = null;
+                try { using var raw = LoadImage(cachedFile); if (raw != null) img = ScaleContain(raw, PCellW, PImgH); } catch { }
+                _posterBmp[id] = img;             // cache (same 600-cap eviction as the async path)
+                _posterBmpOrder.Enqueue(id);
+                while (_posterBmpOrder.Count > 600)
+                {
+                    var old = _posterBmpOrder.Dequeue();
+                    if (_posterBmp.TryGetValue(old, out var ob)) { ob?.Dispose(); _posterBmp.Remove(old); }
+                }
+                return img;
+            }
+        }
+        QueuePosterThumb(model, id);   // not on disk → async (phantom now, fills in later)
         return null;
+    }
+
+    // Request a background thumb load (dedup + LIFO so the newest/visible tiles load first; bounded so a
+    // fast scroll never piles up unbounded work). Called from DrawPosterItem on the UI thread.
+    private void QueuePosterThumb(IGame model, Guid id)
+    {
+        bool spawn = false;
+        lock (_posterQLock)
+        {
+            if (!_posterPending.Add(id)) return;             // already queued / loading / awaiting apply
+            _posterReq.AddFirst((model, id));                // LIFO: newest at the front
+            while (_posterReq.Count > PosterReqCap)          // drop oldest (already scrolled past)
+            {
+                var stale = _posterReq.Last.Value;
+                _posterReq.RemoveLast();
+                _posterPending.Remove(stale.id);
+            }
+            if (_posterActiveWorkers < PosterMaxWorkers) { _posterActiveWorkers++; spawn = true; }
+        }
+        if (spawn) System.Threading.Tasks.Task.Run(PosterLoadWorker);
+    }
+
+    // One pool worker: pop the newest request, decode+scale it (the expensive part) off the UI thread,
+    // hand the result to the batched drain, repeat until the queue empties.
+    private void PosterLoadWorker()
+    {
+        while (true)
+        {
+            IGame model; Guid id;
+            lock (_posterQLock)
+            {
+                if (_posterReq.Count == 0 || IsDisposed || _closing) { _posterActiveWorkers--; return; }
+                var node = _posterReq.First.Value;           // LIFO pop
+                _posterReq.RemoveFirst();
+                model = node.g; id = node.id;
+            }
+
+            Image img = null;
+            try
+            {
+                string src = DetailSource(model, "Front", () =>
+                      Safe(() => model.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => model.Box3DImagePath));
+                if (!string.IsNullOrEmpty(src))
+                {
+                    // Poster grid: load the SMALL cached thumb ONLY — never the full-res original.
+                    // LoadThumbOrFull serves the full original on a cache MISS, so a cold "All games"
+                    // scroll would decode hundreds of multi-megapixel bitmaps onto the Large Object Heap
+                    // → back-to-back Gen2 GCs that suspend the UI thread → the grid freezes until the key
+                    // is released. GetOrCreate makes the 360px thumb via Magick (native downscale, no
+                    // managed LOH) on first use — bounded by THIS pool — and the 2nd pass is a cache HIT.
+                    string thumb = _useImageCache ? ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: false) : null;
+                    using var raw = LoadImage(thumb ?? src);   // small thumb — or the original only if the cache/Magick is unavailable
+                    if (raw != null) img = ScaleContain(raw, PCellW, PImgH);   // pre-size to the cell once
+                }
+            }
+            catch { img = null; }
+
+            lock (_posterQLock) { _posterDone.Enqueue((id, img)); }
+            RequestPosterDrain();
+        }
+    }
+
+    // Coalesce the apply: ONE UI marshal drains ALL ready thumbs, so N completing loads cost ~1
+    // BeginInvoke instead of N — this is what stops a fast scroll from flooding/starving the UI thread.
+    private void RequestPosterDrain()
+    {
+        lock (_posterQLock) { if (_posterDrainPending) return; _posterDrainPending = true; }
+        try
+        {
+            if (!IsDisposed && !_closing && IsHandleCreated) BeginInvoke((Action)DrainPosterDone);
+            else lock (_posterQLock) { _posterDrainPending = false; }
+        }
+        catch { lock (_posterQLock) { _posterDrainPending = false; } }
+    }
+
+    private void DrainPosterDone()
+    {
+        lock (_posterQLock) { _posterDrainPending = false; }
+        bool any = false;
+        while (true)
+        {
+            (Guid id, Image img) item;
+            lock (_posterQLock) { if (_posterDone.Count == 0) break; item = _posterDone.Dequeue(); _posterPending.Remove(item.id); }
+            if (IsDisposed) { item.img?.Dispose(); continue; }
+            if (_posterBmp.TryGetValue(item.id, out var prev) && !ReferenceEquals(prev, item.img)) prev?.Dispose();
+            _posterBmp[item.id] = item.img;     // null = "no art" sentinel (draw phantom, don't retry)
+            _posterBmpOrder.Enqueue(item.id);
+            InvalidatePosterTile(item.id);      // the box thumb arrived → rebuild the (phantom) tile with it
+            any = true;
+        }
+        while (_posterBmpOrder.Count > 600)
+        {
+            var old = _posterBmpOrder.Dequeue();
+            if (_posterBmp.TryGetValue(old, out var ob)) { ob?.Dispose(); _posterBmp.Remove(old); }
+        }
+        if (any && _posterMode && _poster != null && _poster.Visible) _poster.Invalidate();
     }
 
     // Scale src to the largest size that fits (maxW × maxH) keeping aspect — done ONCE (bicubic) so
@@ -1697,44 +1895,6 @@ internal sealed class MainWindow : Form
             return bmp;
         }
         catch { return null; }   // caller disposes the source thumb → never hand it back; phantom instead
-    }
-
-    private void LoadPosterThumb(IGame model, Guid id)
-    {
-        Image img = null;
-        try
-        {
-            string src = DetailSource(model, "Front", () =>
-                  Safe(() => model.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => model.Box3DImagePath));
-            if (!string.IsNullOrEmpty(src))
-            {
-                using var raw = LoadThumbOrFull(src, keepAlpha: false);
-                if (raw != null) img = ScaleContain(raw, PCellW, PImgH);   // pre-size to the cell once
-            }
-        }
-        catch { img = null; }
-        try
-        {
-            if (IsDisposed) { img?.Dispose(); return; }
-            BeginInvoke((Action)(() =>
-            {
-                if (IsDisposed) { img?.Dispose(); return; }
-                _posterLoading.Remove(id);
-                _posterBmp[id] = img;            // null = "no art" sentinel (draw phantom, don't retry)
-                _posterBmpOrder.Enqueue(id);
-                while (_posterBmpOrder.Count > 600)
-                {
-                    var old = _posterBmpOrder.Dequeue();
-                    if (_posterBmp.TryGetValue(old, out var ob)) { ob?.Dispose(); _posterBmp.Remove(old); }
-                }
-                if (_posterMode && _poster.Visible && !_posterRepaintPending)
-                {
-                    _posterRepaintPending = true;
-                    BeginInvoke((Action)(() => { _posterRepaintPending = false; _poster.Invalidate(); }));
-                }
-            }));
-        }
-        catch { img?.Dispose(); }
     }
 
     // ── Win32: per-tile spacing (gap) for the LargeIcon poster grid ───────────
@@ -1843,6 +2003,8 @@ internal sealed class MainWindow : Form
     }
 
     // ── Details rendering ────────────────────────────────────────────────────
+    // Direct path (thumb click, restore-on-launch): load the box async and build the pane now.
+    // The keyboard/selection path goes through RequestDetail → the serialized loader instead.
     private void ShowDetails(IGame g)
     {
         _detailsShown = g;
@@ -1863,14 +2025,34 @@ internal sealed class MainWindow : Form
         // logo, Front for the box (GameCache → same file → shared cache; IO fallback).
         // SetGame (carrying the title fallback) runs BEFORE the async logo load so a game
         // with no clear logo shows its title as text — with the same pulse.
+        var (logoSrc, artSrc) = DetailImageSources(g);
+        SetHeroGame(g);
+        LoadImagesAsync(logoSrc, artSrc);
+        PopulateDetailMeta(g);
+    }
+
+    // The box + clear-logo source files for a game (same resolution launchbox-web/bigbox-web use).
+    private (string logoSrc, string artSrc) DetailImageSources(IGame g)
+    {
         string logoSrc = DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath));
         string artSrc = DetailSource(g, "Front", () =>
               Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
             : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
             : Safe(() => g.ScreenshotImagePath));
+        return (logoSrc, artSrc);
+    }
+
+    // Hero card title/rating/favorite (cheap — property reads only).
+    private void SetHeroGame(IGame g)
+    {
         double eff = Safe(() => g.CommunityOrLocalStarRating);
         _hero.SetGame(S(g.Title), eff, Safe(() => g.StarRatingFloat) > 0, Safe(() => g.Favorite));
-        LoadImagesAsync(logoSrc, artSrc);
+    }
+
+    // The settle-time detail pane: fanart + thumb-strip schedules, metadata rows, notes, launch
+    // buttons, store poll, parental trace. The hero title + main box image are applied by the caller.
+    private void PopulateDetailMeta(IGame g)
+    {
         ScheduleFanart(g, null);
         ScheduleMedia(g);   // 0.5s later: build the thumb strip + upgrade the main to full
 
@@ -1913,6 +2095,81 @@ internal sealed class MainWindow : Form
                            $"platHidden={(plat.Length > 0 && _parentalHiddenPlatforms.Contains(plat))} hidesGame={ParentalHidesGame(g)}");
         }
         catch { }
+    }
+
+    // ── Serialized, latest-wins detail loader ─────────────────────────────────
+    // A selection change (keyboard or mouse) hands its game here. A SINGLE background task loads the
+    // box thumb one image at a time — never in parallel — and always converges on the latest selection.
+    // While an arrow key is held, the base thumb tracks the scroll (transit: image + title only, cheap);
+    // when the selection settles (no newer one arrived while the last image loaded) the full pane lands.
+    // Applying with a blocking Invoke self-paces the loop to the UI's paint rate, so it can never queue
+    // up a backlog of paints that starves keyboard input (the original "scrolls then freezes" bug).
+    private void RequestDetail(IGame g)
+    {
+        if (g == null) return;
+        bool start = false;
+        lock (_detailLock) { _detailWant = g; if (!_detailRunning) { _detailRunning = true; start = true; } }
+        if (start) System.Threading.Tasks.Task.Run(DetailLoop);
+    }
+
+    private void DetailLoop()
+    {
+        while (true)
+        {
+            IGame g;
+            lock (_detailLock) { g = _detailWant; }
+            if (g == null || IsDisposed || _closing) { lock (_detailLock) { _detailRunning = false; } return; }
+
+            // Load the box + clear logo on THIS thread — the "load one, wait for it, then the next".
+            var (logoSrc, artSrc) = DetailImageSources(g);
+            Image logo = LoadThumbOrFull(logoSrc, keepAlpha: true);
+            Image art = LoadThumbOrFull(artSrc, keepAlpha: false);
+
+            // Settled = no newer selection arrived while this image loaded. Decided under the lock so a
+            // selection landing right now is not lost: it keeps _detailRunning true and we loop to it.
+            bool settled;
+            lock (_detailLock) { settled = ReferenceEquals(_detailWant, g); if (settled) _detailRunning = false; }
+
+            try
+            {
+                if (!IsDisposed && !_closing && IsHandleCreated)
+                    Invoke((Action)(() =>
+                    {
+                        if (IsDisposed || !ReferenceEquals(_games.SelectedGame, g)) { logo?.Dispose(); art?.Dispose(); return; }
+                        if (settled) ApplyDetails(g, logo, art);   // landed → full pane
+                        else ApplyImageTransit(g, logo, art);      // scrolled past → base thumb + title only
+                    }));
+                else { logo?.Dispose(); art?.Dispose(); }
+            }
+            catch { logo?.Dispose(); art?.Dispose(); }
+
+            if (settled) return;   // a later selection restarts the loop via RequestDetail
+        }
+    }
+
+    // Settle: the selection landed here. Images are already decoded (on the loader thread) → applied
+    // directly (no re-load, no SetImage(null) flash) and the full pane is built.
+    private void ApplyDetails(IGame g, Image logo, Image art)
+    {
+        _detailsShown = g;
+        _heroGame = g;
+        ++_detailsLoadToken;        // invalidate any async load/fanart still in flight from a prior detail
+        SetHeroGame(g);             // title (text fallback) before the logo
+        _hero.SetLogo(logo);
+        _media.SetImage(art);
+        PopulateDetailMeta(g);
+    }
+
+    // Transit: a game merely scrolled past. Update only the base thumb + title/logo (cheap) so images
+    // track the scroll; the heavy pane (metadata, buttons, fanart, strip) waits for the settle above.
+    private void ApplyImageTransit(IGame g, Image logo, Image art)
+    {
+        _detailsShown = g;
+        _heroGame = g;
+        ++_detailsLoadToken;        // cancel a previous settle's fanart/strip still loading, mid-scroll
+        SetHeroGame(g);
+        _hero.SetLogo(logo);
+        _media.SetImage(art);
     }
 
     // Right pane when a TREE node (category / platform / playlist / All) is selected.

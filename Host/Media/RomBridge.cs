@@ -26,7 +26,7 @@ internal static class RomBridge
     private static bool _probed;
     private static Type _t;
     private static PropertyInfo _featureEnabled;
-    private static MethodInfo _getInfo, _pick, _arm, _entries;
+    private static MethodInfo _getInfo, _pick, _arm, _entries, _heal;
 
     private static void Probe()
     {
@@ -44,8 +44,17 @@ internal static class RomBridge
             _pick = _t.GetMethod("PickRomModal", F, null, new[] { typeof(IGame), typeof(string) }, null);
             _arm = _t.GetMethod("ArmSelectedRom", F, null, new[] { typeof(IGame), typeof(string), typeof(string), typeof(bool) }, null);
             _entries = _t.GetMethod("GetArchiveEntriesJson", F, null, new[] { typeof(IGame), typeof(string) }, null);
+            _heal = _t.GetMethod("HealRa", F, null, new[] { typeof(IGame) }, null);
         }
         catch { }
+    }
+
+    /// <summary>Select-time RA heal (plugin-side): reconciles a present-but-possibly-wrong
+    /// RetroAchievementsHash on the game to our value. No-op when ExtendDB is absent / no hash.</summary>
+    public static void HealRa(IGame game)
+    {
+        Probe();
+        try { _heal?.Invoke(null, new object[] { game }); } catch { }
     }
 
     /// <summary>True iff ExtendDB is loaded, new enough to expose the bridge, and

@@ -116,10 +116,8 @@ internal sealed class LaunchButtons : Panel
         _storeKind = StoreKind.None;
 
         if (game == null) { Visible = false; return; }
-
-        // Select-time RA heal (ExtendDB-side, no-op without the plugin / RA module / a present hash):
-        // reconciles a present-but-wrong RetroAchievementsHash to our value. Cheap once the cache is warm.
-        try { RomBridge.HealRa(game); } catch { }
+        // (RA heal moved to MainWindow.ScheduleMedia — fires at the debounced detail-load, not on every
+        //  selection change, so rapid scrolling never triggers it.)
 
         // Store games (GOG / Steam) bypass the emulator/version/ROM layer entirely:
         // a single Install/Play button drives the client via a URI (see Refresh2 / OnPlay).

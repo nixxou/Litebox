@@ -2505,6 +2505,10 @@ internal sealed class MainWindow : Form
             t.Stop(); t.Dispose();
             if (ReferenceEquals(_mediaTimer, t)) _mediaTimer = null;
             if (IsDisposed || token != _detailsLoadToken) return;
+            // RA heal at the debounced detail-load (not on every selection): reconcile a present-but-wrong
+            // RetroAchievementsHash to the plugin's value. Plugin-side, backgrounded; no-op without the
+            // RA module / a present hash. (Same moment we'll later load the RA panel data.)
+            try { Media.RomBridge.HealRa(g); } catch { }
             var items = BuildMediaList(g);
             _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
             if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full

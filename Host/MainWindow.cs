@@ -2527,11 +2527,11 @@ internal sealed class MainWindow : Form
             t.Stop(); t.Dispose();
             if (ReferenceEquals(_mediaTimer, t)) _mediaTimer = null;
             if (IsDisposed || token != _detailsLoadToken) return;
-            // RA heal at the debounced detail-load (not on every selection): reconcile a present-but-wrong
-            // RetroAchievementsHash to the plugin's value. Plugin-side, backgrounded; no-op without the
-            // RA module / a present hash. (Same moment we'll later load the RA panel data.)
-            try { Media.RomBridge.HealRa(g); } catch { }
-            try { LoadRaPanel(g, token); } catch { }   // RetroAchievements panel (LiteBox-native, from the raid)
+            // RA detail panel at the debounced detail-load (not on every selection). LoadRaPanel first runs
+            // the plugin's on-select hash/raid heal BLOCKING (so a never-hashed game gets its raid written
+            // BEFORE we display from it — fixes the "leave and come back" symptom), then fetches + shows the
+            // achievements. No-op without the plugin / RA module / OnSelect mode. Backgrounded inside.
+            try { LoadRaPanel(g, token); } catch { }
             var items = BuildMediaList(g);
             _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
             if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
@@ -2547,9 +2547,7 @@ internal sealed class MainWindow : Form
     private void LoadRaPanel(IGame g, int token)
     {
         if (_raCard == null) return;
-        int raid = RaFields.Raid(g);
-        var (xmlBeat, xmlMaster) = RaFields.ReadMedians(g);   // fallback only — the live medians come from the API now
-        if (raid <= 0 || !RaService.Configured) { _raCard.HidePanel(); return; }
+        var (xmlBeat, xmlMaster) = RaFields.ReadMedians(g);   // fallback only — live medians come from the API
 
         // Live medians (GetGameProgression, cached) take priority; the game XML is the fallback.
         void ShowWith(RaGameCache c)
@@ -2558,21 +2556,42 @@ internal sealed class MainWindow : Form
             _raCard.Expanded = _raExpanded;
         }
 
-        var cached = RaService.ReadCache(raid);
-        if (cached != null) ShowWith(cached);
-        else _raCard.ShowLoading();
+        // Optimistic first paint: raid already on the game + a cache → show now; known raid w/o cache →
+        // "loading"; nothing known yet → stay hidden and reveal only if the heal resolves a raid (no
+        // loading→hide flicker for non-RA games).
+        int raid0 = RaFields.Raid(g);
+        RaGameCache cached0 = raid0 > 0 ? RaService.ReadCache(raid0) : null;
+        if (cached0 != null) ShowWith(cached0);
+        else if (raid0 > 0) _raCard.ShowLoading();
+        else _raCard.HidePanel();
 
         System.Threading.Tasks.Task.Run(() =>
         {
-            var data = RaService.EnsureAndRead(raid);   // blocking fetch when missing/stale
+            // 1) Make sure the plugin's on-select hash/raid heal has actually RUN (BLOCKING) so a never-
+            //    hashed game gets its raid written BEFORE we read it. No-op without the plugin / RA module /
+            //    OnSelect mode. (Slow first time — hashes the ROM — hence off the UI thread.)
+            try { Media.RomBridge.HealRaSync(g); } catch { }
+            if (IsDisposed || token != _detailsLoadToken) return;
+
+            // 2) read the now-resolved raid (on the UI thread, matching the host's data-access pattern)
+            int raid = 0;
+            try { Invoke(new Action(() => raid = RaFields.Raid(g))); } catch { return; }
+            if (token != _detailsLoadToken) return;
+            if (raid <= 0 || !RaService.Configured)
+            {
+                try { BeginInvoke(new Action(() => { if (token == _detailsLoadToken) _raCard.HidePanel(); })); } catch { }
+                return;
+            }
+
+            // 3) fetch/cache achievements + medians, then show
+            var data = RaService.EnsureAndRead(raid);
             try
             {
-                if (IsDisposed) return;
                 BeginInvoke(new Action(() =>
                 {
                     if (token != _detailsLoadToken) return;   // selection moved on
                     if (data != null) ShowWith(data);
-                    else if (cached == null) _raCard.HidePanel();
+                    else if (cached0 == null) _raCard.HidePanel();
                 }));
             }
             catch { }

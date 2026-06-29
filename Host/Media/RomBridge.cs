@@ -26,7 +26,7 @@ internal static class RomBridge
     private static bool _probed;
     private static Type _t;
     private static PropertyInfo _featureEnabled;
-    private static MethodInfo _getInfo, _pick, _arm, _entries, _heal;
+    private static MethodInfo _getInfo, _pick, _arm, _entries, _heal, _healSync;
 
     private static void Probe()
     {
@@ -45,6 +45,7 @@ internal static class RomBridge
             _arm = _t.GetMethod("ArmSelectedRom", F, null, new[] { typeof(IGame), typeof(string), typeof(string), typeof(bool) }, null);
             _entries = _t.GetMethod("GetArchiveEntriesJson", F, null, new[] { typeof(IGame), typeof(string) }, null);
             _heal = _t.GetMethod("HealRa", F, null, new[] { typeof(IGame) }, null);
+            _healSync = _t.GetMethod("HealRaSync", F, null, new[] { typeof(IGame) }, null);
         }
         catch { }
     }
@@ -55,6 +56,20 @@ internal static class RomBridge
     {
         Probe();
         try { _heal?.Invoke(null, new object[] { game }); } catch { }
+    }
+
+    /// <summary>BLOCKING RA heal — resolves+writes the raid/hash before returning, so a caller that reads
+    /// the raid right after (the RA detail panel) doesn't race the async heal. Falls back to the async
+    /// HealRa on an older plugin that lacks it. Call OFF the UI thread.</summary>
+    public static void HealRaSync(IGame game)
+    {
+        Probe();
+        try
+        {
+            if (_healSync != null) { _healSync.Invoke(null, new object[] { game }); return; }
+            _heal?.Invoke(null, new object[] { game });   // older plugin: best-effort async
+        }
+        catch { }
     }
 
     /// <summary>True iff ExtendDB is loaded, new enough to expose the bridge, and

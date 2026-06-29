@@ -34,6 +34,7 @@ internal static class RaService
         return c;
     }
 
+    private const int CacheVer = 2;   // bump to invalidate every cached file after a shape change (e.g. medians added)
     private static readonly TimeSpan Ttl = TimeSpan.FromHours(12);
     private static readonly object _flightGate = new();
     private static readonly HashSet<string> _inFlight = new(StringComparer.Ordinal);
@@ -83,7 +84,7 @@ internal static class RaService
         try { File.WriteAllText(CacheFile(raid), JsonSerializer.Serialize(c)); } catch { }
     }
     private static bool IsFresh(RaGameCache? c)
-        => c != null
+        => c != null && c.ver == CacheVer
            && DateTime.TryParse(c.fetchedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt)
            && (DateTime.UtcNow - dt.ToUniversalTime()) < Ttl;
 
@@ -137,7 +138,9 @@ internal static class RaService
                 unlockedHardcore = api.NumAwardedToUserHardcore,
                 completion = api.UserCompletion,
                 fetchedAt = DateTime.UtcNow.ToString("o"),
+                ver = CacheVer,
             };
+            FetchMedians(raid, c);   // game-level "time to beat / master" commitments (separate endpoint)
             if (api.Achievements != null)
             {
                 foreach (var kv in api.Achievements)
@@ -159,7 +162,44 @@ internal static class RaService
         catch (Exception ex) { Console.WriteLine($"[ra] fetch g={raid} failed: {ex.Message}"); return null; }
     }
 
+    // API_GetGameProgression — game-level "time to beat / master" medians. The API gives SECONDS; LB
+    // stores (and we display) MINUTES (verified: MedianTimeToBeatHardcore 44765s → 746 min). Best-effort:
+    // a failure leaves the medians 0 and the card falls back to whatever the game XML carries.
+    private static void FetchMedians(int raid, RaGameCache c)
+    {
+        if (string.IsNullOrEmpty(_key)) return;
+        try
+        {
+            string url = "https://retroachievements.org/API/API_GetGameProgression.php"
+                       + $"?i={raid}&y={Uri.EscapeDataString(_key!)}"
+                       + (string.IsNullOrEmpty(_user) ? "" : $"&z={Uri.EscapeDataString(_user!)}");
+            string body;
+            using (var resp = Http.GetAsync(url).GetAwaiter().GetResult())
+            {
+                if (!resp.IsSuccessStatusCode) return;
+                body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            }
+            var p = JsonSerializer.Deserialize<ApiProgression>(body, JsonOpts);
+            if (p == null) return;
+            c.beatMin = SecToMin(p.MedianTimeToBeatHardcore);
+            c.masterMin = SecToMin(p.MedianTimeToMaster);
+            c.beatSamples = p.TimesUsedInHardcoreBeatMedian;
+            c.masterSamples = p.TimesUsedInMasteryMedian;
+        }
+        catch (Exception ex) { Console.WriteLine($"[ra] medians g={raid} failed: {ex.Message}"); }
+    }
+
+    private static int SecToMin(int seconds) => seconds > 0 ? (int)Math.Round(seconds / 60.0) : 0;
+
     // ── API DTOs ─────────────────────────────────────────────────────────────────────────────
+    private sealed class ApiProgression
+    {
+        public int MedianTimeToBeatHardcore { get; set; }
+        public int MedianTimeToMaster { get; set; }
+        public int TimesUsedInHardcoreBeatMedian { get; set; }
+        public int TimesUsedInMasteryMedian { get; set; }
+    }
+
     private sealed class ApiGame
     {
         public int ID { get; set; }
@@ -197,6 +237,11 @@ internal sealed class RaGameCache
     public int unlocked { get; set; }
     public int unlockedHardcore { get; set; }
     public string? completion { get; set; }
+    public int beatMin { get; set; }        // median "time to beat" (hardcore), minutes — from GetGameProgression
+    public int masterMin { get; set; }      // median "time to master", minutes
+    public int beatSamples { get; set; }    // sample size behind each median (TimesUsedIn…Median)
+    public int masterSamples { get; set; }
+    public int ver { get; set; }            // cache-shape version (RaService.CacheVer) — old files are refetched
     public string? fetchedAt { get; set; }
     public List<RaCacheAch> achievements { get; set; } = new();
 }

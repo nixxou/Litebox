@@ -2548,11 +2548,18 @@ internal sealed class MainWindow : Form
     {
         if (_raCard == null) return;
         int raid = RaFields.Raid(g);
-        var (beat, master) = RaFields.ReadMedians(g);
+        var (xmlBeat, xmlMaster) = RaFields.ReadMedians(g);   // fallback only — the live medians come from the API now
         if (raid <= 0 || !RaService.Configured) { _raCard.HidePanel(); return; }
 
+        // Live medians (GetGameProgression, cached) take priority; the game XML is the fallback.
+        void ShowWith(RaGameCache c)
+        {
+            _raCard.Show(c, c.beatMin > 0 ? c.beatMin : xmlBeat, c.masterMin > 0 ? c.masterMin : xmlMaster);
+            _raCard.Expanded = _raExpanded;
+        }
+
         var cached = RaService.ReadCache(raid);
-        if (cached != null) { _raCard.Show(cached, beat, master); _raCard.Expanded = _raExpanded; }
+        if (cached != null) ShowWith(cached);
         else _raCard.ShowLoading();
 
         System.Threading.Tasks.Task.Run(() =>
@@ -2564,7 +2571,7 @@ internal sealed class MainWindow : Form
                 BeginInvoke(new Action(() =>
                 {
                     if (token != _detailsLoadToken) return;   // selection moved on
-                    if (data != null) { _raCard.Show(data, beat, master); _raCard.Expanded = _raExpanded; }
+                    if (data != null) ShowWith(data);
                     else if (cached == null) _raCard.HidePanel();
                 }));
             }

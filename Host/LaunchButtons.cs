@@ -228,7 +228,7 @@ internal sealed class LaunchButtons : Panel
         bool romOk = RomAppliesFor(_selVerAppId, CurrentEmuId());
         if (romOk)
         {
-            _rom.Text = string.IsNullOrEmpty(_selRom) ? "ROM" : "ROM: " + _selRom;
+            _rom.Text = string.IsNullOrEmpty(_selRom) ? "ROM" : "ROM: " + System.IO.Path.GetFileName(_selRom);
             _rom.Visible = true;
         }
         else { _rom.Visible = false; if (!_romFeature) _selRom = null; }
@@ -284,7 +284,7 @@ internal sealed class LaunchButtons : Panel
     // entries, then "More…" which opens the advanced picker (sortable table).
     private const int RomQuickMax = 7;
 
-    private sealed record RomEntry(string FileName, long Size, bool IsFavorite, bool IsLastPlayed, bool HasRa);
+    private sealed record RomEntry(string FileName, string PathInArchive, long Size, bool IsFavorite, bool IsLastPlayed, bool HasRa);
 
     private void OnRomClick()
     {
@@ -303,25 +303,33 @@ internal sealed class LaunchButtons : Panel
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // Identity = PathInArchive; the LABEL stays the basename EXCEPT for entries whose basename is
+        // duplicated within this archive — those show the in-archive path to disambiguate.
+        var dupNames = entries.GroupBy(e => e.FileName, StringComparer.OrdinalIgnoreCase)
+                              .Where(grp => grp.Count() > 1).Select(grp => grp.Key)
+                              .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string Label(RomEntry e) => dupNames.Contains(e.FileName) ? e.PathInArchive : e.FileName;
+
         // The single last-launched ROM (lastLaunch, else the most recently played) — gets the ↻ marker.
         RomEntry last = null;
         if (!string.IsNullOrEmpty(_lastRomEntry))
-            last = entries.FirstOrDefault(e => string.Equals(e.FileName, _lastRomEntry, StringComparison.OrdinalIgnoreCase));
+            last = entries.FirstOrDefault(e => string.Equals(e.PathInArchive, _lastRomEntry, StringComparison.OrdinalIgnoreCase))
+                ?? entries.FirstOrDefault(e => string.Equals(e.FileName, _lastRomEntry, StringComparison.OrdinalIgnoreCase));
         last ??= entries.FirstOrDefault(e => e.IsLastPlayed);
-        var lastName = last?.FileName;
+        var lastKey = last?.PathInArchive;
 
         // Markers CUMULATE per entry, in order: ↻ (last launched) ★ (favourite) 🏆 (RetroAchievements).
         // Computed from the entry's own properties (not the bucket), so a ROM that is e.g. last AND
         // favourite AND RA shows "↻ ★ 🏆 name" rather than just the bucket's single glyph.
         void Push(RomEntry e)
         {
-            if (e == null || !seen.Add(e.FileName)) return;
+            if (e == null || !seen.Add(e.PathInArchive)) return;
             var prefix = "";
-            if (e.IsLastPlayed || (lastName != null && string.Equals(e.FileName, lastName, StringComparison.OrdinalIgnoreCase))) prefix += "↻ ";
+            if (e.IsLastPlayed || (lastKey != null && string.Equals(e.PathInArchive, lastKey, StringComparison.OrdinalIgnoreCase))) prefix += "↻ ";
             if (e.IsFavorite) prefix += "★ ";
             if (e.HasRa)      prefix += "🏆 ";
-            var it = new ToolStripMenuItem(prefix + e.FileName) { Checked = string.Equals(_selRom, e.FileName, StringComparison.OrdinalIgnoreCase) };
-            it.Click += (_, _) => { _selRom = e.FileName; _forcePriority = false; PersistRomSelection(); Refresh2(); };
+            var it = new ToolStripMenuItem(prefix + Label(e)) { Checked = string.Equals(_selRom, e.PathInArchive, StringComparison.OrdinalIgnoreCase) };
+            it.Click += (_, _) => { _selRom = e.PathInArchive; _forcePriority = false; PersistRomSelection(); Refresh2(); };
             menu.Items.Add(it);
         }
 
@@ -338,7 +346,7 @@ internal sealed class LaunchButtons : Panel
         foreach (var e in entries)
         {
             if (prio >= RomQuickMax) break;
-            if (e.IsFavorite || seen.Contains(e.FileName)) continue;
+            if (e.IsFavorite || seen.Contains(e.PathInArchive)) continue;
             Push(e);
             prio++;
         }
@@ -377,11 +385,13 @@ internal sealed class LaunchButtons : Panel
             {
                 var name = e.TryGetProperty("fileName", out var n) ? n.GetString() : null;
                 if (string.IsNullOrEmpty(name)) continue;
+                var path = e.TryGetProperty("pathInArchive", out var pa) && pa.ValueKind == JsonValueKind.String ? pa.GetString() : null;
+                if (string.IsNullOrEmpty(path)) path = name;   // flat archive / older plugin → path == basename
                 long size = e.TryGetProperty("size", out var s) && s.ValueKind == JsonValueKind.Number ? s.GetInt64() : 0;
                 bool fav = e.TryGetProperty("isFavorite", out var f) && f.ValueKind == JsonValueKind.True;
                 bool lp = e.TryGetProperty("isLastPlayed", out var l) && l.ValueKind == JsonValueKind.True;
                 bool ra = e.TryGetProperty("retroAchievements", out var r) && r.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(r.GetString());
-                list.Add(new RomEntry(name!, size, fav, lp, ra));
+                list.Add(new RomEntry(name!, path!, size, fav, lp, ra));
             }
             return list;
         }

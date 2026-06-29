@@ -19,6 +19,7 @@ using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Host.Data;
 using LbApiHost.Host.Media;
+using LbApiHost.Host.Ra;
 
 namespace LbApiHost.Host;
 
@@ -127,9 +128,11 @@ internal sealed class MainWindow : Form
     private System.Windows.Forms.Timer _mediaTimer;   // 0.5s debounce: build strip + upgrade main to full
     private readonly MetaCard _meta;             // title + platform + expandable game fields (or node text)
     private readonly VndbCard _vndb;             // expandable box of coloured VNDB tags (content/tech/ero)
+    private RetroAchievementsCard _raCard;       // expandable RetroAchievements box (LiteBox-native, from the raid)
     private readonly TextBox _notes;
     private static bool _metaExpanded;           // remembered expand state of the platform meta card (session + INI)
     private static bool _vndbExpanded;           // remembered expand state of the VNDB tags box (session + INI)
+    private static bool _raExpanded;             // remembered expand state of the RetroAchievements box (session + INI)
     private readonly Dictionary<string, Image> _platIconCache = new(StringComparer.OrdinalIgnoreCase);
 
     private IGame[] _current = Array.Empty<IGame>();
@@ -187,6 +190,7 @@ internal sealed class MainWindow : Form
         _posterOwnerDraw = _cfg.GetBool("PosterOwnerDraw", false);   // legacy poster renderer (vs native image list)
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
         _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
+        _raExpanded = _cfg.GetBool("RaExpanded", false);
         Text = _secondInstance
             ? "LiteBox — READ-ONLY (another instance is open — changes won't be saved)"
             : "LiteBox";
@@ -707,12 +711,13 @@ internal sealed class MainWindow : Form
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
         _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
 
-        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 6, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 7, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));    // meta card (title + platform + expandable fields, wraps)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // VNDB tags box (0 when none; expandable)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // RetroAchievements box (0 when no raid; expandable)
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest)
         _detailGrid = tlp;
 
@@ -721,6 +726,9 @@ internal sealed class MainWindow : Form
         strip = new MediaStrip { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 4, 0, 4) };
         meta = new MetaCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         vndb = new VndbCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
+        _raCard = new RetroAchievementsCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
+        _raCard.ExpandedChanged = OnRaExpandedToggled;
+        _raCard.LayoutChanged = RelayoutDetail;
         notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
 
         tlp.Controls.Add(hero, 0, 0);
@@ -728,7 +736,8 @@ internal sealed class MainWindow : Form
         tlp.Controls.Add(strip, 0, 2);
         tlp.Controls.Add(meta, 0, 3);
         tlp.Controls.Add(vndb, 0, 4);
-        tlp.Controls.Add(notes, 0, 5);
+        tlp.Controls.Add(_raCard, 0, 5);
+        tlp.Controls.Add(notes, 0, 6);
         return tlp;
     }
 
@@ -752,7 +761,7 @@ internal sealed class MainWindow : Form
     private void RelayoutDetail()
     {
         var host = _detailHost; var tlp = _detailGrid;
-        if (host == null || tlp == null || tlp.RowStyles.Count < 6 || _inRelayout) return;
+        if (host == null || tlp == null || tlp.RowStyles.Count < 7 || _inRelayout) return;
         _inRelayout = true;
         try { RelayoutDetailCore(host, tlp); }
         finally { _inRelayout = false; }
@@ -768,7 +777,7 @@ internal sealed class MainWindow : Form
         int padH = tlp.Padding.Horizontal, padV = tlp.Padding.Vertical;
 
         // Minimum content height for a given grid width (media capped to the viewport).
-        int MinContent(int gridW, out int mediaH, out int metaH, out int vndbH)
+        int MinContent(int gridW, out int mediaH, out int metaH, out int vndbH, out int raH)
         {
             int colW = Math.Max(20, gridW - padH);
             mediaH = (int)Math.Round(colW / _mediaAspect);
@@ -777,12 +786,13 @@ internal sealed class MainWindow : Form
             if (mediaH < 90) mediaH = 90;
             metaH = _meta.HeightForWidth(colW);
             vndbH = _vndb.HeightForWidth(colW);
-            return padV + 158 + mediaH + _stripRowH + metaH + vndbH + MinNotesH;
+            raH = _raCard?.HeightForWidth(colW) ?? 0;
+            return padV + 158 + mediaH + _stripRowH + metaH + vndbH + raH + MinNotesH;
         }
 
-        bool overflow = MinContent(fullW, out _, out _, out _) > viewH;
+        bool overflow = MinContent(fullW, out _, out _, out _, out _) > viewH;
         int wantW = overflow ? Math.Max(80, fullW - sbw) : fullW;
-        int minContent = MinContent(wantW, out int media, out int meta, out int vndb);
+        int minContent = MinContent(wantW, out int media, out int meta, out int vndb, out int ra);
 
         var rsMedia = tlp.RowStyles[1];
         if (rsMedia.SizeType != SizeType.Absolute || Math.Abs(rsMedia.Height - media) > 0.5) { rsMedia.SizeType = SizeType.Absolute; rsMedia.Height = media; }
@@ -792,6 +802,8 @@ internal sealed class MainWindow : Form
         if (rsMeta.SizeType != SizeType.Absolute || Math.Abs(rsMeta.Height - meta) > 0.5) { rsMeta.SizeType = SizeType.Absolute; rsMeta.Height = meta; }
         var rsVndb = tlp.RowStyles[4];
         if (rsVndb.SizeType != SizeType.Absolute || Math.Abs(rsVndb.Height - vndb) > 0.5) { rsVndb.SizeType = SizeType.Absolute; rsVndb.Height = vndb; }
+        var rsRa = tlp.RowStyles[5];
+        if (rsRa.SizeType != SizeType.Absolute || Math.Abs(rsRa.Height - ra) > 0.5) { rsRa.SizeType = SizeType.Absolute; rsRa.Height = ra; }
 
         // Drive the scroll range, then size the grid to EXACTLY the width the meta/vndb were measured
         // at (wantW). Using host.ClientSize.Width here is unsafe right after changing AutoScrollMinSize:
@@ -814,6 +826,12 @@ internal sealed class MainWindow : Form
     private void OnVndbExpandedToggled()
     {
         _vndbExpanded = _vndb.Expanded;
+        RelayoutDetail();
+    }
+
+    private void OnRaExpandedToggled()
+    {
+        _raExpanded = _raCard.Expanded;
         RelayoutDetail();
     }
 
@@ -933,6 +951,7 @@ internal sealed class MainWindow : Form
         _cfg.SetBool("SortAsc", _ascending);
         _cfg.SetBool("MetaExpanded", _metaExpanded);
         _cfg.SetBool("VndbExpanded", _vndbExpanded);
+        _cfg.SetBool("RaExpanded", _raExpanded);
         SaveSplitters();
         _cfg.Save();
     }
@@ -2136,7 +2155,7 @@ internal sealed class MainWindow : Form
             LoadImagesAsync(null, null);
             ScheduleFanart(null, null);
             ClearStrip();
-            _meta.Clear(); _vndb.Clear(); _notes.Text = ""; RelayoutDetail();
+            _meta.Clear(); _vndb.Clear(); _raCard?.HidePanel(); _notes.Text = ""; RelayoutDetail();
             _launchButtons?.HideGame();
             SetStorePoll(false);
             return;
@@ -2198,6 +2217,7 @@ internal sealed class MainWindow : Form
         _meta.Expanded = _metaExpanded;   // honour the remembered expand state
         _vndb.SetTags(vndbTags);
         _vndb.Expanded = _vndbExpanded;
+        _raCard?.HidePanel();   // clean slate at selection — the debounced ScheduleMedia tick (re)fills it from the raid
         RelayoutDetail();
 
         _notes.Text = S(g.Notes).Replace("\n", "\r\n");
@@ -2308,6 +2328,7 @@ internal sealed class MainWindow : Form
             if (node is AllNode) _meta.ShowNode("All Games", new List<string> { $"Total Games: {_current.Length}" });
             else _meta.Clear();
             _vndb.Clear();
+            _raCard?.HidePanel();
             _notes.Text = "";
             PopulateNodeRecentStrip(node is AllNode);   // recently played of the node (empty pane → clears)
             RelayoutDetail();
@@ -2329,6 +2350,7 @@ internal sealed class MainWindow : Form
         }
         _meta.ShowNode(HostPlatformCategory.NodeName(node) ?? "", bits);
         _vndb.Clear();
+        _raCard?.HidePanel();
         RelayoutDetail();
         _notes.Text = NodeNotes(node).Replace("\n", "\r\n");
     }
@@ -2509,12 +2531,45 @@ internal sealed class MainWindow : Form
             // RetroAchievementsHash to the plugin's value. Plugin-side, backgrounded; no-op without the
             // RA module / a present hash. (Same moment we'll later load the RA panel data.)
             try { Media.RomBridge.HealRa(g); } catch { }
+            try { LoadRaPanel(g, token); } catch { }   // RetroAchievements panel (LiteBox-native, from the raid)
             var items = BuildMediaList(g);
             _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
             if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
             PopulateStrip(items, token);
         };
         t.Start();
+    }
+
+    // Loads + shows the RetroAchievements detail card for a game, at the debounced detail-load (NOT on every
+    // selection). PURE LiteBox: reads the raid + median commitments from the <Game> XML (GetField), then
+    // fetches/caches achievements via the public RA Web API (RaService) — no ExtendDB needed at display time.
+    // A fresh cache shows instantly; otherwise a brief "loading" box, the fetch on a bg thread, then the data.
+    private void LoadRaPanel(IGame g, int token)
+    {
+        if (_raCard == null) return;
+        int raid = RaFields.Raid(g);
+        var (beat, master) = RaFields.ReadMedians(g);
+        if (raid <= 0 || !RaService.Configured) { _raCard.HidePanel(); return; }
+
+        var cached = RaService.ReadCache(raid);
+        if (cached != null) { _raCard.Show(cached, beat, master); _raCard.Expanded = _raExpanded; }
+        else _raCard.ShowLoading();
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var data = RaService.EnsureAndRead(raid);   // blocking fetch when missing/stale
+            try
+            {
+                if (IsDisposed) return;
+                BeginInvoke(new Action(() =>
+                {
+                    if (token != _detailsLoadToken) return;   // selection moved on
+                    if (data != null) { _raCard.Show(data, beat, master); _raCard.Expanded = _raExpanded; }
+                    else if (cached == null) _raCard.HidePanel();
+                }));
+            }
+            catch { }
+        });
     }
 
     // Sets the main media. NOTE: single extension point — a future video item would be

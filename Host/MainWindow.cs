@@ -2590,7 +2590,11 @@ internal sealed class MainWindow : Form
                 BeginInvoke(new Action(() =>
                 {
                     if (token != _detailsLoadToken) return;   // selection moved on
-                    if (data != null) ShowWith(data);
+                    if (data != null)
+                    {
+                        ShowWith(data);
+                        RaXmlWriter.Write(g, data);   // persist medians/beaten/cached-date to the <Game> XML (op-log)
+                    }
                     else if (cached0 == null) _raCard.HidePanel();
                 }));
             }

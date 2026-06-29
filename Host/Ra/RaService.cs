@@ -34,7 +34,7 @@ internal static class RaService
         return c;
     }
 
-    private const int CacheVer = 2;   // bump to invalidate every cached file after a shape change (e.g. medians added)
+    private const int CacheVer = 3;   // bump to invalidate every cached file after a shape change (e.g. medians/beaten added)
     private static readonly TimeSpan Ttl = TimeSpan.FromHours(12);
     private static readonly object _flightGate = new();
     private static readonly HashSet<string> _inFlight = new(StringComparer.Ordinal);
@@ -117,8 +117,9 @@ internal static class RaService
         if (string.IsNullOrEmpty(_key) || string.IsNullOrEmpty(_user)) return null;
         try
         {
+            // a=1 → include the award fields (HighestAwardKind) we need for the beaten-softcore/hardcore flags.
             string url = "https://retroachievements.org/API/API_GetGameInfoAndUserProgress.php"
-                       + $"?g={raid}&u={Uri.EscapeDataString(_user!)}&y={Uri.EscapeDataString(_key!)}";
+                       + $"?g={raid}&u={Uri.EscapeDataString(_user!)}&y={Uri.EscapeDataString(_key!)}&a=1";
             string body;
             using (var resp = Http.GetAsync(url).GetAwaiter().GetResult())
             {
@@ -140,6 +141,11 @@ internal static class RaService
                 fetchedAt = DateTime.UtcNow.ToString("o"),
                 ver = CacheVer,
             };
+            // Beaten flags from the user's HighestAwardKind (a=1). Any award ⇒ beaten-softcore; the
+            // hardcore variants ⇒ beaten-hardcore. null/absent (no progress) ⇒ both false (matches LB).
+            string awk = api.HighestAwardKind ?? "";
+            c.beatenSoftcore = awk is "beaten-softcore" or "beaten-hardcore" or "completed" or "mastered";
+            c.beatenHardcore = awk is "beaten-hardcore" or "mastered";
             FetchMedians(raid, c);   // game-level "time to beat / master" commitments (separate endpoint)
             if (api.Achievements != null)
             {
@@ -211,6 +217,7 @@ internal static class RaService
         public string? UserCompletion { get; set; }
         public string? UserCompletionHardcore { get; set; }
         public int UserTotalPlaytime { get; set; }
+        public string? HighestAwardKind { get; set; }   // mastered / completed / beaten-hardcore / beaten-softcore (a=1)
         public Dictionary<string, ApiAch>? Achievements { get; set; }
     }
     private sealed class ApiAch
@@ -241,6 +248,8 @@ internal sealed class RaGameCache
     public int masterMin { get; set; }      // median "time to master", minutes
     public int beatSamples { get; set; }    // sample size behind each median (TimesUsedIn…Median)
     public int masterSamples { get; set; }
+    public bool beatenSoftcore { get; set; }   // from HighestAwardKind — mirrors LB's RetroAchievementsBeaten* XML
+    public bool beatenHardcore { get; set; }
     public int ver { get; set; }            // cache-shape version (RaService.CacheVer) — old files are refetched
     public string? fetchedAt { get; set; }
     public List<RaCacheAch> achievements { get; set; } = new();

@@ -35,7 +35,9 @@ internal static class RaService
     }
 
     private const int CacheVer = 3;   // bump to invalidate every cached file after a shape change (e.g. medians/beaten added)
-    private static readonly TimeSpan Ttl = TimeSpan.FromHours(12);
+    // Safety-net TTL for the game-level data (medians drift, achievements get added). The USER's own
+    // progress is caught earlier by the LastPlayed trigger, so this can be generous.
+    private static readonly TimeSpan Ttl = TimeSpan.FromDays(7);
     private static readonly object _flightGate = new();
     private static readonly HashSet<string> _inFlight = new(StringComparer.Ordinal);
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
@@ -83,19 +85,25 @@ internal static class RaService
     {
         try { File.WriteAllText(CacheFile(raid), JsonSerializer.Serialize(c)); } catch { }
     }
-    private static bool IsFresh(RaGameCache? c)
-        => c != null && c.ver == CacheVer
-           && DateTime.TryParse(c.fetchedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt)
-           && (DateTime.UtcNow - dt.ToUniversalTime()) < Ttl;
+    /// <summary>Fresh = right cache version, within the safety TTL, AND not played since we cached (the
+    /// user's unlock progress only changes when they play, so a launch after the cache invalidates it).</summary>
+    private static bool IsFresh(RaGameCache? c, DateTime lastPlayedUtc)
+    {
+        if (c == null || c.ver != CacheVer) return false;
+        if (!DateTime.TryParse(c.fetchedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt)) return false;
+        var fetched = dt.ToUniversalTime();
+        if ((DateTime.UtcNow - fetched) >= Ttl) return false;
+        return lastPlayedUtc <= fetched;   // played since we cached → stale
+    }
 
-    /// <summary>Returns the panel data for a raid, fetching from the API first when the cache is missing
-    /// or stale. BLOCKING (network) — call from a background thread. Single-flight per raid: a concurrent
-    /// call for the same raid returns the existing cache rather than double-fetching.</summary>
-    public static RaGameCache? EnsureAndRead(int raid)
+    /// <summary>Returns the panel data for a raid, fetching from the API first when the cache is missing,
+    /// stale (TTL), or the game was PLAYED since it was cached (<paramref name="lastPlayedUtc"/>). BLOCKING
+    /// (network) — call from a background thread. Single-flight per raid.</summary>
+    public static RaGameCache? EnsureAndRead(int raid, DateTime lastPlayedUtc)
     {
         if (raid <= 0) return null;
         var cache = ReadCache(raid);
-        if (IsFresh(cache)) return cache;
+        if (IsFresh(cache, lastPlayedUtc)) return cache;
 
         string key = raid.ToString();
         bool mine;

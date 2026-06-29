@@ -2548,6 +2548,10 @@ internal sealed class MainWindow : Form
     {
         if (_raCard == null) return;
         var (xmlBeat, xmlMaster) = RaFields.ReadMedians(g);   // fallback only — live medians come from the API
+        // Played-since-cached invalidates the cache (your unlock progress changed). Read on the UI thread.
+        DateTime lastPlayedUtc;
+        try { var lp = g.LastPlayedDate; lastPlayedUtc = lp.HasValue ? lp.Value.ToUniversalTime() : DateTime.MinValue; }
+        catch { lastPlayedUtc = DateTime.MinValue; }
 
         // Live medians (GetGameProgression, cached) take priority; the game XML is the fallback.
         void ShowWith(RaGameCache c)
@@ -2583,8 +2587,8 @@ internal sealed class MainWindow : Form
                 return;
             }
 
-            // 3) fetch/cache achievements + medians, then show
-            var data = RaService.EnsureAndRead(raid);
+            // 3) fetch/cache achievements + medians (refetch if stale or played since cached), then show
+            var data = RaService.EnsureAndRead(raid, lastPlayedUtc);
             try
             {
                 BeginInvoke(new Action(() =>

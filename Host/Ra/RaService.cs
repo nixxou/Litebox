@@ -68,6 +68,10 @@ internal static class RaService
     /// <summary>True when a key + username are configured (else the panel can't fetch anything).</summary>
     public static bool Configured { get { ReadSettings(); return !string.IsNullOrEmpty(_key) && !string.IsNullOrEmpty(_user); } }
 
+    /// <summary>The RA Web API key from LB's Settings.xml (null/empty when unset). Shared with the LiteBox-
+    /// native RA fallback (RaCatalogLite) so it doesn't re-parse Settings.xml.</summary>
+    internal static string? ApiKey { get { ReadSettings(); return _key; } }
+
     // ── cache: Core\ra-cache\<raid>.json ─────────────────────────────────────────────────────
     private static string CacheDir
     {

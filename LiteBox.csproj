@@ -74,4 +74,13 @@
     <EmbeddedResource Include="litebox.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Bundled RAHasher payload (RahasherExtendDB.exe + native deps as ".dll.api" + licences). Copied
+         next to LiteBox.exe under thirdparty\ so the LiteBox-native RA fallback (RaHasherLite) can deploy
+         it into LB\ThirdParty\RetroAchievements\ when ExtendDB hasn't already — see RaHasherLite.EnsureExe. -->
+    <Content Include="thirdparty\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

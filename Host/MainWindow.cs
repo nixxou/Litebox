@@ -2574,7 +2574,12 @@ internal sealed class MainWindow : Form
             // 1) Make sure the plugin's on-select hash/raid heal has actually RUN (BLOCKING) so a never-
             //    hashed game gets its raid written BEFORE we read it. No-op without the plugin / RA module /
             //    OnSelect mode. (Slow first time — hashes the ROM — hence off the UI thread.)
-            try { Media.RomBridge.HealRaSync(g); } catch { }
+            try
+            {
+                if (Media.RomBridge.RaActive) Media.RomBridge.HealRaSync(g);   // ExtendDB present + RA module on → it owns the hash/raid
+                else RaResolveLite.Resolve(g);                                 // ExtendDB absent / RA module off → LiteBox-native fallback
+            }
+            catch { }
             if (IsDisposed || token != _detailsLoadToken) return;
 
             // 2) read the now-resolved raid (on the UI thread, matching the host's data-access pattern)

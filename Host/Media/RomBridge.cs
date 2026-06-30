@@ -25,7 +25,7 @@ internal static class RomBridge
 {
     private static bool _probed;
     private static Type _t;
-    private static PropertyInfo _featureEnabled;
+    private static PropertyInfo _featureEnabled, _raModuleActive;
     private static MethodInfo _getInfo, _pick, _arm, _entries, _heal, _healSync;
 
     private static void Probe()
@@ -40,6 +40,7 @@ internal static class RomBridge
             if (_t == null) return;
             const BindingFlags F = BindingFlags.Public | BindingFlags.Static;
             _featureEnabled = _t.GetProperty("FeatureEnabled", F);
+            _raModuleActive = _t.GetProperty("RaModuleActive", F);
             _getInfo = _t.GetMethod("GetLaunchInfoJson", F, null, new[] { typeof(IGame) }, null);
             _pick = _t.GetMethod("PickRomModal", F, null, new[] { typeof(IGame), typeof(string) }, null);
             _arm = _t.GetMethod("ArmSelectedRom", F, null, new[] { typeof(IGame), typeof(string), typeof(string), typeof(bool) }, null);
@@ -83,6 +84,22 @@ internal static class RomBridge
             if (_t == null || _getInfo == null) return false;
             try { return _featureEnabled == null || (bool)_featureEnabled.GetValue(null); }
             catch { return false; }
+        }
+    }
+
+    /// <summary>True when ExtendDB is present AND its RetroAchievements module owns the hash/raid resolution.
+    /// When false (ExtendDB absent, or its RA module off), the LiteBox-native fallback (RaResolveLite) takes
+    /// over. An older plugin that predates the RaModuleActive property is assumed to handle RA (defer, so we
+    /// never double-resolve) — same conservative default as today.</summary>
+    public static bool RaActive
+    {
+        get
+        {
+            Probe();
+            if (_t == null) return false;                  // ExtendDB absent → LiteBox handles RA
+            if (_raModuleActive == null) return true;      // old plugin without the flag → assume it handles RA
+            try { return (bool)_raModuleActive.GetValue(null); }
+            catch { return true; }
         }
     }
 

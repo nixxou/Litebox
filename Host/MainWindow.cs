@@ -1125,63 +1125,11 @@ internal sealed class MainWindow : Form
         return (panel, apply);
     }
 
-    // ── RetroAchievements options section (LiteBox-native fallback scan) ──────────────────────────
-    // Only added to the options window when ExtendDB isn't resolving RA (RomBridge.RaActive == false).
-    private const string RaAllPlatforms = "(All platforms)";
-
-    private Control BuildRetroAchievementsScanPanel()
-    {
-        var fg = Color.FromArgb(222, 222, 222);
-        var sub = Color.FromArgb(150, 150, 152);
-        var panel = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false,
-            AutoScroll = true, BackColor = Color.FromArgb(30, 30, 30),
-        };
-        Label L(string t, Color col, bool bold = false) => new Label
-        {
-            Text = t, ForeColor = col, AutoSize = true, MaximumSize = new Size(580, 0),
-            Margin = new Padding(2, 4, 2, 4),
-            Font = bold ? new Font("Segoe UI", 10.5f, FontStyle.Bold) : Font,
-        };
-
-        panel.Controls.Add(L("RetroAchievements — native resolution (fallback)", fg, true));
-        panel.Controls.Add(L("Active because ExtendDB isn't resolving RetroAchievements (it's absent, or its RA "
-            + "module is off). LiteBox computes the rahash and looks up the raid itself, then the panel shows it.", sub));
-
-        if (!Ra.RaService.Configured)
-            panel.Controls.Add(L("⚠  No RetroAchievements API key / username in Settings.xml — hashes can be "
-                + "computed but raids won't be resolved.", Color.FromArgb(222, 175, 90)));
-
-        panel.Controls.Add(L("Platform:", fg));
-        var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 340, Margin = new Padding(2, 2, 2, 8) };
-        combo.Items.Add(RaAllPlatforms);
-        foreach (var n in RaPlatformNamesSorted()) combo.Items.Add(n);
-        combo.SelectedIndex = 0;
-        panel.Controls.Add(combo);
-
-        panel.Controls.Add(L("Lite scan: resolve only games that have no hash yet.\n"
-            + "Full scan: recompute every game (picks up a raid that appeared in RA after a game was first resolved).", sub));
-
-        bool canWrite = !_cfg.ReadOnly;
-        Button Btn(string t)
-        {
-            var b = new Button { Text = t, AutoSize = true, FlatStyle = FlatStyle.Flat, ForeColor = fg, Margin = new Padding(2, 4, 8, 4), Padding = new Padding(10, 4, 10, 4) };
-            b.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 75);
-            b.Enabled = canWrite;
-            return b;
-        }
-        var lite = Btn("Lite scan");
-        var full = Btn("Full scan");
-        lite.Click += (_, _) => RunRaScan(combo.SelectedItem as string, full: false);
-        full.Click += (_, _) => RunRaScan(combo.SelectedItem as string, full: true);
-        var row = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, Margin = new Padding(0, 6, 0, 4) };
-        row.Controls.Add(lite); row.Controls.Add(full);
-        panel.Controls.Add(row);
-        if (!canWrite) panel.Controls.Add(L("(Read-only mode — scanning is disabled.)", sub));
-
-        return panel;
-    }
+    // ── RetroAchievements scan — data-side helpers ──────────────────────────────────────────────
+    // The UI (platform picker + Lite/Full buttons) lives in the LB · Integrations → RetroAchievements
+    // tab (LbGlobalOptions); MainWindow only provides the platform list + the scan launcher (they need
+    // the data manager), handed over via Options.RaScanHook. RunRaScan enumerates on the UI thread,
+    // shows the modal progress dialog, then flushes.
 
     private System.Collections.Generic.IEnumerable<string> RaPlatformNamesSorted()
     {
@@ -1200,7 +1148,7 @@ internal sealed class MainWindow : Form
             {
                 if (p == null) continue;
                 string name = null; try { name = p.Name; } catch { }
-                if (!string.IsNullOrEmpty(sel) && sel != RaAllPlatforms && !string.Equals(name, sel, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrEmpty(sel) && sel != Options.RaScanHook.AllPlatforms && !string.Equals(name, sel, StringComparison.OrdinalIgnoreCase)) continue;
                 IGame[] gs = null; try { gs = p.GetAllGames(true, true); } catch { }
                 if (gs != null) foreach (var g in gs) if (g != null) list.Add(g);
             }
@@ -1215,7 +1163,7 @@ internal sealed class MainWindow : Form
         {
             var games = RaGatherGames(sel);
             if (games.Count == 0) { MessageBox.Show(this, "No games found for this selection.", "RetroAchievements"); return; }
-            using var f = new Ra.RaScanProgress(games, full, string.IsNullOrEmpty(sel) ? RaAllPlatforms : sel);
+            using var f = new Ra.RaScanProgress(games, full, string.IsNullOrEmpty(sel) ? Options.RaScanHook.AllPlatforms : sel);
             f.ShowDialog(this);
             (_dm as HostDataManagerXml)?.FlushIfSafe();
         }
@@ -1258,10 +1206,6 @@ internal sealed class MainWindow : Form
         var (pluginsPanel, applyPlugins) = BuildPluginsSection();
         w.AddSection("Plugins", pluginsPanel, applyPlugins);
 
-        // RetroAchievements native-fallback scan — only when ExtendDB isn't resolving RA itself.
-        if (!Media.RomBridge.RaActive)
-            w.AddSection("RetroAchievements", BuildRetroAchievementsScanPanel(), null);
-
         w.AddSection("Display", new[]
         {
             Options.OptionItem.Toggle("Display", "Use 16:9 for the main media (else poster ratio)",
@@ -1300,7 +1244,18 @@ internal sealed class MainWindow : Form
         // LaunchBox GLOBAL settings (Settings.xml, write-back via the op-log +
         // scoped flush after the window closes). Greyed out in read-only mode.
         if (_dm is HostDataManagerXml hdm2)
-            Options.LbGlobalOptions.AddSections(w, hdm2.LbSettings, hdm2.ReadOnly);
+        {
+            // Hand the RA scan over to the LB · Integrations → RetroAchievements tab. Greyed out (Available
+            // = false) when ExtendDB is resolving RA itself — it takes over and the manual scan is disabled.
+            var raScan = new Options.RaScanHook
+            {
+                Available = !Media.RomBridge.RaActive,
+                Configured = Ra.RaService.Configured,
+                Platforms = RaPlatformNamesSorted,
+                Run = RunRaScan,
+            };
+            Options.LbGlobalOptions.AddSections(w, hdm2.LbSettings, hdm2.ReadOnly, raScan);
+        }
 
         return w;
     }

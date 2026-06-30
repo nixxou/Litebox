@@ -16,11 +16,24 @@ using LbApiHost.Host.Data;
 
 namespace LbApiHost.Host.Options;
 
+/// <summary>Lets MainWindow hand the LiteBox-native RetroAchievements scan to the LB · Integrations →
+/// RetroAchievements tab (the scan needs the data manager, which lives in MainWindow). When
+/// <see cref="Available"/> is false the scan controls are greyed — RA is being resolved elsewhere
+/// (taken over). Null hook ⇒ no scan controls.</summary>
+internal sealed class RaScanHook
+{
+    public const string AllPlatforms = "(All platforms)";
+    public bool Available;                                              // false → grey out (taken over)
+    public bool Configured;                                            // RA key/username present
+    public System.Func<System.Collections.Generic.IEnumerable<string>>? Platforms;
+    public System.Action<string, bool>? Run;                          // (platform, full)
+}
+
 internal static class LbGlobalOptions
 {
     /// <summary>Appends the LaunchBox-settings sections to an options window.
     /// <paramref name="readOnly"/> greys them out entirely.</summary>
-    public static void AddSections(OptionsWindow w, LbSettingsStore s, bool readOnly)
+    public static void AddSections(OptionsWindow w, LbSettingsStore s, bool readOnly, RaScanHook? raScan = null)
     {
         if (!s.Loaded) return;   // no Settings.xml → nothing to edit
 
@@ -95,7 +108,7 @@ internal static class LbGlobalOptions
         // LB "Integrations" branch, tabbed. None drive LiteBox today (it doesn't run
         // these integrations) — they round-trip to Settings.xml for LaunchBox, and the
         // credentials sit here for a future LiteBox feature (notably RetroAchievements).
-        w.AddSection("LB · Integrations", BuildIntegrationsPanel(s, readOnly, out var applyInteg),
+        w.AddSection("LB · Integrations", BuildIntegrationsPanel(s, readOnly, out var applyInteg, raScan),
             readOnly ? null : applyInteg);
 
         // LB "Gameplay" branch (Game Startup / Game Pause / Screen Capture), tabbed.
@@ -533,7 +546,7 @@ internal static class LbGlobalOptions
 
     // ── LB "Integrations" branch (tabbed). All NoImpact on LiteBox today; round-trip
     //    to Settings.xml for LaunchBox, credentials kept for future LiteBox use. ──
-    private static Control BuildIntegrationsPanel(LbSettingsStore s, bool readOnly, out Action apply)
+    private static Control BuildIntegrationsPanel(LbSettingsStore s, bool readOnly, out Action apply, RaScanHook? raScan = null)
     {
         var Bg = Color.FromArgb(30, 30, 30);
         var Fg = Color.FromArgb(222, 222, 222);
@@ -623,6 +636,45 @@ internal static class LbGlobalOptions
             var key = Txt(s.Get("RetroAchievementsApiKey"), new Point(4, 132), 380); p.Controls.Add(key);
             // Username/API key/password round-trip; the login Token is LB-managed — never touched.
             BindTxt(user, "RetroAchievementsUsername"); BindTxt(pwd, "RetroAchievementsPassword"); BindTxt(key, "RetroAchievementsApiKey");
+
+            // ── Scan (LiteBox resolution of hash/raid) — greyed out when it's taken over elsewhere. ──
+            if (raScan != null)
+            {
+                var Sub = Color.FromArgb(150, 150, 152);
+                int y = 178;
+                p.Controls.Add(new Label { Text = "Scan", Location = new Point(4, y), AutoSize = true, ForeColor = Fg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) });
+                y += 24;
+                bool en = raScan.Available && !readOnly;
+                if (!raScan.Available)
+                {
+                    p.Controls.Add(new Label { Text = "RetroAchievements is currently taken over — manual scanning is disabled here.", Location = new Point(4, y), AutoSize = true, MaximumSize = new Size(520, 0), ForeColor = Sub });
+                    y += 24;
+                }
+                else if (!raScan.Configured)
+                {
+                    p.Controls.Add(new Label { Text = "⚠  No username / API key above — hashes are computed but raids won't resolve.", Location = new Point(4, y), AutoSize = true, MaximumSize = new Size(520, 0), ForeColor = Color.FromArgb(222, 175, 90) });
+                    y += 24;
+                }
+                p.Controls.Add(Lbl("Platform", new Point(4, y))); y += 20;
+                var combo = new ComboBox { Location = new Point(4, y), Width = 300, DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat, Enabled = en };
+                combo.Items.Add(RaScanHook.AllPlatforms);
+                var plats = raScan.Platforms?.Invoke();
+                if (plats != null) foreach (var n in plats) combo.Items.Add(n);
+                combo.SelectedIndex = 0;
+                p.Controls.Add(combo); y += 34;
+                Button ScanBtn(string t, int x)
+                {
+                    var b = new Button { Text = t, Location = new Point(x, y), Size = new Size(90, 26), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, Enabled = en, Font = new Font("Segoe UI", 8.5f) };
+                    b.FlatAppearance.BorderSize = 0;
+                    return b;
+                }
+                var lite = ScanBtn("Lite scan", 4);
+                var full = ScanBtn("Full scan", 100);
+                lite.Click += (_, _) => raScan.Run?.Invoke(combo.SelectedItem as string, false);
+                full.Click += (_, _) => raScan.Run?.Invoke(combo.SelectedItem as string, true);
+                p.Controls.Add(lite); p.Controls.Add(full); y += 34;
+                p.Controls.Add(new Label { Text = "Lite: only games with no hash yet.   ·   Full: recompute all (picks up a raid added to RA later).", Location = new Point(4, y), AutoSize = true, MaximumSize = new Size(540, 0), ForeColor = Sub });
+            }
         }
 
         // ── Steam ──

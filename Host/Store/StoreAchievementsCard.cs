@@ -1,13 +1,8 @@
-// Right-panel RetroAchievements card — LiteBox-native, owner-drawn (mirrors MetaCard's look but with its
-// own muted palette and no dependency on MainWindow internals).
-//
-//   collapsed → short box: "RetroAchievements   <unlocked>/<total>" + a "Beat / Mastered" time line
-//               (the medians; "—" placeholder when the game XML hasn't got them yet).
-//   expanded  → the full badge grid: each achievement coloured when the user unlocked it, greyed (RA's
-//               _lock badge) otherwise. Hover a badge for its title / points / description.
-//
-// Data is handed in by MainWindow (RaService cache/API + medians from the game XML). This control only
-// renders and lazy-loads badge PNGs (RaBadges) off the UI thread.
+// Right-panel store-achievements card (GOG today; Steam later) — LiteBox-native, owner-drawn.
+// A trimmed sibling of RetroAchievementsCard: same collapsed/expanded badge-grid look, but no
+// "time to beat/master" medians (stores don't have them) and the badge art comes from arbitrary
+// URLs (StoreBadges) rather than RA's fixed Badge/<name>.png. The title is configurable so the
+// same control serves "GOG Achievements" / "Steam Achievements".
 
 #nullable enable
 
@@ -15,14 +10,15 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Globalization;
 using System.IO;
 using System.Windows.Forms;
 
-namespace LbApiHost.Host.Ra;
+namespace LbApiHost.Host.Store;
 
-internal sealed class RetroAchievementsCard : Panel
+internal sealed class StoreAchievementsCard : Panel
 {
-    // Muted palette (deliberately softer than BigBox's vivid panel; close to MetaCard's box).
     private static readonly Color Box = Color.FromArgb(40, 40, 44);
     private static readonly Color BorderC = Color.FromArgb(58, 58, 62);
     private static readonly Color Fg = Color.FromArgb(208, 208, 210);
@@ -33,24 +29,46 @@ internal sealed class RetroAchievementsCard : Panel
     private const int Pad = 10, VMargin = 4, ChevW = 16;
     private const int Badge = 40, BadgeGap = 6;
 
+    // Locked-badge filter: luminosity grayscale, dimmed to ~60% brightness + 85% alpha, so earned
+    // (full-colour) badges clearly stand out from the desaturated locked ones.
+    private static readonly ImageAttributes LockedAttr = BuildLockedAttr();
+    private static ImageAttributes BuildLockedAttr()
+    {
+        const float d = 0.6f;
+        var cm = new ColorMatrix(new[]
+        {
+            new[] { 0.30f * d, 0.30f * d, 0.30f * d, 0f, 0f },
+            new[] { 0.59f * d, 0.59f * d, 0.59f * d, 0f, 0f },
+            new[] { 0.11f * d, 0.11f * d, 0.11f * d, 0f, 0f },
+            new[] { 0f, 0f, 0f, 0.85f, 0f },
+            new[] { 0f, 0f, 0f, 0f, 1f },
+        });
+        var ia = new ImageAttributes();
+        ia.SetColorMatrix(cm);
+        return ia;
+    }
+
     private readonly Font _titleFont = new("Segoe UI Semibold", 10.5f);
     private readonly Font _font = new("Segoe UI", 9f);
 
-    private RaGameCache? _data;
-    private int _beatMin, _masterMin;
+    private StoreAchCache? _data;
     private bool _expanded;
     private bool _loading;
     private bool _badgeLoadStarted;
 
     private readonly object _imgGate = new();
-    private readonly Dictionary<int, Image> _badgeImg = new();   // ach id → loaded badge image
+    private readonly Dictionary<string, Image> _badgeImg = new(StringComparer.Ordinal);   // ach id → badge image
     private readonly ToolTip _tip = new() { ShowAlways = true, InitialDelay = 250, ReshowDelay = 80, AutoPopDelay = 20000 };
-    private int _hoverId = -1;
+    private string _hoverId = "";
+
+    /// <summary>Card heading, e.g. "GOG Achievements" — set before Show.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public string Title { get; set; } = "Achievements";
 
     public Action? ExpandedChanged;   // persist the open/closed toggle across selections
     public Action? LayoutChanged;     // ask the host to re-measure this row's height
 
-    public RetroAchievementsCard()
+    public StoreAchievementsCard()
     {
         DoubleBuffered = true; ResizeRedraw = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
@@ -65,11 +83,10 @@ internal sealed class RetroAchievementsCard : Panel
         set { if (_expanded != value) { _expanded = value; if (_expanded) KickBadgeLoads(); Invalidate(); } }
     }
 
-    /// <summary>Show one game's RA data + the median commitments (minutes). null ⇒ clear/hide.</summary>
-    public void Show(RaGameCache? data, int beatMinutes, int masterMinutes)
+    /// <summary>Show one game's store achievements. null ⇒ clear/hide.</summary>
+    public void Show(StoreAchCache? data)
     {
-        _data = data; _beatMin = beatMinutes; _masterMin = masterMinutes;
-        _loading = false; _badgeLoadStarted = false; _hoverId = -1;
+        _data = data; _loading = false; _badgeLoadStarted = false; _hoverId = "";
         DisposeBadges();
         try { _tip.SetToolTip(this, ""); } catch { }
         if (_expanded && HasData) KickBadgeLoads();
@@ -77,7 +94,7 @@ internal sealed class RetroAchievementsCard : Panel
         LayoutChanged?.Invoke();
     }
 
-    /// <summary>Show a brief "loading…" box while the background fetch runs (first view of a game).</summary>
+    /// <summary>Brief "loading…" box while the background read runs.</summary>
     public void ShowLoading()
     {
         _data = null; _loading = true; _badgeLoadStarted = false;
@@ -86,8 +103,7 @@ internal sealed class RetroAchievementsCard : Panel
         LayoutChanged?.Invoke();
     }
 
-    /// <summary>Empties the card so it renders nothing and its row collapses to 0 (named to not shadow
-    /// Control.Hide, which only flips Visible).</summary>
+    /// <summary>Empties the card so it renders nothing and its row collapses to 0.</summary>
     public void HidePanel()
     {
         if (_data == null && !_loading) return;
@@ -95,13 +111,8 @@ internal sealed class RetroAchievementsCard : Panel
         Invalidate(); LayoutChanged?.Invoke();
     }
 
-    // ── layout geometry (shared by measure / paint / hit-test) ───────────────────────────────
-    private int HeaderBottom()
-    {
-        int y = VMargin + Pad + _titleFont.Height;
-        if (HasData) y += 4 + _font.Height;       // the Beat/Mastered line is always shown when we have data
-        return y;
-    }
+    // ── layout geometry ──────────────────────────────────────────────────────────────────────
+    private int HeaderBottom() => VMargin + Pad + _titleFont.Height;
 
     private int PerRow(int cardWidth)
     {
@@ -111,7 +122,7 @@ internal sealed class RetroAchievementsCard : Panel
 
     public int HeightForWidth(int cardWidth)
     {
-        if (!HasData && !_loading) return 0;       // hidden — no row
+        if (!HasData && !_loading) return 0;
         if (_loading && !HasData) return VMargin + Pad + _titleFont.Height + Pad + VMargin;
         int y = HeaderBottom();
         if (_expanded && _data!.achievements.Count > 0)
@@ -140,7 +151,6 @@ internal sealed class RetroAchievementsCard : Panel
     {
         base.OnMouseClick(e);
         if (!HasData) return;
-        // Only a click in the header band toggles — clicks on badges leave the grid open.
         if (e.Y <= HeaderBottom())
         {
             _expanded = !_expanded;
@@ -155,27 +165,40 @@ internal sealed class RetroAchievementsCard : Panel
         bool inHeader = HasData && e.Y <= HeaderBottom();
         Cursor = inHeader ? Cursors.Hand : Cursors.Default;
 
-        int id = -1;
+        string id = "";
         if (_expanded && _data != null)
             foreach (var (idx, r) in BadgeRects())
-                if (r.Contains(e.Location)) { id = _data.achievements[idx].id; break; }
+                if (r.Contains(e.Location)) { id = _data.achievements[idx].id ?? ""; break; }
 
         if (id != _hoverId)
         {
             _hoverId = id;
             string text = "";
-            if (id >= 0)
+            if (id.Length > 0)
             {
                 var a = _data!.achievements.Find(x => x.id == id);
                 if (a != null)
-                    text = $"{a.title}  ·  {a.points} pts\n{(a.unlocked ? "✓ Unlocked" : "🔒 Locked")}"
+                {
+                    string state = a.unlocked
+                        ? "✓ Unlocked" + (FormatDate(a.unlockedAt) is string d ? "  ·  " + d : "")
+                        : "🔒 Locked";
+                    string rarity = a.rarity > 0 ? $"\n{a.rarity.ToString("0.#", CultureInfo.InvariantCulture)}% of players" : "";
+                    text = $"{a.title}\n{state}{rarity}"
                          + (string.IsNullOrEmpty(a.description) ? "" : "\n" + a.description);
+                }
             }
             try { _tip.SetToolTip(this, text); } catch { }
         }
     }
 
-    // ── badge image loading (one background loop, cached on disk by RaBadges) ──────────────────
+    private static string? FormatDate(string? iso)
+    {
+        if (string.IsNullOrEmpty(iso)) return null;
+        return DateTime.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dt)
+            ? dt.ToLocalTime().ToString("d MMM yyyy", CultureInfo.CurrentCulture) : null;
+    }
+
+    // ── badge image loading (one background loop, cached on disk by StoreBadges) ────────────────
     private void KickBadgeLoads()
     {
         if (_data == null || _badgeLoadStarted) return;
@@ -187,15 +210,18 @@ internal sealed class RetroAchievementsCard : Panel
             foreach (var a in data.achievements)
             {
                 if (_data != data) return;                 // selection changed → abandon
-                lock (_imgGate) { if (_badgeImg.ContainsKey(a.id)) continue; }
-                var path = RaBadges.Get(a.badge, a.unlocked);
+                string key = a.id ?? "";
+                if (key.Length == 0) continue;
+                lock (_imgGate) { if (_badgeImg.ContainsKey(key)) continue; }
+                var url = a.unlocked ? a.badgeUnlocked : (a.badgeLocked ?? a.badgeUnlocked);
+                var path = StoreBadges.Get(url);
                 if (path == null) continue;
                 try
                 {
                     Image img;
                     using (var fs = File.OpenRead(path)) img = Image.FromStream(fs);  // copy out, no file lock
                     if (_data != data) { img.Dispose(); return; }
-                    lock (_imgGate) _badgeImg[a.id] = img;
+                    lock (_imgGate) _badgeImg[key] = img;
                     if (++sinceRepaint >= 4) { sinceRepaint = 0; SafeInvalidate(); }
                 }
                 catch { }
@@ -229,25 +255,18 @@ internal sealed class RetroAchievementsCard : Panel
 
         if (_loading && !HasData)
         {
-            TextRenderer.DrawText(g, "RetroAchievements — loading…", _titleFont, new Point(x, y), SubFg);
+            TextRenderer.DrawText(g, Title + " — loading…", _titleFont, new Point(x, y), SubFg);
             return;
         }
 
         // header: title (left) + "u/total" (right, before chevron) + chevron
-        TextRenderer.DrawText(g, "RetroAchievements", _titleFont, new Point(x, y), Fg, TextFormatFlags.NoPadding);
+        TextRenderer.DrawText(g, Title, _titleFont, new Point(x, y), Fg, TextFormatFlags.NoPadding);
         string count = $"{_data!.unlocked} / {_data.total}";
         var cntSz = TextRenderer.MeasureText(count, _font, new Size(int.MaxValue, 100), TextFormatFlags.NoPadding);
         int cntX = Pad + innerW - ChevW - cntSz.Width;
         TextRenderer.DrawText(g, count, _font, new Rectangle(cntX, y, cntSz.Width, _titleFont.Height),
             _data.unlocked > 0 ? Accent : SubFg, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         DrawChevron(g, Pad + innerW - ChevW / 2, y + _titleFont.Height / 2, _expanded);
-        y += _titleFont.Height + 4;
-
-        // medians line: "Beat  12h 26m      Mastered  19h 53m" ("—" until the XML carries them)
-        DrawCommit(g, ref x, y, "Beat", _beatMin);
-        x += 22;
-        DrawCommit(g, ref x, y, "Mastered", _masterMin);
-        y += _font.Height;
 
         if (!_expanded) return;
 
@@ -255,10 +274,13 @@ internal sealed class RetroAchievementsCard : Panel
         foreach (var (idx, r) in BadgeRects())
         {
             var a = _data.achievements[idx];
-            Image? img; lock (_imgGate) _badgeImg.TryGetValue(a.id, out img);
+            Image? img; lock (_imgGate) _badgeImg.TryGetValue(a.id ?? "", out img);
             if (img != null)
             {
-                g.DrawImage(img, r);
+                // Locked → render greyed + dimmed (GOG serves a coloured "?" for locked; we desaturate it
+                // so earned badges clearly stand out). Unlocked → full colour.
+                if (a.unlocked) g.DrawImage(img, r);
+                else g.DrawImage(img, r, 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, LockedAttr);
             }
             else
             {
@@ -267,18 +289,6 @@ internal sealed class RetroAchievementsCard : Panel
                 g.FillPath(ph, pp);
             }
         }
-    }
-
-    private void DrawCommit(Graphics g, ref int x, int y, string label, int minutes)
-    {
-        var lblSz = TextRenderer.MeasureText(label + "  ", _font, new Size(int.MaxValue, 100), TextFormatFlags.NoPadding);
-        TextRenderer.DrawText(g, label + "  ", _font, new Point(x, y), SubFg, TextFormatFlags.NoPadding);
-        x += lblSz.Width;
-        string val = RaFields.Duration(minutes);
-        if (string.IsNullOrEmpty(val)) val = "—";
-        var valSz = TextRenderer.MeasureText(val, _font, new Size(int.MaxValue, 100), TextFormatFlags.NoPadding);
-        TextRenderer.DrawText(g, val, _font, new Point(x, y), minutes > 0 ? Fg : SubFg, TextFormatFlags.NoPadding);
-        x += valSz.Width;
     }
 
     private static void DrawChevron(Graphics g, int cx, int cy, bool expanded)

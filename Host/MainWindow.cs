@@ -20,6 +20,7 @@ using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Host.Data;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.Ra;
+using LbApiHost.Host.Store;
 
 namespace LbApiHost.Host;
 
@@ -129,10 +130,12 @@ internal sealed class MainWindow : Form
     private readonly MetaCard _meta;             // title + platform + expandable game fields (or node text)
     private readonly VndbCard _vndb;             // expandable box of coloured VNDB tags (content/tech/ero)
     private RetroAchievementsCard _raCard;       // expandable RetroAchievements box (LiteBox-native, from the raid)
+    private StoreAchievementsCard _storeAchCard; // expandable store-achievements box (GOG today; from galaxy-2.0.db)
     private readonly TextBox _notes;
     private static bool _metaExpanded;           // remembered expand state of the platform meta card (session + INI)
     private static bool _vndbExpanded;           // remembered expand state of the VNDB tags box (session + INI)
     private static bool _raExpanded;             // remembered expand state of the RetroAchievements box (session + INI)
+    private static bool _storeAchExpanded;       // remembered expand state of the store-achievements box (session + INI)
     private readonly Dictionary<string, Image> _platIconCache = new(StringComparer.OrdinalIgnoreCase);
 
     private IGame[] _current = Array.Empty<IGame>();
@@ -191,6 +194,7 @@ internal sealed class MainWindow : Form
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
         _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
         _raExpanded = _cfg.GetBool("RaExpanded", false);
+        _storeAchExpanded = _cfg.GetBool("StoreAchExpanded", false);
         Text = _secondInstance
             ? "LiteBox — READ-ONLY (another instance is open — changes won't be saved)"
             : "LiteBox";
@@ -723,13 +727,14 @@ internal sealed class MainWindow : Form
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
         _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
 
-        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 7, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 8, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));    // meta card (title + platform + expandable fields, wraps)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // VNDB tags box (0 when none; expandable)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // RetroAchievements box (0 when no raid; expandable)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // store achievements box (0 when not a GOG game; expandable)
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest)
         _detailGrid = tlp;
 
@@ -741,6 +746,9 @@ internal sealed class MainWindow : Form
         _raCard = new RetroAchievementsCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         _raCard.ExpandedChanged = OnRaExpandedToggled;
         _raCard.LayoutChanged = RelayoutDetail;
+        _storeAchCard = new StoreAchievementsCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
+        _storeAchCard.ExpandedChanged = OnStoreAchExpandedToggled;
+        _storeAchCard.LayoutChanged = RelayoutDetail;
         notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
 
         tlp.Controls.Add(hero, 0, 0);
@@ -749,7 +757,8 @@ internal sealed class MainWindow : Form
         tlp.Controls.Add(meta, 0, 3);
         tlp.Controls.Add(vndb, 0, 4);
         tlp.Controls.Add(_raCard, 0, 5);
-        tlp.Controls.Add(notes, 0, 6);
+        tlp.Controls.Add(_storeAchCard, 0, 6);
+        tlp.Controls.Add(notes, 0, 7);
         return tlp;
     }
 
@@ -773,7 +782,7 @@ internal sealed class MainWindow : Form
     private void RelayoutDetail()
     {
         var host = _detailHost; var tlp = _detailGrid;
-        if (host == null || tlp == null || tlp.RowStyles.Count < 7 || _inRelayout) return;
+        if (host == null || tlp == null || tlp.RowStyles.Count < 8 || _inRelayout) return;
         _inRelayout = true;
         try { RelayoutDetailCore(host, tlp); }
         finally { _inRelayout = false; }
@@ -789,7 +798,7 @@ internal sealed class MainWindow : Form
         int padH = tlp.Padding.Horizontal, padV = tlp.Padding.Vertical;
 
         // Minimum content height for a given grid width (media capped to the viewport).
-        int MinContent(int gridW, out int mediaH, out int metaH, out int vndbH, out int raH)
+        int MinContent(int gridW, out int mediaH, out int metaH, out int vndbH, out int raH, out int storeH)
         {
             int colW = Math.Max(20, gridW - padH);
             mediaH = (int)Math.Round(colW / _mediaAspect);
@@ -799,12 +808,13 @@ internal sealed class MainWindow : Form
             metaH = _meta.HeightForWidth(colW);
             vndbH = _vndb.HeightForWidth(colW);
             raH = _raCard?.HeightForWidth(colW) ?? 0;
-            return padV + 158 + mediaH + _stripRowH + metaH + vndbH + raH + MinNotesH;
+            storeH = _storeAchCard?.HeightForWidth(colW) ?? 0;
+            return padV + 158 + mediaH + _stripRowH + metaH + vndbH + raH + storeH + MinNotesH;
         }
 
-        bool overflow = MinContent(fullW, out _, out _, out _, out _) > viewH;
+        bool overflow = MinContent(fullW, out _, out _, out _, out _, out _) > viewH;
         int wantW = overflow ? Math.Max(80, fullW - sbw) : fullW;
-        int minContent = MinContent(wantW, out int media, out int meta, out int vndb, out int ra);
+        int minContent = MinContent(wantW, out int media, out int meta, out int vndb, out int ra, out int store);
 
         var rsMedia = tlp.RowStyles[1];
         if (rsMedia.SizeType != SizeType.Absolute || Math.Abs(rsMedia.Height - media) > 0.5) { rsMedia.SizeType = SizeType.Absolute; rsMedia.Height = media; }
@@ -816,6 +826,8 @@ internal sealed class MainWindow : Form
         if (rsVndb.SizeType != SizeType.Absolute || Math.Abs(rsVndb.Height - vndb) > 0.5) { rsVndb.SizeType = SizeType.Absolute; rsVndb.Height = vndb; }
         var rsRa = tlp.RowStyles[5];
         if (rsRa.SizeType != SizeType.Absolute || Math.Abs(rsRa.Height - ra) > 0.5) { rsRa.SizeType = SizeType.Absolute; rsRa.Height = ra; }
+        var rsStore = tlp.RowStyles[6];
+        if (rsStore.SizeType != SizeType.Absolute || Math.Abs(rsStore.Height - store) > 0.5) { rsStore.SizeType = SizeType.Absolute; rsStore.Height = store; }
 
         // Drive the scroll range, then size the grid to EXACTLY the width the meta/vndb were measured
         // at (wantW). Using host.ClientSize.Width here is unsafe right after changing AutoScrollMinSize:
@@ -844,6 +856,12 @@ internal sealed class MainWindow : Form
     private void OnRaExpandedToggled()
     {
         _raExpanded = _raCard.Expanded;
+        RelayoutDetail();
+    }
+
+    private void OnStoreAchExpandedToggled()
+    {
+        _storeAchExpanded = _storeAchCard.Expanded;
         RelayoutDetail();
     }
 
@@ -964,6 +982,7 @@ internal sealed class MainWindow : Form
         _cfg.SetBool("MetaExpanded", _metaExpanded);
         _cfg.SetBool("VndbExpanded", _vndbExpanded);
         _cfg.SetBool("RaExpanded", _raExpanded);
+        _cfg.SetBool("StoreAchExpanded", _storeAchExpanded);
         SaveSplitters();
         _cfg.Save();
     }
@@ -2289,6 +2308,7 @@ internal sealed class MainWindow : Form
         _vndb.SetTags(vndbTags);
         _vndb.Expanded = _vndbExpanded;
         _raCard?.HidePanel();   // clean slate at selection — the debounced ScheduleMedia tick (re)fills it from the raid
+        _storeAchCard?.HidePanel();   // same: refilled from the store (GOG) at the debounced tick
         RelayoutDetail();
 
         _notes.Text = S(g.Notes).Replace("\n", "\r\n");
@@ -2603,6 +2623,7 @@ internal sealed class MainWindow : Form
             // BEFORE we display from it — fixes the "leave and come back" symptom), then fetches + shows the
             // achievements. No-op without the plugin / RA module / OnSelect mode. Backgrounded inside.
             try { LoadRaPanel(g, token); } catch { }
+            try { LoadStoreAchPanel(g, token); } catch { }
             var items = BuildMediaList(g);
             _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
             if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
@@ -2676,6 +2697,53 @@ internal sealed class MainWindow : Form
                         RaXmlWriter.Write(g, data);   // persist medians/beaten/cached-date to the <Game> XML (op-log)
                     }
                     else if (cached0 == null) _raCard.HidePanel();
+                }));
+            }
+            catch { }
+        });
+    }
+
+    // Loads + shows the store-achievements card at the debounced detail-load. PURE LiteBox: for a GOG
+    // game (Source=="GOG" + a GogAppId) the achievements come straight from Galaxy's LOCAL galaxy-2.0.db
+    // (GogAchievements → the shared GalaxyDb snapshot), cached per app id and refreshed when the game was
+    // played since cached or Galaxy re-synced — the same freshness rule as the RA card. Steam is out of
+    // scope for now (it needs the Steamworks helper), so non-GOG games simply hide the card.
+    private void LoadStoreAchPanel(IGame g, int token)
+    {
+        if (_storeAchCard == null) return;
+        string source = Safe(() => g.Source) ?? "";
+        string gogId = Safe(() => (g as ILiteBoxGame)?.GetField("GogAppId")) ?? "";
+        bool isGog = source.Equals("GOG", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(gogId);
+        if (!isGog) { _storeAchCard.HidePanel(); return; }
+
+        // Played-since-cached invalidates the cache (your unlock progress changed). Read on the UI thread.
+        DateTime lastPlayedUtc;
+        try { var lp = g.LastPlayedDate; lastPlayedUtc = lp.HasValue ? lp.Value.ToUniversalTime() : DateTime.MinValue; }
+        catch { lastPlayedUtc = DateTime.MinValue; }
+
+        void ShowWith(StoreAchCache c)
+        {
+            _storeAchCard.Title = "GOG Achievements";
+            _storeAchCard.Show(c);
+            _storeAchCard.Expanded = _storeAchExpanded;
+        }
+
+        // Optimistic first paint from any cache; the local DB read confirms/updates on a bg thread.
+        var cached0 = GogAchievements.ReadCache(gogId);
+        if (cached0 != null && cached0.total > 0) ShowWith(cached0);
+        else _storeAchCard.ShowLoading();
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var data = GogAchievements.EnsureAndRead(gogId, lastPlayedUtc);
+            if (IsDisposed || token != _detailsLoadToken) return;
+            try
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    if (token != _detailsLoadToken) return;   // selection moved on
+                    if (data != null && data.total > 0) ShowWith(data);
+                    else if (cached0 == null) _storeAchCard.HidePanel();
                 }));
             }
             catch { }

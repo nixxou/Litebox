@@ -11,7 +11,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
 
 namespace LbApiHost.Host.Ra;
 
@@ -178,12 +180,65 @@ internal static class RaPlatformMap
         return new string(arr);
     }
 
-    /// <summary>The RA console id for an LB platform name (matched on the hardlist, case/punct-insensitive),
-    /// or null when not mapped. Pass the game's Platform (or ScrapeAs when available).</summary>
+    /// <summary>The RA console id for an LB platform name. A user OVERRIDE (Core\ra-platform-overrides.json,
+    /// edited via the RA options "Platform mapping…" dialog) wins; otherwise the frozen hardlist applies.
+    /// Null when not mapped (or an override explicitly maps it to none). Pass the game's Platform.</summary>
     public static int? ConsoleIdFor(string? platformName)
     {
         if (string.IsNullOrWhiteSpace(platformName)) return null;
+        if (Overrides().TryGetValue(platformName.Trim(), out var ovKey))
+            return string.IsNullOrEmpty(ovKey) ? (int?)null                          // explicit "none"
+                 : (KeyToId.TryGetValue(ovKey, out var oid) ? oid : (int?)null);
         if (!NormToKey.TryGetValue(Normalize(platformName), out var key)) return null;
         return KeyToId.TryGetValue(key, out var id) ? id : (int?)null;
+    }
+
+    /// <summary>The HARDLIST (auto) RAHasher key for a platform — "" when the hardlist doesn't map it.
+    /// Drives the mapping dialog's pre-fill + the "is this an override?" check.</summary>
+    public static string AutoKeyFor(string? platformName)
+        => (!string.IsNullOrWhiteSpace(platformName) && NormToKey.TryGetValue(Normalize(platformName), out var k)) ? k : "";
+
+    /// <summary>All RAHasher console keys (sorted) — the mapping dialog's dropdown values.</summary>
+    public static IEnumerable<string> AllConsoleKeys() => KeyToId.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase);
+
+    // ── User overrides: platform name → RAHasher key ("" = explicit none). Only diffs-from-auto stored. ──
+    private static Dictionary<string, string> _overrides;
+    private static readonly object _ovLock = new();
+    private static string OverridesFile => Path.Combine(AppContext.BaseDirectory, "ra-platform-overrides.json");
+
+    private static Dictionary<string, string> Overrides()
+    {
+        lock (_ovLock)
+        {
+            if (_overrides != null) return _overrides;
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (File.Exists(OverridesFile))
+                {
+                    var j = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(OverridesFile));
+                    if (j != null) foreach (var kv in j) if (!string.IsNullOrWhiteSpace(kv.Key)) d[kv.Key.Trim()] = kv.Value ?? "";
+                }
+            }
+            catch { }
+            _overrides = d;
+            return d;
+        }
+    }
+
+    /// <summary>The current overrides (a copy) — for the mapping dialog to seed itself.</summary>
+    public static Dictionary<string, string> GetOverrides()
+        => new Dictionary<string, string>(Overrides(), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Replaces the override set and persists it (Core\ra-platform-overrides.json). Pass only the
+    /// platforms that DIFFER from the auto mapping.</summary>
+    public static void SaveOverrides(Dictionary<string, string> map)
+    {
+        lock (_ovLock)
+        {
+            _overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (map != null) foreach (var kv in map) if (!string.IsNullOrWhiteSpace(kv.Key)) _overrides[kv.Key.Trim()] = kv.Value ?? "";
+            try { File.WriteAllText(OverridesFile, JsonSerializer.Serialize(_overrides)); } catch { }
+        }
     }
 }

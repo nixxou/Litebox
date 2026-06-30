@@ -29,6 +29,7 @@ internal sealed class RaScanHook
     public System.Action<string, bool>? Run;                          // (platform, full)
     public bool RollingRefresh;                                        // startup rolling-refresh checkbox state
     public System.Action<bool>? SetRollingRefresh;                    // persist the checkbox (apply-live)
+    public System.Action? OpenMapping;                                // opens the platform → RA-console editor
 }
 
 internal static class LbGlobalOptions
@@ -674,7 +675,10 @@ internal static class LbGlobalOptions
                 var full = ScanBtn("Full scan", 100);
                 lite.Click += (_, _) => raScan.Run?.Invoke(combo.SelectedItem as string, false);
                 full.Click += (_, _) => raScan.Run?.Invoke(combo.SelectedItem as string, true);
-                p.Controls.Add(lite); p.Controls.Add(full); y += 36;
+                var mapBtn = new Button { Text = "Platform mapping…", Location = new Point(196, y), Size = new Size(132, 26), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, Enabled = raScan.Available, Font = new Font("Segoe UI", 8.5f) };
+                mapBtn.FlatAppearance.BorderSize = 0;
+                mapBtn.Click += (_, _) => raScan.OpenMapping?.Invoke();
+                p.Controls.Add(lite); p.Controls.Add(full); p.Controls.Add(mapBtn); y += 36;
                 var roll = new CheckBox { Text = "Refresh up to 3 stale platform catalogues at startup (rolling background update)", Location = new Point(4, y), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = raScan.RollingRefresh, Enabled = en };
                 roll.CheckedChanged += (_, _) => raScan.SetRollingRefresh?.Invoke(roll.Checked);
                 p.Controls.Add(roll); y += 28;

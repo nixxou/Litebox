@@ -1267,6 +1267,7 @@ internal sealed class MainWindow : Form
                 Run = RunRaScan,
                 RollingRefresh = _cfg.RaStartupRollingRefresh,
                 SetRollingRefresh = v => { _cfg.RaStartupRollingRefresh = v; _cfg.Save(); },
+                OpenMapping = () => { try { using var d = new Ra.RaMappingDialog(RaPlatformNamesSorted()); d.ShowDialog(this); } catch (Exception ex) { Console.WriteLine("[ra-lite] mapping dialog: " + ex.Message); } },
             };
             Options.LbGlobalOptions.AddSections(w, hdm2.LbSettings, hdm2.ReadOnly, raScan);
         }

@@ -17,7 +17,8 @@ internal static class RaFields
         => int.TryParse(Get(game, "RetroAchievementsId"), out var v) ? v : 0;
 
     /// <summary>The "Beat the Game" (hardcore) / "Mastered" median commitments in MINUTES, or 0 when absent.
-    /// Read from the XML LB already wrote — the public API doesn't carry them (live refresh is a TODO).</summary>
+    /// Read from the XML (LB's cached values) as a FALLBACK only — the live values come from
+    /// RaService.FetchMedians (API_GetGameProgression), which MainWindow.LoadRaPanel prefers when &gt; 0.</summary>
     public static (int beatMinutes, int masterMinutes) ReadMedians(object? game)
     {
         int beat = int.TryParse(Get(game, "RetroAchievementsMedianTimeToBeatHardcore"), out var b) ? b : 0;

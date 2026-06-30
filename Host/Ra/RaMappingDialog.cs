@@ -38,7 +38,7 @@ internal sealed class RaMappingDialog : Form
         {
             Dock = DockStyle.Top, Height = 38, ForeColor = Sub, Padding = new Padding(10, 8, 10, 0), AutoSize = false,
             Text = "Override how a platform maps to a RetroAchievements console (arcade boards, oddballs…). "
-                 + "Leave a row on its auto value to keep the built-in mapping.",
+                 + "Leave a row on “(default: …)” to keep the built-in mapping; pick a console (or “(none)”) to force it.",
         };
 
         var filterHost = new Panel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(10, 2, 10, 4) };
@@ -47,8 +47,7 @@ internal sealed class RaMappingDialog : Form
         var filterLbl = new Label { Dock = DockStyle.Left, Text = "Filter ", ForeColor = Sub, AutoSize = true, Padding = new Padding(0, 4, 0, 0) };
         filterHost.Controls.Add(_filter); filterHost.Controls.Add(filterLbl);
 
-        var keys = new List<string> { None };
-        keys.AddRange(RaPlatformMap.AllConsoleKeys());
+        var consoleKeys = RaPlatformMap.AllConsoleKeys().ToList();
 
         _grid = new DataGridView
         {
@@ -66,25 +65,32 @@ internal sealed class RaMappingDialog : Form
 
         var colPlat = new DataGridViewTextBoxColumn { HeaderText = "Platform", ReadOnly = true, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, FillWeight = 62 };
         var colCons = new DataGridViewComboBoxColumn { HeaderText = "RA console", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, FillWeight = 38, FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton };
-        foreach (var k in keys) colCons.Items.Add(k);
         _grid.Columns.Add(colPlat);
         _grid.Columns.Add(colCons);
         // Commit a combo pick immediately (so OK reads the latest value without leaving the cell).
         _grid.CurrentCellDirtyStateChanged += (_, _) => { if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
         _grid.DataError += (_, e) => { e.ThrowException = false; };
 
-        // Rows: effective value = override (key / "(none)") else the auto key (or "(none)" when unmapped).
+        // Per-row combo: 1st item "(default: <auto>)" = keep the built-in mapping; then "(none)" + every
+        // console key. Picking anything but the default forces an override. (Per-CELL items because the
+        // default label differs per platform.)
         var ov = RaPlatformMap.GetOverrides();
-        var valid = new HashSet<string>(keys, StringComparer.OrdinalIgnoreCase);
+        var keySet = new HashSet<string>(consoleKeys, StringComparer.OrdinalIgnoreCase);
         foreach (var name in (platforms ?? Enumerable.Empty<string>()).Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
-            string val;
-            if (ov.TryGetValue(name, out var ovk)) val = string.IsNullOrEmpty(ovk) ? None : ovk;
-            else { var auto = RaPlatformMap.AutoKeyFor(name); val = string.IsNullOrEmpty(auto) ? None : auto; }
-            if (!valid.Contains(val)) val = None;
+            string auto = RaPlatformMap.AutoKeyFor(name);
+            string defItem = "(default: " + (string.IsNullOrEmpty(auto) ? "—" : auto) + ")";
+
             int i = _grid.Rows.Add();
+            var cell = (DataGridViewComboBoxCell)_grid.Rows[i].Cells[1];   // accessing the row unshares it → per-cell Items
+            cell.Items.Add(defItem);
+            cell.Items.Add(None);
+            foreach (var k in consoleKeys) cell.Items.Add(k);
+
+            string sel = defItem;
+            if (ov.TryGetValue(name, out var ovk)) sel = string.IsNullOrEmpty(ovk) ? None : (keySet.Contains(ovk) ? ovk : defItem);
             _grid.Rows[i].Cells[0].Value = name;
-            _grid.Rows[i].Cells[1].Value = val;
+            cell.Value = sel;
         }
 
         var footer = new Panel { Dock = DockStyle.Bottom, Height = 46, BackColor = Color.FromArgb(37, 37, 38) };
@@ -129,11 +135,9 @@ internal sealed class RaMappingDialog : Form
         {
             var name = r.Cells[0].Value as string;
             if (string.IsNullOrWhiteSpace(name)) continue;
-            string cell = r.Cells[1].Value as string ?? None;
-            string effective = cell == None ? "" : cell;           // "(none)" → explicit none
-            string auto = RaPlatformMap.AutoKeyFor(name);
-            if (!string.Equals(effective, auto, StringComparison.OrdinalIgnoreCase))
-                map[name] = effective;                              // store only diffs-from-auto
+            string v = r.Cells[1].Value as string ?? "";
+            if (v.StartsWith("(default", StringComparison.OrdinalIgnoreCase)) continue;   // default → no override
+            map[name] = (v == None) ? "" : v;                                             // "(none)" → none; else force the key
         }
         RaPlatformMap.SaveOverrides(map);
     }

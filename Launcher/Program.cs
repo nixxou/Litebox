@@ -31,6 +31,33 @@ internal static class Program
     private const string Marker = "_litebox_files.txt";
     private const string BackupDir = "_litebox_backup";
 
+    // Native payloads the HOST would deploy to <root>\ThirdParty\… on first run (see LbApiHost
+    // EverythingSupport / ThumbCache / RaHasherLite — all only-if-absent). The launcher pre-deploys them
+    // DIRECTLY into those folders so Core stays clean; the host's runtime copy then no-ops and its resolver
+    // loads them from ThirdParty as usual. KEEP IN SYNC with those three deployers.
+    // Tuple: (zip entry name, ThirdParty subdir, final on-disk name).
+    private static readonly (string src, string sub, string dst)[] ThirdPartyPayload =
+    {
+        ("Everything64.dll.api",          @"ThirdParty\Everything",        "Everything64.dll"),
+        ("Magick.Native-Q16-x64.dll.api", @"ThirdParty\ExtendDB",          "Magick.Native-Q16-x64.dll"),
+        ("RahasherExtendDB.exe",          @"ThirdParty\RetroAchievements", "RahasherExtendDB.exe"),
+        ("7z.dll.api",                    @"ThirdParty\RetroAchievements", "7z.dll"),
+        ("MSVCP140.dll.api",              @"ThirdParty\RetroAchievements", "MSVCP140.dll"),
+        ("VCRUNTIME140.dll.api",          @"ThirdParty\RetroAchievements", "VCRUNTIME140.dll"),
+        ("VCRUNTIME140_1.dll.api",        @"ThirdParty\RetroAchievements", "VCRUNTIME140_1.dll"),
+        ("RAHasher.COPYING.txt",          @"ThirdParty\RetroAchievements", "COPYING.txt"),
+        ("RAHasher.7z-LICENSE.txt",       @"ThirdParty\RetroAchievements", "7z.dll-LICENSE.txt"),
+        ("RAHasher.RVZ-SUPPORT.txt",      @"ThirdParty\RetroAchievements", "RVZ-SUPPORT.txt"),
+    };
+
+    // The ThirdParty (subdir, final name) for a zip entry that's a native payload — null for a plain Core file.
+    private static (string sub, string dst)? ThirdPartyDest(string srcName)
+    {
+        foreach (var (src, sub, dst) in ThirdPartyPayload)
+            if (string.Equals(src, srcName, StringComparison.OrdinalIgnoreCase)) return (sub, dst);
+        return null;
+    }
+
     [STAThread]
     static int Main(string[] args)
     {
@@ -137,6 +164,23 @@ internal static class Program
                 if (string.IsNullOrEmpty(e.Name) || e.FullName.EndsWith("/")) continue;
                 if (string.Equals(e.Name, "README.txt", StringComparison.OrdinalIgnoreCase)) continue;
 
+                // Native payloads the host would copy to ThirdParty at runtime → place them there NOW,
+                // only-if-absent (shared with ExtendDB; never clobber a copy already on disk). They never
+                // enter Core or the marker; uninstall wipes them explicitly. Also remove any old flat-in-Core
+                // copy left by earlier launcher versions so Core ends up clean after an upgrade.
+                if (ThirdPartyDest(e.Name) is { } tp)
+                {
+                    string tpDir = Path.Combine(root, tp.sub);
+                    Directory.CreateDirectory(tpDir);
+                    string tpTarget = Path.Combine(tpDir, tp.dst);
+                    if (!File.Exists(tpTarget))
+                        using (var es = e.Open())
+                        using (var fs = new FileStream(tpTarget, FileMode.Create, FileAccess.Write))
+                            es.CopyTo(fs);
+                    try { string oldFlat = Path.Combine(core, e.Name); if (File.Exists(oldFlat)) File.Delete(oldFlat); } catch { }
+                    continue;
+                }
+
                 string target = Path.Combine(core, e.Name);
                 // Back up a pre-existing FOREIGN file once, so uninstall can restore LaunchBox's own.
                 // NEVER back up our own LiteBox.* files (LaunchBox never ships them) — otherwise a first
@@ -219,12 +263,13 @@ internal static class Program
             sb.AppendLine($"call :undo \"{f}\"");
         sb.AppendLine($"rmdir /s /q \"Core\\{BackupDir}\" 2>nul");
         sb.AppendLine($"del /q \"Core\\{Marker}\" 2>nul");
-        // ThirdParty natives the host deploys on first run (also re-created by ExtendDB if present).
-        sb.AppendLine("del /q \"ThirdParty\\Everything\\Everything64.dll\" 2>nul");
-        sb.AppendLine("del /q \"ThirdParty\\ExtendDB\\Magick.Native-Q16-x64.dll\" 2>nul");
-        sb.AppendLine("rmdir \"ThirdParty\\Everything\" 2>nul");
-        sb.AppendLine("rmdir \"ThirdParty\\ExtendDB\" 2>nul");
-        sb.AppendLine("rmdir \"ThirdParty\" 2>nul");
+        // ThirdParty natives we pre-deployed (also re-created by the host/ExtendDB on next run if present).
+        // Delete the FILES only — never the directories, which may be shared with ExtendDB.
+        foreach (var (_, sub, dst) in ThirdPartyPayload)
+            sb.AppendLine($"del /q \"{sub}\\{dst}\" 2>nul");
+        // …and any old flat-in-Core copies left by earlier launcher versions.
+        foreach (var (src, _, _) in ThirdPartyPayload)
+            sb.AppendLine($"del /q \"Core\\{src}\" 2>nul");
         // Remove LiteBox's leftover thumb cache (Plugins\ExtendDB\cache) ONLY when the ExtendDB plugin
         // is NOT installed — i.e. Plugins\ExtendDB contains nothing but the "cache" directory. Rigorous:
         // any other entry (or an ExtendDB.dll) aborts the deletion so a real ExtendDB is never touched.
@@ -239,6 +284,10 @@ internal static class Program
         sb.AppendLine("del /q \"Core\\LiteBox.ini\" 2>nul");
         sb.AppendLine("del /q \"Core\\LiteBox.pending\" 2>nul");
         sb.AppendLine("del /q \"Core\\whitelist.txt\" 2>nul");
+        // LiteBox-created RetroAchievements caches/state in Core (LiteBox-only — safe to wipe wholesale).
+        sb.AppendLine("rmdir /s /q \"Core\\ra-cache\" 2>nul");
+        sb.AppendLine("rmdir /s /q \"Core\\ra-badges\" 2>nul");
+        sb.AppendLine("del /q \"Core\\ra-platform-overrides.json\" 2>nul");
         // The root launcher.
         sb.AppendLine("del /q \"LiteBox.exe\" 2>nul");
         sb.AppendLine("echo Done.");

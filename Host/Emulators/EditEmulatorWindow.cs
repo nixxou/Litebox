@@ -39,7 +39,7 @@ internal static class EditEmulatorWindow
         var (details, applyDetails) = BuildDetails(emu, lbRoot);
         w.AddSection("Details", details, applyDetails);
 
-        var (plats, applyPlats) = BuildPlatforms(emu);
+        var (plats, applyPlats) = BuildPlatforms(emu, readOnly);
         w.AddSection("Associated Platforms", plats, applyPlats);
 
         var deps = BuildDependencies(emu, lbRoot);
@@ -223,7 +223,7 @@ internal static class EditEmulatorWindow
     }
 
     // ── Associated Platforms ───────────────────────────────────────────
-    private static (Control, Action) BuildPlatforms(IEmulator emu)
+    private static (Control, Action) BuildPlatforms(IEmulator emu, bool readOnly)
     {
         var p = new Panel { BackColor = Bg };
         var grid = new DataGridView
@@ -271,6 +271,34 @@ internal static class EditEmulatorWindow
         };
         grid.DataError += (_, e) => e.ThrowException = false;
 
+        // LB parity: only ONE emulator may be the default for a given platform. When the
+        // user ticks "Default" for a platform another emulator already owns, warn (Yes =
+        // steal it — the old owner is cleared on Apply; No = revert the tick). Skipped in
+        // read-only (the grid is disabled and nothing is written).
+        const int DefaultCol = 2;
+        bool suppressDefault = false;
+        if (!readOnly)
+        {
+            // Checkbox edits don't commit until focus leaves the cell — force an immediate
+            // commit so CellValueChanged fires the moment the box is (un)ticked.
+            grid.CurrentCellDirtyStateChanged += (_, _) =>
+            { if (grid.IsCurrentCellDirty && grid.CurrentCell is DataGridViewCheckBoxCell) grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
+            grid.CellValueChanged += (_, e) =>
+            {
+                if (suppressDefault || e.ColumnIndex != DefaultCol || e.RowIndex < 0) return;
+                var row = grid.Rows[e.RowIndex];
+                if (row.IsNewRow || row.Cells[DefaultCol].Value is not (true or CheckState.Checked)) return;
+                string platform = (row.Cells[0].Value as string ?? "").Trim();
+                var owner = OtherDefaultEmu(platform);
+                if (owner == null) return;
+                var ans = MessageBox.Show(p.FindForm(),
+                    $"{owner} is already the default emulator for {platform}. Are you sure you wish to replace it with this one?",
+                    "LiteBox", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (ans != DialogResult.Yes)
+                { suppressDefault = true; row.Cells[DefaultCol].Value = false; suppressDefault = false; }
+            };
+        }
+
         // The per-platform AutoExtract is NULLABLE in the data model (null =
         // inherit the emulator-level setting). The UI shows a plain on/off
         // checkbox like LB; the loaded null state is remembered per row so an
@@ -278,6 +306,7 @@ internal static class EditEmulatorWindow
         var loadedExtract = new Dictionary<DataGridViewRow, bool?>();
 
         var rows = emu.GetAllEmulatorPlatforms()?.ToList() ?? new List<IEmulatorPlatform>();
+        suppressDefault = true;   // initial fill must not trigger the "replace default?" prompt
         foreach (var ep in rows)
         {
             bool? ax = Safe(() => ep.AutoExtract);
@@ -286,6 +315,7 @@ internal static class EditEmulatorWindow
             grid.Rows[i].Tag = ep;
             loadedExtract[grid.Rows[i]] = ax;
         }
+        suppressDefault = false;
 
         var hint = new Label
         {
@@ -310,7 +340,10 @@ internal static class EditEmulatorWindow
                 kept.Add(ep);
                 Set(() => ep.Platform = platform);
                 Set(() => ep.CommandLine = (row.Cells[1].Value as string ?? "").Trim());
-                Set(() => ep.IsDefault = row.Cells[2].Value is true or CheckState.Checked);
+                bool wantDefault = row.Cells[2].Value is true or CheckState.Checked;
+                Set(() => ep.IsDefault = wantDefault);
+                // Enforce single-default-per-platform: clear the flag on any other emulator.
+                if (!readOnly && wantDefault) ClearOtherDefaults(platform);
                 // Two-state checkbox over a nullable field: an unchecked box that
                 // LOADED as null (inherit) and was never checked stays null.
                 bool isChecked = row.Cells[3].Value is true or CheckState.Checked;
@@ -322,6 +355,37 @@ internal static class EditEmulatorWindow
             // Rows removed in the grid → remove from the emulator.
             foreach (var ep in rows.Where(r => !kept.Contains(r)))
                 Set(() => emu.TryRemoveEmulatorPlatform(ep));
+        }
+
+        // The title of ANOTHER emulator already flagged default for <paramref name="platform"/>
+        // (null when none) — drives the "replace the default?" warning.
+        string? OtherDefaultEmu(string platform)
+        {
+            if (string.IsNullOrWhiteSpace(platform)) return null;
+            string? selfId = Safe(() => emu.Id);
+            foreach (var oe in PluginHelper.DataManager?.GetAllEmulators() ?? Array.Empty<IEmulator>())
+            {
+                if (oe == null || string.Equals(Safe(() => oe.Id), selfId, StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (var ep in oe.GetAllEmulatorPlatforms() ?? Array.Empty<IEmulatorPlatform>())
+                    if (Safe(() => ep.IsDefault) && string.Equals(Safe(() => ep.Platform), platform, StringComparison.OrdinalIgnoreCase))
+                        return Safe(() => oe.Title) ?? "Another emulator";
+            }
+            return null;
+        }
+
+        // Clear the default flag for <paramref name="platform"/> on every OTHER emulator,
+        // routing through their setters so each change lands in the op-log.
+        void ClearOtherDefaults(string platform)
+        {
+            if (string.IsNullOrWhiteSpace(platform)) return;
+            string? selfId = Safe(() => emu.Id);
+            foreach (var oe in PluginHelper.DataManager?.GetAllEmulators() ?? Array.Empty<IEmulator>())
+            {
+                if (oe == null || string.Equals(Safe(() => oe.Id), selfId, StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (var ep in oe.GetAllEmulatorPlatforms() ?? Array.Empty<IEmulatorPlatform>())
+                    if (Safe(() => ep.IsDefault) && string.Equals(Safe(() => ep.Platform), platform, StringComparison.OrdinalIgnoreCase))
+                        Set(() => ep.IsDefault = false);
+            }
         }
     }
 

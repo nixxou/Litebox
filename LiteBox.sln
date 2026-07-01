@@ -4,8 +4,6 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LiteBox", "LiteBox.csproj", "{1A1A1A1A-1111-4111-8111-111111111111}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LiteBoxLauncher", "Launcher\LiteBoxLauncher.csproj", "{2B2B2B2B-2222-4222-8222-222222222222}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -16,10 +14,6 @@ Global
 		{1A1A1A1A-1111-4111-8111-111111111111}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1A1A1A1A-1111-4111-8111-111111111111}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1A1A1A1A-1111-4111-8111-111111111111}.Release|Any CPU.Build.0 = Release|Any CPU
-		{2B2B2B2B-2222-4222-8222-222222222222}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{2B2B2B2B-2222-4222-8222-222222222222}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{2B2B2B2B-2222-4222-8222-222222222222}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{2B2B2B2B-2222-4222-8222-222222222222}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

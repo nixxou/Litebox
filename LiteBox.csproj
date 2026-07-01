@@ -15,16 +15,19 @@
     <AssemblyName>LiteBox</AssemblyName>
     <RootNamespace>LbApiHost</RootNamespace>
     <ApplicationIcon>litebox.ico</ApplicationIcon>
+    <!-- Distribution: ONE self-contained single-file exe that is BOTH the installer and the host
+         (Program.cs then Host\Install\Installer). Drop it at the LaunchBox root or in Core and it
+         self-installs (copies itself to Core, unpacks the EMBEDDED native payload into ThirdParty\).
+         The old separate LiteBoxLauncher project is gone (merged here).
+         Publish self-contained, RID win-x64, single-file:
+           dotnet publish -c Release -r win-x64 -p:SelfContained=true -p:PublishSingleFile=true
+         PublishSingleFile / IncludeNativeLibrariesForSelfExtract only take effect on publish, so a plain
+         `dotnet build` stays a fast framework-dependent dev build (self-install skips it: it detects the
+         loose LiteBox.dll next to a dev exe and just boots). -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
-
-  <!-- The launcher is a separate project nested in Launcher\ — keep it out of the host's
-       default **/*.cs globbing (otherwise its sources + generated obj files double-compile here). -->
-  <ItemGroup>
-    <Compile Remove="Launcher\**" />
-    <EmbeddedResource Remove="Launcher\**" />
-    <None Remove="Launcher\**" />
-    <Content Remove="Launcher\**" />
-  </ItemGroup>
 
   <ItemGroup>
     <!-- The real LaunchBox plugin SDK — the exact interface contract we
@@ -74,13 +77,45 @@
     <EmbeddedResource Include="litebox.ico" />
   </ItemGroup>
 
+  <!-- Native payload EMBEDDED in the exe. Each LogicalName encodes the final on-disk location under the
+       LaunchBox root; NativeInstaller.EnsureDeployed writes them to <LB>\ThirdParty\… (only-if-absent).
+       ".dll.api" sources land as ".dll" so nothing tries to load them as managed assemblies while embedded.
+       Groups: Everything (host GameCache), ExtendDB (native ImageMagick), RetroAchievements (RAHasher +
+       runtime deps + licences), Steam (Steamworks achievements helper). -->
   <ItemGroup>
-    <!-- Bundled RAHasher payload (RahasherExtendDB.exe + native deps as ".dll.api" + licences). Copied
-         next to LiteBox.exe under thirdparty\ so the LiteBox-native RA fallback (RaHasherLite) can deploy
-         it into LB\ThirdParty\RetroAchievements\ when ExtendDB hasn't already — see RaHasherLite.EnsureExe. -->
-    <Content Include="thirdparty\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    <EmbeddedResource Include="thirdparty\Everything64.dll.api">
+      <LogicalName>natives/ThirdParty/Everything/Everything64.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\Magick.Native-Q16-x64.dll.api">
+      <LogicalName>natives/ThirdParty/ExtendDB/Magick.Native-Q16-x64.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\RahasherExtendDB.exe">
+      <LogicalName>natives/ThirdParty/RetroAchievements/RahasherExtendDB.exe</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\7z.dll.api">
+      <LogicalName>natives/ThirdParty/RetroAchievements/7z.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\MSVCP140.dll.api">
+      <LogicalName>natives/ThirdParty/RetroAchievements/MSVCP140.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\VCRUNTIME140.dll.api">
+      <LogicalName>natives/ThirdParty/RetroAchievements/VCRUNTIME140.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\VCRUNTIME140_1.dll.api">
+      <LogicalName>natives/ThirdParty/RetroAchievements/VCRUNTIME140_1.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\RAHasher.COPYING.txt">
+      <LogicalName>natives/ThirdParty/RetroAchievements/COPYING.txt</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\RAHasher.7z-LICENSE.txt">
+      <LogicalName>natives/ThirdParty/RetroAchievements/7z.dll-LICENSE.txt</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\RAHasher.RVZ-SUPPORT.txt">
+      <LogicalName>natives/ThirdParty/RetroAchievements/RVZ-SUPPORT.txt</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\steam_api64.dll.api">
+      <LogicalName>natives/ThirdParty/Steam/steam_api64.dll</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

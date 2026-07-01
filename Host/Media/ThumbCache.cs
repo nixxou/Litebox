@@ -40,14 +40,10 @@ internal static class MagickSupport
     {
         try
         {
+            // Magick.Native-Q16-x64.dll is deployed by NativeInstaller (embedded → ThirdParty\ExtendDB);
+            // here we only add that folder to the native search path.
             string nativeDir = Path.Combine(lbRoot, "ThirdParty", "ExtendDB");
             Directory.CreateDirectory(nativeDir);
-            string target = Path.Combine(nativeDir, "Magick.Native-Q16-x64.dll");
-            if (!File.Exists(target))
-            {
-                string src = Path.Combine(AppContext.BaseDirectory, "Magick.Native-Q16-x64.dll.api");
-                if (File.Exists(src)) { try { File.Copy(src, target); } catch { } }
-            }
             SetDllDirectory(nativeDir);   // one slot; ExtendDB sets the same dir later — no conflict
         }
         catch { }

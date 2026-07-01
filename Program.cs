@@ -117,6 +117,12 @@ if (args.Contains("--store-sync"))
     return StoreSyncDump.Run(args);
 }
 
+// Merged installer / relocate: when this single-file binary is dropped at the LaunchBox ROOT (or anywhere
+// outside Core), copy itself into <LB>\Core and launch that host. Returns false when we're already the
+// in-place Core host (or a dev build) → fall through and boot the GUI here. Handles the silent --install too.
+if (LbApiHost.Host.Install.Installer.TryRun(args, out int installExit))
+    return installExit;
+
 // Default (no args, or --host): run the host GUI.
 return HostBoot.Run(args);
 

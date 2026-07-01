@@ -25,14 +25,9 @@ internal static class EverythingSupport
     {
         try
         {
-            string dir = Path.Combine(lbRoot, "ThirdParty", "Everything");
-            Directory.CreateDirectory(dir);
-            string target = Path.Combine(dir, "Everything64.dll");
-            if (!File.Exists(target))
-            {
-                string src = Path.Combine(AppContext.BaseDirectory, "Everything64.dll.api");
-                if (File.Exists(src)) { try { File.Copy(src, target); } catch { } }
-            }
+            // Everything64.dll is deployed by NativeInstaller (embedded → ThirdParty\Everything); here we
+            // just point the DllImportResolver at it.
+            string target = Path.Combine(lbRoot, "ThirdParty", "Everything", "Everything64.dll");
             if (File.Exists(target)) _dllPath = target;
 
             if (!_resolverSet)

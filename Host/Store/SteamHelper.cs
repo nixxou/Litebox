@@ -40,21 +40,15 @@ internal static class SteamHelper
         }
     }
 
-    /// <summary>Deploys the bundled steam_api64.dll (shipped as ".dll.api") to LB\ThirdParty\Steam\ only if
-    /// absent. Returns the on-disk DLL path, or null when it can't be made available.</summary>
+    /// <summary>Returns the steam_api64.dll path in LB\ThirdParty\Steam\. The DLL is deployed by
+    /// NativeInstaller (embedded → ThirdParty); this triggers that deploy if it hasn't run yet.
+    /// Null when it can't be made available.</summary>
     public static string? EnsureDll()
     {
         try
         {
-            string dir = Path.Combine(LbRoot, "ThirdParty", "Steam");
-            string dst = Path.Combine(dir, "steam_api64.dll");
-            if (File.Exists(dst)) return dst;
-            string baseDir = AppContext.BaseDirectory;
-            string src = Path.Combine(baseDir, "thirdparty", "steam_api64.dll.api");
-            if (!File.Exists(src)) src = Path.Combine(baseDir, "steam_api64.dll.api");
-            if (!File.Exists(src)) return null;
-            Directory.CreateDirectory(dir);
-            File.Copy(src, dst, overwrite: false);
+            string dst = Path.Combine(LbRoot, "ThirdParty", "Steam", "steam_api64.dll");
+            if (!File.Exists(dst)) LbApiHost.Host.Install.NativeInstaller.EnsureDeployed(LbRoot);
             return File.Exists(dst) ? dst : null;
         }
         catch { return null; }

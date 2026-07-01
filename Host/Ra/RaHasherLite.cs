@@ -33,48 +33,17 @@ internal static class RaHasherLite
         public string Name { get; }
     }
 
-    // The native files we ship (as ".dll.api") and where they land (".dll") next to the exe.
-    private static readonly (string src, string dst)[] Payload =
-    {
-        ("RahasherExtendDB.exe", "RahasherExtendDB.exe"),
-        ("7z.dll.api",           "7z.dll"),
-        ("MSVCP140.dll.api",     "MSVCP140.dll"),
-        ("VCRUNTIME140.dll.api", "VCRUNTIME140.dll"),
-        ("VCRUNTIME140_1.dll.api","VCRUNTIME140_1.dll"),
-        // Licences (GPL/LGPL) — ship alongside the binary.
-        ("RAHasher.COPYING.txt",     "COPYING.txt"),
-        ("RAHasher.7z-LICENSE.txt",  "7z.dll-LICENSE.txt"),
-        ("RAHasher.RVZ-SUPPORT.txt", "RVZ-SUPPORT.txt"),
-    };
-
     private static string RaDir => Path.Combine(MediaResolver.LbRoot ?? "", "ThirdParty", "RetroAchievements");
 
-    /// <summary>Ensures RahasherExtendDB.exe is present in LB\ThirdParty\RetroAchievements\, deploying the
-    /// bundled payload there only if absent. Returns the exe path, or null when it can't be made available.</summary>
+    /// <summary>Returns the RahasherExtendDB.exe path in LB\ThirdParty\RetroAchievements\. The payload is
+    /// deployed by NativeInstaller (embedded → ThirdParty); this triggers that deploy if it hasn't run yet
+    /// (e.g. lazy first use before boot completed). Null when it can't be made available.</summary>
     public static string? EnsureExe()
     {
         try
         {
-            string raDir = RaDir;
-            string exe = Path.Combine(raDir, "RahasherExtendDB.exe");
-            if (File.Exists(exe)) return exe;   // already deployed (by us or by ExtendDB)
-
-            // Source: the bundled payload next to LiteBox.exe (thirdparty\ first, then the root).
-            string root = AppContext.BaseDirectory;
-            string SrcDir(string f)
-            {
-                string a = Path.Combine(root, "thirdparty", f);
-                if (File.Exists(a)) return a;
-                return Path.Combine(root, f);
-            }
-
-            Directory.CreateDirectory(raDir);
-            foreach (var (src, dst) in Payload)
-            {
-                string from = SrcDir(src), to = Path.Combine(raDir, dst);
-                try { if (File.Exists(from) && !File.Exists(to)) File.Copy(from, to); }
-                catch (Exception ex) { Console.WriteLine($"[ra-lite] deploy {dst} failed: {ex.Message}"); }
-            }
+            string exe = Path.Combine(RaDir, "RahasherExtendDB.exe");
+            if (!File.Exists(exe)) LbApiHost.Host.Install.NativeInstaller.EnsureDeployed(MediaResolver.LbRoot);
             return File.Exists(exe) ? exe : null;
         }
         catch (Exception ex) { Console.WriteLine($"[ra-lite] EnsureExe failed: {ex.Message}"); return null; }

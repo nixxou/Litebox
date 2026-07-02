@@ -19,6 +19,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace LbApiHost.Host.Install;
@@ -57,22 +58,24 @@ internal static class Installer
             // Dev build (a loose LiteBox.dll next to a NON-single-file exe) → never self-install; just boot.
             if (File.Exists(Path.Combine(selfDir, "LiteBox.dll"))) return false;
 
-            // Published single-file dropped outside Core → install.
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
+            // Published single-file dropped outside Core → install. WinForms file/message dialogs require an
+            // STA thread, but the process main thread is MTA (top-level Main; the GUI uses its own STA thread
+            // in HostBoot), so the picker + prompts MUST run on a dedicated STA thread — else OpenFileDialog
+            // throws and no picker appears.
+            bool atRoot = File.Exists(Path.Combine(selfDir, "Core", "LaunchBox.exe"));
+            string? root = atRoot ? selfDir : RunSta(AskLaunchBoxRoot);   // dropped somewhere random → ask
+            if (root == null) { exitCode = 1; return true; }              // cancelled
 
-            string? root = File.Exists(Path.Combine(selfDir, "Core", "LaunchBox.exe"))
-                ? selfDir                          // I'm sitting at the LaunchBox root
-                : AskLaunchBoxRoot();              // dropped somewhere random → ask
-            if (root == null) { exitCode = 1; return true; }   // cancelled
-
-            bool interactive = !string.Equals(root, selfDir, StringComparison.OrdinalIgnoreCase);
             InstallToCore(root, selfPath);
-            if (interactive)
-                MessageBox.Show(
-                    $"LiteBox was installed into:\n{root}\n\nStarting it now. A LiteBox.exe was also placed at the\n" +
-                    "LaunchBox root (run it any time), along with \"LiteBox uninstall.bat\".",
-                    "LiteBox — installation complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!atRoot)
+                RunSta(() =>
+                {
+                    MessageBox.Show(
+                        $"LiteBox was installed into:\n{root}\n\nStarting it now. A LiteBox.exe was also placed at the\n" +
+                        "LaunchBox root (run it any time), along with \"LiteBox uninstall.bat\".",
+                        "LiteBox — installation complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return true;
+                });
             LaunchCoreHost(root, args);
             return true;
         }
@@ -114,6 +117,23 @@ internal static class Installer
             psi.ArgumentList.Add(args[i]);
         }
         Process.Start(psi);
+    }
+
+    // Run a WinForms-dialog action on a dedicated STA thread (the process main thread is MTA).
+    private static T RunSta<T>(Func<T> f)
+    {
+        T result = default!;
+        Exception? err = null;
+        var t = new Thread(() =>
+        {
+            try { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); } catch { }
+            try { result = f(); } catch (Exception ex) { err = ex; }
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+        if (err != null) throw err;
+        return result;
     }
 
     // Prompt for the ROOT LaunchBox.exe (reject the one inside Core, require a sibling Core\LaunchBox.exe).

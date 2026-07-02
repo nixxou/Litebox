@@ -1381,9 +1381,9 @@ internal sealed class MainWindow : Form
         var title = new Label { Text = "Uninstall LiteBox", Location = new Point(4, 8), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) };
         var desc = new Label
         {
-            Text = "Removes LiteBox completely: LiteBox.exe (Core + root), the Core\\litebox\\ data folder, the "
-                 + "root launcher and its uninstall script, and ThirdParty\\Steam. The ExtendDB plugin and the "
-                 + "ThirdParty tools it shares are left untouched unless you tick a box below.",
+            Text = "Removes LiteBox completely: LiteBox.exe (Core + root re-launcher), the Core\\litebox\\ data "
+                 + "folder, and ThirdParty\\Steam. The ExtendDB plugin and the ThirdParty tools it shares are "
+                 + "left untouched unless you tick a box below.",
             Location = new Point(4, 32), AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = SubFg, BackColor = Bg,
             Font = new Font("Segoe UI", 8.5f),
         };

@@ -65,7 +65,9 @@ internal static class ThumbCache
     {
         get
         {
-            var d = _dir ?? Path.Combine(AppContext.BaseDirectory, "cache", "thumbs");
+            // Normal path is the shared ExtendDB thumbs dir (set in Init). The fallback (no LB / Init not
+            // called) goes under Core\litebox\ like everything else LiteBox creates — never loose in Core.
+            var d = _dir ?? Path.Combine(LiteBoxPaths.Data, "thumbs");
             try { Directory.CreateDirectory(d); } catch { }
             return d;
         }

@@ -21,13 +21,14 @@ namespace LbApiHost.Host.Install;
 internal static class NativeInstaller
 {
     private const string Prefix = "natives/";
-    private static bool _done;
 
     /// <summary>Extracts every embedded native (only-if-absent) into &lt;lbRoot&gt;\ThirdParty\… .
-    /// Safe to call from anywhere; the first call does the work, later calls are no-ops.</summary>
+    /// Safe + cheap to call repeatedly (each call just re-verifies via File.Exists): the lazy callers
+    /// (RaHasherLite / SteamHelper) rely on this to RE-deploy a file that went missing after boot, so it
+    /// must NOT short-circuit after the first run.</summary>
     public static void EnsureDeployed(string? lbRoot)
     {
-        if (_done || string.IsNullOrEmpty(lbRoot)) return;
+        if (string.IsNullOrEmpty(lbRoot)) return;
         try
         {
             var asm = typeof(NativeInstaller).Assembly;
@@ -48,7 +49,6 @@ internal static class NativeInstaller
                 }
                 catch (Exception ex) { Console.WriteLine($"[installer] {rel} failed: {ex.Message}"); }
             }
-            _done = true;
         }
         catch (Exception ex) { Console.WriteLine($"[installer] EnsureDeployed failed: {ex.Message}"); }
     }

@@ -123,7 +123,7 @@ internal static class Installer
         Exception? err = null;
         var t = new Thread(() =>
         {
-            try { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); } catch { }
+            try { Application.EnableVisualStyles(); } catch { }   // themed native dialogs; SetCompatibleTextRenderingDefault not needed here
             try { result = f(); } catch (Exception ex) { err = ex; }
         });
         t.SetApartmentState(ApartmentState.STA);

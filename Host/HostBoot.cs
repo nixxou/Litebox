@@ -49,6 +49,7 @@ internal static class HostBoot
         string coreDir = AppContext.BaseDirectory;
         Mem.Report("startup");
         InstanceGuard.Probe();   // a 2nd LiteBox must not also write the XMLs / op-log (forces read-only below)
+        bool refreshNatives = LbApiHost.Host.Install.Migration.MigrateConfigAndNeedNatives();   // config migration + upgrade detection (before config/db are used)
 
         // ── Real data: LaunchBox Platform XMLs (authoritative, no ExtendDB dep) ──
         IDataManager dm;
@@ -75,7 +76,7 @@ internal static class HostBoot
             lbRoot = Path.GetFullPath(Path.Combine(dataDir, ".."));                   // ...\LB
             string imagesRoot = Path.Combine(lbRoot, "Images");                       // ...\LB\Images
             LbApiHost.Host.Media.MediaResolver.Init(lbRoot);                          // media (IO + GameCache fast path)
-            LbApiHost.Host.Install.NativeInstaller.EnsureDeployed(lbRoot);            // deploy the EMBEDDED native payload → LB\ThirdParty\… (once, only-if-absent). Single owner of ThirdParty placement.
+            LbApiHost.Host.Install.NativeInstaller.EnsureDeployed(lbRoot, refreshNatives);  // deploy embedded natives → ThirdParty (only-if-absent; a refresh pass on a version bump). Single owner of ThirdParty placement.
             LbApiHost.Host.Media.MagickSupport.Init(lbRoot);                          // point the native-lib search dir at ThirdParty\ExtendDB (already deployed above)
             LbApiHost.Host.Media.ThumbCache.Init(lbRoot);                             // shared degraded-thumb cache (LB\Plugins\ExtendDB\cache\thumbs)
             dm = store.Count > 0 ? new HostDataManagerXml(store, dataDir, imagesRoot) : new HostDataManager(HostCatalog.BuildDummy());

@@ -54,10 +54,17 @@ internal sealed class OpLog : IDisposable
             var csb = new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false };
             log._conn = new SqliteConnection(csb.ToString());
             log._conn.Open();
+            // DB schema version (PRAGMA user_version): drop LiteBox's tables on a breaking bump, then stamp
+            // the current version. On the current rollout ResetPendingDbBelow=0.0.0 → nothing is ever reset.
+            int uv = ReadUserVersion(log._conn);
+            int resetBelow = LbApiHost.Host.Install.LiteBoxVersion.Encode(LbApiHost.Host.Install.LiteBoxVersion.ResetPendingDbBelow);
+            int cur = LbApiHost.Host.Install.LiteBoxVersion.Encode(LbApiHost.Host.Install.LiteBoxVersion.Current);
+            bool reset = uv < resetBelow;
             using (var cmd = log._conn.CreateCommand())
             {
                 cmd.CommandText =
                     "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;" +
+                    (reset ? "DROP TABLE IF EXISTS ops; DROP TABLE IF EXISTS launch_history;" : "") +
                     "CREATE TABLE IF NOT EXISTS ops(" +
                     " seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL," +
                     " op TEXT NOT NULL, entity TEXT NOT NULL, id TEXT, parent_id TEXT," +
@@ -67,9 +74,11 @@ internal sealed class OpLog : IDisposable
                     // never tracks the ROM, so extracted_rom_path stays NULL here.
                     "CREATE TABLE IF NOT EXISTS launch_history(" +
                     " game_id TEXT NOT NULL PRIMARY KEY, additional_app_id TEXT, emulator_id TEXT," +
-                    " extracted_rom_path TEXT, last_launched_utc TEXT NOT NULL);";
+                    " extracted_rom_path TEXT, last_launched_utc TEXT NOT NULL);" +
+                    $"PRAGMA user_version={cur};";
                 cmd.ExecuteNonQuery();
             }
+            if (reset) Console.WriteLine($"[oplog] schema reset (user_version {uv} < {resetBelow})");
             log._insert = log._conn.CreateCommand();
             log._insert.CommandText =
                 "INSERT INTO ops(ts,op,entity,id,parent_id,field,value) VALUES($ts,$op,$e,$id,$pid,$f,$v)";
@@ -239,6 +248,12 @@ internal sealed class OpLog : IDisposable
     }
 
     private static string Str(SqliteDataReader r, int i) => r.IsDBNull(i) ? null : r.GetString(i);
+
+    private static int ReadUserVersion(SqliteConnection conn)
+    {
+        try { using var c = conn.CreateCommand(); c.CommandText = "PRAGMA user_version;"; return Convert.ToInt32(c.ExecuteScalar()); }
+        catch { return 0; }
+    }
 
     public void Dispose()
     {

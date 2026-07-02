@@ -35,7 +35,15 @@ internal static class Installer
             string selfPath = Process.GetCurrentProcess().MainModule!.FileName;
             string selfDir = Path.GetDirectoryName(selfPath)!.TrimEnd('\\', '/');
 
-            // Silent scripted install: --install "<LaunchBox root>"  (no UI, no launch).
+            // In place already? (I'm <LB>\Core\LiteBox.exe) or a dev build (loose LiteBox.dll next to a
+            // NON-single-file exe) → just boot the GUI.
+            bool inCore = string.Equals(Path.GetFileName(selfDir), "Core", StringComparison.OrdinalIgnoreCase)
+                          && File.Exists(Path.Combine(selfDir, "LaunchBox.exe"));
+            bool devBuild = File.Exists(Path.Combine(selfDir, "LiteBox.dll"));
+
+#if SELF_CONTAINED_BUILD
+            // Silent scripted install: --install "<LaunchBox root>" (no UI, no launch) — checked first so it
+            // works from anywhere, even from within Core.
             int ii = Array.FindIndex(args, a => a.Equals("--install", StringComparison.OrdinalIgnoreCase));
             if (ii >= 0 && ii + 1 < args.Length)
             {
@@ -49,18 +57,10 @@ internal static class Installer
                 return true;
             }
 
-            // Already the in-place host? (I'm <LB>\Core\LiteBox.exe) → let the GUI boot.
-            bool inCore = string.Equals(Path.GetFileName(selfDir), "Core", StringComparison.OrdinalIgnoreCase)
-                          && File.Exists(Path.Combine(selfDir, "LaunchBox.exe"));
-            if (inCore) return false;
+            if (inCore || devBuild) return false;
 
-            // Dev build (a loose LiteBox.dll next to a NON-single-file exe) → never self-install; just boot.
-            if (File.Exists(Path.Combine(selfDir, "LiteBox.dll"))) return false;
-
-            // Published single-file dropped outside Core → install. WinForms file/message dialogs require an
-            // STA thread, but the process main thread is MTA (top-level Main; the GUI uses its own STA thread
-            // in HostBoot), so the picker + prompts MUST run on a dedicated STA thread — else OpenFileDialog
-            // throws and no picker appears.
+            // Self-contained single-file dropped outside Core → install. WinForms file/message dialogs require
+            // an STA thread (the process main thread is MTA), so the picker + prompts run on a dedicated one.
             bool atRoot = File.Exists(Path.Combine(selfDir, "Core", "LaunchBox.exe"));
             string? root = atRoot ? selfDir : RunSta(AskLaunchBoxRoot);   // dropped somewhere random → ask
             if (root == null) { exitCode = 1; return true; }              // cancelled
@@ -77,6 +77,17 @@ internal static class Installer
                 });
             LaunchCoreHost(root, args);
             return true;
+#else
+            // Framework-dependent "zip" build: Core-only. It can't self-install (no bundled runtime, no
+            // embedded payload), so if it isn't in place just tell the user where it belongs.
+            if (inCore || devBuild) return false;
+            MessageBox.Show(
+                "This LiteBox needs to live in your LaunchBox \"Core\" folder.\n\n" +
+                "Extract the zip into <LaunchBox>\\Core — or use the standalone (self-installing) LiteBox.exe " +
+                "to install it from anywhere.",
+                "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            exitCode = 1; return true;
+#endif
         }
         catch (Exception ex)
         {
@@ -85,6 +96,7 @@ internal static class Installer
         }
     }
 
+#if SELF_CONTAINED_BUILD
     // Copy MYSELF to <root>\Core\LiteBox.exe (the host) and to <root>\LiteBox.exe (the root re-launcher).
     // Never copies over itself. (Uninstall is done in-app from LiteBox's Options — no .bat is written.)
     private static void InstallToCore(string root, string selfPath)
@@ -163,6 +175,7 @@ internal static class Installer
             return dir;
         }
     }
+#endif
 
     private static void Warn(string msg)
         => MessageBox.Show(msg, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error);

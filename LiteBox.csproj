@@ -29,6 +29,14 @@
          loose LiteBox.dll next to a dev exe and just boots). -->
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <!-- Self-contained builds define SELF_CONTAINED_BUILD (installer/relocate active + payload embedded) and
+       compress the bundle. The framework-dependent "zip" build (published self-contained=false) does NOT —
+       so the Installer runs in Core-only mode and the payload ships loose in the zip instead (compression
+       isn't supported for framework-dependent single-file). -->
+  <PropertyGroup Condition="'$(SelfContained)' == 'true'">
+    <DefineConstants>$(DefineConstants);SELF_CONTAINED_BUILD</DefineConstants>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
@@ -80,36 +88,19 @@
     <EmbeddedResource Include="litebox.ico" />
   </ItemGroup>
 
-  <!-- Native payload EMBEDDED in the exe. Each LogicalName encodes the final on-disk location under the
-       LaunchBox root; NativeInstaller.EnsureDeployed writes them to <LB>\ThirdParty\… (only-if-absent).
-       ".dll.api" sources land as ".dll" so nothing tries to load them as managed assemblies while embedded.
-       Groups: Everything (host GameCache), ExtendDB (native ImageMagick), RetroAchievements (RAHasher +
-       runtime deps), Steam (Steamworks achievements helper). -->
-  <ItemGroup>
-    <EmbeddedResource Include="thirdparty\Everything64.dll.api">
-      <LogicalName>natives/ThirdParty/Everything/Everything64.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\Magick.Native-Q16-x64.dll.api">
-      <LogicalName>natives/ThirdParty/ExtendDB/Magick.Native-Q16-x64.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\RahasherExtendDB.exe">
-      <LogicalName>natives/ThirdParty/RetroAchievements/RahasherExtendDB.exe</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\7z.dll.api">
-      <LogicalName>natives/ThirdParty/RetroAchievements/7z.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\MSVCP140.dll.api">
-      <LogicalName>natives/ThirdParty/RetroAchievements/MSVCP140.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\VCRUNTIME140.dll.api">
-      <LogicalName>natives/ThirdParty/RetroAchievements/VCRUNTIME140.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\VCRUNTIME140_1.dll.api">
-      <LogicalName>natives/ThirdParty/RetroAchievements/VCRUNTIME140_1.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\steam_api64.dll.api">
-      <LogicalName>natives/ThirdParty/Steam/steam_api64.dll</LogicalName>
-    </EmbeddedResource>
+  <!-- Native payload. Embedded as resources ONLY for the self-contained build ($(SelfContained)); the
+       framework-dependent "zip" ships them loose under Core\litebox\thirdparty\ instead, so its exe stays
+       small. LogicalName = the SOURCE filename; the src to ThirdParty mapping lives in NativeInstaller.Payload
+       (keep the two lists in sync). -->
+  <ItemGroup Condition="'$(SelfContained)' == 'true'">
+    <EmbeddedResource Include="thirdparty\Everything64.dll.api"><LogicalName>natives/Everything64.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\Magick.Native-Q16-x64.dll.api"><LogicalName>natives/Magick.Native-Q16-x64.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\RahasherExtendDB.exe"><LogicalName>natives/RahasherExtendDB.exe</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\7z.dll.api"><LogicalName>natives/7z.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\MSVCP140.dll.api"><LogicalName>natives/MSVCP140.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\VCRUNTIME140.dll.api"><LogicalName>natives/VCRUNTIME140.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\VCRUNTIME140_1.dll.api"><LogicalName>natives/VCRUNTIME140_1.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\steam_api64.dll.api"><LogicalName>natives/steam_api64.dll.api</LogicalName></EmbeddedResource>
   </ItemGroup>
 
 </Project>

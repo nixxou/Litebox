@@ -1,15 +1,15 @@
 // Single owner of native-payload deployment into <LB>\ThirdParty\… for the LiteBox host.
 //
-// The payload (RAHasher + its runtime deps, Everything64, Magick.Native, steam_api64) is EMBEDDED in
-// the exe as resources named "natives/<target-relative-path>" (see LiteBox.csproj — each thirdparty\*.api
-// gets a LogicalName encoding its final on-disk location, e.g. natives/ThirdParty/Everything/Everything64.dll).
-//
-//   • Normal (refresh=false): write each resource ONLY IF ABSENT — never clobbers a copy ExtendDB already
-//     deployed. Used at boot and by the lazy self-heal in RaHasherLite / SteamHelper.
-//   • Refresh (refresh=true, run once after a version bump — see Migration): for a file that already exists,
-//     compare it to the embedded one; identical → skip; different → if it's a tool SHARED with an INSTALLED
-//     ExtendDB, ask the user before replacing (one prompt); otherwise (LiteBox-only, or ExtendDB absent)
-//     overwrite silently.
+// The payload = the native tools LiteBox needs (RAHasher + runtime deps, Everything64, Magick.Native,
+// steam_api64). Its source depends on how the exe was published:
+//   • self-contained single-file  → the files are EMBEDDED as resources "natives/<src>" (see LiteBox.csproj,
+//     which embeds them only when $(SelfContained)); the exe is self-sufficient.
+//   • framework-dependent "zip"    → the files ship LOOSE in the zip under Core\litebox\thirdparty\<src>
+//     (kept there as the re-deploy source), so the exe stays small.
+// EnsureDeployed picks whichever source is present, per payload entry, and writes it to
+// <lbRoot>\ThirdParty\<sub>\<dst>. Normal mode = only-if-absent (never clobbers an ExtendDB copy). Refresh
+// mode (run once after a version bump — see Migration) updates a changed file: identical → skip; different
+// → if it's a tool SHARED with an INSTALLED ExtendDB, ask once before replacing; else overwrite.
 
 #nullable enable
 
@@ -25,57 +25,89 @@ namespace LbApiHost.Host.Install;
 
 internal static class NativeInstaller
 {
-    private const string Prefix = "natives/";
+    private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
 
-    /// <summary>Deploys the embedded natives into &lt;lbRoot&gt;\ThirdParty\… . Only-if-absent unless
-    /// <paramref name="refresh"/> (then updates changed files, prompting for shared ExtendDB tools).
-    /// Safe + cheap to call repeatedly.</summary>
+    // (embedded/loose source name, ThirdParty subdir, final on-disk name). Steam is LiteBox-only; the rest
+    // are SHARED with the ExtendDB plugin (same paths). KEEP in sync with the csproj EmbeddedResource list.
+    private static readonly (string src, string sub, string dst)[] Payload =
+    {
+        ("Everything64.dll.api",          "Everything",        "Everything64.dll"),
+        ("Magick.Native-Q16-x64.dll.api", "ExtendDB",          "Magick.Native-Q16-x64.dll"),
+        ("RahasherExtendDB.exe",          "RetroAchievements", "RahasherExtendDB.exe"),
+        ("7z.dll.api",                    "RetroAchievements", "7z.dll"),
+        ("MSVCP140.dll.api",              "RetroAchievements", "MSVCP140.dll"),
+        ("VCRUNTIME140.dll.api",          "RetroAchievements", "VCRUNTIME140.dll"),
+        ("VCRUNTIME140_1.dll.api",        "RetroAchievements", "VCRUNTIME140_1.dll"),
+        ("steam_api64.dll.api",           "Steam",             "steam_api64.dll"),
+    };
+
+    /// <summary>Deploys the payload into &lt;lbRoot&gt;\ThirdParty\… . Only-if-absent unless
+    /// <paramref name="refresh"/>. Safe + cheap to call repeatedly.</summary>
     public static void EnsureDeployed(string? lbRoot, bool refresh = false)
     {
         if (string.IsNullOrEmpty(lbRoot)) return;
         try
         {
             var asm = typeof(NativeInstaller).Assembly;
-            var sharedDiff = new List<(string res, string target)>();   // shared-with-ExtendDB natives that differ
+            var resNames = asm.GetManifestResourceNames();
+            var sharedDiff = new List<(string src, string target)>();
             bool? extendDbPresent = null;
 
-            foreach (var res in asm.GetManifestResourceNames())
+            foreach (var (src, sub, dst) in Payload)
             {
-                if (!res.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)) continue;
-                string rel = res.Substring(Prefix.Length).Replace('/', Path.DirectorySeparatorChar);
-                string target = Path.Combine(lbRoot, rel);
+                string target = Path.Combine(lbRoot, "ThirdParty", sub, dst);
+                if (!HasSource(asm, resNames, src)) continue;   // neither embedded nor loose → nothing to do
 
-                if (!File.Exists(target)) { Extract(asm, res, target); continue; }   // absent → deploy (both modes)
-                if (!refresh) continue;                                              // present + normal → only-if-absent
-                if (SameContent(asm, res, target)) continue;                         // present + refresh + identical → skip
+                if (!File.Exists(target)) { Deploy(asm, resNames, src, target); continue; }   // absent → deploy
+                if (!refresh) continue;                                                        // present + normal → skip
+                if (SameContent(asm, resNames, src, target)) continue;                         // present + identical → skip
 
-                // Present, differs, in a refresh pass.
-                if (IsShared(rel))
+                if (sub != "Steam")   // shared with ExtendDB
                 {
                     extendDbPresent ??= File.Exists(Path.Combine(lbRoot, "Plugins", "ExtendDB", "ExtendDB.dll"));
-                    if (extendDbPresent == true) { sharedDiff.Add((res, target)); continue; }  // ExtendDB owns it → ask
+                    if (extendDbPresent == true) { sharedDiff.Add((src, target)); continue; }  // ask before touching
                 }
-                Extract(asm, res, target);   // LiteBox-only, or no ExtendDB → overwrite
+                Deploy(asm, resNames, src, target);   // LiteBox-only, or no ExtendDB → overwrite
             }
 
-            // One prompt for all shared tools that differ while ExtendDB is installed.
-            if (sharedDiff.Count > 0
-                && AskReplaceShared(sharedDiff.Select(x => Path.GetFileName(x.target))))
-                foreach (var (res, target) in sharedDiff) Extract(asm, res, target);
+            if (sharedDiff.Count > 0 && AskReplaceShared(sharedDiff.Select(x => Path.GetFileName(x.target))))
+                foreach (var (src, target) in sharedDiff) Deploy(asm, resNames, src, target);
         }
         catch (Exception ex) { Console.WriteLine("[installer] EnsureDeployed failed: " + ex.Message); }
     }
 
-    // Everything / ExtendDB / RetroAchievements are shared with the ExtendDB plugin; Steam is LiteBox-only.
-    private static bool IsShared(string rel)
-        => rel.IndexOf(@"ThirdParty\Steam", StringComparison.OrdinalIgnoreCase) < 0;
+    // ── source = embedded "natives/<src>" (self-contained) OR Core\litebox\thirdparty\<src> (framework-dependent zip) ──
+    private static string? ResName(string[] resNames, string src)
+        => resNames.FirstOrDefault(n => n.Equals("natives/" + src, OIC));
 
-    private static void Extract(Assembly asm, string res, string target)
+    private static string LoosePath(string src)
+        => Path.Combine(LbApiHost.Host.LiteBoxPaths.Data, "thirdparty", src);
+
+    private static bool HasSource(Assembly asm, string[] resNames, string src)
+        => ResName(resNames, src) != null || File.Exists(LoosePath(src));
+
+    private static Stream? OpenSource(Assembly asm, string[] resNames, string src)
+    {
+        var res = ResName(resNames, src);
+        if (res != null) return asm.GetManifestResourceStream(res);
+        var loose = LoosePath(src);
+        return File.Exists(loose) ? File.OpenRead(loose) : null;
+    }
+
+    private static long SourceLen(Assembly asm, string[] resNames, string src)
+    {
+        var res = ResName(resNames, src);
+        if (res != null) { using var s = asm.GetManifestResourceStream(res); return s?.Length ?? -1; }
+        var loose = LoosePath(src);
+        return File.Exists(loose) ? new FileInfo(loose).Length : -1;
+    }
+
+    private static void Deploy(Assembly asm, string[] resNames, string src, string target)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            using var rs = asm.GetManifestResourceStream(res);
+            using var rs = OpenSource(asm, resNames, src);
             if (rs == null) return;
             using var fs = new FileStream(target, FileMode.Create, FileAccess.Write);
             rs.CopyTo(fs);
@@ -84,19 +116,19 @@ internal static class NativeInstaller
         catch (Exception ex) { Console.WriteLine($"[installer] {Path.GetFileName(target)} failed: {ex.Message}"); }
     }
 
-    // True when the embedded resource is byte-for-byte the on-disk file (length first, then hash).
-    private static bool SameContent(Assembly asm, string res, string target)
+    // True when the source is byte-for-byte the on-disk file (length first, then MD5).
+    private static bool SameContent(Assembly asm, string[] resNames, string src, string target)
     {
         try
         {
-            using var rs = asm.GetManifestResourceStream(res);
-            if (rs == null) return false;
-            if (rs.CanSeek && rs.Length != new FileInfo(target).Length) return false;   // fast reject
+            long sl = SourceLen(asm, resNames, src);
+            if (sl >= 0 && sl != new FileInfo(target).Length) return false;   // fast reject
+            using var ss = OpenSource(asm, resNames, src);
+            if (ss == null) return false;
             using var md5 = MD5.Create();
-            byte[] embHash = md5.ComputeHash(rs);
+            byte[] srcHash = md5.ComputeHash(ss);
             using var fsr = File.OpenRead(target);
-            byte[] fileHash = md5.ComputeHash(fsr);
-            return embHash.SequenceEqual(fileHash);
+            return srcHash.SequenceEqual(md5.ComputeHash(fsr));
         }
         catch { return false; }   // on any doubt, treat as different
     }

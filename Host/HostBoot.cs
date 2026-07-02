@@ -109,8 +109,10 @@ internal static class HostBoot
         var enabled = pluginCfg.GetEnabledPluginsOrNull();
         List<string> names = enabled ?? ListPluginFolders(pluginsRoot);
 
-        // Retire the obsolete whitelist.txt — selection moved to Options → Plugins.
-        try { var wl = Path.Combine(coreDir, "whitelist.txt"); if (File.Exists(wl)) File.Delete(wl); } catch { }
+        // Sweep obsolete leftovers from OLDER LiteBox versions (pre-litebox\ Core-root config/journal/caches,
+        // old launcher markers, whitelist.txt, copied Magick DLLs, loose .api payload) so an upgrade or a
+        // zip-extract-over-an-old-install self-cleans. Idempotent; never touches current data. See LegacyCleanup.
+        try { LbApiHost.Host.Install.LegacyCleanup.SweepObsolete(Path.GetFullPath(Path.Combine(coreDir, ".."))); } catch { }
 
         Console.WriteLine($"Plugins root: {pluginsRoot}");
         Console.WriteLine($"Enabled plugins: [{string.Join(", ", names)}]"

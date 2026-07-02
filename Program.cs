@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate"))
+if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy"))
     DebugConsole.Enable();
 
 // Act like LaunchBox's root launcher: LiteBox.exe lives in <LB>\Core (so
@@ -110,6 +110,17 @@ if (args.Contains("--deploy-natives"))
     string r = (di >= 0 && di + 1 < args.Length) ? args[di + 1].TrimEnd('\\', '/') : AppContext.BaseDirectory;
     LbApiHost.Host.Install.NativeInstaller.EnsureDeployed(r, args.Contains("refresh"));
     Console.WriteLine("[deploy-natives] done -> " + r);
+    return 0;
+}
+
+// Sweep obsolete leftovers of OLDER LiteBox versions under <root> (dev/test — same as the boot sweep):
+//   --sweep-legacy <lbRoot>
+if (args.Contains("--sweep-legacy"))
+{
+    int di = Array.IndexOf(args, "--sweep-legacy");
+    string r = (di >= 0 && di + 1 < args.Length) ? args[di + 1].TrimEnd('\\', '/') : AppContext.BaseDirectory;
+    LbApiHost.Host.Install.LegacyCleanup.SweepObsolete(r);
+    Console.WriteLine("[sweep-legacy] done -> " + r);
     return 0;
 }
 

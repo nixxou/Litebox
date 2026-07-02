@@ -3,8 +3,9 @@
 // killing LiteBox doesn't kill it), then quit LiteBox. The bat taskkills LiteBox, waits until it's gone
 // (locks released), deletes everything, and finally self-deletes.
 //
-// Always removed (LiteBox-exclusive): Core\LiteBox.exe, Core\litebox\ (all our data), the root re-launcher
-// + uninstall.bat, ThirdParty\Steam, and any pre-reorg Core-root leftovers.
+// Always removed (LiteBox-exclusive): Core\LiteBox.exe (+ the light build's .dll/.json), Core\litebox\ (all
+// our data), the root re-launcher, ThirdParty\Steam, and every obsolete leftover from OLDER LiteBox versions
+// (LegacyCleanup: pre-litebox\ Core-root files, launcher markers, copied Magick DLLs, loose .api payload).
 // Opt-in (shared with ExtendDB — off by default): the thumbnail cache (Plugins\ExtendDB\cache\thumbs) and
 // the shared ThirdParty tools (Everything / ImageMagick native / RAHasher).
 
@@ -67,12 +68,16 @@ internal static class Uninstaller
         sb.AppendLine($"del /q \"{core}\\LiteBox.exe\" \"{core}\\LiteBox.dll\" \"{core}\\LiteBox.deps.json\" \"{core}\\LiteBox.runtimeconfig.json\" 2>nul");
         sb.AppendLine($"rmdir /s /q \"{core}\\litebox\" 2>nul");
         sb.AppendLine($"del /q \"{root}\\LiteBox.exe\" 2>nul");
-        sb.AppendLine($"del /q \"{root}\\LiteBox uninstall.bat\" 2>nul");
         sb.AppendLine($"del /q \"{root}\\ThirdParty\\Steam\\steam_api64.dll\" 2>nul");
         sb.AppendLine($"rmdir \"{root}\\ThirdParty\\Steam\" 2>nul");
-        // Pre-reorg Core-root leftovers (harmless if absent).
-        sb.AppendLine($"del /q \"{core}\\LiteBox.ini\" \"{core}\\LiteBox.pending\" \"{core}\\LiteBox.pending.db*\" \"{core}\\rom-selection.json\" \"{core}\\ra-platform-overrides.json\" \"{core}\\litebox*.log\" 2>nul");
-        sb.AppendLine($"for %%D in (ra-cache ra-badges store-ach-cache store-ach-badges) do rmdir /s /q \"{core}\\%%D\" 2>nul");
+
+        // Obsolete leftovers from OLDER LiteBox versions (pre-litebox\ Core-root config/journal/caches, old
+        // launcher markers, copied Magick DLLs, loose .api payload, …) — the SAME list the boot sweep uses.
+        foreach (var f in LegacyCleanup.CoreFiles) sb.AppendLine($"del /q \"{core}\\{f}\" 2>nul");
+        foreach (var g in LegacyCleanup.CoreGlobs) sb.AppendLine($"del /q \"{core}\\{g}\" 2>nul");
+        foreach (var d in LegacyCleanup.CoreDirs)  sb.AppendLine($"rmdir /s /q \"{core}\\{d}\" 2>nul");
+        foreach (var f in LegacyCleanup.RootFiles) sb.AppendLine($"del /q \"{root}\\{f}\" 2>nul");
+        foreach (var g in LegacyCleanup.RootGlobs) sb.AppendLine($"del /q \"{root}\\{g}\" 2>nul");
 
         // Opt-in: shared thumbnail cache.
         if (alsoThumbs)

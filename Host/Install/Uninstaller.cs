@@ -30,9 +30,6 @@ internal static class Uninstaller
         @"ThirdParty\RetroAchievements\MSVCP140.dll",
         @"ThirdParty\RetroAchievements\VCRUNTIME140.dll",
         @"ThirdParty\RetroAchievements\VCRUNTIME140_1.dll",
-        @"ThirdParty\RetroAchievements\COPYING.txt",
-        @"ThirdParty\RetroAchievements\7z.dll-LICENSE.txt",
-        @"ThirdParty\RetroAchievements\RVZ-SUPPORT.txt",
     };
 
     /// <summary>Writes the uninstall .bat, launches it detached, and exits LiteBox. Does not return.</summary>

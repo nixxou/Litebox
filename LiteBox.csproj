@@ -81,7 +81,7 @@
        LaunchBox root; NativeInstaller.EnsureDeployed writes them to <LB>\ThirdParty\… (only-if-absent).
        ".dll.api" sources land as ".dll" so nothing tries to load them as managed assemblies while embedded.
        Groups: Everything (host GameCache), ExtendDB (native ImageMagick), RetroAchievements (RAHasher +
-       runtime deps + licences), Steam (Steamworks achievements helper). -->
+       runtime deps), Steam (Steamworks achievements helper). -->
   <ItemGroup>
     <EmbeddedResource Include="thirdparty\Everything64.dll.api">
       <LogicalName>natives/ThirdParty/Everything/Everything64.dll</LogicalName>
@@ -103,15 +103,6 @@
     </EmbeddedResource>
     <EmbeddedResource Include="thirdparty\VCRUNTIME140_1.dll.api">
       <LogicalName>natives/ThirdParty/RetroAchievements/VCRUNTIME140_1.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\RAHasher.COPYING.txt">
-      <LogicalName>natives/ThirdParty/RetroAchievements/COPYING.txt</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\RAHasher.7z-LICENSE.txt">
-      <LogicalName>natives/ThirdParty/RetroAchievements/7z.dll-LICENSE.txt</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="thirdparty\RAHasher.RVZ-SUPPORT.txt">
-      <LogicalName>natives/ThirdParty/RetroAchievements/RVZ-SUPPORT.txt</LogicalName>
     </EmbeddedResource>
     <EmbeddedResource Include="thirdparty\steam_api64.dll.api">
       <LogicalName>natives/ThirdParty/Steam/steam_api64.dll</LogicalName>

@@ -18,7 +18,6 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -72,7 +71,7 @@ internal static class Installer
                 {
                     MessageBox.Show(
                         $"LiteBox was installed into:\n{root}\n\nStarting it now. A LiteBox.exe was also placed at the\n" +
-                        "LaunchBox root (run it any time), along with \"LiteBox uninstall.bat\".",
+                        "LaunchBox root — run it any time. (Uninstall from LiteBox's Options.)",
                         "LiteBox — installation complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return true;
                 });
@@ -86,8 +85,8 @@ internal static class Installer
         }
     }
 
-    // Copy MYSELF to <root>\Core\LiteBox.exe (the host) and to <root>\LiteBox.exe (the root re-launcher),
-    // then bake the uninstaller. Never copies over itself.
+    // Copy MYSELF to <root>\Core\LiteBox.exe (the host) and to <root>\LiteBox.exe (the root re-launcher).
+    // Never copies over itself. (Uninstall is done in-app from LiteBox's Options — no .bat is written.)
     private static void InstallToCore(string root, string selfPath)
     {
         string core = Path.Combine(root, "Core");
@@ -101,8 +100,6 @@ internal static class Installer
         string rootExe = Path.Combine(root, "LiteBox.exe");
         if (!string.Equals(full, Path.GetFullPath(rootExe), StringComparison.OrdinalIgnoreCase))
             try { File.Copy(selfPath, rootExe, overwrite: true); } catch { }
-
-        WriteUninstallBat(root);
     }
 
     // Launch <root>\Core\LiteBox.exe (the host), forwarding our args (minus --install), CWD = root.
@@ -169,27 +166,4 @@ internal static class Installer
 
     private static void Warn(string msg)
         => MessageBox.Show(msg, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
-    // "<root>\LiteBox uninstall.bat": removes LiteBox-exclusive files, PRESERVES everything shared with
-    // ExtendDB (the plugin + ThirdParty\{RetroAchievements,ExtendDB,Everything}). Mirrors clean-litebox.bat.
-    private static void WriteUninstallBat(string root)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("@echo off");
-        sb.AppendLine("setlocal EnableExtensions");
-        sb.AppendLine("cd /d \"%~dp0\"");
-        sb.AppendLine("echo Uninstalling LiteBox (ExtendDB + shared ThirdParty preserved)...");
-        sb.AppendLine("taskkill /IM LiteBox.exe /F >nul 2>&1");
-        sb.AppendLine("ping -n 2 127.0.0.1 >nul");
-        sb.AppendLine("del /q \"LiteBox.exe\" 2>nul");                 // root re-launcher
-        sb.AppendLine("del /q \"litebox*.log\" 2>nul");
-        sb.AppendLine("del /q \"Core\\LiteBox.exe\" 2>nul");           // the host binary
-        sb.AppendLine("rmdir /s /q \"Core\\litebox\" 2>nul");         // all LiteBox-created files/dirs live here
-        sb.AppendLine("del /q \"ThirdParty\\Steam\\steam_api64.dll\" 2>nul");   // LiteBox-only ThirdParty native
-        sb.AppendLine("rmdir \"ThirdParty\\Steam\" 2>nul");
-        sb.AppendLine("echo Done.");
-        sb.AppendLine("pause");
-        sb.AppendLine("(goto) 2>nul & del \"%~f0\"");
-        try { File.WriteAllText(Path.Combine(root, "LiteBox uninstall.bat"), sb.ToString(), new UTF8Encoding(false)); } catch { }
-    }
 }

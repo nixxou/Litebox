@@ -1295,6 +1295,9 @@ internal sealed class MainWindow : Form
             Options.LbGlobalOptions.AddSections(w, hdm2.LbSettings, hdm2.ReadOnly, raScan);
         }
 
+        // Danger zone — full self-uninstall. Last section.
+        w.AddSection("Uninstall LiteBox", BuildUninstallSection());
+
         return w;
     }
 
@@ -1368,6 +1371,43 @@ internal sealed class MainWindow : Form
         };
         RefreshSize();
         p.Controls.Add(title); p.Controls.Add(desc); p.Controls.Add(size); p.Controls.Add(btn);
+        return p;
+    }
+
+    // Full self-uninstall (Options → Uninstall LiteBox). Red button + confirmation → detached .bat.
+    private Control BuildUninstallSection()
+    {
+        var p = new Panel { BackColor = Bg, AutoScroll = true };
+        var title = new Label { Text = "Uninstall LiteBox", Location = new Point(4, 8), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) };
+        var desc = new Label
+        {
+            Text = "Removes LiteBox completely: LiteBox.exe (Core + root), the Core\\litebox\\ data folder, the "
+                 + "root launcher and its uninstall script, and ThirdParty\\Steam. The ExtendDB plugin and the "
+                 + "ThirdParty tools it shares are left untouched unless you tick a box below.",
+            Location = new Point(4, 32), AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = SubFg, BackColor = Bg,
+            Font = new Font("Segoe UI", 8.5f),
+        };
+        var cbThumbs = new CheckBox { Text = "Also delete the shared thumbnail cache (Plugins\\ExtendDB\\cache\\thumbs)", Location = new Point(4, 92), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f) };
+        var cbTp = new CheckBox { Text = "Also remove the shared ThirdParty tools (Everything, ImageMagick, RAHasher)", Location = new Point(4, 116), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f) };
+        var shareNote = new Label { Text = "Both are shared with ExtendDB, which re-creates them on its next run.", Location = new Point(22, 140), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8f) };
+        var btn = new Button
+        {
+            Text = "Uninstall LiteBox", Location = new Point(4, 172), Size = new Size(210, 32),
+            FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(150, 40, 40), ForeColor = Color.White,
+            FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+        };
+        btn.Click += (_, _) =>
+        {
+            string extra = (cbThumbs.Checked ? "\n  • the shared thumbnail cache" : "")
+                         + (cbTp.Checked ? "\n  • the shared ThirdParty tools (Everything/ImageMagick/RAHasher)" : "");
+            if (MessageBox.Show(p.FindForm(),
+                    "Uninstall LiteBox now?\n\nLiteBox will close and delete itself. This cannot be undone." + extra,
+                    "Uninstall LiteBox", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                return;
+            try { Install.Uninstaller.RunSelfUninstall(cbThumbs.Checked, cbTp.Checked); }   // launches the bat + exits
+            catch (Exception ex) { MessageBox.Show(p.FindForm(), "Uninstall failed to start: " + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        };
+        p.Controls.Add(title); p.Controls.Add(desc); p.Controls.Add(cbThumbs); p.Controls.Add(cbTp); p.Controls.Add(shareNote); p.Controls.Add(btn);
         return p;
     }
 

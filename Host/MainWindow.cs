@@ -148,6 +148,9 @@ internal sealed class MainWindow : Form
     private System.Windows.Forms.Timer _fanartTimer;                       // 0.5s debounce before fanart fade-in
     private readonly Dictionary<string, string> _fanartPick = new();       // node/game key -> chosen fanart src (stable per session)
     private object _currentNode;   // selected tree node (for the right pane when no game is selected)
+    private System.Windows.Forms.ComboBox _viewCombo;               // left-panel "group by" selector
+    private SourceView _currentView = SourceViews.ById(null);       // current grouping (default Platform Category)
+    private bool _suppressViewEvent;                                // guard combo SelectedIndexChanged during sync
     private List<object> _treeRoots;   // tree roots (incl. AllNode) — for key lookup on restore
     private object _detailsShown;  // current right-pane subject (IGame or tree node)
     private int _detailsLoadToken; // guards async image loads against stale selections
@@ -258,7 +261,19 @@ internal sealed class MainWindow : Form
         inner.Panel1.Resize += (_, _) => LayoutPoster();   // keep the poster grid centred on resize
 
         var outer = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
-        outer.Panel1.Controls.Add(_sources);
+        // Left panel = a "group by" ComboBox (top) above the source tree (fill). A TableLayoutPanel gives a
+        // deterministic top-strip + fill split (no docking z-order guessing).
+        _viewCombo = BuildViewCombo();
+        var leftPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2,
+            BackColor = Panel, Margin = Padding.Empty, Padding = Padding.Empty,
+        };
+        leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        leftPanel.Controls.Add(_viewCombo, 0, 0);
+        leftPanel.Controls.Add(_sources, 0, 1);
+        outer.Panel1.Controls.Add(leftPanel);
         outer.Panel2.Controls.Add(inner);
         Controls.Add(outer);
         _outerSplit = outer; _innerSplit = inner;   // for splitter % persistence
@@ -294,7 +309,9 @@ internal sealed class MainWindow : Form
         bar.Items.Add(_dirBtn);
         bar.Items.Add(new ToolStripSeparator());
 
-        var posterBtn = new ToolStripButton("Poster") { ForeColor = Fg, CheckOnClick = true, ToolTipText = "Toggle list / poster view" };
+        // Label shows the view you'd switch TO: "Poster View" while in list mode, "List View" while in
+        // poster mode (kept in sync by SetPosterMode). Default mode is list → start as "Poster View".
+        var posterBtn = new ToolStripButton("Poster View") { ForeColor = Fg, CheckOnClick = true, ToolTipText = "Toggle list / poster view" };
         posterBtn.CheckedChanged += (_, _) => SetPosterMode(posterBtn.Checked);
         _posterBtn = posterBtn;
         bar.Items.Add(posterBtn);
@@ -463,6 +480,8 @@ internal sealed class MainWindow : Form
             else try { inner.SplitterDistance = Math.Max(300, inner.Width - 380); } catch { }
             RestoreColumnLayout();   // order / width / shown-hidden from the INI
             RestoreSort();           // last sort column + direction
+            _currentView = SourceViews.ById(_cfg.Get("GroupView"));   // restore the saved grouping…
+            SyncViewCombo();                                          // …reflect it in the combo (no rebuild)
             PopulateSources();       // build the tree
             RestoreSelection();      // last category + game
             RefreshExtendDbIndicators();   // ExtendDB-present + parental padlock
@@ -924,11 +943,54 @@ internal sealed class MainWindow : Form
         return tv;
     }
 
+    // ── "Group by" view selector (above the source tree) ─────────────────────
+    private System.Windows.Forms.ComboBox BuildViewCombo()
+    {
+        var cb = new System.Windows.Forms.ComboBox
+        {
+            Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat, BackColor = Panel, ForeColor = Fg,
+        };
+        foreach (var v in SourceViews.All) cb.Items.Add(v.Label);
+        cb.SelectedIndexChanged += (_, _) => OnGroupViewChanged();
+        return cb;
+    }
+
+    // Reflect _currentView in the combo WITHOUT triggering a rebuild (used while restoring the saved view).
+    private void SyncViewCombo()
+    {
+        if (_viewCombo == null) return;
+        int idx = Array.FindIndex(SourceViews.All, v => v.Id == _currentView.Id);
+        _suppressViewEvent = true;
+        try { _viewCombo.SelectedIndex = Math.Max(0, idx); }
+        finally { _suppressViewEvent = false; }
+    }
+
+    // User picked a grouping → persist it, rebuild the tree, land on "All".
+    private void OnGroupViewChanged()
+    {
+        if (_suppressViewEvent || _viewCombo == null) return;
+        int idx = _viewCombo.SelectedIndex;
+        if (idx < 0 || idx >= SourceViews.All.Length) return;
+        _currentView = SourceViews.All[idx];
+        _cfg.Set("GroupView", _currentView.Id); _cfg.Save();
+        _currentNode = null;                 // let LoadNode re-run for the new view's "All"
+        PopulateSources();
+        if (_treeNodeMap.TryGetValue(AllNode.Instance, out var tn)) { _sources.SelectedNode = tn; try { tn.EnsureVisible(); } catch { } }
+        LoadNode(AllNode.Instance);
+    }
+
+    private IReadOnlyList<IGame> SafeAllGames()
+    {
+        try { return (_dm?.GetAllGames() ?? Array.Empty<IGame>()).ToList(); }
+        catch { return Array.Empty<IGame>(); }
+    }
+
     private void PopulateSources()
     {
         var roots = new List<object> { AllNode.Instance };
-        if (_dm is HostDataManagerXml hostDm) roots.AddRange(hostDm.RootNodes);
-        else { try { roots.AddRange(_dm.GetAllPlatforms()); } catch { } }
+        try { roots.AddRange(_currentView.BuildRoots(_dm, SafeAllGames())); }
+        catch { if (_dm is HostDataManagerXml hostDm) roots.AddRange(hostDm.RootNodes); }
 
         _treeRoots = roots;
         RecomputeParentalHiddenPlatforms();   // expand the hide-list before building the tree / filtering
@@ -954,7 +1016,7 @@ internal sealed class MainWindow : Form
     // Build a TreeNode for a source object (Tag = the object), recursing into category children.
     private TreeNode BuildTreeNode(object obj)
     {
-        string text = obj is AllNode ? "All Games" : (HostPlatformCategory.NodeName(obj) ?? "");
+        string text = obj is AllNode ? "All Games" : obj is GroupNode gn ? gn.Label : (HostPlatformCategory.NodeName(obj) ?? "");
         string imgKey = _nodeIconKey.TryGetValue(obj, out var k) ? k : "fb_plat";
         var tn = new TreeNode(text) { Tag = obj, ImageKey = imgKey, SelectedImageKey = imgKey };
         _treeNodeMap[obj] = tn;
@@ -964,6 +1026,8 @@ internal sealed class MainWindow : Form
                 if (ParentalHidesNode(child)) continue;   // parental: drop hidden child categories/platforms
                 tn.Nodes.Add(BuildTreeNode(child));
             }
+        else if (obj is GroupNode gc && gc.Children != null)   // 2-level dynamic view (Progress: bucket ▸ leaf)
+            foreach (var child in gc.Children) tn.Nodes.Add(BuildTreeNode(child));
         return tn;
     }
 
@@ -972,6 +1036,7 @@ internal sealed class MainWindow : Form
     {
         SaveColumnLayout();
         SaveWindowState();
+        _cfg.Set("GroupView", _currentView?.Id ?? SourceViews.DefaultId);
         _cfg.Set("LastCategory", NodeKey(_currentNode) ?? "*");
         var g = _games.SelectedGame;
         _cfg.Set("LastGame", g != null ? S(Safe(() => g.Id)) : "");
@@ -1523,6 +1588,7 @@ internal sealed class MainWindow : Form
     private static string NodeKey(object node)
     {
         if (node is AllNode) return "*";
+        if (node is GroupNode gn) return "G:" + gn.Label;
         if (node is IPlatformCategory c) return "C:" + c.Name;
         if (node is IPlaylist pl) return "L:" + (!string.IsNullOrEmpty(pl.PlaylistId) ? pl.PlaylistId : pl.Name);
         if (node is IPlatform p) return "P:" + p.Name;
@@ -1548,6 +1614,7 @@ internal sealed class MainWindow : Form
             if (n is AllNode) continue;
             yield return n;
             if (n is HostPlatformCategory cat) foreach (var ch in cat.Children) stack.Push(ch);
+            else if (n is GroupNode gn && gn.Children != null) foreach (var ch in gn.Children) stack.Push(ch);
         }
     }
 
@@ -1574,25 +1641,37 @@ internal sealed class MainWindow : Form
             if (node == null || _nodeIconKey.ContainsKey(node)) return;
             _nodeIconKey[node] = ResolveIcon(node, imagesRoot, ref counter);
             if (node is HostPlatformCategory cat) foreach (var c in cat.Children) Walk(c);
+            else if (node is GroupNode gn && gn.Children != null) foreach (var c in gn.Children) Walk(c);
         }
         foreach (var r in roots) Walk(r);
     }
 
     private string ResolveIcon(object node, string imagesRoot, ref int counter)
     {
-        string sub, name, fallback;
-        if (node is AllNode) { sub = "Playlists"; name = "All Games"; fallback = "fb_play"; }
-        else if (node is IPlatformCategory c) { sub = "Platform Categories"; name = c.Name; fallback = "fb_cat"; }
-        else if (node is IPlaylist pl) { sub = "Playlists"; name = pl.Name; fallback = "fb_play"; }
-        else if (node is IPlatform p) { sub = "Platforms"; name = p.Name; fallback = "fb_plat"; }
+        string sub, fallback; string[] names;
+        if (node is AllNode) { sub = "Playlists"; names = new[] { "All Games" }; fallback = "fb_play"; }
+        // The Nostalgic pack names files after the LEAF (NestedName "Atari Classics"), not the full nested
+        // Name ("Arcade Atari Classics") — try NestedName first, then Name.
+        else if (node is IPlatformCategory c) { sub = "Platform Categories"; names = IconNames(c.NestedName, c.Name); fallback = "fb_cat"; }
+        else if (node is IPlaylist pl) { sub = "Playlists"; names = IconNames(pl.NestedName, pl.Name); fallback = "fb_play"; }
+        else if (node is IPlatform p) { sub = "Platforms"; names = IconNames(p.Name); fallback = "fb_plat"; }
+        else if (node is GroupNode) return "fb_cat";   // Publisher/Region/Year/… nodes: neutral folder glyph
         else return "fb_plat";
 
-        string path = MediaResolver.PlatformIcon(imagesRoot, sub, name);
+        string path = MediaResolver.PlatformIcon(imagesRoot, sub, names);
         var img = path == null ? null : LoadScaled(path, 22);
         if (img == null) return fallback;
         string key = "n" + counter++;
         _treeIcons.Images.Add(key, img);
         return key;
+    }
+
+    // Distinct, non-empty icon-file candidates in priority order (NestedName leaf first, then full Name).
+    private static string[] IconNames(params string[] xs)
+    {
+        var list = new List<string>();
+        foreach (var x in xs) if (!string.IsNullOrWhiteSpace(x) && !list.Contains(x)) list.Add(x);
+        return list.ToArray();
     }
 
     private static Image LoadScaled(string path, int size)
@@ -1697,6 +1776,7 @@ internal sealed class MainWindow : Form
         {
             IEnumerable<IGame> src =
                   node is AllNode ? _dm.GetAllGames()
+                : node is GroupNode gn ? gn.Games
                 : node is IPlatformCategory cat ? cat.GetAllGames(true, true)
                 : node is IPlaylist pl ? pl.GetAllGames(true)
                 : node is IPlatform p ? p.GetAllGames(true, true)
@@ -1851,6 +1931,7 @@ internal sealed class MainWindow : Form
     {
         if (_posterMode == on || _poster == null) return;
         _posterMode = on;
+        if (_posterBtn != null) _posterBtn.Text = on ? "List View" : "Poster View";   // label = the view you'd switch TO
         _cfg.SetBool("PosterMode", on); _cfg.Save();
         if (on)
         {

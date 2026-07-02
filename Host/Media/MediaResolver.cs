@@ -66,19 +66,50 @@ internal static class MediaResolver
     /// Images\Media Packs\Platform Icons\Nostalgic Platform Icons\&lt;subFolder&gt;\&lt;name&gt;.png.
     /// subFolder = "Platforms" | "Platform Categories" | "Playlists". Null if none.
     /// </summary>
-    public static string PlatformIcon(string imagesRoot, string subFolder, string name)
+    public static string PlatformIcon(string imagesRoot, string subFolder, params string[] names)
     {
-        if (string.IsNullOrEmpty(imagesRoot) || string.IsNullOrEmpty(name)) return null;
+        if (string.IsNullOrEmpty(imagesRoot) || names == null || names.Length == 0) return null;
         string dir = Path.Combine(imagesRoot, "Media Packs", "Platform Icons", "Nostalgic Platform Icons", subFolder);
         if (!Directory.Exists(dir)) return null;
         try
         {
-            foreach (var f in Directory.EnumerateFiles(dir, "*.png"))
-                if (string.Equals(Path.GetFileNameWithoutExtension(f), name, StringComparison.OrdinalIgnoreCase))
-                    return f;
+            var files = Directory.GetFiles(dir, "*.png");
+            // 1) exact (case-insensitive) match on any candidate name (tried in order — NestedName then Name).
+            foreach (var name in names)
+            {
+                if (string.IsNullOrEmpty(name)) continue;
+                foreach (var f in files)
+                    if (string.Equals(Path.GetFileNameWithoutExtension(f), name, StringComparison.OrdinalIgnoreCase))
+                        return f;
+            }
+            // 2) normalized match (lowercase, punctuation → single space) so the playlist "2-Player Games"
+            //    finds the pack file "2 Player Games.png", "Beat Em Ups" finds "Beat _em Up", etc.
+            foreach (var name in names)
+            {
+                string norm = NormIcon(name);
+                if (norm.Length == 0) continue;
+                foreach (var f in files)
+                    if (NormIcon(Path.GetFileNameWithoutExtension(f)) == norm)
+                        return f;
+            }
         }
         catch { }
         return null;
+    }
+
+    // Loose key for icon-name matching: lowercase, any run of non-alphanumerics collapsed to one space.
+    private static string NormIcon(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var sb = new System.Text.StringBuilder(s.Length);
+        bool sp = false;
+        foreach (char ch in s)
+        {
+            char c = char.ToLowerInvariant(ch);
+            if (char.IsLetterOrDigit(c)) { sb.Append(c); sp = false; }
+            else if (sb.Length > 0 && !sp) { sb.Append(' '); sp = true; }
+        }
+        return sb.ToString().TrimEnd();
     }
 
     /// <summary>Initialise with the LaunchBox root (parent of Data/Images). Reads region priorities.</summary>

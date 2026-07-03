@@ -936,23 +936,41 @@ internal sealed class GameStore
         // Snapshot the pristine originals (still untouched on disk) before any swap.
         BackupBeforeWrite(docs.Keys);
 
-        // Phase 1: write every touched doc to .tmp.
+        // Phase 1: write every touched doc to .tmp. Any failure here means that doc's changes
+        // never make it to disk this pass, so the whole batch must NOT be cleared (allOk=false).
+        bool allOk = true;
         var swaps = new List<(string tmp, string file)>();
         foreach (var kv in docs)
         {
             string tmp = kv.Key + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try { kv.Value.Save(tmp); swaps.Add((tmp, kv.Key)); }
-            catch (Exception ex) { Console.WriteLine("[store] save tmp " + kv.Key + ": " + ex.Message); }
+            catch (Exception ex) { Console.WriteLine("[store] save tmp " + kv.Key + ": " + ex.Message); allOk = false; }
         }
-        // Phase 2: swap all .tmp → real file (atomic per file).
-        foreach (var (tmp, file) in swaps) ReplaceAtomic(tmp, file);
+        // Phase 2: swap all .tmp → real file (atomic per file). A failed swap here is the same
+        // class of problem: that doc's edits are stuck in a .tmp file, not the real one.
+        foreach (var (tmp, file) in swaps)
+            if (!ReplaceAtomic(tmp, file)) allOk = false;
         // Phase 2b: whole-file playlist deletes.
         foreach (var df in playlistDeletes)
-            try { if (File.Exists(df)) File.Delete(df); } catch (Exception ex) { Console.WriteLine("[store] delete playlist file " + df + ": " + ex.Message); }
-        // Phase 3: ONLY now clear the log (scoped → only the ops we just applied).
-        ClearFlushed();
+            try { if (File.Exists(df)) File.Delete(df); }
+            catch (Exception ex) { Console.WriteLine("[store] delete playlist file " + df + ": " + ex.Message); allOk = false; }
 
-        Console.WriteLine($"[store] flushed {touched.Count} game(s) across {docs.Count} file(s)" + (scope != null ? " [scoped]" : ""));
+        // Phase 3: ONLY now clear the log, and ONLY if every write above actually succeeded.
+        // Ops are idempotent by design (see OpLog.cs header: modify = last-write-wins, delete =
+        // delete-if-exists, add = upsert-by-id), so on partial failure it's safe to just leave
+        // the WHOLE batch pending and retry everything next flush rather than try to work out
+        // precisely which ops landed and which didn't - re-applying an already-applied op is a
+        // harmless no-op, silently losing one that never landed is not.
+        if (allOk)
+        {
+            ClearFlushed();
+        }
+        else
+        {
+            Console.WriteLine($"[store] flush had write failures — keeping all {ops.Count} op(s) pending for retry, nothing cleared");
+        }
+
+        Console.WriteLine($"[store] flushed {touched.Count} game(s) across {docs.Count} file(s)" + (scope != null ? " [scoped]" : "") + (allOk ? "" : " [PARTIAL - not cleared]"));
         return touched.Count;
     }
 
@@ -1449,14 +1467,22 @@ internal sealed class GameStore
     }
 
     // ── Atomic disk write (tmp → replace) ────────────────────────────────────
-    private static void ReplaceAtomic(string tmp, string dest)
+    // Returns whether dest now actually holds tmp's content. Callers MUST check this before
+    // treating the corresponding ops as flushed — see the golden-rule note on FlushOpsToXml.
+    private static bool ReplaceAtomic(string tmp, string dest)
     {
         try
         {
             if (File.Exists(dest)) File.Replace(tmp, dest, null);
             else File.Move(tmp, dest);
+            return true;
         }
-        catch { try { File.Copy(tmp, dest, true); File.Delete(tmp); } catch { } }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[store] atomic replace {dest}: {ex.Message}");
+            try { File.Copy(tmp, dest, true); File.Delete(tmp); return true; }
+            catch (Exception ex2) { Console.WriteLine($"[store] fallback copy {dest}: {ex2.Message}"); return false; }
+        }
     }
 
     // ── Stats ────────────────────────────────────────────────────────────────

@@ -126,6 +126,21 @@ internal static class HostBoot
             else Console.WriteLine($"  ! enabled plugin folder not found: {d}");
         }
 
+        // Pin OUR (bundled, net10) WPF assemblies BEFORE any plugin is LoadFrom'd. Some LaunchBox plugins
+        // (e.g. "LaunchBox Reader") ship a loose .NET Framework WindowsBase.dll (v4.0.0.0) in their own
+        // folder; a plugin loaded before WPF is present makes its LoadFrom context probe that folder and
+        // load the 4.0.0.0 copy into the process, after which our WPF init dies with "could not load
+        // System.Windows.Threading.DispatcherObject from WindowsBase 4.0.0.0". Touching a type from each
+        // WPF assembly here loads the correct 10.0.0.0 copies first, so the plugin's ref rolls forward to
+        // them and the stale 4.0.0.0 is never probed — mirroring how a real (WPF) LaunchBox boots.
+        try
+        {
+            _ = typeof(System.Windows.Threading.DispatcherObject).Assembly;   // WindowsBase
+            _ = typeof(System.Windows.Media.Brush).Assembly;                  // PresentationCore
+            _ = typeof(System.Windows.Application).Assembly;                  // PresentationFramework
+        }
+        catch (Exception ex) { Console.WriteLine("[wpf] pin failed: " + ex.Message); }
+
         var reg = PluginLoader.LoadFrom(pluginDirs);
         Console.WriteLine($"Loaded {reg.All.Count} plugin object(s): events={reg.SystemEvents.Count} sysmenu={reg.SystemMenus.Count} gamemenu={reg.GameMenus.Count} themeel={reg.ThemeElements.Count}");
 

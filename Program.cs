@@ -35,8 +35,28 @@ catch { /* leave CWD as-is if anything goes wrong */ }
 // 13.26 vs 13.27 …) from the app base dir (LB\Core) by simple name, ignoring the
 // reference version. This mirrors how an LB plugin binds to the already-loaded SDK
 // and lets the SAME host binary run on any LB version without a rebuild.
+//
+// CRUCIAL: this app is self-contained (UseWPF + UseWindowsForms), so it already carries the whole
+// .NET desktop framework in its bundle. LaunchBox's SDK is WPF-based; the first time a plugin JITs
+// SDK code that touches WPF (e.g. ExtendDB), the runtime resolves WindowsBase. We must NOT hand it
+// Core\WindowsBase.dll — that loads a SECOND copy of an assembly identity already present from the
+// bundle, and the CLR aborts with "The located assembly's manifest definition does not match the
+// assembly reference." So: (1) reuse an already-loaded assembly of the same name, and (2) never
+// redirect Microsoft-signed framework/BCL assemblies to Core. LaunchBox's own assemblies (Unbroken.*)
+// are unsigned (no public key token), so they still fall through to Core exactly as before.
+var frameworkPkts = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{ "b77a5c561934e089", "31bf3856ad364e35", "b03f5f7f11d50a3a", "7cec85d7bea7798e", "cc7b13ffcd2ddd51" };
 AssemblyLoadContext.Default.Resolving += (ctx, name) =>
 {
+    // Framework/BCL/desktop assemblies (WindowsBase, PresentationCore/Framework, System.*) are Microsoft-
+    // signed. NEVER pull them from Core: this app is self-contained (its own net10 WPF is in the bundle),
+    // and loading Core's copy — or a plugin-provided .NET Framework 4.0.0.0 copy — gives a SECOND, mismatched
+    // WindowsBase, which crashes WPF init with "could not load DispatcherObject" / "manifest does not match".
+    // Returning null lets the runtime bind these to the bundle. LaunchBox's own SDK (Unbroken.*) is unsigned,
+    // so it still falls through to Core exactly as intended (version-agnostic plugin-style binding).
+    var pkt = name.GetPublicKeyToken();
+    if (pkt != null && pkt.Length > 0 && frameworkPkts.Contains(Convert.ToHexString(pkt).ToLowerInvariant()))
+        return null;
     var candidate = Path.Combine(AppContext.BaseDirectory, name.Name + ".dll");
     return File.Exists(candidate) ? ctx.LoadFromAssemblyPath(candidate) : null;
 };

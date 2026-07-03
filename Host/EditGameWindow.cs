@@ -6,7 +6,11 @@
 //
 // Deliberately DIFFERENT from ExtendDB's editor:
 //   • NO lock system (that stays ExtendDB-specific for now) — fields are plain, no 🔓 buttons.
-//   • SINGLE game only (no multi-select merge/“<multiple values>” handling).
+//
+// Multi-select (adapted from ExtendDB): the editor takes 1..N games. Each field shows the common value,
+// or a "‹multiple values›" placeholder when they differ. Only fields the user actually TOUCHES are
+// written, to ALL selected games — untouched fields keep each game's own value. (A "touched" set stands
+// in for ExtendDB's read-only-until-double-click lock; it also avoids re-journalling unchanged fields.)
 //
 // Shell: left navigation TREE (full LB Edit-Game hierarchy), right content panel, bottom bar with
 // OK / Cancel + ◄ ► (navigate the visible list; navigating saves first, like LB). Only the Metadata
@@ -44,7 +48,11 @@ internal sealed class EditGameWindow : Form
     private readonly IReadOnlyList<IGame> _visible;
     private readonly bool _readOnly;
     private int _index;
-    private IGame _game;
+    private IReadOnlyList<IGame> _editGames;   // the game(s) being edited (1 for single, N for multi)
+    private bool IsMulti => _editGames.Count > 1;
+    private bool _loading;                     // suppress touch-tracking while LoadMetadata sets values
+    private readonly HashSet<Control> _touched = new();
+    private const string Multi = "‹multiple values›";
 
     // Distinct library values that seed the editable combos (built once).
     private readonly Dictionary<string, string[]> _choices = new(StringComparer.Ordinal);
@@ -65,21 +73,20 @@ internal sealed class EditGameWindow : Form
     private CheckBox _favorite = null!, _portable = null!, _installed = null!, _hide = null!, _broken = null!;
     private Label _dateAdded = null!, _dateModified = null!, _playCount = null!;
     private StarBar _starBar = null!;
-    private bool? _loadedInstalled;   // preserve the tri-state (null = inherit) when the box is untouched
 
-    public static void Open(IGame game, IReadOnlyList<IGame> visible, bool readOnly, IWin32Window? owner)
+    public static void Open(IReadOnlyList<IGame> games, IReadOnlyList<IGame> visible, bool readOnly, IWin32Window? owner)
     {
-        if (game == null) return;
-        using var w = new EditGameWindow(game, visible, readOnly);
+        if (games == null || games.Count == 0) return;
+        using var w = new EditGameWindow(games, visible, readOnly);
         w.ShowDialog(owner);
     }
 
-    private EditGameWindow(IGame game, IReadOnlyList<IGame> visible, bool readOnly)
+    private EditGameWindow(IReadOnlyList<IGame> games, IReadOnlyList<IGame> visible, bool readOnly)
     {
-        _game = game;
+        _editGames = games;
         _visible = visible ?? Array.Empty<IGame>();
         _readOnly = readOnly;
-        _index = IndexOf(game);
+        _index = games.Count > 1 ? -1 : IndexOf(games[0]);
 
         BuildChoices();
 
@@ -129,7 +136,9 @@ internal sealed class EditGameWindow : Form
         var hint = new Label
         {
             AutoSize = true, ForeColor = SubFg, BackColor = PanelC,
-            Text = _readOnly ? "Read-only — changes are not saved" : "Navigating will save immediately",
+            Text = _readOnly ? "Read-only — changes are not saved"
+                 : _editGames.Count > 1 ? $"Editing {_editGames.Count} games — only fields you change are applied to all"
+                 : "Navigating will save immediately",
             Font = new Font("Segoe UI", 9f),
         };
         _prev = NavBtn("◄"); _next = NavBtn("►");
@@ -152,7 +161,7 @@ internal sealed class EditGameWindow : Form
 
         // Build + show the Metadata page, then load the current game.
         _pages["Metadata"] = BuildMetadataPage();
-        LoadMetadata(_game);
+        LoadMetadata();
         _tree.SelectedNode = _tree.Nodes[0];   // Metadata
         ShowPage("Metadata");
         UpdateChrome();
@@ -303,6 +312,7 @@ internal sealed class EditGameWindow : Form
         // value again to clear it (reverts to the community rating shown in cyan).
         Cap("Star Rating", Lx, y, Lw, p);
         _starBar = new StarBar { Location = new Point(LFx, y - 2), ReadOnly = _readOnly };
+        _starBar.Changed = () => { if (!_loading) _touched.Add(_starBar); };
         p.Controls.Add(_starBar);
         y += RowH + 6;
 
@@ -341,6 +351,7 @@ internal sealed class EditGameWindow : Form
         private bool _hoverClear;
 
         public bool ReadOnly;
+        public Action? Changed;   // fired when the user rating changes (drives the parent's touched-set)
 
         public StarBar()
         {
@@ -436,114 +447,149 @@ internal sealed class EditGameWindow : Form
         {
             base.OnMouseClick(e);
             if (ReadOnly) return;
-            if (_clearRect.Contains(e.Location)) { if (_userValue > 0) { _userValue = 0; Invalidate(); } return; }
+            if (_clearRect.Contains(e.Location)) { if (_userValue > 0) { _userValue = 0; Invalidate(); Changed?.Invoke(); } return; }
             double v = ValueAt(e.X);
             if (v <= 0) return;
             _userValue = Math.Abs(_userValue - v) < 0.01 ? 0 : v;   // click the current value → clear (revert to community)
-            Invalidate();
+            Invalidate(); Changed?.Invoke();
         }
     }
 
     // ── Load / Save ──────────────────────────────────────────────────────
-    private void LoadMetadata(IGame g)
+    // Loads the common value of each field across ALL edited games (or the "‹multiple values›"
+    // placeholder when they differ). Touch-tracking is suppressed during the load.
+    private void LoadMetadata()
     {
-        _title.Text = Safe(() => g.Title) ?? "";
-        _releaseDate.Text = FmtDate(Safe(() => g.ReleaseDate));
-        _lastPlayed.Text = FmtDate(Safe(() => g.LastPlayedDate));
-        _rating.Text = Safe(() => g.Rating) ?? "";
-        _releaseType.Text = Safe(() => g.ReleaseType) ?? "";
-        _genre.Text = Safe(() => g.GenresString) ?? "";
-        _platform.Text = Safe(() => g.Platform) ?? "";
-        _developer.Text = Safe(() => g.Developer) ?? "";
-        _publisher.Text = Safe(() => g.Publisher) ?? "";
-        _series.Text = Safe(() => g.Series) ?? "";
-        _region.Text = Safe(() => g.Region) ?? "";
-        _playMode.Text = Safe(() => g.PlayMode) ?? "";
-        _version.Text = Safe(() => g.Version) ?? "";
-        _status.Text = Safe(() => g.Status) ?? "";
-        _source.Text = Safe(() => g.Source) ?? "";
-        _progress.Text = Safe(() => g.Progress) ?? "";
-        _videoUrl.Text = Safe(() => g.VideoUrl) ?? "";
-        _wikiUrl.Text = Safe(() => g.WikipediaUrl) ?? "";
-        _maxPlayers.Value = Clamp(Safe(() => g.MaxPlayers) ?? 0, 0, 64);
-        _starBar.SetFrom(Safe(() => g.StarRatingFloat), Safe(() => g.CommunityStarRating));
+        _loading = true;
+        try
+        {
+            SetText(_title, MergeStr(g => g.Title));
+            SetText(_version, MergeStr(g => g.Version));
+            SetText(_videoUrl, MergeStr(g => g.VideoUrl));
+            SetText(_wikiUrl, MergeStr(g => g.WikipediaUrl));
+            SetText(_releaseDate, MergeDate(g => g.ReleaseDate));
+            SetText(_lastPlayed, MergeDate(g => g.LastPlayedDate));
+            SetCombo(_rating, MergeStr(g => g.Rating));
+            SetCombo(_releaseType, MergeStr(g => g.ReleaseType));
+            SetCombo(_genre, MergeStr(g => g.GenresString));
+            SetCombo(_platform, MergeStr(g => g.Platform));
+            SetCombo(_developer, MergeStr(g => g.Developer));
+            SetCombo(_publisher, MergeStr(g => g.Publisher));
+            SetCombo(_series, MergeStr(g => g.Series));
+            SetCombo(_region, MergeStr(g => g.Region));
+            SetCombo(_playMode, MergeStr(g => g.PlayMode));
+            SetCombo(_status, MergeStr(g => g.Status));
+            SetCombo(_source, MergeStr(g => g.Source));
+            SetCombo(_progress, MergeStr(g => g.Progress));
 
-        _favorite.Checked = Safe(() => g.Favorite);
-        _portable.Checked = Safe(() => g.Portable);
-        _hide.Checked = Safe(() => g.Hide);
-        _broken.Checked = Safe(() => g.Broken);
-        _loadedInstalled = Safe(() => g.Installed);
-        _installed.Checked = _loadedInstalled == true;
+            _maxPlayers.Value = Clamp(MergeVal(g => g.MaxPlayers ?? 0) ?? 0, 0, 64);
+            _starBar.SetFrom(MergeVal(g => (double)g.StarRatingFloat) ?? 0, MergeVal(g => (double)g.CommunityStarRating) ?? 0);
 
-        _dateAdded.Text = "Date Added:   " + FmtDateTime(Safe(() => g.DateAdded));
-        _dateModified.Text = "Date Modified:   " + FmtDateTime(Safe(() => g.DateModified));
-        int pc = Safe(() => g.PlayCount); int pt = Safe(() => g.PlayTime);
-        _playCount.Text = $"Play Count(Time):   {pc} ({FmtDuration(pt)})";
+            SetCheck(_favorite, MergeVal(g => g.Favorite));
+            SetCheck(_portable, MergeVal(g => g.Portable));
+            SetCheck(_hide, MergeVal(g => g.Hide));
+            SetCheck(_broken, MergeVal(g => g.Broken));
+            SetCheck(_installed, MergeVal(g => g.Installed == true));
+
+            if (IsMulti)
+            {
+                _dateAdded.Text = $"{_editGames.Count} games selected";
+                _dateModified.Text = "";
+                _playCount.Text = "";
+            }
+            else
+            {
+                var g0 = _editGames[0];
+                _dateAdded.Text = "Date Added:   " + FmtDateTime(Safe(() => g0.DateAdded));
+                _dateModified.Text = "Date Modified:   " + FmtDateTime(Safe(() => g0.DateModified));
+                int pc = Safe(() => g0.PlayCount); int pt = Safe(() => g0.PlayTime);
+                _playCount.Text = $"Play Count(Time):   {pc} ({FmtDuration(pt)})";
+            }
+        }
+        finally { _touched.Clear(); _loading = false; }
+
+        void SetText(TextBox t, string v) { t.Text = v; t.ForeColor = v == Multi ? SubFg : Fg; }
+        void SetCombo(ComboBox c, string v) { c.Text = v; c.ForeColor = v == Multi ? SubFg : Fg; }
+        void SetCheck(CheckBox cb, bool? merged)
+        {
+            cb.ThreeState = IsMulti;
+            cb.CheckState = merged.HasValue ? (merged.Value ? CheckState.Checked : CheckState.Unchecked) : CheckState.Indeterminate;
+        }
+        string MergeStr(Func<IGame, string> get)
+        {
+            string? first = null;
+            foreach (var g in _editGames) { var v = (Safe(() => get(g)) ?? "").Trim(); if (first == null) first = v; else if (first != v) return Multi; }
+            return first ?? "";
+        }
+        string MergeDate(Func<IGame, DateTime?> get)
+        {
+            string? first = null;
+            foreach (var g in _editGames) { var v = FmtDate(Safe(() => get(g))); if (first == null) first = v; else if (first != v) return Multi; }
+            return first ?? "";
+        }
+        T? MergeVal<T>(Func<IGame, T> get) where T : struct
+        {
+            bool first = true; T acc = default;
+            foreach (var g in _editGames) { T v = Safe(() => get(g)); if (first) { acc = v; first = false; } else if (!acc.Equals(v)) return null; }
+            return first ? (T?)null : acc;
+        }
     }
 
+    // Writes ONLY the fields the user touched, to EVERY edited game. Untouched fields (incl. those still
+    // showing "‹multiple values›") are left alone, so each game keeps its own value.
     private void SaveCurrent()
     {
-        if (_readOnly || _game == null) return;
-        var g = _game;
+        if (_readOnly) return;
+        foreach (var g in _editGames)
+        {
+            if (T(_title)) W(() => g.Title = _title.Text.Trim());
+            if (T(_rating)) W(() => g.Rating = _rating.Text.Trim());
+            if (T(_releaseType)) W(() => g.ReleaseType = _releaseType.Text.Trim());
+            if (T(_genre)) W(() => g.GenresString = _genre.Text.Trim());
+            if (T(_platform)) W(() => g.Platform = _platform.Text.Trim());
+            if (T(_developer)) W(() => g.Developer = _developer.Text.Trim());
+            if (T(_publisher)) W(() => g.Publisher = _publisher.Text.Trim());
+            if (T(_series)) W(() => g.Series = _series.Text.Trim());
+            if (T(_region)) W(() => g.Region = _region.Text.Trim());
+            if (T(_playMode)) W(() => g.PlayMode = _playMode.Text.Trim());
+            if (T(_version)) W(() => g.Version = _version.Text.Trim());
+            if (T(_status)) W(() => g.Status = _status.Text.Trim());
+            if (T(_source)) W(() => g.Source = _source.Text.Trim());
+            if (T(_progress)) W(() => g.Progress = _progress.Text.Trim());
+            if (T(_videoUrl)) W(() => g.VideoUrl = _videoUrl.Text.Trim());
+            if (T(_wikiUrl)) W(() => g.WikipediaUrl = _wikiUrl.Text.Trim());
+            if (T(_releaseDate)) W(() => g.ReleaseDate = ParseDate(_releaseDate.Text));
+            if (T(_lastPlayed)) W(() => g.LastPlayedDate = ParseDate(_lastPlayed.Text));
+            if (T(_maxPlayers)) { int v = (int)_maxPlayers.Value; int? mp = v <= 0 ? (int?)null : v; W(() => g.MaxPlayers = mp); }
+            if (T(_starBar)) W(() => g.StarRatingFloat = (float)_starBar.UserValue);
+            if (T(_favorite) && _favorite.CheckState != CheckState.Indeterminate) W(() => g.Favorite = _favorite.Checked);
+            if (T(_portable) && _portable.CheckState != CheckState.Indeterminate) W(() => g.Portable = _portable.Checked);
+            if (T(_hide) && _hide.CheckState != CheckState.Indeterminate) W(() => g.Hide = _hide.Checked);
+            if (T(_broken) && _broken.CheckState != CheckState.Indeterminate) W(() => g.Broken = _broken.Checked);
+            if (T(_installed) && _installed.CheckState != CheckState.Indeterminate) W(() => g.Installed = _installed.Checked);
+        }
 
-        WriteStr(Safe(() => g.Title), _title.Text, v => g.Title = v);
-        WriteStr(Safe(() => g.Rating), _rating.Text, v => g.Rating = v);
-        WriteStr(Safe(() => g.ReleaseType), _releaseType.Text, v => g.ReleaseType = v);
-        WriteStr(Safe(() => g.GenresString), _genre.Text, v => g.GenresString = v);
-        WriteStr(Safe(() => g.Platform), _platform.Text, v => g.Platform = v);
-        WriteStr(Safe(() => g.Developer), _developer.Text, v => g.Developer = v);
-        WriteStr(Safe(() => g.Publisher), _publisher.Text, v => g.Publisher = v);
-        WriteStr(Safe(() => g.Series), _series.Text, v => g.Series = v);
-        WriteStr(Safe(() => g.Region), _region.Text, v => g.Region = v);
-        WriteStr(Safe(() => g.PlayMode), _playMode.Text, v => g.PlayMode = v);
-        WriteStr(Safe(() => g.Version), _version.Text, v => g.Version = v);
-        WriteStr(Safe(() => g.Status), _status.Text, v => g.Status = v);
-        WriteStr(Safe(() => g.Source), _source.Text, v => g.Source = v);
-        WriteStr(Safe(() => g.Progress), _progress.Text, v => g.Progress = v);
-        WriteStr(Safe(() => g.VideoUrl), _videoUrl.Text, v => g.VideoUrl = v);
-        WriteStr(Safe(() => g.WikipediaUrl), _wikiUrl.Text, v => g.WikipediaUrl = v);
-
-        // Dates (empty → null).
-        DateTime? rd = ParseDate(_releaseDate.Text);
-        if (!DateEquals(rd, Safe(() => g.ReleaseDate))) try { g.ReleaseDate = rd; } catch { }
-        DateTime? lp = ParseDate(_lastPlayed.Text);
-        if (!DateEquals(lp, Safe(() => g.LastPlayedDate))) try { g.LastPlayedDate = lp; } catch { }
-
-        // Max Players (0 → null).
-        int mpV = (int)_maxPlayers.Value; int? mp = mpV <= 0 ? (int?)null : mpV;
-        if (mp != Safe(() => g.MaxPlayers)) try { g.MaxPlayers = mp; } catch { }
-
-        // Star rating — persist the USER value in half-star precision (0 = cleared → community fallback).
-        double uv = _starBar.UserValue;
-        if (Math.Abs(uv - Safe(() => g.StarRatingFloat)) > 0.01) try { g.StarRatingFloat = (float)uv; } catch { }
-
-        // Flags.
-        if (_favorite.Checked != Safe(() => g.Favorite)) try { g.Favorite = _favorite.Checked; } catch { }
-        if (_portable.Checked != Safe(() => g.Portable)) try { g.Portable = _portable.Checked; } catch { }
-        if (_hide.Checked != Safe(() => g.Hide)) try { g.Hide = _hide.Checked; } catch { }
-        if (_broken.Checked != Safe(() => g.Broken)) try { g.Broken = _broken.Checked; } catch { }
-        // Installed is tri-state (null = inherit). Only write when the box's boolean actually flipped,
-        // so an untouched null stays null.
-        bool loaded = _loadedInstalled == true;
-        if (_installed.Checked != loaded) try { g.Installed = _installed.Checked; } catch { }
+        bool T(Control c) => _touched.Contains(c);
+        static void W(Action a) { try { a(); } catch { } }
     }
 
+    // Prev/Next walk the visible list — single-game mode only (multi edits the whole set at once).
     private void Navigate(int delta)
     {
-        if (_visible.Count == 0) return;
+        if (IsMulti || _visible.Count == 0) return;
         int ni = _index + delta;
         if (ni < 0 || ni >= _visible.Count) return;
         SaveCurrent();
         _index = ni;
-        _game = _visible[_index];
-        LoadMetadata(_game);
+        _editGames = new[] { _visible[_index] };
+        LoadMetadata();
         UpdateChrome();
     }
 
     private void UpdateChrome()
     {
-        Text = "Edit Game: " + (Safe(() => _game.Title) ?? "");
-        bool nav = _visible.Count > 1 && _index >= 0;
+        Text = IsMulti ? $"Edit {_editGames.Count} Games" : "Edit Game: " + (Safe(() => _editGames[0].Title) ?? "");
+        bool nav = !IsMulti && _visible.Count > 1 && _index >= 0;
         _prev.Enabled = nav && _index > 0;
         _next.Enabled = nav && _index < _visible.Count - 1;
     }
@@ -612,6 +658,7 @@ internal sealed class EditGameWindow : Form
     private TextBox Txt(string v, int x, int y, int w, Panel p)
     {
         var t = new TextBox { Text = v, Location = new Point(x, y), Width = w, BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        t.TextChanged += (_, _) => { if (!_loading) { _touched.Add(t); t.ForeColor = Fg; } };
         p.Controls.Add(t); return t;
     }
 
@@ -625,17 +672,23 @@ internal sealed class EditGameWindow : Form
         };
         if (items is { Length: > 0 }) c.Items.AddRange(items);
         c.Text = v;
+        c.TextChanged += (_, _) => { if (!_loading) { _touched.Add(c); c.ForeColor = Fg; } };
         p.Controls.Add(c); return c;
     }
 
     private NumericUpDown Num(int v, int min, int max, int x, int y, int w, Panel p)
     {
         var n = new NumericUpDown { Location = new Point(x, y), Width = w, Minimum = min, Maximum = max, Value = Clamp(v, min, max), BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        n.ValueChanged += (_, _) => { if (!_loading) _touched.Add(n); };
         p.Controls.Add(n); return n;
     }
 
-    private CheckBox ChkBox(string text, int x, int y) =>
-        new() { Text = text, Location = new Point(x, y), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+    private CheckBox ChkBox(string text, int x, int y)
+    {
+        var cb = new CheckBox { Text = text, Location = new Point(x, y), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+        cb.CheckStateChanged += (_, _) => { if (!_loading) _touched.Add(cb); };
+        return cb;
+    }
 
     private Label InfoLabel(string text, int x, int y, Panel p)
     {
@@ -646,6 +699,7 @@ internal sealed class EditGameWindow : Form
     private TextBox DateField(int x, int y, int w, Panel p)
     {
         var t = new TextBox { Location = new Point(x, y), Width = w - 28, BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        t.TextChanged += (_, _) => { if (!_loading) { _touched.Add(t); t.ForeColor = Fg; } };
         var b = MiniBtn("▦", new Point(x + w - 26, y - 1), 26);
         b.Click += (_, _) => { if (!_readOnly) ShowDatePopup(b, t); };
         p.Controls.Add(t); p.Controls.Add(b);
@@ -696,11 +750,6 @@ internal sealed class EditGameWindow : Form
     }
 
     // ── value helpers ────────────────────────────────────────────────────
-    private static void WriteStr(string? cur, string val, Action<string> set)
-    {
-        val = (val ?? "").Trim();
-        if (!string.Equals(cur ?? "", val, StringComparison.Ordinal)) { try { set(val); } catch { } }
-    }
     private static string FmtDate(DateTime? d) => d.HasValue ? d.Value.ToString("d", CultureInfo.CurrentCulture) : "";
     private static string FmtDateTime(DateTime d) => d == default ? "" : d.ToString("g", CultureInfo.CurrentCulture);
     private static string FmtDuration(int seconds)
@@ -711,8 +760,6 @@ internal sealed class EditGameWindow : Form
     }
     private static DateTime? ParseDate(string s)
         => DateTime.TryParse((s ?? "").Trim(), CultureInfo.CurrentCulture, DateTimeStyles.None, out var d) ? d.Date : (DateTime?)null;
-    private static bool DateEquals(DateTime? a, DateTime? b)
-        => (a?.Date) == (b?.Date);
     private static int Clamp(int v, int min, int max) => Math.Max(min, Math.Min(max, v));
     private static T? Safe<T>(Func<T?> f) { try { return f(); } catch { return default; } }
 }

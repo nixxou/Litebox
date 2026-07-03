@@ -3387,14 +3387,14 @@ internal sealed class MainWindow : Form
     {
         var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
 
-        var play = new ToolStripMenuItem("Play") { Font = new Font(Font, FontStyle.Bold) };
-        play.Click += (_, _) => LaunchSelected();
-        menu.Items.Add(play);
-
-        // Play With… / Play Version… apply to a single selected game.
+        // Single-game items (Play / Play With / Play Version / Configure). Everything except Edit is single-only.
         if (games.Length == 1)
         {
             var g = games[0];
+
+            var play = new ToolStripMenuItem("Play") { Font = new Font(Font, FontStyle.Bold) };
+            play.Click += (_, _) => LaunchSelected();
+            menu.Items.Add(play);
 
             var emus = SafeEmulatorsForPlatform(S(g.Platform));
             if (emus.Count > 0)
@@ -3438,10 +3438,14 @@ internal sealed class MainWindow : Form
                 cfg.Click += (_, _) => Safe(() => g.Configure());
                 menu.Items.Add(cfg);
             }
+        }
 
-            // Edit… — full metadata editor (single game only; ◄► navigate the visible list).
-            var edit = new ToolStripMenuItem("Edit…");
-            edit.Click += (_, _) => OpenEditGame(g);
+        // Edit — single OR multiple: opens the metadata editor for every selected game (the only item
+        // that isn't single-only). ◄► walk the visible list when a single game is selected.
+        {
+            var gs = games;
+            var edit = new ToolStripMenuItem(gs.Length > 1 ? $"Edit {gs.Length} Games…" : "Edit…");
+            edit.Click += (_, _) => OpenEditGame(gs);
             menu.Items.Add(edit);
         }
 
@@ -3479,17 +3483,18 @@ internal sealed class MainWindow : Form
         return menu;
     }
 
-    // Opens the per-game metadata editor (EditGameWindow). Single game only; the visible list is
-    // passed so the ◄► arrows can walk it. Honours read-only mode. Refreshes the list + detail on close.
-    private void OpenEditGame(IGame g)
+    // Opens the metadata editor (EditGameWindow) for the selected game(s) — single or multiple. The
+    // visible list is passed so the ◄► arrows can walk it in single mode. Honours read-only mode.
+    // Refreshes the list + detail on close.
+    private void OpenEditGame(IGame[] games)
     {
-        if (g == null) return;
+        if (games == null || games.Length == 0) return;
         try
         {
             bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;
-            EditGameWindow.Open(g, _games.VisibleGames, ro, this);
+            EditGameWindow.Open(games, _games.VisibleGames, ro, this);
             try { _games.RebuildView(); } catch { }
-            RequestDetail(g);
+            RequestDetail(games[0]);
         }
         catch (Exception ex) { Console.WriteLine("[editgame] open failed: " + ex); }
     }

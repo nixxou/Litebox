@@ -38,6 +38,7 @@ internal sealed class EditGameWindow : Form
     private static readonly Color Fg = Color.FromArgb(222, 222, 222);
     private static readonly Color SubFg = Color.FromArgb(150, 150, 165);
     private static readonly Color Accent = Color.FromArgb(0, 122, 204);
+    private static readonly Color ModifiedColor = Color.FromArgb(235, 150, 135);   // slightly-red tint for a changed field
 
     // Layout constants (two-column grid).
     private const int Lx = 14, Lw = 92, LFx = 110, FW = 250;   // left column: label x/w, field x, field width
@@ -50,9 +51,18 @@ internal sealed class EditGameWindow : Form
     private int _index;
     private IReadOnlyList<IGame> _editGames;   // the game(s) being edited (1 for single, N for multi)
     private bool IsMulti => _editGames.Count > 1;
-    private bool _loading;                     // suppress touch-tracking while LoadMetadata sets values
-    private readonly HashSet<Control> _touched = new();
+    private bool _loading;                     // suppress dirty-tracking while LoadMetadata sets values
+    private bool _restoring;                   // suppress dirty-tracking while a revert restores a value
     private const string Multi = "‹multiple values›";
+
+    // Dirty-field tracking: baseline (loaded) value-string per control, a per-field ↺ revert button, and
+    // the list of trackable controls. A field is "modified" when its current value differs from the
+    // baseline — shown reddish with the ↺ button; on save it is written (to every edited game) UNLESS it
+    // still holds the Multi placeholder. Reverting restores the baseline (so it never writes the placeholder).
+    private readonly Dictionary<Control, string> _baseline = new();
+    private readonly Dictionary<Control, Button> _revert = new();
+    private readonly List<Control> _fields = new();
+    private readonly ToolTip _tips = new();
 
     // Distinct library values that seed the editable combos (built once).
     private readonly Dictionary<string, string[]> _choices = new(StringComparer.Ordinal);
@@ -312,8 +322,8 @@ internal sealed class EditGameWindow : Form
         // value again to clear it (reverts to the community rating shown in cyan).
         Cap("Star Rating", Lx, y, Lw, p);
         _starBar = new StarBar { Location = new Point(LFx, y - 2), ReadOnly = _readOnly };
-        _starBar.Changed = () => { if (!_loading) _touched.Add(_starBar); };
-        p.Controls.Add(_starBar);
+        _starBar.Changed = () => OnField(_starBar);
+        p.Controls.Add(_starBar); Track(_starBar, p);
         y += RowH + 6;
 
         // ── Read-only info + flags ───────────────────────────────────────
@@ -361,12 +371,14 @@ internal sealed class EditGameWindow : Form
         }
 
         public double UserValue => _userValue;
+        public bool Dirty;   // reddish numeric when the user rating differs from its loaded value
         public void SetFrom(double userRating, double community)
         {
             _userValue = Math.Round(userRating * 2) / 2.0;   // snap the user rating to the nearest half
             _community = community;
             Invalidate();
         }
+        public void SetUserValue(double v) { _userValue = Math.Round(v * 2) / 2.0; Invalidate(); }
 
         private bool IsUser => _userValue > 0;
         private double Effective => IsUser ? _userValue : _community;
@@ -395,7 +407,7 @@ internal sealed class EditGameWindow : Form
             var fill = hovering ? User : (IsUser ? User : Community);
 
             string num = eff > 0 ? eff.ToString("0.0", CultureInfo.InvariantCulture) : "—";
-            using (var tb = new SolidBrush(Color.FromArgb(200, 200, 205)))
+            using (var tb = new SolidBrush(Dirty ? ModifiedColor : Color.FromArgb(200, 200, 205)))
                 g.DrawString(num, numFont, tb, new RectangleF(0, 0, NumW, Height), sfNum);
 
             int sx = NumW + 4;
@@ -506,7 +518,13 @@ internal sealed class EditGameWindow : Form
                 _playCount.Text = $"Play Count(Time):   {pc} ({FmtDuration(pt)})";
             }
         }
-        finally { _touched.Clear(); _loading = false; }
+        finally
+        {
+            // Baseline = the just-loaded value of every field; then paint each field's dirty state
+            // (all clean at this point → normal colour, ↺ hidden).
+            foreach (var c in _fields) { _baseline[c] = ValueStr(c); RefreshFieldState(c); }
+            _loading = false;
+        }
 
         void SetText(TextBox t, string v) { t.Text = v; t.ForeColor = v == Multi ? SubFg : Fg; }
         void SetCombo(ComboBox c, string v) { c.Text = v; c.ForeColor = v == Multi ? SubFg : Fg; }
@@ -535,41 +553,42 @@ internal sealed class EditGameWindow : Form
         }
     }
 
-    // Writes ONLY the fields the user touched, to EVERY edited game. Untouched fields (incl. those still
-    // showing "‹multiple values›") are left alone, so each game keeps its own value.
+    // Writes ONLY the fields the user actually changed (current != loaded baseline), to EVERY edited game.
+    // A field still holding the "‹multiple values›" placeholder is never written — so untouched (or
+    // reverted) multi-value fields keep each game's own value.
     private void SaveCurrent()
     {
         if (_readOnly) return;
         foreach (var g in _editGames)
         {
-            if (T(_title)) W(() => g.Title = _title.Text.Trim());
-            if (T(_rating)) W(() => g.Rating = _rating.Text.Trim());
-            if (T(_releaseType)) W(() => g.ReleaseType = _releaseType.Text.Trim());
-            if (T(_genre)) W(() => g.GenresString = _genre.Text.Trim());
-            if (T(_platform)) W(() => g.Platform = _platform.Text.Trim());
-            if (T(_developer)) W(() => g.Developer = _developer.Text.Trim());
-            if (T(_publisher)) W(() => g.Publisher = _publisher.Text.Trim());
-            if (T(_series)) W(() => g.Series = _series.Text.Trim());
-            if (T(_region)) W(() => g.Region = _region.Text.Trim());
-            if (T(_playMode)) W(() => g.PlayMode = _playMode.Text.Trim());
-            if (T(_version)) W(() => g.Version = _version.Text.Trim());
-            if (T(_status)) W(() => g.Status = _status.Text.Trim());
-            if (T(_source)) W(() => g.Source = _source.Text.Trim());
-            if (T(_progress)) W(() => g.Progress = _progress.Text.Trim());
-            if (T(_videoUrl)) W(() => g.VideoUrl = _videoUrl.Text.Trim());
-            if (T(_wikiUrl)) W(() => g.WikipediaUrl = _wikiUrl.Text.Trim());
-            if (T(_releaseDate)) W(() => g.ReleaseDate = ParseDate(_releaseDate.Text));
-            if (T(_lastPlayed)) W(() => g.LastPlayedDate = ParseDate(_lastPlayed.Text));
-            if (T(_maxPlayers)) { int v = (int)_maxPlayers.Value; int? mp = v <= 0 ? (int?)null : v; W(() => g.MaxPlayers = mp); }
-            if (T(_starBar)) W(() => g.StarRatingFloat = (float)_starBar.UserValue);
-            if (T(_favorite) && _favorite.CheckState != CheckState.Indeterminate) W(() => g.Favorite = _favorite.Checked);
-            if (T(_portable) && _portable.CheckState != CheckState.Indeterminate) W(() => g.Portable = _portable.Checked);
-            if (T(_hide) && _hide.CheckState != CheckState.Indeterminate) W(() => g.Hide = _hide.Checked);
-            if (T(_broken) && _broken.CheckState != CheckState.Indeterminate) W(() => g.Broken = _broken.Checked);
-            if (T(_installed) && _installed.CheckState != CheckState.Indeterminate) W(() => g.Installed = _installed.Checked);
+            if (Writable(_title)) W(() => g.Title = _title.Text.Trim());
+            if (Writable(_rating)) W(() => g.Rating = _rating.Text.Trim());
+            if (Writable(_releaseType)) W(() => g.ReleaseType = _releaseType.Text.Trim());
+            if (Writable(_genre)) W(() => g.GenresString = _genre.Text.Trim());
+            if (Writable(_platform)) W(() => g.Platform = _platform.Text.Trim());
+            if (Writable(_developer)) W(() => g.Developer = _developer.Text.Trim());
+            if (Writable(_publisher)) W(() => g.Publisher = _publisher.Text.Trim());
+            if (Writable(_series)) W(() => g.Series = _series.Text.Trim());
+            if (Writable(_region)) W(() => g.Region = _region.Text.Trim());
+            if (Writable(_playMode)) W(() => g.PlayMode = _playMode.Text.Trim());
+            if (Writable(_version)) W(() => g.Version = _version.Text.Trim());
+            if (Writable(_status)) W(() => g.Status = _status.Text.Trim());
+            if (Writable(_source)) W(() => g.Source = _source.Text.Trim());
+            if (Writable(_progress)) W(() => g.Progress = _progress.Text.Trim());
+            if (Writable(_videoUrl)) W(() => g.VideoUrl = _videoUrl.Text.Trim());
+            if (Writable(_wikiUrl)) W(() => g.WikipediaUrl = _wikiUrl.Text.Trim());
+            if (Writable(_releaseDate)) W(() => g.ReleaseDate = ParseDate(_releaseDate.Text));
+            if (Writable(_lastPlayed)) W(() => g.LastPlayedDate = ParseDate(_lastPlayed.Text));
+            if (Writable(_maxPlayers)) { int v = (int)_maxPlayers.Value; int? mp = v <= 0 ? (int?)null : v; W(() => g.MaxPlayers = mp); }
+            if (Writable(_starBar)) W(() => g.StarRatingFloat = (float)_starBar.UserValue);
+            if (Writable(_favorite) && _favorite.CheckState != CheckState.Indeterminate) W(() => g.Favorite = _favorite.Checked);
+            if (Writable(_portable) && _portable.CheckState != CheckState.Indeterminate) W(() => g.Portable = _portable.Checked);
+            if (Writable(_hide) && _hide.CheckState != CheckState.Indeterminate) W(() => g.Hide = _hide.Checked);
+            if (Writable(_broken) && _broken.CheckState != CheckState.Indeterminate) W(() => g.Broken = _broken.Checked);
+            if (Writable(_installed) && _installed.CheckState != CheckState.Indeterminate) W(() => g.Installed = _installed.Checked);
         }
 
-        bool T(Control c) => _touched.Contains(c);
+        bool Writable(Control c) => Modified(c) && !IsPlaceholder(c);
         static void W(Action a) { try { a(); } catch { } }
     }
 
@@ -593,6 +612,78 @@ internal sealed class EditGameWindow : Form
         _prev.Enabled = nav && _index > 0;
         _next.Enabled = nav && _index < _visible.Count - 1;
     }
+
+    // ── Dirty-field tracking (reddish text + per-field ↺ revert) ─────────
+    // Registers a control for dirty-tracking and gives it an overlay ↺ button (hidden until modified)
+    // at its right edge, which restores the loaded value. Checkboxes register via _fields directly
+    // (no ↺ — trivial to toggle back).
+    private void Track(Control c, Panel p)
+    {
+        _fields.Add(c);
+        var b = new Button
+        {
+            Text = "↺", Size = new Size(18, 18), Visible = false, TabStop = false, Cursor = Cursors.Hand,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(92, 46, 42),          // dark-red fill → clearly reads as a button
+            ForeColor = Color.FromArgb(255, 180, 165),
+            Font = new Font("Segoe UI Symbol", 9.5f),        // symbol font so the ↺ renders (plain Segoe UI shows tofu)
+            FlatAppearance = { BorderSize = 1, MouseOverBackColor = Color.FromArgb(120, 58, 52) },
+        };
+        b.FlatAppearance.BorderColor = Color.FromArgb(150, 72, 64);
+        int cy = c.Top + Math.Max(0, (c.Height - 18) / 2);
+        b.Location = c switch
+        {
+            ComboBox => new Point(c.Right - 36, cy),        // left of the dropdown arrow
+            NumericUpDown => new Point(c.Right - 34, cy),   // left of the spin buttons
+            StarBar => new Point(c.Right + 3, cy),          // just right of the star widget
+            _ => new Point(c.Right - 18, cy),               // over a text box's right edge
+        };
+        b.Click += (_, _) => RevertField(c);
+        _tips.SetToolTip(b, "Restore the original value");
+        p.Controls.Add(b); b.BringToFront();
+        _revert[c] = b;
+    }
+
+    private void OnField(Control c) { if (!_loading && !_restoring) RefreshFieldState(c); }
+
+    private void RefreshFieldState(Control c)
+    {
+        bool mod = Modified(c);
+        if (c is StarBar s) { s.Dirty = mod; s.Invalidate(); }
+        else c.ForeColor = mod ? ModifiedColor : (IsPlaceholder(c) ? SubFg : Fg);
+        if (_revert.TryGetValue(c, out var b)) b.Visible = mod && !_readOnly;
+    }
+
+    private void RevertField(Control c)
+    {
+        if (!_baseline.TryGetValue(c, out var b)) return;
+        _restoring = true;
+        try
+        {
+            switch (c)
+            {
+                case ComboBox cb: cb.Text = b; break;
+                case TextBox t: t.Text = b; break;
+                case NumericUpDown n: n.Value = decimal.TryParse(b, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? Math.Max(n.Minimum, Math.Min(n.Maximum, d)) : n.Minimum; break;
+                case CheckBox ck: ck.CheckState = Enum.TryParse<CheckState>(b, out var cs) ? cs : CheckState.Unchecked; break;
+                case StarBar s: s.SetUserValue(double.TryParse(b, NumberStyles.Any, CultureInfo.InvariantCulture, out var uv) ? uv : 0); break;
+            }
+        }
+        finally { _restoring = false; }
+        RefreshFieldState(c);
+    }
+
+    private bool Modified(Control c) => _baseline.TryGetValue(c, out var b) && b != ValueStr(c);
+    private bool IsPlaceholder(Control c) => (c is TextBox t && t.Text == Multi) || (c is ComboBox cb && cb.Text == Multi);
+    private static string ValueStr(Control c) => c switch
+    {
+        ComboBox cb => cb.Text,
+        TextBox t => t.Text,
+        NumericUpDown n => n.Value.ToString(CultureInfo.InvariantCulture),
+        CheckBox ck => ck.CheckState.ToString(),
+        StarBar s => s.UserValue.ToString(CultureInfo.InvariantCulture),
+        _ => "",
+    };
 
     private int IndexOf(IGame g)
     {
@@ -658,8 +749,8 @@ internal sealed class EditGameWindow : Form
     private TextBox Txt(string v, int x, int y, int w, Panel p)
     {
         var t = new TextBox { Text = v, Location = new Point(x, y), Width = w, BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
-        t.TextChanged += (_, _) => { if (!_loading) { _touched.Add(t); t.ForeColor = Fg; } };
-        p.Controls.Add(t); return t;
+        t.TextChanged += (_, _) => OnField(t);
+        p.Controls.Add(t); Track(t, p); return t;
     }
 
     private ComboBox Cbo(string v, string[] items, int x, int y, int w, Panel p)
@@ -672,21 +763,22 @@ internal sealed class EditGameWindow : Form
         };
         if (items is { Length: > 0 }) c.Items.AddRange(items);
         c.Text = v;
-        c.TextChanged += (_, _) => { if (!_loading) { _touched.Add(c); c.ForeColor = Fg; } };
-        p.Controls.Add(c); return c;
+        c.TextChanged += (_, _) => OnField(c);
+        p.Controls.Add(c); Track(c, p); return c;
     }
 
     private NumericUpDown Num(int v, int min, int max, int x, int y, int w, Panel p)
     {
         var n = new NumericUpDown { Location = new Point(x, y), Width = w, Minimum = min, Maximum = max, Value = Clamp(v, min, max), BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
-        n.ValueChanged += (_, _) => { if (!_loading) _touched.Add(n); };
-        p.Controls.Add(n); return n;
+        n.ValueChanged += (_, _) => OnField(n);
+        p.Controls.Add(n); Track(n, p); return n;
     }
 
     private CheckBox ChkBox(string text, int x, int y)
     {
         var cb = new CheckBox { Text = text, Location = new Point(x, y), AutoSize = true, ForeColor = Fg, BackColor = Bg };
-        cb.CheckStateChanged += (_, _) => { if (!_loading) _touched.Add(cb); };
+        cb.CheckStateChanged += (_, _) => OnField(cb);
+        _fields.Add(cb);   // tracked for the reddish "modified" text + save (no ↺ button — a checkbox is trivial to toggle back)
         return cb;
     }
 
@@ -699,10 +791,10 @@ internal sealed class EditGameWindow : Form
     private TextBox DateField(int x, int y, int w, Panel p)
     {
         var t = new TextBox { Location = new Point(x, y), Width = w - 28, BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
-        t.TextChanged += (_, _) => { if (!_loading) { _touched.Add(t); t.ForeColor = Fg; } };
+        t.TextChanged += (_, _) => OnField(t);
         var b = MiniBtn("▦", new Point(x + w - 26, y - 1), 26);
         b.Click += (_, _) => { if (!_readOnly) ShowDatePopup(b, t); };
-        p.Controls.Add(t); p.Controls.Add(b);
+        p.Controls.Add(t); Track(t, p); p.Controls.Add(b);
         return t;
     }
 

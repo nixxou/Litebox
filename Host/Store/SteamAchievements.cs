@@ -201,12 +201,17 @@ internal static class SteamAchievements
             if (res != null && res.ok)
             {
                 unlocks = new Dictionary<string, (bool, long, string?)>(StringComparer.Ordinal);
+                // Seed defs/order from the helper ONLY when the web schema gave us nothing at all - decided
+                // once, before the loop. Re-checking defs.Count inside the loop would only ever be true for
+                // the very first achievement (since adding it makes defs non-empty), silently dropping every
+                // achievement after the first from "order" (and therefore from the rendered card).
+                bool seedDefsFromHelper = defs.Count == 0;
                 foreach (var a in res.achievements)
                 {
                     var apiname = a.id ?? "";
                     if (apiname.Length == 0) continue;
                     unlocks[apiname] = (a.unlocked, a.unlockTime, a.name);
-                    if (defs.Count == 0) { defs[apiname] = new Def(a.name, a.desc, null, null, a.hidden); order.Add(apiname); }
+                    if (seedDefsFromHelper) { defs[apiname] = new Def(a.name, a.desc, null, null, a.hidden); order.Add(apiname); }
                 }
                 source = "helper";
             }

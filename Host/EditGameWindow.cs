@@ -41,10 +41,10 @@ internal sealed class EditGameWindow : Form
     private static readonly Color ModifiedColor = Color.FromArgb(235, 150, 135);   // slightly-red tint for a changed field
 
     // Layout constants (two-column grid).
-    private const int Lx = 14, Lw = 92, LFx = 110, FW = 250;   // left column: label x/w, field x, field width
-    private const int Rx = 380, Rw = 80, RFx = 462;            // right column: label x/w, field x
-    private const int FullW = 602;                             // full-width field (Title / URLs)
-    private const int RowH = 30, FieldH = 23;
+    private const int Lx = 16, Lw = 104, LFx = 126, FW = 290;   // left column: label x/w, field x, field width
+    private const int Rx = 436, Rw = 96, RFx = 540;            // right column: label x/w, field x
+    private const int FullW = 704;                             // full-width field (Title / URLs)
+    private const int RowH = 32, FieldH = 24;
 
     private readonly IReadOnlyList<IGame> _visible;
     private readonly bool _readOnly;
@@ -64,8 +64,12 @@ internal sealed class EditGameWindow : Form
     private readonly List<Control> _fields = new();
     private readonly ToolTip _tips = new();
 
-    // Distinct library values that seed the editable combos (built once).
-    private readonly Dictionary<string, string[]> _choices = new(StringComparer.Ordinal);
+    // Custom Fields page (lazy-built). Names are a library-wide vocabulary; values are per game.
+    private DataGridView? _cfGrid;
+    private const int CfName = 0, CfValue = 1;
+    private Dictionary<string, string[]> _cfValuesByName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _cfLoaded = new(StringComparer.OrdinalIgnoreCase);
+    private string? _cfRenameFrom;
 
     // Shell.
     private readonly TreeView _tree;
@@ -75,7 +79,7 @@ internal sealed class EditGameWindow : Form
     private readonly Dictionary<string, Control> _pages = new(StringComparer.Ordinal);
 
     // Metadata controls (kept so navigation just reloads values).
-    private TextBox _title = null!, _releaseDate = null!, _lastPlayed = null!, _videoUrl = null!, _wikiUrl = null!, _version = null!;
+    private TextBox _title = null!, _releaseDate = null!, _lastPlayed = null!, _videoUrl = null!, _wikiUrl = null!, _version = null!, _notes = null!;
     private ComboBox _rating = null!, _releaseType = null!, _genre = null!, _platform = null!, _developer = null!,
                      _publisher = null!, _series = null!, _region = null!, _playMode = null!, _status = null!,
                      _source = null!, _progress = null!;
@@ -98,10 +102,8 @@ internal sealed class EditGameWindow : Form
         _readOnly = readOnly;
         _index = games.Count > 1 ? -1 : IndexOf(games[0]);
 
-        BuildChoices();
-
-        Size = new Size(940, 660);
-        MinimumSize = new Size(760, 520);
+        Size = new Size(1080, 730);
+        MinimumSize = new Size(880, 600);
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Bg; ForeColor = Fg;
         Font = new Font("Segoe UI", 9.5f);
@@ -140,7 +142,7 @@ internal sealed class EditGameWindow : Form
         var cancel = FooterBtn("Cancel", Color.FromArgb(70, 70, 82));
         ok.Location = new Point(12, 9);
         cancel.Location = new Point(112, 9);
-        ok.Click += (_, _) => { SaveCurrent(); DialogResult = DialogResult.OK; Close(); };
+        ok.Click += (_, _) => { SaveCurrent(); SaveCustomFields(); DialogResult = DialogResult.OK; Close(); };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
 
         var hint = new Label
@@ -171,11 +173,29 @@ internal sealed class EditGameWindow : Form
 
         // Build + show the Metadata page, then load the current game.
         _pages["Metadata"] = BuildMetadataPage();
+        _pages["Notes"] = BuildNotesPage();
         LoadMetadata();
         _tree.SelectedNode = _tree.Nodes[0];   // Metadata
         ShowPage("Metadata");
         UpdateChrome();
-        if (_readOnly) DisableInputs(_pages["Metadata"]);
+
+        // Open with a clean look: no field pre-selected. Setting a combo's .Text to a value that exists in
+        // its Items highlights the editor text, and the first tab-stop field would otherwise grab focus and
+        // select-all. Park focus on the tree and clear every field's selection.
+        Shown += (_, _) =>
+        {
+            try
+            {
+                foreach (var c in _fields)
+                {
+                    if (c is TextBox tb) tb.Select(0, 0);
+                    else if (c is ComboBox cb) cb.SelectionLength = 0;
+                }
+                ActiveControl = _tree;
+            }
+            catch { }
+        };
+        if (_readOnly) { DisableInputs(_pages["Metadata"]); DisableInputs(_pages["Notes"]); }
     }
 
     // ── Navigation tree ──────────────────────────────────────────────────
@@ -234,7 +254,12 @@ internal sealed class EditGameWindow : Form
         _titleBar.Text = _tree.SelectedNode?.Text ?? key;
         if (!_pages.TryGetValue(key, out var page))
         {
-            page = key == "Metadata" ? BuildMetadataPage() : Placeholder(_tree.SelectedNode?.Text ?? key);
+            page = key switch
+            {
+                "Metadata" => BuildMetadataPage(),
+                "CustomFields" => BuildCustomFieldsPage(),
+                _ => Placeholder(_tree.SelectedNode?.Text ?? key),
+            };
             _pages[key] = page;
             if (_readOnly) DisableInputs(page);
         }
@@ -258,6 +283,244 @@ internal sealed class EditGameWindow : Form
         return p;
     }
 
+    // ── Notes page ───────────────────────────────────────────────────────
+    // A single big multiline box bound to IGame.Notes. Same dirty-tracking as the Metadata fields:
+    // in multi mode it merges (or shows the "‹multiple values›" placeholder), goes reddish when changed,
+    // and its ↺ (top-right) restores the loaded text. Whitespace is preserved (unlike the trimmed fields).
+    private Control BuildNotesPage()
+    {
+        var p = new Panel { BackColor = Bg, Padding = new Padding(6) };
+        _notes = new TextBox
+        {
+            Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, WordWrap = true,
+            Dock = DockStyle.Fill, BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
+            Font = new Font("Segoe UI", 9.5f),
+        };
+        _notes.TextChanged += (_, _) => OnField(_notes);
+        p.Controls.Add(_notes);
+        _fields.Add(_notes);
+
+        var rb = new Button
+        {
+            Text = "↺", Size = new Size(18, 18), Visible = false, TabStop = false, Cursor = Cursors.Hand,
+            FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(92, 46, 42), ForeColor = Color.FromArgb(255, 180, 165),
+            Font = new Font("Segoe UI Symbol", 9.5f), FlatAppearance = { BorderSize = 1 },
+        };
+        rb.FlatAppearance.BorderColor = Color.FromArgb(150, 72, 64);
+        rb.Click += (_, _) => RevertField(_notes);
+        _tips.SetToolTip(rb, "Restore the original value");
+        p.Controls.Add(rb); rb.BringToFront();
+        _revert[_notes] = rb;
+        void Place() { if (p.ClientSize.Width > 60) rb.Location = new Point(p.ClientSize.Width - rb.Width - 24, 12); }
+        p.Resize += (_, _) => { Place(); rb.BringToFront(); };
+        Place();
+
+        return p;
+    }
+
+    // ── Custom Fields page (Name/Value grid) ─────────────────────────────
+    // Names are a LIBRARY-WIDE vocabulary (union across every game): adding a name shows it for all games,
+    // but nothing is stored for a game until it gets a value (empty values are never written — no bloat).
+    // Value = free-text combo seeded with that name's distinct library values. Renaming or deleting a name
+    // asks to apply it across the whole library. Multi-select: a value merges ("‹multiple values›") and is
+    // applied to every edited game.
+    private Control BuildCustomFieldsPage()
+    {
+        var p = new Panel { BackColor = Bg, Padding = new Padding(6) };
+        var grid = new DataGridView
+        {
+            Dock = DockStyle.Fill, BackgroundColor = Bg, GridColor = Color.FromArgb(60, 60, 70),
+            BorderStyle = BorderStyle.None, EnableHeadersVisualStyles = false, RowHeadersVisible = false,
+            AllowUserToAddRows = !_readOnly, AllowUserToDeleteRows = !_readOnly, ReadOnly = _readOnly,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None, Font = new Font("Segoe UI", 9.5f),
+        };
+        grid.ColumnHeadersDefaultCellStyle.BackColor = PanelC;
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = Fg;
+        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = PanelC;
+        grid.DefaultCellStyle.BackColor = Field;
+        grid.DefaultCellStyle.ForeColor = Fg;
+        grid.DefaultCellStyle.SelectionBackColor = Accent;
+        grid.DefaultCellStyle.SelectionForeColor = Color.White;
+
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Name", Width = 260, SortMode = DataGridViewColumnSortMode.NotSortable });
+        var valCol = new DataGridViewComboBoxColumn
+        {
+            HeaderText = "Value", Width = 560, FlatStyle = FlatStyle.Flat,
+            DisplayStyle = DataGridViewComboBoxDisplayStyle.Nothing, SortMode = DataGridViewColumnSortMode.NotSortable,
+        };
+        grid.Columns.Add(valCol);
+        grid.DataError += (_, e) => e.ThrowException = false;
+
+        // Value cell → an editable combo seeded with that row-name's library values.
+        grid.EditingControlShowing += (_, e) =>
+        {
+            if (grid.CurrentCell?.ColumnIndex == CfValue && e.Control is ComboBox cb)
+            {
+                cb.DropDownStyle = ComboBoxStyle.DropDown;
+                cb.AutoCompleteMode = AutoCompleteMode.SuggestAppend; cb.AutoCompleteSource = AutoCompleteSource.ListItems;
+                cb.Items.Clear();
+                string name = (grid.CurrentRow?.Cells[CfName].Value as string ?? "").Trim();
+                if (_cfValuesByName.TryGetValue(name, out var vals)) cb.Items.AddRange(vals);
+            }
+        };
+        // Accept free text: register any typed value so the combo commit never DataErrors.
+        grid.CellValidating += (_, e) =>
+        {
+            if (e.ColumnIndex != CfValue) return;
+            var v = e.FormattedValue as string ?? "";
+            if (v.Length > 0 && !valCol.Items.Contains(v)) valCol.Items.Add(v);
+        };
+        // Rename an EXISTING field → confirm library-wide (else revert).
+        grid.CellBeginEdit += (_, e) => { if (e.ColumnIndex == CfName && e.RowIndex >= 0) _cfRenameFrom = grid.Rows[e.RowIndex].Cells[CfName].Value as string; };
+        grid.CellEndEdit += (_, e) =>
+        {
+            if (e.ColumnIndex != CfName || e.RowIndex < 0) return;
+            var row = grid.Rows[e.RowIndex];
+            string orig = row.Tag as string ?? "";                         // the library name this row started as ("" = new row)
+            string now = (row.Cells[CfName].Value as string ?? "").Trim();
+            if (string.IsNullOrEmpty(orig) || string.Equals(orig, now, StringComparison.Ordinal)) return;
+            if (now.Length == 0) { row.Cells[CfName].Value = orig; return; }
+            var ans = MessageBox.Show(this,
+                $"Rename the custom field \"{orig}\" to \"{now}\" for ALL games in your library?",
+                "Rename Custom Field", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+            if (ans == DialogResult.OK) { RenameCustomFieldLibraryWide(orig, now); row.Tag = now; RebuildCfVocab(); }
+            else row.Cells[CfName].Value = orig;
+        };
+        // The Delete key removes the whole custom-field row (with the library-wide warning), rather than
+        // just clearing the value cell. Ignored while editing a cell (there Delete edits the text).
+        grid.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Delete || _readOnly || grid.IsCurrentCellInEditMode) return;
+            var row = grid.CurrentRow;
+            if (row == null || row.IsNewRow) return;
+            e.Handled = true; e.SuppressKeyPress = true;
+            DeleteCfRow(row);
+        };
+
+        p.Controls.Add(grid);
+        _cfGrid = grid;
+        LoadCustomFields();
+        return p;
+    }
+
+    private void LoadCustomFields()
+    {
+        if (_cfGrid == null) return;
+        RebuildCfVocab();
+        _cfLoaded.Clear();
+        var valCol = (DataGridViewComboBoxColumn)_cfGrid.Columns[CfValue];
+        _cfGrid.Rows.Clear();
+        valCol.Items.Clear();
+        foreach (var name in _cfValuesByName.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+        {
+            string val = MergeCfValue(name);
+            _cfLoaded[name] = val;
+            if (val.Length > 0 && !valCol.Items.Contains(val)) valCol.Items.Add(val);   // so the cell can display it
+            int i = _cfGrid.Rows.Add(name, val);
+            _cfGrid.Rows[i].Tag = name;
+        }
+    }
+
+    private void SaveCustomFields()
+    {
+        if (_readOnly || _cfGrid == null) return;
+        try { _cfGrid.EndEdit(); } catch { }
+        // Grid → intended name→value (last row wins on a duplicate name).
+        var intended = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (DataGridViewRow r in _cfGrid.Rows)
+        {
+            if (r.IsNewRow) continue;
+            string name = (r.Cells[CfName].Value as string ?? "").Trim();
+            if (name.Length == 0) continue;
+            intended[name] = r.Cells[CfValue].Value as string ?? "";
+        }
+        foreach (var g in _editGames)
+        {
+            var existing = Safe(() => g.GetAllCustomFields()) ?? Array.Empty<ICustomField>();
+            foreach (var (name, value) in intended)
+            {
+                if (value == Multi) continue;                                                     // untouched multi → keep this game's value
+                if (_cfLoaded.TryGetValue(name, out var loaded) && string.Equals(value, loaded, StringComparison.Ordinal)) continue;  // unchanged
+                var cur = existing.FirstOrDefault(c => string.Equals(Safe(() => c.Name), name, StringComparison.OrdinalIgnoreCase));
+                if (value.Length > 0)
+                {
+                    if (cur != null) { try { cur.Value = value; } catch { } }
+                    else { try { var nc = g.AddNewCustomField(); nc.Name = name; nc.Value = value; } catch { } }
+                }
+                else if (cur != null) { try { g.TryRemoveCustomField(cur); } catch { } }          // cleared → remove (no bloat)
+            }
+        }
+        RebuildCfVocab();
+    }
+
+    // The library-wide vocabulary: every distinct custom-field name, and each name's distinct values.
+    private void RebuildCfVocab()
+    {
+        var byName = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var g in PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>())
+                foreach (var c in Safe(() => g.GetAllCustomFields()) ?? Array.Empty<ICustomField>())
+                {
+                    string n = (Safe(() => c.Name) ?? "").Trim(); if (n.Length == 0) continue;
+                    if (!byName.TryGetValue(n, out var set)) byName[n] = set = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                    string v = (Safe(() => c.Value) ?? "").Trim(); if (v.Length > 0) set.Add(v);
+                }
+        }
+        catch { }
+        _cfValuesByName = byName.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private string MergeCfValue(string name)
+    {
+        string? first = null;
+        foreach (var g in _editGames)
+        {
+            string v = CfValueOf(g, name);
+            if (first == null) first = v; else if (first != v) return Multi;
+        }
+        return first ?? "";
+    }
+    private static string CfValueOf(IGame g, string name)
+    {
+        try { foreach (var c in g.GetAllCustomFields()) if (string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)) return c.Value ?? ""; }
+        catch { }
+        return "";
+    }
+
+    // Delete a grid row: an existing field → confirm + remove library-wide; an unsaved new row → drop it.
+    // The DataGridView keeps a fresh empty new-row at the bottom automatically (AllowUserToAddRows).
+    private void DeleteCfRow(DataGridViewRow row)
+    {
+        if (_cfGrid == null || row.IsNewRow) return;
+        string orig = row.Tag as string ?? "";
+        if (!string.IsNullOrEmpty(orig))
+        {
+            var ans = MessageBox.Show(this,
+                $"Delete the custom field \"{orig}\" from ALL games in your library?",
+                "Delete Custom Field", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            if (ans != DialogResult.OK) return;
+            DeleteCustomFieldLibraryWide(orig);
+            RebuildCfVocab();
+        }
+        try { _cfGrid.Rows.Remove(row); } catch { }
+    }
+
+    private void RenameCustomFieldLibraryWide(string oldName, string newName)
+    {
+        foreach (var g in PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>())
+            foreach (var c in Safe(() => g.GetAllCustomFields()) ?? Array.Empty<ICustomField>())
+                if (string.Equals(Safe(() => c.Name), oldName, StringComparison.OrdinalIgnoreCase))
+                    try { c.Name = newName; } catch { }
+    }
+    private void DeleteCustomFieldLibraryWide(string name)
+    {
+        foreach (var g in PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>())
+            foreach (var c in Safe(() => g.GetAllCustomFields()) ?? Array.Empty<ICustomField>())
+                if (string.Equals(Safe(() => c.Name), name, StringComparison.OrdinalIgnoreCase))
+                    try { g.TryRemoveCustomField(c); } catch { }
+    }
+
     // ── Metadata page ────────────────────────────────────────────────────
     private Control BuildMetadataPage()
     {
@@ -275,42 +538,42 @@ internal sealed class EditGameWindow : Form
 
         // Release Date | Rating
         Cap("Release Date", Lx, y, Lw, p); _releaseDate = DateField(LFx, y, FW, p);
-        Cap("Rating", Rx, y, Rw, p); _rating = Cbo("", _choices["Rating"], RFx, y, FW, p);
+        Cap("Rating", Rx, y, Rw, p); _rating = Cbo("", "Rating", RFx, y, FW, p);
         y += RowH;
 
         // Release Type | Max Players
-        Cap("Release Type", Lx, y, Lw, p); _releaseType = Cbo("", _choices["ReleaseType"], LFx, y, FW, p);
+        Cap("Release Type", Lx, y, Lw, p); _releaseType = Cbo("", "ReleaseType", LFx, y, FW, p);
         Cap("Max Players", Rx, y, Rw, p); _maxPlayers = Num(0, 0, 64, RFx, y, 80, p);
         y += RowH;
 
         // Genre | Platform
-        Cap("Genre", Lx, y, Lw, p); _genre = Cbo("", _choices["Genre"], LFx, y, FW, p);
-        Cap("Platform", Rx, y, Rw, p); _platform = Cbo("", _choices["Platform"], RFx, y, FW, p);
+        Cap("Genre", Lx, y, Lw, p); _genre = Cbo("", "Genre", LFx, y, FW, p);
+        Cap("Platform", Rx, y, Rw, p); _platform = Cbo("", "Platform", RFx, y, FW, p);
         y += RowH;
 
         // Developer | Publisher
-        Cap("Developer", Lx, y, Lw, p); _developer = Cbo("", _choices["Developer"], LFx, y, FW, p);
-        Cap("Publisher", Rx, y, Rw, p); _publisher = Cbo("", _choices["Publisher"], RFx, y, FW, p);
+        Cap("Developer", Lx, y, Lw, p); _developer = Cbo("", "Developer", LFx, y, FW, p);
+        Cap("Publisher", Rx, y, Rw, p); _publisher = Cbo("", "Publisher", RFx, y, FW, p);
         y += RowH;
 
         // Series | Region
-        Cap("Series", Lx, y, Lw, p); _series = Cbo("", _choices["Series"], LFx, y, FW, p);
-        Cap("Region", Rx, y, Rw, p); _region = Cbo("", _choices["Region"], RFx, y, FW, p);
+        Cap("Series", Lx, y, Lw, p); _series = Cbo("", "Series", LFx, y, FW, p);
+        Cap("Region", Rx, y, Rw, p); _region = Cbo("", "Region", RFx, y, FW, p);
         y += RowH;
 
         // Play Mode | Version
-        Cap("Play Mode", Lx, y, Lw, p); _playMode = Cbo("", _choices["PlayMode"], LFx, y, FW, p);
+        Cap("Play Mode", Lx, y, Lw, p); _playMode = Cbo("", "PlayMode", LFx, y, FW, p);
         Cap("Version", Rx, y, Rw, p); _version = Txt("", RFx, y, FW, p);
         y += RowH;
 
         // Status | Source
-        Cap("Status", Lx, y, Lw, p); _status = Cbo("", _choices["Status"], LFx, y, FW, p);
-        Cap("Source", Rx, y, Rw, p); _source = Cbo("", _choices["Source"], RFx, y, FW, p);
+        Cap("Status", Lx, y, Lw, p); _status = Cbo("", "Status", LFx, y, FW, p);
+        Cap("Source", Rx, y, Rw, p); _source = Cbo("", "Source", RFx, y, FW, p);
         y += RowH;
 
         // Last Played | Progress
         Cap("Last Played", Lx, y, Lw, p); _lastPlayed = DateField(LFx, y, FW, p);
-        Cap("Progress", Rx, y, Rw, p); _progress = Cbo("", _choices["Progress"], RFx, y, FW, p);
+        Cap("Progress", Rx, y, Rw, p); _progress = Cbo("", "Progress", RFx, y, FW, p);
         y += RowH;
 
         // Video URL (full) | Wikipedia URL (full)
@@ -479,6 +742,7 @@ internal sealed class EditGameWindow : Form
             SetText(_version, MergeStr(g => g.Version));
             SetText(_videoUrl, MergeStr(g => g.VideoUrl));
             SetText(_wikiUrl, MergeStr(g => g.WikipediaUrl));
+            SetText(_notes, DisplayNl(MergeRaw(g => (g.Notes ?? "").Replace("\r\n", "\n"))));
             SetText(_releaseDate, MergeDate(g => g.ReleaseDate));
             SetText(_lastPlayed, MergeDate(g => g.LastPlayedDate));
             SetCombo(_rating, MergeStr(g => g.Rating));
@@ -539,6 +803,12 @@ internal sealed class EditGameWindow : Form
             foreach (var g in _editGames) { var v = (Safe(() => get(g)) ?? "").Trim(); if (first == null) first = v; else if (first != v) return Multi; }
             return first ?? "";
         }
+        string MergeRaw(Func<IGame, string> get)   // like MergeStr but keeps whitespace (Notes)
+        {
+            string? first = null;
+            foreach (var g in _editGames) { var v = Safe(() => get(g)) ?? ""; if (first == null) first = v; else if (first != v) return Multi; }
+            return first ?? "";
+        }
         string MergeDate(Func<IGame, DateTime?> get)
         {
             string? first = null;
@@ -577,6 +847,7 @@ internal sealed class EditGameWindow : Form
             if (Writable(_progress)) W(() => g.Progress = _progress.Text.Trim());
             if (Writable(_videoUrl)) W(() => g.VideoUrl = _videoUrl.Text.Trim());
             if (Writable(_wikiUrl)) W(() => g.WikipediaUrl = _wikiUrl.Text.Trim());
+            if (Writable(_notes)) W(() => g.Notes = _notes.Text.Replace("\r\n", "\n"));
             if (Writable(_releaseDate)) W(() => g.ReleaseDate = ParseDate(_releaseDate.Text));
             if (Writable(_lastPlayed)) W(() => g.LastPlayedDate = ParseDate(_lastPlayed.Text));
             if (Writable(_maxPlayers)) { int v = (int)_maxPlayers.Value; int? mp = v <= 0 ? (int?)null : v; W(() => g.MaxPlayers = mp); }
@@ -598,10 +869,11 @@ internal sealed class EditGameWindow : Form
         if (IsMulti || _visible.Count == 0) return;
         int ni = _index + delta;
         if (ni < 0 || ni >= _visible.Count) return;
-        SaveCurrent();
+        SaveCurrent(); SaveCustomFields();
         _index = ni;
         _editGames = new[] { _visible[_index] };
         LoadMetadata();
+        if (_cfGrid != null) LoadCustomFields();
         UpdateChrome();
     }
 
@@ -694,50 +966,7 @@ internal sealed class EditGameWindow : Form
     }
 
     // ── Distinct-value choice lists (one pass over the library) ──────────
-    private void BuildChoices()
-    {
-        Sset genre = New(), dev = New(), pub = New(), series = New(), region = New(),
-             playMode = New(), source = New(), status = New(), releaseType = New(), rating = New(), progress = New();
-        // A couple of known LB sets merged in so common values are offered even on an empty library.
-        foreach (var r in new[] { "E", "E10+", "T", "M", "AO", "RP" }) rating.Add(r);
-        foreach (var r in new[] { "Full", "Demo", "Prototype", "Beta", "Homebrew", "Hack" }) releaseType.Add(r);
-        foreach (var s in new[] { "Imperfect", "Playable", "Preservable", "Unplayable" }) status.Add(s);
-        foreach (var s in new[] { "Not Started / Unplayed", "Playing / Progressing", "Beaten / Completed", "Mastered / 100%", "Abandoned" }) progress.Add(s);
-
-        try
-        {
-            foreach (var g in PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>())
-            {
-                AddMulti(genre, Safe(() => g.GenresString));
-                AddMulti(dev, Safe(() => g.Developer));
-                AddMulti(pub, Safe(() => g.Publisher));
-                AddMulti(series, Safe(() => g.Series));
-                AddMulti(playMode, Safe(() => g.PlayMode));
-                Add(region, Safe(() => g.Region));
-                Add(source, Safe(() => g.Source));
-                Add(status, Safe(() => g.Status));
-                Add(releaseType, Safe(() => g.ReleaseType));
-                Add(rating, Safe(() => g.Rating));
-                Add(progress, Safe(() => g.Progress));
-            }
-        }
-        catch { }
-
-        Sset platform = New();
-        try { foreach (var pl in PluginHelper.DataManager?.GetAllPlatforms() ?? Array.Empty<IPlatform>()) Add(platform, Safe(() => pl.Name)); }
-        catch { }
-
-        _choices["Genre"] = Arr(genre); _choices["Developer"] = Arr(dev); _choices["Publisher"] = Arr(pub);
-        _choices["Series"] = Arr(series); _choices["Region"] = Arr(region); _choices["PlayMode"] = Arr(playMode);
-        _choices["Source"] = Arr(source); _choices["Status"] = Arr(status); _choices["ReleaseType"] = Arr(releaseType);
-        _choices["Rating"] = Arr(rating); _choices["Progress"] = Arr(progress); _choices["Platform"] = Arr(platform);
-
-        static Sset New() => new(StringComparer.OrdinalIgnoreCase);
-        static void Add(Sset s, string? v) { v = v?.Trim(); if (!string.IsNullOrEmpty(v)) s.Add(v!); }
-        static void AddMulti(Sset s, string? v) { if (string.IsNullOrEmpty(v)) return; foreach (var part in v!.Split(';')) Add(s, part); }
-        static string[] Arr(Sset s) => s.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
-    }
-    private sealed class Sset : SortedSet<string> { public Sset(IComparer<string> c) : base(c) { } }
+    // (Combo choice-lists now come from the shared, dirty-tracked MetadataChoicesCache — see Cbo.)
 
     // ── UI helpers ───────────────────────────────────────────────────────
     private Label Cap(string text, int x, int y, int w, Panel p)
@@ -753,16 +982,26 @@ internal sealed class EditGameWindow : Form
         p.Controls.Add(t); Track(t, p); return t;
     }
 
-    private ComboBox Cbo(string v, string[] items, int x, int y, int w, Panel p)
+    private ComboBox Cbo(string v, string choiceKey, int x, int y, int w, Panel p)
     {
         var c = new ComboBox
         {
             Location = new Point(x, y), Width = w, DropDownStyle = ComboBoxStyle.DropDown,
             BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
-            AutoCompleteMode = AutoCompleteMode.SuggestAppend, AutoCompleteSource = AutoCompleteSource.ListItems,
+            // AutoComplete is deferred to first focus (below). Building a ListItems autocomplete index over the
+            // library-wide value lists (thousands of Developers/Publishers) at handle-creation froze the window
+            // open for ~5s. We now pay it once, per field, only when the user actually edits that field.
         };
-        if (items is { Length: > 0 }) c.Items.AddRange(items);
+        var items = MetadataChoicesCache.Get(choiceKey, PluginHelper.DataManager);   // cached; a rebuild runs only for dirty keys
+        if (items.Length > 0) c.Items.AddRange(items);
         c.Text = v;
+        bool acDone = false;
+        c.Enter += (_, _) =>
+        {
+            if (acDone || c.Items.Count == 0) return; acDone = true;
+            c.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+            c.AutoCompleteSource = AutoCompleteSource.ListItems;
+        };
         c.TextChanged += (_, _) => OnField(c);
         p.Controls.Add(c); Track(c, p); return c;
     }
@@ -853,5 +1092,7 @@ internal sealed class EditGameWindow : Form
     private static DateTime? ParseDate(string s)
         => DateTime.TryParse((s ?? "").Trim(), CultureInfo.CurrentCulture, DateTimeStyles.None, out var d) ? d.Date : (DateTime?)null;
     private static int Clamp(int v, int min, int max) => Math.Max(min, Math.Min(max, v));
+    // WinForms multiline TextBox only breaks on CRLF — normalise any \n to \r\n for display.
+    private static string DisplayNl(string s) => s == Multi ? s : s.Replace("\r\n", "\n").Replace("\n", "\r\n");
     private static T? Safe<T>(Func<T?> f) { try { return f(); } catch { return default; } }
 }

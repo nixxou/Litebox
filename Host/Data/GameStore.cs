@@ -550,10 +550,26 @@ internal sealed class GameStore
     // Apply to memory (always, for UI) + append the op (only when persisting).
     private void RecordModify(int i, string xmlName, string value)
     {
+        // For a combo-choice field, note the old value so the distinct-values cache is invalidated ONLY
+        // on an EFFECTIVE change (old ≠ new) — setting the same value must not mark it dirty.
+        string oldChoice = ReadChoiceField(i, xmlName);
         ApplyFieldToRow(i, xmlName, value);
+        if (oldChoice != null && !string.Equals(oldChoice, value, StringComparison.Ordinal))
+            LbApiHost.Host.MetadataChoicesCache.MarkFieldDirty(xmlName);
         if (ReadOnly || _oplog == null) return;
         _oplog.Append("modify", "Game", Rows[i].Id.ToString(), null, xmlName, value);
     }
+
+    // The current value of a combo-choice field (before a modify), or null when xmlName isn't one.
+    private string ReadChoiceField(int i, string xmlName) => xmlName switch
+    {
+        "Genre" => Str(Rows[i].GenresIdx),        "Developer" => Str(Rows[i].DeveloperIdx),
+        "Publisher" => Str(Rows[i].PublisherIdx), "Series" => Str(Rows[i].SeriesIdx),
+        "Region" => Str(Rows[i].RegionIdx),       "PlayMode" => Str(Rows[i].PlayModeIdx),
+        "Source" => Str(Rows[i].SourceIdx),       "Status" => Str(Rows[i].StatusIdx),
+        "ReleaseType" => Str(Rows[i].ReleaseTypeIdx), "Rating" => Str(Rows[i].RatingIdx),
+        "Progress" => Str(Rows[i].ProgressIdx),   _ => null,
+    };
 
     private void ApplyFieldToRow(int i, string xmlName, string value)
     {
@@ -961,6 +977,7 @@ internal sealed class GameStore
             _oplog.Append("add", "Game", id.ToString(), null, null, null);
             _oplog.Append("modify", "Game", id.ToString(), null, "Title", title);
         }
+        LbApiHost.Host.MetadataChoicesCache.MarkAllDirty();   // a new game may introduce new combo values
         return idx;
     }
 
@@ -1011,6 +1028,7 @@ internal sealed class GameStore
         _byId.Remove(id);
         _addedIds.Remove(id);
         if (!ReadOnly && _oplog != null) _oplog.Append("delete", "Game", id.ToString(), null, "Platform", platform);
+        LbApiHost.Host.MetadataChoicesCache.MarkAllDirty();   // removing a game may drop combo values
         return true;
     }
 

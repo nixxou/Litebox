@@ -190,6 +190,8 @@ internal sealed class MainWindow : Form
     public MainWindow(PluginRegistry reg, IDataManager dm)
     {
         _reg = reg; _dm = dm;
+        // LEDBlinky reads its enable flag + exe path live from LB Settings.xml.
+        if (_dm is HostDataManagerXml hdmLed) LedBlinky.Bind(hdmLed.LbSettings);
         _cfg = LiteBoxConfig.LoadForExe();
         _secondInstance = InstanceGuard.AnotherInstanceRunning;
         _useImageCache = _cfg.UseImageCache;
@@ -384,7 +386,7 @@ internal sealed class MainWindow : Form
 
         // Persist layout / window / selection once, at close (not per change).
         // _closing lets the serialized detail loader bail before its blocking Invoke once the pump ends.
-        FormClosing += (_, _) => { _closing = true; try { SaveAll(); } catch { } };
+        FormClosing += (_, _) => { _closing = true; LedBlinky.FrontendQuit(); try { SaveAll(); } catch { } };
 
         // Bring the window back on-screen if a monitor is unplugged while running.
         try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged; } catch { }
@@ -487,6 +489,7 @@ internal sealed class MainWindow : Form
             RefreshExtendDbIndicators();   // ExtendDB-present + parental padlock
             try { ActiveControl = _games; _games.Focus(); } catch { }
             if (_cfg.GetBool("PosterMode", false)) _posterBtn.Checked = true;   // → SetPosterMode(true)
+            LedBlinky.FrontendStart();   // "1" — the front-end is up (LEDBlinky FE-active animation, etc.)
         };
         // Final dark-scrollbar pass once everything (data, columns) is in place.
         Shown += (_, _) =>
@@ -1761,7 +1764,7 @@ internal sealed class MainWindow : Form
         // one parallel load per row — which floods the UI thread with image-decode continuations and
         // freezes the list while an arrow key is held). The loader shows the base thumb tracking the
         // scroll (one image at a time, latest-wins) and lands the full detail pane once it settles.
-        if (_games.SelectedGame is IGame g) RequestDetail(g);
+        if (_games.SelectedGame is IGame g) { RequestDetail(g); LedBlinky.GameSelect(g); }   // "9" — highlight → light this game's controls
         else if (!ReferenceEquals(_detailsShown, _currentNode)) ShowNodeDetails(_currentNode);
     }
 
@@ -1772,6 +1775,9 @@ internal sealed class MainWindow : Form
         // selection) right after RestoreSelection called LoadNode directly.
         if (node == null || ReferenceEquals(node, _currentNode)) return;
         _currentNode = node;
+        // LEDBlinky list-change "7 <emu>" (arcade → "MAME"). Real platforms only for now; playlists /
+        // groups / All are the unresolved 7-vs-8 case — see LedBlinky.ListChange.
+        try { if (node is IPlatform lbPlat) LedBlinky.ListChange(lbPlat.Name); } catch { }
         try
         {
             IEnumerable<IGame> src =
@@ -3275,6 +3281,11 @@ internal sealed class MainWindow : Form
         if (IsDisposed) return;
         if (InvokeRequired) { try { BeginInvoke((Action)(() => OnGameStarted(g))); } catch { } return; }
 
+        // LEDBlinky: select the launched game then Game Start — mirrors LaunchBox ("9" before "3",
+        // since "3" is argument-less and lights whatever the last "9" selected).
+        LedBlinky.GameSelect(g);
+        LedBlinky.GameStart();
+
         _resumeGameId = g != null ? Safe(() => g.Id) : null;
         _gameRunning = true;
         SetStorePoll(false);   // pause the install-state poll while the game runs (client DB may be mid-write)
@@ -3292,6 +3303,8 @@ internal sealed class MainWindow : Form
     {
         if (IsDisposed) return;
         if (InvokeRequired) { try { BeginInvoke((Action)(() => OnGameEnded(g))); } catch { } return; }
+
+        LedBlinky.GameStop();   // "4" — fire before the list re-selects a game (which would send a "9")
 
         _gameRunning = false;   // game over → store status refresh may resume
 
@@ -3425,6 +3438,11 @@ internal sealed class MainWindow : Form
                 cfg.Click += (_, _) => Safe(() => g.Configure());
                 menu.Items.Add(cfg);
             }
+
+            // Edit… — full metadata editor (single game only; ◄► navigate the visible list).
+            var edit = new ToolStripMenuItem("Edit…");
+            edit.Click += (_, _) => OpenEditGame(g);
+            menu.Items.Add(edit);
         }
 
         menu.Items.Add(new ToolStripSeparator());
@@ -3459,6 +3477,21 @@ internal sealed class MainWindow : Form
             foreach (var mi in items) menu.Items.Add(BuildGameMenuItem(mi, games));
         }
         return menu;
+    }
+
+    // Opens the per-game metadata editor (EditGameWindow). Single game only; the visible list is
+    // passed so the ◄► arrows can walk it. Honours read-only mode. Refreshes the list + detail on close.
+    private void OpenEditGame(IGame g)
+    {
+        if (g == null) return;
+        try
+        {
+            bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;
+            EditGameWindow.Open(g, _games.VisibleGames, ro, this);
+            try { _games.RebuildView(); } catch { }
+            RequestDetail(g);
+        }
+        catch (Exception ex) { Console.WriteLine("[editgame] open failed: " + ex); }
     }
 
     private ToolStripMenuItem BuildGameMenuItem(IGameMenuItem mi, IGame[] games)

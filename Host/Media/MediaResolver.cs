@@ -31,6 +31,7 @@ internal static class MediaResolver
     public static readonly string[] Front = { "Box - Front", "Box - Front - Reconstructed", "Fanart - Box - Front" };
     public static readonly string[] Back = { "Box - Back", "Box - Back - Reconstructed", "Fanart - Box - Back" };
     public static readonly string[] Box3D = { "Box - 3D" };
+    public static readonly string[] Spine = { "Box - Spine" };
     public static readonly string[] CartFront = { "Cart - Front", "Fanart - Cart - Front" };
     public static readonly string[] CartBack = { "Cart - Back", "Fanart - Cart - Back" };
     public static readonly string[] Cart3D = { "Cart - 3D" };

@@ -227,6 +227,24 @@ internal static class HostBoot
                 Console.WriteLine($"[mediatest] scanned {scanned} game(s), {shown} with media shown");
             }
 
+            if (args.Contains("--box3dtest"))
+            {
+                string needle = GetArg(args, "--box3dtest");
+                var all = PluginHelper.DataManager.GetAllGames();
+                var g = string.IsNullOrEmpty(needle)
+                    ? all.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.FrontImagePath))
+                    : all.FirstOrDefault(x => x.Title != null && x.Title.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
+                if (g == null) { Console.WriteLine("[box3dtest] no matching game with a front image found."); }
+                else
+                {
+                    string outPath = Path.Combine(LiteBoxPaths.Dir("litebox"), "box3d-test.png");
+                    bool ok = LbApiHost.Host.Media.Box3DRenderer.RenderPreview(g, outPath);
+                    Console.WriteLine(ok
+                        ? $"[box3dtest] \"{g.Title}\" [{g.Platform}] -> {outPath}"
+                        : $"[box3dtest] \"{g.Title}\" [{g.Platform}] has no front image, nothing rendered.");
+                }
+            }
+
             if (args.Contains("--apitest"))
             {
                 var dm2 = PluginHelper.DataManager;

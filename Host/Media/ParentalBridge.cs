@@ -40,6 +40,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using LbApiHost.Host.UiKit;
 
 namespace LbApiHost.Host.Media;
 
@@ -300,7 +301,7 @@ internal static class ParentalBridge
     /// <summary>Minimal modal PIN entry (masked) for the one-shot install gate. Returns the entered
     /// PIN, or null if cancelled. Deliberately separate from ExtendDB's lock popup so it never
     /// toggles the global parental lock.</summary>
-    private sealed class PinPromptForm : Form
+    private sealed class PinPromptForm : LiteBoxForm
     {
         private readonly TextBox _box;
         private PinPromptForm()
@@ -309,11 +310,11 @@ internal static class ParentalBridge
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false; MaximizeBox = false; ShowInTaskbar = false;
-            ClientSize = new System.Drawing.Size(300, 112);
-            var lbl = new Label { Text = "Enter PIN to allow this install:", AutoSize = true, Left = 12, Top = 14 };
-            _box = new TextBox { Left = 12, Top = 38, Width = 276, UseSystemPasswordChar = true };
-            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Left = 132, Top = 72, Width = 70 };
-            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Left = 212, Top = 72, Width = 70 };
+            ClientSize = new System.Drawing.Size(S(300), S(112));
+            var lbl = new Label { Text = "Enter PIN to allow this install:", AutoSize = true, Left = S(12), Top = S(14), ForeColor = LiteBoxTheme.Fg };
+            _box = new TextBox { Left = S(12), Top = S(38), Width = S(276), UseSystemPasswordChar = true, BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle };
+            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Left = S(132), Top = S(72), Width = S(70), Height = S(26), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Ok, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
+            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Left = S(212), Top = S(72), Width = S(70), Height = S(26), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.CancelBtn, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
             AcceptButton = ok; CancelButton = cancel;
             Controls.AddRange(new Control[] { lbl, _box, ok, cancel });
         }

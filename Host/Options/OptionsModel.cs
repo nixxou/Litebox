@@ -22,6 +22,7 @@ internal enum OptionKind
     Bool,     // checkbox
     Text,     // single-line textbox
     Choice,   // combobox over Choices
+    Button,   // a plain button that runs OnClick (e.g. open a sub-dialog)
 }
 
 internal sealed class OptionItem
@@ -43,6 +44,7 @@ internal sealed class OptionItem
     public Func<string> Get = () => "";
     public Action<string> Set = _ => { };
     public Action? ApplyLive;
+    public Action? OnClick;   // Button kind: runs when clicked
 
     public OptionItem(string section, string label, OptionKind kind)
     { Section = section; Label = label; Kind = kind; }
@@ -62,4 +64,8 @@ internal sealed class OptionItem
 
     public static OptionItem Choice(string section, string label, string[] choices, Func<string> get, Action<string> set, string? help = null, Action? applyLive = null)
         => new(section, label, OptionKind.Choice) { Choices = choices, Help = help, Get = get, Set = set, ApplyLive = applyLive };
+
+    // A plain action button (opens a sub-dialog, etc.). No storage binding.
+    public static OptionItem Action(string section, string label, Action onClick, string? help = null)
+        => new(section, label, OptionKind.Button) { OnClick = onClick, Help = help };
 }

@@ -37,7 +37,7 @@ internal sealed partial class EditGameWindow
     {
         _savesPage = new Panel { BackColor = Bg };
 
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 46, BackColor = Bg, Padding = new Padding(3) };
+        var bottom = new Panel { Dock = DockStyle.Bottom, Height = S(46), BackColor = Bg, Padding = new Padding(S(3)) };
         _savesImportFile = FooterBtn("Import Save Game File…", Color.FromArgb(60, 60, 72));
         _savesImportState = FooterBtn("Import Save State File…", Color.FromArgb(60, 60, 72));
         _savesImportFile.AutoSize = false;
@@ -47,12 +47,12 @@ internal sealed partial class EditGameWindow
         bottom.Controls.AddRange(new Control[] { _savesImportFile, _savesImportState });
         bottom.Resize += (_, _) =>
         {
-            int w = (bottom.ClientSize.Width - 18) / 2;
-            _savesImportFile.SetBounds(6, 8, w, 30);
-            _savesImportState.SetBounds(12 + w, 8, w, 30);
+            int w = (bottom.ClientSize.Width - S(18)) / 2;
+            _savesImportFile.SetBounds(S(6), S(8), w, S(30));
+            _savesImportState.SetBounds(S(12) + w, S(8), w, S(30));
         };
 
-        _savesContent = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(10, 6, 10, 6) };
+        _savesContent = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(10), S(6), S(10), S(6)) };
         _savesPage.Controls.Add(_savesContent);
         _savesPage.Controls.Add(bottom);
         _savesContent.BringToFront();
@@ -133,13 +133,13 @@ internal sealed partial class EditGameWindow
         void Stack(Control c) { _savesContent!.Controls.Add(c); c.Dock = DockStyle.Top; c.BringToFront(); }
         void Header(string text) => Stack(new Label
         {
-            Height = 36, Text = text, ForeColor = Fg, BackColor = Bg,
-            Font = new Font("Segoe UI", 12f, FontStyle.Bold), TextAlign = ContentAlignment.BottomLeft, Padding = new Padding(2, 0, 0, 6),
+            Height = S(36), Text = text, ForeColor = Fg, BackColor = Bg,
+            Font = new Font("Segoe UI", 12f, FontStyle.Bold), TextAlign = ContentAlignment.BottomLeft, Padding = new Padding(S(2), S(0), S(0), S(6)),
         });
         void Empty(string text) => Stack(new Label
         {
-            Height = 28, Text = text, ForeColor = SubFg, BackColor = Bg,
-            Font = new Font("Segoe UI", 9.5f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(6, 0, 0, 0),
+            Height = S(28), Text = text, ForeColor = SubFg, BackColor = Bg,
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(S(6), S(0), S(0), S(0)),
         });
 
         Header("Save Files");
@@ -155,21 +155,21 @@ internal sealed partial class EditGameWindow
 
     private Control BuildSaveCard(SaveGroup g)
     {
-        var card = new Panel { Height = 96, BackColor = PanelC, Margin = new Padding(0), Padding = new Padding(12, 8, 10, 8) };
+        var card = new Panel { Height = S(96), BackColor = PanelC, Margin = new Padding(S(0)), Padding = new Padding(S(12), S(8), S(10), S(8)) };
         card.Paint += (_, e) =>
         {
             using var pen = new Pen(Color.FromArgb(58, 58, 70));
             e.Graphics.DrawRectangle(pen, 0, 0, card.Width - 1, card.Height - 1);
         };
         // A little breathing room between cards: a transparent spacer painted by the parent Bg.
-        var wrap = new Panel { Height = card.Height + 8, BackColor = Bg, Padding = new Padding(0, 0, 0, 8) };
+        var wrap = new Panel { Height = card.Height + S(8), BackColor = Bg, Padding = new Padding(S(0), S(0), S(0), S(8)) };
         wrap.Controls.Add(card);
         card.Dock = DockStyle.Fill;
 
         // Row 1 — name + slot chip; right-aligned: ⚠ no-backup, [Active] pill, ⋯ menu.
         var name = new Label
         {
-            AutoSize = true, ForeColor = Fg, BackColor = PanelC, Location = new Point(10, 8),
+            AutoSize = true, ForeColor = Fg, BackColor = PanelC, Location = new Point(S(10), S(8)),
             Font = new Font("Segoe UI", 11.5f, FontStyle.Bold), Text = g.GroupName, UseMnemonic = false,
         };
         card.Controls.Add(name);
@@ -179,7 +179,7 @@ internal sealed partial class EditGameWindow
         {
             chip = new Label
             {
-                AutoSize = true, ForeColor = SubFg, BackColor = Field, Padding = new Padding(6, 2, 6, 2),
+                AutoSize = true, ForeColor = SubFg, BackColor = Field, Padding = new Padding(S(6), S(2), S(6), S(2)),
                 Font = new Font("Segoe UI", 8.5f), Text = "Slot " + (g.Slot is -1 ? "Auto" : (g.Slot?.ToString() ?? "?")),
             };
             card.Controls.Add(chip);
@@ -187,7 +187,7 @@ internal sealed partial class EditGameWindow
 
         var menuBtn = new Button
         {
-            Text = "…", Size = new Size(34, 26), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
+            Text = "…", Size = new Size(S(34), S(26)), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
             BackColor = Field, ForeColor = Fg, Font = new Font("Segoe UI", 10f, FontStyle.Bold),
             FlatAppearance = { BorderColor = Color.FromArgb(70, 70, 84), BorderSize = 1 },
             Enabled = !_readOnly,
@@ -201,7 +201,7 @@ internal sealed partial class EditGameWindow
             pill = new Label
             {
                 AutoSize = true, ForeColor = Color.FromArgb(120, 220, 130), BackColor = PanelC,
-                Padding = new Padding(8, 3, 8, 3), Font = new Font("Segoe UI", 9f, FontStyle.Bold), Text = "★ Active",
+                Padding = new Padding(S(8), S(3), S(8), S(3)), Font = new Font("Segoe UI", 9f, FontStyle.Bold), Text = "★ Active",
             };
             pill.Paint += (_, e) =>
             {
@@ -215,17 +215,17 @@ internal sealed partial class EditGameWindow
         // no/stale backup; red ✕ = record whose file is gone. Absent for pure vault-only groups.
         StatusDot? dot = null;
         if (g.RecordOnly)
-            dot = new StatusDot(StatusKind.Error, "The save file this record points to no longer exists on disk.");
+            dot = new StatusDot(StatusKind.Error, "The save file this record points to no longer exists on disk.", S(22));
         else if (g.Active != null)
             dot = g.NeedsBackup
-                ? new StatusDot(StatusKind.Warn, "No up-to-date backup in the vault — use Backup Save to protect it.")
-                : new StatusDot(StatusKind.Ok, "This save has an up-to-date backup in the vault.");
+                ? new StatusDot(StatusKind.Warn, "No up-to-date backup in the vault — use Backup Save to protect it.", S(22))
+                : new StatusDot(StatusKind.Ok, "This save has an up-to-date backup in the vault.", S(22));
         if (dot != null) { dot.BackColor = PanelC; card.Controls.Add(dot); }
 
         // Row 2 — the file path, shown LB-style (relative to the LaunchBox root; full path in the tooltip).
         var path = new Label
         {
-            AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = 18,
+            AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = S(18),
             Font = new Font("Segoe UI", 9f), AutoEllipsis = true, UseMnemonic = false,
             Text = g.ActivePath.Length > 0 ? DisplaySavePath(g.ActivePath) : "(no file)",
         };
@@ -239,7 +239,7 @@ internal sealed partial class EditGameWindow
         string backups = g.Backups.Count == 1 ? "1 Backup" : $"{g.Backups.Count} Backups";
         var info = new Label
         {
-            AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = 18,
+            AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = S(18),
             Font = new Font("Segoe UI", 9f), AutoEllipsis = true, UseMnemonic = false,
             Text = $"🗓 {date}      🕹 {emu}      💾 {size}      🗂 {backups}",
         };
@@ -247,14 +247,14 @@ internal sealed partial class EditGameWindow
 
         void Layout()
         {
-            int right = card.ClientSize.Width - 10;
-            menuBtn.Location = new Point(right - menuBtn.Width, 8);
-            int x = menuBtn.Left - 8;
-            if (pill != null) { pill.Location = new Point(x - pill.Width, 9); x = pill.Left - 8; }
-            if (dot != null) { dot.Location = new Point(x - dot.Width, 10); }
-            if (chip != null) chip.Location = new Point(name.Right + 8, 13);
-            path.SetBounds(12, 40, card.ClientSize.Width - 24, 18);
-            info.SetBounds(12, 62, card.ClientSize.Width - 24, 18);
+            int right = card.ClientSize.Width - S(10);
+            menuBtn.Location = new Point(right - menuBtn.Width, S(8));
+            int x = menuBtn.Left - S(8);
+            if (pill != null) { pill.Location = new Point(x - pill.Width, S(9)); x = pill.Left - S(8); }
+            if (dot != null) { dot.Location = new Point(x - dot.Width, S(10)); }
+            if (chip != null) chip.Location = new Point(name.Right + S(8), S(13));
+            path.SetBounds(S(12), S(40), card.ClientSize.Width - S(24), S(18));
+            info.SetBounds(S(12), S(62), card.ClientSize.Width - S(24), S(18));
         }
         card.Resize += (_, _) => Layout();
         Layout();
@@ -267,10 +267,10 @@ internal sealed partial class EditGameWindow
     private sealed class StatusDot : Panel
     {
         private readonly StatusKind _kind;
-        public StatusDot(StatusKind kind, string tip)
+        public StatusDot(StatusKind kind, string tip, int size)
         {
             _kind = kind;
-            Size = new Size(22, 22);
+            Size = new Size(size, size);
             SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
             _tip.SetToolTip(this, tip);
@@ -474,7 +474,7 @@ internal sealed partial class EditGameWindow
     {
         return new Form
         {
-            Text = title, Size = new Size(w, h), StartPosition = FormStartPosition.CenterParent,
+            Text = title, Size = new Size(S(w), S(h)), StartPosition = FormStartPosition.CenterParent,
             FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
             ShowIcon = false, ShowInTaskbar = false, BackColor = Bg, ForeColor = Fg, Font = new Font("Segoe UI", 9.5f),
         };
@@ -484,8 +484,8 @@ internal sealed partial class EditGameWindow
     {
         var b = new Button
         {
-            Text = text, AutoSize = true, Padding = new Padding(10, 2, 10, 2), FlatStyle = FlatStyle.Flat,
-            BackColor = back, ForeColor = Color.White, Cursor = Cursors.Hand, Height = 30,
+            Text = text, AutoSize = true, Padding = new Padding(S(10), S(2), S(10), S(2)), FlatStyle = FlatStyle.Flat,
+            BackColor = back, ForeColor = Color.White, Cursor = Cursors.Hand, Height = S(30),
             FlatAppearance = { BorderSize = 0 },
         };
         return b;
@@ -494,15 +494,15 @@ internal sealed partial class EditGameWindow
     private string? PromptText(string title, string label, string initial)
     {
         using var f = NewDialog(title, 460, 170);
-        f.Controls.Add(new Label { Text = label, AutoSize = true, Location = new Point(16, 16), ForeColor = Fg });
+        f.Controls.Add(new Label { Text = label, AutoSize = true, Location = new Point(S(16), S(16)), ForeColor = Fg });
         var tb = new TextBox
         {
-            Location = new Point(16, 42), Width = 410, Text = initial,
+            Location = new Point(S(16), S(42)), Width = S(410), Text = initial,
             BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
         };
         f.Controls.Add(tb);
-        var ok = DlgBtn("OK", Color.FromArgb(50, 110, 65)); ok.Location = new Point(16, 84); ok.DialogResult = DialogResult.OK;
-        var cancel = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.Location = new Point(96, 84); cancel.DialogResult = DialogResult.Cancel;
+        var ok = DlgBtn("OK", Color.FromArgb(50, 110, 65)); ok.Location = new Point(S(16), S(84)); ok.DialogResult = DialogResult.OK;
+        var cancel = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.Location = new Point(S(96), S(84)); cancel.DialogResult = DialogResult.Cancel;
         f.Controls.Add(ok); f.Controls.Add(cancel);
         f.AcceptButton = ok; f.CancelButton = cancel;
         tb.SelectAll();
@@ -514,11 +514,11 @@ internal sealed partial class EditGameWindow
         using var f = NewDialog("Combine With Another Save", 500, 190);
         f.Controls.Add(new Label
         {
-            Text = $"Merge \"{src.GroupName}\" into:", AutoSize = true, Location = new Point(16, 16), ForeColor = Fg,
+            Text = $"Merge \"{src.GroupName}\" into:", AutoSize = true, Location = new Point(S(16), S(16)), ForeColor = Fg,
         });
         var combo = new ComboBox
         {
-            Location = new Point(16, 42), Width = 450, DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(S(16), S(42)), Width = S(450), DropDownStyle = ComboBoxStyle.DropDownList,
             BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
         };
         foreach (var o in others)
@@ -528,8 +528,8 @@ internal sealed partial class EditGameWindow
         }
         combo.SelectedIndex = 0;
         f.Controls.Add(combo);
-        var ok = DlgBtn("Combine", Color.FromArgb(50, 110, 65)); ok.Location = new Point(16, 96); ok.DialogResult = DialogResult.OK;
-        var cancel = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.Location = new Point(116, 96); cancel.DialogResult = DialogResult.Cancel;
+        var ok = DlgBtn("Combine", Color.FromArgb(50, 110, 65)); ok.Location = new Point(S(16), S(96)); ok.DialogResult = DialogResult.OK;
+        var cancel = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.Location = new Point(S(116), S(96)); cancel.DialogResult = DialogResult.Cancel;
         f.Controls.Add(ok); f.Controls.Add(cancel);
         f.AcceptButton = ok; f.CancelButton = cancel;
         return f.ShowDialog(this) == DialogResult.OK && combo.SelectedIndex >= 0 ? others[combo.SelectedIndex] : null;
@@ -542,18 +542,18 @@ internal sealed partial class EditGameWindow
         if (slots.Count == 0) return 0;   // emulator without slot notion → slot 0
 
         using var f = NewDialog("Import Save State", 380, 170);
-        f.Controls.Add(new Label { Text = "Import into slot:", AutoSize = true, Location = new Point(16, 16), ForeColor = Fg });
+        f.Controls.Add(new Label { Text = "Import into slot:", AutoSize = true, Location = new Point(S(16), S(16)), ForeColor = Fg });
         var combo = new ComboBox
         {
-            Location = new Point(16, 42), Width = 330, DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(S(16), S(42)), Width = S(330), DropDownStyle = ComboBoxStyle.DropDownList,
             BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
         };
         var keys = slots.Keys.OrderBy(k => k).ToList();
         foreach (int k in keys) combo.Items.Add(slots[k]);
         combo.SelectedIndex = keys.Count > 1 && keys[0] < 0 ? 1 : 0;   // default to slot 0, not "Auto"
         f.Controls.Add(combo);
-        var ok = DlgBtn("Import", Color.FromArgb(50, 110, 65)); ok.Location = new Point(16, 84); ok.DialogResult = DialogResult.OK;
-        var cancel = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.Location = new Point(106, 84); cancel.DialogResult = DialogResult.Cancel;
+        var ok = DlgBtn("Import", Color.FromArgb(50, 110, 65)); ok.Location = new Point(S(16), S(84)); ok.DialogResult = DialogResult.OK;
+        var cancel = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.Location = new Point(S(106), S(84)); cancel.DialogResult = DialogResult.Cancel;
         f.Controls.Add(ok); f.Controls.Add(cancel);
         f.AcceptButton = ok; f.CancelButton = cancel;
         return f.ShowDialog(this) == DialogResult.OK && combo.SelectedIndex >= 0 ? keys[combo.SelectedIndex] : (int?)null;
@@ -566,16 +566,16 @@ internal sealed partial class EditGameWindow
         f.Controls.Add(new Label
         {
             Text = $"Delete \"{g.GroupName}\"?\n\nThis permanently deletes the underlying save file(s) on disk — not just the entry.",
-            AutoSize = false, Location = new Point(16, 14), Size = new Size(475, 66), ForeColor = Fg,
+            AutoSize = false, Location = new Point(S(16), S(14)), Size = new Size(S(475), S(66)), ForeColor = Fg,
         });
         var cb = new CheckBox
         {
             Text = $"Also delete its {g.Backups.Count} vault backup(s)", AutoSize = true,
-            Location = new Point(18, 92), ForeColor = Fg, Checked = false,
+            Location = new Point(S(18), S(92)), ForeColor = Fg, Checked = false,
         };
         f.Controls.Add(cb);
-        var ok = DlgBtn("Delete", Color.FromArgb(150, 55, 50)); ok.Location = new Point(16, 128); ok.DialogResult = DialogResult.OK;
-        var cancel = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.Location = new Point(106, 128); cancel.DialogResult = DialogResult.Cancel;
+        var ok = DlgBtn("Delete", Color.FromArgb(150, 55, 50)); ok.Location = new Point(S(16), S(128)); ok.DialogResult = DialogResult.OK;
+        var cancel = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.Location = new Point(S(106), S(128)); cancel.DialogResult = DialogResult.Cancel;
         f.Controls.Add(ok); f.Controls.Add(cancel);
         f.AcceptButton = cancel; f.CancelButton = cancel;
         bool res = f.ShowDialog(this) == DialogResult.OK;
@@ -588,25 +588,25 @@ internal sealed partial class EditGameWindow
     {
         using var f = NewDialog($"Backup History — {g.GroupName}", 720, 470);
         f.FormBorderStyle = FormBorderStyle.Sizable;
-        f.MinimumSize = new Size(560, 320);
+        f.MinimumSize = new Size(S(560), S(320));
 
         string Summary() => g.Active != null
             ? $"Active: {g.LastModified?.ToString("G") ?? "—"}   ·   {FmtSize(g.SizeBytes)}   ·   {g.Backups.Count} backup(s)"
             : $"{g.Backups.Count} backup(s) in the vault — no live active save";
 
-        var header = new Panel { Dock = DockStyle.Top, Height = 58, BackColor = Bg };
-        var hTitle = new Label { AutoSize = true, ForeColor = Fg, BackColor = Bg, Location = new Point(16, 10), Font = new Font("Segoe UI", 13f, FontStyle.Bold), Text = g.GroupName, UseMnemonic = false };
-        var hSub = new Label { AutoSize = true, ForeColor = SubFg, BackColor = Bg, Location = new Point(16, 36), Font = new Font("Segoe UI", 9f), UseMnemonic = false, Text = Summary() };
+        var header = new Panel { Dock = DockStyle.Top, Height = S(58), BackColor = Bg };
+        var hTitle = new Label { AutoSize = true, ForeColor = Fg, BackColor = Bg, Location = new Point(S(16), S(10)), Font = new Font("Segoe UI", 13f, FontStyle.Bold), Text = g.GroupName, UseMnemonic = false };
+        var hSub = new Label { AutoSize = true, ForeColor = SubFg, BackColor = Bg, Location = new Point(S(16), S(36)), Font = new Font("Segoe UI", 9f), UseMnemonic = false, Text = Summary() };
         header.Controls.Add(hTitle); header.Controls.Add(hSub);
 
-        var list = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(10, 4, 10, 8) };
+        var list = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(10), S(4), S(10), S(8)) };
 
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 46, BackColor = PanelC };
+        var bottom = new Panel { Dock = DockStyle.Bottom, Height = S(46), BackColor = PanelC };
         var close = DlgBtn("Close", Color.FromArgb(70, 70, 82));
         close.DialogResult = DialogResult.Cancel;
         bottom.Controls.Add(close);
-        bottom.Resize += (_, _) => close.Location = new Point(bottom.ClientSize.Width - close.Width - 10, 8);
-        close.Location = new Point(bottom.ClientSize.Width - close.Width - 10, 8);
+        bottom.Resize += (_, _) => close.Location = new Point(bottom.ClientSize.Width - close.Width - S(10), S(8));
+        close.Location = new Point(bottom.ClientSize.Width - close.Width - S(10), S(8));
 
         void Rebuild()
         {
@@ -617,7 +617,7 @@ internal sealed partial class EditGameWindow
             if (g.Active != null) cards.Add(BuildVersionCard(g, null, f, Rebuild));
             foreach (var e in g.Backups.OrderByDescending(x => x.CreatedUtc)) cards.Add(BuildVersionCard(g, e, f, Rebuild));
             if (cards.Count == 0)
-                list.Controls.Add(new Label { Dock = DockStyle.Top, Height = 40, Text = "No versions.", ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 9.5f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(6, 0, 0, 0) });
+                list.Controls.Add(new Label { Dock = DockStyle.Top, Height = S(40), Text = "No versions.", ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 9.5f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(S(6), S(0), S(0), S(0)) });
             else for (int i = cards.Count - 1; i >= 0; i--) { list.Controls.Add(cards[i]); cards[i].Dock = DockStyle.Top; cards[i].BringToFront(); }
             list.ResumeLayout();
             hSub.Text = Summary();
@@ -646,17 +646,17 @@ internal sealed partial class EditGameWindow
             ? (g.ActivePath.Length > 0 ? Path.GetFileName(g.ActivePath) : g.GroupName)
             : (entry!.Label.Length > 0 ? entry.Label : Path.GetFileName(abs.TrimEnd('\\', '/')));
 
-        var card = new Panel { Height = 72, BackColor = PanelC, Padding = new Padding(12, 8, 10, 8) };
+        var card = new Panel { Height = S(72), BackColor = PanelC, Padding = new Padding(S(12), S(8), S(10), S(8)) };
         card.Paint += (_, e) => { using var pen = new Pen(Color.FromArgb(58, 58, 70)); e.Graphics.DrawRectangle(pen, 0, 0, card.Width - 1, card.Height - 1); };
-        var wrap = new Panel { Height = card.Height + 8, BackColor = Bg, Padding = new Padding(0, 0, 0, 8) };
+        var wrap = new Panel { Height = card.Height + S(8), BackColor = Bg, Padding = new Padding(S(0), S(0), S(0), S(8)) };
         wrap.Controls.Add(card); card.Dock = DockStyle.Fill;
 
-        var name = new Label { AutoSize = true, ForeColor = Fg, BackColor = PanelC, Location = new Point(10, 8), Font = new Font("Segoe UI", 10.5f, FontStyle.Bold), Text = title, UseMnemonic = false };
+        var name = new Label { AutoSize = true, ForeColor = Fg, BackColor = PanelC, Location = new Point(S(10), S(8)), Font = new Font("Segoe UI", 10.5f, FontStyle.Bold), Text = title, UseMnemonic = false };
         card.Controls.Add(name);
 
         var menuBtn = new Button
         {
-            Text = "…", Size = new Size(32, 24), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
+            Text = "…", Size = new Size(S(32), S(24)), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
             BackColor = Field, ForeColor = Fg, Font = new Font("Segoe UI", 10f, FontStyle.Bold),
             FlatAppearance = { BorderColor = Color.FromArgb(70, 70, 84), BorderSize = 1 }, Enabled = !_readOnly,
         };
@@ -664,7 +664,7 @@ internal sealed partial class EditGameWindow
 
         var pill = new Label
         {
-            AutoSize = true, BackColor = PanelC, Padding = new Padding(8, 2, 8, 2), Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+            AutoSize = true, BackColor = PanelC, Padding = new Padding(S(8), S(2), S(8), S(2)), Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
             ForeColor = isActive ? Color.FromArgb(120, 220, 130) : Color.FromArgb(150, 180, 235),
             Text = isActive ? "★ Active" : "Vault",
         };
@@ -674,7 +674,7 @@ internal sealed partial class EditGameWindow
 
         var info = new Label
         {
-            AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = 18, Font = new Font("Segoe UI", 9f),
+            AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = S(18), Font = new Font("Segoe UI", 9f),
             AutoEllipsis = true, UseMnemonic = false,
             Text = $"🗓 {when?.ToString("G") ?? "—"}      💾 {FmtSize(size)}" + (md5.Length >= 8 ? $"      🔑 {md5.Substring(0, 8).ToLowerInvariant()}" : ""),
         };
@@ -715,10 +715,10 @@ internal sealed partial class EditGameWindow
 
         void Layout()
         {
-            int right = card.ClientSize.Width - 10;
-            menuBtn.Location = new Point(right - menuBtn.Width, 8);
-            pill.Location = new Point(menuBtn.Left - 8 - pill.Width, 9);
-            info.SetBounds(12, 42, card.ClientSize.Width - 24, 18);
+            int right = card.ClientSize.Width - S(10);
+            menuBtn.Location = new Point(right - menuBtn.Width, S(8));
+            pill.Location = new Point(menuBtn.Left - S(8) - pill.Width, S(9));
+            info.SetBounds(S(12), S(42), card.ClientSize.Width - S(24), S(18));
         }
         card.Resize += (_, _) => Layout();
         Layout();

@@ -17,6 +17,7 @@
 #nullable enable
 
 using System.IO;
+using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -135,61 +136,63 @@ internal static class DependencyCheck
     private static T? Safe<T>(Func<T?> f) { try { return f(); } catch { return default; } }
 
     // ── The dialog (dark, LB-style wording) ──────────────────────────────
-    private sealed class MissingDepsDialog : Form
+    // Derives from LiteBoxForm (shared theme + DPI scale factor) instead of hand-rolling both, and
+    // stacks its content in a top-down FlowLayoutPanel instead of manual Point math - the same fix
+    // applied to OptionsWindow.cs: a fixed Y position baked in before the (DPI-correct, so
+    // potentially bigger) text is measured is exactly what caused this session's original overlap
+    // bug. AutoScroll on the body absorbs any size misestimate instead of controls overlapping.
+    private sealed class MissingDepsDialog : LiteBoxForm
     {
         public bool DontShowAgain { get; private set; }
 
         public MissingDepsDialog(List<string> missing)
         {
             Text = "Missing Dependency Files";
-            Size = new Size(560, 260 + Math.Min(5, missing.Count) * 20);
+            ClientSize = new Size(S(560), S(260 + Math.Min(5, missing.Count) * 20));
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterScreen;
             MinimizeBox = false; MaximizeBox = false; ShowInTaskbar = false; TopMost = true;
-            BackColor = Color.FromArgb(30, 30, 30); ForeColor = Color.FromArgb(222, 222, 222);
-            Font = new Font("Segoe UI", 9.5f);
+
+            var body = new Panel
+            {
+                Dock = DockStyle.Fill, AutoScroll = true, BackColor = LiteBoxTheme.Bg,
+                Padding = new Padding(S(16), S(14), S(16), S(8)),
+            };
+            var stack = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false,
+                BackColor = LiteBoxTheme.Bg,
+            };
 
             var head = new Label
             {
                 Text = "Heads Up!  There are missing dependency files that may be required to play this game.",
-                Location = new Point(16, 14), Size = new Size(515, 36),
+                AutoSize = true, MaximumSize = new Size(S(515), 0), Margin = new Padding(0, 0, 0, S(12)),
             };
-            Controls.Add(head);
+            stack.Controls.Add(head);
 
             var list = new TextBox
             {
                 Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
-                Location = new Point(16, 54), Size = new Size(515, Math.Min(5, missing.Count) * 20 + 24),
-                BackColor = Color.FromArgb(45, 45, 48), ForeColor = Color.FromArgb(235, 150, 150),
-                BorderStyle = BorderStyle.FixedSingle,
+                Width = S(515), Height = S(Math.Min(5, missing.Count) * 20 + 24),
+                BackColor = LiteBoxTheme.Panel2, ForeColor = Color.FromArgb(235, 150, 150),
+                BorderStyle = BorderStyle.FixedSingle, Margin = new Padding(0, 0, 0, S(12)),
                 Text = string.Join("\r\n", missing),
             };
-            Controls.Add(list);
+            stack.Controls.Add(list);
 
-            var chk = new CheckBox
-            {
-                Text = "Don't show this again for this platform/emulator",
-                Location = new Point(16, list.Bottom + 12), AutoSize = true,
-            };
+            var chk = new CheckBox { Text = "Don't show this again for this platform/emulator", AutoSize = true };
             chk.CheckedChanged += (_, _) => DontShowAgain = chk.Checked;
-            Controls.Add(chk);
+            stack.Controls.Add(chk);
 
-            var play = Btn("Play Anyway", Color.FromArgb(50, 110, 65));
-            play.Location = new Point(290, chk.Bottom + 16);
-            play.Click += (_, _) => { DialogResult = DialogResult.OK; Close(); };
-            Controls.Add(play);
-            var cancel = Btn("Cancel Launch", Color.FromArgb(60, 60, 75));
-            cancel.Location = new Point(412, chk.Bottom + 16);
-            cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
-            Controls.Add(cancel);
+            body.Controls.Add(stack);
+            Controls.Add(body);
+
+            var footer = new FooterBar();
+            var cancel = footer.AddButton("Cancel Launch", LiteBoxTheme.CancelBtn, (_, _) => { DialogResult = DialogResult.Cancel; Close(); });
+            var play = footer.AddButton("Play Anyway", LiteBoxTheme.Ok, (_, _) => { DialogResult = DialogResult.OK; Close(); });
+            Controls.Add(footer);
             AcceptButton = play; CancelButton = cancel;
         }
-
-        private static Button Btn(string text, Color back) => new()
-        {
-            Text = text, Size = new Size(116, 30),
-            FlatStyle = FlatStyle.Flat, BackColor = back, ForeColor = Color.White,
-            FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-        };
     }
 }

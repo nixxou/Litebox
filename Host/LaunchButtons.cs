@@ -19,13 +19,14 @@
 using System.Text.Json;
 using LbApiHost.Host.Data;
 using LbApiHost.Host.Media;
+using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host;
 
 internal sealed class LaunchButtons : Panel
 {
-    private static readonly Color Bg      = Color.FromArgb(37, 37, 38);
+    private static readonly Color Bg      = LiteBoxTheme.PanelC;   // same (37,37,38) - single source of truth
     private static readonly Color PlayCol = Color.FromArgb(50, 110, 65);
     private static readonly Color CaretCol= Color.FromArgb(40, 90, 55);
     private static readonly Color InstallCol = Color.FromArgb(150, 134, 48); // muted mustard (store "Install")
@@ -36,6 +37,14 @@ internal sealed class LaunchButtons : Panel
     private readonly Action<IGame, IAdditionalApplication?, IEmulator?> _playGame;
     private readonly Action<IGame>? _storeLaunch;   // installed GOG/Steam game → store launch lifecycle
     private readonly Func<IGame, (string? emuId, string? appId)?>? _lastLaunchFallback;   // LiteBox history (used when ExtendDB absent)
+
+    // Every height/padding number below is a pure chrome pixel dimension (no text-flow to derive
+    // it from), so - same as everywhere else in this DPI pass - it needs explicit scaling: the
+    // button FONT already renders at the correct physical size via GDI+, but a fixed, unscaled
+    // container height doesn't grow to match, so the (correctly bigger) text overflows past the
+    // too-short box - this is what clipped "Play with RetroArch" at the bottom of the window.
+    private readonly float _s;
+    private int S(int px) => (int)Math.Round(px * _s);
 
     // Current subject + choices.
     private IGame? _game;
@@ -63,27 +72,28 @@ internal sealed class LaunchButtons : Panel
         _playGame = playGame;
         _storeLaunch = storeLaunch;
         _lastLaunchFallback = lastLaunchFallback;
+        _s = LiteBoxTheme.DpiScale(this);
         Dock = DockStyle.Bottom;
         BackColor = Bg;
-        Padding = new Padding(10, 6, 10, 8);
-        Height = 96;
+        Padding = new Padding(S(10), S(6), S(10), S(8));
+        Height = S(96);
 
         // Stacked, reverse Dock.Top order so the first added sits at the bottom.
-        _rom = MakeBtn("ROM", SubCol, 22, FontStyle.Regular);
+        _rom = MakeBtn("ROM", SubCol, S(22), FontStyle.Regular);
         _rom.Click += (_, _) => OnRomClick();
         _rom.MouseUp += (_, e) => { if (e.Button == MouseButtons.Right) OnRomClear(); };
         Controls.Add(_rom);
 
-        _version = MakeBtn("Version", SubCol, 22, FontStyle.Regular);
+        _version = MakeBtn("Version", SubCol, S(22), FontStyle.Regular);
         _version.Click += (_, _) => ShowVersionMenu();
         Controls.Add(_version);
 
         // Play row: Play (fill) + caret (right).
-        var playRow = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Bg, Margin = new Padding(0) };
-        _caret = MakeBtn("▾", CaretCol, 34, FontStyle.Bold);
-        _caret.Dock = DockStyle.Right; _caret.Width = 32;
+        var playRow = new Panel { Dock = DockStyle.Top, Height = S(34), BackColor = Bg, Margin = new Padding(0) };
+        _caret = MakeBtn("▾", CaretCol, S(34), FontStyle.Bold);
+        _caret.Dock = DockStyle.Right; _caret.Width = S(32);
         _caret.Click += (_, _) => ShowEmulatorMenu();
-        _play = MakeBtn("Play", PlayCol, 34, FontStyle.Bold);
+        _play = MakeBtn("Play", PlayCol, S(34), FontStyle.Bold);
         _play.Dock = DockStyle.Fill;
         _play.Click += (_, _) => OnPlay();
         playRow.Controls.Add(_play);   // Fill added first
@@ -91,13 +101,13 @@ internal sealed class LaunchButtons : Panel
         Controls.Add(playRow);
     }
 
-    private static Button MakeBtn(string text, Color back, int height, FontStyle style) => new()
+    private Button MakeBtn(string text, Color back, int height, FontStyle style) => new()
     {
         Text = text, Dock = DockStyle.Top, Height = height,
         FlatStyle = FlatStyle.Flat, BackColor = back, ForeColor = Fg,
         FlatAppearance = { BorderSize = 0 },
         Font = new Font("Segoe UI", style == FontStyle.Bold ? 9.5f : 8.5f, style),
-        Margin = new Padding(0, 0, 0, 4), TextAlign = ContentAlignment.MiddleCenter,
+        Margin = new Padding(0, 0, 0, S(4)), TextAlign = ContentAlignment.MiddleCenter,
     };
 
     /// <summary>Rebuild for a game. Pass the platform's emulators and the game's
@@ -206,7 +216,7 @@ internal sealed class LaunchButtons : Panel
             _caret.Visible = false;
             _version.Visible = false;
             _rom.Visible = false;
-            Height = Padding.Vertical + 38;   // just the play row
+            Height = Padding.Vertical + S(38);   // just the play row
             return;
         }
 
@@ -234,9 +244,9 @@ internal sealed class LaunchButtons : Panel
         else { _rom.Visible = false; if (!_romFeature) _selRom = null; }
 
         // Size the docked panel to exactly the visible rows (no wasted space).
-        int h = Padding.Vertical + 38;          // play row (34 + 4 margin)
-        if (_version.Visible) h += 26;
-        if (_rom.Visible) h += 26;
+        int h = Padding.Vertical + S(38);          // play row (34 + 4 margin)
+        if (_version.Visible) h += S(26);
+        if (_rom.Visible) h += S(26);
         Height = h;
     }
 

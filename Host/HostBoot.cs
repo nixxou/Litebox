@@ -360,6 +360,7 @@ internal static class HostBoot
                 // which BeginInvokes PlayGame onto that dispatcher (else: "no dispatcher"). We don't call
                 // its Run(); the WinForms message loop pumps the WPF Dispatcher queue (same-thread interop).
                 try { if (System.Windows.Application.Current == null) _ = new System.Windows.Application(); } catch (Exception ex) { Console.WriteLine("[gui] WPF Application init: " + ex.Message); }
+                UiKit.LiteBoxTheme.Load(LiteBoxConfig.LoadForExe());   // apply saved color overrides BEFORE any window copies the palette
                 Application.Run(new MainWindow(reg, dm));
             }
             catch (Exception ex) { Console.WriteLine("[gui] " + ex); }

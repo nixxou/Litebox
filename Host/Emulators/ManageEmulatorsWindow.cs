@@ -11,17 +11,14 @@
 
 #nullable enable
 
+using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host.Emulators;
 
-internal sealed class ManageEmulatorsWindow : Form
+internal sealed class ManageEmulatorsWindow : LiteBoxForm
 {
-    private static readonly Color Bg = Color.FromArgb(30, 30, 30);
-    private static readonly Color Panel2 = Color.FromArgb(45, 45, 48);
-    private static readonly Color Fg = Color.FromArgb(222, 222, 222);
-
     private readonly ListView _list;
     private readonly bool _readOnly;
     private readonly string _lbRoot;
@@ -30,48 +27,67 @@ internal sealed class ManageEmulatorsWindow : Form
     {
         _readOnly = readOnly; _lbRoot = lbRoot;
         Text = "Manage Emulators" + (readOnly ? "   [READ-ONLY]" : "");
-        Size = new Size(900, 520);
-        MinimumSize = new Size(640, 320);
+        ClientSize = new Size(S(900), S(520));
+        MinimumSize = new Size(S(640), S(320));
         StartPosition = FormStartPosition.CenterParent;
-        BackColor = Bg; ForeColor = Fg;
-        Font = new Font("Segoe UI", 9.5f);
-        ShowIcon = false; ShowInTaskbar = false; MinimizeBox = false; MaximizeBox = false;
+        MinimizeBox = false; MaximizeBox = false;
 
         _list = new ListView
         {
             Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = false,
-            BackColor = Color.FromArgb(37, 37, 38), ForeColor = Fg, BorderStyle = BorderStyle.None,
+            BackColor = LiteBoxTheme.PanelC, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.None,
             HeaderStyle = ColumnHeaderStyle.Nonclickable, HideSelection = false,
         };
-        _list.Columns.Add("Name", 160);
-        _list.Columns.Add("Application Path", 290);
-        _list.Columns.Add("Default Command-Line Parameters", 220);
-        _list.Columns.Add("Version", 110);
-        _list.Columns.Add("Status", 60, HorizontalAlignment.Center);
+        _list.Columns.Add("Name", S(160));
+        _list.Columns.Add("Application Path", S(290));
+        _list.Columns.Add("Default Command-Line Parameters", S(220));
+        _list.Columns.Add("Version", S(110));
+        _list.Columns.Add("Status", S(60), HorizontalAlignment.Center);
         _list.DoubleClick += (_, _) => EditSelected();
 
-        var footer = new Panel { Dock = DockStyle.Bottom, Height = 44, BackColor = Panel2 };
-        var edit = Btn("Edit…", new Point(12, 8));
+        // Mixed-alignment footer (action buttons on the left, Close on the right) doesn't fit
+        // FooterBar's single-direction layout, so it's built directly here - but still DPI-scaled
+        // and Dock/FlowLayoutPanel-based (no manual Point positions, no manual resize-repositioning
+        // of Close - Dock=Right handles that for free instead of the old footer.Resize handler).
+        var footer = new Panel { Dock = DockStyle.Bottom, BackColor = LiteBoxTheme.PanelC, Height = S(44) };
+        var leftGroup = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Left, FlowDirection = FlowDirection.LeftToRight, WrapContents = false,
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = LiteBoxTheme.PanelC,
+            Padding = new Padding(S(12), S(8), 0, 0),
+        };
+        var rightGroup = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Right, FlowDirection = FlowDirection.RightToLeft, WrapContents = false,
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = LiteBoxTheme.PanelC,
+            Padding = new Padding(0, S(8), S(12), 0),
+        };
+
+        var edit = Btn("Edit…");
         edit.Click += (_, _) => EditSelected();
-        var add = Btn("Add…", new Point(116, 8));
+        var add = Btn("Add…");
         add.Enabled = !readOnly;
         if (readOnly) add.Text = "Add 🔒";
         add.Click += (_, _) => AddEmulator();
-        var del = Btn("Delete", new Point(220, 8));
+        var del = Btn("Delete");
         del.Enabled = !readOnly;
         if (readOnly) del.Text = "Delete 🔒";
         del.Click += (_, _) => DeleteSelected();
         // Update All: every plugin-managed emulator with a newer installable
         // version gets InstallEmulator run sequentially (per-emulator progress
         // dialog).
-        var updAll = Btn("Update All", new Point(324, 8));
+        var updAll = Btn("Update All");
         updAll.Enabled = !readOnly;
         if (readOnly) updAll.Text = "Update All 🔒";
         updAll.Click += (_, _) => UpdateAll();
-        var close = Btn("Close", new Point(0, 8));
+        leftGroup.Controls.Add(edit); leftGroup.Controls.Add(add); leftGroup.Controls.Add(del); leftGroup.Controls.Add(updAll);
+
+        var close = Btn("Close");
         close.Click += (_, _) => Close();
-        footer.Resize += (_, _) => close.Left = footer.ClientSize.Width - close.Width - 12;
-        footer.Controls.Add(edit); footer.Controls.Add(add); footer.Controls.Add(del); footer.Controls.Add(updAll); footer.Controls.Add(close);
+        rightGroup.Controls.Add(close);
+
+        footer.Controls.Add(leftGroup);
+        footer.Controls.Add(rightGroup);
 
         Controls.Add(_list);
         Controls.Add(footer);
@@ -192,10 +208,10 @@ internal sealed class ManageEmulatorsWindow : Form
         Fill();
     }
 
-    private static Button Btn(string text, Point loc) => new()
+    private Button Btn(string text) => new()
     {
-        Text = text, Location = loc, Size = new Size(96, 28),
-        FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(60, 60, 75), ForeColor = Color.White,
+        Text = text, Size = new Size(S(96), S(28)), Margin = new Padding(0, 0, S(8), 0),
+        FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.CancelBtn, ForeColor = Color.White,
         FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 9f, FontStyle.Bold),
     };
 

@@ -20,9 +20,15 @@ internal sealed class InfoOverlay : Form
     private Bitmap? _bg;
     private bool _cursorHidden;
 
+    // Full-screen overlay (own art, no app chrome) rather than a themed dialog, same as
+    // LegacyPauseScreen - so a local DPI scale factor instead of deriving from LiteBoxForm.
+    private readonly float _s;
+    private int S(int px) => (int)Math.Round(px * _s);
+
     public InfoOverlay(PauseContext ctx, string banner, bool hideCursor)
     {
         _banner = banner ?? "";
+        _s = DeviceDpi / 96f;
 
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
@@ -77,7 +83,7 @@ internal sealed class InfoOverlay : Form
         // Pre-art fallback: solid background + the banner so it's visible immediately.
         e.Graphics.Clear(ScreenArt.Bg);
         if (_banner.Length == 0) return;
-        int bandH = Math.Max(120, ClientSize.Height / 7);
+        int bandH = Math.Max(S(120), ClientSize.Height / 7);
         int bandY = (ClientSize.Height - bandH) / 2;
         using var band = new SolidBrush(Color.FromArgb(150, 0, 0, 0));
         e.Graphics.FillRectangle(band, 0, bandY, ClientSize.Width, bandH);

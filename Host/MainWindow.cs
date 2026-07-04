@@ -21,19 +21,24 @@ using LbApiHost.Host.Data;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.Ra;
 using LbApiHost.Host.Store;
+using LbApiHost.Host.UiKit;
 
 namespace LbApiHost.Host;
 
-internal sealed class MainWindow : Form
+internal sealed class MainWindow : Form, IMessageFilter
 {
     // ── Theme ────────────────────────────────────────────────────────────────
-    private static readonly Color Bg      = Color.FromArgb(30, 30, 30);
-    private static readonly Color Panel   = Color.FromArgb(37, 37, 38);
-    private static readonly Color Panel2  = Color.FromArgb(45, 45, 48);
+    // Bg/Panel/Panel2/Fg/SubFg/Accent are byte-for-byte the same palette as Host.UiKit.LiteBoxTheme -
+    // referencing it here instead of a second copy of the same Color.FromArgb literals means a future
+    // palette change only has one place to edit. Row2 has no LiteBoxTheme equivalent (a striped-row
+    // shade specific to this list), so it stays local.
+    private static readonly Color Bg      = LiteBoxTheme.Bg;
+    private static readonly Color Panel   = LiteBoxTheme.PanelC;
+    private static readonly Color Panel2  = LiteBoxTheme.Panel2;
     private static readonly Color Row2    = Color.FromArgb(34, 34, 36);
-    private static readonly Color Fg      = Color.FromArgb(222, 222, 222);
-    private static readonly Color SubFg   = Color.FromArgb(150, 150, 152);
-    private static readonly Color Accent  = Color.FromArgb(0, 122, 204);
+    private static readonly Color Fg      = LiteBoxTheme.Fg;
+    private static readonly Color SubFg   = LiteBoxTheme.SubFg;
+    private static readonly Color Accent  = LiteBoxTheme.Accent;
     private static readonly Color UserRating = Color.FromArgb(255, 196, 0);   // amber: user-set rating
     private static readonly Color CommRating = Color.FromArgb(150, 150, 152); // grey: community rating
 
@@ -102,7 +107,16 @@ internal sealed class MainWindow : Form
     private bool _posterDrainPending;              // coalesces the batched apply+invalidate
     private static readonly int PosterMaxWorkers = Math.Max(1, Math.Min(3, Environment.ProcessorCount - 1));
     private const int PosterReqCap = 64;           // cap pending requests; drop oldest (scrolled-past) beyond this
-    private const int PCellW = 124, PImgH = 174, PLabelH = 38, PGap = 14;
+    // Base poster tile geometry at zoom 100%; the live values scale with the central-panel zoom so a
+    // zoomed grid fits more/fewer posters per row (PCellW+PGap is the horizontal stride LayoutPoster uses).
+    private const int PCellW0 = 124, PImgH0 = 174, PLabelH0 = 38, PGap0 = 14;
+    private double _zoom = 1.0;                                       // central-panel zoom 0.5–2.0 (saved as ZoomPercent)
+    private int PCellW  => (int)Math.Round(PCellW0  * _zoom);
+    private int PImgH   => (int)Math.Round(PImgH0   * _zoom);
+    private int PLabelH => (int)Math.Round(PLabelH0 * _zoom);
+    private int PGap    => (int)Math.Round(PGap0    * _zoom);
+    private int PZ(int px) => (int)Math.Round(px * _zoom);           // scale a tile-internal offset by zoom
+    private Font _posterTileFont;                                    // MainWindow.Font × zoom, for tile title/dev text
     private readonly ToolStripTextBox _search;
     private readonly ToolStripComboBox _sortCombo;
     private readonly ToolStripButton _dirBtn;
@@ -196,6 +210,7 @@ internal sealed class MainWindow : Form
         _secondInstance = InstanceGuard.AnotherInstanceRunning;
         _useImageCache = _cfg.UseImageCache;
         _posterOwnerDraw = _cfg.GetBool("PosterOwnerDraw", false);   // legacy poster renderer (vs native image list)
+        _zoom = Math.Clamp(_cfg.GetInt("ZoomPercent", 100) / 100.0, 0.5, 2.0);   // read BEFORE BuildPoster so its image list is sized for the saved zoom
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
         _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
         _raExpanded = _cfg.GetBool("RaExpanded", false);
@@ -247,7 +262,7 @@ internal sealed class MainWindow : Form
 
         _poster = BuildPoster();
 
-        var inner = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
+        var inner = new ThemedSplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
         inner.Panel1.BackColor = Panel;       // shows in the side margins around the centred poster grid
         inner.Panel1.Controls.Add(_poster);   // hidden until poster mode; same cell as the list
         inner.Panel1.Controls.Add(_games);
@@ -262,7 +277,7 @@ internal sealed class MainWindow : Form
         inner.Panel2.Controls.Add(_launchButtons);
         inner.Panel1.Resize += (_, _) => LayoutPoster();   // keep the poster grid centred on resize
 
-        var outer = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
+        var outer = new ThemedSplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
         // Left panel = a "group by" ComboBox (top) above the source tree (fill). A TableLayoutPanel gives a
         // deterministic top-strip + fill split (no docking z-order guessing).
         _viewCombo = BuildViewCombo();
@@ -386,7 +401,7 @@ internal sealed class MainWindow : Form
 
         // Persist layout / window / selection once, at close (not per change).
         // _closing lets the serialized detail loader bail before its blocking Invoke once the pump ends.
-        FormClosing += (_, _) => { _closing = true; LedBlinky.FrontendQuit(); try { SaveAll(); } catch { } };
+        FormClosing += (_, _) => { _closing = true; try { Application.RemoveMessageFilter(this); } catch { } LedBlinky.FrontendQuit(); try { SaveAll(); } catch { } };
 
         // Bring the window back on-screen if a monitor is unplugged while running.
         try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged; } catch { }
@@ -476,11 +491,16 @@ internal sealed class MainWindow : Form
             // (sets inner's available width), then inner.
             int leftPm = _cfg.GetInt("SplitLeftPermille", 0);
             int midPm = _cfg.GetInt("SplitMidPermille", 0);
+            float dpiS = LiteBoxTheme.DpiScale(this);
             if (leftPm > 0) SetSplitFraction(outer, leftPm / 1000.0);
-            else try { outer.SplitterDistance = 240; } catch { }
+            else try { outer.SplitterDistance = (int)Math.Round(240 * dpiS); } catch { }
             if (midPm > 0) SetSplitFraction(inner, midPm / 1000.0);
-            else try { inner.SplitterDistance = Math.Max(300, inner.Width - 380); } catch { }
+            else try { inner.SplitterDistance = Math.Max((int)Math.Round(300 * dpiS), inner.Width - (int)Math.Round(380 * dpiS)); } catch { }
             RestoreColumnLayout();   // order / width / shown-hidden from the INI
+            _games.AutoFitColumns = _cfg.GetBool("AutoFitColumns", true);   // Display option (default on)
+            _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true);         // Display option (default on)
+            if (Math.Abs(_zoom - 1.0) > 0.001) _games.SetZoom((float)_zoom, 9f);   // apply saved central-panel zoom to the list (poster already built at this zoom)
+            Application.AddMessageFilter(this);   // enable Ctrl-wheel zoom over the central panel
             RestoreSort();           // last sort column + direction
             _currentView = SourceViews.ById(_cfg.Get("GroupView"));   // restore the saved grouping…
             SyncViewCombo();                                          // …reflect it in the combo (no rebuild)
@@ -532,51 +552,57 @@ internal sealed class MainWindow : Form
         // key = stable INI identity; never localise it. sort = comparable value; text = displayed
         // string; fore = optional per-cell colour (rating). visible = default visibility.
         GameColumn Col(string key, string title, int w, Func<IGame, object> sort, Func<IGame, string> text,
-                       HorizontalAlignment align = HorizontalAlignment.Left, bool visible = true, Func<IGame, Color?> fore = null)
-            => lv.AddColumn(new GameColumn { Key = key, Title = title, Width = w, Visible = visible, Align = align, Sort = sort, Text = text, Fore = fore });
+                       HorizontalAlignment align = HorizontalAlignment.Left, bool visible = true, Func<IGame, Color?> fore = null, bool stretch = false)
+            => lv.AddColumn(new GameColumn { Key = key, Title = title, Width = w, Visible = visible, Align = align, Sort = sort, Text = text, Fore = fore, Stretch = stretch });
+
+        // DPI-scaled default width, so a fresh install's columns are proportioned sensibly at any
+        // scaling factor. Named DpiW, not "W" - a bare one-letter name sits right next to the
+        // pre-existing S(string) null-coalescing helper used in the very same Col(...) calls below,
+        // and the two are easy to confuse (or swap) at a glance since both take one short argument.
+        int DpiW(int px) => (int)Math.Round(px * LiteBoxTheme.DpiScale(this));
 
         static string DateStr(object v) => v is DateTime d && d != default ? d.ToString("yyyy-MM-dd") : "";
 
         // Sort the Title column by the article-stripped compare name (LaunchBox-style: "The Legend
         // of Zelda" sorts under L), while still DISPLAYING the full title.
-        Col("title", "Title", 320, g => CompareName(g), g => S(Safe(() => g.Title)));
-        Col("platform", "Platform", 150, g => S(Safe(() => g.Platform)), g => S(Safe(() => g.Platform)));
-        Col("developer", "Developer", 150, g => S(Safe(() => g.Developer)), g => S(Safe(() => g.Developer)));
-        Col("publisher", "Publisher", 150, g => S(Safe(() => g.Publisher)), g => S(Safe(() => g.Publisher)), visible: false);
-        Col("genre", "Genre", 140, g => S(Safe(() => g.GenresString)), g => S(Safe(() => g.GenresString)));
-        Col("series", "Series", 130, g => S(Safe(() => g.Series)), g => S(Safe(() => g.Series)), visible: false);
-        Col("region", "Region", 90, g => S(Safe(() => g.Region)), g => S(Safe(() => g.Region)), visible: false);
-        Col("playmode", "Play Mode", 110, g => S(Safe(() => g.PlayMode)), g => S(Safe(() => g.PlayMode)), visible: false);
-        Col("version", "Version", 90, g => S(Safe(() => g.Version)), g => S(Safe(() => g.Version)), visible: false);
-        Col("status", "Status", 90, g => S(Safe(() => g.Status)), g => S(Safe(() => g.Status)), visible: false);
-        Col("source", "Source", 110, g => S(Safe(() => g.Source)), g => S(Safe(() => g.Source)), visible: false);
-        Col("year", "Year", 55, g => N(() => g.ReleaseYear), g => N(() => g.ReleaseYear)?.ToString() ?? "", HorizontalAlignment.Right);
-        Col("releasedate", "Release Date", 100, g => Safe(() => (object)g.ReleaseDate), g => DateStr(Safe(() => (object)g.ReleaseDate)), HorizontalAlignment.Right, visible: false);
+        Col("title", "Title", DpiW(320), g => CompareName(g), g => S(Safe(() => g.Title)), stretch: true);
+        Col("platform", "Platform", DpiW(150), g => S(Safe(() => g.Platform)), g => S(Safe(() => g.Platform)));
+        Col("developer", "Developer", DpiW(150), g => S(Safe(() => g.Developer)), g => S(Safe(() => g.Developer)));
+        Col("publisher", "Publisher", DpiW(150), g => S(Safe(() => g.Publisher)), g => S(Safe(() => g.Publisher)), visible: false);
+        Col("genre", "Genre", DpiW(140), g => S(Safe(() => g.GenresString)), g => S(Safe(() => g.GenresString)));
+        Col("series", "Series", DpiW(130), g => S(Safe(() => g.Series)), g => S(Safe(() => g.Series)), visible: false);
+        Col("region", "Region", DpiW(90), g => S(Safe(() => g.Region)), g => S(Safe(() => g.Region)), visible: false);
+        Col("playmode", "Play Mode", DpiW(110), g => S(Safe(() => g.PlayMode)), g => S(Safe(() => g.PlayMode)), visible: false);
+        Col("version", "Version", DpiW(90), g => S(Safe(() => g.Version)), g => S(Safe(() => g.Version)), visible: false);
+        Col("status", "Status", DpiW(90), g => S(Safe(() => g.Status)), g => S(Safe(() => g.Status)), visible: false);
+        Col("source", "Source", DpiW(110), g => S(Safe(() => g.Source)), g => S(Safe(() => g.Source)), visible: false);
+        Col("year", "Year", DpiW(55), g => N(() => g.ReleaseYear), g => N(() => g.ReleaseYear)?.ToString() ?? "", HorizontalAlignment.Right);
+        Col("releasedate", "Release Date", DpiW(100), g => Safe(() => (object)g.ReleaseDate), g => DateStr(Safe(() => (object)g.ReleaseDate)), HorizontalAlignment.Right, visible: false);
         // Effective rating: user (StarRatingFloat) if set, else community. Coloured per-cell: user amber, community grey.
-        Col("rating", "Rating", 70, g => N(() => (double?)g.CommunityOrLocalStarRating),
+        Col("rating", "Rating", DpiW(70), g => N(() => (double?)g.CommunityOrLocalStarRating),
             g => { var d = Safe(() => g.CommunityOrLocalStarRating); return d > 0 ? d.ToString("0.#") + " ★" : ""; }, HorizontalAlignment.Right,
             fore: g => Safe(() => g.CommunityOrLocalStarRating) > 0 ? (Safe(() => g.StarRatingFloat) > 0 ? UserRating : CommRating) : (Color?)null);
-        Col("esrb", "ESRB", 70, g => S(Safe(() => g.Rating)), g => S(Safe(() => g.Rating)), visible: false);
-        Col("community", "Community", 80, g => N(() => (double?)g.CommunityStarRating),
+        Col("esrb", "ESRB", DpiW(70), g => S(Safe(() => g.Rating)), g => S(Safe(() => g.Rating)), visible: false);
+        Col("community", "Community", DpiW(80), g => N(() => (double?)g.CommunityStarRating),
             g => { var d = Safe(() => g.CommunityStarRating); return d > 0 ? d.ToString("0.#") : ""; }, HorizontalAlignment.Right, visible: false);
-        Col("votes", "Votes", 60, g => N(() => (int?)g.CommunityStarRatingTotalVotes),
+        Col("votes", "Votes", DpiW(60), g => N(() => (int?)g.CommunityStarRatingTotalVotes),
             g => N(() => (int?)g.CommunityStarRatingTotalVotes)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
-        Col("fav", "Fav", 45, g => Safe(() => (object)g.Favorite), g => Safe(() => g.Favorite) ? "★" : "", HorizontalAlignment.Center);
+        Col("fav", "Fav", DpiW(45), g => Safe(() => (object)g.Favorite), g => Safe(() => g.Favorite) ? "★" : "", HorizontalAlignment.Center);
 #pragma warning disable CS0618 // IGame.Completed is marked obsolete by the SDK but is still the Completed flag
-        Col("completed", "Done", 50, g => Safe(() => (object)g.Completed), g => Safe(() => g.Completed) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("completed", "Done", DpiW(50), g => Safe(() => (object)g.Completed), g => Safe(() => g.Completed) ? "✓" : "", HorizontalAlignment.Center, visible: false);
 #pragma warning restore CS0618
-        Col("broken", "Broken", 55, g => Safe(() => (object)g.Broken), g => Safe(() => g.Broken) ? "✓" : "", HorizontalAlignment.Center, visible: false);
-        Col("portable", "Portable", 60, g => Safe(() => (object)g.Portable), g => Safe(() => g.Portable) ? "✓" : "", HorizontalAlignment.Center, visible: false);
-        Col("installed", "Installed", 60, g => Safe(() => (object)g.Installed), g => Safe(() => g.Installed == true) ? "✓" : "", HorizontalAlignment.Center, visible: false);
-        Col("players", "Players", 60, g => N(() => g.MaxPlayers), g => N(() => g.MaxPlayers)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
-        Col("plays", "Plays", 55, g => N(() => (int?)g.PlayCount), g => { var p = Safe(() => g.PlayCount); return p > 0 ? p.ToString() : ""; }, HorizontalAlignment.Right);
-        Col("playtime", "Play Time", 80, g => Safe(() => (object)g.PlayTime), g => FormatPlayTime(Safe(() => g.PlayTime)), HorizontalAlignment.Right, visible: false);
-        Col("dateadded", "Date Added", 100, g => Safe(() => (object)g.DateAdded), g => DateStr(Safe(() => (object)g.DateAdded)), HorizontalAlignment.Right, visible: false);
-        Col("datemodified", "Date Modified", 110, g => Safe(() => (object)g.DateModified), g => DateStr(Safe(() => (object)g.DateModified)), HorizontalAlignment.Right, visible: false);
-        Col("lastplayed", "Last Played", 100, g => Safe(() => (object)g.LastPlayedDate), g => DateStr(Safe(() => (object)g.LastPlayedDate)), HorizontalAlignment.Right, visible: false);
-        Col("dbid", "DB Id", 70, g => N(() => g.LaunchBoxDbId), g => N(() => g.LaunchBoxDbId)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
-        Col("apppath", "Application Path", 300, g => S(Safe(() => g.ApplicationPath)), g => S(Safe(() => g.ApplicationPath)), visible: false);
-        Col("rahash", "RA Hash", 240, g => g is HostGame hg ? hg.RetroAchievementsHash : "", g => g is HostGame hg ? hg.RetroAchievementsHash : "", visible: false);
+        Col("broken", "Broken", DpiW(55), g => Safe(() => (object)g.Broken), g => Safe(() => g.Broken) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("portable", "Portable", DpiW(60), g => Safe(() => (object)g.Portable), g => Safe(() => g.Portable) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("installed", "Installed", DpiW(60), g => Safe(() => (object)g.Installed), g => Safe(() => g.Installed == true) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("players", "Players", DpiW(60), g => N(() => g.MaxPlayers), g => N(() => g.MaxPlayers)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
+        Col("plays", "Plays", DpiW(55), g => N(() => (int?)g.PlayCount), g => { var p = Safe(() => g.PlayCount); return p > 0 ? p.ToString() : ""; }, HorizontalAlignment.Right);
+        Col("playtime", "Play Time", DpiW(80), g => Safe(() => (object)g.PlayTime), g => FormatPlayTime(Safe(() => g.PlayTime)), HorizontalAlignment.Right, visible: false);
+        Col("dateadded", "Date Added", DpiW(100), g => Safe(() => (object)g.DateAdded), g => DateStr(Safe(() => (object)g.DateAdded)), HorizontalAlignment.Right, visible: false);
+        Col("datemodified", "Date Modified", DpiW(110), g => Safe(() => (object)g.DateModified), g => DateStr(Safe(() => (object)g.DateModified)), HorizontalAlignment.Right, visible: false);
+        Col("lastplayed", "Last Played", DpiW(100), g => Safe(() => (object)g.LastPlayedDate), g => DateStr(Safe(() => (object)g.LastPlayedDate)), HorizontalAlignment.Right, visible: false);
+        Col("dbid", "DB Id", DpiW(70), g => N(() => g.LaunchBoxDbId), g => N(() => g.LaunchBoxDbId)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
+        Col("apppath", "Application Path", DpiW(300), g => S(Safe(() => g.ApplicationPath)), g => S(Safe(() => g.ApplicationPath)), visible: false);
+        Col("rahash", "RA Hash", DpiW(240), g => g is HostGame hg ? hg.RetroAchievementsHash : "", g => g is HostGame hg ? hg.RetroAchievementsHash : "", visible: false);
 
         lv.RebuildColumns();
 
@@ -936,11 +962,15 @@ internal sealed class MainWindow : Form
     // "DarkMode_Explorer" visual style (applied by ApplyDarkScroll), so no custom renderer is needed.
     private TreeView BuildSourceTree()
     {
+        // Row height/indent scaled for DPI, and bumped up from the classic-Windows-Explorer-tree
+        // density (was a hardcoded, unscaled 26px) to the roomier spacing modern Windows apps use.
+        float s = LiteBoxTheme.DpiScale(this);
         var tv = new TreeView
         {
             Dock = DockStyle.Fill, BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None,
             FullRowSelect = true, ShowLines = false, ShowPlusMinus = true, ShowRootLines = true,
-            HideSelection = false, ItemHeight = 26, ImageList = _treeIcons,
+            HideSelection = false, ItemHeight = (int)Math.Round(32 * s), Indent = (int)Math.Round(20 * s),
+            ImageList = _treeIcons,
         };
         tv.AfterSelect += (_, e) => { if (e.Node?.Tag != null) LoadNode(e.Node.Tag); };
         return tv;
@@ -1083,6 +1113,9 @@ internal sealed class MainWindow : Form
         foreach (var c in _games.AllColumns)
         {
             int di = c.Visible ? c.SavedDisplayIndex : -1;
+            // c.Width is the user's BASE width (their drag intent), NOT the AutoFit-computed header
+            // width — for the Stretch column (Title) it's the fill FLOOR, for the others the shrink
+            // CAP — so it's a real preference worth persisting for every column.
             _cfg.Set("Col." + c.Key, $"{c.Width},{(c.Visible ? 1 : 0)},{di}");
         }
     }
@@ -1126,7 +1159,20 @@ internal sealed class MainWindow : Form
         {
             StartPosition = FormStartPosition.Manual;
             Bounds = rect;
-            if (_cfg.GetBool("WinMax", false)) WindowState = FormWindowState.Maximized;
+            if (_cfg.GetBool("WinMax", false))
+            {
+                // This runs from the constructor, before the form has a real handle or has been
+                // resolved to an actual monitor. Maximizing THIS early can resolve against stale
+                // screen metrics rather than the current monitor's real work area, producing a
+                // "maximized" window that visibly doesn't fill the screen. Load (not Shown) is
+                // early enough to fix that - the handle exists and Bounds is already applied by
+                // then - and, critically, it fires BEFORE the separate Load handler below that
+                // restores the splitter/pane fractions from their saved permille. That handler
+                // computes each pane's pixel width from the CURRENT container Width, so the
+                // window must already be at its final (maximized) size when it runs, or the
+                // panes end up sized for the small pre-maximize window instead.
+                Load += (_, _) => { if (WindowState != FormWindowState.Maximized) WindowState = FormWindowState.Maximized; };
+            }
         }
     }
 
@@ -1325,6 +1371,22 @@ internal sealed class MainWindow : Form
                 applyLive: ApplyGameCacheOption),
             Options.OptionItem.Toggle("Display", "Unload the game cache while a game runs",
                 () => _cfg.UnloadGameCacheDuringGame, v => _cfg.UnloadGameCacheDuringGame = v),
+            Options.OptionItem.Toggle("Display", "Auto-fit column widths to content",
+                () => _cfg.GetBool("AutoFitColumns", true), v => _cfg.SetBool("AutoFitColumns", v),
+                "On (default): the non-Title columns shrink to fit their content and the Title column grows to "
+                + "fill the leftover space (never below the width you set for it). Off: every column, Title "
+                + "included, keeps exactly the width you drag it to — classic manual sizing (a gap may appear "
+                + "before the detail pane).",
+                applyLive: () => _games.AutoFitColumns = _cfg.GetBool("AutoFitColumns", true)),
+            Options.OptionItem.Toggle("Display", "Two-line rows (wrap long cell text)",
+                () => _cfg.GetBool("TwoLineRows", true), v => _cfg.SetBool("TwoLineRows", v),
+                "On (default): rows are tall enough that long cell text (titles, developers…) wraps onto a "
+                + "second line. Off: compact single-line rows — long text is truncated with an ellipsis and "
+                + "more games fit on screen. Wrapping is all-or-nothing (a Windows list limitation): the row "
+                + "height applies to every column, there is no per-column setting.",
+                applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
+            Options.OptionItem.Action("Display", "Edit colours…", ShowColorEditor,
+                "Customise the shared LiteBox palette. Takes full effect after restarting LiteBox."),
         });
 
         w.AddSection("Pause screen", new[]
@@ -1396,6 +1458,82 @@ internal sealed class MainWindow : Form
         foreach (var d in _achCacheDirs)
             try { var dir = Path.Combine(LiteBoxPaths.Data, d); if (Directory.Exists(dir)) Directory.Delete(dir, true); }
             catch { }
+    }
+
+    // Options → Colors: swatch + hex + system color picker + per-color reset, for the shared theme.
+    // Edits the live LiteBoxTheme immediately (so a newly-opened dialog reflects it); the section's
+    // apply (LiteBoxTheme.Save) persists it. Already-built windows — the main window especially — pick
+    // the new palette up on the next launch, hence the "restart" note.
+    // Colour editor as its OWN modal dialog (opened from Display → "Edit colours…"). A section panel
+    // hosted inside the Options window's nested AutoScroll host failed to create its window handle; a
+    // standalone top-level dialog sidesteps that. One button per colour (the button IS the swatch):
+    // left-click = picker, right-click = reset that colour. OK saves; Cancel restores the snapshot.
+    private void ShowColorEditor()
+    {
+        float sc = LiteBoxTheme.DpiScale(this);
+        int Z(int px) => (int)Math.Round(px * sc);
+        static Color Ink(Color c) => (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) > 140 ? Color.Black : Color.White;
+
+        var swatches = LiteBoxTheme.Swatches;
+        var snapshot = new Color[swatches.Length];
+        for (int i = 0; i < snapshot.Length; i++) snapshot[i] = swatches[i].Get();
+
+        var form = new Form
+        {
+            Text = "LiteBox — Colours", FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false,
+            ShowInTaskbar = false, ShowIcon = false, BackColor = Bg, ForeColor = Fg, Font = new Font("Segoe UI", 9f),
+            ClientSize = new Size(Z(380), Z(44) + swatches.Length * Z(34) + Z(50)),
+        };
+
+        var list = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true,
+            FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(Z(12), Z(10), Z(12), Z(6)),
+        };
+        var buttons = new Button[swatches.Length];
+        void Style(int i) { var sw = swatches[i]; var b = buttons[i]; b.BackColor = sw.Get(); b.ForeColor = Ink(sw.Get()); b.Text = $"{sw.Name}    {LiteBoxTheme.ToHex(sw.Get())}"; }
+        for (int i = 0; i < swatches.Length; i++)
+        {
+            int ix = i; var sw = swatches[i];
+            var b = new Button
+            {
+                Size = new Size(Z(344), Z(30)), Margin = new Padding(0, Z(2), 0, Z(2)),
+                FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(Z(10), 0, 0, 0),
+                Font = new Font("Segoe UI", 9f), FlatAppearance = { BorderColor = Color.FromArgb(80, 80, 84), BorderSize = 1 },
+            };
+            buttons[i] = b; Style(i);
+            b.Click += (_, _) =>
+            {
+                using var dlg = new ColorDialog { Color = sw.Get(), FullOpen = true, AnyColor = true };
+                if (dlg.ShowDialog(form) == DialogResult.OK) { sw.Set(dlg.Color); Style(ix); }
+            };
+            b.MouseUp += (_, me) => { if (me.Button == MouseButtons.Right) { sw.Set(sw.Default); Style(ix); } };
+            list.Controls.Add(b);
+        }
+
+        var footer = new Panel { Dock = DockStyle.Bottom, Height = Z(46), BackColor = Panel };
+        var ok = new Button { Text = "OK", Size = new Size(Z(84), Z(28)), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Ok, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
+        var cancel = new Button { Text = "Cancel", Size = new Size(Z(84), Z(28)), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.CancelBtn, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
+        var resetAll = new Button { Text = "Reset all", Size = new Size(Z(90), Z(28)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 } };
+        ok.Click += (_, _) => { LiteBoxTheme.Save(_cfg); form.DialogResult = DialogResult.OK; form.Close(); };
+        cancel.Click += (_, _) => { for (int i = 0; i < snapshot.Length; i++) swatches[i].Set(snapshot[i]); form.DialogResult = DialogResult.Cancel; form.Close(); };
+        resetAll.Click += (_, _) => { LiteBoxTheme.ResetAll(); for (int i = 0; i < buttons.Length; i++) Style(i); };
+        footer.Controls.AddRange(new Control[] { resetAll, cancel, ok });
+        void LayoutFooter()
+        {
+            int r = footer.ClientSize.Width - Z(12), y = (footer.Height - ok.Height) / 2;
+            ok.Location = new Point(r - ok.Width, y);
+            cancel.Location = new Point(ok.Left - cancel.Width - Z(8), y);
+            resetAll.Location = new Point(Z(12), y);
+        }
+        footer.Resize += (_, _) => LayoutFooter();
+        LayoutFooter();
+
+        form.Controls.Add(list);
+        form.Controls.Add(footer);
+        form.AcceptButton = ok; form.CancelButton = cancel;
+        try { form.ShowDialog((Form?)Form.ActiveForm ?? this); } finally { form.Dispose(); }
     }
 
     private Control BuildCachesSection()
@@ -1933,6 +2071,103 @@ internal sealed class MainWindow : Form
         if (_poster.Bounds != b) _poster.Bounds = b;
     }
 
+    // ── Central-panel zoom (Ctrl +/- , Ctrl-wheel, Ctrl-0) ────────────────────────────────────
+    // One level (0.5–2.0, 25% steps) drives BOTH views: the detail list scales its font + row height
+    // + re-fits its columns; the poster grid scales its tile geometry so more/fewer posters fit a row.
+    // Persisted as ZoomPercent; only fires when the central panel (list or poster) has focus.
+    private bool CentralPanelHasFocus()
+        => (_games != null && _games.Focused) || (_poster != null && _poster.Focused);
+
+    private void ChangeZoom(int steps)
+        => ApplyZoomLevel(Math.Round((_zoom + steps * 0.25) / 0.25) * 0.25);
+
+    private void ApplyZoomLevel(double z)
+    {
+        z = Math.Clamp(z, 0.5, 2.0);
+        if (Math.Abs(z - _zoom) < 0.001) return;
+        _zoom = z;
+        _cfg.SetInt("ZoomPercent", (int)Math.Round(_zoom * 100)); _cfg.Save();
+        ApplyZoom();
+    }
+
+    private void ApplyZoom()
+    {
+        try { _games?.SetZoom((float)_zoom, 9f); } catch { }
+        try { RebuildPosterGeometry(); } catch { }
+        if (_posterMode) { try { RefreshPoster(); LayoutPoster(); } catch { } }
+        else { try { _poster?.Invalidate(); } catch { } }
+    }
+
+    // The poster tiles + decoded thumbs are all sized for the PREVIOUS zoom, and the native image list
+    // has fixed-size slots — so a zoom change means: free every cached tile/thumb, reset the slot
+    // bookkeeping, and recreate the image list at the new cell size. Tiles then rebuild lazily (at the
+    // new geometry) on the next retrieval. Guarded/try-wrapped: it must never take the app down.
+    private void RebuildPosterGeometry()
+    {
+        if (_poster == null) return;
+        foreach (var h in _posterTileHbm.Values) if (h != IntPtr.Zero) DeleteObject(h);
+        _posterTileHbm.Clear(); _posterTileOrder.Clear();
+        foreach (var img in _posterBmp.Values) img?.Dispose();
+        _posterBmp.Clear();
+        _slotOf.Clear(); _slotId.Clear(); _slotCount = 0; _slotLru.Clear(); _slotNode.Clear();
+        _posterTileFont?.Dispose(); _posterTileFont = null;
+
+        if (_posterOwnerDraw)
+        {
+            var oldGeom = _posterGeom;
+            int cw = Math.Min(256, PCellW), ch = Math.Min(256, PImgH + PLabelH);   // managed ImageList caps at 256
+            _posterGeom = new ImageList { ColorDepth = ColorDepth.Depth32Bit, ImageSize = new Size(cw, ch) };
+            try { if (_poster.IsHandleCreated) _poster.LargeImageList = _posterGeom; } catch { }
+            oldGeom?.Dispose();
+        }
+        else
+        {
+            var oldHiml = _himl;
+            _himl = ImageList_Create(PCellW, PImgH + PLabelH, ILC_COLOR32, 0, 64);
+            try { if (_poster.IsHandleCreated) SendMessage(_poster.Handle, LVM_SETIMAGELIST, (IntPtr)LVSIL_NORMAL, _himl); } catch { }
+            if (oldHiml != IntPtr.Zero) ImageList_Destroy(oldHiml);
+        }
+        try { if (_poster.IsHandleCreated) SetIconSpacing(_poster, PCellW + PGap, PImgH + PLabelH + PGap); } catch { }
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if ((keyData & Keys.Control) == Keys.Control)
+        {
+            var k = keyData & Keys.KeyCode;
+            // Ctrl+0 → reset zoom to 100%. Ungated on purpose: it's a harmless global reset, and
+            // requiring central-panel keyboard focus made it miss right after a Ctrl-wheel zoom (the
+            // wheel leaves focus wherever it was, so the list usually isn't keyboard-focused then).
+            if (k == Keys.D0 || k == Keys.NumPad0) { ApplyZoomLevel(1.0); return true; }
+            // Ctrl+A → select every game (detail list only; the poster grid is single-select).
+            if (k == Keys.A && _games != null && _games.Focused) { _games.SelectAll(); return true; }
+            if (CentralPanelHasFocus())
+            {
+                switch (k)
+                {
+                    case Keys.Oemplus: case Keys.Add:       ChangeZoom(+1); return true;
+                    case Keys.OemMinus: case Keys.Subtract: ChangeZoom(-1); return true;
+                }
+            }
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    // Ctrl-wheel over (or with focus in) the central panel zooms instead of scrolling. This filter
+    // catches WM_MOUSEWHEEL before the native list scrolls it; returning true swallows the scroll.
+    bool IMessageFilter.PreFilterMessage(ref Message m)
+    {
+        const int WM_MOUSEWHEEL = 0x020A;
+        if (m.Msg != WM_MOUSEWHEEL || (ModifierKeys & Keys.Control) != Keys.Control) return false;
+        bool central =
+            (_games  != null && (_games.Focused  || (_games.IsHandleCreated  && m.HWnd == _games.Handle))) ||
+            (_poster != null && (_poster.Focused || (_poster.IsHandleCreated && m.HWnd == _poster.Handle)));
+        if (!central) return false;
+        int delta = unchecked((short)((long)m.WParam >> 16));
+        ChangeZoom(delta > 0 ? +1 : -1);
+        return true;
+    }
+
     private void SetPosterMode(bool on)
     {
         if (_posterMode == on || _poster == null) return;
@@ -2072,12 +2307,13 @@ internal sealed class MainWindow : Form
                 }
                 var title = S(Safe(() => model.Title));
                 var dev = S(Safe(() => model.Developer));
-                var tRect = new Rectangle(0, PImgH + 3, PCellW, 17);
-                var dRect = new Rectangle(0, PImgH + 19, PCellW, 15);
-                TextRenderer.DrawText(tg, title, Font, tRect, Fg,
+                var tRect = new Rectangle(0, PImgH + PZ(3), PCellW, PZ(17));
+                var dRect = new Rectangle(0, PImgH + PZ(19), PCellW, PZ(15));
+                var tileFont = _posterTileFont ??= new Font(Font.FontFamily, Font.Size * (float)_zoom, Font.Style);
+                TextRenderer.DrawText(tg, title, tileFont, tRect, Fg,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
                 if (!string.IsNullOrEmpty(dev))
-                    TextRenderer.DrawText(tg, dev, Font, dRect, SubFg,
+                    TextRenderer.DrawText(tg, dev, tileFont, dRect, SubFg,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
             }
             hbm = tile.GetHbitmap();
@@ -4436,22 +4672,25 @@ internal sealed class MainWindow : Form
         private readonly Button _cancel;
         private readonly System.Threading.CancellationTokenSource _cts = new();
         private int _done;
+        private readonly float _s;
+        private int S(int px) => (int)Math.Round(px * _s);
 
         public GenerateCacheForm(IGame[] games, Func<IGame, string[]> resolve)
         {
             _games = games; _resolve = resolve;
+            _s = DeviceDpi / 96f;
             Text = "Generate Image Cache";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false; ControlBox = false;
-            ClientSize = new Size(452, 116);
+            ClientSize = new Size(S(452), S(116));
             BackColor = Bg; ForeColor = Fg; Font = new Font("Segoe UI", 9f);
 
-            _label = new Label { Location = new Point(16, 14), Size = new Size(420, 20), ForeColor = Fg,
+            _label = new Label { Location = new Point(S(16), S(14)), Size = new Size(S(420), S(20)), ForeColor = Fg,
                                  Text = $"Preparing…  0 / {games.Length}" };
-            _bar = new ProgressBar { Location = new Point(16, 42), Size = new Size(420, 18),
+            _bar = new ProgressBar { Location = new Point(S(16), S(42)), Size = new Size(S(420), S(18)),
                                      Minimum = 0, Maximum = Math.Max(1, games.Length), Style = ProgressBarStyle.Continuous };
-            _cancel = new Button { Location = new Point(346, 78), Size = new Size(90, 26), Text = "Cancel",
+            _cancel = new Button { Location = new Point(S(346), S(78)), Size = new Size(S(90), S(26)), Text = "Cancel",
                                    FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
             _cancel.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
             _cancel.Click += (_, _) => { try { _cts.Cancel(); } catch { } _cancel.Enabled = false; _cancel.Text = "Cancelling…"; };

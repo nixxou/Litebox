@@ -9,17 +9,13 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
+using LbApiHost.Host.UiKit;
 
 namespace LbApiHost.Host.Ra;
 
-internal sealed class RaMappingDialog : Form
+internal sealed class RaMappingDialog : LiteBoxForm
 {
     private const string None = "(none)";
-    private static readonly Color Bg = Color.FromArgb(30, 30, 30);
-    private static readonly Color Panel2 = Color.FromArgb(45, 45, 48);
-    private static readonly Color Fg = Color.FromArgb(222, 222, 222);
-    private static readonly Color Sub = Color.FromArgb(150, 150, 152);
-    private static readonly Color Accent = Color.FromArgb(0, 122, 204);
 
     private readonly DataGridView _grid;
     private readonly TextBox _filter;
@@ -27,41 +23,40 @@ internal sealed class RaMappingDialog : Form
     public RaMappingDialog(IEnumerable<string> platforms)
     {
         Text = "RetroAchievements — platform mapping";
-        Size = new Size(520, 560);
-        MinimumSize = new Size(420, 360);
+        ClientSize = new Size(S(520), S(560));
+        MinimumSize = new Size(S(420), S(360));
         StartPosition = FormStartPosition.CenterParent;
-        BackColor = Bg; ForeColor = Fg;
         Font = new Font("Segoe UI", 8.5f);
-        ShowIcon = false; ShowInTaskbar = false; MinimizeBox = false; MaximizeBox = false;
+        MinimizeBox = false; MaximizeBox = false;
 
         var help = new Label
         {
-            Dock = DockStyle.Top, Height = 38, ForeColor = Sub, Padding = new Padding(10, 8, 10, 0), AutoSize = false,
+            Dock = DockStyle.Top, Height = S(38), ForeColor = LiteBoxTheme.SubFg, Padding = new Padding(S(10), S(8), S(10), 0), AutoSize = false,
             Text = "Override how a platform maps to a RetroAchievements console (arcade boards, oddballs…). "
                  + "Leave a row on “(default: …)” to keep the built-in mapping; pick a console (or “(none)”) to force it.",
         };
 
-        var filterHost = new Panel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(10, 2, 10, 4) };
-        _filter = new TextBox { Dock = DockStyle.Fill, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        var filterHost = new Panel { Dock = DockStyle.Top, Height = S(30), Padding = new Padding(S(10), S(2), S(10), S(4)) };
+        _filter = new TextBox { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle };
         _filter.TextChanged += (_, _) => ApplyFilter();
-        var filterLbl = new Label { Dock = DockStyle.Left, Text = "Filter ", ForeColor = Sub, AutoSize = true, Padding = new Padding(0, 4, 0, 0) };
+        var filterLbl = new Label { Dock = DockStyle.Left, Text = "Filter ", ForeColor = LiteBoxTheme.SubFg, AutoSize = true, Padding = new Padding(0, S(4), 0, 0) };
         filterHost.Controls.Add(_filter); filterHost.Controls.Add(filterLbl);
 
         var consoleKeys = RaPlatformMap.AllConsoleKeys().ToList();
 
         _grid = new DataGridView
         {
-            Dock = DockStyle.Fill, BackgroundColor = Bg, BorderStyle = BorderStyle.None, GridColor = Color.FromArgb(60, 60, 64),
+            Dock = DockStyle.Fill, BackgroundColor = LiteBoxTheme.Bg, BorderStyle = BorderStyle.None, GridColor = Color.FromArgb(60, 60, 64),
             AllowUserToAddRows = false, AllowUserToDeleteRows = false, AllowUserToResizeRows = false,
             RowHeadersVisible = false, MultiSelect = false, SelectionMode = DataGridViewSelectionMode.CellSelect,
             ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
             EnableHeadersVisualStyles = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         };
-        _grid.ColumnHeadersDefaultCellStyle.BackColor = Panel2;
-        _grid.ColumnHeadersDefaultCellStyle.ForeColor = Fg;
-        _grid.DefaultCellStyle.BackColor = Bg; _grid.DefaultCellStyle.ForeColor = Fg;
-        _grid.DefaultCellStyle.SelectionBackColor = Accent; _grid.DefaultCellStyle.SelectionForeColor = Color.White;
-        _grid.RowTemplate.Height = 22;
+        _grid.ColumnHeadersDefaultCellStyle.BackColor = LiteBoxTheme.Panel2;
+        _grid.ColumnHeadersDefaultCellStyle.ForeColor = LiteBoxTheme.Fg;
+        _grid.DefaultCellStyle.BackColor = LiteBoxTheme.Bg; _grid.DefaultCellStyle.ForeColor = LiteBoxTheme.Fg;
+        _grid.DefaultCellStyle.SelectionBackColor = LiteBoxTheme.Accent; _grid.DefaultCellStyle.SelectionForeColor = Color.White;
+        _grid.RowTemplate.Height = S(22);
 
         var colPlat = new DataGridViewTextBoxColumn { HeaderText = "Platform", ReadOnly = true, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, FillWeight = 62 };
         var colCons = new DataGridViewComboBoxColumn { HeaderText = "RA console", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, FillWeight = 38, FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton };
@@ -93,25 +88,16 @@ internal sealed class RaMappingDialog : Form
             cell.Value = sel;
         }
 
-        var footer = new Panel { Dock = DockStyle.Bottom, Height = 46, BackColor = Color.FromArgb(37, 37, 38) };
-        var ok = FooterBtn("Save", Color.FromArgb(50, 110, 65));
-        var cancel = FooterBtn("Cancel", Color.FromArgb(60, 60, 75));
-        ok.Click += (_, _) => { Persist(); DialogResult = DialogResult.OK; Close(); };
-        cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
-        void Place() { int r = ClientSize.Width - 12; cancel.Left = r - cancel.Width; ok.Left = cancel.Left - ok.Width - 8; }
-        footer.Resize += (_, _) => Place();
-        footer.Controls.AddRange(new Control[] { ok, cancel });
+        var footer = new FooterBar();
+        footer.AddButton("Cancel", LiteBoxTheme.CancelBtn, (_, _) => { DialogResult = DialogResult.Cancel; Close(); });
+        footer.AddButton("Save", LiteBoxTheme.Ok, (_, _) => { Persist(); DialogResult = DialogResult.OK; Close(); });
 
         Controls.Add(_grid);
         Controls.Add(filterHost);
         Controls.Add(help);
         Controls.Add(footer);
         _grid.BringToFront();
-        Shown += (_, _) => Place();
     }
-
-    private Button FooterBtn(string t, Color c)
-        => new Button { Text = t, Size = new Size(92, 30), Top = 8, FlatStyle = FlatStyle.Flat, BackColor = c, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
 
     private void ApplyFilter()
     {

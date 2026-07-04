@@ -56,7 +56,7 @@ internal static class LedBlinky
     // ── Game lifecycle ─────────────────────────────────────────────────────
     /// <summary>Emit "3" (Game Start). The caller must have sent a GameSelect for THIS game first —
     /// LEDBlinky's "3" is argument-less and lights whatever the last "9" selected.</summary>
-    public static void GameStart() => Fire("3");
+    public static void GameStart() { FlushSelect(); Fire("3"); }   // flush any pending "9" first — "3" lights the last-selected
     public static void GameStop()  => Fire("4");
 
     // ── Screensaver / attract — PLACEHOLDER (not wired) ─────────────────────
@@ -83,14 +83,46 @@ internal static class LedBlinky
     /// <summary>Emit "9 \"&lt;rom-or-title&gt;\" &lt;emulator&gt;" when the highlighted game changes.</summary>
     public static void GameSelect(IGame game)
     {
-        if (game == null) return;
+        if (game == null || !Enabled) return;   // disabled → zero cost, exactly like before
         string platform = Safe(() => game.Platform) ?? "";
         string emu = MapEmulator(platform);
         string name = IsArcade(platform)
             ? Path.GetFileNameWithoutExtension(Safe(() => game.ApplicationPath) ?? "")   // MAME ROM short name
             : (Safe(() => game.Title) ?? "");
         if (string.IsNullOrWhiteSpace(name)) return;
-        Fire(string.IsNullOrEmpty(emu) ? $"9 \"{name}\"" : $"9 \"{name}\" {emu}");
+        string args = string.IsNullOrEmpty(emu) ? $"9 \"{name}\"" : $"9 \"{name}\" {emu}";
+
+        // Debounce (latest-wins). While an arrow key is held the highlighted game changes many times
+        // a second, and every "9" is a full Process.Start of LEDBlinky.exe — one per intermediate row
+        // spawns dozens of processes (heavy lag, and LEDBlinky itself chokes under the flood). Only the
+        // game the selection LANDS on matters, so remember the latest and fire once, after it settles
+        // (SelectDebounceMs). The IGame is read here on the UI thread; only the built string crosses to the timer
+        // thread, so there's no cross-thread IGame access.
+        lock (_selLock)
+        {
+            _pendingSelect = args;
+            _selectTimer ??= new System.Threading.Timer(_ => FlushSelect());
+            _selectTimer.Change(SelectDebounceMs, System.Threading.Timeout.Infinite);
+        }
+    }
+
+    private const int SelectDebounceMs = 500;   // matches the media/detail loader's settle delay
+    private static readonly object _selLock = new();
+    private static System.Threading.Timer _selectTimer;
+    private static string _pendingSelect;
+
+    // Fire the pending (debounced) "9" highlight now. Called by the settle timer, and by GameStart so
+    // "3" (which lights whatever the last "9" selected) can't beat a still-pending highlight when the
+    // user hits Play inside the debounce window. Idempotent: a second call sees a null pending → no-op.
+    private static void FlushSelect()
+    {
+        string args;
+        lock (_selLock)
+        {
+            args = _pendingSelect; _pendingSelect = null;
+            _selectTimer?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+        }
+        if (!string.IsNullOrEmpty(args)) Fire(args);
     }
 
     // Arcade → "MAME" (LEDBlinky keys arcade games off the MAME controls.ini by ROM name).

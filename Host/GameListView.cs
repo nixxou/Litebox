@@ -14,6 +14,7 @@ using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host;
@@ -30,8 +31,14 @@ internal sealed class GameColumn
     public Func<IGame, object> Sort;         // comparable value for ordering (may be null)
     public Func<IGame, string> Text;         // display text
     public Func<IGame, Color?> Fore;         // optional per-cell colour (unused in this no-styling build)
+    /// <summary>This column absorbs whatever width the others don't use, so the list never
+    /// leaves a dead gap before the detail pane regardless of DPI or saved column widths.
+    /// Exactly one column should set this - naturally the one that benefits from extra room
+    /// (Title: long names stop truncating), not just "whichever ends up last."</summary>
+    public bool Stretch;
 
     internal ColumnHeader Header;            // the live native header (when visible)
+    internal int FitWidth = -1;              // cached content-fit width (header + widest cell + pad); -1 = unmeasured
 }
 
 internal sealed class GameListView : ListView
@@ -40,6 +47,10 @@ internal sealed class GameListView : ListView
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref LVITEM lvi);
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hWnd, string app, string idList);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct LVITEM
@@ -57,6 +68,7 @@ internal sealed class GameListView : ListView
     private const int LVS_EX_DOUBLEBUFFER = 0x00010000;
     private const uint LVIS_FOCUSED = 1, LVIS_SELECTED = 2;
     private const int WM_CONTEXTMENU = 0x007B;
+    private const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_FRAMECHANGED = 0x20;
 
     private readonly List<GameColumn> _columns = new();
     private List<GameColumn> _visCols = new();          // logical (subitem) order == add order
@@ -102,12 +114,52 @@ internal sealed class GameListView : ListView
         BorderStyle = BorderStyle.None;
         AllowColumnReorder = true;
 
+        // Native ListView rows size themselves to max(Font.Height, SmallImageList.ImageSize.Height).
+        // With no image list at all that's the cramped ~17px classic-Windows look; a taller BLANK image
+        // list (no per-row icon is ever drawn) stretches the row height. A two-line height is one the
+        // native control fills by WRAPPING long cell text onto a second line; a compact height keeps
+        // text on one line (truncated). See ApplyRowHeight / the TwoLineRows option.
+        ApplyRowHeight();
+
         RetrieveVirtualItem += OnRetrieveVirtualItem;
         ColumnClick += (_, e) => { if (e.Column >= 0 && e.Column < _visCols.Count) ColumnClicked?.Invoke(_visCols[e.Column]); };
         ItemActivate += (_, _) => GameActivated?.Invoke();
         MouseUp += OnMouseUpRight;
         SelectedIndexChanged += OnSelectedIndexChanged;
-        HandleCreated += (_, _) => EnableDoubleBuffer();
+        HandleCreated += (_, _) => { EnableDoubleBuffer(); ThemeHeader(); ApplyRowHeight(); MeasureContentFits(); AutoFit(); };
+        Resize += (_, _) => AutoFit();   // cheap: reuses cached content-fit widths, only recomputes the fill
+        // Capture the user's BASE width during the DRAG (ColumnWidthChanging fires live, left button
+        // held), NOT in ColumnWidthChanged. Programmatic width changes (AutoFit shrinking a column to
+        // fit a list with shorter content; the native control re-laying-out when the scrollbar toggles)
+        // ALSO raise these events, sometimes deferred past the _autoFitting window — mis-adopting one
+        // as the base is what made a manually-widened column stay tiny after visiting a shorter list.
+        // The mouse-button state cleanly separates a real drag from every programmatic/native change;
+        // _autoFitting still guards the re-balance AutoFit triggers on the OTHER columns.
+        ColumnWidthChanging += (_, e) =>
+        {
+            if (_autoFitting || Control.MouseButtons != MouseButtons.Left) return;
+            if (e.ColumnIndex >= 0 && e.ColumnIndex < _visCols.Count)
+                _visCols[e.ColumnIndex].Width = e.NewWidth;   // adopt the dragged width as the persisted base
+        };
+        ColumnWidthChanged += (_, _) => { if (!_autoFitting) AutoFit(); };   // re-balance after a drag / native change
+    }
+
+    // The list body picks up dark scrollbars/selection from ApplyDarkScroll (MainWindow) via
+    // SetWindowTheme on ITS OWN handle - but the column header is a SEPARATE native child window
+    // (SysHeader32, fetched via LVM_GETHEADER) that never got that treatment, so it stayed the
+    // classic light Win32 bevel button style while every row below it went dark. That header/body
+    // mismatch reads as "old Windows app" faster than almost anything else in this UI.
+    private void ThemeHeader()
+    {
+        try
+        {
+            IntPtr header = SendMessage(Handle, LVM_GETHEADER, IntPtr.Zero, IntPtr.Zero);
+            if (header == IntPtr.Zero) return;
+            SetWindowTheme(header, "DarkMode_ItemsView", null);
+            SetWindowPos(header, IntPtr.Zero, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+        catch { }
     }
 
     public GameColumn AddColumn(GameColumn c) { _columns.Add(c); return c; }
@@ -130,7 +182,158 @@ internal sealed class GameListView : ListView
             }
         }
         finally { EndUpdate(); }
+        MeasureContentFits();   // visible-column set changed → re-measure content fit
+        AutoFit();
         Invalidate();
+    }
+
+    // ── Smart column fit — two rules that keep the list exactly as wide as its window ─────────
+    // Persisted per-column widths never, by themselves, add up to the list's real width (different
+    // DPI, hidden/shown columns, years-old sessions). Instead of chasing that with scaling math, the
+    // width each column actually GETS is derived every time the list is shown or resized:
+    //   • non-Stretch columns SHRINK to their content: width = min(userWidth, contentFit). A column
+    //     is never wider than it needs, which frees space (A); userWidth acts as a MAX cap.
+    //   • the one Stretch column (Title) GROWS to fill: width = max(userWidth, leftover). It eats the
+    //     freed space but never drops below what the user set (B); userWidth acts as a MIN floor.
+    // contentFit is measured once per list display (MeasureContentFits), cached on the column, and
+    // reused by AutoFit on every resize so dragging the window edge stays cheap.
+    private const int FitRowCap = 15000;   // above this many rows, skip the content scan (keep user widths)
+    private const int FitCandidates = 8;   // longest-by-length cells kept per column as measure candidates
+    private const int FitPad = 14;         // cell padding + a little slack so nothing truncates
+    private const int MinCol = 24;         // never collapse a visible column below this
+    private bool _autoFitting;             // true while WE assign header widths → ignore our own ColumnWidthChanged
+    private static readonly Comparison<string> ByLenDesc = (a, b) => b.Length.CompareTo(a.Length);
+
+    // Display option "Auto-fit column widths" (default on). Off → every column, Title included, keeps
+    // exactly the width the user drags it to (classic manual sizing); the dead gap before the detail
+    // pane may reappear, which is then the user's explicit choice.
+    private bool _autoFitColumns = true;
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool AutoFitColumns
+    {
+        get => _autoFitColumns;
+        set
+        {
+            if (_autoFitColumns == value) return;
+            _autoFitColumns = value;
+            if (!IsHandleCreated) return;
+            if (value) { MeasureContentFits(); AutoFit(); }   // turned ON → measure + re-balance
+            else RestoreBaseWidths();                         // turned OFF → back to the user's exact widths
+        }
+    }
+
+    // Put every header back to its user base width (used when auto-fit is turned OFF).
+    private void RestoreBaseWidths()
+    {
+        _autoFitting = true;
+        try { foreach (var c in _visCols) if (c.Header != null) c.Header.Width = c.Width > 0 ? c.Width : 100; }
+        finally { _autoFitting = false; }
+    }
+
+    // Display option "Two-line rows" (default on). On → rows are tall enough that the native ListView
+    // WRAPS long cell text onto a second line. Off → compact single-line rows (long text truncates,
+    // more games fit). It is the ROW HEIGHT that drives the native wrap; there is no per-column control
+    // (the OS wraps every column or none), which is why this is a single global toggle.
+    private bool _twoLineRows = true;
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool TwoLineRows
+    {
+        get => _twoLineRows;
+        set { if (_twoLineRows == value) return; _twoLineRows = value; ApplyRowHeight(); }
+    }
+
+    private ImageList _rowSizer;   // a blank image list whose height sets the row height
+
+    // Row height = one blank-image height. 30px fits two wrapped lines (the native control fills the
+    // extra height by wrapping); 22px fits a single line (a second line has no room, so text truncates).
+    // Re-applied on HandleCreated so the DPI scale is the real monitor's, not the pre-handle default.
+    private void ApplyRowHeight()
+    {
+        float s = LiteBoxTheme.DpiScale(this);
+        int h = (int)Math.Round((_twoLineRows ? 30 : 22) * s * _zoom);
+        var old = _rowSizer;
+        _rowSizer = new ImageList { ImageSize = new Size(1, Math.Max(1, h)), ColorDepth = ColorDepth.Depth32Bit };
+        SmallImageList = _rowSizer;
+        old?.Dispose();
+    }
+
+    // ── Zoom (Ctrl +/- and Ctrl-wheel over the game list; level owned + persisted by MainWindow) ──
+    // Scales the FONT and the row height together, then re-measures content (text widths change with
+    // the font) and re-fits the columns. baseFontPt is the un-zoomed point size, passed each call so
+    // repeated steps never compound off an already-scaled font.
+    private float _zoom = 1f;
+    private float _baseFontPt = 9f;
+    public void SetZoom(float zoom, float baseFontPt)
+    {
+        if (baseFontPt > 0) _baseFontPt = baseFontPt;
+        _zoom = Math.Clamp(zoom, 0.5f, 2f);
+        try { Font = new Font(Font.FontFamily, _baseFontPt * _zoom, Font.Style); } catch { }
+        ApplyRowHeight();
+        MeasureContentFits();
+        AutoFit();
+        Invalidate();
+    }
+
+    // Measure each non-Stretch column's content-fit width (widest of its header text + its cells) over
+    // the CURRENT view, once. Proportional font: longest-by-chars ≠ widest-by-pixels, so keep the few
+    // longest cells per column and MeasureText each rather than trusting a single candidate.
+    private void MeasureContentFits()
+    {
+        if (!_autoFitColumns || !IsHandleCreated) return;
+        var cols = new List<GameColumn>();
+        foreach (var c in _visCols) if (!c.Stretch && c.Header != null) cols.Add(c);
+        if (cols.Count == 0) return;
+
+        var view = _view;
+        if (view.Length > FitRowCap) { foreach (var c in cols) c.FitWidth = -1; return; }   // too big → no shrink
+
+        var cand = new List<string>[cols.Count];
+        for (int i = 0; i < cols.Count; i++) cand[i] = new List<string>(FitCandidates + 1);
+        foreach (var g in view)
+            for (int i = 0; i < cols.Count; i++)
+            {
+                string t = CellText(cols[i], g);
+                if (string.IsNullOrEmpty(t)) continue;
+                var list = cand[i];
+                if (list.Count < FitCandidates) { list.Add(t); if (list.Count == FitCandidates) list.Sort(ByLenDesc); }
+                else if (t.Length > list[FitCandidates - 1].Length) { list[FitCandidates - 1] = t; list.Sort(ByLenDesc); }
+            }
+
+        for (int i = 0; i < cols.Count; i++)
+        {
+            int max = TextRenderer.MeasureText(HeaderText(cols[i]), Font).Width;
+            foreach (var t in cand[i]) { int w = TextRenderer.MeasureText(t, Font).Width; if (w > max) max = w; }
+            cols[i].FitWidth = max + FitPad;
+        }
+    }
+
+    // Apply the two rules from the cached FitWidth values. Cheap — safe to call on every resize.
+    private void AutoFit()
+    {
+        if (!_autoFitColumns || _autoFitting || !IsHandleCreated) return;
+        _autoFitting = true;
+        try
+        {
+            GameColumn stretch = null;
+            int othersWidth = 0;
+            foreach (var c in _visCols)
+            {
+                if (c.Header == null) continue;
+                if (c.Stretch) { stretch = c; continue; }
+                int baseW = c.Width > 0 ? c.Width : 100;
+                int w = c.FitWidth > 0 ? Math.Min(baseW, c.FitWidth) : baseW;   // A: shrink to content, capped at user width
+                if (w < MinCol) w = MinCol;
+                if (c.Header.Width != w) c.Header.Width = w;
+                othersWidth += w;
+            }
+            if (stretch?.Header != null)
+            {
+                int baseW = stretch.Width > 0 ? stretch.Width : 100;
+                int w = Math.Max(baseW, ClientSize.Width - othersWidth);        // B: fill leftover, floored at user width
+                if (stretch.Header.Width != w) stretch.Header.Width = w;
+            }
+        }
+        finally { _autoFitting = false; }
     }
 
     private string HeaderText(GameColumn c)
@@ -151,12 +354,12 @@ internal sealed class GameListView : ListView
 
     public void SyncFromUi()
     {
+        // Width is deliberately NOT read back from the live header here: the header width is the
+        // AutoFit-COMPUTED value (shrunk/filled), not the user's base. The base is captured directly
+        // on a user drag (ColumnWidthChanged), so it stays the pure user intent that gets persisted.
         foreach (var c in _visCols)
             if (c.Header != null)
-            {
-                try { c.Width = c.Header.Width; } catch { }
                 try { c.SavedDisplayIndex = c.Header.DisplayIndex; } catch { }
-            }
     }
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -174,6 +377,8 @@ internal sealed class GameListView : ListView
         _view = list.ToArray();
         RefreshHeaderGlyphs();
         try { VirtualListSize = _view.Length; } catch { }
+        MeasureContentFits();   // view content changed → re-fit columns (capped + cached, so cheap)
+        AutoFit();
         try { SelectedIndices.Clear(); } catch { }
         if (prev != null) { int ix = Array.IndexOf(_view, prev); if (ix >= 0) SetSelectedAndFocused(ix); }
         Invalidate();
@@ -184,9 +389,22 @@ internal sealed class GameListView : ListView
 
     private void OnRetrieveVirtualItem(object sender, RetrieveVirtualItemEventArgs e)
     {
-        if (e.ItemIndex < 0 || e.ItemIndex >= _view.Length) { e.Item = new ListViewItem(""); return; }
-        var g = _view[e.ItemIndex];
         int n = _visCols.Count;
+        if (e.ItemIndex < 0 || e.ItemIndex >= _view.Length)
+        {
+            // A virtual item MUST carry one subitem PER COLUMN — even the placeholder we hand back
+            // for an index that briefly falls out of range. That happens during a platform switch:
+            // VirtualListSize can still reflect the previous (larger) platform's count while _view
+            // already points at the smaller new array, so a still-visible row index is momentarily
+            // >= _view.Length. A single-subitem item here makes WinForms throw
+            // "…needs a SubItem for each ListView column" the instant the native control asks for
+            // column >= 1 (a forced header repaint — StretchColumn/ThemeHeader — makes it ask).
+            var blank = new ListViewItem("");
+            for (int i = 1; i < n; i++) blank.SubItems.Add("");
+            e.Item = blank;
+            return;
+        }
+        var g = _view[e.ItemIndex];
         var it = new ListViewItem(n > 0 ? CellText(_visCols[0], g) : "");
         for (int i = 1; i < n; i++) it.SubItems.Add(CellText(_visCols[i], g));
 
@@ -258,6 +476,15 @@ internal sealed class GameListView : ListView
         SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref clear);
         var set = new LVITEM { stateMask = LVIS_SELECTED | LVIS_FOCUSED, state = LVIS_SELECTED | LVIS_FOCUSED };
         SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)index, ref set);
+    }
+
+    // Select every row (Ctrl+A). Virtual-mode friendly: LVM_SETITEMSTATE with item index -1 targets
+    // all items at once, so it costs nothing regardless of how many games the view holds.
+    public void SelectAll()
+    {
+        if (!IsHandleCreated || _view.Length == 0) return;
+        var all = new LVITEM { stateMask = LVIS_SELECTED, state = LVIS_SELECTED };
+        SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref all);
     }
 
     private void OnSelectedIndexChanged(object sender, EventArgs e)

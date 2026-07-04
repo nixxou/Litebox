@@ -17,6 +17,7 @@
 
 using System.IO;
 using LbApiHost.Host.Options;
+using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -24,10 +25,10 @@ namespace LbApiHost.Host.Emulators;
 
 internal static class EditEmulatorWindow
 {
-    private static readonly Color Bg = Color.FromArgb(30, 30, 30);
-    private static readonly Color Panel2 = Color.FromArgb(45, 45, 48);
-    private static readonly Color Fg = Color.FromArgb(222, 222, 222);
-    private static readonly Color SubFg = Color.FromArgb(150, 150, 152);
+    private static readonly Color Bg = LiteBoxTheme.Bg;
+    private static readonly Color Panel2 = LiteBoxTheme.Panel2;
+    private static readonly Color Fg = LiteBoxTheme.Fg;
+    private static readonly Color SubFg = LiteBoxTheme.SubFg;
     private static readonly Color Good = Color.FromArgb(120, 220, 140);
     private static readonly Color Bad = Color.FromArgb(235, 120, 120);
 
@@ -35,20 +36,21 @@ internal static class EditEmulatorWindow
     {
         string title = Safe(() => emu.Title) ?? "Emulator";
         using var w = new OptionsWindow($"Edit Emulator — {title}{(readOnly ? "   [READ-ONLY]" : "")}");
+        float s = LiteBoxTheme.DpiScale(w);
 
-        var (details, applyDetails) = BuildDetails(emu, lbRoot);
+        var (details, applyDetails) = BuildDetails(emu, lbRoot, s);
         w.AddSection("Details", details, applyDetails);
 
-        var (plats, applyPlats) = BuildPlatforms(emu, readOnly);
+        var (plats, applyPlats) = BuildPlatforms(emu, readOnly, s);
         w.AddSection("Associated Platforms", plats, applyPlats);
 
-        var deps = BuildDependencies(emu, lbRoot);
+        var deps = BuildDependencies(emu, lbRoot, s);
         if (deps != null) w.AddSection("Dependency Files", deps);
 
-        var (startup, applyStartup) = BuildStartup(emu);
+        var (startup, applyStartup) = BuildStartup(emu, s);
         w.AddSection("Startup Screen", startup, applyStartup);
 
-        var (pause, applyPause) = BuildPause(emu);
+        var (pause, applyPause) = BuildPause(emu, s);
         w.AddSection("Pause Screen", pause, applyPause);
 
         AddScript(w, emu, "Pause Script", e => e.PauseAutoHotkeyScript, (e, v) => e.PauseAutoHotkeyScript = v);
@@ -65,25 +67,26 @@ internal static class EditEmulatorWindow
     }
 
     // ── Details ────────────────────────────────────────────────────────
-    private static (Control, Action) BuildDetails(IEmulator emu, string lbRoot)
+    private static (Control, Action) BuildDetails(IEmulator emu, string lbRoot, float s)
     {
+        int S(int px) => (int)Math.Round(px * s);
         var p = new Panel { BackColor = Bg, AutoScroll = true };
 
-        var name = LabeledText(p, 4, "Emulator Name:", Safe(() => emu.Title) ?? "");
-        var path = LabeledText(p, 64, "Application Path:", Safe(() => emu.ApplicationPath) ?? "", browse: true, lbRoot: lbRoot);
-        var cmd = LabeledText(p, 124, "Default Command-Line Parameters:", Safe(() => emu.CommandLine) ?? "");
+        var name = LabeledText(p, S(4), "Emulator Name:", Safe(() => emu.Title) ?? "", s: s);
+        var path = LabeledText(p, S(64), "Application Path:", Safe(() => emu.ApplicationPath) ?? "", browse: true, lbRoot: lbRoot, s: s);
+        var cmd = LabeledText(p, S(124), "Default Command-Line Parameters:", Safe(() => emu.CommandLine) ?? "", s: s);
 
-        var noQuotes = Chk(p, new Point(8, 188), "Remove Quotes", Safe(() => emu.NoQuotes));
-        var noSpace = Chk(p, new Point(300, 188), "Remove space before ROM", Safe(() => emu.NoSpace));
-        var nameOnly = Chk(p, new Point(8, 212), "Remove file extension and folder path", Safe(() => emu.FileNameWithoutExtensionAndPath));
-        var hideCon = Chk(p, new Point(8, 236), "Attempt to hide console window on startup/shutdown", Safe(() => emu.HideConsole));
-        var extract = Chk(p, new Point(8, 260), "Extract ROM archives before running", Safe(() => emu.AutoExtract));
+        var noQuotes = Chk(p, new Point(S(8), S(188)), "Remove Quotes", Safe(() => emu.NoQuotes));
+        var noSpace = Chk(p, new Point(S(300), S(188)), "Remove space before ROM", Safe(() => emu.NoSpace));
+        var nameOnly = Chk(p, new Point(S(8), S(212)), "Remove file extension and folder path", Safe(() => emu.FileNameWithoutExtensionAndPath));
+        var hideCon = Chk(p, new Point(S(8), S(236)), "Attempt to hide console window on startup/shutdown", Safe(() => emu.HideConsole));
+        var extract = Chk(p, new Point(S(8), S(260)), "Extract ROM archives before running", Safe(() => emu.AutoExtract));
 
         // Live sample command (LB parity).
-        var sampleLbl = new Label { Text = "Sample Command:", Location = new Point(8, 292), AutoSize = true, ForeColor = SubFg, BackColor = Bg };
+        var sampleLbl = new Label { Text = "Sample Command:", Location = new Point(S(8), S(292)), AutoSize = true, ForeColor = SubFg, BackColor = Bg };
         var sample = new TextBox
         {
-            Location = new Point(8, 312), Width = 600, ReadOnly = true,
+            Location = new Point(S(8), S(312)), Width = S(600), ReadOnly = true,
             BackColor = Panel2, ForeColor = SubFg, BorderStyle = BorderStyle.FixedSingle,
         };
         p.Controls.Add(sampleLbl); p.Controls.Add(sample);
@@ -104,10 +107,10 @@ internal static class EditEmulatorWindow
         var plugin = EmuPlugins.ForEmulator(emu);
         if (plugin != null)
         {
-            var verLbl = new Label { Text = "Current Version: …", Location = new Point(8, 352), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
-            var updLbl = new Label { Text = "", Location = new Point(8, 374), AutoSize = true, ForeColor = SubFg, BackColor = Bg };
-            var updBtn = MiniBtn("Update", new Point(220, 348)); updBtn.Enabled = false;
-            var reBtn = MiniBtn("Reinstall", new Point(316, 348)); reBtn.Enabled = false;
+            var verLbl = new Label { Text = "Current Version: …", Location = new Point(S(8), S(352)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
+            var updLbl = new Label { Text = "", Location = new Point(S(8), S(374)), AutoSize = true, ForeColor = SubFg, BackColor = Bg };
+            var updBtn = MiniBtn("Update", new Point(S(220), S(348)), s); updBtn.Enabled = false;
+            var reBtn = MiniBtn("Reinstall", new Point(S(316), S(348)), s); reBtn.Enabled = false;
             p.Controls.Add(verLbl); p.Controls.Add(updLbl); p.Controls.Add(updBtn); p.Controls.Add(reBtn);
 
             string? latestId = null;
@@ -167,15 +170,17 @@ internal static class EditEmulatorWindow
     internal static void RunInstall(EmulatorPlugin plugin, IEmulator emu, string version, Form? owner)
     {
         bool cancelled = false;
+        float s = owner != null ? LiteBoxTheme.DpiScale(owner) : 1f;
+        int S(int px) => (int)Math.Round(px * s);
         var dlg = new Form
         {
-            Text = "Installing…", Size = new Size(460, 150), FormBorderStyle = FormBorderStyle.FixedDialog,
+            Text = "Installing…", Size = new Size(S(460), S(150)), FormBorderStyle = FormBorderStyle.FixedDialog,
             StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false,
             BackColor = Bg, ForeColor = Fg, ControlBox = false,
         };
-        var lbl = new Label { Location = new Point(14, 14), Size = new Size(420, 36), Text = "Starting…" };
-        var bar = new ProgressBar { Location = new Point(14, 56), Size = new Size(420, 18), Style = ProgressBarStyle.Marquee };
-        var cancel = MiniBtn("Cancel", new Point(338, 84));
+        var lbl = new Label { Location = new Point(S(14), S(14)), Size = new Size(S(420), S(36)), Text = "Starting…" };
+        var bar = new ProgressBar { Location = new Point(S(14), S(56)), Size = new Size(S(420), S(18)), Style = ProgressBarStyle.Marquee };
+        var cancel = MiniBtn("Cancel", new Point(S(338), S(84)), s);
         cancel.Click += (_, _) => { cancelled = true; cancel.Enabled = false; };
         dlg.Controls.AddRange(new Control[] { lbl, bar, cancel });
 
@@ -223,8 +228,9 @@ internal static class EditEmulatorWindow
     }
 
     // ── Associated Platforms ───────────────────────────────────────────
-    private static (Control, Action) BuildPlatforms(IEmulator emu, bool readOnly)
+    private static (Control, Action) BuildPlatforms(IEmulator emu, bool readOnly, float s)
     {
+        int S(int px) => (int)Math.Round(px * s);
         var p = new Panel { BackColor = Bg };
         var grid = new DataGridView
         {
@@ -232,7 +238,12 @@ internal static class EditEmulatorWindow
             BackgroundColor = Bg, GridColor = Color.FromArgb(60, 60, 64),
             BorderStyle = BorderStyle.None, EnableHeadersVisualStyles = false,
             AllowUserToAddRows = true, AllowUserToDeleteRows = true,
-            RowHeadersVisible = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
+            // Fill (not None+fixed Width): fixed pixel column widths never scale for DPI and can
+            // leave a dead gap or overflow relative to the grid's real width - the same class of
+            // bug fixed in GameListView's column stretch. Fill (already used correctly by
+            // RaMappingDialog's grid) sidesteps it entirely by always dividing the available width
+            // proportionally, at any DPI, with no scaling math needed.
+            RowHeadersVisible = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         };
         grid.ColumnHeadersDefaultCellStyle.BackColor = Panel2;
         grid.ColumnHeadersDefaultCellStyle.ForeColor = Fg;
@@ -245,7 +256,7 @@ internal static class EditEmulatorWindow
         // text stays allowed via EditingControlShowing → DropDown style.
         var platCol = new DataGridViewComboBoxColumn
         {
-            HeaderText = "Associated Platform", Width = 230,
+            HeaderText = "Associated Platform", FillWeight = 230,
             FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox,
         };
         var known = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -254,10 +265,10 @@ internal static class EditEmulatorWindow
         { var n = Safe(() => ep0.Platform); if (!string.IsNullOrEmpty(n)) known.Add(n!); }
         foreach (var n in known) platCol.Items.Add(n);
         grid.Columns.Add(platCol);
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Default Command-Line Parameters", Width = 280 });
-        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Default", Width = 64 });
-        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Extract ROMs", Width = 90 });
-        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Use M3U", Width = 70 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Default Command-Line Parameters", FillWeight = 280 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Default", FillWeight = 64 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Extract ROMs", FillWeight = 90 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Use M3U", FillWeight = 70 });
 
         // Free-text platform entry: switch the editing combo to DropDown and accept
         // values not in Items (register them on validation so commit never DataErrors).
@@ -319,9 +330,9 @@ internal static class EditEmulatorWindow
 
         var hint = new Label
         {
-            Dock = DockStyle.Bottom, Height = 34, ForeColor = SubFg, BackColor = Bg,
+            Dock = DockStyle.Bottom, Height = S(34), ForeColor = SubFg, BackColor = Bg,
             Text = "An unchecked, untouched Extract ROMs keeps inheriting the emulator-level setting.  New row at the bottom adds a platform; Delete removes the selected row.",
-            Font = new Font("Segoe UI", 8.25f), Padding = new Padding(4, 2, 0, 0),
+            Font = new Font("Segoe UI", 8.25f), Padding = new Padding(S(4), S(2), 0, 0),
         };
         p.Controls.Add(grid); p.Controls.Add(hint);
 
@@ -390,20 +401,21 @@ internal static class EditEmulatorWindow
     }
 
     // ── Dependency Files (plugin capability) ───────────────────────────
-    private static Control? BuildDependencies(IEmulator emu, string lbRoot)
+    private static Control? BuildDependencies(IEmulator emu, string lbRoot, float s)
     {
-        var platforms = emu.GetAllEmulatorPlatforms()?.Select(ep => Safe(() => ep.Platform) ?? "").Where(s => s.Length > 0).Distinct().ToList()
+        int S(int px) => (int)Math.Round(px * s);
+        var platforms = emu.GetAllEmulatorPlatforms()?.Select(ep => Safe(() => ep.Platform) ?? "").Where(name => name.Length > 0).Distinct().ToList()
                         ?? new List<string>();
         if (platforms.Count == 0 || EmuPlugins.ForEmulator(emu) == null) return null;
         // Show the section only when at least one platform reports files.
         if (!platforms.Any(pl => EmuPlugins.BiosFiles(emu, pl).Any())) return null;
 
         var p = new Panel { BackColor = Bg };
-        var top = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = Bg };
-        var lbl = new Label { Text = "Platform:", Location = new Point(4, 9), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+        var top = new Panel { Dock = DockStyle.Top, Height = S(36), BackColor = Bg };
+        var lbl = new Label { Text = "Platform:", Location = new Point(S(4), S(9)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
         var cmb = new ComboBox
         {
-            Location = new Point(70, 5), Width = 320, DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(S(70), S(5)), Width = S(320), DropDownStyle = ComboBoxStyle.DropDownList,
             BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
         };
         cmb.Items.AddRange(platforms.Cast<object>().ToArray());
@@ -415,10 +427,10 @@ internal static class EditEmulatorWindow
             BackColor = Color.FromArgb(37, 37, 38), ForeColor = Fg, BorderStyle = BorderStyle.None,
             HeaderStyle = ColumnHeaderStyle.Nonclickable,
         };
-        list.Columns.Add("", 30);
-        list.Columns.Add("File", 320);
-        list.Columns.Add("Description", 260);
-        list.Columns.Add("Rule", 160);
+        list.Columns.Add("", S(30));
+        list.Columns.Add("File", S(320));
+        list.Columns.Add("Description", S(260));
+        list.Columns.Add("Rule", S(160));
 
         string emuDir = "";
         try
@@ -457,26 +469,27 @@ internal static class EditEmulatorWindow
     }
 
     // ── Startup Screen ─────────────────────────────────────────────────
-    private static (Control, Action) BuildStartup(IEmulator emu)
+    private static (Control, Action) BuildStartup(IEmulator emu, float s)
     {
+        int S(int px) => (int)Math.Round(px * s);
         var p = new Panel { BackColor = Bg, AutoScroll = true };
-        var use = Chk(p, new Point(8, 6), "Enable Game Startup Screen", Safe(() => emu.UseStartupScreen));
-        var noShut = Chk(p, new Point(330, 6), "Enable Game Shutdown Screen", !Safe(() => emu.DisableShutdownScreen));
-        var hideMouse = Chk(p, new Point(8, 30), "Hide Mouse Cursor During Game", Safe(() => emu.HideMouseCursorInGame));
-        var aggressive = Chk(p, new Point(330, 30), "Aggressive Startup Window Hiding", Safe(() => emu.AggressiveWindowHiding));
-        var hideAll = Chk(p, new Point(8, 54), "Hide All Windows that are not in Exclusive Fullscreen Mode", Safe(() => emu.HideAllNonExclusiveFullscreenWindows));
+        var use = Chk(p, new Point(S(8), S(6)), "Enable Game Startup Screen", Safe(() => emu.UseStartupScreen));
+        var noShut = Chk(p, new Point(S(330), S(6)), "Enable Game Shutdown Screen", !Safe(() => emu.DisableShutdownScreen));
+        var hideMouse = Chk(p, new Point(S(8), S(30)), "Hide Mouse Cursor During Game", Safe(() => emu.HideMouseCursorInGame));
+        var aggressive = Chk(p, new Point(S(330), S(30)), "Aggressive Startup Window Hiding", Safe(() => emu.AggressiveWindowHiding));
+        var hideAll = Chk(p, new Point(S(8), S(54)), "Hide All Windows that are not in Exclusive Fullscreen Mode", Safe(() => emu.HideAllNonExclusiveFullscreenWindows));
 
-        var dlyLbl = new Label { Text = "Startup Load Delay (ms):", Location = new Point(8, 88), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+        var dlyLbl = new Label { Text = "Startup Load Delay (ms):", Location = new Point(S(8), S(88)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
         var dly = new NumericUpDown
         {
-            Location = new Point(170, 85), Width = 90, Minimum = 0, Maximum = 60000, Increment = 250,
+            Location = new Point(S(170), S(85)), Width = S(90), Minimum = 0, Maximum = 60000, Increment = 250,
             BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
             Value = Math.Max(0, Math.Min(60000, Safe(() => emu.StartupLoadDelay))),
         };
         var note = new Label
         {
             Text = "These settings round-trip to Emulators.xml and are honoured by LaunchBox.\nLiteBox does not implement startup/shutdown screens yet.",
-            Location = new Point(8, 122), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
+            Location = new Point(S(8), S(122)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
         };
         p.Controls.Add(dlyLbl); p.Controls.Add(dly); p.Controls.Add(note);
 
@@ -492,15 +505,16 @@ internal static class EditEmulatorWindow
     }
 
     // ── Pause Screen (off-SDK toggles via ILiteBoxFields) ──────────────
-    private static (Control, Action) BuildPause(IEmulator emu)
+    private static (Control, Action) BuildPause(IEmulator emu, float s)
     {
+        int S(int px) => (int)Math.Round(px * s);
         var p = new Panel { BackColor = Bg };
         var lf = emu as ILiteBoxFields;
         bool GetB(string k, bool def) { var v = lf?.GetField(k); return string.IsNullOrEmpty(v) ? def : string.Equals(v, "true", StringComparison.OrdinalIgnoreCase); }
 
-        var use = Chk(p, new Point(8, 6), "Enable Game Pause Screen", GetB("UsePauseScreen", true));
-        var susp = Chk(p, new Point(8, 30), "Suspend Emulator Process While Paused", GetB("SuspendProcessOnPause", true));
-        var force = Chk(p, new Point(8, 54), "Forceful Pause Screen Activation (enable this if the pause screen is not showing)", GetB("ForcefulPauseScreenActivation", true));
+        var use = Chk(p, new Point(S(8), S(6)), "Enable Game Pause Screen", GetB("UsePauseScreen", true));
+        var susp = Chk(p, new Point(S(8), S(30)), "Suspend Emulator Process While Paused", GetB("SuspendProcessOnPause", true));
+        var force = Chk(p, new Point(S(8), S(54)), "Forceful Pause Screen Activation (enable this if the pause screen is not showing)", GetB("ForcefulPauseScreenActivation", true));
 
         return (p, () =>
         {
@@ -529,19 +543,20 @@ internal static class EditEmulatorWindow
     }
 
     // ── helpers ────────────────────────────────────────────────────────
-    private static TextBox LabeledText(Panel p, int y, string label, string value, bool browse = false, string lbRoot = "")
+    private static TextBox LabeledText(Panel p, int y, string label, string value, bool browse = false, string lbRoot = "", float s = 1f)
     {
-        var lbl = new Label { Text = label, Location = new Point(8, y), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+        int S(int px) => (int)Math.Round(px * s);
+        var lbl = new Label { Text = label, Location = new Point(S(8), y), AutoSize = true, ForeColor = Fg, BackColor = Bg };
         var tb = new TextBox
         {
-            Location = new Point(8, y + 20), Width = browse ? 510 : 600,
+            Location = new Point(S(8), y + S(20)), Width = browse ? S(510) : S(600),
             BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
             Text = value,
         };
         p.Controls.Add(lbl); p.Controls.Add(tb);
         if (browse)
         {
-            var btn = MiniBtn("Browse…", new Point(526, y + 18));
+            var btn = MiniBtn("Browse…", new Point(S(526), y + S(18)), s);
             btn.Click += (_, _) =>
             {
                 using var dlg = new OpenFileDialog { Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*" };
@@ -568,9 +583,9 @@ internal static class EditEmulatorWindow
         return cb;
     }
 
-    private static Button MiniBtn(string text, Point loc) => new()
+    private static Button MiniBtn(string text, Point loc, float s = 1f) => new()
     {
-        Text = text, Location = loc, Size = new Size(88, 26),
+        Text = text, Location = loc, Size = new Size((int)Math.Round(88 * s), (int)Math.Round(26 * s)),
         FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg,
         FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f),
     };

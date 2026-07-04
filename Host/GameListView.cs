@@ -114,35 +114,34 @@ internal sealed class GameListView : ListView
         BorderStyle = BorderStyle.None;
         AllowColumnReorder = true;
 
-        // Native ListView rows size themselves to max(Font.Height, SmallImageList.ImageSize.Height) -
-        // with no image list at all, that's just the cramped ~17px the classic-Windows-app look comes
-        // from. No per-row icons are drawn here (ImageIndex is never set), so this list's images are
-        // blank - it exists purely to stretch row height to something roomier, DPI-scaled like
-        // everything else in this pass.
-        float s = LiteBoxTheme.DpiScale(this);
-        SmallImageList = new ImageList { ImageSize = new Size(1, (int)Math.Round(30 * s)), ColorDepth = ColorDepth.Depth32Bit };
+        // Native ListView rows size themselves to max(Font.Height, SmallImageList.ImageSize.Height).
+        // With no image list at all that's the cramped ~17px classic-Windows look; a taller BLANK image
+        // list (no per-row icon is ever drawn) stretches the row height. A two-line height is one the
+        // native control fills by WRAPPING long cell text onto a second line; a compact height keeps
+        // text on one line (truncated). See ApplyRowHeight / the TwoLineRows option.
+        ApplyRowHeight();
 
         RetrieveVirtualItem += OnRetrieveVirtualItem;
         ColumnClick += (_, e) => { if (e.Column >= 0 && e.Column < _visCols.Count) ColumnClicked?.Invoke(_visCols[e.Column]); };
         ItemActivate += (_, _) => GameActivated?.Invoke();
         MouseUp += OnMouseUpRight;
         SelectedIndexChanged += OnSelectedIndexChanged;
-        HandleCreated += (_, _) => { EnableDoubleBuffer(); ThemeHeader(); MeasureContentFits(); AutoFit(); };
+        HandleCreated += (_, _) => { EnableDoubleBuffer(); ThemeHeader(); ApplyRowHeight(); MeasureContentFits(); AutoFit(); };
         Resize += (_, _) => AutoFit();   // cheap: reuses cached content-fit widths, only recomputes the fill
-        // A width change we DIDN'T cause (guarded by _autoFitting) is the user dragging a border →
-        // adopt it as that column's BASE width: for the Stretch column (Title) the base is its MINIMUM
-        // (B — the fill grows above it, never below); for the others it's the MAXIMUM cap (A — content
-        // fit shrinks below it, never above). Then re-run AutoFit so the fill re-balances.
-        ColumnWidthChanged += (_, e) =>
+        // Capture the user's BASE width during the DRAG (ColumnWidthChanging fires live, left button
+        // held), NOT in ColumnWidthChanged. Programmatic width changes (AutoFit shrinking a column to
+        // fit a list with shorter content; the native control re-laying-out when the scrollbar toggles)
+        // ALSO raise these events, sometimes deferred past the _autoFitting window — mis-adopting one
+        // as the base is what made a manually-widened column stay tiny after visiting a shorter list.
+        // The mouse-button state cleanly separates a real drag from every programmatic/native change;
+        // _autoFitting still guards the re-balance AutoFit triggers on the OTHER columns.
+        ColumnWidthChanging += (_, e) =>
         {
-            if (_autoFitting) return;
+            if (_autoFitting || Control.MouseButtons != MouseButtons.Left) return;
             if (e.ColumnIndex >= 0 && e.ColumnIndex < _visCols.Count)
-            {
-                var c = _visCols[e.ColumnIndex];
-                if (c.Header != null) c.Width = c.Header.Width;
-            }
-            AutoFit();
+                _visCols[e.ColumnIndex].Width = e.NewWidth;   // adopt the dragged width as the persisted base
         };
+        ColumnWidthChanged += (_, _) => { if (!_autoFitting) AutoFit(); };   // re-balance after a drag / native change
     }
 
     // The list body picks up dark scrollbars/selection from ApplyDarkScroll (MainWindow) via
@@ -229,6 +228,50 @@ internal sealed class GameListView : ListView
         _autoFitting = true;
         try { foreach (var c in _visCols) if (c.Header != null) c.Header.Width = c.Width > 0 ? c.Width : 100; }
         finally { _autoFitting = false; }
+    }
+
+    // Display option "Two-line rows" (default on). On → rows are tall enough that the native ListView
+    // WRAPS long cell text onto a second line. Off → compact single-line rows (long text truncates,
+    // more games fit). It is the ROW HEIGHT that drives the native wrap; there is no per-column control
+    // (the OS wraps every column or none), which is why this is a single global toggle.
+    private bool _twoLineRows = true;
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool TwoLineRows
+    {
+        get => _twoLineRows;
+        set { if (_twoLineRows == value) return; _twoLineRows = value; ApplyRowHeight(); }
+    }
+
+    private ImageList _rowSizer;   // a blank image list whose height sets the row height
+
+    // Row height = one blank-image height. 30px fits two wrapped lines (the native control fills the
+    // extra height by wrapping); 22px fits a single line (a second line has no room, so text truncates).
+    // Re-applied on HandleCreated so the DPI scale is the real monitor's, not the pre-handle default.
+    private void ApplyRowHeight()
+    {
+        float s = LiteBoxTheme.DpiScale(this);
+        int h = (int)Math.Round((_twoLineRows ? 30 : 22) * s * _zoom);
+        var old = _rowSizer;
+        _rowSizer = new ImageList { ImageSize = new Size(1, Math.Max(1, h)), ColorDepth = ColorDepth.Depth32Bit };
+        SmallImageList = _rowSizer;
+        old?.Dispose();
+    }
+
+    // ── Zoom (Ctrl +/- and Ctrl-wheel over the game list; level owned + persisted by MainWindow) ──
+    // Scales the FONT and the row height together, then re-measures content (text widths change with
+    // the font) and re-fits the columns. baseFontPt is the un-zoomed point size, passed each call so
+    // repeated steps never compound off an already-scaled font.
+    private float _zoom = 1f;
+    private float _baseFontPt = 9f;
+    public void SetZoom(float zoom, float baseFontPt)
+    {
+        if (baseFontPt > 0) _baseFontPt = baseFontPt;
+        _zoom = Math.Clamp(zoom, 0.5f, 2f);
+        try { Font = new Font(Font.FontFamily, _baseFontPt * _zoom, Font.Style); } catch { }
+        ApplyRowHeight();
+        MeasureContentFits();
+        AutoFit();
+        Invalidate();
     }
 
     // Measure each non-Stretch column's content-fit width (widest of its header text + its cells) over
@@ -433,6 +476,15 @@ internal sealed class GameListView : ListView
         SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref clear);
         var set = new LVITEM { stateMask = LVIS_SELECTED | LVIS_FOCUSED, state = LVIS_SELECTED | LVIS_FOCUSED };
         SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)index, ref set);
+    }
+
+    // Select every row (Ctrl+A). Virtual-mode friendly: LVM_SETITEMSTATE with item index -1 targets
+    // all items at once, so it costs nothing regardless of how many games the view holds.
+    public void SelectAll()
+    {
+        if (!IsHandleCreated || _view.Length == 0) return;
+        var all = new LVITEM { stateMask = LVIS_SELECTED, state = LVIS_SELECTED };
+        SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref all);
     }
 
     private void OnSelectedIndexChanged(object sender, EventArgs e)

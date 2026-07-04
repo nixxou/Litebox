@@ -25,7 +25,7 @@ using LbApiHost.Host.UiKit;
 
 namespace LbApiHost.Host;
 
-internal sealed class MainWindow : Form
+internal sealed class MainWindow : Form, IMessageFilter
 {
     // ── Theme ────────────────────────────────────────────────────────────────
     // Bg/Panel/Panel2/Fg/SubFg/Accent are byte-for-byte the same palette as Host.UiKit.LiteBoxTheme -
@@ -107,7 +107,16 @@ internal sealed class MainWindow : Form
     private bool _posterDrainPending;              // coalesces the batched apply+invalidate
     private static readonly int PosterMaxWorkers = Math.Max(1, Math.Min(3, Environment.ProcessorCount - 1));
     private const int PosterReqCap = 64;           // cap pending requests; drop oldest (scrolled-past) beyond this
-    private const int PCellW = 124, PImgH = 174, PLabelH = 38, PGap = 14;
+    // Base poster tile geometry at zoom 100%; the live values scale with the central-panel zoom so a
+    // zoomed grid fits more/fewer posters per row (PCellW+PGap is the horizontal stride LayoutPoster uses).
+    private const int PCellW0 = 124, PImgH0 = 174, PLabelH0 = 38, PGap0 = 14;
+    private double _zoom = 1.0;                                       // central-panel zoom 0.5–2.0 (saved as ZoomPercent)
+    private int PCellW  => (int)Math.Round(PCellW0  * _zoom);
+    private int PImgH   => (int)Math.Round(PImgH0   * _zoom);
+    private int PLabelH => (int)Math.Round(PLabelH0 * _zoom);
+    private int PGap    => (int)Math.Round(PGap0    * _zoom);
+    private int PZ(int px) => (int)Math.Round(px * _zoom);           // scale a tile-internal offset by zoom
+    private Font _posterTileFont;                                    // MainWindow.Font × zoom, for tile title/dev text
     private readonly ToolStripTextBox _search;
     private readonly ToolStripComboBox _sortCombo;
     private readonly ToolStripButton _dirBtn;
@@ -201,6 +210,7 @@ internal sealed class MainWindow : Form
         _secondInstance = InstanceGuard.AnotherInstanceRunning;
         _useImageCache = _cfg.UseImageCache;
         _posterOwnerDraw = _cfg.GetBool("PosterOwnerDraw", false);   // legacy poster renderer (vs native image list)
+        _zoom = Math.Clamp(_cfg.GetInt("ZoomPercent", 100) / 100.0, 0.5, 2.0);   // read BEFORE BuildPoster so its image list is sized for the saved zoom
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
         _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
         _raExpanded = _cfg.GetBool("RaExpanded", false);
@@ -391,7 +401,7 @@ internal sealed class MainWindow : Form
 
         // Persist layout / window / selection once, at close (not per change).
         // _closing lets the serialized detail loader bail before its blocking Invoke once the pump ends.
-        FormClosing += (_, _) => { _closing = true; LedBlinky.FrontendQuit(); try { SaveAll(); } catch { } };
+        FormClosing += (_, _) => { _closing = true; try { Application.RemoveMessageFilter(this); } catch { } LedBlinky.FrontendQuit(); try { SaveAll(); } catch { } };
 
         // Bring the window back on-screen if a monitor is unplugged while running.
         try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged; } catch { }
@@ -488,6 +498,9 @@ internal sealed class MainWindow : Form
             else try { inner.SplitterDistance = Math.Max((int)Math.Round(300 * dpiS), inner.Width - (int)Math.Round(380 * dpiS)); } catch { }
             RestoreColumnLayout();   // order / width / shown-hidden from the INI
             _games.AutoFitColumns = _cfg.GetBool("AutoFitColumns", true);   // Display option (default on)
+            _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true);         // Display option (default on)
+            if (Math.Abs(_zoom - 1.0) > 0.001) _games.SetZoom((float)_zoom, 9f);   // apply saved central-panel zoom to the list (poster already built at this zoom)
+            Application.AddMessageFilter(this);   // enable Ctrl-wheel zoom over the central panel
             RestoreSort();           // last sort column + direction
             _currentView = SourceViews.ById(_cfg.Get("GroupView"));   // restore the saved grouping…
             SyncViewCombo();                                          // …reflect it in the combo (no rebuild)
@@ -1365,6 +1378,13 @@ internal sealed class MainWindow : Form
                 + "included, keeps exactly the width you drag it to — classic manual sizing (a gap may appear "
                 + "before the detail pane).",
                 applyLive: () => _games.AutoFitColumns = _cfg.GetBool("AutoFitColumns", true)),
+            Options.OptionItem.Toggle("Display", "Two-line rows (wrap long cell text)",
+                () => _cfg.GetBool("TwoLineRows", true), v => _cfg.SetBool("TwoLineRows", v),
+                "On (default): rows are tall enough that long cell text (titles, developers…) wraps onto a "
+                + "second line. Off: compact single-line rows — long text is truncated with an ellipsis and "
+                + "more games fit on screen. Wrapping is all-or-nothing (a Windows list limitation): the row "
+                + "height applies to every column, there is no per-column setting.",
+                applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
         });
 
         w.AddSection("Pause screen", new[]
@@ -1973,6 +1993,103 @@ internal sealed class MainWindow : Form
         if (_poster.Bounds != b) _poster.Bounds = b;
     }
 
+    // ── Central-panel zoom (Ctrl +/- , Ctrl-wheel, Ctrl-0) ────────────────────────────────────
+    // One level (0.5–2.0, 25% steps) drives BOTH views: the detail list scales its font + row height
+    // + re-fits its columns; the poster grid scales its tile geometry so more/fewer posters fit a row.
+    // Persisted as ZoomPercent; only fires when the central panel (list or poster) has focus.
+    private bool CentralPanelHasFocus()
+        => (_games != null && _games.Focused) || (_poster != null && _poster.Focused);
+
+    private void ChangeZoom(int steps)
+        => ApplyZoomLevel(Math.Round((_zoom + steps * 0.25) / 0.25) * 0.25);
+
+    private void ApplyZoomLevel(double z)
+    {
+        z = Math.Clamp(z, 0.5, 2.0);
+        if (Math.Abs(z - _zoom) < 0.001) return;
+        _zoom = z;
+        _cfg.SetInt("ZoomPercent", (int)Math.Round(_zoom * 100)); _cfg.Save();
+        ApplyZoom();
+    }
+
+    private void ApplyZoom()
+    {
+        try { _games?.SetZoom((float)_zoom, 9f); } catch { }
+        try { RebuildPosterGeometry(); } catch { }
+        if (_posterMode) { try { RefreshPoster(); LayoutPoster(); } catch { } }
+        else { try { _poster?.Invalidate(); } catch { } }
+    }
+
+    // The poster tiles + decoded thumbs are all sized for the PREVIOUS zoom, and the native image list
+    // has fixed-size slots — so a zoom change means: free every cached tile/thumb, reset the slot
+    // bookkeeping, and recreate the image list at the new cell size. Tiles then rebuild lazily (at the
+    // new geometry) on the next retrieval. Guarded/try-wrapped: it must never take the app down.
+    private void RebuildPosterGeometry()
+    {
+        if (_poster == null) return;
+        foreach (var h in _posterTileHbm.Values) if (h != IntPtr.Zero) DeleteObject(h);
+        _posterTileHbm.Clear(); _posterTileOrder.Clear();
+        foreach (var img in _posterBmp.Values) img?.Dispose();
+        _posterBmp.Clear();
+        _slotOf.Clear(); _slotId.Clear(); _slotCount = 0; _slotLru.Clear(); _slotNode.Clear();
+        _posterTileFont?.Dispose(); _posterTileFont = null;
+
+        if (_posterOwnerDraw)
+        {
+            var oldGeom = _posterGeom;
+            int cw = Math.Min(256, PCellW), ch = Math.Min(256, PImgH + PLabelH);   // managed ImageList caps at 256
+            _posterGeom = new ImageList { ColorDepth = ColorDepth.Depth32Bit, ImageSize = new Size(cw, ch) };
+            try { if (_poster.IsHandleCreated) _poster.LargeImageList = _posterGeom; } catch { }
+            oldGeom?.Dispose();
+        }
+        else
+        {
+            var oldHiml = _himl;
+            _himl = ImageList_Create(PCellW, PImgH + PLabelH, ILC_COLOR32, 0, 64);
+            try { if (_poster.IsHandleCreated) SendMessage(_poster.Handle, LVM_SETIMAGELIST, (IntPtr)LVSIL_NORMAL, _himl); } catch { }
+            if (oldHiml != IntPtr.Zero) ImageList_Destroy(oldHiml);
+        }
+        try { if (_poster.IsHandleCreated) SetIconSpacing(_poster, PCellW + PGap, PImgH + PLabelH + PGap); } catch { }
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if ((keyData & Keys.Control) == Keys.Control)
+        {
+            var k = keyData & Keys.KeyCode;
+            // Ctrl+0 → reset zoom to 100%. Ungated on purpose: it's a harmless global reset, and
+            // requiring central-panel keyboard focus made it miss right after a Ctrl-wheel zoom (the
+            // wheel leaves focus wherever it was, so the list usually isn't keyboard-focused then).
+            if (k == Keys.D0 || k == Keys.NumPad0) { ApplyZoomLevel(1.0); return true; }
+            // Ctrl+A → select every game (detail list only; the poster grid is single-select).
+            if (k == Keys.A && _games != null && _games.Focused) { _games.SelectAll(); return true; }
+            if (CentralPanelHasFocus())
+            {
+                switch (k)
+                {
+                    case Keys.Oemplus: case Keys.Add:       ChangeZoom(+1); return true;
+                    case Keys.OemMinus: case Keys.Subtract: ChangeZoom(-1); return true;
+                }
+            }
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    // Ctrl-wheel over (or with focus in) the central panel zooms instead of scrolling. This filter
+    // catches WM_MOUSEWHEEL before the native list scrolls it; returning true swallows the scroll.
+    bool IMessageFilter.PreFilterMessage(ref Message m)
+    {
+        const int WM_MOUSEWHEEL = 0x020A;
+        if (m.Msg != WM_MOUSEWHEEL || (ModifierKeys & Keys.Control) != Keys.Control) return false;
+        bool central =
+            (_games  != null && (_games.Focused  || (_games.IsHandleCreated  && m.HWnd == _games.Handle))) ||
+            (_poster != null && (_poster.Focused || (_poster.IsHandleCreated && m.HWnd == _poster.Handle)));
+        if (!central) return false;
+        int delta = unchecked((short)((long)m.WParam >> 16));
+        ChangeZoom(delta > 0 ? +1 : -1);
+        return true;
+    }
+
     private void SetPosterMode(bool on)
     {
         if (_posterMode == on || _poster == null) return;
@@ -2112,12 +2229,13 @@ internal sealed class MainWindow : Form
                 }
                 var title = S(Safe(() => model.Title));
                 var dev = S(Safe(() => model.Developer));
-                var tRect = new Rectangle(0, PImgH + 3, PCellW, 17);
-                var dRect = new Rectangle(0, PImgH + 19, PCellW, 15);
-                TextRenderer.DrawText(tg, title, Font, tRect, Fg,
+                var tRect = new Rectangle(0, PImgH + PZ(3), PCellW, PZ(17));
+                var dRect = new Rectangle(0, PImgH + PZ(19), PCellW, PZ(15));
+                var tileFont = _posterTileFont ??= new Font(Font.FontFamily, Font.Size * (float)_zoom, Font.Style);
+                TextRenderer.DrawText(tg, title, tileFont, tRect, Fg,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
                 if (!string.IsNullOrEmpty(dev))
-                    TextRenderer.DrawText(tg, dev, Font, dRect, SubFg,
+                    TextRenderer.DrawText(tg, dev, tileFont, dRect, SubFg,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
             }
             hbm = tile.GetHbitmap();

@@ -38,6 +38,7 @@ internal sealed class GameColumn
     public bool Stretch;
 
     internal ColumnHeader Header;            // the live native header (when visible)
+    internal int FitWidth = -1;              // cached content-fit width (header + widest cell + pad); -1 = unmeasured
 }
 
 internal sealed class GameListView : ListView
@@ -126,19 +127,21 @@ internal sealed class GameListView : ListView
         ItemActivate += (_, _) => GameActivated?.Invoke();
         MouseUp += OnMouseUpRight;
         SelectedIndexChanged += OnSelectedIndexChanged;
-        HandleCreated += (_, _) => { EnableDoubleBuffer(); ThemeHeader(); StretchColumn(); };
-        Resize += (_, _) => StretchColumn();
-        // Skip re-stretching when the event is the STRETCH column's own header changing width -
-        // otherwise a user dragging Title's border fires this, StretchColumn() recomputes leftover
-        // space (which excludes Title from its own sum), gets the same answer as before the drag,
-        // and snaps the column right back - the column becomes impossible to resize by hand. A drag
-        // on any OTHER column still re-stretches Title to absorb the new leftover space, and a later
-        // window Resize still re-asserts the fill (so a manual narrowing doesn't leave a dead gap
-        // once the window changes size again).
+        HandleCreated += (_, _) => { EnableDoubleBuffer(); ThemeHeader(); MeasureContentFits(); AutoFit(); };
+        Resize += (_, _) => AutoFit();   // cheap: reuses cached content-fit widths, only recomputes the fill
+        // A width change we DIDN'T cause (guarded by _autoFitting) is the user dragging a border →
+        // adopt it as that column's BASE width: for the Stretch column (Title) the base is its MINIMUM
+        // (B — the fill grows above it, never below); for the others it's the MAXIMUM cap (A — content
+        // fit shrinks below it, never above). Then re-run AutoFit so the fill re-balances.
         ColumnWidthChanged += (_, e) =>
         {
-            if (e.ColumnIndex >= 0 && e.ColumnIndex < _visCols.Count && _visCols[e.ColumnIndex].Stretch) return;
-            StretchColumn();
+            if (_autoFitting) return;
+            if (e.ColumnIndex >= 0 && e.ColumnIndex < _visCols.Count)
+            {
+                var c = _visCols[e.ColumnIndex];
+                if (c.Header != null) c.Width = c.Header.Width;
+            }
+            AutoFit();
         };
     }
 
@@ -180,32 +183,114 @@ internal sealed class GameListView : ListView
             }
         }
         finally { EndUpdate(); }
-        StretchColumn();
+        MeasureContentFits();   // visible-column set changed → re-measure content fit
+        AutoFit();
         Invalidate();
     }
 
-    // Column widths are independent, persisted numbers (INI Col.<key> entries from years-old
-    // sessions, unscaled for whatever DPI the app happens to run at now) - they will never, by
-    // themselves, reliably add up to the list's actual width. Rather than chase that with more
-    // scaling math, make the designated Stretch column (Title) self-heal: it always eats
-    // whatever width the others didn't use, so there's never a dead gap before the detail pane,
-    // at any DPI, any saved column set, any resize. Deliberately NOT "whichever column ends up
-    // last" - that used to be Plays (a small numeric count with no reason to be wide), which
-    // just moved the confusing dead-looking gap into a column instead of removing it.
-    private bool _stretchingColumn;
+    // ── Smart column fit — two rules that keep the list exactly as wide as its window ─────────
+    // Persisted per-column widths never, by themselves, add up to the list's real width (different
+    // DPI, hidden/shown columns, years-old sessions). Instead of chasing that with scaling math, the
+    // width each column actually GETS is derived every time the list is shown or resized:
+    //   • non-Stretch columns SHRINK to their content: width = min(userWidth, contentFit). A column
+    //     is never wider than it needs, which frees space (A); userWidth acts as a MAX cap.
+    //   • the one Stretch column (Title) GROWS to fill: width = max(userWidth, leftover). It eats the
+    //     freed space but never drops below what the user set (B); userWidth acts as a MIN floor.
+    // contentFit is measured once per list display (MeasureContentFits), cached on the column, and
+    // reused by AutoFit on every resize so dragging the window edge stays cheap.
+    private const int FitRowCap = 15000;   // above this many rows, skip the content scan (keep user widths)
+    private const int FitCandidates = 8;   // longest-by-length cells kept per column as measure candidates
+    private const int FitPad = 14;         // cell padding + a little slack so nothing truncates
+    private const int MinCol = 24;         // never collapse a visible column below this
+    private bool _autoFitting;             // true while WE assign header widths → ignore our own ColumnWidthChanged
+    private static readonly Comparison<string> ByLenDesc = (a, b) => b.Length.CompareTo(a.Length);
 
-    private void StretchColumn()
+    // Display option "Auto-fit column widths" (default on). Off → every column, Title included, keeps
+    // exactly the width the user drags it to (classic manual sizing); the dead gap before the detail
+    // pane may reappear, which is then the user's explicit choice.
+    private bool _autoFitColumns = true;
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool AutoFitColumns
     {
-        if (_stretchingColumn || !IsHandleCreated) return;
-        var target = _visCols.FirstOrDefault(c => c.Stretch);
-        if (target?.Header == null) return;
-        int othersWidth = 0;
-        foreach (var c in _visCols) if (c != target) othersWidth += c.Header?.Width ?? 0;
-        int minWidth = 60;
-        int w = Math.Max(minWidth, ClientSize.Width - othersWidth);
-        if (target.Header.Width == w) return;
-        _stretchingColumn = true;
-        try { target.Header.Width = w; } finally { _stretchingColumn = false; }
+        get => _autoFitColumns;
+        set
+        {
+            if (_autoFitColumns == value) return;
+            _autoFitColumns = value;
+            if (!IsHandleCreated) return;
+            if (value) { MeasureContentFits(); AutoFit(); }   // turned ON → measure + re-balance
+            else RestoreBaseWidths();                         // turned OFF → back to the user's exact widths
+        }
+    }
+
+    // Put every header back to its user base width (used when auto-fit is turned OFF).
+    private void RestoreBaseWidths()
+    {
+        _autoFitting = true;
+        try { foreach (var c in _visCols) if (c.Header != null) c.Header.Width = c.Width > 0 ? c.Width : 100; }
+        finally { _autoFitting = false; }
+    }
+
+    // Measure each non-Stretch column's content-fit width (widest of its header text + its cells) over
+    // the CURRENT view, once. Proportional font: longest-by-chars ≠ widest-by-pixels, so keep the few
+    // longest cells per column and MeasureText each rather than trusting a single candidate.
+    private void MeasureContentFits()
+    {
+        if (!_autoFitColumns || !IsHandleCreated) return;
+        var cols = new List<GameColumn>();
+        foreach (var c in _visCols) if (!c.Stretch && c.Header != null) cols.Add(c);
+        if (cols.Count == 0) return;
+
+        var view = _view;
+        if (view.Length > FitRowCap) { foreach (var c in cols) c.FitWidth = -1; return; }   // too big → no shrink
+
+        var cand = new List<string>[cols.Count];
+        for (int i = 0; i < cols.Count; i++) cand[i] = new List<string>(FitCandidates + 1);
+        foreach (var g in view)
+            for (int i = 0; i < cols.Count; i++)
+            {
+                string t = CellText(cols[i], g);
+                if (string.IsNullOrEmpty(t)) continue;
+                var list = cand[i];
+                if (list.Count < FitCandidates) { list.Add(t); if (list.Count == FitCandidates) list.Sort(ByLenDesc); }
+                else if (t.Length > list[FitCandidates - 1].Length) { list[FitCandidates - 1] = t; list.Sort(ByLenDesc); }
+            }
+
+        for (int i = 0; i < cols.Count; i++)
+        {
+            int max = TextRenderer.MeasureText(HeaderText(cols[i]), Font).Width;
+            foreach (var t in cand[i]) { int w = TextRenderer.MeasureText(t, Font).Width; if (w > max) max = w; }
+            cols[i].FitWidth = max + FitPad;
+        }
+    }
+
+    // Apply the two rules from the cached FitWidth values. Cheap — safe to call on every resize.
+    private void AutoFit()
+    {
+        if (!_autoFitColumns || _autoFitting || !IsHandleCreated) return;
+        _autoFitting = true;
+        try
+        {
+            GameColumn stretch = null;
+            int othersWidth = 0;
+            foreach (var c in _visCols)
+            {
+                if (c.Header == null) continue;
+                if (c.Stretch) { stretch = c; continue; }
+                int baseW = c.Width > 0 ? c.Width : 100;
+                int w = c.FitWidth > 0 ? Math.Min(baseW, c.FitWidth) : baseW;   // A: shrink to content, capped at user width
+                if (w < MinCol) w = MinCol;
+                if (c.Header.Width != w) c.Header.Width = w;
+                othersWidth += w;
+            }
+            if (stretch?.Header != null)
+            {
+                int baseW = stretch.Width > 0 ? stretch.Width : 100;
+                int w = Math.Max(baseW, ClientSize.Width - othersWidth);        // B: fill leftover, floored at user width
+                if (stretch.Header.Width != w) stretch.Header.Width = w;
+            }
+        }
+        finally { _autoFitting = false; }
     }
 
     private string HeaderText(GameColumn c)
@@ -226,12 +311,12 @@ internal sealed class GameListView : ListView
 
     public void SyncFromUi()
     {
+        // Width is deliberately NOT read back from the live header here: the header width is the
+        // AutoFit-COMPUTED value (shrunk/filled), not the user's base. The base is captured directly
+        // on a user drag (ColumnWidthChanged), so it stays the pure user intent that gets persisted.
         foreach (var c in _visCols)
             if (c.Header != null)
-            {
-                try { c.Width = c.Header.Width; } catch { }
                 try { c.SavedDisplayIndex = c.Header.DisplayIndex; } catch { }
-            }
     }
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -249,6 +334,8 @@ internal sealed class GameListView : ListView
         _view = list.ToArray();
         RefreshHeaderGlyphs();
         try { VirtualListSize = _view.Length; } catch { }
+        MeasureContentFits();   // view content changed → re-fit columns (capped + cached, so cheap)
+        AutoFit();
         try { SelectedIndices.Clear(); } catch { }
         if (prev != null) { int ix = Array.IndexOf(_view, prev); if (ix >= 0) SetSelectedAndFocused(ix); }
         Invalidate();
@@ -259,9 +346,22 @@ internal sealed class GameListView : ListView
 
     private void OnRetrieveVirtualItem(object sender, RetrieveVirtualItemEventArgs e)
     {
-        if (e.ItemIndex < 0 || e.ItemIndex >= _view.Length) { e.Item = new ListViewItem(""); return; }
-        var g = _view[e.ItemIndex];
         int n = _visCols.Count;
+        if (e.ItemIndex < 0 || e.ItemIndex >= _view.Length)
+        {
+            // A virtual item MUST carry one subitem PER COLUMN — even the placeholder we hand back
+            // for an index that briefly falls out of range. That happens during a platform switch:
+            // VirtualListSize can still reflect the previous (larger) platform's count while _view
+            // already points at the smaller new array, so a still-visible row index is momentarily
+            // >= _view.Length. A single-subitem item here makes WinForms throw
+            // "…needs a SubItem for each ListView column" the instant the native control asks for
+            // column >= 1 (a forced header repaint — StretchColumn/ThemeHeader — makes it ask).
+            var blank = new ListViewItem("");
+            for (int i = 1; i < n; i++) blank.SubItems.Add("");
+            e.Item = blank;
+            return;
+        }
+        var g = _view[e.ItemIndex];
         var it = new ListViewItem(n > 0 ? CellText(_visCols[0], g) : "");
         for (int i = 1; i < n; i++) it.SubItems.Add(CellText(_visCols[i], g));
 

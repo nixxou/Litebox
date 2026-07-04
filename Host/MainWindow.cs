@@ -487,6 +487,7 @@ internal sealed class MainWindow : Form
             if (midPm > 0) SetSplitFraction(inner, midPm / 1000.0);
             else try { inner.SplitterDistance = Math.Max((int)Math.Round(300 * dpiS), inner.Width - (int)Math.Round(380 * dpiS)); } catch { }
             RestoreColumnLayout();   // order / width / shown-hidden from the INI
+            _games.AutoFitColumns = _cfg.GetBool("AutoFitColumns", true);   // Display option (default on)
             RestoreSort();           // last sort column + direction
             _currentView = SourceViews.ById(_cfg.Get("GroupView"));   // restore the saved grouping…
             SyncViewCombo();                                          // …reflect it in the combo (no rebuild)
@@ -1099,13 +1100,10 @@ internal sealed class MainWindow : Form
         foreach (var c in _games.AllColumns)
         {
             int di = c.Visible ? c.SavedDisplayIndex : -1;
-            // The Stretch column's width is runtime-computed (GameListView.StretchColumn fills
-            // whatever the others don't use) and gets overwritten on every resize/rebuild anyway -
-            // persisting it would just save whatever transient size the window happened to be at
-            // closing time (e.g. a degenerate near-zero width if closed while minimized), which is
-            // never a real user preference. Save 0 so RestoreColumnLayout's "w > 0" check skips it.
-            int w = c.Stretch ? 0 : c.Width;
-            _cfg.Set("Col." + c.Key, $"{w},{(c.Visible ? 1 : 0)},{di}");
+            // c.Width is the user's BASE width (their drag intent), NOT the AutoFit-computed header
+            // width — for the Stretch column (Title) it's the fill FLOOR, for the others the shrink
+            // CAP — so it's a real preference worth persisting for every column.
+            _cfg.Set("Col." + c.Key, $"{c.Width},{(c.Visible ? 1 : 0)},{di}");
         }
     }
 
@@ -1360,6 +1358,13 @@ internal sealed class MainWindow : Form
                 applyLive: ApplyGameCacheOption),
             Options.OptionItem.Toggle("Display", "Unload the game cache while a game runs",
                 () => _cfg.UnloadGameCacheDuringGame, v => _cfg.UnloadGameCacheDuringGame = v),
+            Options.OptionItem.Toggle("Display", "Auto-fit column widths to content",
+                () => _cfg.GetBool("AutoFitColumns", true), v => _cfg.SetBool("AutoFitColumns", v),
+                "On (default): the non-Title columns shrink to fit their content and the Title column grows to "
+                + "fill the leftover space (never below the width you set for it). Off: every column, Title "
+                + "included, keeps exactly the width you drag it to — classic manual sizing (a gap may appear "
+                + "before the detail pane).",
+                applyLive: () => _games.AutoFitColumns = _cfg.GetBool("AutoFitColumns", true)),
         });
 
         w.AddSection("Pause screen", new[]

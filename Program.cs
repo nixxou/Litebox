@@ -200,7 +200,13 @@ static class DebugConsole
         try
         {
             if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
-            var w = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
+            // Without an explicit encoding, Console output falls back to the console's default
+            // codepage (not UTF-8 on a fresh Windows console), so every em-dash/arrow/non-ASCII
+            // character in log messages throughout the app (there are many) renders as garbled
+            // "?"/"�" instead of the intended character. UTF8Encoding(false) = no BOM, since a BOM
+            // in the middle of a text stream (every write, not just the first) would itself show
+            // up as visible garbage in the console.
+            var w = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = true };
             Console.SetOut(w);
             Console.SetError(w);
         }

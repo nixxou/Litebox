@@ -76,6 +76,7 @@ internal static class HostBoot
             lbRoot = Path.GetFullPath(Path.Combine(dataDir, ".."));                   // ...\LB
             string imagesRoot = Path.Combine(lbRoot, "Images");                       // ...\LB\Images
             LbApiHost.Host.Media.MediaResolver.Init(lbRoot);                          // media (IO + GameCache fast path)
+            SetLaunchBoxCoreRootFolder(lbRoot);                                       // process-wide LB-root static the integration plugins read (save scans, …)
             LbApiHost.Host.Install.NativeInstaller.EnsureDeployed(lbRoot, refreshNatives);  // deploy embedded natives → ThirdParty (only-if-absent; a refresh pass on a version bump). Single owner of ThirdParty placement.
             LbApiHost.Host.Media.MagickSupport.Init(lbRoot);                          // point the native-lib search dir at ThirdParty\ExtendDB (already deployed above)
             LbApiHost.Host.Media.ThumbCache.Init(lbRoot);                             // shared degraded-thumb cache (LB\Plugins\ExtendDB\cache\thumbs)
@@ -378,5 +379,27 @@ internal static class HostBoot
     {
         int i = Array.IndexOf(args, flag);
         return (i >= 0 && i + 1 < args.Length) ? args[i + 1] : null;
+    }
+
+    // LaunchBox's core keeps a process-wide LB-root static — Unbroken.LaunchBox.NamingHelper.RootFolder
+    // (public auto-property) — that LaunchBox.exe sets at boot and the emulator-integration plugins
+    // read to rebase relative paths: the RetroArch plugin resolves retroarch.cfg's ":\saves" prefix via
+    // Path.GetFullPath(emulator.ApplicationPath, NamingHelper.RootFolder). Left unset under LiteBox,
+    // that call throws inside the plugin's try/catch → GetSaves silently finds nothing. Set by
+    // reflection: the obfuscated core assembly (resolved from LB\Core) is not compile-referenced.
+    internal static void SetLaunchBoxCoreRootFolder(string lbRoot)
+    {
+        try
+        {
+            var t = Type.GetType("Unbroken.LaunchBox.NamingHelper, Unbroken.LaunchBox");
+            var p = t?.GetProperty("RootFolder", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            if (p?.SetMethod == null) { Console.WriteLine("[boot] NamingHelper.RootFolder not found/settable — plugin save scans may miss ':\\'-relative dirs"); return; }
+            p.SetValue(null, lbRoot);
+            Console.WriteLine($"[boot] NamingHelper.RootFolder = {p.GetValue(null)}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[boot] NamingHelper.RootFolder init failed: " + ex.Message);
+        }
     }
 }

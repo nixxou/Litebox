@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Generated;
 using LbApiHost.Host.Media;
@@ -274,6 +275,12 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
         return n > 0;
     }
 
+    // LB semantics (SDK doc): the game's own CommandLine, else the appropriate emulator's — its
+    // platform-specific command line for this game's Platform, else the emulator-level one. The
+    // RetroArch integration plugin parses this to extract the core (save management, BIOS, …).
+    public override string GetEffectiveCommandLine()
+        => EffectiveCommandLine.Resolve(CommandLine, EmulatorId, Platform);
+
     // Run the game's Configuration Application (DOSBox-aware for DOSBox games).
     public override string Configure() => LbApiHost.Host.HostLaunch.RunConfigTool(this);
 
@@ -319,6 +326,46 @@ internal sealed class HostAdditionalApplication : DummyAdditionalApplication
     public override DateTime? ReleaseDate { get => _a.ReleaseDate; set { _a.ReleaseDate = value; Rec(); } }
     public override DateTime? LastPlayed { get => _a.LastPlayed; set { _a.LastPlayed = value; Rec(); } }
     public override bool? Installed { get => _a.Installed; set { _a.Installed = value; Rec(); } }
+
+    // LB semantics (SDK doc): the app's own CommandLine, else the appropriate emulator's — the app's
+    // EmulatorId when set, else the parent game's; platform command line first, emulator-level second.
+    public override string GetEffectiveCommandLine()
+    {
+        IGame g = null;
+        try { g = PluginHelper.DataManager?.GetGameById(_gid.ToString()); } catch { }
+        string emuId = !string.IsNullOrEmpty(_a.EmulatorId) ? _a.EmulatorId : Safe(() => g?.EmulatorId);
+        return EffectiveCommandLine.Resolve(_a.CommandLine, emuId, Safe(() => g?.Platform));
+    }
+    private static string Safe(Func<string> f) { try { return f() ?? ""; } catch { return ""; } }
+}
+
+/// <summary>The "effective command line" fallback chain LaunchBox documents on
+/// IGame/IAdditionalApplication.GetEffectiveCommandLine(): own → emulator-platform → emulator.
+/// Mirrors the launch-time resolution in HostServices.RunProcess (kept in sync).</summary>
+internal static class EffectiveCommandLine
+{
+    public static string Resolve(string ownCommandLine, string emulatorId, string platform)
+    {
+        if (!string.IsNullOrWhiteSpace(ownCommandLine)) return ownCommandLine;
+        try
+        {
+            var emu = string.IsNullOrEmpty(emulatorId) ? null : PluginHelper.DataManager?.GetEmulatorById(emulatorId);
+            if (emu == null) return "";
+            try
+            {
+                var ep = emu.GetAllEmulatorPlatforms()?.FirstOrDefault(p =>
+                {
+                    try { return string.Equals(p?.Platform, platform, StringComparison.OrdinalIgnoreCase); }
+                    catch { return false; }
+                });
+                string pc = null; try { pc = ep?.CommandLine; } catch { }
+                if (!string.IsNullOrWhiteSpace(pc)) return pc;
+            }
+            catch { }
+            try { return emu.CommandLine ?? ""; } catch { return ""; }
+        }
+        catch { return ""; }
+    }
 }
 
 /// <summary>ICustomField over a CustomField record.</summary>

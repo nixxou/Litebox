@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy"))
+if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves"))
     DebugConsole.Enable();
 
 // Act like LaunchBox's root launcher: LiteBox.exe lives in <LB>\Core (so
@@ -90,6 +90,10 @@ if (args.Contains("--dump-ctors"))
 // Empirical probe of the RetroArch integration plugin's command-line behaviour.
 if (args.Contains("--probe-emuplugin"))
     return EmuPluginProbe.Run();
+
+// Headless diagnostic of the Game Saves scan pipeline (read-only, real data + real plugins).
+if (args.Contains("--probe-saves"))
+    return ProbeSaves.Run(args);
 
 // Dump the pending write-back ops of the REAL deploy (diagnostic, read-only).
 if (args.Contains("--dump-oplog"))

@@ -29,7 +29,7 @@ using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host;
 
-internal sealed class EditGameWindow : Form
+internal sealed partial class EditGameWindow : Form   // Game Saves page lives in EditGameWindowSaves.cs
 {
     // Palette — matches OptionsWindow / EditEmulatorWindow.
     private static readonly Color Bg = Color.FromArgb(24, 24, 30);
@@ -79,7 +79,7 @@ internal sealed class EditGameWindow : Form
     private readonly Dictionary<string, Control> _pages = new(StringComparer.Ordinal);
 
     // Metadata controls (kept so navigation just reloads values).
-    private TextBox _title = null!, _releaseDate = null!, _lastPlayed = null!, _videoUrl = null!, _wikiUrl = null!, _version = null!, _notes = null!;
+    private TextBox _title = null!, _releaseDate = null!, _lastPlayed = null!, _videoUrl = null!, _wikiUrl = null!, _version = null!, _notes = null!, _sortTitle = null!;
     private ComboBox _rating = null!, _releaseType = null!, _genre = null!, _platform = null!, _developer = null!,
                      _publisher = null!, _series = null!, _region = null!, _playMode = null!, _status = null!,
                      _source = null!, _progress = null!;
@@ -174,6 +174,7 @@ internal sealed class EditGameWindow : Form
         // Build + show the Metadata page, then load the current game.
         _pages["Metadata"] = BuildMetadataPage();
         _pages["Notes"] = BuildNotesPage();
+        if (!IsMulti) _pages["SortTitle"] = BuildSortTitlePage();   // single-game only
         LoadMetadata();
         _tree.SelectedNode = _tree.Nodes[0];   // Metadata
         ShowPage("Metadata");
@@ -195,7 +196,7 @@ internal sealed class EditGameWindow : Form
             }
             catch { }
         };
-        if (_readOnly) { DisableInputs(_pages["Metadata"]); DisableInputs(_pages["Notes"]); }
+        if (_readOnly) { DisableInputs(_pages["Metadata"]); DisableInputs(_pages["Notes"]); if (!IsMulti) DisableInputs(_pages["SortTitle"]); }
     }
 
     // ── Navigation tree ──────────────────────────────────────────────────
@@ -204,16 +205,13 @@ internal sealed class EditGameWindow : Form
         TreeNode N(string text, string tag) => new(text) { Tag = tag };
 
         var metadata = N("Metadata", "Metadata");
-        metadata.Nodes.AddRange(new[]
-        {
-            N("Notes", "Notes"),
-            N("Custom Fields", "CustomFields"),
-            N("Sort Title", "SortTitle"),
-            N("Additional Apps", "AdditionalApps"),
-            N("Alternate Names", "AlternateNames"),
-            N("Controller Support", "ControllerSupport"),
-            N("Game Saves", "GameSaves"),
-        });
+        metadata.Nodes.Add(N("Notes", "Notes"));
+        metadata.Nodes.Add(N("Custom Fields", "CustomFields"));
+        if (!IsMulti) metadata.Nodes.Add(N("Sort Title", "SortTitle"));   // single-game only — hidden in multi
+        metadata.Nodes.Add(N("Additional Apps", "AdditionalApps"));
+        metadata.Nodes.Add(N("Alternate Names", "AlternateNames"));
+        metadata.Nodes.Add(N("Controller Support", "ControllerSupport"));
+        metadata.Nodes.Add(N("Game Saves", "GameSaves"));
 
         var media = N("Media", "Media");
         media.Nodes.AddRange(new[]
@@ -258,6 +256,7 @@ internal sealed class EditGameWindow : Form
             {
                 "Metadata" => BuildMetadataPage(),
                 "CustomFields" => BuildCustomFieldsPage(),
+                "GameSaves" => IsMulti ? Placeholder("Game Saves") : BuildGameSavesPage(),
                 _ => Placeholder(_tree.SelectedNode?.Text ?? key),
             };
             _pages[key] = page;
@@ -315,6 +314,53 @@ internal sealed class EditGameWindow : Form
         p.Resize += (_, _) => { Place(); rb.BringToFront(); };
         Place();
 
+        return p;
+    }
+
+    // ── Sort Title page ──────────────────────────────────────────────────
+    // Single-game only. Hardcodes the name used to ORDER this game: it overrides Title as the base of the
+    // list sort (which then strips a leading article + normalises — see MainWindow.CompareName), so a
+    // Sort Title lets you keep a series together or force any custom order. Written straight to
+    // IGame.SortTitle; the list re-sorts on close (RebuildView). The node is hidden entirely in
+    // multi-select (single-game only), so this page is only ever built when !IsMulti.
+    private Control BuildSortTitlePage()
+    {
+        var p = new Panel { BackColor = Bg, Padding = new Padding(16), AutoScroll = true };
+
+        var lbl = new Label { Text = "Sort Title:", AutoSize = true, ForeColor = Fg, Location = new Point(16, 18), Font = new Font("Segoe UI", 9.5f) };
+        p.Controls.Add(lbl);
+
+        _sortTitle = new TextBox
+        {
+            Location = new Point(16, 42), Width = 620, BackColor = Field, ForeColor = Fg,
+            BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 9.5f),
+        };
+        _sortTitle.TextChanged += (_, _) => OnField(_sortTitle);
+        p.Controls.Add(_sortTitle);
+        _fields.Add(_sortTitle);
+
+        var rb = new Button
+        {
+            Text = "↺", Size = new Size(18, 18), Visible = false, TabStop = false, Cursor = Cursors.Hand,
+            FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(92, 46, 42), ForeColor = Color.FromArgb(255, 180, 165),
+            Font = new Font("Segoe UI Symbol", 9.5f), FlatAppearance = { BorderSize = 1 },
+        };
+        rb.FlatAppearance.BorderColor = Color.FromArgb(150, 72, 64);
+        rb.Location = new Point(_sortTitle.Right + 6, _sortTitle.Top + (_sortTitle.Height - rb.Height) / 2);
+        rb.Click += (_, _) => RevertField(_sortTitle);
+        _tips.SetToolTip(rb, "Restore the original value");
+        p.Controls.Add(rb); rb.BringToFront();
+        _revert[_sortTitle] = rb;
+
+        var help = new Label
+        {
+            AutoSize = false, Location = new Point(16, 80), Size = new Size(660, 170), ForeColor = SubFg,
+            Font = new Font("Segoe UI", 9f),
+            Text = "The Sort Title field is used for custom arrangement of your games. It can be used to keep a series "
+                 + "together, reorder games in a series, or for any other changes to the order in which games are displayed.\r\n\r\n"
+                 + "For example:\r\n\r\nKing's Quest 1\r\nKing's Quest 1.5\r\nKing's Quest 2\r\nKing's Quest 3",
+        };
+        p.Controls.Add(help);
         return p;
     }
 
@@ -743,6 +789,7 @@ internal sealed class EditGameWindow : Form
             SetText(_videoUrl, MergeStr(g => g.VideoUrl));
             SetText(_wikiUrl, MergeStr(g => g.WikipediaUrl));
             SetText(_notes, DisplayNl(MergeRaw(g => (g.Notes ?? "").Replace("\r\n", "\n"))));
+            if (!IsMulti) SetText(_sortTitle, MergeStr(g => g.SortTitle));   // single-game only; multi leaves it empty/disabled
             SetText(_releaseDate, MergeDate(g => g.ReleaseDate));
             SetText(_lastPlayed, MergeDate(g => g.LastPlayedDate));
             SetCombo(_rating, MergeStr(g => g.Rating));
@@ -848,6 +895,7 @@ internal sealed class EditGameWindow : Form
             if (Writable(_videoUrl)) W(() => g.VideoUrl = _videoUrl.Text.Trim());
             if (Writable(_wikiUrl)) W(() => g.WikipediaUrl = _wikiUrl.Text.Trim());
             if (Writable(_notes)) W(() => g.Notes = _notes.Text.Replace("\r\n", "\n"));
+            if (!IsMulti && Writable(_sortTitle)) W(() => g.SortTitle = _sortTitle.Text.Trim());
             if (Writable(_releaseDate)) W(() => g.ReleaseDate = ParseDate(_releaseDate.Text));
             if (Writable(_lastPlayed)) W(() => g.LastPlayedDate = ParseDate(_lastPlayed.Text));
             if (Writable(_maxPlayers)) { int v = (int)_maxPlayers.Value; int? mp = v <= 0 ? (int?)null : v; W(() => g.MaxPlayers = mp); }
@@ -874,6 +922,7 @@ internal sealed class EditGameWindow : Form
         _editGames = new[] { _visible[_index] };
         LoadMetadata();
         if (_cfGrid != null) LoadCustomFields();
+        ReloadGameSavesIfBuilt();   // Game Saves page is per-game — rescan for the new game
         UpdateChrome();
     }
 

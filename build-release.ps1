@@ -35,7 +35,10 @@
 [CmdletBinding()]
 param(
   [string]$Lb9Root  = 'G:\LB',
-  [string]$Lb10Root = "$PSScriptRoot\..\..\..\LB",
+  # Default resolved in the body (NOT here): a $PSScriptRoot-based param default is evaluated at binding,
+  # where $PSScriptRoot can be empty in some hosts (nested powershell), giving "\..\..\..\LB" -> C:\LB.
+  # In the body it's reliable.
+  [string]$Lb10Root = '',
   [string]$Rid      = 'win-x64'
 )
 
@@ -46,6 +49,7 @@ $thirdparty = Join-Path $here 'thirdparty'
 $readme     = Join-Path $here 'release-README.txt'
 $out        = Join-Path $here 'release'
 $tmp        = Join-Path $env:TEMP 'litebox-pub'
+if (-not $Lb10Root) { $Lb10Root = Join-Path $here '..\..\..\LB' }   # primary LB beside the repo
 $Lb10Root   = [IO.Path]::GetFullPath($Lb10Root)
 
 # The 8 native payload files shipped LOOSE in each light zip (under litebox\thirdparty\). Same list as the

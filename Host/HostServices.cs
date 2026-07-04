@@ -393,12 +393,18 @@ internal static class HostLaunch
             // ROM to pass: m3u (multi-disc) → auto-extracted file (archive) → the rom itself.
             string romAbs = ResolvePath(targetPath);
             string rom = ResolveLaunchRomPath(game, emulator, ep, romAbs, label);
+            // When the command line ALREADY places the ROM itself via %romfile% (ScummVM's "-p %romfile%",
+            // DOSBox, …), LB substitutes it IN PLACE and does NOT also append the ROM at the end — appending
+            // would pass the ROM twice and the emulator chokes (ScummVM never launches). %romlocation% & co.
+            // are partial (MAME's "-rompath %romlocation%") and DON'T suppress the append.
+            bool cmdPlacesRom = !string.IsNullOrEmpty(emuCmd)
+                                && emuCmd.IndexOf("%romfile%", StringComparison.OrdinalIgnoreCase) >= 0;
             // Expand the LaunchBox command-line variables (%romlocation%, %romfile%, …) that
             // LB's core (Game.PlayEmulator) resolves at launch and that integration plugins
             // embed in their command lines — most importantly MAME's "-rompath %romlocation%".
-            // Resolved against the ORIGINAL rom path, before the ROM token is appended.
-            emuCmd = ExpandLaunchVariables(emuCmd, romAbs, fileName, game);
-            args = BuildEmulatorArgs(emuCmd, rom, emulator);
+            // %romfile% resolves to the actual launch rom (extracted / m3u when applicable).
+            emuCmd = ExpandLaunchVariables(emuCmd, cmdPlacesRom ? rom : romAbs, fileName, game);
+            args = cmdPlacesRom ? (emuCmd?.Trim() ?? "") : BuildEmulatorArgs(emuCmd, rom, emulator);
             // PrepareEmulatorForLaunch: the integration plugin may rewrite the
             // final command line right before the spawn (what LB does silently).
             // Main launch only — autorun helpers aren't emulator launches.

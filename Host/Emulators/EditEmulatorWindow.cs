@@ -96,7 +96,17 @@ internal static class EditEmulatorWindow
             string rom = nameOnly.Checked ? "ROMFILE" : @"FULL\PATH\TO\ROM\FILE";
             if (!noQuotes.Checked) rom = "\"" + rom + "\"";
             string c = cmd.Text.Trim();
-            sample.Text = exe + (c.Length > 0 ? " " + c : "") + (noSpace.Checked ? "" : " ") + rom;
+            // If the command line places the ROM itself via %romfile% (ScummVM's "-p %romfile%", DOSBox…),
+            // substitute it in place and DON'T append the ROM again — mirrors the real launch
+            // (HostServices.RunProcess), which otherwise would pass the ROM twice.
+            if (c.IndexOf("%romfile%", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                c = System.Text.RegularExpressions.Regex.Replace(c, "%romfile%", _ => rom,
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                sample.Text = exe + (c.Length > 0 ? " " + c : "");
+            }
+            else
+                sample.Text = exe + (c.Length > 0 ? " " + c : "") + (noSpace.Checked ? "" : " ") + rom;
         }
         path.TextChanged += (_, _) => RefreshSample();
         cmd.TextChanged += (_, _) => RefreshSample();

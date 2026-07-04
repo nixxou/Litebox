@@ -35,6 +35,36 @@ internal static class Box3DRenderer
     private static readonly System.Windows.Media.Color FallbackSpine = System.Windows.Media.Color.FromRgb(24, 24, 24);
     private static readonly System.Windows.Media.Color FallbackFace = System.Windows.Media.Color.FromRgb(40, 40, 40);
 
+    /// <summary>Returns a cached preview path for this game, rendering it once on first access (Core\
+    /// litebox\box3d-cache\&lt;gameId&gt;.png) and reusing the cached file on every later call - this is
+    /// the "cached image" half of the feature: the render only ever happens once per game, not once per
+    /// UI selection. Returns null if the game has no front image (nothing to render, or an invalid Id),
+    /// callers should fall back to their normal art source in that case.</summary>
+    public static string? GetOrRenderCachedPreview(IGame game)
+    {
+        string path = CachePath(game);
+        if (path == null) return null;
+        if (File.Exists(path)) return path;
+        return RenderPreview(game, path) ? path : null;
+    }
+
+    /// <summary>Same cache lookup as <see cref="GetOrRenderCachedPreview"/> but NEVER renders - returns
+    /// null on a cache miss instead of blocking. For call sites on the UI thread (BuildMediaList runs on
+    /// a WinForms Timer tick, not a background thread) where triggering a fresh render would stutter the
+    /// UI; the background-threaded LoadImagesAsync path is what actually populates the cache.</summary>
+    public static string? GetCachedPreviewIfExists(IGame game)
+    {
+        string path = CachePath(game);
+        return path != null && File.Exists(path) ? path : null;
+    }
+
+    private static string? CachePath(IGame game)
+    {
+        if (!Guid.TryParse(game.Id, out var gid)) return null;
+        string cacheDir = LbApiHost.Host.LiteBoxPaths.Dir("box3d-cache");
+        return Path.Combine(cacheDir, gid.ToString("N") + ".png");
+    }
+
     /// <summary>Renders one PNG preview for <paramref name="game"/> to <paramref name="outPngPath"/>.
     /// Returns false (and writes nothing) if the game has no front image to render at all.
     /// WPF's Viewport3D/FrameworkElement require an STA thread (InputManager throws otherwise); this

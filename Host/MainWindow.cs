@@ -167,6 +167,7 @@ internal sealed class MainWindow : Form
 
     private readonly LiteBoxConfig _cfg;
     private static bool _useImageCache = true;   // option: use the degraded thumb cache for UI images
+    private static bool _use3dBoxPreview;         // option: procedural 3D box preview instead of the flat cover (default OFF - cosmetic/subjective, opt-in)
 
     // "Game running" overlay + during-game unload state.
     private DoubleBufferedPanel _overlay;
@@ -195,6 +196,7 @@ internal sealed class MainWindow : Form
         _cfg = LiteBoxConfig.LoadForExe();
         _secondInstance = InstanceGuard.AnotherInstanceRunning;
         _useImageCache = _cfg.UseImageCache;
+        _use3dBoxPreview = _cfg.GetBool("Use3DBoxPreview", false);
         _posterOwnerDraw = _cfg.GetBool("PosterOwnerDraw", false);   // legacy poster renderer (vs native image list)
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
         _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
@@ -1325,6 +1327,13 @@ internal sealed class MainWindow : Form
                 applyLive: ApplyGameCacheOption),
             Options.OptionItem.Toggle("Display", "Unload the game cache while a game runs",
                 () => _cfg.UnloadGameCacheDuringGame, v => _cfg.UnloadGameCacheDuringGame = v),
+            Options.OptionItem.Toggle("Display", "Show a 3D box preview instead of the flat cover",
+                () => _cfg.GetBool("Use3DBoxPreview", false), v => _cfg.SetBool("Use3DBoxPreview", v),
+                "Off (default): the game details panel shows the flat Front cover, same as LaunchBox. On: a "
+                + "procedurally rendered pseudo-3D box (front + spine, built from your existing box art) is "
+                + "shown instead, cached after the first render per game. Purely cosmetic and subjective, off "
+                + "by default so it doesn't change anyone's existing view without asking.",
+                applyLive: () => _use3dBoxPreview = _cfg.GetBool("Use3DBoxPreview", false)),
         });
 
         w.AddSection("Pause screen", new[]
@@ -2461,7 +2470,7 @@ internal sealed class MainWindow : Form
         // with no clear logo shows its title as text — with the same pulse.
         var (logoSrc, artSrc) = DetailImageSources(g);
         SetHeroGame(g);
-        LoadImagesAsync(logoSrc, artSrc);
+        LoadImagesAsync(logoSrc, artSrc, g);
         PopulateDetailMeta(g);
     }
 
@@ -2569,6 +2578,17 @@ internal sealed class MainWindow : Form
             // selection landing right now is not lost: it keeps _detailRunning true and we loop to it.
             bool settled;
             lock (_detailLock) { settled = ReferenceEquals(_detailWant, g); if (settled) _detailRunning = false; }
+
+            // 3D box preview (cached after the first render): only worth the possibly-first-time render
+            // cost once the user has actually settled here - this loop runs for EVERY game passed over
+            // during a fast arrow-key scroll, and rendering one for each of those would make scrolling
+            // through the list stutter badly. A settled selection is the only case this is cheap enough
+            // to be worth it (and after the first render, it's just a cache-hit file load either way).
+            if (settled && _use3dBoxPreview)
+            {
+                var box3dPath = Box3DRenderer.GetOrRenderCachedPreview(g);
+                if (box3dPath != null) { art?.Dispose(); art = LoadImage(box3dPath); }
+            }
 
             try
             {
@@ -3019,8 +3039,13 @@ internal sealed class MainWindow : Form
         }
         void AddAll(IEnumerable<string> ss) { if (ss != null) foreach (var s in ss) Add(s); }
 
-        // 1. The box = the main image (best Front; cache when ready, else IO).
-        Add(DetailSource(g, "Front", () =>
+        // 1. The box = the main image. Prefer an already-cached 3D box preview (never trigger a fresh
+        // render here - this runs on the UI thread via the ScheduleMedia timer tick, LoadImagesAsync's
+        // background thread is what actually populates the cache); else best Front; cache when ready,
+        // else IO.
+        var cachedBox3d = _use3dBoxPreview ? Box3DRenderer.GetCachedPreviewIfExists(g) : null;
+        if (cachedBox3d != null) Add(cachedBox3d);
+        else Add(DetailSource(g, "Front", () =>
               Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => g.Box3DImagePath)));
 
         string plat = Safe(() => g.Platform);
@@ -3176,7 +3201,7 @@ internal sealed class MainWindow : Form
     // shared cache: logo=WebP w/ alpha, art=JPEG), so selecting a node/game never blocks
     // the game-list paint — only the cheap text is set synchronously. The token discards
     // a stale load if the selection changed before it finished. Args are SOURCE paths.
-    private void LoadImagesAsync(string logoSrc, string artSrc)
+    private void LoadImagesAsync(string logoSrc, string artSrc, IGame game3dBox = null)
     {
         int token = ++_detailsLoadToken;
         _media.SetImage(null);
@@ -3185,7 +3210,15 @@ internal sealed class MainWindow : Form
         System.Threading.Tasks.Task.Run(() =>
         {
             var logo = LoadThumbOrFull(logoSrc, keepAlpha: true);   // clear logo → WebP/alpha
-            var art = LoadThumbOrFull(artSrc, keepAlpha: false);    // main media (box) DEGRADED, instant
+            // 3D box preview (cached after the first render) takes priority over the flat cover when we
+            // can produce one - this is the actual visible point of the feature, not a buried fallback.
+            // Rendering happens here (background thread, via Task.Run above), never on the UI thread.
+            string box3dPath = (game3dBox != null && _use3dBoxPreview)
+                ? Box3DRenderer.GetOrRenderCachedPreview(game3dBox)
+                : null;
+            var art = box3dPath != null
+                ? LoadImage(box3dPath)
+                : LoadThumbOrFull(artSrc, keepAlpha: false);         // main media (box) DEGRADED, instant
             void Apply()
             {
                 if (IsDisposed || token != _detailsLoadToken) { logo?.Dispose(); art?.Dispose(); return; }

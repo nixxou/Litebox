@@ -3,10 +3,10 @@ setlocal
 rem ---------------------------------------------------------------------------
 rem  build-release.bat - double-click to build the LiteBox release artifacts.
 rem
-rem  Produces, under this folder's release\ (git-ignored):
-rem    LiteBox-Setup-<ver>.exe          the ONE universal installer (net9+net10)
-rem    light\<ver>_net9\LiteBox-*.zip   manual "extract into Core" alternative (LB 13.27)
-rem    light\<ver>_net10\LiteBox-*.zip  manual "extract into Core" alternative (LB 13.28+)
+rem  Produces, under this folder's release\ (git-ignored), named by the LiteBox version:
+rem    LiteBox-Setup-<ver>.exe            the ONE universal installer (works on net9 13.27 AND net10 13.28+)
+rem    light\LiteBox-<ver>-net9.zip       manual "extract into Core" alternative (LB 13.27)
+rem    light\LiteBox-<ver>-net10.zip      manual "extract into Core" alternative (LB 13.28+)
 rem
 rem  Uses the PowerShell script's defaults:
 rem    net9  SDK ref / version = G:\LB          (a .NET 9 LaunchBox on disk)

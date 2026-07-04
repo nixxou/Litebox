@@ -6,14 +6,19 @@
 powershell -ExecutionPolicy Bypass -File build-release.ps1
 ```
 
-Output:
+Output (named by the **LiteBox** product version — the installer works on ANY compatible LaunchBox, so a
+LaunchBox-version name would be misleading):
 
 ```
 release\
-  LiteBox-Setup-<ver10>.exe                 README.txt          the ONE universal installer (net9+net10)
-  light\<ver>_net9\   LiteBox-<ver>.zip      README.txt          manual "extract into Core", net9 (LB 13.27)
-  light\<ver>_net10\  LiteBox-<ver>.zip      README.txt          manual "extract into Core", net10 (LB 13.28+)
+  LiteBox-Setup-<ver>.exe            README.txt   the ONE universal installer (net9 13.27 + net10 13.28+)
+  light\LiteBox-<ver>-net9.zip                    manual "extract into Core", net9 (LB 13.27)
+  light\LiteBox-<ver>-net10.zip      README.txt   manual "extract into Core", net10 (LB 13.28+)
 ```
+
+`<ver>` = the LiteBox version from `LiteBox.csproj` `<Version>` (e.g. `0.7.9`). The `net9`/`net10` suffix on
+each light zip is the **runtime** it borrows from `Core` (LB 13.27 vs 13.28+), which is the real
+compatibility axis.
 
 ---
 
@@ -82,7 +87,7 @@ This split lives in `LiteBox.csproj` via `$(SdkRefDll)` / `$(Lb9Root)` / `$(Lb10
 
 - default net9 root = **`G:\LB`**; default net10 root = the primary LB beside the repo (`..\..\..\LB`);
 - override: `build-release.ps1 -Lb9Root "D:\LB-net9" -Lb10Root "D:\LB-net10"` (or `dotnet … -p:Lb9Root=… -p:Lb10Root=…`).
-- the script reads each root's `Core\LaunchBox.exe` version to name the outputs (`<ver>_net9`, `LiteBox-Setup-<ver10>.exe`).
+- the script reads the LiteBox `<Version>` from `LiteBox.csproj` to name the outputs (`LiteBox-Setup-<ver>.exe`, `LiteBox-<ver>-net9.zip`); each root's `Core\LaunchBox.exe` version is used only for the log line.
 
 `Magick.NET*` and `Microsoft.Data.Sqlite` / `SQLitePCLRaw*` are net8 → satisfy both targets; only the SDK
 reference is split. All are `Private=false` (compile-time only); at runtime LiteBox binds Core's copy by name.
@@ -96,11 +101,11 @@ reference is split. All are `Private=false` (compile-time only); at runtime Lite
 dotnet publish LiteBox.csproj -c Release -r win-x64 -f <tfm> -p:SelfContained=true -p:PublishSingleFile=false -p:LiteBoxDist=light -o <dir>
 #    stage <dir>\{LiteBox.exe,LiteBox.dll,LiteBox.deps.json,LiteBox.runtimeconfig.json}
 #      → into  light-payload\<label>\   (for the installer to embed)
-#      → and into a zip stage + litebox\thirdparty\<8 native files>  →  release\light\<ver>_<label>\LiteBox-<ver>.zip
+#      → and into a zip stage + litebox\thirdparty\<8 native files>  →  release\light\LiteBox-<liteBoxVer>-<label>.zip
 
 # 2) the ONE universal installer — self-contained SINGLE-FILE (net10), embeds both lights + the native payload.
 dotnet publish LiteBox.csproj -c Release -r win-x64 -f net10.0-windows -p:SelfContained=true -p:PublishSingleFile=true -p:LiteBoxDist=standalone -p:LightPayloadDir=<light-payload> -o <dir>
-#    → release\LiteBox-Setup-<ver10>.exe
+#    → release\LiteBox-Setup-<liteBoxVer>.exe
 ```
 
 The csproj embeds, only for `LiteBoxDist=standalone`:
@@ -121,10 +126,10 @@ The light's 4 app-file names are shared by `build-release.ps1` (`$appFiles`), th
 After `build-release.ps1`:
 
 1. **Both lights + installer built** — the script throws on any publish failure.
-2. **Artifacts** exist: `release\LiteBox-Setup-<ver10>.exe` and `release\light\<ver>_{net9,net10}\LiteBox-<ver>.zip`.
+2. **Artifacts** exist: `release\LiteBox-Setup-<ver>.exe` and `release\light\LiteBox-<ver>-{net9,net10}.zip` (`<ver>` = LiteBox version).
 3. **Light zip contents** = exactly `LiteBox.exe` + `LiteBox.dll` + `LiteBox.deps.json` +
    `LiteBox.runtimeconfig.json` + `litebox\thirdparty\<8 files>`; the inner exe stays `LiteBox.exe`; README beside, not inside.
-4. **Installer install** (decisive) — from a temp folder, `LiteBox-Setup-<ver10>.exe --install "<LB root>"`, then check:
+4. **Installer install** (decisive) — from a temp folder, `LiteBox-Setup-<ver>.exe --install "<LB root>"`, then check:
    - `Core\LiteBox.exe` ≈ **523 KB** (the light apphost, NOT ~86 MB) + `LiteBox.dll` + the two `.json`;
    - `<LB>\ThirdParty\…` has the native payload;
    - `<LB>\LiteBox.exe` ≈ 86 MB (the installer/re-launcher);

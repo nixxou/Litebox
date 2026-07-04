@@ -25,10 +25,11 @@
     -Lb10Root <path>  .NET 10 LaunchBox: net10 SDK compile ref AND net10 version label. Default ..\..\..\LB.
     -Rid      <rid>   runtime identifier. Default win-x64.
 
-  Output layout (release\, git-ignored):
-    LiteBox-Setup-<ver10>.exe                  (+ README.txt)   the ONE universal installer (net9+net10)
-    light\<ver>_<label>\LiteBox-<ver>.zip      (+ README.txt)   manual "extract into Core" alternative, per TFM
-  where <ver> = Major.Minor of the referenced LaunchBox, <label> = net9 / net10, <ver10> = the net10 LB version.
+  Output layout (release\, git-ignored) — named by the LITEBOX product version (csproj <Version>), NOT the
+  LaunchBox version, since the installer works on ANY compatible LaunchBox (net9 13.27 + net10 13.28+):
+    LiteBox-Setup-<liteBoxVer>.exe             (+ README.txt)   the ONE universal installer (net9+net10)
+    light\LiteBox-<liteBoxVer>-net9.zip                         manual "extract into Core", net9 (LB 13.27)
+    light\LiteBox-<liteBoxVer>-net10.zip       (+ README.txt)   manual "extract into Core", net10 (LB 13.28+)
   The exe INSIDE each zip stays "LiteBox.exe" (it lands in Core as-is; the uninstaller + ExtendDB host-detection
   key on that name).
 #>
@@ -98,14 +99,22 @@ foreach ($d in @($out, $tmp)) {
 }
 New-Item -ItemType Directory -Force $out | Out-Null
 
+# Artifacts are named by the LITEBOX product version (csproj <Version>), NOT the LaunchBox version — the
+# universal installer works on ANY compatible LaunchBox (net9 13.27 + net10 13.28+), so a "13.28" name would
+# be misleading. The light zips add the runtime label (net9/net10 = which Core runtime they borrow).
+$liteBoxVer = ([regex]::Match((Get-Content $proj -Raw), '<Version>\s*([^<\s]+)\s*</Version>')).Groups[1].Value
+if (-not $liteBoxVer) { throw "could not read <Version> from $proj" }
+Write-Host "LiteBox version = $liteBoxVer"
+
 $lightPayload = Join-Path $tmp 'light-payload'   # <label>\{LiteBox.exe,dll,deps,runtimeconfig} → embedded by the installer
-$verByLabel   = @{}
+$lightRel     = Join-Path $out 'light'
+New-Item -ItemType Directory -Force $lightRel | Out-Null
+Copy-Item $readme (Join-Path $lightRel 'README.txt')
 
 # ---- 1) Build BOTH lights: stage for the installer + ship each as a manual "extract into Core" zip ----
 foreach ($t in $targets) {
   $tfm = $t.Tfm; $label = $t.Label
-  $ver = LbVersion $t.LbRoot           # e.g. 13.27
-  $verByLabel[$label] = $ver
+  $ver = LbVersion $t.LbRoot           # LaunchBox version, for the log line only
   Write-Host "== light $label (LaunchBox $ver, $tfm from $($t.LbRoot)) =="
 
   $liDir = Join-Path $tmp "$label-light"
@@ -120,7 +129,8 @@ foreach ($t in $targets) {
     Copy-Item $src (Join-Path $stageEmbed $f)
   }
 
-  # b) manual zip: the 4 app files + the loose native payload under litebox\thirdparty\ (extract into Core)
+  # b) manual zip: the 4 app files + the loose native payload under litebox\thirdparty\ (extract into Core).
+  #    Named LiteBox-<liteBoxVer>-<label>.zip; the exe INSIDE stays "LiteBox.exe" (host-detection / uninstall).
   $stageZip = Join-Path $tmp "$label-zip"
   if (Test-Path $stageZip) { Remove-Item $stageZip -Recurse -Force }
   $tpDir = Join-Path $stageZip 'litebox\thirdparty'
@@ -131,18 +141,14 @@ foreach ($t in $targets) {
     if (-not (Test-Path $src)) { throw "payload file missing: $src" }
     Copy-Item $src (Join-Path $tpDir $p)
   }
-  $zipRel = Join-Path $out "light\${ver}_${label}"
-  New-Item -ItemType Directory -Force $zipRel | Out-Null
-  Compress-Archive -Path (Join-Path $stageZip '*') -DestinationPath (Join-Path $zipRel "LiteBox-$ver.zip") -Force
-  Copy-Item $readme (Join-Path $zipRel 'README.txt')
+  Compress-Archive -Path (Join-Path $stageZip '*') -DestinationPath (Join-Path $lightRel "LiteBox-$liteBoxVer-$label.zip") -Force
 }
 
 # ---- 2) Build the ONE universal installer (net10 single-file) embedding BOTH lights + the native payload ----
-$ver10 = $verByLabel['net10']
 Write-Host "== universal installer (net10 single-file, embeds net9+net10 lights) =="
 $instDir = Join-Path $tmp 'installer'
 Publish 'net10.0-windows' $instDir @('-p:PublishSingleFile=true', '-p:LiteBoxDist=standalone', "-p:LightPayloadDir=$lightPayload")
-Copy-Item (Join-Path $instDir 'LiteBox.exe') (Join-Path $out "LiteBox-Setup-$ver10.exe")
+Copy-Item (Join-Path $instDir 'LiteBox.exe') (Join-Path $out "LiteBox-Setup-$liteBoxVer.exe")
 Copy-Item $readme (Join-Path $out 'README.txt')
 
 # ---- summary ----

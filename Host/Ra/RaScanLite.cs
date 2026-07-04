@@ -18,6 +18,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using LbApiHost.Host.Data;
+using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host.Ra;
@@ -60,12 +61,8 @@ internal static class RaScanLite
 
 /// <summary>Modal progress dialog for a per-platform RA scan. Built from a pre-gathered IGame[] (the caller
 /// enumerates on the UI thread). Runs the scan on a background thread, cancellable.</summary>
-internal sealed class RaScanProgress : Form
+internal sealed class RaScanProgress : LiteBoxForm
 {
-    private static readonly Color Bg = Color.FromArgb(30, 30, 30);
-    private static readonly Color Fg = Color.FromArgb(222, 222, 222);
-    private static readonly Color SubFg = Color.FromArgb(150, 150, 152);
-
     private readonly IReadOnlyList<IGame> _games;
     private readonly bool _full;
     private readonly ProgressBar _bar;
@@ -81,24 +78,22 @@ internal sealed class RaScanProgress : Form
         _full = full;
 
         Text = (full ? "Full scan" : "Lite scan") + " — RetroAchievements";
-        Size = new Size(460, 170);
+        ClientSize = new Size(S(460), S(170));
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
-        BackColor = Bg; ForeColor = Fg;
-        Font = new Font("Segoe UI", 9.5f);
-        ShowIcon = false; ShowInTaskbar = false; MinimizeBox = false; MaximizeBox = false;
+        MinimizeBox = false; MaximizeBox = false;
 
         var head = new Label
         {
             Text = $"{scopeLabel} — {_games.Count} game(s)\n{(full ? "Recomputing every hash/raid." : "Resolving games with no hash yet.")}",
-            ForeColor = SubFg, AutoSize = false, Dock = DockStyle.Top, Height = 44,
-            Padding = new Padding(16, 12, 16, 0),
+            ForeColor = LiteBoxTheme.SubFg, AutoSize = false, Dock = DockStyle.Top, Height = S(44),
+            Padding = new Padding(S(16), S(12), S(16), 0),
         };
-        _bar = new ProgressBar { Dock = DockStyle.Top, Height = 22, Maximum = Math.Max(1, _games.Count), Margin = new Padding(16) };
-        var barHost = new Panel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(16, 6, 16, 6) };
+        _bar = new ProgressBar { Dock = DockStyle.Top, Height = S(22), Maximum = Math.Max(1, _games.Count), Margin = new Padding(S(16)) };
+        var barHost = new Panel { Dock = DockStyle.Top, Height = S(34), Padding = new Padding(S(16), S(6), S(16), S(6)) };
         barHost.Controls.Add(_bar);
-        _label = new Label { Text = "Preparing…", ForeColor = Fg, Dock = DockStyle.Top, Height = 26, Padding = new Padding(16, 0, 16, 0) };
-        _close = new Button { Text = "Cancel", Dock = DockStyle.Bottom, Height = 34, FlatStyle = FlatStyle.Flat, ForeColor = Fg };
+        _label = new Label { Text = "Preparing…", ForeColor = LiteBoxTheme.Fg, Dock = DockStyle.Top, Height = S(26), Padding = new Padding(S(16), 0, S(16), 0) };
+        _close = new Button { Text = "Cancel", Dock = DockStyle.Bottom, Height = S(34), FlatStyle = FlatStyle.Flat, ForeColor = LiteBoxTheme.Fg };
         _close.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 75);
         _close.Click += (_, _) => { if (_done) Close(); else _cts.Cancel(); };
 

@@ -14,6 +14,7 @@ using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host;
@@ -30,6 +31,11 @@ internal sealed class GameColumn
     public Func<IGame, object> Sort;         // comparable value for ordering (may be null)
     public Func<IGame, string> Text;         // display text
     public Func<IGame, Color?> Fore;         // optional per-cell colour (unused in this no-styling build)
+    /// <summary>This column absorbs whatever width the others don't use, so the list never
+    /// leaves a dead gap before the detail pane regardless of DPI or saved column widths.
+    /// Exactly one column should set this - naturally the one that benefits from extra room
+    /// (Title: long names stop truncating), not just "whichever ends up last."</summary>
+    public bool Stretch;
 
     internal ColumnHeader Header;            // the live native header (when visible)
 }
@@ -40,6 +46,10 @@ internal sealed class GameListView : ListView
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref LVITEM lvi);
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hWnd, string app, string idList);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct LVITEM
@@ -57,6 +67,7 @@ internal sealed class GameListView : ListView
     private const int LVS_EX_DOUBLEBUFFER = 0x00010000;
     private const uint LVIS_FOCUSED = 1, LVIS_SELECTED = 2;
     private const int WM_CONTEXTMENU = 0x007B;
+    private const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_FRAMECHANGED = 0x20;
 
     private readonly List<GameColumn> _columns = new();
     private List<GameColumn> _visCols = new();          // logical (subitem) order == add order
@@ -102,12 +113,51 @@ internal sealed class GameListView : ListView
         BorderStyle = BorderStyle.None;
         AllowColumnReorder = true;
 
+        // Native ListView rows size themselves to max(Font.Height, SmallImageList.ImageSize.Height) -
+        // with no image list at all, that's just the cramped ~17px the classic-Windows-app look comes
+        // from. No per-row icons are drawn here (ImageIndex is never set), so this list's images are
+        // blank - it exists purely to stretch row height to something roomier, DPI-scaled like
+        // everything else in this pass.
+        float s = LiteBoxTheme.DpiScale(this);
+        SmallImageList = new ImageList { ImageSize = new Size(1, (int)Math.Round(30 * s)), ColorDepth = ColorDepth.Depth32Bit };
+
         RetrieveVirtualItem += OnRetrieveVirtualItem;
         ColumnClick += (_, e) => { if (e.Column >= 0 && e.Column < _visCols.Count) ColumnClicked?.Invoke(_visCols[e.Column]); };
         ItemActivate += (_, _) => GameActivated?.Invoke();
         MouseUp += OnMouseUpRight;
         SelectedIndexChanged += OnSelectedIndexChanged;
-        HandleCreated += (_, _) => EnableDoubleBuffer();
+        HandleCreated += (_, _) => { EnableDoubleBuffer(); ThemeHeader(); StretchColumn(); };
+        Resize += (_, _) => StretchColumn();
+        // Skip re-stretching when the event is the STRETCH column's own header changing width -
+        // otherwise a user dragging Title's border fires this, StretchColumn() recomputes leftover
+        // space (which excludes Title from its own sum), gets the same answer as before the drag,
+        // and snaps the column right back - the column becomes impossible to resize by hand. A drag
+        // on any OTHER column still re-stretches Title to absorb the new leftover space, and a later
+        // window Resize still re-asserts the fill (so a manual narrowing doesn't leave a dead gap
+        // once the window changes size again).
+        ColumnWidthChanged += (_, e) =>
+        {
+            if (e.ColumnIndex >= 0 && e.ColumnIndex < _visCols.Count && _visCols[e.ColumnIndex].Stretch) return;
+            StretchColumn();
+        };
+    }
+
+    // The list body picks up dark scrollbars/selection from ApplyDarkScroll (MainWindow) via
+    // SetWindowTheme on ITS OWN handle - but the column header is a SEPARATE native child window
+    // (SysHeader32, fetched via LVM_GETHEADER) that never got that treatment, so it stayed the
+    // classic light Win32 bevel button style while every row below it went dark. That header/body
+    // mismatch reads as "old Windows app" faster than almost anything else in this UI.
+    private void ThemeHeader()
+    {
+        try
+        {
+            IntPtr header = SendMessage(Handle, LVM_GETHEADER, IntPtr.Zero, IntPtr.Zero);
+            if (header == IntPtr.Zero) return;
+            SetWindowTheme(header, "DarkMode_ItemsView", null);
+            SetWindowPos(header, IntPtr.Zero, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+        catch { }
     }
 
     public GameColumn AddColumn(GameColumn c) { _columns.Add(c); return c; }
@@ -130,7 +180,32 @@ internal sealed class GameListView : ListView
             }
         }
         finally { EndUpdate(); }
+        StretchColumn();
         Invalidate();
+    }
+
+    // Column widths are independent, persisted numbers (INI Col.<key> entries from years-old
+    // sessions, unscaled for whatever DPI the app happens to run at now) - they will never, by
+    // themselves, reliably add up to the list's actual width. Rather than chase that with more
+    // scaling math, make the designated Stretch column (Title) self-heal: it always eats
+    // whatever width the others didn't use, so there's never a dead gap before the detail pane,
+    // at any DPI, any saved column set, any resize. Deliberately NOT "whichever column ends up
+    // last" - that used to be Plays (a small numeric count with no reason to be wide), which
+    // just moved the confusing dead-looking gap into a column instead of removing it.
+    private bool _stretchingColumn;
+
+    private void StretchColumn()
+    {
+        if (_stretchingColumn || !IsHandleCreated) return;
+        var target = _visCols.FirstOrDefault(c => c.Stretch);
+        if (target?.Header == null) return;
+        int othersWidth = 0;
+        foreach (var c in _visCols) if (c != target) othersWidth += c.Header?.Width ?? 0;
+        int minWidth = 60;
+        int w = Math.Max(minWidth, ClientSize.Width - othersWidth);
+        if (target.Header.Width == w) return;
+        _stretchingColumn = true;
+        try { target.Header.Width = w; } finally { _stretchingColumn = false; }
     }
 
     private string HeaderText(GameColumn c)

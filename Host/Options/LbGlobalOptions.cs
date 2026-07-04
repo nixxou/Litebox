@@ -14,6 +14,7 @@
 
 using LbApiHost.Host.Data;
 using LbApiHost.Host.Store;
+using LbApiHost.Host.UiKit;
 
 namespace LbApiHost.Host.Options;
 
@@ -40,6 +41,10 @@ internal static class LbGlobalOptions
     public static void AddSections(OptionsWindow w, LbSettingsStore s, bool readOnly, RaScanHook? raScan = null)
     {
         if (!s.Loaded) return;   // no Settings.xml → nothing to edit
+        // Computed once and threaded into every Build*Panel below - each panel's own local
+        // S(int) wraps this into every pixel dimension. Same DPI-scale-factor idea as the rest
+        // of the app; this file just has a lot of manually-positioned custom panels to cover.
+        float dpiS = LiteBoxTheme.DpiScale(w);
 
         OptionItem B(string label, string field, bool noImpact, string? help = null)
             => new(label, label, OptionKind.Bool)
@@ -85,7 +90,7 @@ internal static class LbGlobalOptions
                 "Only when the startup screen is disabled."),
         }, readOnly);
 
-        w.AddSection("LB · Startup Applications", BuildStartupAppsPanel(s, readOnly, out var applyStartupApps),
+        w.AddSection("LB · Startup Applications", BuildStartupAppsPanel(s, readOnly, dpiS, out var applyStartupApps),
             readOnly ? null : applyStartupApps);
 
         w.AddSection("LB · System Tray", new[]
@@ -98,26 +103,26 @@ internal static class LbGlobalOptions
                 .Tag(noImpact: true),
         }, readOnly);
 
-        w.AddSection("LB · Region Priorities", BuildRegionPrioritiesPanel(s, readOnly, out var applyRegions),
+        w.AddSection("LB · Region Priorities", BuildRegionPrioritiesPanel(s, readOnly, dpiS, out var applyRegions),
             readOnly ? null : applyRegions);
 
-        w.AddSection("LB · Auto-Import Media", BuildAutoImportMediaPanel(s, readOnly, out var applyMedia),
+        w.AddSection("LB · Auto-Import Media", BuildAutoImportMediaPanel(s, readOnly, dpiS, out var applyMedia),
             readOnly ? null : applyMedia);
 
         // All media priority lists live under ONE section with internal tabs
         // (LB has ~10 separate sub-pages; we fold them into tabs to cut clutter).
-        w.AddSection("LB · Media Priorities", BuildMediaPrioritiesPanel(s, readOnly, out var applyPrio),
+        w.AddSection("LB · Media Priorities", BuildMediaPrioritiesPanel(s, readOnly, dpiS, out var applyPrio),
             readOnly ? null : applyPrio);
 
         // LB "Integrations" branch, tabbed. None drive LiteBox today (it doesn't run
         // these integrations) — they round-trip to Settings.xml for LaunchBox, and the
         // credentials sit here for a future LiteBox feature (notably RetroAchievements).
-        w.AddSection("LB · Integrations", BuildIntegrationsPanel(s, readOnly, out var applyInteg, raScan),
+        w.AddSection("LB · Integrations", BuildIntegrationsPanel(s, readOnly, dpiS, out var applyInteg, raScan),
             readOnly ? null : applyInteg);
 
         // LB "Gameplay" branch (Game Startup / Game Pause / Screen Capture), tabbed.
         // These DO drive LiteBox (startup/end/pause overlays + screenshot hotkey).
-        w.AddSection("LB · Gameplay", BuildGameplayPanel(s, readOnly, out var applyGameplay),
+        w.AddSection("LB · Gameplay", BuildGameplayPanel(s, readOnly, dpiS, out var applyGameplay),
             readOnly ? null : applyGameplay);
     }
 
@@ -126,38 +131,39 @@ internal static class LbGlobalOptions
     //    Settings.xml (LB-owned field names); the two HOTKEYS live in LiteBox.ini
     //    (combo-capable, unlike LB's single WPF-Key int). Theme pickers are omitted
     //    (LiteBox has no themes). Changes apply on the next game launch. ──
-    private static Control BuildGameplayPanel(LbSettingsStore s, bool readOnly, out Action apply)
+    private static Control BuildGameplayPanel(LbSettingsStore s, bool readOnly, float dpiS, out Action apply)
     {
-        var Bg = Color.FromArgb(30, 30, 30);
-        var Fg = Color.FromArgb(222, 222, 222);
-        var Dim = Color.FromArgb(150, 150, 152);
-        var Panel2 = Color.FromArgb(45, 45, 48);
+        int S(int px) => (int)Math.Round(px * dpiS);
+        var Bg = LiteBoxTheme.Bg;
+        var Fg = LiteBoxTheme.Fg;
+        var Dim = LiteBoxTheme.SubFg;
+        var Panel2 = LiteBoxTheme.Panel2;
         var applies = new List<Action>();
         var ini = LiteBoxConfig.LoadForExe();   // PauseHotkey / ScreenCaptureKey live here
         bool iniDirty = false;
 
         CheckBox Chk(string t, bool v, Point loc) => new() { Text = t, Location = loc, AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = v, Enabled = !readOnly };
         Label Lbl(string t, Point loc, Color? c = null) => new() { Text = t, Location = loc, AutoSize = true, ForeColor = c ?? Fg, BackColor = Bg };
-        TextBox Txt(string v, Point loc, int w) => new() { Text = v, Location = loc, Width = w, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly };
-        HotkeyCaptureBox Hk(string v, Point loc, int w) => new(v) { Location = loc, Width = w, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly };
+        TextBox Txt(string v, Point loc, int w) => new() { Text = v, Location = loc, Width = S(w), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly };
+        HotkeyCaptureBox Hk(string v, Point loc, int w) => new(v) { Location = loc, Width = S(w), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly };
         void BindChk(CheckBox cb, string field) => applies.Add(() => { if (cb.Checked != s.GetBool(field)) s.SetBool(field, cb.Checked); });
         void BindTxt(TextBox tb, string field) => applies.Add(() => { if (tb.Text != s.Get(field)) s.Set(field, tb.Text); });
         void BindIniHk(HotkeyCaptureBox hb, string key) => applies.Add(() => { if (hb.HotkeyValue != ini.Get(key)) { ini.Set(key, hb.HotkeyValue); iniDirty = true; } });
 
-        var tabs = NewDarkTabControl();
-        TabPage Page(string t) { var p = new TabPage(t) { BackColor = Bg, Padding = new Padding(12) }; tabs.TabPages.Add(p); return p; }
+        var tabs = NewDarkTabControl(dpiS);
+        TabPage Page(string t) { var p = new TabPage(t) { BackColor = Bg, Padding = new Padding(S(12)) }; tabs.TabPages.Add(p); return p; }
 
         // ── Game Startup (governs the startup "NOW LOADING…" AND end "GAME OVER" screens) ──
         {
             var p = Page("Game Startup");
-            var use = Chk("Use Game Startup Screen", s.GetBool("UseStartupScreen", true), new Point(4, 8));
+            var use = Chk("Use Game Startup Screen", s.GetBool("UseStartupScreen", true), new Point(S(4), S(8)));
             p.Controls.Add(use);
-            p.Controls.Add(Lbl("(also shows the end “GAME OVER” screen)", new Point(28, 30), Dim));
-            p.Controls.Add(Lbl("Minimum Startup Screen Display Time (ms)", new Point(4, 64)));
-            var st = Txt(s.Get("MinimumStartupScreenDisplayTime", "1000"), new Point(320, 61), 90); p.Controls.Add(st);
-            p.Controls.Add(Lbl("Minimum Shutdown Screen Display Time (ms)", new Point(4, 96)));
-            var sh = Txt(s.Get("MinimumShutdownScreenDisplayTime", "1000"), new Point(320, 93), 90); p.Controls.Add(sh);
-            var hc = Chk("Hide Mouse Cursor on Startup Screens", s.GetBool("HideMouseCursorOnStartupScreens", true), new Point(4, 128));
+            p.Controls.Add(Lbl("(also shows the end “GAME OVER” screen)", new Point(S(28), S(30)), Dim));
+            p.Controls.Add(Lbl("Minimum Startup Screen Display Time (ms)", new Point(S(4), S(64))));
+            var st = Txt(s.Get("MinimumStartupScreenDisplayTime", "1000"), new Point(S(320), S(61)), 90); p.Controls.Add(st);
+            p.Controls.Add(Lbl("Minimum Shutdown Screen Display Time (ms)", new Point(S(4), S(96))));
+            var sh = Txt(s.Get("MinimumShutdownScreenDisplayTime", "1000"), new Point(S(320), S(93)), 90); p.Controls.Add(sh);
+            var hc = Chk("Hide Mouse Cursor on Startup Screens", s.GetBool("HideMouseCursorOnStartupScreens", true), new Point(S(4), S(128)));
             p.Controls.Add(hc);
             BindChk(use, "UseStartupScreen"); BindTxt(st, "MinimumStartupScreenDisplayTime");
             BindTxt(sh, "MinimumShutdownScreenDisplayTime"); BindChk(hc, "HideMouseCursorOnStartupScreens");
@@ -166,13 +172,13 @@ internal static class LbGlobalOptions
         // ── Game Pause ──
         {
             var p = Page("Game Pause");
-            var use = Chk("Use Game Pause Screen", s.GetBool("UsePauseScreen", true), new Point(4, 8));
+            var use = Chk("Use Game Pause Screen", s.GetBool("UsePauseScreen", true), new Point(S(4), S(8)));
             p.Controls.Add(use);
-            p.Controls.Add(Lbl("Pause Key", new Point(4, 40)));
-            var pk = Hk(ini.Get("PauseHotkey", "Pause"), new Point(120, 37), 220); p.Controls.Add(pk);
-            p.Controls.Add(Lbl("click, then press a key/combo", new Point(348, 40), Dim));
-            var fade = Chk("Enable Fading", s.GetBool("PauseScreenFading", true), new Point(4, 76));
-            var mute = Chk("Mute Audio During Transitions", s.GetBool("PauseScreenMuting", true), new Point(4, 102));
+            p.Controls.Add(Lbl("Pause Key", new Point(S(4), S(40))));
+            var pk = Hk(ini.Get("PauseHotkey", "Pause"), new Point(S(120), S(37)), 220); p.Controls.Add(pk);
+            p.Controls.Add(Lbl("click, then press a key/combo", new Point(S(348), S(40)), Dim));
+            var fade = Chk("Enable Fading", s.GetBool("PauseScreenFading", true), new Point(S(4), S(76)));
+            var mute = Chk("Mute Audio During Transitions", s.GetBool("PauseScreenMuting", true), new Point(S(4), S(102)));
             p.Controls.AddRange(new Control[] { fade, mute });
             BindChk(use, "UsePauseScreen"); BindIniHk(pk, "PauseHotkey");
             BindChk(fade, "PauseScreenFading"); BindChk(mute, "PauseScreenMuting");
@@ -181,17 +187,17 @@ internal static class LbGlobalOptions
         // ── Screen Capture ──
         {
             var p = Page("Screen Capture");
-            p.Controls.Add(Lbl("Screen Capture Key", new Point(4, 12)));
-            var sc = Hk(ini.Get("ScreenCaptureKey", ""), new Point(150, 9), 220); p.Controls.Add(sc);
-            p.Controls.Add(Lbl("click, then press a key/combo  (empty = disabled)", new Point(378, 12), Dim));
-            p.Controls.Add(Lbl("Saves a PNG of the game's monitor to <LB>\\Screenshots.", new Point(4, 44), Dim));
+            p.Controls.Add(Lbl("Screen Capture Key", new Point(S(4), S(12))));
+            var sc = Hk(ini.Get("ScreenCaptureKey", ""), new Point(S(150), S(9)), 220); p.Controls.Add(sc);
+            p.Controls.Add(Lbl("click, then press a key/combo  (empty = disabled)", new Point(S(378), S(12)), Dim));
+            p.Controls.Add(Lbl("Saves a PNG of the game's monitor to <LB>\\Screenshots.", new Point(S(4), S(44)), Dim));
             BindIniHk(sc, "ScreenCaptureKey");
         }
 
         // Footer note: gameplay changes take effect on the next game launch.
         var note = new Label
         {
-            Dock = DockStyle.Bottom, Height = 24, ForeColor = Dim, BackColor = Bg,
+            Dock = DockStyle.Bottom, Height = S(24), ForeColor = Dim, BackColor = Bg,
             Font = new Font("Segoe UI", 8.25f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft,
             Text = "These options apply to the next game launch.",
         };
@@ -209,12 +215,13 @@ internal static class LbGlobalOptions
 
     // ── Startup Applications grid (LB parity; LiteBox LAUNCHES the LaunchBox-
     //    flagged rows at its own boot — see StartupApps.LaunchAll) ────────────
-    private static Control BuildStartupAppsPanel(LbSettingsStore s, bool readOnly, out Action apply)
+    private static Control BuildStartupAppsPanel(LbSettingsStore s, bool readOnly, float dpiS, out Action apply)
     {
+        int S(int px) => (int)Math.Round(px * dpiS);
         var panel = new Panel { BackColor = Color.FromArgb(30, 30, 30) };
         var hint = new Label
         {
-            Dock = DockStyle.Top, Height = 34, ForeColor = Color.FromArgb(150, 150, 152),
+            Dock = DockStyle.Top, Height = S(34), ForeColor = Color.FromArgb(150, 150, 152),
             Text = "Started when LaunchBox/Big Box launch — LiteBox starts the LaunchBox-flagged rows too.\nDelete key removes the selected row.",
             Font = new Font("Segoe UI", 8.25f),
         };
@@ -292,12 +299,13 @@ internal static class LbGlobalOptions
         "Thailand", "United Kingdom", "United States",
     };
 
-    private static Control BuildRegionPrioritiesPanel(LbSettingsStore s, bool readOnly, out Action apply)
+    private static Control BuildRegionPrioritiesPanel(LbSettingsStore s, bool readOnly, float dpiS, out Action apply)
     {
+        int S(int px) => (int)Math.Round(px * dpiS);
         var panel = new Panel { BackColor = Color.FromArgb(30, 30, 30) };
         var hint = new Label
         {
-            Dock = DockStyle.Top, Height = 24, ForeColor = Color.FromArgb(150, 150, 152),
+            Dock = DockStyle.Top, Height = S(24), ForeColor = Color.FromArgb(150, 150, 152),
             Text = "Regions to prioritize for imports and displayed images. Checked = used, in order.",
             Font = new Font("Segoe UI", 8.25f),
         };
@@ -321,9 +329,9 @@ internal static class LbGlobalOptions
         foreach (var r in ordered)
             list.Items.Add(r, stored.Contains(r, StringComparer.OrdinalIgnoreCase));
 
-        var right = new Panel { Dock = DockStyle.Right, Width = 150, BackColor = Color.FromArgb(30, 30, 30) };
-        var up = MoveBtn("Move Selected Up", 4);
-        var down = MoveBtn("Move Selected Down", 38);
+        var right = new Panel { Dock = DockStyle.Right, Width = S(150), BackColor = Color.FromArgb(30, 30, 30) };
+        var up = MoveBtn("Move Selected Up", 4, dpiS);
+        var down = MoveBtn("Move Selected Down", 38, dpiS);
         up.Enabled = down.Enabled = !readOnly;
         void Move(int delta)
         {
@@ -389,19 +397,20 @@ internal static class LbGlobalOptions
         ("Icon", ""), ("Square", "Boxes"), ("Poster", "Boxes"),
     };
 
-    private static Control BuildAutoImportMediaPanel(LbSettingsStore s, bool readOnly, out Action apply)
+    private static Control BuildAutoImportMediaPanel(LbSettingsStore s, bool readOnly, float dpiS, out Action apply)
     {
+        int S(int px) => (int)Math.Round(px * dpiS);
         var panel = new Panel { BackColor = Color.FromArgb(30, 30, 30) };
 
-        var top = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = Color.FromArgb(30, 30, 30) };
+        var top = new Panel { Dock = DockStyle.Top, Height = S(52), BackColor = Color.FromArgb(30, 30, 30) };
         top.Controls.Add(new Label
         {
             Text = "Image downloads limit (per image group) — 0 = No Limit:",
-            Location = new Point(4, 6), AutoSize = true, ForeColor = Color.FromArgb(222, 222, 222),
+            Location = new Point(S(4), S(6)), AutoSize = true, ForeColor = Color.FromArgb(222, 222, 222),
         });
         var limit = new TextBox
         {
-            Location = new Point(4, 26), Width = 120, Enabled = !readOnly,
+            Location = new Point(S(4), S(26)), Width = S(120), Enabled = !readOnly,
             BackColor = Color.FromArgb(45, 45, 48), ForeColor = Color.FromArgb(222, 222, 222), BorderStyle = BorderStyle.FixedSingle,
             Text = s.Get("AutoImportMediaLimit", "0"),
         };
@@ -508,13 +517,14 @@ internal static class LbGlobalOptions
     }
 
     /// <summary>A dark, owner-drawn TabControl (the OS draws tabs light otherwise).</summary>
-    private static TabControl NewDarkTabControl()
+    private static TabControl NewDarkTabControl(float dpiS)
     {
+        int S(int px) => (int)Math.Round(px * dpiS);
         var tabs = new TabControl
         {
             Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed, Multiline = true,
             BackColor = Color.FromArgb(30, 30, 30), ForeColor = Color.FromArgb(222, 222, 222),
-            SizeMode = TabSizeMode.Normal, Padding = new Point(14, 4),
+            SizeMode = TabSizeMode.Normal, Padding = new Point(S(14), S(4)),
         };
         tabs.DrawItem += (_, e) =>
         {
@@ -530,15 +540,16 @@ internal static class LbGlobalOptions
     }
 
     // One tabbed section hosting all media priority lists.
-    private static Control BuildMediaPrioritiesPanel(LbSettingsStore s, bool readOnly, out Action apply)
+    private static Control BuildMediaPrioritiesPanel(LbSettingsStore s, bool readOnly, float dpiS, out Action apply)
     {
+        int S(int px) => (int)Math.Round(px * dpiS);
         var imgCatalog = ImageCatalog(s);
         var applies = new List<Action>();
-        var tabs = NewDarkTabControl();
+        var tabs = NewDarkTabControl(dpiS);
         foreach (var (tab, field, defaults, video) in _mediaPriorities)
         {
-            var page = new TabPage(tab) { BackColor = Color.FromArgb(30, 30, 30), Padding = new Padding(2) };
-            var panel = BuildPriorityPanel(s, field, video ? _videoTypes : imgCatalog, defaults, readOnly, out var ap);
+            var page = new TabPage(tab) { BackColor = Color.FromArgb(30, 30, 30), Padding = new Padding(S(2)) };
+            var panel = BuildPriorityPanel(s, field, video ? _videoTypes : imgCatalog, defaults, readOnly, dpiS, out var ap);
             panel.Dock = DockStyle.Fill;
             page.Controls.Add(panel);
             tabs.TabPages.Add(page);
@@ -550,8 +561,9 @@ internal static class LbGlobalOptions
 
     // ── LB "Integrations" branch (tabbed). All NoImpact on LiteBox today; round-trip
     //    to Settings.xml for LaunchBox, credentials kept for future LiteBox use. ──
-    private static Control BuildIntegrationsPanel(LbSettingsStore s, bool readOnly, out Action apply, RaScanHook? raScan = null)
+    private static Control BuildIntegrationsPanel(LbSettingsStore s, bool readOnly, float dpiS, out Action apply, RaScanHook? raScan = null)
     {
+        int S(int px) => (int)Math.Round(px * dpiS);
         var Bg = Color.FromArgb(30, 30, 30);
         var Fg = Color.FromArgb(222, 222, 222);
         var Panel2 = Color.FromArgb(45, 45, 48);
@@ -559,10 +571,10 @@ internal static class LbGlobalOptions
 
         CheckBox Chk(string t, bool v, Point loc) => new() { Text = t, Location = loc, AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = v, Enabled = !readOnly };
         Label Lbl(string t, Point loc) => new() { Text = t, Location = loc, AutoSize = true, ForeColor = Fg, BackColor = Bg };
-        TextBox Txt(string v, Point loc, int w, bool pwd = false) => new() { Text = v, Location = loc, Width = w, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly, UseSystemPasswordChar = pwd };
+        TextBox Txt(string v, Point loc, int w, bool pwd = false) => new() { Text = v, Location = loc, Width = S(w), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly, UseSystemPasswordChar = pwd };
         Button Browse(Point loc, Action onClick)
         {
-            var b = new Button { Text = "Browse…", Location = loc, Size = new Size(84, 24), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f), Enabled = !readOnly };
+            var b = new Button { Text = "Browse…", Location = loc, Size = new Size(S(84), S(24)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f), Enabled = !readOnly };
             b.Click += (_, _) => onClick();
             return b;
         }
@@ -572,16 +584,16 @@ internal static class LbGlobalOptions
         void BindTxt(TextBox tb, string field)
             => applies.Add(() => { if (tb.Text != s.Get(field)) s.Set(field, tb.Text); });
 
-        var tabs = NewDarkTabControl();
+        var tabs = NewDarkTabControl(dpiS);
         TabPage Page(string t) { var p = new TabPage(t) { BackColor = Bg, Padding = new Padding(12) }; tabs.TabPages.Add(p); return p; }
 
         // ── DOSBox ──
         {
             var p = Page("DOSBox");
-            var c1 = Chk("Show all DOSBox commands", s.GetBool("ShowCommands"), new Point(4, 8));
-            var c2 = Chk("Don't exit DOSBox when exiting games", !s.GetBool("ExitDosBox", true), new Point(4, 34));
-            var c3 = Chk("Pause before each command", s.GetBool("PauseBeforeCommands"), new Point(4, 60));
-            var c4 = Chk("Pause before exiting DOSBox", s.GetBool("PauseBeforeExit"), new Point(4, 86));
+            var c1 = Chk("Show all DOSBox commands", s.GetBool("ShowCommands"), new Point(S(4), S(8)));
+            var c2 = Chk("Don't exit DOSBox when exiting games", !s.GetBool("ExitDosBox", true), new Point(S(4), S(34)));
+            var c3 = Chk("Pause before each command", s.GetBool("PauseBeforeCommands"), new Point(S(4), S(60)));
+            var c4 = Chk("Pause before exiting DOSBox", s.GetBool("PauseBeforeExit"), new Point(S(4), S(86)));
             p.Controls.AddRange(new Control[] { c1, c2, c3, c4 });
             BindChk(c1, "ShowCommands"); BindChk(c2, "ExitDosBox", invert: true); BindChk(c3, "PauseBeforeCommands"); BindChk(c4, "PauseBeforeExit");
         }
@@ -589,10 +601,10 @@ internal static class LbGlobalOptions
         // ── EmuMovies ──
         {
             var p = Page("EmuMovies");
-            p.Controls.Add(Lbl("User ID", new Point(4, 8)));
-            var user = Txt(s.Get("EmuMoviesUserId"), new Point(4, 28), 280); p.Controls.Add(user);
-            p.Controls.Add(Lbl("Password", new Point(4, 60)));
-            var pwd = Txt(s.Get("EmuMoviesPassword"), new Point(4, 80), 280, pwd: true); p.Controls.Add(pwd);
+            p.Controls.Add(Lbl("User ID", new Point(S(4), S(8))));
+            var user = Txt(s.Get("EmuMoviesUserId"), new Point(S(4), S(28)), 280); p.Controls.Add(user);
+            p.Controls.Add(Lbl("Password", new Point(S(4), S(60))));
+            var pwd = Txt(s.Get("EmuMoviesPassword"), new Point(S(4), S(80)), 280, pwd: true); p.Controls.Add(pwd);
             BindTxt(user, "EmuMoviesUserId"); BindTxt(pwd, "EmuMoviesPassword");
         }
 
@@ -612,24 +624,24 @@ internal static class LbGlobalOptions
                 ll.LinkClicked += (_, _) => { var t = target(); if (!string.IsNullOrEmpty(t)) try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(t) { UseShellExecute = true }); } catch { } };
                 return ll;
             }
-            Label Stat(Point loc, int w = 540) => new() { Location = loc, AutoSize = false, Size = new Size(w, 20), ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.75f) };
+            Label Stat(Point loc, int w = 540) => new() { Location = loc, AutoSize = false, Size = new Size(S(w), S(20)), ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.75f) };
 
-            p.Controls.Add(Lbl("Profile Name", new Point(4, 8)));
-            var prof = Txt(s.Get("GogProfileName"), new Point(4, 28), 280); p.Controls.Add(prof);
-            p.Controls.Add(Link("Open profile ↗", new Point(292, 31), () => GogDiagnostics.ProfileUrl(prof.Text)));
+            p.Controls.Add(Lbl("Profile Name", new Point(S(4), S(8))));
+            var prof = Txt(s.Get("GogProfileName"), new Point(S(4), S(28)), 280); p.Controls.Add(prof);
+            p.Controls.Add(Link("Open profile ↗", new Point(S(292), S(31)), () => GogDiagnostics.ProfileUrl(prof.Text)));
             BindTxt(prof, "GogProfileName");
             // NB no "Launch games through GOG Galaxy client" toggle: LiteBox always launches GOG games via
             // the Galaxy shortcut regardless, so the LB setting has no effect here.
 
-            p.Controls.Add(new Label { Text = "Status", Location = new Point(4, 64), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) });
-            var dbLbl = Stat(new Point(4, 88));
-            var clientLbl = Stat(new Point(4, 112));
+            p.Controls.Add(new Label { Text = "Status", Location = new Point(S(4), S(64)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) });
+            var dbLbl = Stat(new Point(S(4), S(88)));
+            var clientLbl = Stat(new Point(S(4), S(112)));
             p.Controls.Add(dbLbl); p.Controls.Add(clientLbl);
-            var explain = new Label { Location = new Point(4, 136), AutoSize = false, Size = new Size(540, 34), ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.25f) };
+            var explain = new Label { Location = new Point(S(4), S(136)), AutoSize = false, Size = new Size(S(540), S(34)), ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.25f) };
             p.Controls.Add(explain);
-            var statsLbl = Stat(new Point(4, 174));
+            var statsLbl = Stat(new Point(S(4), S(174)));
             p.Controls.Add(statsLbl);
-            var reBtn = new Button { Text = "Re-check", Location = new Point(4, 202), Size = new Size(96, 26), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f) };
+            var reBtn = new Button { Text = "Re-check", Location = new Point(S(4), S(202)), Size = new Size(S(96), S(26)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f) };
             p.Controls.Add(reBtn);
 
             void Refresh()
@@ -684,13 +696,13 @@ internal static class LbGlobalOptions
         // ── LEDBlinky ──
         {
             var p = Page("LEDBlinky");
-            var en = Chk("Enable LEDBlinky", s.GetBool("EnableLedBlinky"), new Point(4, 8));
+            var en = Chk("Enable LEDBlinky", s.GetBool("EnableLedBlinky"), new Point(S(4), S(8)));
             p.Controls.Add(en);
-            p.Controls.Add(Lbl("Path to LEDBlinky.exe file", new Point(4, 38)));
-            var path = Txt(s.Get("LedBlinkyPath"), new Point(4, 58), 480); p.Controls.Add(path);
-            p.Controls.Add(Browse(new Point(490, 57), () => { using var d = new OpenFileDialog { Filter = "LEDBlinky (LEDBlinky.exe)|LEDBlinky.exe|Executables (*.exe)|*.exe" }; if (d.ShowDialog() == DialogResult.OK) path.Text = d.FileName; }));
-            var ss = Chk("Don't start screensaver when entering attract mode", s.GetBool("LedBlinkyDontStartScreensaver"), new Point(4, 92));
-            var adv = Chk("Use advanced logic for LEDBlinky filters lists in Big Box (primarily for addon devices)", s.GetBool("LedBlinkyUseAdvanced"), new Point(4, 118));
+            p.Controls.Add(Lbl("Path to LEDBlinky.exe file", new Point(S(4), S(38))));
+            var path = Txt(s.Get("LedBlinkyPath"), new Point(S(4), S(58)), 480); p.Controls.Add(path);
+            p.Controls.Add(Browse(new Point(S(490), S(57)), () => { using var d = new OpenFileDialog { Filter = "LEDBlinky (LEDBlinky.exe)|LEDBlinky.exe|Executables (*.exe)|*.exe" }; if (d.ShowDialog() == DialogResult.OK) path.Text = d.FileName; }));
+            var ss = Chk("Don't start screensaver when entering attract mode", s.GetBool("LedBlinkyDontStartScreensaver"), new Point(S(4), S(92)));
+            var adv = Chk("Use advanced logic for LEDBlinky filters lists in Big Box (primarily for addon devices)", s.GetBool("LedBlinkyUseAdvanced"), new Point(S(4), S(118)));
             p.Controls.AddRange(new Control[] { ss, adv });
             BindChk(en, "EnableLedBlinky"); BindTxt(path, "LedBlinkyPath"); BindChk(ss, "LedBlinkyDontStartScreensaver"); BindChk(adv, "LedBlinkyUseAdvanced");
         }
@@ -698,8 +710,8 @@ internal static class LbGlobalOptions
         // ── MAME ──
         {
             var p = Page("MAME");
-            var dl = Chk("Download MAME Community Leaderboards from the LaunchBox Games Database", s.GetBool("DownloadMameCommunityHighScores"), new Point(4, 8));
-            var ul = Chk("Upload Your MAME High Scores to the LaunchBox Games Database Community Leaderboards", s.GetBool("UploadMameCommunityHighScores"), new Point(4, 34));
+            var dl = Chk("Download MAME Community Leaderboards from the LaunchBox Games Database", s.GetBool("DownloadMameCommunityHighScores"), new Point(S(4), S(8)));
+            var ul = Chk("Upload Your MAME High Scores to the LaunchBox Games Database Community Leaderboards", s.GetBool("UploadMameCommunityHighScores"), new Point(S(4), S(34)));
             p.Controls.AddRange(new Control[] { dl, ul });
             BindChk(dl, "DownloadMameCommunityHighScores"); BindChk(ul, "UploadMameCommunityHighScores");
         }
@@ -707,12 +719,12 @@ internal static class LbGlobalOptions
         // ── RetroAchievements ── (the integration most likely to be wired into LiteBox later)
         {
             var p = Page("RetroAchievements");
-            p.Controls.Add(Lbl("Username", new Point(4, 8)));
-            var user = Txt(s.Get("RetroAchievementsUsername"), new Point(4, 28), 280); p.Controls.Add(user);
-            p.Controls.Add(Lbl("Password", new Point(4, 60)));
-            var pwd = Txt(s.Get("RetroAchievementsPassword"), new Point(4, 80), 280, pwd: true); p.Controls.Add(pwd);
-            p.Controls.Add(Lbl("API Key", new Point(4, 112)));
-            var key = Txt(s.Get("RetroAchievementsApiKey"), new Point(4, 132), 380); p.Controls.Add(key);
+            p.Controls.Add(Lbl("Username", new Point(S(4), S(8))));
+            var user = Txt(s.Get("RetroAchievementsUsername"), new Point(S(4), S(28)), 280); p.Controls.Add(user);
+            p.Controls.Add(Lbl("Password", new Point(S(4), S(60))));
+            var pwd = Txt(s.Get("RetroAchievementsPassword"), new Point(S(4), S(80)), 280, pwd: true); p.Controls.Add(pwd);
+            p.Controls.Add(Lbl("API Key", new Point(S(4), S(112))));
+            var key = Txt(s.Get("RetroAchievementsApiKey"), new Point(S(4), S(132)), 380); p.Controls.Add(key);
             // Username/API key/password round-trip; the login Token is LB-managed — never touched.
             BindTxt(user, "RetroAchievementsUsername"); BindTxt(pwd, "RetroAchievementsPassword"); BindTxt(key, "RetroAchievementsApiKey");
 
@@ -720,30 +732,30 @@ internal static class LbGlobalOptions
             if (raScan != null)
             {
                 var Sub = Color.FromArgb(150, 150, 152);
-                int y = 178;
-                p.Controls.Add(new Label { Text = "Scan", Location = new Point(4, y), AutoSize = true, ForeColor = Fg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) });
-                y += 24;
+                int y = S(178);
+                p.Controls.Add(new Label { Text = "Scan", Location = new Point(S(4), y), AutoSize = true, ForeColor = Fg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) });
+                y += S(24);
                 bool en = raScan.Available && !readOnly;
                 if (!raScan.Available)
                 {
-                    p.Controls.Add(new Label { Text = "RetroAchievements is currently taken over — manual scanning is disabled here.", Location = new Point(4, y), AutoSize = true, MaximumSize = new Size(520, 0), ForeColor = Sub });
-                    y += 24;
+                    p.Controls.Add(new Label { Text = "RetroAchievements is currently taken over — manual scanning is disabled here.", Location = new Point(S(4), y), AutoSize = true, MaximumSize = new Size(S(520), S(0)), ForeColor = Sub });
+                    y += S(24);
                 }
                 else if (!raScan.Configured)
                 {
-                    p.Controls.Add(new Label { Text = "⚠  No username / API key above — hashes are computed but raids won't resolve.", Location = new Point(4, y), AutoSize = true, MaximumSize = new Size(520, 0), ForeColor = Color.FromArgb(222, 175, 90) });
-                    y += 24;
+                    p.Controls.Add(new Label { Text = "⚠  No username / API key above — hashes are computed but raids won't resolve.", Location = new Point(S(4), y), AutoSize = true, MaximumSize = new Size(S(520), S(0)), ForeColor = Color.FromArgb(222, 175, 90) });
+                    y += S(24);
                 }
-                p.Controls.Add(Lbl("Platform", new Point(4, y))); y += 20;
-                var combo = new ComboBox { Location = new Point(4, y), Width = 300, DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat, Enabled = en };
+                p.Controls.Add(Lbl("Platform", new Point(S(4), y))); y += S(20);
+                var combo = new ComboBox { Location = new Point(S(4), y), Width = S(300), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat, Enabled = en };
                 combo.Items.Add(RaScanHook.AllPlatforms);
                 var plats = raScan.Platforms?.Invoke();
                 if (plats != null) foreach (var n in plats) combo.Items.Add(n);
                 combo.SelectedIndex = 0;
-                p.Controls.Add(combo); y += 34;
+                p.Controls.Add(combo); y += S(34);
                 Button ScanBtn(string t, int x)
                 {
-                    var b = new Button { Text = t, Location = new Point(x, y), Size = new Size(90, 26), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, Enabled = en, Font = new Font("Segoe UI", 8.5f) };
+                    var b = new Button { Text = t, Location = new Point(S(x), y), Size = new Size(S(90), S(26)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, Enabled = en, Font = new Font("Segoe UI", 8.5f) };
                     b.FlatAppearance.BorderSize = 0;
                     return b;
                 }
@@ -751,14 +763,14 @@ internal static class LbGlobalOptions
                 var full = ScanBtn("Full scan", 100);
                 lite.Click += (_, _) => raScan.Run?.Invoke(combo.SelectedItem as string, false);
                 full.Click += (_, _) => raScan.Run?.Invoke(combo.SelectedItem as string, true);
-                var mapBtn = new Button { Text = "Platform mapping…", Location = new Point(196, y), Size = new Size(132, 26), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, Enabled = raScan.Available, Font = new Font("Segoe UI", 8.5f) };
+                var mapBtn = new Button { Text = "Platform mapping…", Location = new Point(S(196), y), Size = new Size(S(132), S(26)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, Enabled = raScan.Available, Font = new Font("Segoe UI", 8.5f) };
                 mapBtn.FlatAppearance.BorderSize = 0;
                 mapBtn.Click += (_, _) => raScan.OpenMapping?.Invoke();
-                p.Controls.Add(lite); p.Controls.Add(full); p.Controls.Add(mapBtn); y += 36;
-                var roll = new CheckBox { Text = "Refresh up to 3 stale platform catalogues at startup (rolling background update)", Location = new Point(4, y), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = raScan.RollingRefresh, Enabled = en };
+                p.Controls.Add(lite); p.Controls.Add(full); p.Controls.Add(mapBtn); y += S(36);
+                var roll = new CheckBox { Text = "Refresh up to 3 stale platform catalogues at startup (rolling background update)", Location = new Point(S(4), y), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = raScan.RollingRefresh, Enabled = en };
                 roll.CheckedChanged += (_, _) => raScan.SetRollingRefresh?.Invoke(roll.Checked);
-                p.Controls.Add(roll); y += 28;
-                p.Controls.Add(new Label { Text = "Lite: only games with no hash yet.   ·   Full: recompute all (picks up a raid added to RA later).", Location = new Point(4, y), AutoSize = true, MaximumSize = new Size(540, 0), ForeColor = Sub });
+                p.Controls.Add(roll); y += S(28);
+                p.Controls.Add(new Label { Text = "Lite: only games with no hash yet.   ·   Full: recompute all (picks up a raid added to RA later).", Location = new Point(S(4), y), AutoSize = true, MaximumSize = new Size(S(540), S(0)), ForeColor = Sub });
             }
         }
 
@@ -778,28 +790,28 @@ internal static class LbGlobalOptions
                 ll.LinkClicked += (_, _) => { var t = target(); if (!string.IsNullOrEmpty(t)) try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(t) { UseShellExecute = true }); } catch { } };
                 return ll;
             }
-            Label Stat(Point loc, int w = 520) => new() { Location = loc, AutoSize = false, Size = new Size(w, 20), ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.75f) };
+            Label Stat(Point loc, int w = 520) => new() { Location = loc, AutoSize = false, Size = new Size(S(w), S(20)), ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.75f) };
 
-            p.Controls.Add(Lbl("Steam Custom URL  (https://steamcommunity.com/id/…)  — vanity name or 64-bit id", new Point(4, 8)));
-            var url = Txt(s.Get("SteamUserName"), new Point(4, 28), 300); p.Controls.Add(url);
-            p.Controls.Add(Link("Open profile ↗", new Point(312, 31), () => SteamDiagnostics.ProfileUrl(url.Text)));
+            p.Controls.Add(Lbl("Steam Custom URL  (https://steamcommunity.com/id/…)  — vanity name or 64-bit id", new Point(S(4), S(8))));
+            var url = Txt(s.Get("SteamUserName"), new Point(S(4), S(28)), 300); p.Controls.Add(url);
+            p.Controls.Add(Link("Open profile ↗", new Point(S(312), S(31)), () => SteamDiagnostics.ProfileUrl(url.Text)));
 
-            p.Controls.Add(Lbl("API Key", new Point(4, 60)));
-            var keyStatus = new Label { Location = new Point(70, 60), AutoSize = true, ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.75f) };
+            p.Controls.Add(Lbl("API Key", new Point(S(4), S(60))));
+            var keyStatus = new Label { Location = new Point(S(70), S(60)), AutoSize = true, ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.75f) };
             p.Controls.Add(keyStatus);
-            var key = Txt(s.Get("SteamApiKey"), new Point(4, 80), 380); p.Controls.Add(key);
+            var key = Txt(s.Get("SteamApiKey"), new Point(S(4), S(80)), 380); p.Controls.Add(key);
             BindTxt(url, "SteamUserName"); BindTxt(key, "SteamApiKey");
 
-            p.Controls.Add(new Label { Text = "Status", Location = new Point(4, 120), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) });
-            var clientLbl = Stat(new Point(4, 144));
-            var publicLbl = Stat(new Point(4, 168));
+            p.Controls.Add(new Label { Text = "Status", Location = new Point(S(4), S(120)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) });
+            var clientLbl = Stat(new Point(S(4), S(144)));
+            var publicLbl = Stat(new Point(S(4), S(168)));
             p.Controls.Add(clientLbl); p.Controls.Add(publicLbl);
-            p.Controls.Add(Link("Set “Game details” privacy ↗", new Point(4, 190), () => SteamDiagnostics.PrivacyUrl(url.Text)));
-            var explain = new Label { Location = new Point(4, 212), AutoSize = false, Size = new Size(540, 46), ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.25f) };
+            p.Controls.Add(Link("Set “Game details” privacy ↗", new Point(S(4), S(190)), () => SteamDiagnostics.PrivacyUrl(url.Text)));
+            var explain = new Label { Location = new Point(S(4), S(212)), AutoSize = false, Size = new Size(S(540), S(46)), ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.25f) };
             p.Controls.Add(explain);
-            var statsLbl = Stat(new Point(4, 264));
+            var statsLbl = Stat(new Point(S(4), S(264)));
             p.Controls.Add(statsLbl);
-            var reBtn = new Button { Text = "Re-check", Location = new Point(4, 292), Size = new Size(96, 26), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f) };
+            var reBtn = new Button { Text = "Re-check", Location = new Point(S(4), S(292)), Size = new Size(S(96), S(26)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f) };
             p.Controls.Add(reBtn);
 
             void Refresh()
@@ -879,16 +891,16 @@ internal static class LbGlobalOptions
         // ── OBS Studio ──
         {
             var p = Page("OBS Studio");
-            var auto = Chk("Automatically add OBS Studio recordings to LaunchBox games", s.GetBool("AutoAddObsRecordings"), new Point(4, 8));
+            var auto = Chk("Automatically add OBS Studio recordings to LaunchBox games", s.GetBool("AutoAddObsRecordings"), new Point(S(4), S(8)));
             p.Controls.Add(auto);
-            p.Controls.Add(Lbl("OBS Studio Video Recordings Folder", new Point(4, 38)));
-            var folder = Txt(s.Get("ObsRecordingsFolder"), new Point(4, 58), 480); p.Controls.Add(folder);
-            p.Controls.Add(Browse(new Point(490, 57), () => { using var d = new FolderBrowserDialog(); if (d.ShowDialog() == DialogResult.OK) folder.Text = d.SelectedPath; }));
-            var ensure = Chk("Make sure OBS Studio is running before launching games", s.GetBool("StartObsWithGames"), new Point(4, 92));
+            p.Controls.Add(Lbl("OBS Studio Video Recordings Folder", new Point(S(4), S(38))));
+            var folder = Txt(s.Get("ObsRecordingsFolder"), new Point(S(4), S(58)), 480); p.Controls.Add(folder);
+            p.Controls.Add(Browse(new Point(S(490), S(57)), () => { using var d = new FolderBrowserDialog(); if (d.ShowDialog() == DialogResult.OK) folder.Text = d.SelectedPath; }));
+            var ensure = Chk("Make sure OBS Studio is running before launching games", s.GetBool("StartObsWithGames"), new Point(S(4), S(92)));
             p.Controls.Add(ensure);
-            p.Controls.Add(Lbl("OBS Studio Executable Path", new Point(4, 122)));
-            var exe = Txt(s.Get("ObsExePath"), new Point(4, 142), 480); p.Controls.Add(exe);
-            p.Controls.Add(Browse(new Point(490, 141), () => { using var d = new OpenFileDialog { Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*" }; if (d.ShowDialog() == DialogResult.OK) exe.Text = d.FileName; }));
+            p.Controls.Add(Lbl("OBS Studio Executable Path", new Point(S(4), S(122))));
+            var exe = Txt(s.Get("ObsExePath"), new Point(S(4), S(142)), 480); p.Controls.Add(exe);
+            p.Controls.Add(Browse(new Point(S(490), S(141)), () => { using var d = new OpenFileDialog { Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*" }; if (d.ShowDialog() == DialogResult.OK) exe.Text = d.FileName; }));
             BindChk(auto, "AutoAddObsRecordings"); BindTxt(folder, "ObsRecordingsFolder"); BindChk(ensure, "StartObsWithGames"); BindTxt(exe, "ObsExePath");
         }
 
@@ -901,8 +913,9 @@ internal static class LbGlobalOptions
     // (stored order), then the remaining catalog types alphabetically (LB layout).
     // Tolerant of unknown types: a stored type not in the catalog is kept (checked)
     // and written back, so a future LB type is never dropped.
-    private static Control BuildPriorityPanel(LbSettingsStore s, string field, string[] catalog, string defaults, bool readOnly, out Action apply)
+    private static Control BuildPriorityPanel(LbSettingsStore s, string field, string[] catalog, string defaults, bool readOnly, float dpiS, out Action apply)
     {
+        int S(int px) => (int)Math.Round(px * dpiS);
         var panel = new Panel { BackColor = Color.FromArgb(30, 30, 30) };
         var list = new CheckedListBox
         {
@@ -924,10 +937,10 @@ internal static class LbGlobalOptions
         }
         Populate(s.Get(field).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
 
-        var right = new Panel { Dock = DockStyle.Right, Width = 150, BackColor = Color.FromArgb(30, 30, 30) };
-        var up = MoveBtn("Move Selected Up", 4);
-        var down = MoveBtn("Move Selected Down", 38);
-        var revert = MoveBtn("Revert to Default", 76);
+        var right = new Panel { Dock = DockStyle.Right, Width = S(150), BackColor = Color.FromArgb(30, 30, 30) };
+        var up = MoveBtn("Move Selected Up", 4, dpiS);
+        var down = MoveBtn("Move Selected Down", 38, dpiS);
+        var revert = MoveBtn("Revert to Default", 76, dpiS);
         up.Enabled = down.Enabled = revert.Enabled = !readOnly;
         void Move(int delta)
         {
@@ -956,9 +969,9 @@ internal static class LbGlobalOptions
         return panel;
     }
 
-    private static Button MoveBtn(string text, int top) => new()
+    private static Button MoveBtn(string text, int top, float dpiS) => new()
     {
-        Text = text, Location = new Point(4, top), Size = new Size(142, 28),
+        Text = text, Location = new Point((int)Math.Round(4 * dpiS), (int)Math.Round(top * dpiS)), Size = new Size((int)Math.Round(142 * dpiS), (int)Math.Round(28 * dpiS)),
         FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(60, 60, 75), ForeColor = Color.White,
         FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f),
     };

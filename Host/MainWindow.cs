@@ -21,19 +21,24 @@ using LbApiHost.Host.Data;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.Ra;
 using LbApiHost.Host.Store;
+using LbApiHost.Host.UiKit;
 
 namespace LbApiHost.Host;
 
 internal sealed class MainWindow : Form
 {
     // ── Theme ────────────────────────────────────────────────────────────────
-    private static readonly Color Bg      = Color.FromArgb(30, 30, 30);
-    private static readonly Color Panel   = Color.FromArgb(37, 37, 38);
-    private static readonly Color Panel2  = Color.FromArgb(45, 45, 48);
+    // Bg/Panel/Panel2/Fg/SubFg/Accent are byte-for-byte the same palette as Host.UiKit.LiteBoxTheme -
+    // referencing it here instead of a second copy of the same Color.FromArgb literals means a future
+    // palette change only has one place to edit. Row2 has no LiteBoxTheme equivalent (a striped-row
+    // shade specific to this list), so it stays local.
+    private static readonly Color Bg      = LiteBoxTheme.Bg;
+    private static readonly Color Panel   = LiteBoxTheme.PanelC;
+    private static readonly Color Panel2  = LiteBoxTheme.Panel2;
     private static readonly Color Row2    = Color.FromArgb(34, 34, 36);
-    private static readonly Color Fg      = Color.FromArgb(222, 222, 222);
-    private static readonly Color SubFg   = Color.FromArgb(150, 150, 152);
-    private static readonly Color Accent  = Color.FromArgb(0, 122, 204);
+    private static readonly Color Fg      = LiteBoxTheme.Fg;
+    private static readonly Color SubFg   = LiteBoxTheme.SubFg;
+    private static readonly Color Accent  = LiteBoxTheme.Accent;
     private static readonly Color UserRating = Color.FromArgb(255, 196, 0);   // amber: user-set rating
     private static readonly Color CommRating = Color.FromArgb(150, 150, 152); // grey: community rating
 
@@ -247,7 +252,7 @@ internal sealed class MainWindow : Form
 
         _poster = BuildPoster();
 
-        var inner = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
+        var inner = new ThemedSplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
         inner.Panel1.BackColor = Panel;       // shows in the side margins around the centred poster grid
         inner.Panel1.Controls.Add(_poster);   // hidden until poster mode; same cell as the list
         inner.Panel1.Controls.Add(_games);
@@ -262,7 +267,7 @@ internal sealed class MainWindow : Form
         inner.Panel2.Controls.Add(_launchButtons);
         inner.Panel1.Resize += (_, _) => LayoutPoster();   // keep the poster grid centred on resize
 
-        var outer = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
+        var outer = new ThemedSplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
         // Left panel = a "group by" ComboBox (top) above the source tree (fill). A TableLayoutPanel gives a
         // deterministic top-strip + fill split (no docking z-order guessing).
         _viewCombo = BuildViewCombo();
@@ -476,10 +481,11 @@ internal sealed class MainWindow : Form
             // (sets inner's available width), then inner.
             int leftPm = _cfg.GetInt("SplitLeftPermille", 0);
             int midPm = _cfg.GetInt("SplitMidPermille", 0);
+            float dpiS = LiteBoxTheme.DpiScale(this);
             if (leftPm > 0) SetSplitFraction(outer, leftPm / 1000.0);
-            else try { outer.SplitterDistance = 240; } catch { }
+            else try { outer.SplitterDistance = (int)Math.Round(240 * dpiS); } catch { }
             if (midPm > 0) SetSplitFraction(inner, midPm / 1000.0);
-            else try { inner.SplitterDistance = Math.Max(300, inner.Width - 380); } catch { }
+            else try { inner.SplitterDistance = Math.Max((int)Math.Round(300 * dpiS), inner.Width - (int)Math.Round(380 * dpiS)); } catch { }
             RestoreColumnLayout();   // order / width / shown-hidden from the INI
             RestoreSort();           // last sort column + direction
             _currentView = SourceViews.ById(_cfg.Get("GroupView"));   // restore the saved grouping…
@@ -532,51 +538,57 @@ internal sealed class MainWindow : Form
         // key = stable INI identity; never localise it. sort = comparable value; text = displayed
         // string; fore = optional per-cell colour (rating). visible = default visibility.
         GameColumn Col(string key, string title, int w, Func<IGame, object> sort, Func<IGame, string> text,
-                       HorizontalAlignment align = HorizontalAlignment.Left, bool visible = true, Func<IGame, Color?> fore = null)
-            => lv.AddColumn(new GameColumn { Key = key, Title = title, Width = w, Visible = visible, Align = align, Sort = sort, Text = text, Fore = fore });
+                       HorizontalAlignment align = HorizontalAlignment.Left, bool visible = true, Func<IGame, Color?> fore = null, bool stretch = false)
+            => lv.AddColumn(new GameColumn { Key = key, Title = title, Width = w, Visible = visible, Align = align, Sort = sort, Text = text, Fore = fore, Stretch = stretch });
+
+        // DPI-scaled default width, so a fresh install's columns are proportioned sensibly at any
+        // scaling factor. Named DpiW, not "W" - a bare one-letter name sits right next to the
+        // pre-existing S(string) null-coalescing helper used in the very same Col(...) calls below,
+        // and the two are easy to confuse (or swap) at a glance since both take one short argument.
+        int DpiW(int px) => (int)Math.Round(px * LiteBoxTheme.DpiScale(this));
 
         static string DateStr(object v) => v is DateTime d && d != default ? d.ToString("yyyy-MM-dd") : "";
 
         // Sort the Title column by the article-stripped compare name (LaunchBox-style: "The Legend
         // of Zelda" sorts under L), while still DISPLAYING the full title.
-        Col("title", "Title", 320, g => CompareName(g), g => S(Safe(() => g.Title)));
-        Col("platform", "Platform", 150, g => S(Safe(() => g.Platform)), g => S(Safe(() => g.Platform)));
-        Col("developer", "Developer", 150, g => S(Safe(() => g.Developer)), g => S(Safe(() => g.Developer)));
-        Col("publisher", "Publisher", 150, g => S(Safe(() => g.Publisher)), g => S(Safe(() => g.Publisher)), visible: false);
-        Col("genre", "Genre", 140, g => S(Safe(() => g.GenresString)), g => S(Safe(() => g.GenresString)));
-        Col("series", "Series", 130, g => S(Safe(() => g.Series)), g => S(Safe(() => g.Series)), visible: false);
-        Col("region", "Region", 90, g => S(Safe(() => g.Region)), g => S(Safe(() => g.Region)), visible: false);
-        Col("playmode", "Play Mode", 110, g => S(Safe(() => g.PlayMode)), g => S(Safe(() => g.PlayMode)), visible: false);
-        Col("version", "Version", 90, g => S(Safe(() => g.Version)), g => S(Safe(() => g.Version)), visible: false);
-        Col("status", "Status", 90, g => S(Safe(() => g.Status)), g => S(Safe(() => g.Status)), visible: false);
-        Col("source", "Source", 110, g => S(Safe(() => g.Source)), g => S(Safe(() => g.Source)), visible: false);
-        Col("year", "Year", 55, g => N(() => g.ReleaseYear), g => N(() => g.ReleaseYear)?.ToString() ?? "", HorizontalAlignment.Right);
-        Col("releasedate", "Release Date", 100, g => Safe(() => (object)g.ReleaseDate), g => DateStr(Safe(() => (object)g.ReleaseDate)), HorizontalAlignment.Right, visible: false);
+        Col("title", "Title", DpiW(320), g => CompareName(g), g => S(Safe(() => g.Title)), stretch: true);
+        Col("platform", "Platform", DpiW(150), g => S(Safe(() => g.Platform)), g => S(Safe(() => g.Platform)));
+        Col("developer", "Developer", DpiW(150), g => S(Safe(() => g.Developer)), g => S(Safe(() => g.Developer)));
+        Col("publisher", "Publisher", DpiW(150), g => S(Safe(() => g.Publisher)), g => S(Safe(() => g.Publisher)), visible: false);
+        Col("genre", "Genre", DpiW(140), g => S(Safe(() => g.GenresString)), g => S(Safe(() => g.GenresString)));
+        Col("series", "Series", DpiW(130), g => S(Safe(() => g.Series)), g => S(Safe(() => g.Series)), visible: false);
+        Col("region", "Region", DpiW(90), g => S(Safe(() => g.Region)), g => S(Safe(() => g.Region)), visible: false);
+        Col("playmode", "Play Mode", DpiW(110), g => S(Safe(() => g.PlayMode)), g => S(Safe(() => g.PlayMode)), visible: false);
+        Col("version", "Version", DpiW(90), g => S(Safe(() => g.Version)), g => S(Safe(() => g.Version)), visible: false);
+        Col("status", "Status", DpiW(90), g => S(Safe(() => g.Status)), g => S(Safe(() => g.Status)), visible: false);
+        Col("source", "Source", DpiW(110), g => S(Safe(() => g.Source)), g => S(Safe(() => g.Source)), visible: false);
+        Col("year", "Year", DpiW(55), g => N(() => g.ReleaseYear), g => N(() => g.ReleaseYear)?.ToString() ?? "", HorizontalAlignment.Right);
+        Col("releasedate", "Release Date", DpiW(100), g => Safe(() => (object)g.ReleaseDate), g => DateStr(Safe(() => (object)g.ReleaseDate)), HorizontalAlignment.Right, visible: false);
         // Effective rating: user (StarRatingFloat) if set, else community. Coloured per-cell: user amber, community grey.
-        Col("rating", "Rating", 70, g => N(() => (double?)g.CommunityOrLocalStarRating),
+        Col("rating", "Rating", DpiW(70), g => N(() => (double?)g.CommunityOrLocalStarRating),
             g => { var d = Safe(() => g.CommunityOrLocalStarRating); return d > 0 ? d.ToString("0.#") + " ★" : ""; }, HorizontalAlignment.Right,
             fore: g => Safe(() => g.CommunityOrLocalStarRating) > 0 ? (Safe(() => g.StarRatingFloat) > 0 ? UserRating : CommRating) : (Color?)null);
-        Col("esrb", "ESRB", 70, g => S(Safe(() => g.Rating)), g => S(Safe(() => g.Rating)), visible: false);
-        Col("community", "Community", 80, g => N(() => (double?)g.CommunityStarRating),
+        Col("esrb", "ESRB", DpiW(70), g => S(Safe(() => g.Rating)), g => S(Safe(() => g.Rating)), visible: false);
+        Col("community", "Community", DpiW(80), g => N(() => (double?)g.CommunityStarRating),
             g => { var d = Safe(() => g.CommunityStarRating); return d > 0 ? d.ToString("0.#") : ""; }, HorizontalAlignment.Right, visible: false);
-        Col("votes", "Votes", 60, g => N(() => (int?)g.CommunityStarRatingTotalVotes),
+        Col("votes", "Votes", DpiW(60), g => N(() => (int?)g.CommunityStarRatingTotalVotes),
             g => N(() => (int?)g.CommunityStarRatingTotalVotes)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
-        Col("fav", "Fav", 45, g => Safe(() => (object)g.Favorite), g => Safe(() => g.Favorite) ? "★" : "", HorizontalAlignment.Center);
+        Col("fav", "Fav", DpiW(45), g => Safe(() => (object)g.Favorite), g => Safe(() => g.Favorite) ? "★" : "", HorizontalAlignment.Center);
 #pragma warning disable CS0618 // IGame.Completed is marked obsolete by the SDK but is still the Completed flag
-        Col("completed", "Done", 50, g => Safe(() => (object)g.Completed), g => Safe(() => g.Completed) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("completed", "Done", DpiW(50), g => Safe(() => (object)g.Completed), g => Safe(() => g.Completed) ? "✓" : "", HorizontalAlignment.Center, visible: false);
 #pragma warning restore CS0618
-        Col("broken", "Broken", 55, g => Safe(() => (object)g.Broken), g => Safe(() => g.Broken) ? "✓" : "", HorizontalAlignment.Center, visible: false);
-        Col("portable", "Portable", 60, g => Safe(() => (object)g.Portable), g => Safe(() => g.Portable) ? "✓" : "", HorizontalAlignment.Center, visible: false);
-        Col("installed", "Installed", 60, g => Safe(() => (object)g.Installed), g => Safe(() => g.Installed == true) ? "✓" : "", HorizontalAlignment.Center, visible: false);
-        Col("players", "Players", 60, g => N(() => g.MaxPlayers), g => N(() => g.MaxPlayers)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
-        Col("plays", "Plays", 55, g => N(() => (int?)g.PlayCount), g => { var p = Safe(() => g.PlayCount); return p > 0 ? p.ToString() : ""; }, HorizontalAlignment.Right);
-        Col("playtime", "Play Time", 80, g => Safe(() => (object)g.PlayTime), g => FormatPlayTime(Safe(() => g.PlayTime)), HorizontalAlignment.Right, visible: false);
-        Col("dateadded", "Date Added", 100, g => Safe(() => (object)g.DateAdded), g => DateStr(Safe(() => (object)g.DateAdded)), HorizontalAlignment.Right, visible: false);
-        Col("datemodified", "Date Modified", 110, g => Safe(() => (object)g.DateModified), g => DateStr(Safe(() => (object)g.DateModified)), HorizontalAlignment.Right, visible: false);
-        Col("lastplayed", "Last Played", 100, g => Safe(() => (object)g.LastPlayedDate), g => DateStr(Safe(() => (object)g.LastPlayedDate)), HorizontalAlignment.Right, visible: false);
-        Col("dbid", "DB Id", 70, g => N(() => g.LaunchBoxDbId), g => N(() => g.LaunchBoxDbId)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
-        Col("apppath", "Application Path", 300, g => S(Safe(() => g.ApplicationPath)), g => S(Safe(() => g.ApplicationPath)), visible: false);
-        Col("rahash", "RA Hash", 240, g => g is HostGame hg ? hg.RetroAchievementsHash : "", g => g is HostGame hg ? hg.RetroAchievementsHash : "", visible: false);
+        Col("broken", "Broken", DpiW(55), g => Safe(() => (object)g.Broken), g => Safe(() => g.Broken) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("portable", "Portable", DpiW(60), g => Safe(() => (object)g.Portable), g => Safe(() => g.Portable) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("installed", "Installed", DpiW(60), g => Safe(() => (object)g.Installed), g => Safe(() => g.Installed == true) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        Col("players", "Players", DpiW(60), g => N(() => g.MaxPlayers), g => N(() => g.MaxPlayers)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
+        Col("plays", "Plays", DpiW(55), g => N(() => (int?)g.PlayCount), g => { var p = Safe(() => g.PlayCount); return p > 0 ? p.ToString() : ""; }, HorizontalAlignment.Right);
+        Col("playtime", "Play Time", DpiW(80), g => Safe(() => (object)g.PlayTime), g => FormatPlayTime(Safe(() => g.PlayTime)), HorizontalAlignment.Right, visible: false);
+        Col("dateadded", "Date Added", DpiW(100), g => Safe(() => (object)g.DateAdded), g => DateStr(Safe(() => (object)g.DateAdded)), HorizontalAlignment.Right, visible: false);
+        Col("datemodified", "Date Modified", DpiW(110), g => Safe(() => (object)g.DateModified), g => DateStr(Safe(() => (object)g.DateModified)), HorizontalAlignment.Right, visible: false);
+        Col("lastplayed", "Last Played", DpiW(100), g => Safe(() => (object)g.LastPlayedDate), g => DateStr(Safe(() => (object)g.LastPlayedDate)), HorizontalAlignment.Right, visible: false);
+        Col("dbid", "DB Id", DpiW(70), g => N(() => g.LaunchBoxDbId), g => N(() => g.LaunchBoxDbId)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
+        Col("apppath", "Application Path", DpiW(300), g => S(Safe(() => g.ApplicationPath)), g => S(Safe(() => g.ApplicationPath)), visible: false);
+        Col("rahash", "RA Hash", DpiW(240), g => g is HostGame hg ? hg.RetroAchievementsHash : "", g => g is HostGame hg ? hg.RetroAchievementsHash : "", visible: false);
 
         lv.RebuildColumns();
 
@@ -936,11 +948,15 @@ internal sealed class MainWindow : Form
     // "DarkMode_Explorer" visual style (applied by ApplyDarkScroll), so no custom renderer is needed.
     private TreeView BuildSourceTree()
     {
+        // Row height/indent scaled for DPI, and bumped up from the classic-Windows-Explorer-tree
+        // density (was a hardcoded, unscaled 26px) to the roomier spacing modern Windows apps use.
+        float s = LiteBoxTheme.DpiScale(this);
         var tv = new TreeView
         {
             Dock = DockStyle.Fill, BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None,
             FullRowSelect = true, ShowLines = false, ShowPlusMinus = true, ShowRootLines = true,
-            HideSelection = false, ItemHeight = 26, ImageList = _treeIcons,
+            HideSelection = false, ItemHeight = (int)Math.Round(32 * s), Indent = (int)Math.Round(20 * s),
+            ImageList = _treeIcons,
         };
         tv.AfterSelect += (_, e) => { if (e.Node?.Tag != null) LoadNode(e.Node.Tag); };
         return tv;
@@ -1083,7 +1099,13 @@ internal sealed class MainWindow : Form
         foreach (var c in _games.AllColumns)
         {
             int di = c.Visible ? c.SavedDisplayIndex : -1;
-            _cfg.Set("Col." + c.Key, $"{c.Width},{(c.Visible ? 1 : 0)},{di}");
+            // The Stretch column's width is runtime-computed (GameListView.StretchColumn fills
+            // whatever the others don't use) and gets overwritten on every resize/rebuild anyway -
+            // persisting it would just save whatever transient size the window happened to be at
+            // closing time (e.g. a degenerate near-zero width if closed while minimized), which is
+            // never a real user preference. Save 0 so RestoreColumnLayout's "w > 0" check skips it.
+            int w = c.Stretch ? 0 : c.Width;
+            _cfg.Set("Col." + c.Key, $"{w},{(c.Visible ? 1 : 0)},{di}");
         }
     }
 
@@ -1126,7 +1148,20 @@ internal sealed class MainWindow : Form
         {
             StartPosition = FormStartPosition.Manual;
             Bounds = rect;
-            if (_cfg.GetBool("WinMax", false)) WindowState = FormWindowState.Maximized;
+            if (_cfg.GetBool("WinMax", false))
+            {
+                // This runs from the constructor, before the form has a real handle or has been
+                // resolved to an actual monitor. Maximizing THIS early can resolve against stale
+                // screen metrics rather than the current monitor's real work area, producing a
+                // "maximized" window that visibly doesn't fill the screen. Load (not Shown) is
+                // early enough to fix that - the handle exists and Bounds is already applied by
+                // then - and, critically, it fires BEFORE the separate Load handler below that
+                // restores the splitter/pane fractions from their saved permille. That handler
+                // computes each pane's pixel width from the CURRENT container Width, so the
+                // window must already be at its final (maximized) size when it runs, or the
+                // panes end up sized for the small pre-maximize window instead.
+                Load += (_, _) => { if (WindowState != FormWindowState.Maximized) WindowState = FormWindowState.Maximized; };
+            }
         }
     }
 
@@ -4436,22 +4471,25 @@ internal sealed class MainWindow : Form
         private readonly Button _cancel;
         private readonly System.Threading.CancellationTokenSource _cts = new();
         private int _done;
+        private readonly float _s;
+        private int S(int px) => (int)Math.Round(px * _s);
 
         public GenerateCacheForm(IGame[] games, Func<IGame, string[]> resolve)
         {
             _games = games; _resolve = resolve;
+            _s = DeviceDpi / 96f;
             Text = "Generate Image Cache";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false; ControlBox = false;
-            ClientSize = new Size(452, 116);
+            ClientSize = new Size(S(452), S(116));
             BackColor = Bg; ForeColor = Fg; Font = new Font("Segoe UI", 9f);
 
-            _label = new Label { Location = new Point(16, 14), Size = new Size(420, 20), ForeColor = Fg,
+            _label = new Label { Location = new Point(S(16), S(14)), Size = new Size(S(420), S(20)), ForeColor = Fg,
                                  Text = $"Preparing…  0 / {games.Length}" };
-            _bar = new ProgressBar { Location = new Point(16, 42), Size = new Size(420, 18),
+            _bar = new ProgressBar { Location = new Point(S(16), S(42)), Size = new Size(S(420), S(18)),
                                      Minimum = 0, Maximum = Math.Max(1, games.Length), Style = ProgressBarStyle.Continuous };
-            _cancel = new Button { Location = new Point(346, 78), Size = new Size(90, 26), Text = "Cancel",
+            _cancel = new Button { Location = new Point(S(346), S(78)), Size = new Size(S(90), S(26)), Text = "Cancel",
                                    FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
             _cancel.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
             _cancel.Click += (_, _) => { try { _cts.Cancel(); } catch { } _cancel.Enabled = false; _cancel.Text = "Cancelling…"; };

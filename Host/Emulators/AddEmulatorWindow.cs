@@ -9,18 +9,14 @@
 #nullable enable
 
 using System.IO;
+using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host.Emulators;
 
-internal sealed class AddEmulatorWindow : Form
+internal sealed class AddEmulatorWindow : LiteBoxForm
 {
-    private static readonly Color Bg = Color.FromArgb(30, 30, 30);
-    private static readonly Color Panel2 = Color.FromArgb(45, 45, 48);
-    private static readonly Color Fg = Color.FromArgb(222, 222, 222);
-    private static readonly Color SubFg = Color.FromArgb(150, 150, 152);
-
     private readonly string _lbRoot;
     private readonly ComboBox _preset;
     private readonly TextBox _name;
@@ -38,24 +34,22 @@ internal sealed class AddEmulatorWindow : Form
     {
         _lbRoot = lbRoot;
         Text = "Add Emulator";
-        Size = new Size(680, 640);
-        MinimumSize = new Size(620, 520);
+        ClientSize = new Size(S(680), S(640));
+        MinimumSize = new Size(S(620), S(520));
         StartPosition = FormStartPosition.CenterParent;
-        BackColor = Bg; ForeColor = Fg;
-        Font = new Font("Segoe UI", 9.5f);
-        ShowIcon = false; ShowInTaskbar = false; MinimizeBox = false; MaximizeBox = false;
+        MinimizeBox = false; MaximizeBox = false;
         FormBorderStyle = FormBorderStyle.FixedDialog;
 
         var presets = EmuPresets.Load(lbRoot);
 
-        var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), BackColor = Bg };
-        int y = 10;
+        var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(S(12)), BackColor = LiteBoxTheme.Bg };
+        int y = S(10);
 
-        Lbl(body, 8, y, "Preset");
+        Lbl(body, S(8), y, "Preset");
         _preset = new ComboBox
         {
-            Location = new Point(8, y + 20), Width = 320, DropDownStyle = ComboBoxStyle.DropDownList,
-            BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
+            Location = new Point(S(8), y + S(20)), Width = S(320), DropDownStyle = ComboBoxStyle.DropDownList,
+            BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
         };
         _preset.Items.Add("(Custom emulator)");
         foreach (var p in presets) _preset.Items.Add(p.Name);
@@ -64,69 +58,51 @@ internal sealed class AddEmulatorWindow : Form
             _preset.SelectedIndex > 0 ? presets[_preset.SelectedIndex - 1] : null);
         body.Controls.Add(_preset);
 
-        _hint = new Label { Location = new Point(340, y + 23), AutoSize = true, ForeColor = SubFg, BackColor = Bg };
+        _hint = new Label { Location = new Point(S(340), y + S(23)), AutoSize = true, ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg };
         body.Controls.Add(_hint);
-        y += 52;
+        y += S(52);
 
-        Lbl(body, 8, y, "Name");
-        _name = Txt(body, new Point(8, y + 20), 320);
-        y += 52;
+        Lbl(body, S(8), y, "Name");
+        _name = Txt(body, new Point(S(8), y + S(20)), S(320));
+        y += S(52);
 
-        Lbl(body, 8, y, "Application Path");
-        _path = Txt(body, new Point(8, y + 20), 524);
+        Lbl(body, S(8), y, "Application Path");
+        _path = Txt(body, new Point(S(8), y + S(20)), S(524));
         var browse = new Button
         {
-            Text = "Browse…", Location = new Point(540, y + 18), Size = new Size(88, 26),
-            FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg,
+            Text = "Browse…", Location = new Point(S(540), y + S(18)), Size = new Size(S(88), S(26)),
+            FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg,
             FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f),
         };
         browse.Click += (_, _) => BrowseExe();
         body.Controls.Add(browse);
-        y += 52;
+        y += S(52);
 
-        Lbl(body, 8, y, "Default Command-Line Parameters");
-        _cmd = Txt(body, new Point(8, y + 20), 620);
-        y += 52;
+        Lbl(body, S(8), y, "Default Command-Line Parameters");
+        _cmd = Txt(body, new Point(S(8), y + S(20)), S(620));
+        y += S(52);
 
-        _noQuotes = Chk(body, new Point(8, y), "Don't use quotes");
-        _noSpace = Chk(body, new Point(160, y), "No space before ROM");
-        _hideConsole = Chk(body, new Point(340, y), "Attempt to hide console");
-        y += 26;
-        _fileNameOnly = Chk(body, new Point(8, y), "Use file name only (no path/extension)");
-        _autoExtract = Chk(body, new Point(340, y), "Extract ROM archives");
-        y += 34;
+        _noQuotes = Chk(body, new Point(S(8), y), "Don't use quotes");
+        _noSpace = Chk(body, new Point(S(160), y), "No space before ROM");
+        _hideConsole = Chk(body, new Point(S(340), y), "Attempt to hide console");
+        y += S(26);
+        _fileNameOnly = Chk(body, new Point(S(8), y), "Use file name only (no path/extension)");
+        _autoExtract = Chk(body, new Point(S(340), y), "Extract ROM archives");
+        y += S(34);
 
-        Lbl(body, 8, y, "Associated Platforms   (check the ones you use — BIOS requirements shown inline)");
+        Lbl(body, S(8), y, "Associated Platforms   (check the ones you use — BIOS requirements shown inline)");
         _platforms = new CheckedListBox
         {
-            Location = new Point(8, y + 20), Size = new Size(620, 240),
+            Location = new Point(S(8), y + S(20)), Size = new Size(S(620), S(240)),
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
-            BackColor = Color.FromArgb(37, 37, 38), ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
+            BackColor = LiteBoxTheme.PanelC, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
             CheckOnClick = true, IntegralHeight = false,
         };
         body.Controls.Add(_platforms);
 
-        var footer = new Panel { Dock = DockStyle.Bottom, Height = 44, BackColor = Panel2 };
-        var ok = new Button
-        {
-            Text = "Add", Size = new Size(96, 28), Location = new Point(0, 8),
-            FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(60, 60, 75), ForeColor = Color.White,
-            FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-        };
-        var cancel = new Button
-        {
-            Text = "Cancel", Size = new Size(96, 28), Location = new Point(0, 8),
-            FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg,
-            FlatAppearance = { BorderSize = 1, BorderColor = Color.FromArgb(80, 80, 84) },
-        };
-        ok.Click += (_, _) => { if (CreateEmulator()) { DialogResult = DialogResult.OK; Close(); } };
-        cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
-        footer.Resize += (_, _) =>
-        {
-            cancel.Left = footer.ClientSize.Width - cancel.Width - 12;
-            ok.Left = cancel.Left - ok.Width - 8;
-        };
-        footer.Controls.Add(ok); footer.Controls.Add(cancel);
+        var footer = new FooterBar();
+        var cancel = footer.AddButton("Cancel", LiteBoxTheme.CancelBtn, (_, _) => { DialogResult = DialogResult.Cancel; Close(); });
+        var ok = footer.AddButton("Add", LiteBoxTheme.Ok, (_, _) => { if (CreateEmulator()) { DialogResult = DialogResult.OK; Close(); } });
         AcceptButton = ok; CancelButton = cancel;
 
         Controls.Add(body);
@@ -227,14 +203,14 @@ internal sealed class AddEmulatorWindow : Form
     }
 
     private void Lbl(Control p, int x, int y, string text)
-        => p.Controls.Add(new Label { Text = text, Location = new Point(x, y), AutoSize = true, ForeColor = Fg, BackColor = Bg });
+        => p.Controls.Add(new Label { Text = text, Location = new Point(x, y), AutoSize = true, ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg });
 
     private TextBox Txt(Control p, Point loc, int width)
     {
         var tb = new TextBox
         {
             Location = loc, Width = width,
-            BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
+            BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
         };
         p.Controls.Add(tb);
         return tb;
@@ -242,7 +218,7 @@ internal sealed class AddEmulatorWindow : Form
 
     private CheckBox Chk(Control p, Point loc, string text)
     {
-        var cb = new CheckBox { Text = text, Location = loc, AutoSize = true, ForeColor = Fg, BackColor = Bg };
+        var cb = new CheckBox { Text = text, Location = loc, AutoSize = true, ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg };
         p.Controls.Add(cb);
         return cb;
     }

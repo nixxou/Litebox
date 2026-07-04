@@ -69,9 +69,18 @@ internal sealed class LegacyPauseScreen : IPauseScreen
         private Bitmap? _bg;   // pre-composited full-screen background (blitted as-is)
         private System.Windows.Forms.Timer? _padTimer;   // controller poll (overlay lifetime)
 
+        // This overlay is a full-screen game pause menu with its own deliberately distinct color
+        // scheme - not a settings dialog - so it doesn't derive from LiteBoxForm (which would force
+        // the standard app palette). Same DPI-scale-factor idea as everywhere else, just local: only
+        // the button/menu-layout pixel dimensions below need it (Font sizes are already DPI-correct
+        // via GDI+, same as always).
+        private readonly float _s;
+        private int S(int px) => (int)Math.Round(px * _s);
+
         public PauseForm(PauseContext ctx)
         {
             _ctx = ctx;
+            _s = DeviceDpi / 96f;
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             // Cover the monitor the GAME is on (multi-monitor: the overlay must sit
@@ -99,7 +108,7 @@ internal sealed class LegacyPauseScreen : IPauseScreen
                     BackColor = BtnBg, ForeColor = Fg,
                     FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(40, 40, 52) },
                     Font = new Font("Segoe UI", 15f),
-                    Size = new Size(420, 52),
+                    Size = new Size(S(420), S(52)),
                     TabStop = false,
                 };
                 b.Click += (_, _) => Fire(a);
@@ -216,12 +225,13 @@ internal sealed class LegacyPauseScreen : IPauseScreen
 
         private void LayoutMenu()
         {
-            int totalH = _items.Count * 58;
-            int y = Math.Max(220, (ClientSize.Height - totalH) / 2 - 10);
+            int rowH = S(58);
+            int totalH = _items.Count * rowH;
+            int y = Math.Max(S(220), (ClientSize.Height - totalH) / 2 - S(10));
             foreach (var (_, b) in _items)
             {
                 b.Location = new Point((ClientSize.Width - b.Width) / 2, y);
-                y += 58;
+                y += rowH;
             }
         }
 

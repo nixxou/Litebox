@@ -40,11 +40,16 @@ internal sealed class EditGameWindow : Form
     private static readonly Color Accent = Color.FromArgb(0, 122, 204);
     private static readonly Color ModifiedColor = Color.FromArgb(235, 150, 135);   // slightly-red tint for a changed field
 
-    // Layout constants (two-column grid).
-    private const int Lx = 16, Lw = 104, LFx = 126, FW = 290;   // left column: label x/w, field x, field width
-    private const int Rx = 436, Rw = 96, RFx = 540;            // right column: label x/w, field x
-    private const int FullW = 704;                             // full-width field (Title / URLs)
-    private const int RowH = 32, FieldH = 24;
+    // Layout constants (two-column grid) - DPI-scaled instance fields, not compile-time consts:
+    // nearly the entire Metadata page (47 usages) is built purely from these ten numbers, so
+    // scaling them once here fixes the bulk of this file's DPI correctness without individually
+    // touching every place that reads them.
+    private readonly int Lx, Lw, LFx, FW;   // left column: label x/w, field x, field width
+    private readonly int Rx, Rw, RFx;       // right column: label x/w, field x
+    private readonly int FullW;             // full-width field (Title / URLs)
+    private readonly int RowH, FieldH;
+    private readonly float _s;
+    private int S(int px) => (int)Math.Round(px * _s);
 
     private readonly IReadOnlyList<IGame> _visible;
     private readonly bool _readOnly;
@@ -97,13 +102,20 @@ internal sealed class EditGameWindow : Form
 
     private EditGameWindow(IReadOnlyList<IGame> games, IReadOnlyList<IGame> visible, bool readOnly)
     {
+        var _h = Handle;   // force handle creation so DeviceDpi reflects the real monitor
+        _s = DeviceDpi / 96f;
+        Lx = S(16); Lw = S(104); LFx = S(126); FW = S(290);
+        Rx = S(436); Rw = S(96); RFx = S(540);
+        FullW = S(704);
+        RowH = S(32); FieldH = S(24);
+
         _editGames = games;
         _visible = visible ?? Array.Empty<IGame>();
         _readOnly = readOnly;
         _index = games.Count > 1 ? -1 : IndexOf(games[0]);
 
-        Size = new Size(1080, 730);
-        MinimumSize = new Size(880, 600);
+        Size = new Size(S(1080), S(730));
+        MinimumSize = new Size(S(880), S(600));
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Bg; ForeColor = Fg;
         Font = new Font("Segoe UI", 9.5f);
@@ -114,10 +126,10 @@ internal sealed class EditGameWindow : Form
         // ── Left navigation tree ─────────────────────────────────────────
         _tree = new TreeView
         {
-            Dock = DockStyle.Left, Width = 210,
+            Dock = DockStyle.Left, Width = S(210),
             BackColor = PanelC, ForeColor = Fg, BorderStyle = BorderStyle.None,
             HideSelection = false, FullRowSelect = true, ShowLines = false, ShowPlusMinus = true,
-            ItemHeight = 26, DrawMode = TreeViewDrawMode.OwnerDrawText, Indent = 18,
+            ItemHeight = S(26), DrawMode = TreeViewDrawMode.OwnerDrawText, Indent = S(18),
             Font = new Font("Segoe UI", 9.5f),
         };
         _tree.DrawNode += OnDrawNode;
@@ -128,20 +140,20 @@ internal sealed class EditGameWindow : Form
         var right = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
         _titleBar = new Label
         {
-            Dock = DockStyle.Top, Height = 34, BackColor = PanelC, ForeColor = Fg,
+            Dock = DockStyle.Top, Height = S(34), BackColor = PanelC, ForeColor = Fg,
             Text = "Metadata", TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
         };
-        _host = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(6, 6, 6, 6) };
+        _host = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(6), S(6), S(6), S(6)) };
         right.Controls.Add(_host);
         right.Controls.Add(_titleBar);
 
         // ── Bottom bar: OK / Cancel + hint + ◄ ► ─────────────────────────
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 46, BackColor = PanelC };
+        var bottom = new Panel { Dock = DockStyle.Bottom, Height = S(46), BackColor = PanelC };
         var ok = FooterBtn("OK", Color.FromArgb(50, 110, 65));
         var cancel = FooterBtn("Cancel", Color.FromArgb(70, 70, 82));
-        ok.Location = new Point(12, 9);
-        cancel.Location = new Point(112, 9);
+        ok.Location = new Point(S(12), S(9));
+        cancel.Location = new Point(S(112), S(9));
         ok.Click += (_, _) => { SaveCurrent(); SaveCustomFields(); DialogResult = DialogResult.OK; Close(); };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
 
@@ -159,9 +171,9 @@ internal sealed class EditGameWindow : Form
         bottom.Controls.AddRange(new Control[] { ok, cancel, hint, _prev, _next });
         bottom.Resize += (_, _) =>
         {
-            int r = bottom.ClientSize.Width - 12;
-            _next.Left = r - _next.Width; _prev.Left = _next.Left - _prev.Width - 6;
-            hint.Left = _prev.Left - hint.Width - 12; hint.Top = (bottom.Height - hint.Height) / 2;
+            int r = bottom.ClientSize.Width - S(12);
+            _next.Left = r - _next.Width; _prev.Left = _next.Left - _prev.Width - S(6);
+            hint.Left = _prev.Left - hint.Width - S(12); hint.Top = (bottom.Height - hint.Height) / 2;
         };
 
         Controls.Add(right);
@@ -289,7 +301,7 @@ internal sealed class EditGameWindow : Form
     // and its ↺ (top-right) restores the loaded text. Whitespace is preserved (unlike the trimmed fields).
     private Control BuildNotesPage()
     {
-        var p = new Panel { BackColor = Bg, Padding = new Padding(6) };
+        var p = new Panel { BackColor = Bg, Padding = new Padding(S(6)) };
         _notes = new TextBox
         {
             Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, WordWrap = true,
@@ -302,7 +314,7 @@ internal sealed class EditGameWindow : Form
 
         var rb = new Button
         {
-            Text = "↺", Size = new Size(18, 18), Visible = false, TabStop = false, Cursor = Cursors.Hand,
+            Text = "↺", Size = new Size(S(18), S(18)), Visible = false, TabStop = false, Cursor = Cursors.Hand,
             FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(92, 46, 42), ForeColor = Color.FromArgb(255, 180, 165),
             Font = new Font("Segoe UI Symbol", 9.5f), FlatAppearance = { BorderSize = 1 },
         };
@@ -311,7 +323,7 @@ internal sealed class EditGameWindow : Form
         _tips.SetToolTip(rb, "Restore the original value");
         p.Controls.Add(rb); rb.BringToFront();
         _revert[_notes] = rb;
-        void Place() { if (p.ClientSize.Width > 60) rb.Location = new Point(p.ClientSize.Width - rb.Width - 24, 12); }
+        void Place() { if (p.ClientSize.Width > S(60)) rb.Location = new Point(p.ClientSize.Width - rb.Width - S(24), S(12)); }
         p.Resize += (_, _) => { Place(); rb.BringToFront(); };
         Place();
 
@@ -326,13 +338,16 @@ internal sealed class EditGameWindow : Form
     // applied to every edited game.
     private Control BuildCustomFieldsPage()
     {
-        var p = new Panel { BackColor = Bg, Padding = new Padding(6) };
+        var p = new Panel { BackColor = Bg, Padding = new Padding(S(6)) };
         var grid = new DataGridView
         {
             Dock = DockStyle.Fill, BackgroundColor = Bg, GridColor = Color.FromArgb(60, 60, 70),
             BorderStyle = BorderStyle.None, EnableHeadersVisualStyles = false, RowHeadersVisible = false,
             AllowUserToAddRows = !_readOnly, AllowUserToDeleteRows = !_readOnly, ReadOnly = _readOnly,
-            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None, Font = new Font("Segoe UI", 9.5f),
+            // Fill (not None+fixed Width): a fixed pixel column width never scales for DPI and can
+            // leave a dead gap or overflow relative to the grid's real width - see GameListView's
+            // StretchColumn fix and EditEmulatorWindow's platform grid for the same reasoning.
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, Font = new Font("Segoe UI", 9.5f),
         };
         grid.ColumnHeadersDefaultCellStyle.BackColor = PanelC;
         grid.ColumnHeadersDefaultCellStyle.ForeColor = Fg;
@@ -342,10 +357,10 @@ internal sealed class EditGameWindow : Form
         grid.DefaultCellStyle.SelectionBackColor = Accent;
         grid.DefaultCellStyle.SelectionForeColor = Color.White;
 
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Name", Width = 260, SortMode = DataGridViewColumnSortMode.NotSortable });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Name", FillWeight = 260, SortMode = DataGridViewColumnSortMode.NotSortable });
         var valCol = new DataGridViewComboBoxColumn
         {
-            HeaderText = "Value", Width = 560, FlatStyle = FlatStyle.Flat,
+            HeaderText = "Value", FillWeight = 560, FlatStyle = FlatStyle.Flat,
             DisplayStyle = DataGridViewComboBoxDisplayStyle.Nothing, SortMode = DataGridViewColumnSortMode.NotSortable,
         };
         grid.Columns.Add(valCol);
@@ -613,7 +628,11 @@ internal sealed class EditGameWindow : Form
         private static readonly Color Community = Color.FromArgb(0x38, 0xD6, 0xE6);   // cyan (default/community)
         private static readonly Color User      = Color.FromArgb(0xF6, 0xC3, 0x44);   // yellow (user-set)
         private static readonly Color Empty     = Color.FromArgb(105, 255, 255, 255); // faint white
-        private const int StarW = 22, NumW = 34;
+        // A self-contained custom control (its own Panel subclass nested in EditGameWindow) - it
+        // can't reach the outer class's _s/S(), so it computes its own from DeviceDpi, same idea.
+        private readonly float _s;
+        private int S(int px) => (int)Math.Round(px * _s);
+        private readonly int StarW, NumW;
 
         // Ratings are HALF-STAR precise (0, 0.5, 1, … 5) — StarRatingFloat is a float.
         private double _userValue;   // 0..5 in .5 steps — persisted (0 = not rated → show community)
@@ -629,7 +648,9 @@ internal sealed class EditGameWindow : Form
         public StarBar()
         {
             DoubleBuffered = true;
-            Height = 26; Width = NumW + 5 * StarW + 34;   // room for the ✕ clear button
+            _s = DeviceDpi / 96f;
+            StarW = S(22); NumW = S(34);
+            Height = S(26); Width = NumW + 5 * StarW + S(34);   // room for the ✕ clear button
             BackColor = Bg;
         }
 
@@ -673,7 +694,7 @@ internal sealed class EditGameWindow : Form
             using (var tb = new SolidBrush(Dirty ? ModifiedColor : Color.FromArgb(200, 200, 205)))
                 g.DrawString(num, numFont, tb, new RectangleF(0, 0, NumW, Height), sfNum);
 
-            int sx = NumW + 4;
+            int sx = NumW + S(4);
             for (int i = 0; i < 5; i++)
             {
                 _rects[i] = new Rectangle(sx + i * StarW, 0, StarW, Height);
@@ -694,10 +715,11 @@ internal sealed class EditGameWindow : Form
             // removes it, reverting to the community rating (cyan). Reddens on hover.
             if (IsUser && !ReadOnly)
             {
-                int cx = sx + 5 * StarW + 6;
-                _clearRect = new Rectangle(cx, 0, 20, Height);
+                int cx = sx + 5 * StarW + S(6);
+                int clearW = S(20);
+                _clearRect = new Rectangle(cx, 0, clearW, Height);
                 using var cb = new SolidBrush(_hoverClear ? Color.FromArgb(235, 120, 120) : Color.FromArgb(140, 140, 150));
-                g.DrawString("✕", numFont, cb, new RectangleF(cx, 0, 20, Height), sfStar);
+                g.DrawString("✕", numFont, cb, new RectangleF(cx, 0, clearW, Height), sfStar);
             }
             else _clearRect = Rectangle.Empty;
         }
@@ -894,7 +916,7 @@ internal sealed class EditGameWindow : Form
         _fields.Add(c);
         var b = new Button
         {
-            Text = "↺", Size = new Size(18, 18), Visible = false, TabStop = false, Cursor = Cursors.Hand,
+            Text = "↺", Size = new Size(S(18), S(18)), Visible = false, TabStop = false, Cursor = Cursors.Hand,
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.FromArgb(92, 46, 42),          // dark-red fill → clearly reads as a button
             ForeColor = Color.FromArgb(255, 180, 165),
@@ -902,13 +924,13 @@ internal sealed class EditGameWindow : Form
             FlatAppearance = { BorderSize = 1, MouseOverBackColor = Color.FromArgb(120, 58, 52) },
         };
         b.FlatAppearance.BorderColor = Color.FromArgb(150, 72, 64);
-        int cy = c.Top + Math.Max(0, (c.Height - 18) / 2);
+        int cy = c.Top + Math.Max(0, (c.Height - S(18)) / 2);
         b.Location = c switch
         {
-            ComboBox => new Point(c.Right - 36, cy),        // left of the dropdown arrow
-            NumericUpDown => new Point(c.Right - 34, cy),   // left of the spin buttons
-            StarBar => new Point(c.Right + 3, cy),          // just right of the star widget
-            _ => new Point(c.Right - 18, cy),               // over a text box's right edge
+            ComboBox => new Point(c.Right - S(36), cy),        // left of the dropdown arrow
+            NumericUpDown => new Point(c.Right - S(34), cy),   // left of the spin buttons
+            StarBar => new Point(c.Right + S(3), cy),          // just right of the star widget
+            _ => new Point(c.Right - S(18), cy),               // over a text box's right edge
         };
         b.Click += (_, _) => RevertField(c);
         _tips.SetToolTip(b, "Restore the original value");
@@ -1051,21 +1073,21 @@ internal sealed class EditGameWindow : Form
 
     private Button MiniBtn(string text, Point loc, int w) => new()
     {
-        Text = text, Location = loc, Size = new Size(w, FieldH + 2),
+        Text = text, Location = loc, Size = new Size(S(w), FieldH + S(2)),
         FlatStyle = FlatStyle.Flat, BackColor = Field, ForeColor = Fg,
         FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f),
     };
 
-    private static Button FooterBtn(string text, Color back) => new()
+    private Button FooterBtn(string text, Color back) => new()
     {
-        Text = text, Size = new Size(92, 28),
+        Text = text, Size = new Size(S(92), S(28)),
         FlatStyle = FlatStyle.Flat, BackColor = back, ForeColor = Color.White,
         FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 9f, FontStyle.Bold),
     };
 
     private Button NavBtn(string text) => new()
     {
-        Text = text, Size = new Size(40, 28), Top = 9,
+        Text = text, Size = new Size(S(40), S(28)), Top = S(9),
         FlatStyle = FlatStyle.Flat, BackColor = Field, ForeColor = Fg,
         FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 10f),
     };

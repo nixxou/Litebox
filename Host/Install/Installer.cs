@@ -99,18 +99,38 @@ internal static class Installer
     }
 
 #if FULL_INSTALLER
-    // Copy MYSELF to <root>\Core\LiteBox.exe (the host) and to <root>\LiteBox.exe (the root re-launcher).
-    // Never copies over itself. (Uninstall is done in-app from LiteBox's Options — no .bat is written.)
+    // Install the HOST into <root>\Core and keep MYSELF at <root> as the re-launcher/installer.
+    //
+    // A2 model: the host that runs in Core is the LIGHT MULTI-FILE build (extracted from the resources
+    // embedded in me), NOT a copy of this single-file exe — a single-file bundle crashes LaunchBox's
+    // method-body-encryption obfuscator (see LightPayload / the RE doc). I (the self-contained single-file)
+    // only ever run as the installer/relauncher; I stay at the root so the user can double-click me any
+    // time to re-extract + launch. If I carry no embedded light (a dev/light build reached here somehow),
+    // fall back to the legacy self-copy so nothing regresses.
     private static void InstallToCore(string root, string selfPath)
     {
         string core = Path.Combine(root, "Core");
         Directory.CreateDirectory(core);
         string full = Path.GetFullPath(selfPath);
 
-        string coreExe = Path.Combine(core, "LiteBox.exe");
-        if (!string.Equals(full, Path.GetFullPath(coreExe), StringComparison.OrdinalIgnoreCase))
-            File.Copy(selfPath, coreExe, overwrite: true);
+        if (LightPayload.IsEmbedded(out _))
+        {
+            string? err = LightPayload.ExtractToCore(core);
+            if (err != null) throw new InvalidOperationException(err);
+            // The extracted light host does NOT carry the native payload (it's a stripped multi-file build).
+            // I (the installer) DO have it embedded, so deploy it into <root>\ThirdParty now — the light then
+            // finds it already present at boot (EnsureDeployed is only-if-absent).
+            NativeInstaller.EnsureDeployed(root);
+        }
+        else
+        {
+            // Legacy fallback: copy myself into Core (only correct for a non-single-file build).
+            string coreExe = Path.Combine(core, "LiteBox.exe");
+            if (!string.Equals(full, Path.GetFullPath(coreExe), StringComparison.OrdinalIgnoreCase))
+                File.Copy(selfPath, coreExe, overwrite: true);
+        }
 
+        // Keep the single-file installer at the LaunchBox root as the re-launcher.
         string rootExe = Path.Combine(root, "LiteBox.exe");
         if (!string.Equals(full, Path.GetFullPath(rootExe), StringComparison.OrdinalIgnoreCase))
             try { File.Copy(selfPath, rootExe, overwrite: true); } catch { }

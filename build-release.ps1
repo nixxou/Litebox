@@ -1,14 +1,20 @@
 #Requires -Version 5.1
 <#
-  build-release.ps1 - builds the FOUR LiteBox release artifacts (2 runtimes x 2 forms).
-  See BUILD-RELEASE.md for the full explanation.
+  build-release.ps1 - builds the LiteBox release artifacts. See BUILD-RELEASE.md for the full explanation.
 
-  The two forms (BOTH self-contained, so both get the 'includedFrameworks' runtimeconfig):
-    - standalone : self-contained SINGLE-FILE, self-installing, native payload EMBEDDED (~84 MB).
-    - light      : self-contained NON-single-file, then STRIPPED of the .NET runtime DLLs so it borrows the
-                   runtime already sitting in LaunchBox\Core (exactly like LaunchBox.exe). Core-only, payload
-                   loose under litebox\thirdparty\. Ships LiteBox.exe + LiteBox.dll + the two .json (~a few MB
-                   + payload). Runs ONLY from Core (that's where the runtime it needs lives).
+  WHY multi-file: LaunchBox's core assemblies use a method-body-encryption obfuscator (a runtime JIT-hook
+  decryptor). Its native reads (Marshal.ReadInt64 on JIT'd code) AccessViolation-crash under a .NET
+  SINGLE-FILE bundle, so the HOST must be the LIGHT multi-file form. A single-file exe can therefore only be
+  an INSTALLER, never the host. (See LightPayload.cs / the reference-lb-obfuscator memory.)
+
+  Forms (all self-contained -> 'includedFrameworks' runtimeconfig):
+    - light      : NON-single-file, STRIPPED of the .NET runtime DLLs so it borrows LaunchBox\Core's runtime
+                   (like LaunchBox.exe). This is THE HOST. Ships LiteBox.exe + LiteBox.dll + the two .json.
+                   Runs ONLY from Core. Built per TFM (net9 for LB 13.27, net10 for LB 13.28+).
+    - installer  : ONE universal self-contained SINGLE-FILE exe (~86 MB) that EMBEDS both lights (net9+net10)
+                   AND the native payload. Never runs as the host: at install it detects Core's .NET
+                   (LightPayload.DetectCoreTfm), extracts the matching light into Core + deploys the natives,
+                   then launches Core\LiteBox.exe. Drop it anywhere / at the LaunchBox root and double-click.
 
   Usage:
     powershell -ExecutionPolicy Bypass -File build-release.ps1
@@ -20,11 +26,11 @@
     -Rid      <rid>   runtime identifier. Default win-x64.
 
   Output layout (release\, git-ignored):
-    <ver>_<label>\standalone\LiteBox-<ver>.exe        (+ README.txt)   e.g. 13.28_net10\standalone\LiteBox-13.28.exe
-    <ver>_<label>\zip\LiteBox-<ver>.zip               (+ README.txt)   e.g. 13.28_net10\zip\LiteBox-13.28.zip
-  where <ver> = Major.Minor of the referenced LaunchBox, <label> = net9 / net10.
-  The exe INSIDE the zip stays "LiteBox.exe" (it lands in Core as-is; the uninstaller + ExtendDB host-detection
-  key on that name). Only the distributed files (LiteBox-<ver>.exe / .zip) carry the version.
+    LiteBox-Setup-<ver10>.exe                  (+ README.txt)   the ONE universal installer (net9+net10)
+    light\<ver>_<label>\LiteBox-<ver>.zip      (+ README.txt)   manual "extract into Core" alternative, per TFM
+  where <ver> = Major.Minor of the referenced LaunchBox, <label> = net9 / net10, <ver10> = the net10 LB version.
+  The exe INSIDE each zip stays "LiteBox.exe" (it lands in Core as-is; the uninstaller + ExtendDB host-detection
+  key on that name).
 #>
 [CmdletBinding()]
 param(
@@ -42,7 +48,7 @@ $out        = Join-Path $here 'release'
 $tmp        = Join-Path $env:TEMP 'litebox-pub'
 $Lb10Root   = [IO.Path]::GetFullPath($Lb10Root)
 
-# The 8 native payload files shipped LOOSE in the zip (under litebox\thirdparty\). Same list as the
+# The 8 native payload files shipped LOOSE in each light zip (under litebox\thirdparty\). Same list as the
 # csproj EmbeddedResource block and NativeInstaller.Payload - keep the three in sync.
 $payload = @(
   'Everything64.dll.api','Magick.Native-Q16-x64.dll.api','RahasherExtendDB.exe','7z.dll.api',
@@ -50,7 +56,8 @@ $payload = @(
 )
 
 # The ONLY files the light build ships (everything else the publish produced is the .NET runtime, which
-# LaunchBox\Core already provides). deps.json + runtimeconfig.json make it self-contained-flat.
+# LaunchBox\Core already provides). deps.json + runtimeconfig.json make it self-contained-flat. These four
+# are BOTH the zip contents AND what the universal installer embeds (per TFM) and extracts into Core.
 $appFiles = @('LiteBox.exe','LiteBox.dll','LiteBox.deps.json','LiteBox.runtimeconfig.json')
 
 # net9.0-windows -> "net9" (uses Lb9Root), net10.0-windows -> "net10" (uses Lb10Root)
@@ -78,9 +85,7 @@ function Publish([string]$Tfm, [string]$Dir, [string[]]$Extra) {
   if (-not (Test-Path (Join-Path $Dir 'LiteBox.exe'))) { throw "LiteBox.exe missing after publish: $Dir" }
 }
 
-# fresh output + temp. Tolerate a locked dir (e.g. the release folder open in Explorer): we overwrite every
-# file in place anyway (New-Item -Force / Copy-Item -Force / Compress-Archive -Force), so a failed delete
-# only risks leaving unrelated stale files behind - not a broken build.
+# fresh output + temp. Tolerate a locked dir (release folder open in Explorer): we overwrite in place anyway.
 foreach ($d in @($out, $tmp)) {
   if (Test-Path $d) {
     try { Remove-Item $d -Recurse -Force -ErrorAction Stop }
@@ -89,42 +94,52 @@ foreach ($d in @($out, $tmp)) {
 }
 New-Item -ItemType Directory -Force $out | Out-Null
 
+$lightPayload = Join-Path $tmp 'light-payload'   # <label>\{LiteBox.exe,dll,deps,runtimeconfig} → embedded by the installer
+$verByLabel   = @{}
+
+# ---- 1) Build BOTH lights: stage for the installer + ship each as a manual "extract into Core" zip ----
 foreach ($t in $targets) {
   $tfm = $t.Tfm; $label = $t.Label
   $ver = LbVersion $t.LbRoot           # e.g. 13.27
-  $dir = "${ver}_${label}"             # e.g. 13.27_net9
-  Write-Host "== building $dir ($tfm, LaunchBox $ver from $($t.LbRoot)) =="
+  $verByLabel[$label] = $ver
+  Write-Host "== light $label (LaunchBox $ver, $tfm from $($t.LbRoot)) =="
 
-  # ---- A) standalone: self-contained SINGLE-FILE, payload EMBEDDED, self-installing ----
-  $scDir = Join-Path $tmp "$label-sc"
-  Publish $tfm $scDir @('-p:PublishSingleFile=true', '-p:LiteBoxDist=standalone')
-  $scRel = Join-Path $out "$dir\standalone"
-  New-Item -ItemType Directory -Force $scRel | Out-Null
-  Copy-Item (Join-Path $scDir 'LiteBox.exe') (Join-Path $scRel "LiteBox-$ver.exe")
-  Copy-Item $readme (Join-Path $scRel 'README.txt')
-
-  # ---- B) light "zip": self-contained NON-single-file, STRIPPED of runtime DLLs (Core provides them) ----
   $liDir = Join-Path $tmp "$label-light"
   Publish $tfm $liDir @('-p:PublishSingleFile=false', '-p:LiteBoxDist=light')
-  $stage = Join-Path $tmp "$label-stage"
-  if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-  $tpDir = Join-Path $stage 'litebox\thirdparty'
-  New-Item -ItemType Directory -Force $tpDir | Out-Null
-  foreach ($f in $appFiles) {                              # keep ONLY the app files (strip the runtime)
+
+  # a) stage the 4 app files for the universal installer to embed
+  $stageEmbed = Join-Path $lightPayload $label
+  New-Item -ItemType Directory -Force $stageEmbed | Out-Null
+  foreach ($f in $appFiles) {
     $src = Join-Path $liDir $f
-    if (-not (Test-Path $src)) { throw "light build missing expected file: $f" }
-    Copy-Item $src (Join-Path $stage $f)
+    if (-not (Test-Path $src)) { throw "light build missing expected file: $f ($label)" }
+    Copy-Item $src (Join-Path $stageEmbed $f)
   }
-  foreach ($p in $payload) {                               # loose payload
+
+  # b) manual zip: the 4 app files + the loose native payload under litebox\thirdparty\ (extract into Core)
+  $stageZip = Join-Path $tmp "$label-zip"
+  if (Test-Path $stageZip) { Remove-Item $stageZip -Recurse -Force }
+  $tpDir = Join-Path $stageZip 'litebox\thirdparty'
+  New-Item -ItemType Directory -Force $tpDir | Out-Null
+  foreach ($f in $appFiles) { Copy-Item (Join-Path $liDir $f) (Join-Path $stageZip $f) }
+  foreach ($p in $payload) {
     $src = Join-Path $thirdparty $p
     if (-not (Test-Path $src)) { throw "payload file missing: $src" }
     Copy-Item $src (Join-Path $tpDir $p)
   }
-  $zipRel = Join-Path $out "$dir\zip"
+  $zipRel = Join-Path $out "light\${ver}_${label}"
   New-Item -ItemType Directory -Force $zipRel | Out-Null
-  Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $zipRel "LiteBox-$ver.zip") -Force
-  Copy-Item $readme (Join-Path $zipRel 'README.txt')       # beside the zip, not inside
+  Compress-Archive -Path (Join-Path $stageZip '*') -DestinationPath (Join-Path $zipRel "LiteBox-$ver.zip") -Force
+  Copy-Item $readme (Join-Path $zipRel 'README.txt')
 }
+
+# ---- 2) Build the ONE universal installer (net10 single-file) embedding BOTH lights + the native payload ----
+$ver10 = $verByLabel['net10']
+Write-Host "== universal installer (net10 single-file, embeds net9+net10 lights) =="
+$instDir = Join-Path $tmp 'installer'
+Publish 'net10.0-windows' $instDir @('-p:PublishSingleFile=true', '-p:LiteBoxDist=standalone', "-p:LightPayloadDir=$lightPayload")
+Copy-Item (Join-Path $instDir 'LiteBox.exe') (Join-Path $out "LiteBox-Setup-$ver10.exe")
+Copy-Item $readme (Join-Path $out 'README.txt')
 
 # ---- summary ----
 Write-Host "`n== release tree ($out) =="

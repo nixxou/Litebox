@@ -1,151 +1,138 @@
-# Building the LiteBox releases (4 artifacts)
+# Building the LiteBox releases
 
-`build-release.ps1` produces **four** artifacts — two runtimes × two forms — under `release\`
-(git-ignored). One command:
+`build-release.ps1` produces the release artifacts under `release\` (git-ignored). One command:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build-release.ps1
 ```
 
+Output:
+
+```
+release\
+  LiteBox-Setup-<ver10>.exe                 README.txt          the ONE universal installer (net9+net10)
+  light\<ver>_net9\   LiteBox-<ver>.zip      README.txt          manual "extract into Core", net9 (LB 13.27)
+  light\<ver>_net10\  LiteBox-<ver>.zip      README.txt          manual "extract into Core", net10 (LB 13.28+)
+```
+
 ---
 
-## Why four
+## Why the host is multi-file (and single-file is an installer only)
 
-LaunchBox moved its runtime from **.NET 9** (13.x stable) to **.NET 10** (newer alpha). LiteBox borrows
-LaunchBox's SDK (`Unbroken.LaunchBox.Plugins.dll`) at runtime and **must run on the same runtime family**,
-so we ship one set per runtime:
+LaunchBox's core assemblies (`Unbroken.LaunchBox.dll`, `.Windows.dll`, `.LocalDb.dll`) are protected by a
+**method-body-encryption obfuscator** — a runtime JIT-hook decryptor (`getJit` + `mmap`/`mprotect` +
+`RuntimeHelpers.PrepareMethod` + `Marshal.ReadInt64` over the JIT'd code). Method bodies ship **encrypted**
+and are decrypted into JIT memory on first call. LiteBox only reimplements the **SDK** (`Unbroken.LaunchBox.Plugins`);
+the moment a plugin or LiteBox itself calls a **core** service (`NamingHelper`, `Root`, `GamesDb`, the emulator-
+integration plugins…), that decryptor runs.
 
-| Runtime | For a LaunchBox where `Core\LaunchBox.runtimeconfig.json` says… |
-|---------|----------------------------------------------------------------|
-| **net9**  | `"tfm": "net9.0"`  |
-| **net10** | `"tfm": "net10.0"` |
+Under a **.NET single-file bundle** the decryptor's native reads land on the wrong memory (the bundle changes
+the load layout) → `AccessViolationException` at module init → every later core call throws
+`TypeInitializationException` forever (symptom: the Game Saves page finds nothing, options greyed). Confirmed:
+multi-file works; single-file crashes; forcing disk extraction (`IncludeAllContentForSelfExtract`) does **not**
+help. So **the host must be the light multi-file form.** A single-file exe can only be the **installer**.
 
-Each runtime ships two **forms** — **both self-contained** (see next box), differing in how they carry the runtime:
+> This is structural, not a licence bypass — the obfuscator isn't rejecting LiteBox (it runs fine multi-file),
+> it just can't survive the single-file repackaging. Neutralising it would (a) break the decoder every core
+> call depends on and (b) be circumventing a technical protection measure. See
+> `ExtendDB/docs/lb-save-management.md` and the `reference-lb-obfuscator-singlefile` memory.
 
-| Form | Runtime | ~Size | Install |
-|------|---------|-------|---------|
-| **standalone** | bundles its own .NET runtime (single-file)        | ~85 MB | self-installing, runs anywhere |
-| **light "zip"** | **borrows** the runtime already in `LaunchBox\Core` | ~13 MB | extract into `<LaunchBox>\Core`; runs only from there |
+---
 
-> **How the light build shares LaunchBox's runtime.** It is published **self-contained** (so its
-> `runtimeconfig.json` has `includedFrameworks`, exactly like `LaunchBox.exe`), then **stripped** of every
-> runtime DLL — only `LiteBox.exe`, `LiteBox.dll`, `LiteBox.deps.json`, `LiteBox.runtimeconfig.json` ship. In
-> `Core`, the host loads `coreclr.dll` and all framework assemblies from `Core` itself (they're right there,
-> because LaunchBox is a self-contained flat deployment). This is the ONLY way a small build can run in Core:
-> a plain *framework-dependent* build fails there — Core's flat runtime hijacks its host resolution and it
-> can't find an installed shared framework ("You must install .NET"). The light build runs **only from Core**
-> (that's where the runtime it borrows lives).
->
-> The **net10 standalone** also runs on a .NET 9 LaunchBox (it carries its own .NET 10 runtime; the net9 SDK
-> loads fine on a net10 runtime). A net10 **light** build needs a .NET 10 `Core` — it's tied to the runtime
-> major (net9/net10), like everything else. That's why all four exist.
+## The two forms
+
+| Form | What it is | ~Size | Role |
+|------|-----------|-------|------|
+| **light** | self-contained, NON-single-file, **stripped** of the .NET runtime DLLs → borrows `LaunchBox\Core`'s runtime (like `LaunchBox.exe`). Ships `LiteBox.exe` + `LiteBox.dll` + the two `.json`. Runs ONLY from `Core`. Built per TFM (net9/net10). | ~13 MB zip | **THE HOST** |
+| **installer** | ONE universal self-contained **single-file** exe. **Embeds both lights** (net9+net10) AND the native payload. Never runs as the host. | ~86 MB | **installer / re-launcher** |
+
+**How the light shares Core's runtime.** Published **self-contained** (so its `runtimeconfig.json` has
+`includedFrameworks`, exactly like `LaunchBox.exe`), then **stripped** of every runtime DLL — only
+`LiteBox.exe`, `LiteBox.dll`, `LiteBox.deps.json`, `LiteBox.runtimeconfig.json` remain. In `Core`, the apphost
+loads `coreclr.dll` + all framework assemblies from `Core` itself (LaunchBox is a self-contained flat
+deployment). A plain *framework-dependent* build fails there ("You must install .NET"). The light is tied to
+the runtime major — a net9 light needs a net9 `Core`, a net10 light a net10 `Core`.
+
+**What the installer does at install** (`Host\Install\Installer.cs` + `LightPayload.cs`):
+1. Detects Core's .NET major from `Core\coreclr.dll` (`DetectCoreTfm` → net9 for LB 13.27, net10 for LB 13.28+).
+2. Extracts the **matching** light's 4 files into `Core` (NOT a copy of itself — that would crash).
+3. Deploys the embedded native payload into `<LB>\ThirdParty` (`NativeInstaller.EnsureDeployed`).
+4. Copies **itself** to `<LB>\LiteBox.exe` (the root re-launcher) and launches `Core\LiteBox.exe` (the light host).
+
+Drop the installer anywhere, at the LaunchBox root, or in Core — it self-installs (`--install "<root>"` for
+silent). The user double-clicks the root `LiteBox.exe` (the installer) any time; it re-extracts + launches.
 
 ---
 
 ## Prerequisites
 
 - **.NET SDK 10.x** — it targets **both** `net9.0-windows` and `net10.0-windows`. Check with `dotnet --list-sdks`.
-- A **.NET 9 LaunchBox** available on disk, used *only* as the net9 compile reference (see next section). Default `G:\LB`.
+- A **.NET 9 LaunchBox** on disk, used *only* as the net9 compile reference (below). Default `G:\LB`.
 - Windows + PowerShell (5.1 is fine).
 
 ### The net9 SDK reference (the one non-obvious bit)
 
 A **net9** project **cannot** reference LaunchBox's **net10** build of `Unbroken.LaunchBox.Plugins.dll`
-— it fails to compile with **CS1705** because that DLL pulls in `System.Runtime, Version=10.0.0.0`. So:
+— **CS1705** (that DLL pulls `System.Runtime, Version=10.0.0.0`). So:
 
-- the **net9** target compiles its SDK reference against a **.NET 9** LaunchBox's copy, and
-- the **net10** target compiles against the primary `..\..\..\LB\Core` (net10).
+- the **net9** light compiles its SDK reference against a **.NET 9** LaunchBox's copy, and
+- the **net10** light (and the installer) compile against the primary `..\..\..\LB\Core` (net10).
 
 This split lives in `LiteBox.csproj` via `$(SdkRefDll)` / `$(Lb9Root)` / `$(Lb10Root)`:
 
-- default net9 root = **`G:\LB`** → `G:\LB\Core\Unbroken.LaunchBox.Plugins.dll`;
-- default net10 root = the primary LB beside the repo (`..\..\..\LB`);
-- override either: `build-release.ps1 -Lb9Root "D:\LB-net9" -Lb10Root "D:\LB-net10"` (or `dotnet … -p:Lb9Root=… -p:Lb10Root=…`).
-- the script also reads each root's `Core\LaunchBox.exe` **version** to name the outputs (`<ver>_net9`, `LiteBox-<ver>.exe`, …).
+- default net9 root = **`G:\LB`**; default net10 root = the primary LB beside the repo (`..\..\..\LB`);
+- override: `build-release.ps1 -Lb9Root "D:\LB-net9" -Lb10Root "D:\LB-net10"` (or `dotnet … -p:Lb9Root=… -p:Lb10Root=…`).
+- the script reads each root's `Core\LaunchBox.exe` version to name the outputs (`<ver>_net9`, `LiteBox-Setup-<ver10>.exe`).
 
-`Magick.NET*` and `Microsoft.Data.Sqlite` / `SQLitePCLRaw*` are **net8**, so they satisfy *both* targets —
-only the LaunchBox SDK reference is split. All of these are `Private=false` (compile-time only); at runtime
-LiteBox resolves whatever version LaunchBox ships, by simple name.
+`Magick.NET*` and `Microsoft.Data.Sqlite` / `SQLitePCLRaw*` are net8 → satisfy both targets; only the SDK
+reference is split. All are `Private=false` (compile-time only); at runtime LiteBox binds Core's copy by name.
 
 ---
 
-## Output layout
-
-```
-release\
-  <ver>_net9\          (e.g. 13.27_net9)
-    standalone\   LiteBox-<ver>.exe    README.txt
-    zip\          LiteBox-<ver>.zip    README.txt
-  <ver>_net10\         (e.g. 13.28_net10)
-    standalone\   LiteBox-<ver>.exe    README.txt
-    zip\          LiteBox-<ver>.zip    README.txt
-```
-
-`<ver>` = Major.Minor of the LaunchBox each build compiled against (net9 → Lb9Root's LaunchBox, net10 →
-Lb10Root's); the script reads it from `<LbRoot>\Core\LaunchBox.exe`. It's just a label — a net9 build runs
-on ANY .NET 9 LaunchBox, a net10 build on any .NET 10 one; the runtime is the real requirement.
-
-- **standalone** = the self-contained single-file exe (native payload embedded). The distributed file is
-  versioned; on install it self-copies to `Core\LiteBox.exe`. Ship the `.exe` (+ README).
-- **light "zip"** = extract into `<LaunchBox>\Core` → `Core\LiteBox.exe` + `LiteBox.dll` + `LiteBox.deps.json`
-  + `LiteBox.runtimeconfig.json` + `Core\litebox\thirdparty\<8 native files>`. The `.zip` is versioned but
-  **the exe inside stays `LiteBox.exe`** — it lands in Core as-is, and the uninstaller + ExtendDB
-  host-detection key on that name, so it must NOT be renamed. The `README.txt` sits *beside* the zip, not
-  inside it. (`LiteBox.dll` + the two `.json` are the light build's app + its self-contained runtimeconfig;
-  the runtime DLLs themselves are stripped — Core provides them.)
-
----
-
-## What the script runs (per TFM = `net9.0-windows` or `net10.0-windows`)
-
-Both forms are **self-contained** (`-p:SelfContained=true`); `-p:LiteBoxDist=` picks the shape.
+## What the script runs
 
 ```powershell
-# A) standalone — self-contained SINGLE-FILE; payload embedded, self-installing (defines FULL_INSTALLER)
-dotnet publish LiteBox.csproj -c Release -r win-x64 -f <tfm> -p:SelfContained=true -p:PublishSingleFile=true  -p:LiteBoxDist=standalone -p:Lb9Root=G:\LB -o <dir>
-#    then copy <dir>\LiteBox.exe -> release\<ver>_<label>\standalone\LiteBox-<ver>.exe
+# 1) each light — self-contained NON-single-file, then keep only the 4 app files (strip the runtime).
+dotnet publish LiteBox.csproj -c Release -r win-x64 -f <tfm> -p:SelfContained=true -p:PublishSingleFile=false -p:LiteBoxDist=light -o <dir>
+#    stage <dir>\{LiteBox.exe,LiteBox.dll,LiteBox.deps.json,LiteBox.runtimeconfig.json}
+#      → into  light-payload\<label>\   (for the installer to embed)
+#      → and into a zip stage + litebox\thirdparty\<8 native files>  →  release\light\<ver>_<label>\LiteBox-<ver>.zip
 
-# B) light "zip" — self-contained NON-single-file, then STRIP the runtime (Core provides it)
-dotnet publish LiteBox.csproj -c Release -r win-x64 -f <tfm> -p:SelfContained=true -p:PublishSingleFile=false -p:LiteBoxDist=light      -p:Lb9Root=G:\LB -o <dir>
-#    keep ONLY  <dir>\{LiteBox.exe, LiteBox.dll, LiteBox.deps.json, LiteBox.runtimeconfig.json}  (delete the rest = the .NET runtime)
-#    then stage those 4 at the zip root  +  <stage>\litebox\thirdparty\<8 files from .\thirdparty\>   (exe KEEPS the name LiteBox.exe)
-#    then Compress-Archive <stage>\*  ->  release\<ver>_<label>\zip\LiteBox-<ver>.zip
-#    (<ver> = Major.Minor of <LbRoot>\Core\LaunchBox.exe ; <label> = net9 / net10)
+# 2) the ONE universal installer — self-contained SINGLE-FILE (net10), embeds both lights + the native payload.
+dotnet publish LiteBox.csproj -c Release -r win-x64 -f net10.0-windows -p:SelfContained=true -p:PublishSingleFile=true -p:LiteBoxDist=standalone -p:LightPayloadDir=<light-payload> -o <dir>
+#    → release\LiteBox-Setup-<ver10>.exe
 ```
 
-The **8 payload files** (source of truth) live in `.\thirdparty\`. That list is duplicated in three places
-— keep them in sync:
+The csproj embeds, only for `LiteBoxDist=standalone`:
+- the **8 native payload files** (`natives/…`) — from `.\thirdparty\`;
+- when `-p:LightPayloadDir=<dir>` is passed, the **light payload** as `light/net9/*` + `light/net10/*`.
 
-1. `.\thirdparty\` (the files themselves),
-2. the `EmbeddedResource` block in `LiteBox.csproj` (embedded into the standalone build),
-3. `NativeInstaller.Payload` in `Host\Install\NativeInstaller.cs` (the src→ThirdParty mapping).
+Three lists to keep in sync for the native payload:
+1. `.\thirdparty\` (the files), 2. the `natives/…` `EmbeddedResource` block in `LiteBox.csproj`,
+3. `NativeInstaller.Payload` in `Host\Install\NativeInstaller.cs`.
+
+The light's 4 app-file names are shared by `build-release.ps1` (`$appFiles`), the `light/<tfm>/*`
+`EmbeddedResource` block, and `LightPayload.Files` — keep those three in sync.
 
 ---
 
-## Verify (so it comes out right every time)
+## Verify
 
-After `build-release.ps1`, confirm:
+After `build-release.ps1`:
 
-1. **Both TFM compiled** — the script throws on any publish failure. For a manual clean check:
-   `dotnet build -f net9.0-windows --no-incremental` and `-f net10.0-windows` → `Build succeeded`, `0 Error(s)`.
-2. **Four artifacts** exist: `release\<ver>_net9\{standalone,zip}\` and `release\<ver>_net10\{standalone,zip}\`,
-   named `LiteBox-<ver>.exe` and `LiteBox-<ver>.zip`.
-3. **Light zip contents** (list it) = exactly `LiteBox.exe` + `LiteBox.dll` + `LiteBox.deps.json` +
-   `LiteBox.runtimeconfig.json` + `litebox\thirdparty\<8 files>`; `README.txt` is *beside* the zip, not inside;
-   the inner exe stays `LiteBox.exe`.
-4. **Light runtimeconfig matches the runtime** — `LiteBox.runtimeconfig.json` in the net9 zip lists
-   `includedFrameworks` 9.0.x; in the net10 zip, 10.0.x. (Plain readable JSON — no binary grep needed.)
-5. **The light build runs on Core's runtime** (the decisive one) — copy the 4 app files **plus every `*.dll`
-   from `<LB>\Core`** into a temp folder, then run `LiteBox.exe --migrate`: it must exit `0` and print
-   `[migrate…]`, with **no** "You must install .NET" on stderr. Do it once per TFM (net9 → DLLs from a .NET 9
-   Core such as `G:\LB\Core`; net10 → from the .NET 10 `Core`).
-6. **Each build references its own runtime's SDK** — `GetReferencedAssemblies()` on
-   `bin\Release\<tfm>\LiteBox.dll` shows `Unbroken.LaunchBox.Plugins` at the net9 vs net10 version (currently
-   13.27 vs 13.28). It locks nothing — at runtime the real Core DLL is loaded by simple name.
-7. **Sizes** ≈ standalone 84 MB, zip 13 MB (app ~2.3 MB, payload ~29 MB raw → ~13 MB zipped).
-
-The definitive end-to-end check is human: extract the matching light zip into a **real** `<LaunchBox>\Core`
-and launch `Core\LiteBox.exe` — the UI should boot.
+1. **Both lights + installer built** — the script throws on any publish failure.
+2. **Artifacts** exist: `release\LiteBox-Setup-<ver10>.exe` and `release\light\<ver>_{net9,net10}\LiteBox-<ver>.zip`.
+3. **Light zip contents** = exactly `LiteBox.exe` + `LiteBox.dll` + `LiteBox.deps.json` +
+   `LiteBox.runtimeconfig.json` + `litebox\thirdparty\<8 files>`; the inner exe stays `LiteBox.exe`; README beside, not inside.
+4. **Installer install** (decisive) — from a temp folder, `LiteBox-Setup-<ver10>.exe --install "<LB root>"`, then check:
+   - `Core\LiteBox.exe` ≈ **523 KB** (the light apphost, NOT ~86 MB) + `LiteBox.dll` + the two `.json`;
+   - `<LB>\ThirdParty\…` has the native payload;
+   - `<LB>\LiteBox.exe` ≈ 86 MB (the installer/re-launcher);
+   - console shows `[installer] Core .NET major = 10 → net10` (or 9), `extracted light host`.
+5. **Light host boots without the obfuscator crash** — `Core\LiteBox.exe --probe-saves "<a game>"` prints
+   `NamingHelper.RootFolder = …` and a save `group … active=True` (NOT `THREW … AccessViolation`). The
+   definitive check is human: launch `Core\LiteBox.exe`, the UI boots, Edit Game → Game Saves scans.
+6. **Sizes** ≈ installer 86 MB, each light zip 13 MB.
 
 ---
 
@@ -163,8 +150,8 @@ Fix:
    `Dummies.g.cs` (style: `public virtual global::System.<Type> <Name> { get; set; }`), **or**
 2. delete the file and regenerate once the project compiles: `dotnet run --project . -- --gen-stubs`.
 
-Extra members are harmless on an older SDK, so the **net10 superset satisfies the net9 build too** — you only
-need to patch the file once, against the newest SDK.
+Extra members are harmless on an older SDK, so the **net10 superset satisfies the net9 build too** — patch the
+file once, against the newest SDK.
 
 > This already happened for the net10 SDK (13.28): it added `StartupScreenPostLaunchDisplayTime` (int) +
 > `MonitorStartupShutdownWithProcess` (bool) to both `IGame` and `IEmulator`, plus `ForceFrontendFocusOnShutdown`

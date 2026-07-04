@@ -129,4 +129,21 @@
     <EmbeddedResource Include="thirdparty\steam_api64.dll.api"><LogicalName>natives/steam_api64.dll.api</LogicalName></EmbeddedResource>
   </ItemGroup>
 
+  <!-- A2 universal installer: the standalone single-file embeds the LIGHT multi-file host for BOTH runtime
+       targets (net9 for LB 13.27, net10 for LB 13.28+). At install, Installer/LightPayload detects Core's
+       .NET and extracts the matching set into Core — the light host does NOT hit the single-file obfuscator
+       crash (see LightPayload.cs). The light files are produced by an earlier publish; build-release.ps1
+       stages them under $(LightPayloadDir)\{net9,net10}\ and passes -p:LightPayloadDir=<dir>. Absent (dev
+       build) → nothing embedded → Installer falls back to the legacy self-copy. LogicalName = light/<tfm>/<file>. -->
+  <ItemGroup Condition="'$(LiteBoxDist)' == 'standalone' and '$(LightPayloadDir)' != ''">
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.exe"><LogicalName>light/net9/LiteBox.exe</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.dll"><LogicalName>light/net9/LiteBox.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.deps.json"><LogicalName>light/net9/LiteBox.deps.json</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.runtimeconfig.json"><LogicalName>light/net9/LiteBox.runtimeconfig.json</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.exe"><LogicalName>light/net10/LiteBox.exe</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.dll"><LogicalName>light/net10/LiteBox.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.deps.json"><LogicalName>light/net10/LiteBox.deps.json</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.runtimeconfig.json"><LogicalName>light/net10/LiteBox.runtimeconfig.json</LogicalName></EmbeddedResource>
+  </ItemGroup>
+
 </Project>

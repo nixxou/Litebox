@@ -39,6 +39,11 @@ internal sealed class HostDataManagerXml : DummyDataManager
     /// for LiteBox to exit. No-op otherwise (the log keeps the ops).</summary>
     public void FlushIfSafe() { try { _store?.FlushJournalIfSafe(); } catch { } }
 
+    /// <summary>Records a whole-collection replace of the game-controller CATALOG
+    /// (Data\GameControllers.xml) — applied by the GameController branch of the op flush.</summary>
+    public void ReplaceGameControllerCatalog(string json)
+    { try { _store?.RecordEntityReplace("GameController", "GameControllers", json); } catch { } }
+
     /// <summary>Scoped variant for the emulator editors: flush ONLY the ops targeting
     /// Emulators.xml, leaving game/playlist ops pending until close. LB plugins read
     /// the XMLs directly (no settings API), so this keeps them on fresh emulator data.</summary>

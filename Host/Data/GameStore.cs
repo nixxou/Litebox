@@ -835,6 +835,35 @@ internal sealed class GameStore
                     foreach (var rec in recs)
                         sdoc.Root.Add(BuildElement(op.Entity, rec, order));
                 }
+                else if (op.Entity == "GameController" && op.OpType == "replace")
+                {
+                    // The game-controller CATALOG (Data\GameControllers.xml): whole-collection replace,
+                    // same pattern as StartupAppSettings. Elements serialize alphabetically (LB DataSet
+                    // style: AssociatedPlatforms, Category, Id, Name). AssociatedPlatforms is preserved
+                    // as RAW inner XML (its populated format isn't RE'd yet) — values containing markup
+                    // re-parse as nodes instead of being escaped.
+                    string file = GameControllersFile;
+                    if (file == null || !File.Exists(file)) continue;
+                    EnsureDoc(file);
+                    var cdoc = docs[file];
+                    foreach (var el in cdoc.Root.Elements("GameController").ToList()) el.Remove();
+                    List<Dictionary<string, string>> recs;
+                    try { recs = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(op.Value) ?? new(); } catch { recs = new(); }
+                    foreach (var rec in recs)
+                    {
+                        var el = new XElement("GameController");
+                        foreach (var kv in rec.OrderBy(k => k.Key, StringComparer.Ordinal))
+                        {
+                            if (kv.Value != null && kv.Value.Contains('<'))
+                            {
+                                try { el.Add(XElement.Parse($"<{kv.Key}>{kv.Value}</{kv.Key}>")); continue; }
+                                catch { }
+                            }
+                            el.Add(new XElement(kv.Key, kv.Value ?? ""));
+                        }
+                        cdoc.Root.Add(el);
+                    }
+                }
                 else if (op.Entity == "EmulatorPlatform" && op.OpType == "replace")
                 {
                     string file = EmulatorsFile;
@@ -1286,6 +1315,7 @@ internal sealed class GameStore
     private string EmulatorsFile => DataDir != null ? Path.Combine(DataDir, "Emulators.xml") : null;
     private string PlatformsFile => DataDir != null ? Path.Combine(DataDir, "Platforms.xml") : null;
     private string SettingsFile => DataDir != null ? Path.Combine(DataDir, "Settings.xml") : null;
+    private string GameControllersFile => DataDir != null ? Path.Combine(DataDir, "GameControllers.xml") : null;
 
     // Keyed top-level entities → (file, key child element, canonical field order for adds).
     internal static bool IsTopLevelEntity(string e) => e == "Emulator" || e == "Platform" || e == "PlatformCategory";

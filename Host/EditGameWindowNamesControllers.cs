@@ -8,11 +8,14 @@
 //     "Set Selected Name as Title" button (feeds the Metadata page's Title field, saved with it).
 //   • Controller Support — the game's <GameControllerSupport> sub-entities: one row per controller
 //     (picked from the Data\GameControllers.xml catalog) with an optional support level.
-//     SupportLevel mapping (RE'd against LB 13.28 data): absent = (Empty), 0 = Not Supported,
+//     SupportLevel mapping (RE'd against LB 13.28 data): absent = empty cell, 0 = Not Supported,
 //     1 = Partial Support, 2 = Full Support, 3 = Required.
-//     "Manage Game Controllers…" shows the catalog (name / category / associated-game count);
-//     catalog EDITING is deferred — it lives in its own root file (GameControllers.xml), which has
-//     no LiteBox write-back channel yet.
+//   • Manage Game Controllers — full catalog CRUD (LB parity): Add / Edit / Delete over
+//     Data\GameControllers.xml through ControllerCatalogStore (session-authoritative in-memory list;
+//     writes go through the op-log's GameController whole-collection replace). The editor dialog has
+//     LB's Details tab (Unique Name / Category; AssociatedPlatforms is preserved verbatim — its
+//     populated format isn't RE'd yet) and Games tab (the games associated with the controller).
+//     Deleting a controller also removes its association rows from every game.
 
 #nullable enable
 
@@ -21,9 +24,12 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Windows.Forms;
 using System.Xml.Linq;
+using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
+using LbApiHost.Host.Data;
 using LbApiHost.Host.Saves;
 
 namespace LbApiHost.Host;
@@ -32,7 +38,7 @@ internal sealed partial class EditGameWindow
 {
     private DataGridView? _anGrid;                       // Alternate Names
     private DataGridView? _csGrid;                       // Controller Support
-    private List<(string id, string name, string category)>? _controllerCatalog;
+    private DataGridViewComboBoxColumn? _csCtlCol;
     private readonly Dictionary<string, string> _csDisplayToId = new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly string[] SupportDisplay = { "(Empty)", "Not Supported", "Partial Support", "Full Support", "Required" };
@@ -151,36 +157,27 @@ internal sealed partial class EditGameWindow
         var p = new Panel { BackColor = Bg, Padding = new Padding(S(6)) };
         var grid = NewDarkGrid();
 
-        var catalog = ControllerCatalog();
-        _csDisplayToId.Clear();
-        var displays = new List<string>();
-        foreach (var (id, name, category) in catalog)
-        {
-            string d = category.Length > 0 ? $"{name} ({category})" : name;
-            if (_csDisplayToId.TryAdd(d, id)) displays.Add(d);
-        }
-
-        var ctlCol = new DataGridViewComboBoxColumn
+        _csCtlCol = new DataGridViewComboBoxColumn
         {
             HeaderText = "Controller", FillWeight = 480, FlatStyle = FlatStyle.Flat,
             DisplayStyle = DataGridViewComboBoxDisplayStyle.Nothing, SortMode = DataGridViewColumnSortMode.NotSortable,
         };
-        ctlCol.Items.AddRange(displays.Cast<object>().ToArray());
         var supCol = new DataGridViewComboBoxColumn
         {
             HeaderText = "Support (Optional)", FillWeight = 340, FlatStyle = FlatStyle.Flat,
             DisplayStyle = DataGridViewComboBoxDisplayStyle.Nothing, SortMode = DataGridViewColumnSortMode.NotSortable,
         };
         supCol.Items.AddRange(SupportDisplay.Cast<object>().ToArray());
-        grid.Columns.Add(ctlCol);
+        grid.Columns.Add(_csCtlCol);
         grid.Columns.Add(supCol);
+        RefreshControllerColumn();
         // A cell may hold a value outside the column's items (unknown controller id, blank support) —
         // register it so the combo cell never DataErrors.
         grid.CellValidating += (_, e) =>
         {
-            var col = e.ColumnIndex == 0 ? ctlCol : supCol;
+            var col = e.ColumnIndex == 0 ? _csCtlCol : supCol;
             var v = e.FormattedValue as string ?? "";
-            if (v.Length > 0 && !col.Items.Contains(v)) col.Items.Add(v);
+            if (v.Length > 0 && col != null && !col.Items.Contains(v)) col.Items.Add(v);
         };
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = S(40), BackColor = Bg, Padding = new Padding(0, S(6), 0, 0) };
@@ -205,24 +202,24 @@ internal sealed partial class EditGameWindow
         return p;
     }
 
-    private List<(string id, string name, string category)> ControllerCatalog()
+    /// <summary>(Re)builds the Controller column's choices + the display↔id map from the catalog.</summary>
+    private void RefreshControllerColumn()
     {
-        if (_controllerCatalog != null) return _controllerCatalog;
-        var list = new List<(string, string, string)>();
-        try
+        if (_csCtlCol == null) return;
+        _csDisplayToId.Clear();
+        var displays = new List<string>();
+        foreach (var r in ControllerCatalogStore.All())
         {
-            string f = Path.Combine(SaveManager.LbRoot, "Data", "GameControllers.xml");
-            if (File.Exists(f))
-                foreach (var e in XDocument.Load(f).Root?.Elements("GameController") ?? Enumerable.Empty<XElement>())
-                {
-                    string id = e.Element("Id")?.Value ?? "";
-                    if (id.Length == 0) continue;
-                    list.Add((id, e.Element("Name")?.Value ?? id, e.Element("Category")?.Value ?? ""));
-                }
+            string d = r.Category.Length > 0 ? $"{r.Name} ({r.Category})" : r.Name;
+            if (_csDisplayToId.TryAdd(d, r.Id)) displays.Add(d);
         }
-        catch (Exception ex) { Console.WriteLine("[controllers] catalog load failed: " + ex.Message); }
-        list.Sort((a, b) => string.Compare(a.Item2, b.Item2, StringComparison.OrdinalIgnoreCase));
-        return _controllerCatalog = list;
+        // Keep any value already used by a grid cell (unknown ids shown raw) so cells keep rendering.
+        var keep = new HashSet<string>(displays, StringComparer.OrdinalIgnoreCase);
+        if (_csGrid != null)
+            foreach (DataGridViewRow r in _csGrid.Rows)
+                if (!r.IsNewRow && r.Cells[0].Value is string v && v.Length > 0 && keep.Add(v)) displays.Add(v);
+        _csCtlCol.Items.Clear();
+        _csCtlCol.Items.AddRange(displays.Cast<object>().ToArray());
     }
 
     private string ControllerDisplay(string id)
@@ -284,13 +281,13 @@ internal sealed partial class EditGameWindow
         catch (Exception ex) { Console.WriteLine("[controllers] save failed: " + ex.Message); }
     }
 
-    // ── Manage Game Controllers (catalog viewer — editing deferred, see header) ──
+    // ── Manage Game Controllers (catalog CRUD, LB parity) ─────────────────
 
     private void ShowManageControllersDialog()
     {
-        using var f = NewDialog("Manage Game Controllers", 640, 480);
+        using var f = NewDialog("Manage Game Controllers", 680, 500);
         f.FormBorderStyle = FormBorderStyle.Sizable;
-        f.MinimumSize = new Size(S(480), S(320));
+        f.MinimumSize = new Size(S(520), S(340));
 
         var lv = new ListView
         {
@@ -298,8 +295,8 @@ internal sealed partial class EditGameWindow
             BackColor = PanelC, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, HideSelection = false,
             OwnerDraw = true,
         };
-        lv.Columns.Add("Name", S(240));
-        lv.Columns.Add("Category", S(140));
+        lv.Columns.Add("Name", S(250));
+        lv.Columns.Add("Category", S(150));
         lv.Columns.Add("Associated Games", S(150));
         lv.DrawColumnHeader += (_, e) =>
         {
@@ -313,40 +310,222 @@ internal sealed partial class EditGameWindow
         lv.DrawSubItem += (_, e) => e.DrawDefault = true;
 
         // Association counts: one pass over the library's GameControllerSupport rows.
+        var counts = ControllerAssociationCounts();
+
+        void Reload()
+        {
+            lv.BeginUpdate();
+            lv.Items.Clear();
+            foreach (var r in ControllerCatalogStore.All())
+            {
+                var it = new ListViewItem(r.Name) { Tag = r.Id };
+                it.SubItems.Add(r.Category);
+                it.SubItems.Add(counts.TryGetValue(r.Id, out var n) ? n.ToString() : "0");
+                lv.Items.Add(it);
+            }
+            lv.EndUpdate();
+        }
+        Reload();
+
+        string? SelectedId() => lv.SelectedItems.Count > 0 ? lv.SelectedItems[0].Tag as string : null;
+
+        var bottom = new Panel { Dock = DockStyle.Bottom, Height = S(46), BackColor = Bg };
+        var add = DlgBtn("✚ Add…", Color.FromArgb(60, 60, 72));
+        var edit = DlgBtn("✎ Edit…", Color.FromArgb(60, 60, 72));
+        var del = DlgBtn("✖ Delete", Color.FromArgb(60, 60, 72));
+        var close = DlgBtn("Close", Color.FromArgb(70, 70, 82));
+        add.Enabled = edit.Enabled = del.Enabled = !_readOnly;
+        close.DialogResult = DialogResult.Cancel;
+        bottom.Controls.AddRange(new Control[] { add, edit, del, close });
+        bottom.Resize += (_, _) =>
+        {
+            add.Location = new Point(S(8), S(8));
+            edit.Location = new Point(add.Right + S(6), S(8));
+            del.Location = new Point(edit.Right + S(6), S(8));
+            close.Location = new Point(bottom.ClientSize.Width - close.Width - S(10), S(8));
+        };
+
+        add.Click += (_, _) => { if (ShowControllerEditor(f, null)) { Reload(); RefreshControllerColumn(); } };
+        edit.Click += (_, _) =>
+        {
+            var id = SelectedId(); if (id == null) return;
+            if (ShowControllerEditor(f, id)) { Reload(); RefreshControllerColumn(); }
+        };
+        lv.DoubleClick += (_, _) => { var id = SelectedId(); if (id != null && ShowControllerEditor(f, id)) { Reload(); RefreshControllerColumn(); } };
+        del.Click += (_, _) =>
+        {
+            var id = SelectedId(); if (id == null) return;
+            var rec = ControllerCatalogStore.All().FirstOrDefault(x => x.Id == id); if (rec == null) return;
+            int n = counts.TryGetValue(id, out var c) ? c : 0;
+            string extra = n > 0 ? $"\n\nIt is associated with {n} game(s); those associations are removed too." : "";
+            if (MessageBox.Show(f, $"Delete the game controller \"{rec.Name}\"?{extra}", "Delete Controller",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            if (n > 0) RemoveControllerAssociations(id);
+            ControllerCatalogStore.Remove(id);
+            counts.Remove(id);
+            Reload(); RefreshControllerColumn(); LoadControllerSupport();   // this game's page may have shown it
+        };
+
+        f.Controls.Add(lv);
+        f.Controls.Add(bottom);
+        lv.BringToFront();
+        f.CancelButton = close;
+        f.ShowDialog(this);
+        try { (PluginHelper.DataManager as HostDataManagerXml)?.FlushIfSafe(); } catch { }   // catalog edits → disk when safe
+    }
+
+    private static Dictionary<string, int> ControllerAssociationCounts()
+    {
         var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            foreach (var gm in Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>())
+            foreach (var gm in PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>())
                 foreach (var row in (gm as ILiteBoxGame)?.GetSubEntities("GameControllerSupport")
                                     ?? (IReadOnlyList<IReadOnlyDictionary<string, string>>)Array.Empty<IReadOnlyDictionary<string, string>>())
                     if (row.TryGetValue("ControllerId", out var cid) && cid.Length > 0)
                         counts[cid] = counts.TryGetValue(cid, out var n) ? n + 1 : 1;
         }
         catch { }
-        foreach (var (id, name, category) in ControllerCatalog())
+        return counts;
+    }
+
+    private static void RemoveControllerAssociations(string controllerId)
+    {
+        try
         {
-            var it = new ListViewItem(name);
-            it.SubItems.Add(category);
-            it.SubItems.Add(counts.TryGetValue(id, out var n) ? n.ToString() : "0");
-            lv.Items.Add(it);
+            foreach (var gm in PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>())
+            {
+                var lbg = gm as ILiteBoxGame;
+                if (lbg == null) continue;
+                List<IReadOnlyDictionary<string, string>> rows;
+                try { rows = lbg.GetSubEntities("GameControllerSupport").ToList(); } catch { continue; }
+                if (rows.Count == 0) continue;
+                var kept = rows.Where(r => !(r.TryGetValue("ControllerId", out var cid)
+                                             && string.Equals(cid, controllerId, StringComparison.OrdinalIgnoreCase))).ToList();
+                if (kept.Count != rows.Count) lbg.SetSubEntities("GameControllerSupport", kept);
+            }
+        }
+        catch (Exception ex) { Console.WriteLine("[controllers] association cleanup failed: " + ex.Message); }
+    }
+
+    /// <summary>LB's "Edit Game Controller" dialog: Details (Unique Name / Category) + Games tab
+    /// (associated games, read-only). Returns true when the catalog changed.</summary>
+    private bool ShowControllerEditor(IWin32Window owner, string? id)
+    {
+        var existing = id == null ? null : ControllerCatalogStore.All().FirstOrDefault(x => x.Id == id);
+        using var f = NewDialog(existing == null ? "Add Game Controller" : "Edit Game Controller", 620, 440);
+
+        var tabs = NewDarkTabs(f);
+        var details = NewTabPage(tabs, "Details");
+
+        int x = S(140), w = S(420), y = S(18);
+        Label Cap(string text, int cy)
+        {
+            var l = new Label { Text = text, AutoSize = true, Location = new Point(S(16), cy + S(3)), ForeColor = Fg, BackColor = Bg };
+            details.Controls.Add(l);
+            return l;
+        }
+        Cap("Unique Name:", y);
+        var name = new TextBox { Location = new Point(x, y), Width = w, Text = existing?.Name ?? "", BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        details.Controls.Add(name); y += S(34);
+
+        Cap("Category:", y);
+        var category = new ComboBox
+        {
+            Location = new Point(x, y), Width = w, DropDownStyle = ComboBoxStyle.DropDown,
+            BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat, Text = existing?.Category ?? "",
+        };
+        foreach (var c in ControllerCatalogStore.All().Select(r => r.Category).Where(c => c.Length > 0)
+                     .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(c => c, StringComparer.OrdinalIgnoreCase))
+            category.Items.Add(c);
+        category.Text = existing?.Category ?? "";
+        details.Controls.Add(category); y += S(34);
+
+        Cap("Associated Platform(s):", y);
+        string rawPlatforms = existing != null && existing.Extra.TryGetValue("AssociatedPlatforms", out var ap) ? ap : "";
+        var platforms = new TextBox
+        {
+            Location = new Point(x, y), Width = w, Text = rawPlatforms, ReadOnly = true,
+            BackColor = Field, ForeColor = SubFg, BorderStyle = BorderStyle.FixedSingle,
+        };
+        _tips.SetToolTip(platforms, "Preserved as-is — LaunchBox's storage format for this field isn't reverse-engineered yet.");
+        details.Controls.Add(platforms);
+
+        // Games tab — the associated games (read-only), like LB's.
+        if (existing != null)
+        {
+            var games = NewTabPage(tabs, "Games");
+            var glv = new ListView
+            {
+                Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = false,
+                BackColor = PanelC, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, HideSelection = false,
+                OwnerDraw = true,
+            };
+            glv.Columns.Add("Title", S(260));
+            glv.Columns.Add("Platform", S(160));
+            glv.Columns.Add("Support", S(120));
+            glv.DrawColumnHeader += (_, e) =>
+            {
+                using var b = new SolidBrush(Color.FromArgb(24, 24, 28));
+                e.Graphics.FillRectangle(b, e.Bounds);
+                var r = e.Bounds; r.Inflate(-S(4), 0);
+                TextRenderer.DrawText(e.Graphics, e.Header?.Text ?? "", glv.Font, r, SubFg,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            };
+            glv.DrawItem += (_, e) => e.DrawDefault = true;
+            glv.DrawSubItem += (_, e) => e.DrawDefault = true;
+            try
+            {
+                foreach (var gm in PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>())
+                    foreach (var row in (gm as ILiteBoxGame)?.GetSubEntities("GameControllerSupport")
+                                        ?? (IReadOnlyList<IReadOnlyDictionary<string, string>>)Array.Empty<IReadOnlyDictionary<string, string>>())
+                        if (row.TryGetValue("ControllerId", out var cid) && string.Equals(cid, existing.Id, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var it = new ListViewItem(Safe(() => gm.Title) ?? "");
+                            it.SubItems.Add(Safe(() => gm.Platform) ?? "");
+                            it.SubItems.Add(SupportToDisplay(row.TryGetValue("SupportLevel", out var l) ? l : ""));
+                            glv.Items.Add(it);
+                        }
+            }
+            catch { }
+            games.Controls.Add(glv);
         }
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = S(46), BackColor = Bg };
-        var hint = new Label
+        var ok = DlgBtn("✔ OK", Color.FromArgb(50, 110, 65));
+        var cancel = DlgBtn("✘ Cancel", Color.FromArgb(70, 70, 82));
+        ok.Enabled = !_readOnly;
+        cancel.DialogResult = DialogResult.Cancel;
+        bottom.Controls.AddRange(new Control[] { ok, cancel });
+        bottom.Resize += (_, _) =>
         {
-            AutoSize = true, ForeColor = SubFg, BackColor = Bg, Location = new Point(S(8), S(14)),
-            Text = "Catalog editing (add / edit / delete) is managed by LaunchBox for now.",
+            cancel.Location = new Point(bottom.ClientSize.Width - cancel.Width - S(12), S(8));
+            ok.Location = new Point(cancel.Left - ok.Width - S(8), S(8));
         };
-        var close = DlgBtn("Close", Color.FromArgb(70, 70, 82));
-        close.DialogResult = DialogResult.Cancel;
-        bottom.Controls.Add(hint);
-        bottom.Controls.Add(close);
-        bottom.Resize += (_, _) => close.Location = new Point(bottom.ClientSize.Width - close.Width - S(10), S(8));
-        f.Controls.Add(lv);
         f.Controls.Add(bottom);
-        lv.BringToFront();
-        f.CancelButton = close;
-        f.ShowDialog(this);
+        f.AcceptButton = ok;
+        f.CancelButton = cancel;
+
+        bool changed = false;
+        ok.Click += (_, _) =>
+        {
+            string n = name.Text.Trim(), c = category.Text.Trim();
+            if (n.Length == 0) { MessageBox.Show(f, "The controller needs a name.", "Game Controller", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            bool taken = ControllerCatalogStore.All().Any(r => !string.Equals(r.Id, existing?.Id, StringComparison.OrdinalIgnoreCase)
+                                                            && string.Equals(r.Name, n, StringComparison.OrdinalIgnoreCase));
+            if (taken) { MessageBox.Show(f, $"A controller named \"{n}\" already exists (the name must be unique).", "Game Controller", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            try
+            {
+                if (existing == null) ControllerCatalogStore.AddNew(n, c);
+                else ControllerCatalogStore.Update(existing.Id, n, c);
+                changed = true;
+            }
+            catch (Exception ex) { Console.WriteLine("[controllers] catalog save failed: " + ex.Message); }
+            f.DialogResult = DialogResult.OK; f.Close();
+        };
+        cancel.Click += (_, _) => { f.DialogResult = DialogResult.Cancel; f.Close(); };
+        f.ShowDialog(owner);
+        return changed;
     }
 
     private void ReloadNamesControllersIfBuilt()
@@ -354,5 +533,115 @@ internal sealed partial class EditGameWindow
         if (IsMulti) return;
         if (_anGrid != null) LoadAlternateNames();
         if (_csGrid != null) LoadControllerSupport();
+    }
+}
+
+// ── The game-controller catalog (Data\GameControllers.xml) ─────────────────────
+// Session-authoritative in-memory list: loaded once from the file, mutated by the Manage dialog,
+// persisted through the op-log's "GameController" whole-collection replace (flushed when safe —
+// so reads NEVER go back to the possibly-stale file within a session). Unmodelled elements
+// (AssociatedPlatforms, future fields) are preserved verbatim per controller.
+
+internal sealed class ControllerRec
+{
+    public string Id = "", Name = "", Category = "";
+    public Dictionary<string, string> Extra = new(StringComparer.Ordinal);   // element → raw inner XML
+}
+
+internal static class ControllerCatalogStore
+{
+    private static readonly object _lock = new();
+    private static List<ControllerRec>? _list;
+
+    private static string FilePath => Path.Combine(Saves.SaveManager.LbRoot, "Data", "GameControllers.xml");
+
+    public static List<ControllerRec> All()
+    {
+        lock (_lock)
+        {
+            Load();
+            return _list!.Select(Clone).ToList();
+        }
+    }
+
+    public static ControllerRec AddNew(string name, string category)
+    {
+        lock (_lock)
+        {
+            Load();
+            var r = new ControllerRec { Id = Guid.NewGuid().ToString(), Name = name, Category = category };
+            r.Extra["AssociatedPlatforms"] = "";   // LB always writes the (empty) element
+            _list!.Add(r);
+            Sort();
+            Persist();
+            return Clone(r);
+        }
+    }
+
+    public static void Update(string id, string name, string category)
+    {
+        lock (_lock)
+        {
+            Load();
+            var r = _list!.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase));
+            if (r == null) return;
+            r.Name = name;
+            r.Category = category;
+            Sort();
+            Persist();
+        }
+    }
+
+    public static void Remove(string id)
+    {
+        lock (_lock)
+        {
+            Load();
+            if (_list!.RemoveAll(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase)) > 0) Persist();
+        }
+    }
+
+    private static void Load()
+    {
+        if (_list != null) return;
+        var list = new List<ControllerRec>();
+        try
+        {
+            if (File.Exists(FilePath))
+                foreach (var e in XDocument.Load(FilePath).Root?.Elements("GameController") ?? Enumerable.Empty<XElement>())
+                {
+                    var r = new ControllerRec();
+                    foreach (var c in e.Elements())
+                        switch (c.Name.LocalName)
+                        {
+                            case "Id": r.Id = c.Value; break;
+                            case "Name": r.Name = c.Value; break;
+                            case "Category": r.Category = c.Value; break;
+                            default: r.Extra[c.Name.LocalName] = string.Concat(c.Nodes()); break;   // raw inner XML
+                        }
+                    if (r.Id.Length > 0) list.Add(r);
+                }
+        }
+        catch (Exception ex) { Console.WriteLine("[controllers] catalog load failed: " + ex.Message); }
+        _list = list;
+        Sort();
+    }
+
+    private static void Sort() => _list!.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+
+    private static ControllerRec Clone(ControllerRec r)
+        => new() { Id = r.Id, Name = r.Name, Category = r.Category, Extra = new Dictionary<string, string>(r.Extra, StringComparer.Ordinal) };
+
+    private static void Persist()
+    {
+        var rows = _list!.Select(r =>
+        {
+            var d = new Dictionary<string, string>(StringComparer.Ordinal) { ["Id"] = r.Id, ["Name"] = r.Name, ["Category"] = r.Category };
+            foreach (var kv in r.Extra) d.TryAdd(kv.Key, kv.Value);
+            d.TryAdd("AssociatedPlatforms", "");
+            return d;
+        }).ToList();
+        try { (PluginHelper.DataManager as HostDataManagerXml)?.ReplaceGameControllerCatalog(JsonSerializer.Serialize(rows)); }
+        catch (Exception ex) { Console.WriteLine("[controllers] catalog persist failed: " + ex.Message); }
     }
 }

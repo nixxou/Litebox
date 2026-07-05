@@ -224,14 +224,17 @@ internal sealed class LaunchButtons : Panel
     // changing the version re-selects that version's effective default emulator.
     private bool _emuPickedByUser;
 
-    /// <summary>The EFFECTIVE default emulator for the current selection: the selected VERSION's own
-    /// EmulatorId when it launches through one, else the game's. Null when neither is set.</summary>
+    /// <summary>The EFFECTIVE default emulator for the current selection — tri-state:
+    /// the selected VERSION's own EmulatorId when it launches through one; NULL (= direct
+    /// launch) when the version has UseEmulator OFF (a plain executable — "on exécute le
+    /// path", NOT the game's emulator); else the game's. Null too when nothing is set.</summary>
     private string? DefaultEmuIdForSelection()
     {
         var app = CurrentVersionApp();
         if (app != null)
         {
-            string? vid = Safe(() => app.UseEmulator ? app.EmulatorId : null);
+            if (Safe(() => app.UseEmulator) != true) return null;   // exe-based version → direct is ITS default
+            string? vid = Safe(() => app.EmulatorId);
             if (!string.IsNullOrEmpty(vid) && vid != Guid.Empty.ToString() && EmuIndexOf(vid) >= 0) return vid;
         }
         var gid = _game != null ? Safe(() => _game.EmulatorId) : null;

@@ -1,8 +1,9 @@
-// Host boot: wire dummy services into PluginHelper, load the WHITELISTED plugins
-// (whitelist.txt next to the exe), fire PluginInitialized, then show the GUI
-// (a simple menu of the plugins' system-menu items + a blank area).
+// Host boot: wire dummy services into PluginHelper, load the enabled plugins
+// (LiteBox.ini EnabledPlugins; default = every folder under LB\Plugins), fire
+// PluginInitialized, then show the GUI (a simple menu of the plugins'
+// system-menu items + a blank area).
 //
-//   --host                         GUI (default). Plugins from whitelist.txt.
+//   --host                         GUI (default). Plugins from LiteBox.ini (EnabledPlugins).
 //   --host --plugins <root>        override the plugins root (default LB\Plugins)
 //   --host --headless [--loop]     no GUI (diagnostics); --loop keeps it alive
 //   --host --headless --menu N     invoke system menu N on the UI thread

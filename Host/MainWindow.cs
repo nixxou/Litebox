@@ -1196,8 +1196,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     // Sections + option bindings (Host/Options). Storage today = LiteBox.ini;
     // the Pause options are slated to migrate to the LB-wide settings layer
     // (LB-compatible) — only their Get/Set bindings will change.
-    // Options → Plugins : a checkbox per folder under <LB>\Plugins. Replaces
-    // whitelist.txt. Default (never configured) = every present folder checked.
+    // Options → Plugins : a checkbox per folder under <LB>\Plugins, stored as
+    // LiteBox.ini EnabledPlugins. Default (never configured) = every present folder checked.
     // Changes are written to LiteBox.ini and take effect on the next start
     // (plugins load once at boot), so we warn on Apply when the set changed.
     private (Control panel, Action apply) BuildPluginsSection()

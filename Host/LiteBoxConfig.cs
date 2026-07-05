@@ -131,7 +131,7 @@ internal sealed class LiteBoxConfig
         => int.TryParse(Get(key), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : def;
     public void SetInt(string key, int val) => _kv[key] = val.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-    // ── Enabled plugins (replaces whitelist.txt) ───────────────────────────────
+    // ── Enabled plugins (LiteBox.ini EnabledPlugins) ───────────────────────────
     // Comma-separated folder names under <LB>\Plugins. KEY ABSENT (null) means
     // "never configured" → the host defaults to enabling every folder present.
     // An empty value means "none enabled".

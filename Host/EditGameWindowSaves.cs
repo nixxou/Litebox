@@ -575,7 +575,7 @@ internal sealed partial class EditGameWindow
         private int? PromptSlot(EmulatorPlugin plugin)
         {
             Dictionary<int, string> slots = new();
-            try { foreach (var kv in plugin.GetPotentialSaveSlots() ?? new Dictionary<int, string>()) slots[kv.Key] = kv.Value; } catch { }
+            try { lock (SaveManager.PluginGate) foreach (var kv in plugin.GetPotentialSaveSlots() ?? new Dictionary<int, string>()) slots[kv.Key] = kv.Value; } catch { }
             if (slots.Count == 0) return 0;   // emulator without slot notion → slot 0
 
             using var f = _w.NewDialog("Import Save State", 380, 170);

@@ -247,6 +247,19 @@ internal static class SaveManager
         catch { }
     }
 
+    // ── Plugin-call gate ──────────────────────────────────────────────────
+    // The integration plugins call into LaunchBox's OBFUSCATED core, whose method-body decryptor is a
+    // JIT hook (MonoMod CompileMethodHook). That hook is NOT safe under CONCURRENT first-compilations:
+    // two GetSaves scans running at once (fast game navigation; the game page + the Edit Additional
+    // Version dialog) can wedge threads inside GetSaves and leave the decryptor's module initializer
+    // (Unbroken.UserManagement.SeparatedUser) permanently broken — every later core call then throws
+    // TypeInitializationException for the rest of the session (observed in saves-diag.log: three scans
+    // that never completed, then only TypeInitializationException). Serialize EVERY plugin call behind
+    // one gate so obfuscated code is never JIT-compiled from two scan threads at once.
+    private static readonly object _pluginGate = new();
+    /// <summary>Same gate, for the few plugin calls made by the UI layer (e.g. GetPotentialSaveSlots).</summary>
+    internal static object PluginGate => _pluginGate;
+
     // ── Resolution ────────────────────────────────────────────────────────
     // LB does NOT limit the scan to the game's assigned emulator: it queries every emulator that has a
     // save-management integration plugin (each plugin self-filters — Dolphin/PCSX2 only scan games
@@ -264,7 +277,7 @@ internal static class SaveManager
             if (e == null) continue;
             var p = EmuPlugins.ForEmulator(e);
             if (p == null) continue;
-            bool sup = false; try { sup = p.SupportsSaveManagement(); } catch { }
+            bool sup = false; try { lock (_pluginGate) sup = p.SupportsSaveManagement(); } catch { }
             if (sup) list.Add((e, p));
         }
         return list;
@@ -359,7 +372,9 @@ internal static class SaveManager
                 // Root.DataManager d'un chemin save (RetroArch IsSaturnSaveContext, fallback null-gardé) donne
                 // le même résultat que le shim soit vide OU absent → aucun impact. Conservé en commentaire.
                 // var resp = EmuInstall.WithCoreShim(() => cPlugin.GetSaves(new GetSavesArgs { Emulator = absEmu, Games = new[] { game }, AdditionalApplications = apps }));
-                var resp = cPlugin.GetSaves(new GetSavesArgs { Emulator = absEmu, Games = new[] { game }, AdditionalApplications = apps });
+                GetSavesResponse resp;
+                lock (_pluginGate)
+                    resp = cPlugin.GetSaves(new GetSavesArgs { Emulator = absEmu, Games = new[] { game }, AdditionalApplications = apps });
                 int raw = resp?.FoundSaves?.Count ?? -1;
                 int kept = 0;
                 if (resp?.FoundSaves == null)
@@ -403,7 +418,7 @@ internal static class SaveManager
             // Match a persisted row: by SaveGroupId when the plugin says so (PCSX2/Saturn), else by path.
             Dictionary<string, string>? row = null;
             bool byGroupId = false;
-            try { byGroupId = !string.IsNullOrEmpty(save.SaveGroupId) && sPlugin.UseSaveGroupIdForPersistedMatch(save); } catch { }
+            try { if (!string.IsNullOrEmpty(save.SaveGroupId)) lock (_pluginGate) byGroupId = sPlugin.UseSaveGroupIdForPersistedMatch(save); } catch { }
             if (byGroupId)
                 row = baseRows.FirstOrDefault(r => !usedRows.Contains(r) && string.Equals(r.GetValueOrDefault("SaveGroupId"), save.SaveGroupId, StringComparison.OrdinalIgnoreCase));
             row ??= baseRows.FirstOrDefault(r => !usedRows.Contains(r)
@@ -438,7 +453,7 @@ internal static class SaveManager
                 ActiveIsDirectory = save.IsDirectory || Directory.Exists(abs),
                 Record = row,
             };
-            try { g.ActiveLive = sPlugin.IsSaveActive(save, EmuAppPath(sEmu)); } catch { g.ActiveLive = true; }
+            try { lock (_pluginGate) g.ActiveLive = sPlugin.IsSaveActive(save, EmuAppPath(sEmu)); } catch { g.ActiveLive = true; }
             groups.Add(g);
         }
 
@@ -552,12 +567,12 @@ internal static class SaveManager
         try
         {
             bool isContainer = false;
-            try { isContainer = plugin.IsSaveContainer(g.Active); } catch { }
+            try { lock (_pluginGate) isContainer = plugin.IsSaveContainer(g.Active); } catch { }
             if (isContainer)
             {
                 Directory.CreateDirectory(tempDir);
                 bool ok = false; string? err = null;
-                try { ok = plugin.TryBackupSave(g.Active, EmuAppPath(emu), tempDir, out err); } catch (Exception ex) { err = ex.Message; }
+                try { lock (_pluginGate) ok = plugin.TryBackupSave(g.Active, EmuAppPath(emu), tempDir, out err); } catch (Exception ex) { err = ex.Message; }
                 if (!ok) { r.Error = "The plugin could not extract this save: " + (err ?? "unknown error"); return r; }
                 sourceDir = tempDir;
             }
@@ -568,7 +583,7 @@ internal static class SaveManager
             // 2. Signature/md5 → skip identical backups (LB's dirty-check, TryComputeSaveSignature first).
             string md5;
             string? sig = null;
-            try { if (plugin.TryComputeSaveSignature(g.Active, EmuAppPath(emu), out var s) && !string.IsNullOrEmpty(s)) sig = s; } catch { }
+            try { bool okSig; string? sigv; lock (_pluginGate) okSig = plugin.TryComputeSaveSignature(g.Active, EmuAppPath(emu), out sigv); if (okSig && !string.IsNullOrEmpty(sigv)) sig = sigv; } catch { }
             md5 = sig ?? (sourceFile != null ? FileMd5(sourceFile) : DirManifestMd5(sourceDir!));
             var latest = g.Backups.OrderByDescending(b => b.CreatedUtc).FirstOrDefault();
             if (!force && latest != null && md5.Length > 0 && string.Equals(latest.Md5, md5, StringComparison.OrdinalIgnoreCase))
@@ -661,7 +676,7 @@ internal static class SaveManager
             // WithCoreShim désactivé — voir la note sur GetSaves : AddSaveFile ne touche pas Root.DataManager
             // (Dolphin/PCSX2 install-only ; RetroArch AddSaveFile → IsSaturnSaveContext null-gardé). Aucun impact.
             // return EmuInstall.WithCoreShim(() => plugin.AddSaveFile(args));
-            return plugin.AddSaveFile(args);
+            lock (_pluginGate) return plugin.AddSaveFile(args);
         }
         finally { try { if (prev != null) Environment.CurrentDirectory = prev; } catch { } }
     }
@@ -685,7 +700,8 @@ internal static class SaveManager
             if (g.Plugin is not EmulatorPlugin plugin) return "No integration plugin for this save.";
             try
             {
-                var resp = plugin.RemoveSave(g.Active);
+                PluginResponse resp;
+                lock (_pluginGate) resp = plugin.RemoveSave(g.Active);
                 if (resp is { WasSuccess: false }) return resp.Message ?? "The plugin could not delete the save file.";
             }
             catch (Exception ex) { return ex.Message; }
@@ -705,7 +721,8 @@ internal static class SaveManager
         if (b.Error != null) return "Backup failed — nothing was changed: " + b.Error;
         try
         {
-            var resp = plugin.RemoveSave(g.Active);
+            PluginResponse resp;
+            lock (_pluginGate) resp = plugin.RemoveSave(g.Active);
             if (resp is { WasSuccess: false }) return resp.Message ?? "The plugin could not remove the active save.";
         }
         catch (Exception ex) { return ex.Message; }
@@ -734,7 +751,7 @@ internal static class SaveManager
             };
             var b = Backup(moved, force: false);
             if (b.Error != null) return "Could not archive the source save — nothing was combined: " + b.Error;
-            try { src.Plugin.RemoveSave(src.Active); } catch { }
+            try { lock (_pluginGate) src.Plugin.RemoveSave(src.Active); } catch { }
         }
         bool changed = false;
         foreach (var e in src.Backups) { e.GroupId = dst.GroupId; e.GroupName = dst.GroupName; changed = true; }

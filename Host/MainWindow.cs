@@ -545,6 +545,11 @@ internal sealed class MainWindow : Form, IMessageFilter
                     catch (Exception ex) { Console.WriteLine("[options] " + ex.Message); }
                 }));
             }
+            // Automatic Progress Tracking sweep (LB parity) — background, opt-in (LiteBox option) and
+            // gated internally on the Settings.xml master switch; local data only (play time, last
+            // played, RA cache). Off by default: the on-select / on-exit triggers cover normal use.
+            if (_cfg.ProgressSweepOnBoot)
+                try { Data.ProgressAutomation.SweepAsync(); } catch { }
             // RA native-fallback rolling refresh (opt-in) — after the window is up, on idle so it never
             // delays the first paint. Gated internally (checkbox + ExtendDB-not-handling-RA + creds set).
             try
@@ -1376,6 +1381,17 @@ internal sealed class MainWindow : Form, IMessageFilter
                 "Only matters when 'close the store client on game exit' is on. Off (default): leave a client "
                 + "you already had open before the launch. On: close it too (kill ALL of that store's client "
                 + "processes, not just the one LiteBox started)."),
+            Options.OptionItem.Toggle("General", "Progress automation: sweep the whole library at startup",
+                () => _cfg.ProgressSweepOnBoot, v => _cfg.ProgressSweepOnBoot = v,
+                "Runs the Game Progress automation rules over EVERY game in the background right after "
+                + "startup. Off (default): games are re-evaluated when selected and when a game exits — "
+                + "the sweep is only useful to catch up a whole library at once. Needs 'Automatic Progress "
+                + "Tracking' enabled in LB · Game Progress Automation."),
+            Options.OptionItem.Toggle("General", "Progress automation: re-evaluate a game when selected",
+                () => _cfg.ProgressApplyOnSelect, v => _cfg.ProgressApplyOnSelect = v,
+                "Re-runs the Game Progress automation rules for a game while its details pane loads "
+                + "(background, cheap). On by default. Needs 'Automatic Progress Tracking' enabled in "
+                + "LB · Game Progress Automation."),
         });
 
         var (pluginsPanel, applyPlugins) = BuildPluginsSection();
@@ -2733,6 +2749,15 @@ internal sealed class MainWindow : Form, IMessageFilter
         SetHeroGame(g);
         LoadImagesAsync(logoSrc, artSrc);
         PopulateDetailMeta(g);
+
+        // Automatic Progress Tracking, "on select" flavor (option): re-evaluate this game while its
+        // detail data is being composed — off the UI thread, and cheap (RAM + at most one cached-RA
+        // read). Gated on the option AND (inside the engine) on the LB master switch.
+        if (_cfg.ProgressApplyOnSelect)
+        {
+            var pg = g;
+            Task.Run(() => { try { Data.ProgressAutomation.ApplyToGame(pg); } catch { } });
+        }
     }
 
     // The box + clear-logo source files for a game (same resolution launchbox-web/bigbox-web use).

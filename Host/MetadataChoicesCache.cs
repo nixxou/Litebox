@@ -24,13 +24,14 @@ internal static class MetadataChoicesCache
         ["ReleaseType"] = "ReleaseType", ["Rating"] = "Rating", ["Progress"] = "Progress",
     };
     private static readonly HashSet<string> Multi = new(StringComparer.Ordinal) { "Genre", "Developer", "Publisher", "Series", "PlayMode" };
-    // Known values merged in so common choices exist even on an empty library.
+    // Known values merged in so common choices exist even on an empty library. Progress is NOT
+    // seeded here: its list mirrors LB's "Game Progress Organization" (Settings.xml
+    // ProgressPriorities, edited in Options) — see the ordering special-case in EnsureBuilt.
     private static readonly Dictionary<string, string[]> Known = new(StringComparer.Ordinal)
     {
         ["Rating"] = new[] { "E", "E10+", "T", "M", "AO", "RP" },
         ["ReleaseType"] = new[] { "Full", "Demo", "Prototype", "Beta", "Homebrew", "Hack" },
         ["Status"] = new[] { "Imperfect", "Playable", "Preservable", "Unplayable" },
-        ["Progress"] = new[] { "Not Started / Unplayed", "Playing / Progressing", "Beaten / Completed", "Mastered / 100%", "Abandoned" },
     };
 
     private static readonly object _lock = new();
@@ -89,7 +90,20 @@ internal static class MetadataChoicesCache
                 }
         }
         catch { }
-        lock (_lock) { foreach (var k in keys) { _lists[k] = sets[k].ToArray(); _dirty.Remove(k); } }
+        lock (_lock) { foreach (var k in keys) { _lists[k] = k == "Progress" ? OrderProgress(sets[k]) : sets[k].ToArray(); _dirty.Remove(k); } }
+    }
+
+    // Progress mirrors LB's "Game Progress Organization": the organized values first, in THEIR
+    // order (not alphabetical), then any library-only custom values appended — custom text stays
+    // possible, the organization just drives the choices.
+    private static string[] OrderProgress(SortedSet<string> library)
+    {
+        List<string> org;
+        try { org = Data.ProgressModel.Values(Data.ProgressModel.Store); }
+        catch { org = new List<string>(); }
+        var res = new List<string>(org);
+        foreach (var v in library) if (!org.Contains(v, StringComparer.OrdinalIgnoreCase)) res.Add(v);
+        return res.ToArray();
     }
 
     private static string ReadKey(IGame g, string key) => (key switch

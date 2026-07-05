@@ -90,6 +90,22 @@ internal static class RaService
         catch { }
         return null;
     }
+
+    /// <summary>The raids that HAVE a cache file — ONE directory listing, so a library-wide pass
+    /// (the progress-automation sweep) skips the per-game File.Exists probe (100K games × Exists
+    /// costs seconds; one listing costs milliseconds).</summary>
+    public static HashSet<int> CachedRaids()
+    {
+        var set = new HashSet<int>();
+        try
+        {
+            foreach (var f in Directory.GetFiles(CacheDir, "*.json"))
+                if (int.TryParse(Path.GetFileNameWithoutExtension(f), out var r)) set.Add(r);
+        }
+        catch { }
+        return set;
+    }
+
     private static void WriteCache(int raid, RaGameCache c)
     {
         try { File.WriteAllText(CacheFile(raid), JsonSerializer.Serialize(c)); } catch { }

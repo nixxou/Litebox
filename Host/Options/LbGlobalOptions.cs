@@ -90,6 +90,10 @@ internal static class LbGlobalOptions
                 "Only when the startup screen is disabled."),
         }, readOnly);
 
+        // LB "Data" branch: Game Progress Automation / Organization (Data\ProgressModel + the
+        // automation engine live in Host\Data; these two pages just edit their Settings.xml fields).
+        ProgressOptions.AddSections(w, s, readOnly, dpiS);
+
         w.AddSection("LB · Startup Applications", BuildStartupAppsPanel(s, readOnly, dpiS, out var applyStartupApps),
             readOnly ? null : applyStartupApps);
 

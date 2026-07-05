@@ -169,6 +169,12 @@ internal sealed class LiteBoxConfig
     // RetroAchievements native fallback: at launch, refresh up to 3 console catalogues older than 48h and
     // re-link games that gained a raid (rolling background update). Off by default (a startup network op).
     public bool RaStartupRollingRefresh { get => GetBool("RaStartupRollingRefresh", false); set => SetBool("RaStartupRollingRefresh", value); }
+    // Automatic Progress Tracking triggers (the RULES live in LB's Settings.xml; these choose WHEN
+    // LiteBox runs them). Boot sweep = whole library in the background at startup (off by default —
+    // avoidable cost on huge libraries); on-select = re-evaluate a game while its detail pane loads
+    // (cheap: RAM + at most one cached-RA read). Game-exit evaluation is always on.
+    public bool ProgressSweepOnBoot   { get => GetBool("ProgressSweepOnBoot", false); set => SetBool("ProgressSweepOnBoot", value); }
+    public bool ProgressApplyOnSelect { get => GetBool("ProgressApplyOnSelect", true); set => SetBool("ProgressApplyOnSelect", value); }
     public string GameRunningText     => Get("GameRunningText", "Game running...");
     public Color GameRunningColor     => ParseColor(Get("GameRunningColor", "#0F0F12"), Color.FromArgb(15, 15, 18));
 

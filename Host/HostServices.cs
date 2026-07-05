@@ -239,6 +239,7 @@ internal static class HostLaunch
             // Record play time only if the game process was actually observed (else the launch likely
             // failed, or we couldn't track it — don't bill the watcher's wait as play time).
             if (!DryRun && seen && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
+            if (!DryRun && seen) { try { Data.ProgressAutomation.ApplyToGame(game); } catch { } }   // LB parity (see RunAndWait)
             Fire(p => p.OnGameExited());                  // ExtendDB: reopen the kiosk (mirror RunAndWait)
             if (!DryRun) Gameplay.GameScreens.ShowEndBlocking(endSnap);   // "GAME OVER"
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
@@ -353,6 +354,9 @@ internal static class HostLaunch
             // Per-version play time — same elapsed seconds as the game's (see JournalPlayStart above).
             if (!DryRun && app != null)
                 try { int secs = (int)sw.Elapsed.TotalSeconds; if (secs > 0) app.PlayTime += secs; } catch { }
+            // Automatic Progress Tracking (LB parity): re-evaluate this game's Progress now that its
+            // play time / last-played moved. Gated internally on EnableAutoProgressTracking.
+            if (!DryRun) { try { Data.ProgressAutomation.ApplyToGame(game); } catch { } }
             Fire(p => p.OnGameExited());
             // End screen ("GAME OVER") — held for the min display time before the UI reloads.
             if (!DryRun) Gameplay.GameScreens.ShowEndBlocking(endSnap);

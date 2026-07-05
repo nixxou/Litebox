@@ -26,7 +26,7 @@
     <ApplicationIcon>litebox.ico</ApplicationIcon>
     <!-- LiteBox version, read back at boot for upgrade/migration (see Host\Install\LiteBoxVersion). Bump
          this on each release; also raise the matching …Below threshold when a change is breaking. -->
-    <Version>0.8.1</Version>
+    <Version>0.8.2</Version>
     <!-- Distribution: ONE self-contained single-file exe that is BOTH the installer and the host
          (Program.cs then Host\Install\Installer). Drop it at the LaunchBox root or in Core and it
          self-installs (copies itself to Core, unpacks the EMBEDDED native payload into ThirdParty\).

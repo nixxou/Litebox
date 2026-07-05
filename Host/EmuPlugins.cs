@@ -73,7 +73,7 @@ internal static class EmuPlugins
         if (p == null) return commandLine;
         try
         {
-            var args = new PrepareForLaunchArgs(emu, game, commandLine, app, null /* RA credentials: later */);
+            var args = new PrepareForLaunchArgs(emu, game, commandLine, app, ResolveRaCredentials(emu));
             var resp = p.PrepareEmulatorForLaunch(args);
             if (resp is { WasSuccess: true } && !string.IsNullOrEmpty(resp.NewCommandLine)
                 && !string.Equals(resp.NewCommandLine, commandLine, StringComparison.Ordinal))
@@ -86,6 +86,25 @@ internal static class EmuPlugins
         }
         catch (Exception ex) { Console.WriteLine("[emuplugin] PrepareEmulatorForLaunch threw: " + ex.Message); }
         return commandLine;
+    }
+
+    /// <summary>RetroAchievements credentials to hand PrepareEmulatorForLaunch so the plugin injects them
+    /// (RetroArch writes cheevos_* to a temp config and appends --appendconfig). Only when the emulator opts
+    /// in (LoginToCheevoOnGameLaunch) AND LiteBox has a username+token in Settings.xml. Hardcore is read by
+    /// the plugin from the emulator's EnableHardcoreAchievements. Null → the plugin skips RA (LB parity).</summary>
+    private static RetroAchievementCredentials? ResolveRaCredentials(IEmulator emu)
+    {
+        try
+        {
+            bool optIn = emu is ILiteBoxFields lf
+                         && string.Equals(lf.GetField("LoginToCheevoOnGameLaunch"), "true", StringComparison.OrdinalIgnoreCase);
+            if (!optIn) return null;
+            string? user = Ra.RaService.Username, token = Ra.RaService.Token;
+            if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(token)) return null;
+            Console.WriteLine($"[emuplugin] injecting RetroAchievements creds (user={user}) into {(ForEmulator(emu)?.EmulatorName ?? "emulator")}");
+            return new RetroAchievementCredentials(user, token);
+        }
+        catch { return null; }
     }
 
     /// <summary>NormalizeCommandLineForExecutable on the emulator's command line

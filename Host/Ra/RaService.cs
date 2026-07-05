@@ -43,7 +43,7 @@ internal static class RaService
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     // ── settings: RA key + username straight from LB's Settings.xml (no ExtendDB) ────────────
-    private static string? _key, _user;
+    private static string? _key, _user, _token;
     private static bool _settingsRead;
     private static void ReadSettings()
     {
@@ -56,6 +56,7 @@ internal static class RaService
             var txt = File.ReadAllText(p);
             _key = Between(txt, "RetroAchievementsApiKey");
             _user = Between(txt, "RetroAchievementsUsername");
+            _token = Between(txt, "RetroAchievementsToken");
         }
         catch { }
     }
@@ -71,6 +72,13 @@ internal static class RaService
     /// <summary>The RA Web API key from LB's Settings.xml (null/empty when unset). Shared with the LiteBox-
     /// native RA fallback (RaCatalogLite) so it doesn't re-parse Settings.xml.</summary>
     internal static string? ApiKey { get { ReadSettings(); return _key; } }
+
+    /// <summary>RA account username from LB's Settings.xml (null/empty when unset).</summary>
+    internal static string? Username { get { ReadSettings(); return _user; } }
+
+    /// <summary>The RA emulator CONNECT token from LB's Settings.xml — the value emulators need for
+    /// cheevos_token to log in (NOT the web ApiKey). Injected into the emulator at launch.</summary>
+    internal static string? Token { get { ReadSettings(); return _token; } }
 
     // ── cache: Core\litebox\ra-cache\<raid>.json ─────────────────────────────────────────────
     private static string CacheDir => LiteBoxPaths.Dir("ra-cache");

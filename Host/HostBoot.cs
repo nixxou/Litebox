@@ -29,9 +29,17 @@ internal static class HostBoot
     /// Options → Plugins section lists the same folders the host loads from.</summary>
     public static string PluginsRoot { get; private set; }
 
-    /// <summary>--edit-gamesaves "&lt;title&gt;": auto-open Edit Game → Game Saves for that game once the
-    /// main window is shown (diagnostics — lets a remote session exercise the page hands-free).</summary>
-    public static string AutoEditGameSaves;
+    // ── Hands-free UI drivers (diagnostics / remote testing) ──────────────────
+    // Once the main window is shown:
+    //   --edit-game "<title|id>"      open Edit Game for that game (id exact → title exact → title contains)
+    //   --edit-page "<page>"          page for --edit-game, by node tag or label, case/space-insensitive
+    //                                 (Metadata, Notes, "Additional Versions", GameSaves, Emulation, …)
+    //   --edit-gamesaves "<title|id>" sugar for --edit-game X --edit-page GameSaves
+    //   --options ["<section>"]       open the Options window, optionally on the named section
+    //                                 (fuzzy: "gameplay" → "LB · Gameplay")
+    public static string AutoEditGame;
+    public static string AutoEditPage;
+    public static string AutoOptions;   // null = not requested; "" = open on the first section
 
     /// <summary>Immediate subfolder names of <paramref name="root"/> (plugin folders),
     /// sorted case-insensitively. Empty when the root is missing/unreadable.</summary>
@@ -171,9 +179,15 @@ internal static class HostBoot
         var reg = PluginLoader.LoadFrom(pluginDirs);
         Console.WriteLine($"Loaded {reg.All.Count} plugin object(s): events={reg.SystemEvents.Count} sysmenu={reg.SystemMenus.Count} gamemenu={reg.GameMenus.Count} themeel={reg.ThemeElements.Count}");
 
-        // Diagnostics: --edit-gamesaves "<title>" auto-opens Edit Game → Game Saves for that game right
-        // after the window shows (remote/headless-driven UI checks without touching the mouse).
-        AutoEditGameSaves = GetArg(args, "--edit-gamesaves");
+        // Hands-free UI drivers (see the fields' doc): --edit-game/--edit-page/--edit-gamesaves/--options.
+        AutoEditGame = GetArg(args, "--edit-game");
+        AutoEditPage = GetArg(args, "--edit-page");
+        string legacySaves = GetArg(args, "--edit-gamesaves");
+        if (legacySaves != null) { AutoEditGame = legacySaves; AutoEditPage ??= "GameSaves"; }
+        int optIx = Array.IndexOf(args, "--options");
+        if (optIx >= 0)
+            AutoOptions = (optIx + 1 < args.Length && !args[optIx + 1].StartsWith("--", StringComparison.Ordinal))
+                ? args[optIx + 1] : "";
 
         // Launch lifecycle: drop/reload the optional tier + notify launching plugins.
         HostLaunch.DryRun = args.Contains("--drylaunch");

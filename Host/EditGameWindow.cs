@@ -105,22 +105,31 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         using var w = new EditGameWindow(games, visible, readOnly);
         if (initialPage != null)
         {
-            var node = FindNodeByTag(w._tree.Nodes, initialPage);
+            // Fuzzy: match the node TAG or its LABEL, ignoring case/spaces/punctuation — so
+            // "GameSaves", "game saves", "Additional Versions" and "additionalversions" all resolve.
+            var node = FindNode(w._tree.Nodes, initialPage, exact: true) ?? FindNode(w._tree.Nodes, initialPage, exact: false);
             if (node != null) w._tree.SelectedNode = node;   // AfterSelect → ShowPage
+            else Console.WriteLine($"[editgame] page not found: \"{initialPage}\"");
         }
         w.ShowDialog(owner);
     }
 
-    private static TreeNode? FindNodeByTag(TreeNodeCollection nodes, string tag)
+    private static TreeNode? FindNode(TreeNodeCollection nodes, string key, bool exact)
     {
+        string norm = NormKey(key);
         foreach (TreeNode n in nodes)
         {
-            if (Equals(n.Tag as string, tag)) return n;
-            var c = FindNodeByTag(n.Nodes, tag);
+            string tag = NormKey(n.Tag as string ?? ""), label = NormKey(n.Text ?? "");
+            bool hit = exact ? (tag == norm || label == norm)
+                             : (tag.Contains(norm, StringComparison.Ordinal) || label.Contains(norm, StringComparison.Ordinal));
+            if (hit && norm.Length > 0) return n;
+            var c = FindNode(n.Nodes, key, exact);
             if (c != null) return c;
         }
         return null;
     }
+
+    private static string NormKey(string s) => new string(s.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
 
     private EditGameWindow(IReadOnlyList<IGame> games, IReadOnlyList<IGame> visible, bool readOnly)
     {

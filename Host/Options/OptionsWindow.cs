@@ -101,6 +101,24 @@ internal sealed class OptionsWindow : LiteBoxForm
         _host.ResumeLayout();
     }
 
+    /// <summary>Selects a section by (fuzzy) name — exact normalized match first, then contains.
+    /// "gameplay" → "LB · Gameplay". Case, spaces and punctuation are ignored. False when no match.</summary>
+    public bool SelectSection(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        string norm = Norm(name);
+        for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < _sections.Count; i++)
+            {
+                string t = Norm(_sections[i].title);
+                if (pass == 0 ? t == norm : t.Contains(norm, StringComparison.Ordinal))
+                { _nav.SelectedIndex = i; return true; }
+            }
+        return false;
+
+        static string Norm(string s) => new string(s.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+    }
+
     private void ApplyAll()
     {
         foreach (var (_, _, apply) in _sections) { try { apply?.Invoke(); } catch { } }

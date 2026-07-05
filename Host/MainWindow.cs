@@ -515,18 +515,35 @@ internal sealed class MainWindow : Form, IMessageFilter
         Shown += (_, _) =>
         {
             ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); RelayoutDetail();
-            // Diagnostics: --edit-gamesaves "<title>" → auto-open Edit Game on its Game Saves page.
-            if (!string.IsNullOrEmpty(HostBoot.AutoEditGameSaves))
+            // Hands-free UI drivers (diagnostics): --edit-game/--edit-page and --options — see HostBoot.
+            if (!string.IsNullOrEmpty(HostBoot.AutoEditGame))
             {
-                string t = HostBoot.AutoEditGameSaves;
                 try
                 {
-                    var g = PluginHelper.DataManager?.GetAllGames()
-                        ?.FirstOrDefault(x => string.Equals(Safe(() => x.Title), t, StringComparison.OrdinalIgnoreCase));
-                    if (g != null) BeginInvoke((Action)(() => EditGameWindow.Open(new[] { g }, Array.Empty<IGame>(), false, this, "GameSaves")));
-                    else Console.WriteLine($"[edit-gamesaves] game not found: \"{t}\"");
+                    var g = FindGameForCli(HostBoot.AutoEditGame);
+                    if (g != null)
+                    {
+                        Console.WriteLine($"[edit-game] opening \"{Safe(() => g.Title)}\" page={HostBoot.AutoEditPage ?? "(default)"}");
+                        BeginInvoke((Action)(() => EditGameWindow.Open(new[] { g }, Array.Empty<IGame>(), false, this, HostBoot.AutoEditPage)));
+                    }
+                    else Console.WriteLine($"[edit-game] game not found: \"{HostBoot.AutoEditGame}\"");
                 }
-                catch (Exception ex) { Console.WriteLine("[edit-gamesaves] " + ex.Message); }
+                catch (Exception ex) { Console.WriteLine("[edit-game] " + ex.Message); }
+            }
+            else if (HostBoot.AutoOptions != null)
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    try
+                    {
+                        using var w = BuildOptionsWindow();
+                        if (HostBoot.AutoOptions.Length > 0 && !w.SelectSection(HostBoot.AutoOptions))
+                            Console.WriteLine($"[options] section not found: \"{HostBoot.AutoOptions}\"");
+                        w.ShowDialog(this);
+                        (_dm as HostDataManagerXml)?.FlushLbSettingsIfSafe();
+                    }
+                    catch (Exception ex) { Console.WriteLine("[options] " + ex.Message); }
+                }));
             }
             // RA native-fallback rolling refresh (opt-in) — after the window is up, on idle so it never
             // delays the first paint. Gated internally (checkbox + ExtendDB-not-handling-RA + creds set).
@@ -3888,6 +3905,18 @@ internal sealed class MainWindow : Form, IMessageFilter
         catch (Exception ex) { MessageBox.Show(this, ex.ToString(), "Plugin error", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
     private static T Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }
+
+    /// <summary>Game lookup for the CLI drivers: id exact → title exact → first title containing the
+    /// key (all case-insensitive).</summary>
+    private static IGame FindGameForCli(string key)
+    {
+        var all = PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>();
+        var byId = all.FirstOrDefault(x => string.Equals(Safe(() => x.Id), key, StringComparison.OrdinalIgnoreCase));
+        if (byId != null) return byId;
+        var exact = all.FirstOrDefault(x => string.Equals(Safe(() => x.Title), key, StringComparison.OrdinalIgnoreCase));
+        if (exact != null) return exact;
+        return all.FirstOrDefault(x => (Safe(() => x.Title) ?? "").IndexOf(key, StringComparison.OrdinalIgnoreCase) >= 0);
+    }
 
     // Metadata card under the media: a rounded box holding the title and the platform
     // (icon + name + a rotating chevron, like the source tree). Clicking it expands the

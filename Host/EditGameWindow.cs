@@ -185,7 +185,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         var cancel = FooterBtn("Cancel", Color.FromArgb(70, 70, 82));
         ok.Location = new Point(S(12), S(9));
         cancel.Location = new Point(S(112), S(9));
-        ok.Click += (_, _) => { SaveCurrent(); SaveCustomFields(); DialogResult = DialogResult.OK; Close(); };
+        ok.Click += (_, _) => { SaveCurrent(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); DialogResult = DialogResult.OK; Close(); };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
 
         var hint = new Label
@@ -303,6 +303,8 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "GameSaves" => IsMulti ? Placeholder("Game Saves") : BuildGameSavesPage(),
                 "AdditionalVersions" => IsMulti ? Placeholder("Additional Versions") : BuildAdditionalVersionsPage(),
                 "AdditionalApps" => IsMulti ? Placeholder("Additional Apps") : BuildAdditionalAppsPage(),
+                "AlternateNames" => IsMulti ? Placeholder("Alternate Names") : BuildAlternateNamesPage(),
+                "ControllerSupport" => IsMulti ? Placeholder("Controller Support") : BuildControllerSupportPage(),
                 _ => Placeholder(_tree.SelectedNode?.Text ?? key),
             };
             _pages[key] = page;
@@ -981,13 +983,14 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         if (IsMulti || _visible.Count == 0) return;
         int ni = _index + delta;
         if (ni < 0 || ni >= _visible.Count) return;
-        SaveCurrent(); SaveCustomFields();
+        SaveCurrent(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport();
         _index = ni;
         _editGames = new[] { _visible[_index] };
         LoadMetadata();
         if (_cfGrid != null) LoadCustomFields();
-        ReloadGameSavesIfBuilt();   // Game Saves page is per-game — rescan for the new game
-        ReloadAddAppsIfBuilt();     // Additional Versions / Apps pages too
+        ReloadGameSavesIfBuilt();          // Game Saves page is per-game — rescan for the new game
+        ReloadAddAppsIfBuilt();            // Additional Versions / Apps pages too
+        ReloadNamesControllersIfBuilt();   // Alternate Names / Controller Support too
         UpdateChrome();
     }
 

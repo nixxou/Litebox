@@ -219,6 +219,24 @@ internal static class EmuInstall
         finally { if (shim != null) { try { RootDmProp!.SetValue(null, prev); } catch { } } }
     }
 
+    /// <summary>Run a plugin call with the core shimmed (LocalDb configured + a bare Root.DataManager injected
+    /// for the duration). Used for save-management (GetSaves/AddSaveFile/…): RetroArch null-checks
+    /// Root.DataManager so it works raw, but PCSX2/Dolphin read it unchecked and would NRE (silently, inside
+    /// SaveManager's try/catch → missing saves). An empty shim satisfies the null-check path; Root.DataManager
+    /// is restored right after.</summary>
+    public static T WithCoreShim<T>(Func<T> action)
+    {
+        EnsureLocalDbConfigured(_ => { });
+        object? prev = null, shim = null;
+        if (CanShim)
+        {
+            try { shim = TDataManager!.GetConstructor(new[] { typeof(bool), typeof(bool) })!.Invoke(new object[] { true, false }); } catch { }
+            if (shim != null) { try { prev = RootDmProp!.GetValue(null); } catch { } try { RootDmProp!.SetValue(null, shim); } catch { } }
+        }
+        try { return action(); }
+        finally { if (shim != null) { try { RootDmProp!.SetValue(null, prev); } catch { } } }
+    }
+
     // ── populate the bare shim with light mirrors ──
     private static void PopulateShim(object shim, IDataManager dm,
         List<(IGame, IGame)> gamePairs, List<(IAdditionalApplication, IAdditionalApplication)> appPairs, Action<string> log)

@@ -337,6 +337,11 @@ internal static class SaveManager
             var absEmu = AbsEmu(cEmu);
             try
             {
+                // WithCoreShim désactivé : le save-mgmt résout jeux/émulateurs via PluginHelper.DataManager
+                // (= HostDataManagerXml, données réelles) et Root.Logging est null-gardé. Le seul accès à
+                // Root.DataManager d'un chemin save (RetroArch IsSaturnSaveContext, fallback null-gardé) donne
+                // le même résultat que le shim soit vide OU absent → aucun impact. Conservé en commentaire.
+                // var resp = EmuInstall.WithCoreShim(() => cPlugin.GetSaves(new GetSavesArgs { Emulator = absEmu, Games = new[] { game }, AdditionalApplications = apps }));
                 var resp = cPlugin.GetSaves(new GetSavesArgs { Emulator = absEmu, Games = new[] { game }, AdditionalApplications = apps });
                 int raw = resp?.FoundSaves?.Count ?? -1;
                 int kept = 0;
@@ -630,6 +635,9 @@ internal static class SaveManager
         try
         {
             try { if (Directory.Exists(LbRoot)) Environment.CurrentDirectory = LbRoot; } catch { }
+            // WithCoreShim désactivé — voir la note sur GetSaves : AddSaveFile ne touche pas Root.DataManager
+            // (Dolphin/PCSX2 install-only ; RetroArch AddSaveFile → IsSaturnSaveContext null-gardé). Aucun impact.
+            // return EmuInstall.WithCoreShim(() => plugin.AddSaveFile(args));
             return plugin.AddSaveFile(args);
         }
         finally { try { if (prev != null) Environment.CurrentDirectory = prev; } catch { } }

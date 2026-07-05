@@ -2679,7 +2679,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             hdm.FlushIfSafe();   // persist Installed / ApplicationPath now (no-op if LaunchBox is running)
             if (_heroGame != null && StoreSupport.KindOf(_heroGame) != StoreKind.None)
             {
-                _launchButtons?.ShowFor(_heroGame, SafeEmulatorsForPlatform(S(_heroGame.Platform)), SafeAddApps(_heroGame));
+                _launchButtons?.ShowFor(_heroGame, SafeEmulatorsForPlatform(S(_heroGame.Platform), _heroGame), SafeAddApps(_heroGame));
                 StoreTrace.Log($"activated: rebuilt button for '{S(_heroGame.Title)}' installed={Safe(() => _heroGame.Installed) == true}");
             }
         }
@@ -2716,7 +2716,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             hdm.FlushIfSafe();
             if (_heroGame != null && StoreSupport.KindOf(_heroGame) != StoreKind.None)
             {
-                _launchButtons?.ShowFor(_heroGame, SafeEmulatorsForPlatform(S(_heroGame.Platform)), SafeAddApps(_heroGame));
+                _launchButtons?.ShowFor(_heroGame, SafeEmulatorsForPlatform(S(_heroGame.Platform), _heroGame), SafeAddApps(_heroGame));
                 StoreTrace.Log($"poll tick: REBUILT button for '{S(_heroGame.Title)}' installed={Safe(() => _heroGame.Installed) == true}");
             }
         }
@@ -2819,7 +2819,7 @@ internal sealed class MainWindow : Form, IMessageFilter
 
         // Launch buttons (Play / Version / ROM) — reuses the same SDK enumeration
         // as the right-click menu; the ROM tier lights up only when ExtendDB is loaded.
-        _launchButtons?.ShowFor(g, SafeEmulatorsForPlatform(S(g.Platform)), SafeAddApps(g));
+        _launchButtons?.ShowFor(g, SafeEmulatorsForPlatform(S(g.Platform), g), SafeAddApps(g));
         SetStorePoll(StoreSupport.KindOf(g) != StoreKind.None);   // poll only for GOG/Steam games
 
         // Diagnostic: why is this game visible under parental control?
@@ -3692,7 +3692,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             play.Click += (_, _) => LaunchSelected();
             menu.Items.Add(play);
 
-            var emus = SafeEmulatorsForPlatform(S(g.Platform));
+            var emus = SafeEmulatorsForPlatform(S(g.Platform), g);
             if (emus.Count > 0)
             {
                 var pw = new ToolStripMenuItem("Play With");
@@ -3826,17 +3826,38 @@ internal sealed class MainWindow : Form, IMessageFilter
         catch { return new List<IPlaylist>(); }
     }
 
-    private List<IEmulator> SafeEmulatorsForPlatform(string platform)
+    private List<IEmulator> SafeEmulatorsForPlatform(string platform, IGame game = null)
     {
         try
         {
-            var all = _dm.GetAllEmulators() ?? Array.Empty<IEmulator>();
+            // LB's hidden zero-GUID "unassigned" placeholder lives in Emulators.xml but is never
+            // shown by LB — filter it everywhere (same as ManageEmulatorsWindow / the Edit combos).
+            var all = (_dm.GetAllEmulators() ?? Array.Empty<IEmulator>()).Where(e =>
+            {
+                try { var id = e?.Id; return !string.IsNullOrEmpty(id) && id != Guid.Empty.ToString(); }
+                catch { return false; }
+            }).ToList();
             var match = all.Where(e =>
             {
                 try { return e.GetAllEmulatorPlatforms()?.Any(ep => string.Equals(ep.Platform, platform, StringComparison.OrdinalIgnoreCase)) == true; }
                 catch { return false; }
             }).ToList();
-            return match.Count > 0 ? match : all.ToList(); // fall back to all emulators
+            if (match.Count > 0) return match;
+            // No emulator configured for the platform: don't dump the whole catalog into the picker.
+            // Keep only the emulator(s) the game / its versions actually reference (data-mismatch
+            // protection — the Play default must stay resolvable); a pure exe game gets an empty
+            // list and the launch buttons show plain "Launch <exe>" with no caret.
+            var wanted = new HashSet<string>(StringComparer.Ordinal);
+            var gid = Safe(() => game?.EmulatorId);
+            if (!string.IsNullOrEmpty(gid)) wanted.Add(gid);
+            if (game != null)
+                foreach (var a in SafeAddApps(game))
+                {
+                    var vid = Safe(() => a.UseEmulator ? a.EmulatorId : null);
+                    if (!string.IsNullOrEmpty(vid)) wanted.Add(vid);
+                }
+            return wanted.Count == 0 ? new List<IEmulator>()
+                                     : all.Where(e => wanted.Contains(Safe(() => e.Id) ?? "")).ToList();
         }
         catch { return new List<IEmulator>(); }
     }

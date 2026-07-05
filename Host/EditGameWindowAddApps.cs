@@ -493,10 +493,14 @@ internal sealed partial class EditGameWindow
         });
 
         // ── Game Saves tab (existing versions only — a new one has no ROM to scan yet) ──
+        // Full parity with the game's Game Saves page: the SAME SavesPane control (cards, status
+        // dots, action menus, Backup History, Import buttons), scoped to THIS version's ROM.
         if (app != null)
         {
             var saves = NewTabPage(tabs, "Game Saves");
-            BuildVersionSavesTab(saves, f, g, app);
+            var pane = new SavesPane(this);
+            saves.Controls.Add(pane);
+            pane.Rescan(g, app);   // scan fires when the tab first shows (handle-created deferral)
         }
 
         return RunAddAppDialog(f, app, () =>
@@ -614,124 +618,4 @@ internal sealed partial class EditGameWindow
         return p;
     }
 
-    // ── Per-version Game Saves tab ────────────────────────────────────────
-    // A compact view of the saves attributed to THIS version's ROM (SaveManager.ScanApp): name,
-    // Active pill, path, size / backups / modified + an Open Folder shortcut per card. Full save
-    // management (backup / restore / combine / …) stays on the game's Game Saves page.
-    private void BuildVersionSavesTab(TabPage page, Form f, IGame game, IAdditionalApplication app)
-    {
-        var host = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(10)) };
-        page.Controls.Add(host);
-        var msg = new Label
-        {
-            Dock = DockStyle.Top, Height = S(40), Text = "Scanning saves…", ForeColor = SubFg, BackColor = Bg,
-            Font = new Font("Segoe UI", 10f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft,
-        };
-        host.Controls.Add(msg);
-
-        f.Shown += (_, _) => Task.Run(() =>
-        {
-            SaveScan scan;
-            try { scan = SaveManager.ScanApp(game, app); }
-            catch (Exception ex) { scan = new SaveScan { Error = "Save scan failed: " + ex.Message }; }
-            try
-            {
-                if (f.IsHandleCreated && !f.IsDisposed)
-                    f.BeginInvoke(new Action(() => RenderVersionSaves(host, scan)));
-            }
-            catch { }
-        });
-    }
-
-    private void RenderVersionSaves(Panel host, SaveScan scan)
-    {
-        host.SuspendLayout();
-        host.Controls.Clear();
-        var groups = scan.Files.Concat(scan.States).ToList();
-        if (scan.Error != null || groups.Count == 0)
-        {
-            host.Controls.Add(new Label
-            {
-                Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = SubFg, BackColor = Bg,
-                Font = new Font("Segoe UI", 10f, FontStyle.Italic),
-                Text = scan.Error ?? "No saves found for this version.",
-            });
-            host.ResumeLayout();
-            return;
-        }
-
-        int y = S(4), w = host.ClientSize.Width - S(30);
-        foreach (var g in groups)
-        {
-            var card = new Panel
-            {
-                Location = new Point(S(4), y), Size = new Size(w, S(66)), BackColor = PanelC,
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-            };
-            string title = g.GroupName + (g.IsState ? (g.Slot.HasValue ? $"  (state, slot {g.Slot})" : "  (state)") : "");
-            card.Controls.Add(new Label
-            {
-                Text = title, AutoSize = true, Location = new Point(S(10), S(6)),
-                ForeColor = Fg, BackColor = PanelC, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-            });
-            if (g.Active != null)
-                card.Controls.Add(new Label
-                {
-                    Text = g.ActiveLive ? "★ Active" : "Inactive", AutoSize = true,
-                    Location = new Point(S(10) + TextRenderer.MeasureText(title, new Font("Segoe UI", 9.5f, FontStyle.Bold)).Width + S(10), S(7)),
-                    ForeColor = g.ActiveLive ? Color.FromArgb(120, 200, 130) : SubFg, BackColor = PanelC,
-                });
-            string meta = $"{(g.SizeBytes is long sz ? FmtBytes(sz) : "—")}   ·   {g.Backups.Count} backup{(g.Backups.Count == 1 ? "" : "s")}"
-                        + (g.LastModified is DateTime lm ? $"   ·   {lm:g}" : "");
-            card.Controls.Add(new Label
-            {
-                Text = DisplayPathShort(g.ActivePath), AutoSize = true, Location = new Point(S(10), S(26)),
-                ForeColor = SubFg, BackColor = PanelC, Font = new Font("Segoe UI", 8.5f),
-            });
-            card.Controls.Add(new Label
-            {
-                Text = meta, AutoSize = true, Location = new Point(S(10), S(44)),
-                ForeColor = SubFg, BackColor = PanelC, Font = new Font("Segoe UI", 8.5f),
-            });
-            var open = DlgBtn("Open Folder", Color.FromArgb(60, 60, 72));
-            open.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            open.Location = new Point(w - S(110), S(18));
-            string p = g.ActivePath;
-            open.Click += (_, _) =>
-            {
-                try
-                {
-                    string dir = Directory.Exists(p) ? p : Path.GetDirectoryName(p) ?? "";
-                    if (dir.Length > 0 && Directory.Exists(dir))
-                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
-                }
-                catch { }
-            };
-            card.Controls.Add(open);
-            host.Controls.Add(card);
-            y += S(72);
-        }
-        host.Controls.Add(new Label
-        {
-            Text = "Backups, restores and other actions live on the game's Game Saves page.",
-            AutoSize = true, Location = new Point(S(6), y + S(6)), ForeColor = SubFg, BackColor = Bg,
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-        });
-        host.ResumeLayout();
-    }
-
-    private static string FmtBytes(long b)
-        => b >= 1 << 20 ? $"{b / 1048576.0:0.#} MB" : b >= 1 << 10 ? $"{b / 1024.0:0.#} KB" : $"{b} B";
-
-    private static string DisplayPathShort(string abs)
-    {
-        try
-        {
-            string root = SaveManager.LbRoot.TrimEnd('\\');
-            if (root.Length > 0 && abs.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase))
-                return abs.Substring(root.Length + 1);
-        }
-        catch { }
-        return abs;
-    }
 }

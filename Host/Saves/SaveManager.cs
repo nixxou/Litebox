@@ -628,11 +628,17 @@ internal static class SaveManager
     }
 
     /// <summary>Imports an external save/state file as the active save (LB's Import buttons).</summary>
-    public static string? Import(IGame game, EmulatorPlugin plugin, string filePath, bool asState, int? slot, Func<bool> confirmOverwrite)
+    public static string? Import(IGame game, EmulatorPlugin plugin, string filePath, bool asState, int? slot, Func<bool> confirmOverwrite,
+        IAdditionalApplication? focus = null)
     {
+        // With a focused VERSION, stamp its id: the plugins resolve the TARGET save name from the
+        // additional app's ApplicationPath when AdditionalApplicationId is set (verified in the
+        // RetroArch integration), so the import lands on the version's ROM, not the base game's.
+        string? appId = focus != null ? SafeStr(() => focus.Id) : null;
+        if (string.IsNullOrEmpty(appId)) appId = null;
         GameSaveBase save = asState
-            ? new GameSaveState { GameId = SafeStr(() => game.Id), FileLocation = filePath, Slot = slot }
-            : new GameSaveGame { GameId = SafeStr(() => game.Id), FileLocation = filePath };
+            ? new GameSaveState { GameId = SafeStr(() => game.Id), AdditionalApplicationId = appId, FileLocation = filePath, Slot = slot }
+            : new GameSaveGame { GameId = SafeStr(() => game.Id), AdditionalApplicationId = appId, FileLocation = filePath };
         try
         {
             var resp = AddSaveFileCwdSafe(plugin, new AddSaveArgs { SaveToAdd = save, ShouldOverwriteFunc = confirmOverwrite });

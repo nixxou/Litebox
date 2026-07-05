@@ -91,7 +91,9 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
     private ComboBox _rating = null!, _releaseType = null!, _genre = null!, _platform = null!, _developer = null!,
                      _publisher = null!, _series = null!, _region = null!, _playMode = null!, _status = null!,
                      _source = null!, _progress = null!;
-    private NumericUpDown _maxPlayers = null!;
+    // NumericUpDown (single-game) OR a numeric TextBox (multi-select — a spinner can't show the
+    // "‹multiple values›" placeholder, a text box can). See MaxPlayersText / LoadMetadata / SaveCurrent.
+    private Control _maxPlayers = null!;
     private CheckBox _favorite = null!, _portable = null!, _installed = null!, _hide = null!, _broken = null!;
     private Label _dateAdded = null!, _dateModified = null!, _playCount = null!;
     private StarBar _starBar = null!;
@@ -607,7 +609,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
 
         // Release Type | Max Players
         Cap("Release Type", Lx, y, Lw, p); _releaseType = Cbo("", "ReleaseType", LFx, y, FW, p);
-        Cap("Max Players", Rx, y, Rw, p); _maxPlayers = Num(0, 0, 64, RFx, y, 80, p);
+        Cap("Max Players", Rx, y, Rw, p); _maxPlayers = IsMulti ? MaxPlayersText(RFx, y, 80, p) : Num(0, 0, 64, RFx, y, 80, p);
         y += RowH;
 
         // Genre | Platform
@@ -830,7 +832,10 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             SetCombo(_source, MergeStr(g => g.Source));
             SetCombo(_progress, MergeStr(g => g.Progress));
 
-            _maxPlayers.Value = Clamp(MergeVal(g => g.MaxPlayers ?? 0) ?? 0, 0, 64);
+            if (_maxPlayers is NumericUpDown mpNum)
+                mpNum.Value = Clamp(MergeVal(g => g.MaxPlayers ?? 0) ?? 0, 0, 64);
+            else if (_maxPlayers is TextBox mpTxt)
+                SetText(mpTxt, MergeStr(g => { int v = g.MaxPlayers ?? 0; return v > 0 ? v.ToString(CultureInfo.InvariantCulture) : ""; }));
             _starBar.SetFrom(MergeVal(g => (double)g.StarRatingFloat) ?? 0, MergeVal(g => (double)g.CommunityStarRating) ?? 0);
 
             SetCheck(_favorite, MergeVal(g => g.Favorite));
@@ -923,7 +928,12 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             if (!IsMulti && Writable(_sortTitle)) W(() => g.SortTitle = _sortTitle.Text.Trim());
             if (Writable(_releaseDate)) W(() => g.ReleaseDate = ParseDate(_releaseDate.Text));
             if (Writable(_lastPlayed)) W(() => g.LastPlayedDate = ParseDate(_lastPlayed.Text));
-            if (Writable(_maxPlayers)) { int v = (int)_maxPlayers.Value; int? mp = v <= 0 ? (int?)null : v; W(() => g.MaxPlayers = mp); }
+            if (Writable(_maxPlayers))
+            {
+                int v = _maxPlayers is NumericUpDown mpNum ? (int)mpNum.Value
+                      : int.TryParse(((TextBox)_maxPlayers).Text.Trim(), out var pv) ? pv : 0;
+                int? mp = v <= 0 ? (int?)null : v; W(() => g.MaxPlayers = mp);
+            }
             if (Writable(_starBar)) W(() => g.StarRatingFloat = (float)_starBar.UserValue);
             if (Writable(_favorite) && _favorite.CheckState != CheckState.Indeterminate) W(() => g.Favorite = _favorite.Checked);
             if (Writable(_portable) && _portable.CheckState != CheckState.Indeterminate) W(() => g.Portable = _portable.Checked);
@@ -1085,6 +1095,28 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         var n = new NumericUpDown { Location = new Point(x, y), Width = w, Minimum = min, Maximum = max, Value = Clamp(v, min, max), BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
         n.ValueChanged += (_, _) => OnField(n);
         p.Controls.Add(n); Track(n, p); return n;
+    }
+
+    // Multi-select Max Players: a NumericUpDown can't display the "‹multiple values›" placeholder, so with
+    // several games selected we use a text box. It accepts ONLY digits (clamped to 0-64); otherwise it keeps
+    // the placeholder, which — like every multi-value field — is never written back.
+    private TextBox MaxPlayersText(int x, int y, int w, Panel p)
+    {
+        var t = new TextBox { Location = new Point(x, y), Width = w, BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        t.KeyPress += (_, e) => { if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar)) e.Handled = true; };
+        t.Enter += (_, _) => { if (t.Text == Multi) t.SelectAll(); };   // so the first digit typed replaces the placeholder
+        t.TextChanged += (_, _) =>
+        {
+            if (!_loading && !_restoring && t.Text != Multi)             // sanitize typed/pasted input to a 0-64 number
+            {
+                var digits = new string(t.Text.Where(char.IsDigit).ToArray());
+                if (digits.Length > 2) digits = digits.Substring(0, 2);
+                if (int.TryParse(digits, out var n) && n > 64) digits = "64";
+                if (digits != t.Text) { int pos = t.SelectionStart; t.Text = digits; t.SelectionStart = Math.Min(pos, t.Text.Length); }
+            }
+            OnField(t);
+        };
+        p.Controls.Add(t); Track(t, p); return t;
     }
 
     private CheckBox ChkBox(string text, int x, int y)

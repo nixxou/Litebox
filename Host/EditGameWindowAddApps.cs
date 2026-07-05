@@ -207,18 +207,25 @@ internal sealed partial class EditGameWindow
     }
 
     // ── Make Default ─────────────────────────────────────────────────────
-    // Swap the launch identity (path / command line / emulator / DOSBox) + the version identity
-    // (Version / Region) between the game and the selected version. Play statistics are NOT
-    // swapped — the game's totals stay the game's, each version keeps its own history. The demoted
-    // version gets a regenerated name (LB regenerates a localized one; LiteBox's UI is English).
+    // LB's data model keeps a version ROW for EVERY version, INCLUDING the current default (a "twin"
+    // row whose ApplicationPath equals the game's — the user's imported libraries all carry one). So
+    // Make Default must NOT swap/overwrite the selected row (that made it vanish into a duplicate of
+    // the old default). Instead:
+    //   1. the selected version's launch identity (ROM, command line, emulator, DOSBox) + version
+    //      identity (Version, Region) are COPIED to the game — its row stays untouched (it simply
+    //      becomes the new default's twin);
+    //   2. the OLD default stays reachable: if no other row already points at the game's previous
+    //      ROM (no twin existed), a new version row is created carrying the old launch identity.
+    // Play statistics are never moved — the game's totals stay the game's, each row keeps its own.
     private void MakeDefaultVersion(IAdditionalApplication a)
     {
         if (_readOnly) return;
         var g = AppsGame;
         string aName = Safe(() => a.Name) ?? "";
         if (MessageBox.Show(this,
-                $"Make \"{aName}\" the default version?\n\nThe game's launch target (ROM file, command line, emulator, "
-                + "DOSBox flag) and its Version/Region swap with this version's.",
+                $"Make \"{aName}\" the default version?\n\nThe game will launch this version (its ROM file, command line, "
+                + "emulator, DOSBox flag and Version/Region are copied to the game). The previous default stays available "
+                + "in the versions list.",
                 "Make Default", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
 
         SaveCurrent();   // persist any pending metadata-page edits BEFORE the reload below discards them
@@ -230,21 +237,37 @@ internal sealed partial class EditGameWindow
             bool gDos = false; try { gDos = g.UseDosBox; } catch { }
             bool gHasEmu = gEmu.Length > 0 && gEmu != Guid.Empty.ToString();
 
+            // 1. Keep the old default reachable — create a row for it only when no twin already exists.
+            IAdditionalApplication[] apps;
+            try { apps = g.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>(); }
+            catch { apps = Array.Empty<IAdditionalApplication>(); }
+            bool twinExists = apps.Any(x => x != null && !ReferenceEquals(x, a)
+                                            && !string.Equals(Safe(() => x.Id), Safe(() => a.Id), StringComparison.OrdinalIgnoreCase)
+                                            && AppPathEq(Safe(() => x.ApplicationPath) ?? "", gPath));
+            if (!twinExists && gPath.Length > 0)
+            {
+                var d = g.AddNewAdditionalApplication();
+                if (d != null)
+                {
+                    d.Name = gVer.Length > 0 ? $"Play {gVer} version…" : "Play previous version…";
+                    d.ApplicationPath = gPath;
+                    d.CommandLine = gCmd;
+                    d.EmulatorId = gHasEmu ? gEmu : "";
+                    d.UseEmulator = gHasEmu;
+                    d.UseDosBox = gDos;
+                    d.Version = gVer;
+                    d.Region = gReg;
+                    d.Priority = NextPriority(g);
+                }
+            }
+
+            // 2. The selected version becomes the game's launch target; its row is left untouched.
             g.ApplicationPath = Safe(() => a.ApplicationPath) ?? "";
             g.CommandLine = Safe(() => a.CommandLine) ?? "";
             g.EmulatorId = (Safe(() => a.UseEmulator ? a.EmulatorId : "") ?? "");
             try { g.UseDosBox = a.UseDosBox; } catch { }
             g.Version = Safe(() => a.Version) ?? "";
             g.Region = Safe(() => a.Region) ?? "";
-
-            a.ApplicationPath = gPath;
-            a.CommandLine = gCmd;
-            a.EmulatorId = gHasEmu ? gEmu : "";
-            a.UseEmulator = gHasEmu;
-            a.UseDosBox = gDos;
-            a.Version = gVer;
-            a.Region = gReg;
-            a.Name = gVer.Length > 0 ? $"Play {gVer} version…" : "Play previous version…";
         }
         catch (Exception ex) { Console.WriteLine("[addapps] make-default failed: " + ex.Message); }
 
@@ -252,6 +275,10 @@ internal sealed partial class EditGameWindow
         LoadMetadata();            // the game's own fields changed → refresh page + baselines
         ReloadGameSavesIfBuilt();  // the game's ApplicationPath changed → base-view saves change too
     }
+
+    /// <summary>Path equality for twin detection: separators normalized, case-insensitive.</summary>
+    private static bool AppPathEq(string x, string y)
+        => string.Equals(x.Replace('/', '\\').Trim(), y.Replace('/', '\\').Trim(), StringComparison.OrdinalIgnoreCase);
 
     // ── Shared dialog helpers ────────────────────────────────────────────
 

@@ -98,11 +98,28 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
     private Label _dateAdded = null!, _dateModified = null!, _playCount = null!;
     private StarBar _starBar = null!;
 
-    public static void Open(IReadOnlyList<IGame> games, IReadOnlyList<IGame> visible, bool readOnly, IWin32Window? owner)
+    public static void Open(IReadOnlyList<IGame> games, IReadOnlyList<IGame> visible, bool readOnly, IWin32Window? owner,
+        string? initialPage = null)
     {
         if (games == null || games.Count == 0) return;
         using var w = new EditGameWindow(games, visible, readOnly);
+        if (initialPage != null)
+        {
+            var node = FindNodeByTag(w._tree.Nodes, initialPage);
+            if (node != null) w._tree.SelectedNode = node;   // AfterSelect → ShowPage
+        }
         w.ShowDialog(owner);
+    }
+
+    private static TreeNode? FindNodeByTag(TreeNodeCollection nodes, string tag)
+    {
+        foreach (TreeNode n in nodes)
+        {
+            if (Equals(n.Tag as string, tag)) return n;
+            var c = FindNodeByTag(n.Nodes, tag);
+            if (c != null) return c;
+        }
+        return null;
     }
 
     private EditGameWindow(IReadOnlyList<IGame> games, IReadOnlyList<IGame> visible, bool readOnly)

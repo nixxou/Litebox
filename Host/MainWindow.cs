@@ -515,6 +515,19 @@ internal sealed class MainWindow : Form, IMessageFilter
         Shown += (_, _) =>
         {
             ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); RelayoutDetail();
+            // Diagnostics: --edit-gamesaves "<title>" → auto-open Edit Game on its Game Saves page.
+            if (!string.IsNullOrEmpty(HostBoot.AutoEditGameSaves))
+            {
+                string t = HostBoot.AutoEditGameSaves;
+                try
+                {
+                    var g = PluginHelper.DataManager?.GetAllGames()
+                        ?.FirstOrDefault(x => string.Equals(Safe(() => x.Title), t, StringComparison.OrdinalIgnoreCase));
+                    if (g != null) BeginInvoke((Action)(() => EditGameWindow.Open(new[] { g }, Array.Empty<IGame>(), false, this, "GameSaves")));
+                    else Console.WriteLine($"[edit-gamesaves] game not found: \"{t}\"");
+                }
+                catch (Exception ex) { Console.WriteLine("[edit-gamesaves] " + ex.Message); }
+            }
             // RA native-fallback rolling refresh (opt-in) — after the window is up, on idle so it never
             // delays the first paint. Gated internally (checkbox + ExtendDB-not-handling-RA + creds set).
             try

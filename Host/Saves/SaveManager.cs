@@ -291,16 +291,23 @@ internal static class SaveManager
         return string.Equals(abs, cur, StringComparison.Ordinal) ? emu : new AbsPathEmulator(emu, abs);
     }
 
-    // ── Scan (BASE game view) ─────────────────────────────────────────────
+    // ── Scan (BASE game view / one-version view) ──────────────────────────
     // LB semantics: GetSaves is called with the game + ALL its additional apps; the plugin attributes
     // each save to an app (pass 1) or to the game (pass 2, skipped when a twin app shares the game's
     // ApplicationPath). The BASE page shows the saves of the game's own ApplicationPath — i.e. entries
-    // with no app, or attributed to the twin app.
+    // with no app, or attributed to the twin app. The VERSION view (Edit Additional Version → Game
+    // Saves) is the same scan focused on ONE additional app's path instead of the game's.
 
-    public static SaveScan ScanBase(IGame game)
+    public static SaveScan ScanBase(IGame game) => Scan(game, null);
+
+    /// <summary>Saves attributed to one additional VERSION (its ApplicationPath) — the per-version
+    /// "Game Saves" tab of the Edit Additional Version dialog.</summary>
+    public static SaveScan ScanApp(IGame game, IAdditionalApplication focus) => Scan(game, focus);
+
+    private static SaveScan Scan(IGame game, IAdditionalApplication? focus)
     {
         var scan = new SaveScan();
-        Diag($"=== ScanBase \"{SafeStr(() => game.Title)}\" ===  CWD={Try(() => Environment.CurrentDirectory)}  LbRoot={LbRoot}  MediaLbRoot={Try(() => MediaResolver.LbRoot ?? "<null>")}");
+        Diag($"=== Scan{(focus == null ? "Base" : "App \"" + SafeStr(() => focus.Name) + "\"")} \"{SafeStr(() => game.Title)}\" ===  CWD={Try(() => Environment.CurrentDirectory)}  LbRoot={LbRoot}  MediaLbRoot={Try(() => MediaResolver.LbRoot ?? "<null>")}");
         scan.Candidates = Candidates();
         Diag($"candidates={scan.Candidates.Count}: {string.Join(", ", scan.Candidates.Select(c => Try(() => c.emu.Title) + "→" + c.plugin.GetType().Name))}");
         if (scan.Candidates.Count == 0)
@@ -318,15 +325,25 @@ internal static class SaveManager
         try { scan.GameEmulatorTitle = PluginHelper.DataManager?.GetEmulatorById(gameEmuId)?.Title ?? ""; } catch { }
 
         string gameAppPath = SafeStr(() => game.ApplicationPath);
-        if (gameAppPath.Length == 0) { scan.Error = "This game has no application path — nothing to scan saves for."; return scan; }
+        // The path this scan is ABOUT: the game's own (base view) or the focused version's.
+        string focusPath = focus == null ? gameAppPath : SafeStr(() => focus.ApplicationPath);
+        if (focusPath.Length == 0)
+        { scan.Error = focus == null ? "This game has no application path — nothing to scan saves for." : "This version has no ROM file — nothing to scan saves for."; return scan; }
 
         IAdditionalApplication[] apps;
         try { apps = game.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>(); }
         catch { apps = Array.Empty<IAdditionalApplication>(); }
+        // "Twins" = the apps sharing the focused path (the plugin attributes their saves to the APP,
+        // pass 1 wins). In base view the twins are the apps duplicating the game's own path.
         var twinAppIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var a in apps)
-            if (PathEq(SafeStr(() => a.ApplicationPath), gameAppPath)) { var id = SafeStr(() => a.Id); if (id.Length > 0) twinAppIds.Add(id); }
-        bool InBaseView(string? appId) => string.IsNullOrEmpty(appId) || twinAppIds.Contains(appId);
+            if (PathEq(SafeStr(() => a.ApplicationPath), focusPath)) { var id = SafeStr(() => a.Id); if (id.Length > 0) twinAppIds.Add(id); }
+        // Base view: game-attributed saves + twins. Version view: that version's twins, plus
+        // game-attributed saves only when the version shares the game's path.
+        bool InBaseView(string? appId) => focus == null
+            ? string.IsNullOrEmpty(appId) || twinAppIds.Contains(appId)
+            : (!string.IsNullOrEmpty(appId) && twinAppIds.Contains(appId))
+              || (string.IsNullOrEmpty(appId) && PathEq(focusPath, gameAppPath));
 
         // 1. Live scan through EVERY candidate plugin (LB parity). Each plugin self-filters, so a
         //    per-candidate failure only loses that emulator's results, never the whole page.

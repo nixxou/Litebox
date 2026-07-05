@@ -273,6 +273,11 @@ internal static class HostLaunch
         int gi = GameIndex(game);
         var sw = Stopwatch.StartNew();
         if (!DryRun && gi >= 0) { try { _store.JournalPlayStart(gi); } catch { } }
+        // Per-VERSION play tracking (LB parity): the launched additional app carries its own
+        // PlayCount / LastPlayed / PlayTime alongside the game's. Safe post-DropOptional: the
+        // add-app list is resident (not Tier-2), and the setters persist through the op-log.
+        if (!DryRun && app != null)
+            try { app.PlayCount += 1; app.LastPlayed = DateTime.Now; } catch { }
         // LiteBox's own last-launch history (emulator + version). Dual-written on EVERY launch — even
         // when ExtendDB is loaded — so the history survives disabling the plugin (ROM stays ExtendDB's).
         if (!DryRun) { try { _store.RecordLaunch(SafeStr(() => game.Id), SafeStr(() => emulator?.Id), SafeStr(() => app?.Id)); } catch { } }
@@ -345,6 +350,9 @@ internal static class HostLaunch
             var endSnap = LaunchedGame.Current;   // capture cosmetics before clearing (end screen needs them)
             LaunchedGame.Clear();
             if (!DryRun && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
+            // Per-version play time — same elapsed seconds as the game's (see JournalPlayStart above).
+            if (!DryRun && app != null)
+                try { int secs = (int)sw.Elapsed.TotalSeconds; if (secs > 0) app.PlayTime += secs; } catch { }
             Fire(p => p.OnGameExited());
             // End screen ("GAME OVER") — held for the min display time before the UI reloads.
             if (!DryRun) Gameplay.GameScreens.ShowEndBlocking(endSnap);

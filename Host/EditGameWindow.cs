@@ -225,6 +225,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         metadata.Nodes.Add(N("Notes", "Notes"));
         metadata.Nodes.Add(N("Custom Fields", "CustomFields"));
         if (!IsMulti) metadata.Nodes.Add(N("Sort Title", "SortTitle"));   // single-game only — hidden in multi
+        metadata.Nodes.Add(N("Additional Versions", "AdditionalVersions"));
         metadata.Nodes.Add(N("Additional Apps", "AdditionalApps"));
         metadata.Nodes.Add(N("Alternate Names", "AlternateNames"));
         metadata.Nodes.Add(N("Controller Support", "ControllerSupport"));
@@ -274,6 +275,8 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "Metadata" => BuildMetadataPage(),
                 "CustomFields" => BuildCustomFieldsPage(),
                 "GameSaves" => IsMulti ? Placeholder("Game Saves") : BuildGameSavesPage(),
+                "AdditionalVersions" => IsMulti ? Placeholder("Additional Versions") : BuildAdditionalVersionsPage(),
+                "AdditionalApps" => IsMulti ? Placeholder("Additional Apps") : BuildAdditionalAppsPage(),
                 _ => Placeholder(_tree.SelectedNode?.Text ?? key),
             };
             _pages[key] = page;
@@ -958,6 +961,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         LoadMetadata();
         if (_cfGrid != null) LoadCustomFields();
         ReloadGameSavesIfBuilt();   // Game Saves page is per-game — rescan for the new game
+        ReloadAddAppsIfBuilt();     // Additional Versions / Apps pages too
         UpdateChrome();
     }
 

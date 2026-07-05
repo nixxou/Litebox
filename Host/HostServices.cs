@@ -843,12 +843,31 @@ internal static class HostLaunch
         if (string.IsNullOrEmpty(cfg)) return null;
         bool useDos = SafeBool(() => game.UseDosBox);
         string extra = SafeStr(() => game.ConfigurationCommandLine);
+        // Working directory: there's no dedicated setting for the config tool, so — when a valid
+        // Root Folder exists AND the config exe lives in the SAME folder as the game's exe (a
+        // Setup.exe next to the game shares its launch context) — use the Root Folder, like a
+        // direct game launch would. A config tool living elsewhere (external utility) runs in its
+        // own folder (Spawn's default). DOSBox config launches are untouched.
+        string cfgWorkDir = null;
+        try
+        {
+            var rfd = RootFolderDir(game);
+            if (rfd != null)
+            {
+                string gameDir = SafeDir(ResolvePath(SafeStr(() => game.ApplicationPath)));
+                string cfgDir = SafeDir(ResolvePath(cfg));
+                if (!string.IsNullOrEmpty(gameDir) && !string.IsNullOrEmpty(cfgDir)
+                    && string.Equals(Path.GetFullPath(gameDir), Path.GetFullPath(cfgDir), StringComparison.OrdinalIgnoreCase))
+                    cfgWorkDir = rfd;
+            }
+        }
+        catch { }
         var t = new Thread(() =>
         {
             try
             {
                 if (useDos) Spawn(DosBoxExe(game), BuildDosBoxArgs(game, cfg, extra), "configure");
-                else Spawn(ResolvePath(cfg), extra?.Trim() ?? "", "configure");
+                else Spawn(ResolvePath(cfg), extra?.Trim() ?? "", "configure", workDir: cfgWorkDir);
             }
             catch (Exception ex) { Console.WriteLine("[configure] error: " + ex.Message); }
         })

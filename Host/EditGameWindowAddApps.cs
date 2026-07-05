@@ -164,20 +164,30 @@ internal sealed partial class EditGameWindow
         IAdditionalApplication[] apps;
         try { apps = AppsGame.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>(); }
         catch { apps = Array.Empty<IAdditionalApplication>(); }
-        FillAppList(_verList, apps.Where(a => a != null && IsLikelyVersion(a)).OrderBy(a => Safe(() => a.Priority)));
+        // The CURRENT DEFAULT (the row twinning the game's own ROM) sorts first and is tagged, so a
+        // Make Default is immediately readable; the rest keeps the Priority order.
+        string gPath = Safe(() => AppsGame.ApplicationPath) ?? "";
+        FillAppList(_verList,
+            apps.Where(a => a != null && IsLikelyVersion(a))
+                .OrderByDescending(a => AppPathEq(Safe(() => a.ApplicationPath) ?? "", gPath))
+                .ThenBy(a => Safe(() => a.Priority)),
+            defaultPath: gPath);
         FillAppList(_appList, apps.Where(a => a != null && !IsLikelyVersion(a)));
         UpdateAddAppButtons();
     }
 
-    private static void FillAppList(ListView? lv, IEnumerable<IAdditionalApplication> apps)
+    private static void FillAppList(ListView? lv, IEnumerable<IAdditionalApplication> apps, string defaultPath = "")
     {
         if (lv == null) return;
         lv.BeginUpdate();
         lv.Items.Clear();
         foreach (var a in apps)
         {
-            var it = new ListViewItem(Safe(() => a.Name) ?? "") { Tag = a };
-            it.SubItems.Add(Safe(() => a.ApplicationPath) ?? "");
+            string name = Safe(() => a.Name) ?? "", path = Safe(() => a.ApplicationPath) ?? "";
+            bool isDefault = defaultPath.Length > 0 && AppPathEq(path, defaultPath);
+            var it = new ListViewItem(isDefault ? "★ " + name : name) { Tag = a };
+            if (isDefault) it.ForeColor = Color.FromArgb(120, 220, 130);   // same green as the saves "Active" pill
+            it.SubItems.Add(path);
             lv.Items.Add(it);
         }
         lv.EndUpdate();

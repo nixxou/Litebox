@@ -185,7 +185,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         var cancel = FooterBtn("Cancel", Color.FromArgb(70, 70, 82));
         ok.Location = new Point(S(12), S(9));
         cancel.Location = new Point(S(112), S(9));
-        ok.Click += (_, _) => { SaveCurrent(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); DialogResult = DialogResult.OK; Close(); };
+        ok.Click += (_, _) => { SaveCurrent(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching(); DialogResult = DialogResult.OK; Close(); };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
 
         var hint = new Label
@@ -308,6 +308,12 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "AdditionalApps" => IsMulti ? Placeholder("Additional Apps") : BuildAdditionalAppsPage(),
                 "AlternateNames" => IsMulti ? Placeholder("Alternate Names") : BuildAlternateNamesPage(),
                 "ControllerSupport" => IsMulti ? BuildControllerSupportMultiPage() : BuildControllerSupportPage(),
+                "Launching" => IsMulti ? Placeholder("Launching") : BuildLaunchingPage(),
+                "DOSBox" => IsMulti ? Placeholder("DOSBox") : BuildDosBoxPage(),
+                "Mounts" => IsMulti ? Placeholder("Mounts") : BuildMountsPage(),
+                "Emulation" => IsMulti ? Placeholder("Emulation") : BuildEmulationPage(),
+                "RootFolder" => IsMulti ? Placeholder("Root Folder") : BuildRootFolderPage(),
+                "StartupPause" => IsMulti ? Placeholder("Startup/Pause") : BuildStartupPausePage(),
                 _ => Placeholder(_tree.SelectedNode?.Text ?? key),
             };
             _pages[key] = page;
@@ -1002,7 +1008,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         if (IsMulti || _visible.Count == 0) return;
         int ni = _index + delta;
         if (ni < 0 || ni >= _visible.Count) return;
-        SaveCurrent(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport();
+        SaveCurrent(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveLaunching();
         _index = ni;
         _editGames = new[] { _visible[_index] };
         LoadMetadata();
@@ -1010,6 +1016,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         ReloadGameSavesIfBuilt();          // Game Saves page is per-game — rescan for the new game
         ReloadAddAppsIfBuilt();            // Additional Versions / Apps pages too
         ReloadNamesControllersIfBuilt();   // Alternate Names / Controller Support too
+        ReloadLaunchingIfBuilt();          // the Launching branch too
         UpdateChrome();
     }
 

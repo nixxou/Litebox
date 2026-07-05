@@ -226,6 +226,25 @@ internal sealed class OpLog : IDisposable
         }
     }
 
+    /// <summary>Deletes the game's launch-history row — the reset-to-default button cancels the
+    /// entry so the next GetLastLaunch seeds pure defaults. NOT gated by ReadOnly (LiteBox state,
+    /// same as RecordLaunch). No-op when disabled or no row exists.</summary>
+    public void ClearLaunch(string gameId)
+    {
+        if (!Enabled || string.IsNullOrEmpty(gameId)) return;
+        lock (_lock)
+        {
+            try
+            {
+                using var cmd = _conn.CreateCommand();
+                cmd.CommandText = "DELETE FROM launch_history WHERE game_id=$g";
+                cmd.Parameters.AddWithValue("$g", gameId);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex) { Console.WriteLine("[oplog] launch clear failed: " + ex.Message); }
+        }
+    }
+
     /// <summary>The last (emulatorId, additionalAppId) recorded for a game, or null if none. Either
     /// field may be null (= default emulator / Base version).</summary>
     public (string emulatorId, string additionalAppId)? GetLastLaunch(string gameId)

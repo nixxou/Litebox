@@ -1,10 +1,16 @@
 // Launch-button group for the detail pane, modelled on ExtendDB's LaunchBox-Web theme.
 //
-//   ▶ Play with <emu>          [▾]     ← full width; the ▾ caret SELECTS an emulator (two-step:
-//   Version: <name>                       picking updates the label, Play launches). Default first.
-//   ROM: <entry>                        ← Version / ROM are shorter. ROM only when ExtendDB is loaded
+//   ▶ Play with <emu>          [▾] ┃↺┃  ← full width; the ▾ caret SELECTS an emulator (two-step:
+//   Version: <name>                ┃↺┃     picking updates the label, Play launches). Default first.
+//   ROM: <entry>                   ┃↺┃  ← Version / ROM are shorter. ROM only when ExtendDB is loaded
 //                                          AND the launch source is an archive AND the selected
 //                                          emulator extracts (autoExtract) — same gating as LB-Web.
+//
+// The ↺ column (muted red, caret-wide, spans every visible row) resets the selection to factory
+// defaults: Base version + default emulator (or direct launch) + no ROM pick, AND cancels the
+// game's launch-history entry on both sides (ExtendDB's launch-history.db + LiteBox's op-log copy)
+// plus the persisted pending ROM picks — so re-selecting the game shows the pure default state.
+// It only appears when something actually differs from those defaults.
 //
 // Two tiers:
 //   • WITHOUT ExtendDB — Play (+ emulator picker) and Version only, from the SDK (emulators for the
@@ -32,14 +38,18 @@ internal sealed class LaunchButtons : Panel
     // an at-a-glance cue that Play will use an override (user pick or last-launch history).
     private static readonly Color PlayAltCol = Color.FromArgb(82, 158, 98);
     private static readonly Color CaretCol= Color.FromArgb(40, 90, 55);
+    private static readonly Color ResetCol = Color.FromArgb(118, 52, 52);   // muted red (reset-to-default column)
     private static readonly Color InstallCol = Color.FromArgb(150, 134, 48); // muted mustard (store "Install")
     private static readonly Color SubCol  = Color.FromArgb(60, 60, 70);   // duller than Play (Version/ROM)
     private static readonly Color Fg      = Color.FromArgb(230, 230, 230);
 
-    private readonly Button _play, _caret, _version, _rom;
+    private readonly Button _play, _caret, _version, _rom, _reset;
+    private readonly Panel _resetHost;   // right column hosting ↺ (gives it a gutter; docking ignores Margin)
+    private readonly ToolTip _tip = new();
     private readonly Action<IGame, IAdditionalApplication?, IEmulator?> _playGame;
     private readonly Action<IGame>? _storeLaunch;   // installed GOG/Steam game → store launch lifecycle
     private readonly Func<IGame, (string? emuId, string? appId)?>? _lastLaunchFallback;   // LiteBox history (used when ExtendDB absent)
+    private readonly Action<string>? _clearLastLaunch;   // reset button → cancel LiteBox's own history row
 
     // Every height/padding number below is a pure chrome pixel dimension (no text-flow to derive
     // it from), so - same as everywhere else in this DPI pass - it needs explicit scaling: the
@@ -70,11 +80,13 @@ internal sealed class LaunchButtons : Panel
     private StoreKind _storeKind;
 
     public LaunchButtons(Action<IGame, IAdditionalApplication?, IEmulator?> playGame, Action<IGame>? storeLaunch = null,
-        Func<IGame, (string? emuId, string? appId)?>? lastLaunchFallback = null)
+        Func<IGame, (string? emuId, string? appId)?>? lastLaunchFallback = null,
+        Action<string>? clearLastLaunch = null)
     {
         _playGame = playGame;
         _storeLaunch = storeLaunch;
         _lastLaunchFallback = lastLaunchFallback;
+        _clearLastLaunch = clearLastLaunch;
         _s = LiteBoxTheme.DpiScale(this);
         Dock = DockStyle.Bottom;
         BackColor = Bg;
@@ -102,6 +114,21 @@ internal sealed class LaunchButtons : Panel
         playRow.Controls.Add(_play);   // Fill added first
         playRow.Controls.Add(_caret);  // Right added last → docks first
         Controls.Add(playRow);
+
+        // ↺ reset column — Dock.Right added LAST so it docks FIRST and spans the full content
+        // height (every visible row); the Top-docked rows then fill the remaining width.
+        _reset = new Button
+        {
+            Text = "↺", Dock = DockStyle.Fill,
+            FlatStyle = FlatStyle.Flat, BackColor = ResetCol, ForeColor = Fg,
+            FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(148, 66, 66) },
+            Font = new Font("Segoe UI", 12f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter,
+        };
+        _reset.Click += (_, _) => OnResetClick();
+        _tip.SetToolTip(_reset, "Reset to defaults — restores the default version and emulator and cancels this game's launch history");
+        _resetHost = new Panel { Dock = DockStyle.Right, Width = S(36), BackColor = Bg, Padding = new Padding(S(4), 0, 0, 0), Visible = false };
+        _resetHost.Controls.Add(_reset);
+        Controls.Add(_resetHost);
     }
 
     private Button MakeBtn(string text, Color back, int height, FontStyle style) => new()
@@ -268,6 +295,7 @@ internal sealed class LaunchButtons : Panel
             _caret.Visible = false;
             _version.Visible = false;
             _rom.Visible = false;
+            _resetHost.Visible = false;
             Height = Padding.Vertical + S(38);   // just the play row
             return;
         }
@@ -309,11 +337,54 @@ internal sealed class LaunchButtons : Panel
         }
         else { _rom.Visible = false; if (!_romFeature) _selRom = null; }
 
+        // ↺ reset column: only when something differs from factory defaults (see HasResettableState).
+        _resetHost.Visible = HasResettableState();
+
         // Size the docked panel to exactly the visible rows (no wasted space).
         int h = Padding.Vertical + S(38);          // play row (34 + 4 margin)
         if (_version.Visible) h += S(26);
         if (_rom.Visible) h += S(26);
         Height = h;
+    }
+
+    // ── Reset to defaults (↺ column) ──────────────────────────────────
+    /// <summary>Whether anything differs from the game's factory defaults: a non-Base version, a
+    /// non-default emulator, a ROM pick / Clear, or a launch-history row that would re-seed one of
+    /// those on the next visit. Drives the ↺ column's visibility (hidden = pure defaults).</summary>
+    private bool HasResettableState()
+    {
+        if (_selVerAppId != null) return true;
+        string? defId = DefaultEmuIdForSelection();
+        bool emuIsDefault = defId == null ? CurrentEmu() == null
+                                          : string.Equals(CurrentEmuId(), defId, StringComparison.Ordinal);
+        if (!emuIsDefault) return true;
+        if (!string.IsNullOrEmpty(_selRom) || _forcePriority) return true;
+        // History carrying an override (all-null rows just re-seed the defaults — nothing to cancel).
+        return !string.IsNullOrEmpty(_lastVerAppId) || !string.IsNullOrEmpty(_lastEmuId) || !string.IsNullOrEmpty(_lastRomEntry);
+    }
+
+    /// <summary>Restores Base version + the default emulator (or direct launch) + no ROM pick, AND
+    /// cancels the game's launch-history entry on BOTH sides (ExtendDB's launch-history.db and
+    /// LiteBox's op-log copy) plus the persisted pending ROM picks — so leaving and re-selecting the
+    /// game shows the pure default selection instead of re-seeding from history.</summary>
+    private void OnResetClick()
+    {
+        if (_game == null) return;
+        var gid = Safe(() => _game.Id);
+        if (!string.IsNullOrEmpty(gid))
+        {
+            RomBridge.ClearLaunchHistory(_game);       // plugin's launch-history.db row (no-op sans ExtendDB)
+            try { _clearLastLaunch?.Invoke(gid!); } catch { }   // LiteBox's op-log row
+            RomSelectionStore.ClearGame(gid!);         // pending ROM picks, all versions
+        }
+        // In-memory: forget history + user picks, back to factory defaults.
+        _lastEmuId = _lastVerAppId = _lastRomEntry = null;
+        _emuPickedByUser = false;
+        _selVerAppId = null;
+        _selEmu = ResolveInitialEmu();
+        _selRom = null; _forcePriority = false;
+        ApplyRomSelection();
+        Refresh2();
     }
 
     // ── Emulator picker (two-step) ────────────────────────────────────

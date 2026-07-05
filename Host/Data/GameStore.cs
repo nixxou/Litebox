@@ -541,6 +541,9 @@ internal sealed class GameStore
     public (string emulatorId, string additionalAppId)? GetLastLaunch(string gameId)
     { return _oplog?.GetLastLaunch(gameId); }
 
+    /// <summary>Cancels the game's LiteBox launch-history row (reset-to-default button).</summary>
+    public void ClearLaunch(string gameId) { _oplog?.ClearLaunch(gameId); }
+
     /// <summary>Generic IGame scalar write-back: <paramref name="xmlName"/> is the XML element name
     /// (e.g. "Developer"), <paramref name="value"/> the serialized value ("" = clear). Updates memory
     /// + logs the op. Unknown field names are ignored (logged once).</summary>

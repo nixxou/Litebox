@@ -59,6 +59,18 @@ internal static class RomSelectionStore
         }
     }
 
+    /// <summary>Drops ALL pending picks for the game (every version) — the reset-to-default button
+    /// restores pure default seeding across the board. No-op when nothing was persisted.</summary>
+    public static void ClearGame(string gameId)
+    {
+        if (string.IsNullOrEmpty(gameId)) return;
+        lock (_gate)
+        {
+            EnsureLoaded();
+            if (_map!.Remove(gameId)) Save();
+        }
+    }
+
     /// <summary>Persist the pending pick. rom set → explicit pick; rom empty + force → "Clear";
     /// rom empty + !force → remove the slot (revert to history seeding), mirroring the web's
     /// setSelectedRomFor(null) / setRomForce(false).</summary>

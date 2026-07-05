@@ -64,6 +64,10 @@ internal sealed class HostDataManagerXml : DummyDataManager
     public (string emulatorId, string additionalAppId)? GetLastLaunch(string gameId)
     { try { return _store?.GetLastLaunch(gameId); } catch { return null; } }
 
+    /// <summary>Cancels the game's LiteBox launch-history row — the launch buttons' reset-to-default
+    /// button, so the next selection seeds pure defaults instead of the last launch.</summary>
+    public void ClearLastLaunch(string gameId) { try { _store?.ClearLaunch(gameId); } catch { } }
+
     /// <summary>LaunchBox's global settings (LB\Data\Settings.xml), lazily loaded.</summary>
     public LbSettingsStore LbSettings => _lbSettings ??= new LbSettingsStore(_dataDir, _store);
     private LbSettingsStore _lbSettings;

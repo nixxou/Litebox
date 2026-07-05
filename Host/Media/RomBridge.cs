@@ -26,7 +26,7 @@ internal static class RomBridge
     private static bool _probed;
     private static Type _t;
     private static PropertyInfo _featureEnabled, _raModuleActive;
-    private static MethodInfo _getInfo, _pick, _arm, _entries, _heal, _healSync;
+    private static MethodInfo _getInfo, _pick, _arm, _entries, _heal, _healSync, _clearHist;
 
     private static void Probe()
     {
@@ -47,6 +47,7 @@ internal static class RomBridge
             _entries = _t.GetMethod("GetArchiveEntriesJson", F, null, new[] { typeof(IGame), typeof(string) }, null);
             _heal = _t.GetMethod("HealRa", F, null, new[] { typeof(IGame) }, null);
             _healSync = _t.GetMethod("HealRaSync", F, null, new[] { typeof(IGame) }, null);
+            _clearHist = _t.GetMethod("ClearLaunchHistory", F, null, new[] { typeof(IGame) }, null);
         }
         catch { }
     }
@@ -108,6 +109,16 @@ internal static class RomBridge
         Probe();
         try { return _getInfo?.Invoke(null, new object[] { game }) as string; }
         catch { return null; }
+    }
+
+    /// <summary>Cancels the plugin's launch-history row for the game (reset-to-default button) so
+    /// GetLaunchInfoJson stops re-seeding the last version/emulator/ROM. No-op when ExtendDB is
+    /// absent or predates the method — the in-memory reset still applies for the session, but the
+    /// history would re-seed on the next selection.</summary>
+    public static void ClearLaunchHistory(IGame game)
+    {
+        Probe();
+        try { _clearHist?.Invoke(null, new object[] { game }); } catch { }
     }
 
     public static string PickRomModal(IGame game, string appId)

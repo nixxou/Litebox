@@ -28,6 +28,9 @@ internal sealed class LaunchButtons : Panel
 {
     private static readonly Color Bg      = LiteBoxTheme.PanelC;   // same (37,37,38) - single source of truth
     private static readonly Color PlayCol = Color.FromArgb(50, 110, 65);
+    // Lighter green: the selected emulator is NOT the effective default for the selected version —
+    // an at-a-glance cue that Play will use an override (user pick or last-launch history).
+    private static readonly Color PlayAltCol = Color.FromArgb(82, 158, 98);
     private static readonly Color CaretCol= Color.FromArgb(40, 90, 55);
     private static readonly Color InstallCol = Color.FromArgb(150, 134, 48); // muted mustard (store "Install")
     private static readonly Color SubCol  = Color.FromArgb(60, 60, 70);   // duller than Play (Version/ROM)
@@ -163,9 +166,11 @@ internal sealed class LaunchButtons : Panel
             if (lb != null) { _lastEmuId = lb.Value.emuId; _lastVerAppId = lb.Value.appId; }
         }
 
-        // Initial selection: last launch (ExtendDB) → default → first.
-        _selEmu = ResolveInitialEmu();
+        // Initial selection: version first (the effective DEFAULT emulator depends on it —
+        // a version carries its own EmulatorId), then last launch (history) → default → first.
+        _emuPickedByUser = false;
         _selVerAppId = (_lastVerAppId != null && _versions.Any(v => v.appId == _lastVerAppId)) ? _lastVerAppId : null;
+        _selEmu = ResolveInitialEmu();
         ApplyRomSelection();   // persisted pending pick (web-style) → else seed from last-launched ROM
 
         // Always show for a game — Play is available even with no platform
@@ -174,13 +179,60 @@ internal sealed class LaunchButtons : Panel
         Refresh2();
     }
 
+    // _selEmu semantics: an index into _emus, or -1 = DIRECT LAUNCH (no emulator — the game/version
+    // is a plain executable). The platform's emulators stay offered as alternatives in the ▾ menu
+    // (wrappers/launchers), direct being the default when nothing is assigned.
     private int ResolveInitialEmu()
     {
-        if (_emus.Count == 0) return 0;
         if (!string.IsNullOrEmpty(_lastEmuId))
             for (int i = 0; i < _emus.Count; i++)
                 if (string.Equals(Safe(() => _emus[i].Id), _lastEmuId, StringComparison.Ordinal)) return i;
-        return 0;   // default is already first
+        string? did = DefaultEmuIdForSelection();
+        if (did == null) return -1;                 // exe-based game/version → direct launch
+        int def = EmuIndexOf(did);
+        return def >= 0 ? def : 0;   // the game default is first; a version's own default may differ
+    }
+
+    // Whether the user explicitly picked an emulator for THIS game (via the ▾ menu). While false,
+    // changing the version re-selects that version's effective default emulator.
+    private bool _emuPickedByUser;
+
+    /// <summary>The EFFECTIVE default emulator for the current selection: the selected VERSION's own
+    /// EmulatorId when it launches through one, else the game's. Null when neither is set.</summary>
+    private string? DefaultEmuIdForSelection()
+    {
+        var app = CurrentVersionApp();
+        if (app != null)
+        {
+            string? vid = Safe(() => app.UseEmulator ? app.EmulatorId : null);
+            if (!string.IsNullOrEmpty(vid) && vid != Guid.Empty.ToString() && EmuIndexOf(vid) >= 0) return vid;
+        }
+        var gid = _game != null ? Safe(() => _game.EmulatorId) : null;
+        return string.IsNullOrEmpty(gid) || gid == Guid.Empty.ToString() ? null : gid;
+    }
+
+    private int EmuIndexOf(string? emuId)
+    {
+        if (string.IsNullOrEmpty(emuId)) return -1;
+        for (int i = 0; i < _emus.Count; i++)
+            if (string.Equals(Safe(() => _emus[i].Id), emuId, StringComparison.Ordinal)) return i;
+        return -1;
+    }
+
+    /// <summary>The launch source of the current selection: the version's path when one is picked
+    /// (and non-empty), else the game's ApplicationPath.</summary>
+    private string? SelectedLaunchPath()
+    {
+        var app = CurrentVersionApp();
+        string? p = app != null ? Safe(() => app.ApplicationPath) : null;
+        if (!string.IsNullOrEmpty(p)) return p;
+        return _game != null ? Safe(() => _game.ApplicationPath) : null;
+    }
+
+    private bool SelectedUseDosBox()
+    {
+        var app = CurrentVersionApp();
+        try { return app != null ? app.UseDosBox : _game?.UseDosBox == true; } catch { return false; }
     }
 
     private string? CurrentEmuId() => (_selEmu >= 0 && _selEmu < _emus.Count) ? Safe(() => _emus[_selEmu].Id) : null;
@@ -221,9 +273,23 @@ internal sealed class LaunchButtons : Panel
         }
 
         var emu = CurrentEmu();
-        _play.BackColor = PlayCol;   // reset (a previous store game may have left it Install-yellow)
-        _play.Text = emu != null ? "▶  Play with " + (Safe(() => emu.Title) ?? "Emulator") : "▶  Play";
-        _caret.Visible = _emus.Count > 1;
+        // Normal green = the effective default for the selected version (an emulator, or DIRECT for
+        // an exe-based game/version); LIGHTER green = an override is selected (user pick or history).
+        string? defId = DefaultEmuIdForSelection();
+        bool isDefault = defId == null ? emu == null
+                                       : string.Equals(CurrentEmuId(), defId, StringComparison.Ordinal);
+        _play.BackColor = isDefault ? PlayCol : PlayAltCol;
+        if (emu != null)
+            _play.Text = "▶  Play with " + (Safe(() => emu.Title) ?? "Emulator");
+        else
+        {
+            // Direct launch: "Launch <exe>" — or "DOSBox <exe>" when the game/version runs in DOSBox.
+            string exe = "";
+            try { exe = System.IO.Path.GetFileName(SelectedLaunchPath() ?? "") ?? ""; } catch { }
+            bool dos = SelectedUseDosBox();
+            _play.Text = (dos ? "▶  DOSBox " : "▶  Launch ") + (exe.Length > 0 ? exe : "");
+        }
+        _caret.Visible = _emus.Count > 1 || (_emus.Count > 0 && defId == null);
 
         // Version: only when there's an alternative beyond Base.
         if (_versions.Count > 1)
@@ -255,14 +321,27 @@ internal sealed class LaunchButtons : Panel
     {
         if (_emus.Count == 0) return;
         var menu = NewMenu();
-        var defId = _game != null ? Safe(() => _game.EmulatorId) : null;
+        var defId = DefaultEmuIdForSelection();   // per-VERSION default (a version carries its own emulator)
+
+        // Exe-based game/version (no default emulator): DIRECT LAUNCH heads the menu as the default —
+        // the platform's emulators stay below as alternatives (wrappers/launchers/whatever).
+        if (defId == null)
+        {
+            string exe = "";
+            try { exe = System.IO.Path.GetFileName(SelectedLaunchPath() ?? "") ?? ""; } catch { }
+            var direct = new ToolStripMenuItem((exe.Length > 0 ? "Launch " + exe : "Launch directly") + "  (default)")
+            { Checked = _selEmu < 0 };
+            direct.Click += (_, _) => { _selEmu = -1; _emuPickedByUser = true; Refresh2(); };
+            menu.Items.Add(direct);
+            menu.Items.Add(new ToolStripSeparator());
+        }
         for (int i = 0; i < _emus.Count; i++)
         {
             int idx = i;
             var title = Safe(() => _emus[i].Title) ?? "Emulator";
             bool isDef = !string.IsNullOrEmpty(defId) && string.Equals(Safe(() => _emus[i].Id), defId, StringComparison.Ordinal);
             var it = new ToolStripMenuItem(isDef ? title + "  (default)" : title) { Checked = idx == _selEmu };
-            it.Click += (_, _) => { _selEmu = idx; Refresh2(); };   // select only — no launch
+            it.Click += (_, _) => { _selEmu = idx; _emuPickedByUser = true; Refresh2(); };   // select only — no launch
             menu.Items.Add(it);
         }
         menu.Show(_caret, new Point(0, 0), ToolStripDropDownDirection.AboveLeft);
@@ -280,6 +359,15 @@ internal sealed class LaunchButtons : Panel
             it.Click += (_, _) =>
             {
                 _selVerAppId = cv.appId;
+                // A version carries its OWN default emulator — follow it unless the user explicitly
+                // picked one (▾ menu). Exception: re-selecting the LAST-PLAYED version restores the
+                // last-played emulator (the history stays the source of truth for that pair).
+                if (!_emuPickedByUser)
+                {
+                    string? want = (cv.appId == _lastVerAppId && !string.IsNullOrEmpty(_lastEmuId))
+                        ? _lastEmuId : DefaultEmuIdForSelection();
+                    _selEmu = want == null ? -1 : Math.Max(EmuIndexOf(want), 0);   // null default → direct launch
+                }
                 ApplyRomSelection();   // version changed → re-read the pending pick for this version (per-version key)
                 Refresh2();
             };

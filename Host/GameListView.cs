@@ -391,22 +391,36 @@ internal sealed class GameListView : ListView
                              : q.OrderByDescending(SortGetter, ValueComparer.Instance)).ToList();
         _view = list.ToArray();
         RefreshHeaderGlyphs();
-        try { VirtualListSize = _view.Length; } catch { }
+        bool swapped = _setSwapped; _setSwapped = false;
+        // A native virtual ListView carries TWO kinds of stale state across a content change:
+        //   • its pixel scroll offset (both directions) — a same-or-larger platform came up
+        //     parked mid-list, a smaller one past its end (blank);
+        //   • worse, a stale ITEMS-AREA ORIGIN: rows painted shifted way down while the
+        //     scrollbar sits at the top (user screenshots: first rows at the BOTTOM of the
+        //     viewport, or a 1-row list rendering nothing at all). EnsureVisible can't fix
+        //     that one — the control believes item 0 is already visible.
+        // On a SET SWAP (new Games array = platform/node switch) zero VirtualListSize first:
+        // the control drops its whole geometry (origin + scroll) and recomputes from scratch
+        // for the new size. Same-set rebuilds (sort, search typing) keep the fast direct set.
+        try
+        {
+            if (swapped && IsHandleCreated)
+            {
+                BeginUpdate();
+                try { VirtualListSize = 0; VirtualListSize = _view.Length; }
+                finally { EndUpdate(); }
+            }
+            else VirtualListSize = _view.Length;
+        }
+        catch { }
         MeasureContentFits();   // view content changed → re-fit columns (capped + cached, so cheap)
         AutoFit();
         try { SelectedIndices.Clear(); } catch { }
         int selIx = prev != null ? Array.IndexOf(_view, prev) : -1;
         if (selIx >= 0) SetSelectedAndFocused(selIx);
-        // A native virtual ListView keeps its pixel scroll offset when the content is replaced —
-        // in BOTH directions. Two snaps:
-        //   • the game SET changed (new Games array = platform/node switch): the old offset is
-        //     meaningless for the new list — a same-or-larger platform would come up parked
-        //     mid-list with its top rows off-screen. Snap to the surviving selection, else the top.
-        //   • same set but the view SHRANK (search filter narrowing): the viewport can be parked
-        //     past the new end — rendering blank. Same snap.
-        // EnsureVisible is a no-op when the target is already visible, so a same-set, same-size
-        // refresh (sort glyph toggle, in-place refresh) keeps the user's scroll untouched.
-        bool swapped = _setSwapped; _setSwapped = false;
+        // Scroll snap: on a swap, to the surviving selection or the top; on a same-set SHRINK
+        // (search narrowing), back into range. EnsureVisible is a no-op when the target is
+        // already visible, so a same-set same-size refresh keeps the user's scroll untouched.
         if (_view.Length > 0 && (swapped || _view.Length < prevLen))
         {
             try { EnsureVisible(selIx >= 0 ? selIx : 0); } catch { }

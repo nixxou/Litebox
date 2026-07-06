@@ -39,6 +39,12 @@ internal sealed class LaunchedGame
     public bool PauseOverride;
     public bool PauseUse, PauseSuspend, PauseForceful;
 
+    // Per-GAME pause AHK scripts (the six Customize-dialog tabs). Only meaningful when
+    // PauseOverride is true — the game's scripts then REPLACE the emulator's wholesale
+    // (an empty tab = no script for that action, exactly like LB's override panel).
+    // Keyed by the emulator-side field name (PauseAutoHotkeyScript, …).
+    public Dictionary<string, string> PauseScripts = new(StringComparer.Ordinal);
+
     // Per-GAME startup/end-screen overrides (LB "Override Default Startup Screen
     // Settings" on the Game). StartupMinMs = -1 ⇒ "use the global value".
     public bool StartupOverride;
@@ -93,6 +99,9 @@ internal sealed class LaunchedGame
                     lg.PauseUse = string.Equals(lf.GetField("UsePauseScreen"), "true", StringComparison.OrdinalIgnoreCase);
                     lg.PauseSuspend = string.Equals(lf.GetField("SuspendProcessOnPause"), "true", StringComparison.OrdinalIgnoreCase);
                     lg.PauseForceful = string.Equals(lf.GetField("ForcefulPauseScreenActivation"), "true", StringComparison.OrdinalIgnoreCase);
+                    foreach (var f in new[] { "PauseAutoHotkeyScript", "ResumeAutoHotkeyScript", "ResetAutoHotkeyScript",
+                                              "SaveStateAutoHotkeyScript", "LoadStateAutoHotkeyScript", "SwapDiscsAutoHotkeyScript" })
+                        lg.PauseScripts[f] = lf.GetField(f) ?? "";
                 }
             }
             catch { }
@@ -107,7 +116,10 @@ internal sealed class LaunchedGame
                     lg.StartupUse = string.Equals(lf2.GetField("UseStartupScreen"), "true", StringComparison.OrdinalIgnoreCase);
                     lg.StartupHideCursor = string.Equals(lf2.GetField("HideMouseCursorInGame"), "true", StringComparison.OrdinalIgnoreCase);
                     lg.ShutdownDisabled = string.Equals(lf2.GetField("DisableShutdownScreen"), "true", StringComparison.OrdinalIgnoreCase);
-                    lg.StartupMinMs = int.TryParse(lf2.GetField("StartupLoadDelay"), out var ld) ? ld : -1;
+                    // Display time of the "NOW LOADING…" screen — the Customize slider
+                    // (StartupScreenPostLaunchDisplayTime, ms). NOT StartupLoadDelay,
+                    // which is the separate wait-before-game-is-up knob (unwired yet).
+                    lg.StartupMinMs = int.TryParse(lf2.GetField("StartupScreenPostLaunchDisplayTime"), out var ld) ? ld : -1;
                 }
             }
             catch { }

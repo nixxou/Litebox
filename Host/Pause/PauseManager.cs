@@ -161,7 +161,7 @@ internal static class PauseManager
 
         // 1. Pause script BEFORE the freeze (it usually sends the emulator's own
         //    pause key, so the process must still be running).
-        var p = AhkScript.RunOneOff(FieldStr(_emu!, "PauseAutoHotkeyScript"), _lbRoot);
+        var p = AhkScript.RunOneOff(ScriptStr("PauseAutoHotkeyScript"), _lbRoot);
         if (p != null) { try { p.WaitForExit(1500); } catch { } }
 
         // 2. Freeze (default ON, like LB; per-game override wins).
@@ -187,10 +187,10 @@ internal static class PauseManager
             BoxFrontPath = snap?.BoxFrontPath,
             SessionStartUtc = snap?.LaunchedAtUtc ?? DateTime.UtcNow,
             CanViewManual = !string.IsNullOrEmpty(snap?.ManualPath),
-            CanSaveState = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "SaveStateAutoHotkeyScript")),
-            CanLoadState = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "LoadStateAutoHotkeyScript")),
-            CanReset = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "ResetAutoHotkeyScript")),
-            CanSwapDiscs = !AhkScript.IsScriptEmpty(FieldStr(_emu!, "SwapDiscsAutoHotkeyScript")),
+            CanSaveState = !AhkScript.IsScriptEmpty(ScriptStr("SaveStateAutoHotkeyScript")),
+            CanLoadState = !AhkScript.IsScriptEmpty(ScriptStr("LoadStateAutoHotkeyScript")),
+            CanReset = !AhkScript.IsScriptEmpty(ScriptStr("ResetAutoHotkeyScript")),
+            CanSwapDiscs = !AhkScript.IsScriptEmpty(ScriptStr("SwapDiscsAutoHotkeyScript")),
             ForcefulActivation = snap is { PauseOverride: true } ? snap.PauseForceful : FieldBool(_emu!, "ForcefulPauseScreenActivation", true),
             EmulatorMainWindow = EmulatorWindow(),
             OnAction = a => System.Threading.Tasks.Task.Run(() => OnScreenAction(a)),
@@ -211,7 +211,7 @@ internal static class PauseManager
         _suspended = false;
         if (runResumeScript)
         {
-            var p = AhkScript.RunOneOff(FieldStr(_emu!, "ResumeAutoHotkeyScript"), _lbRoot);
+            var p = AhkScript.RunOneOff(ScriptStr("ResumeAutoHotkeyScript"), _lbRoot);
             if (p != null) { try { p.WaitForExit(1500); } catch { } }
         }
         // Unmute AFTER the resume script — the whole transition stays silent, the game
@@ -274,10 +274,21 @@ internal static class PauseManager
     /// emulator, then fire the one-off script (no auto re-pause).</summary>
     private static void RunActionScript(string field)
     {
-        var script = FieldStr(_emu!, field);
+        var script = ScriptStr(field);
         ResumeLocked(runResumeScript: false);
         try { Thread.Sleep(200); } catch { }   // let the emulator window settle into the foreground
         AhkScript.RunOneOff(script, _lbRoot);
+    }
+
+    /// <summary>The AHK script for a pause action: the GAME's when its pause override is
+    /// active (LB Edit Game → Customize replaces the emulator's scripts wholesale — an
+    /// empty tab means "no script for that action"), else the EMULATOR's field. The
+    /// per-game set never includes ExitAutoHotkeyScript (emulator-only, like LB).</summary>
+    private static string ScriptStr(string field)
+    {
+        var snap = LaunchedGame.Current;
+        if (snap is { PauseOverride: true } && snap.PauseScripts.TryGetValue(field, out var s)) return s ?? "";
+        return FieldStr(_emu!, field);
     }
 
     // LB's default exit-game behaviour when the emulator has no custom exit

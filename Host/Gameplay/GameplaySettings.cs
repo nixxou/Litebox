@@ -78,6 +78,27 @@ internal static class GameplaySettings
         catch { return true; }
     }
 
+    /// <summary>LB's "Force LaunchBox or Big Box back into focus when the shutdown screen
+    /// closes" (Settings.xml ForceFrontendFocusOnShutdown — LB's own key, so the setting is
+    /// shared with a real LaunchBox). Under LiteBox the frontend to refocus is the ExtendDB
+    /// web kiosk when one is up (it relaunches after the game), else the LiteBox window.</summary>
+    public static bool ForceFrontendFocusOnShutdown()
+    {
+        try { return GBool(ReadSettings(), "ForceFrontendFocusOnShutdown", true); }
+        catch { return true; }
+    }
+
+    /// <summary>LiteBox.ini StartupStayOnTop (LiteBox-specific → NOT Settings.xml, which LB
+    /// strips of unknown keys): the startup/end overlays keep TOPMOST for their whole
+    /// configured duration WITHOUT ever taking the focus — non-blocking, so an emulator
+    /// that pauses when unfocused (RetroArch pause_nonactive) keeps running behind the
+    /// cover. Off = historical behaviour (overlay yields top+front at spawn).</summary>
+    public static bool StartupStayOnTop()
+    {
+        try { return LiteBoxConfig.LoadForExe().GetBool("StartupStayOnTop", false); }
+        catch { return false; }
+    }
+
     /// <summary>True when "Mute Audio During Transitions" is on (Settings.xml
     /// PauseScreenMuting, LB default true). Read fresh — an options change applies
     /// to the next pause without a restart.</summary>

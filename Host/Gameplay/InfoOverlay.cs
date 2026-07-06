@@ -17,6 +17,7 @@ internal sealed class InfoOverlay : Form
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
 
     private readonly string _banner;
+    private readonly bool _noActivate;   // StartupStayOnTop: cover the screen, NEVER take focus
     private Bitmap? _bg;
     private bool _cursorHidden;
 
@@ -25,9 +26,10 @@ internal sealed class InfoOverlay : Form
     private readonly float _s;
     private int S(int px) => (int)Math.Round(px * _s);
 
-    public InfoOverlay(PauseContext ctx, string banner, bool hideCursor)
+    public InfoOverlay(PauseContext ctx, string banner, bool hideCursor, bool noActivate = false)
     {
         _banner = banner ?? "";
+        _noActivate = noActivate;
         _s = DeviceDpi / 96f;
 
         FormBorderStyle = FormBorderStyle.None;
@@ -49,11 +51,22 @@ internal sealed class InfoOverlay : Form
         BuildBackgroundAsync(Bounds.Size, ctx);
     }
 
-    /// <summary>WS_EX_COMPOSITED: window + children drawn into one buffer (no flicker).</summary>
+    /// <summary>WS_EX_COMPOSITED: window + children drawn into one buffer (no flicker).
+    /// In no-activate mode, WS_EX_NOACTIVATE too: the window can be shown, sized and kept
+    /// TOPMOST while NEVER entering the activation chain — the emulator behind it keeps
+    /// the focus (RetroArch pause_nonactive stays running).</summary>
     protected override CreateParams CreateParams
     {
-        get { var cp = base.CreateParams; cp.ExStyle |= 0x02000000; return cp; }
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ExStyle |= 0x02000000;                    // WS_EX_COMPOSITED
+            if (_noActivate) cp.ExStyle |= 0x08000000;   // WS_EX_NOACTIVATE
+            return cp;
+        }
     }
+
+    protected override bool ShowWithoutActivation => _noActivate;
 
     private void BuildBackgroundAsync(Size size, PauseContext ctx)
     {
@@ -101,6 +114,7 @@ internal sealed class InfoOverlay : Form
     /// foreground to the emulator the moment it spawns.</summary>
     public void ForceToFront(int attempts)
     {
+        if (_noActivate) return;   // stay-on-top mode: TOPMOST already covers, focus is never ours
         if (_frontYielded) return;
         try { Activate(); SetForegroundWindow(Handle); } catch { }
         int n = 0;
@@ -124,7 +138,18 @@ internal sealed class InfoOverlay : Form
         _frontYielded = true;
         try { _frontTimer?.Stop(); _frontTimer?.Dispose(); } catch { }
         _frontTimer = null;
-        try { TopMost = false; } catch { }
+        // Stay-on-top mode KEEPS TopMost for the whole configured duration — the emulator
+        // loads (and runs, focused) behind the cover; only the focus-forcing ever stops.
+        if (!_noActivate) { try { TopMost = false; } catch { } }
+    }
+
+    /// <summary>Close without ever yanking the foreground: when this window is NOT the
+    /// foreground, hide first (hiding a non-active window never moves the focus, and
+    /// destroying a hidden one doesn't either — the ExtendDB Update-form lesson).</summary>
+    public void HideThenClose()
+    {
+        try { if (GetForegroundWindow() != Handle) Hide(); } catch { }
+        try { Close(); } catch { }
     }
 
     protected override void Dispose(bool disposing)

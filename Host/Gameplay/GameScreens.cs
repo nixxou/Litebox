@@ -36,6 +36,11 @@ internal static class GameScreens
         var ctx = BuildCtx(snap);
         bool hide = rr.HideCursor;
 
+        // StartupStayOnTop: the overlay never activates (WS_EX_NOACTIVATE) and keeps
+        // TOPMOST for its whole duration — the emulator spawns, takes the focus and RUNS
+        // behind the cover (RetroArch pause_nonactive included) until the timer reveals it.
+        bool stayTop = Safe2(GameplaySettings.StartupStayOnTop);
+
         UiThread.Invoke(() =>
         {
             lock (_lock)
@@ -43,9 +48,9 @@ internal static class GameScreens
                 CloseLocked();
                 try
                 {
-                    _overlay = new InfoOverlay(ctx, "NOW LOADING…", hide);
+                    _overlay = new InfoOverlay(ctx, "NOW LOADING…", hide, noActivate: stayTop);
                     _overlay.Show();
-                    _overlay.ForceToFront(8);
+                    _overlay.ForceToFront(8);   // no-op in stay-on-top mode
                 }
                 catch { CloseLocked(); return; }
 
@@ -70,18 +75,80 @@ internal static class GameScreens
         var ctx = BuildCtx(snap);
         bool hide = rr.HideCursor;
 
+        bool stayTop = Safe2(GameplaySettings.StartupStayOnTop);
         UiThread.Invoke(() =>
         {
             lock (_lock)
             {
                 CloseLocked();
-                try { _overlay = new InfoOverlay(ctx, "GAME OVER", hide); _overlay.Show(); _overlay.ForceToFront(8); }
+                try { _overlay = new InfoOverlay(ctx, "GAME OVER", hide, noActivate: stayTop); _overlay.Show(); _overlay.ForceToFront(8); }
                 catch { CloseLocked(); }
             }
         });
         try { Thread.Sleep(ms); } catch { }
+        // LB's "Force LaunchBox or Big Box back into focus when the shutdown screen closes":
+        // decide BEFORE closing, apply AFTER — the frontend is the ExtendDB web kiosk when
+        // one is up (it relaunched during the exit), else the LiteBox window. When OFF the
+        // overlay hides-then-closes and the foreground falls wherever Windows says (the
+        // "stay in another app after alt-tabbing away" behaviour LB documents).
+        bool refocus = Safe2(GameplaySettings.ForceFrontendFocusOnShutdown);
         UiThread.Invoke(() => { lock (_lock) CloseLocked(); });
+        if (refocus) FocusFrontend();
     }
+
+    /// <summary>Refocus after the end screen closed (also called when no end screen is
+    /// configured — see HostLaunch). Kiosk first, LiteBox window as the fallback.</summary>
+    public static void FocusFrontend()
+    {
+        try
+        {
+            IntPtr target = FindKioskWindow();
+            if (target == IntPtr.Zero)
+                try { target = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle; } catch { }
+            if (target != IntPtr.Zero) SetForegroundWindow(target);
+        }
+        catch { }
+    }
+
+    // The ExtendDB web kiosk (BigBox Web / LaunchBox Web fullscreen window) lives IN this
+    // process — find it by pid + visibility + its "ExtendDB — … Web …" title. IntPtr.Zero
+    // when none is up (plugin absent, kiosk off, or plain-browser use).
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    private static IntPtr FindKioskWindow()
+    {
+        IntPtr found = IntPtr.Zero;
+        uint myPid = (uint)Environment.ProcessId;
+        try
+        {
+            EnumWindows((h, _) =>
+            {
+                try
+                {
+                    if (!IsWindowVisible(h)) return true;
+                    GetWindowThreadProcessId(h, out uint pid);
+                    if (pid != myPid) return true;
+                    var sb = new System.Text.StringBuilder(128);
+                    GetWindowText(h, sb, 128);
+                    var t = sb.ToString();
+                    if (t.StartsWith("ExtendDB", StringComparison.Ordinal) && t.Contains("Web", StringComparison.Ordinal))
+                    { found = h; return false; }
+                }
+                catch { }
+                return true;
+            }, IntPtr.Zero);
+        }
+        catch { }
+        return found;
+    }
+
+    private static bool Safe2(Func<bool> f) { try { return f(); } catch { return false; } }
 
     /// <summary>Hand the foreground to the emulator about to spawn: the startup overlay drops
     /// its always-on-top + foreground-stealing so the emulator window can take and keep focus.
@@ -101,7 +168,7 @@ internal static class GameScreens
     {
         try { _timer?.Stop(); _timer?.Dispose(); } catch { }
         _timer = null;
-        try { _overlay?.Close(); } catch { }
+        try { _overlay?.HideThenClose(); } catch { }   // never yank the foreground off the game
         try { _overlay?.Dispose(); } catch { }
         _overlay = null;
     }

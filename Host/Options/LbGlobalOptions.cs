@@ -153,6 +153,7 @@ internal static class LbGlobalOptions
         void BindChk(CheckBox cb, string field) => applies.Add(() => { if (cb.Checked != s.GetBool(field)) s.SetBool(field, cb.Checked); });
         void BindTxt(TextBox tb, string field) => applies.Add(() => { if (tb.Text != s.Get(field)) s.Set(field, tb.Text); });
         void BindIniHk(HotkeyCaptureBox hb, string key) => applies.Add(() => { if (hb.HotkeyValue != ini.Get(key)) { ini.Set(key, hb.HotkeyValue); iniDirty = true; } });
+        void BindIniChk(CheckBox cb, string key, bool def = false) => applies.Add(() => { if (cb.Checked != ini.GetBool(key, def)) { ini.SetBool(key, cb.Checked); iniDirty = true; } });
 
         var tabs = NewDarkTabControl(dpiS);
         TabPage Page(string t) { var p = new TabPage(t) { BackColor = Bg, Padding = new Padding(S(12)) }; tabs.TabPages.Add(p); return p; }
@@ -169,8 +170,20 @@ internal static class LbGlobalOptions
             var sh = Txt(s.Get("MinimumShutdownScreenDisplayTime", "1000"), new Point(S(320), S(93)), 90); p.Controls.Add(sh);
             var hc = Chk("Hide Mouse Cursor on Startup Screens", s.GetBool("HideMouseCursorOnStartupScreens", true), new Point(S(4), S(128)));
             p.Controls.Add(hc);
+            // LB parity: reclaim the frontend's focus when the shutdown screen closes. Under
+            // LiteBox the "frontend" is the ExtendDB web kiosk when one is up (it relaunches
+            // after the game), else the LiteBox window itself. LB's own Settings.xml key.
+            var ff = Chk("Force frontend back into focus when the shutdown screen closes", s.GetBool("ForceFrontendFocusOnShutdown", true), new Point(S(4), S(154)));
+            p.Controls.Add(ff);
+            // LiteBox-specific (LiteBox.ini): startup/end screens stay TOPMOST for their whole
+            // duration WITHOUT ever taking focus — the emulator loads and runs behind the
+            // cover, so one that pauses when unfocused (RetroArch) keeps running.
+            var stp = Chk("Keep startup/end screens on top without taking focus (non-blocking)", ini.GetBool("StartupStayOnTop", false), new Point(S(4), S(180)));
+            p.Controls.Add(stp);
+            p.Controls.Add(Lbl("The screen covers the display while the game keeps the focus behind it.", new Point(S(28), S(202)), Dim));
             BindChk(use, "UseStartupScreen"); BindTxt(st, "MinimumStartupScreenDisplayTime");
             BindTxt(sh, "MinimumShutdownScreenDisplayTime"); BindChk(hc, "HideMouseCursorOnStartupScreens");
+            BindChk(ff, "ForceFrontendFocusOnShutdown"); BindIniChk(stp, "StartupStayOnTop");
         }
 
         // ── Game Pause ──

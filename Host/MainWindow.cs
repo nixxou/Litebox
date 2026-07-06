@@ -3625,7 +3625,11 @@ internal sealed class MainWindow : Form, IMessageFilter
             ApplyFilter();   // _current already reloaded by HostLaunch → Games = _current + rebuild
             IGame target = _resumeGameId == null ? null
                 : _current.FirstOrDefault(x => string.Equals(Safe(() => x.Id), _resumeGameId, StringComparison.OrdinalIgnoreCase));
-            if (target != null) { _games.SelectGame(target, true); ShowDetails(target); }
+            // focus:false — re-selecting the resumed game must NOT activate the LiteBox
+            // window: with the ExtendDB web kiosk as the frontend, its re-shown window
+            // owns the post-game focus (the ForceFrontendFocusOnShutdown option and the
+            // end-screen close govern who ends up in front, not this bookkeeping).
+            if (target != null) { _games.SelectGame(target, false); ShowDetails(target); }
             else if (_games.VisibleGames.Count > 0) { _games.SelectFirst(); }
         }
         // Resume the poll if a store game is the current subject (covers UnloadListDuringGame off too).

@@ -144,8 +144,9 @@ internal static class HostLaunch
 
         // 0. snapshot the launched game BEFORE anything is dropped — in-game
         //    surfaces (pause screen fanart/logo/session time) read this, never
-        //    the store / cache (both are freed below).
-        LaunchedGame.Capture(game);
+        //    the store / cache (both are freed below). The emulator contributes its
+        //    startup/end-screen tier (global < emulator < game).
+        LaunchedGame.Capture(game, emulator);
 
         // 0b. notify the GUI (it may show a "game running" screen / unload its list)
         //    BEFORE DropOptional so freed memory is reclaimed by the drop's GC.

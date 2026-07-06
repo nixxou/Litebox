@@ -90,8 +90,10 @@ internal static class GameScreens
         // decide BEFORE closing, apply AFTER — the frontend is the ExtendDB web kiosk when
         // one is up (it relaunched during the exit), else the LiteBox window. When OFF the
         // overlay hides-then-closes and the foreground falls wherever Windows says (the
-        // "stay in another app after alt-tabbing away" behaviour LB documents).
-        bool refocus = Safe2(GameplaySettings.ForceFrontendFocusOnShutdown);
+        // "stay in another app after alt-tabbing away" behaviour LB documents). The emulator
+        // carries its own copy of this flag (Edit Emulator → Startup Screen) → it wins over
+        // the global for an emulator launch.
+        bool refocus = snap?.EmuForceFocus ?? Safe2(GameplaySettings.ForceFrontendFocusOnShutdown);
         UiThread.Invoke(() => { lock (_lock) CloseLocked(); });
         if (refocus) FocusFrontend();
     }

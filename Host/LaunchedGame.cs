@@ -51,6 +51,16 @@ internal sealed class LaunchedGame
     public bool StartupUse, StartupHideCursor, ShutdownDisabled;
     public int StartupMinMs = -1;
 
+    // Per-EMULATOR startup/end-screen tier (LB Edit Emulator → Startup Screen). Every
+    // emulator in Emulators.xml carries its own copy (seeded from the global defaults at
+    // add time), so when a game launches THROUGH an emulator these win over the global —
+    // themselves overridden by the per-game override above. Captured here because the
+    // emulator, like the game, isn't available once the screen path runs. -1/null ⇒ unset.
+    public bool EmuCaptured;
+    public bool EmuUse, EmuHideCursor, EmuShutdownDisabled;
+    public int EmuStartupMinMs = -1, EmuShutdownMinMs = -1;
+    public bool? EmuForceFocus;
+
     /// <summary>The game currently running, or null. Set by HostLaunch at launch,
     /// cleared in its exit finally.</summary>
     public static LaunchedGame? Current { get; private set; }
@@ -58,8 +68,9 @@ internal sealed class LaunchedGame
     public static void Clear() => Current = null;
 
     /// <summary>Capture everything the in-game surfaces may need. Call BEFORE
-    /// DropOptional / GameCache clear. Never throws.</summary>
-    public static void Capture(IGame game)
+    /// DropOptional / GameCache clear. Never throws. <paramref name="emulator"/> (null
+    /// for a store / direct launch) contributes the emulator startup/end-screen tier.</summary>
+    public static void Capture(IGame game, IEmulator? emulator = null)
     {
         try
         {
@@ -124,6 +135,26 @@ internal sealed class LaunchedGame
             }
             catch { }
 
+            // Per-emulator startup/end-screen tier (LB Edit Emulator → Startup Screen). Read
+            // through ILiteBoxFields (HostEmulator round-trips every XML field) — not on the
+            // SDK IEmulator. Only when a game launches through an emulator (store/direct: null).
+            try
+            {
+                if (emulator is LbApiHost.ILiteBoxFields ef)
+                {
+                    lg.EmuCaptured = true;
+                    lg.EmuUse = EBool(ef, "UseStartupScreen", true);
+                    lg.EmuHideCursor = EBool(ef, "HideMouseCursorInGame", true);
+                    lg.EmuShutdownDisabled = EBool(ef, "DisableShutdownScreen", false);
+                    lg.EmuStartupMinMs = int.TryParse(ef.GetField("StartupScreenPostLaunchDisplayTime"), out var es) ? es : -1;
+                    lg.EmuShutdownMinMs = int.TryParse(ef.GetField("ShutdownScreenPostReadyDisplayTime"), out var eh) ? eh : -1;
+                    var ff = ef.GetField("ForceFrontendFocusOnShutdown");
+                    lg.EmuForceFocus = string.IsNullOrEmpty(ff) ? (bool?)null
+                                     : string.Equals(ff, "true", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch { }
+
             Current = lg;
             Console.WriteLine($"[launched] snapshot \"{lg.Title}\" fanart={(lg.FanartPath != null ? "yes" : "no")} logo={(lg.ClearLogoPath != null ? "yes" : "no")} box={(lg.BoxFrontPath != null ? "yes" : "no")}");
         }
@@ -137,5 +168,7 @@ internal sealed class LaunchedGame
     private static int SafeYear(IGame g) { try { return g.ReleaseYear ?? 0; } catch { return 0; } }
     private static string? FirstOrNull(List<string>? l) => l is { Count: > 0 } ? l[0] : null;
     private static string? NonEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;
+    private static bool EBool(LbApiHost.ILiteBoxFields f, string name, bool def)
+    { var v = f.GetField(name); return string.IsNullOrEmpty(v) ? def : string.Equals(v, "true", StringComparison.OrdinalIgnoreCase); }
     private static T? Safe<T>(Func<T?> f) { try { return f(); } catch { return default; } }
 }

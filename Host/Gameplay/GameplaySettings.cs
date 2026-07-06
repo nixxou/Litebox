@@ -57,9 +57,20 @@ internal static class GameplaySettings
             Muting        = GBool(d, "PauseScreenMuting", true),
         };
 
-        // Per-platform tier reserved here (none today).
+        // Emulator tier (LB Edit Emulator → Startup Screen): every emulator carries its own
+        // copy seeded from the global defaults, so for a launch THROUGH an emulator these win
+        // over the global — themselves overridden by the per-game override below. Direct /
+        // store launches have no emulator captured, so the global stands.
+        if (snap is { EmuCaptured: true })
+        {
+            r.UseStartup = snap.EmuUse;
+            r.HideCursor = snap.EmuHideCursor;
+            if (snap.EmuStartupMinMs >= 0) r.StartupMinMs = snap.EmuStartupMinMs;
+            r.ShutdownMinMs = snap.EmuShutdownDisabled ? -1
+                            : (snap.EmuShutdownMinMs >= 0 ? snap.EmuShutdownMinMs : r.ShutdownMinMs);
+        }
 
-        // Per-game override (LB "Override Default … Settings" on the Game).
+        // Per-game override (LB "Override Default … Settings" on the Game) — top tier.
         if (snap is { StartupOverride: true })
         {
             r.UseStartup = snap.StartupUse;

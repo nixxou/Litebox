@@ -15,6 +15,9 @@ internal sealed class InfoOverlay : Form
 {
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
+    private const uint SWP_NOMOVE = 0x2, SWP_NOSIZE = 0x1, SWP_NOACTIVATE = 0x10;
 
     private readonly string _banner;
     private readonly bool _noActivate;   // StartupStayOnTop: cover the screen, NEVER take focus
@@ -46,6 +49,29 @@ internal sealed class InfoOverlay : Form
 
         if (hideCursor) { try { Cursor.Hide(); _cursorHidden = true; } catch { } }
 
+        // Stay-on-top mode: a fullscreen emulator (RetroArch) makes ITSELF topmost when it
+        // activates, and within the topmost band the activated window goes in front — a
+        // single TopMost=true loses the cover after a second. Re-assert our spot at the top
+        // of the band every 300 ms, WITHOUT activation, for as long as the cover is up: the
+        // emulator asserts once at window creation, we assert continuously, we win.
+        if (_noActivate)
+        {
+            int ticks = 0;
+            _topTimer = new System.Windows.Forms.Timer { Interval = 300 };
+            _topTimer.Tick += (_, _) =>
+            {
+                try
+                {
+                    if (IsDisposed || !Visible) return;
+                    bool ok = SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    if (++ticks == 1 || !ok)
+                        Console.WriteLine($"[startup] top re-assert #{ticks} ok={ok} err={Marshal.GetLastWin32Error()}");
+                }
+                catch (Exception ex) { Console.WriteLine("[startup] top re-assert EX: " + ex.Message); }
+            };
+            _topTimer.Start();
+        }
+
         // Banner shows instantly (drawn in OnPaintBackground); the full art swaps in
         // a moment later (image loads off the UI thread).
         BuildBackgroundAsync(Bounds.Size, ctx);
@@ -61,7 +87,11 @@ internal sealed class InfoOverlay : Form
         {
             var cp = base.CreateParams;
             cp.ExStyle |= 0x02000000;                    // WS_EX_COMPOSITED
-            if (_noActivate) cp.ExStyle |= 0x08000000;   // WS_EX_NOACTIVATE
+            // WinForms quirk: with ShowWithoutActivation=true the TopMost property is
+            // silently LOST (its SetWindowPos rides the activation path) — measured: the
+            // shown overlay had no WS_EX_TOPMOST bit and sat BELOW the emulator. Bake the
+            // bit into the window at birth instead.
+            if (_noActivate) cp.ExStyle |= 0x08000000 | 0x00000008;   // WS_EX_NOACTIVATE | WS_EX_TOPMOST
             return cp;
         }
     }
@@ -107,6 +137,7 @@ internal sealed class InfoOverlay : Form
     }
 
     private System.Windows.Forms.Timer? _frontTimer;
+    private System.Windows.Forms.Timer? _topTimer;   // stay-on-top band re-assert (no-activate mode)
     private bool _frontYielded;
 
     /// <summary>Re-assert the foreground only while it is actually lost (no per-tick flicker).
@@ -148,6 +179,8 @@ internal sealed class InfoOverlay : Form
     /// destroying a hidden one doesn't either — the ExtendDB Update-form lesson).</summary>
     public void HideThenClose()
     {
+        try { _topTimer?.Stop(); _topTimer?.Dispose(); } catch { }
+        _topTimer = null;
         try { if (GetForegroundWindow() != Handle) Hide(); } catch { }
         try { Close(); } catch { }
     }
@@ -156,6 +189,8 @@ internal sealed class InfoOverlay : Form
     {
         if (disposing)
         {
+            try { _topTimer?.Stop(); _topTimer?.Dispose(); } catch { }
+            _topTimer = null;
             if (_cursorHidden) { try { Cursor.Show(); } catch { } _cursorHidden = false; }
             _bg?.Dispose();
         }

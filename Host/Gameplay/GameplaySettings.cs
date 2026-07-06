@@ -78,6 +78,15 @@ internal static class GameplaySettings
         catch { return true; }
     }
 
+    /// <summary>True when "Mute Audio During Transitions" is on (Settings.xml
+    /// PauseScreenMuting, LB default true). Read fresh — an options change applies
+    /// to the next pause without a restart.</summary>
+    public static bool PauseMutingGlobal()
+    {
+        try { return GBool(ReadSettings(), "PauseScreenMuting", true); }
+        catch { return true; }
+    }
+
     /// <summary>Screenshot hotkey string (LiteBox.ini). Empty/None ⇒ disabled.</summary>
     public static string ScreenCaptureKey()
     {

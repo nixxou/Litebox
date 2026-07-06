@@ -113,6 +113,7 @@ internal static class PauseManager
             if (_suspended && _proc is { HasExited: false }) { NtResumeProcess(_proc.Handle); }
         }
         catch { }
+        UnmuteIfWeMuted();   // a game killed while paused must not stay muted (session may outlive us)
         _suspended = false; _paused = false;
         var w = _hkWin; _hkWin = null;
         var s = _screen; _screen = null;
@@ -141,6 +142,22 @@ internal static class PauseManager
     {
         _paused = true;
         Console.WriteLine("[pause] pausing");
+
+        // 0. Mute the emulator's audio session(s) FIRST — LB's "Mute Audio During
+        //    Transitions": the whole transition (pause script, freeze, screen fade)
+        //    is silent. Skipped when the app was already muted by the user (we then
+        //    must not unmute it on resume either). AppAudio = the BigBoxProfile
+        //    per-process mute building block.
+        _mutedByUs = false;
+        if (Gameplay.GameplaySettings.PauseMutingGlobal())
+        {
+            try
+            {
+                if (_proc is { HasExited: false } && AppAudio.GetMute(_proc.Id) != true)
+                    _mutedByUs = AppAudio.SetMute(_proc.Id, true);
+            }
+            catch { }
+        }
 
         // 1. Pause script BEFORE the freeze (it usually sends the emulator's own
         //    pause key, so the process must still be running).
@@ -197,8 +214,22 @@ internal static class PauseManager
             var p = AhkScript.RunOneOff(FieldStr(_emu!, "ResumeAutoHotkeyScript"), _lbRoot);
             if (p != null) { try { p.WaitForExit(1500); } catch { } }
         }
+        // Unmute AFTER the resume script — the whole transition stays silent, the game
+        // comes back audible only once it is actually running again. Only if WE muted.
+        UnmuteIfWeMuted();
         if (refocus) FocusEmulator();
         Console.WriteLine("[pause] resumed");
+    }
+
+    // "Mute Audio During Transitions" bookkeeping: true only when the PAUSE muted the
+    // process (an app the user muted himself stays muted through pause/resume).
+    private static bool _mutedByUs;
+
+    private static void UnmuteIfWeMuted()
+    {
+        if (!_mutedByUs) return;
+        _mutedByUs = false;
+        try { if (_proc is { HasExited: false }) AppAudio.SetMute(_proc.Id, false); } catch { }
     }
 
     // ── Screen actions ──────────────────────────────────────────────────

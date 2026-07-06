@@ -426,7 +426,38 @@ internal sealed class GameListView : ListView
             try { EnsureVisible(selIx >= 0 ? selIx : 0); } catch { }
         }
         Invalidate();
+        // The VirtualListSize=0 reset above is NOT always enough: the stale-origin state can
+        // survive it (measured — SNES switch still painted row 0 ~800px down, scrollbar at
+        // top). Post-layout self-check: once this message batch settles, ask the control
+        // where item 0 actually sits; parked way below the header = corrupted geometry →
+        // recreate the native handle (guaranteed full reset), restore selection, re-snap.
+        if (swapped && _view.Length > 0 && IsHandleCreated)
+        {
+            int keepSel = selIx;
+            try { BeginInvoke((Action)(() => VerifyOriginAfterSwap(keepSel))); } catch { }
+        }
         ViewChanged?.Invoke();
+    }
+
+    private void VerifyOriginAfterSwap(int selIx)
+    {
+        try
+        {
+            if (IsDisposed || !IsHandleCreated || _view.Length == 0) return;
+            var r = GetItemRect(0, ItemBoundsPortion.Entire);
+            // Healthy: item 0 right under the header (~header height), or scrolled above the
+            // viewport (negative Top — a selection was re-snapped). Corrupted: hundreds of px
+            // down while the scrollbar sits at the top.
+            int rowH = _rowSizer?.ImageSize.Height ?? 30;
+            int worstHealthyTop = rowH * 2 + 64;   // header + generous slack
+            if (r.Top <= worstHealthyTop) return;
+            Console.WriteLine($"[gamelist] stale items origin after swap (item0.Top={r.Top}, rowH={rowH}) — recreating handle");
+            RecreateHandle();   // HandleCreated hook re-applies double-buffer/theme/row height/fit
+            if (selIx >= 0) SetSelectedAndFocused(selIx);
+            try { EnsureVisible(selIx >= 0 ? selIx : 0); } catch { }
+            Invalidate();
+        }
+        catch { }
     }
 
     private bool SafeFilter(IGame g) { try { return FilterPredicate(g); } catch { return false; } }

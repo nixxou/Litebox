@@ -362,8 +362,22 @@ internal sealed class GameListView : ListView
                 try { c.SavedDisplayIndex = c.Header.DisplayIndex; } catch { }
     }
 
+    // A NEW array reference = a different game set (platform/node switch — MainWindow rebuilds
+    // _current per node); the SAME reference = a re-sort / re-filter of the current set. The next
+    // RebuildView uses this to decide whether to snap the scroll back to the top.
+    private bool _setSwapped;
+
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public IGame[] Games { get => _all; set => _all = value ?? Array.Empty<IGame>(); }
+    public IGame[] Games
+    {
+        get => _all;
+        set
+        {
+            var v = value ?? Array.Empty<IGame>();
+            if (!ReferenceEquals(_all, v)) _setSwapped = true;
+            _all = v;
+        }
+    }
 
     public void RebuildView()
     {
@@ -383,12 +397,20 @@ internal sealed class GameListView : ListView
         try { SelectedIndices.Clear(); } catch { }
         int selIx = prev != null ? Array.IndexOf(_view, prev) : -1;
         if (selIx >= 0) SetSelectedAndFocused(selIx);
-        // A native virtual ListView keeps its pixel scroll offset when VirtualListSize SHRINKS, so
-        // switching to a smaller view (e.g. a platform with fewer games) can leave the viewport parked
-        // past the new end — rendering blank. When the list shrank, snap the scroll back into range: to
-        // the surviving selection, else the top. EnsureVisible is a no-op when the target is already
-        // visible, so a same-size / grown refresh is untouched.
-        if (_view.Length > 0 && _view.Length < prevLen) { try { EnsureVisible(selIx >= 0 ? selIx : 0); } catch { } }
+        // A native virtual ListView keeps its pixel scroll offset when the content is replaced —
+        // in BOTH directions. Two snaps:
+        //   • the game SET changed (new Games array = platform/node switch): the old offset is
+        //     meaningless for the new list — a same-or-larger platform would come up parked
+        //     mid-list with its top rows off-screen. Snap to the surviving selection, else the top.
+        //   • same set but the view SHRANK (search filter narrowing): the viewport can be parked
+        //     past the new end — rendering blank. Same snap.
+        // EnsureVisible is a no-op when the target is already visible, so a same-set, same-size
+        // refresh (sort glyph toggle, in-place refresh) keeps the user's scroll untouched.
+        bool swapped = _setSwapped; _setSwapped = false;
+        if (_view.Length > 0 && (swapped || _view.Length < prevLen))
+        {
+            try { EnsureVisible(selIx >= 0 ? selIx : 0); } catch { }
+        }
         Invalidate();
         ViewChanged?.Invoke();
     }

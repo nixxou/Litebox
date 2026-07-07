@@ -42,16 +42,16 @@ internal static class GameplaySettings
         var d = ReadSettings();
         var r = new Resolved
         {
-            UseStartup    = GBool(d, "UseStartupScreen", true),
+            UseStartup    = GBool(d, "UseStartupScreen"),
             // Display times use the 13.28 key names. Routed: shared in LB's XML on 13.28+,
             // in LiteBox's own DB on 13.27 (where those key names don't exist) — the boot
             // seed carried the pre-rename value over. Single mechanism, no version branching here.
-            StartupMinMs  = GIntRouted(d, "StartupScreenPostLaunchDisplayTime", 1000),
-            ShutdownMinMs = GIntRouted(d, "ShutdownScreenPostReadyDisplayTime", 1000),
-            HideCursor    = GBool(d, "HideMouseCursorOnStartupScreens", true),
-            UsePause      = GBool(d, "UsePauseScreen", true),
-            Fading        = GBool(d, "PauseScreenFading", true),
-            Muting        = GBool(d, "PauseScreenMuting", true),
+            StartupMinMs  = GIntRouted(d, "StartupScreenPostLaunchDisplayTime"),
+            ShutdownMinMs = GIntRouted(d, "ShutdownScreenPostReadyDisplayTime"),
+            HideCursor    = GBool(d, "HideMouseCursorOnStartupScreens"),
+            UsePause      = GBool(d, "UsePauseScreen"),
+            Fading        = GBool(d, "PauseScreenFading"),
+            Muting        = GBool(d, "PauseScreenMuting"),
         };
 
         // Emulator tier (LB Edit Emulator → Startup Screen): every emulator carries its own
@@ -145,11 +145,14 @@ internal static class GameplaySettings
         return d;
     }
 
+    // GBool/GInt default to the centralised SettingDefaults when no explicit fallback is given,
+    // so the "no value anywhere" case matches LbSettingsStore and the options page exactly.
+    private static bool GBool(Dictionary<string, string> d, string name)
+        => d.TryGetValue(name, out var v) ? string.Equals(v, "true", StringComparison.OrdinalIgnoreCase)
+                                          : Data.SettingDefaults.GetBool(name);
+
     private static bool GBool(Dictionary<string, string> d, string name, bool def)
         => d.TryGetValue(name, out var v) ? string.Equals(v, "true", StringComparison.OrdinalIgnoreCase) : def;
-
-    private static int GInt(Dictionary<string, string> d, string name, int def)
-        => d.TryGetValue(name, out var v) && int.TryParse(v, out var n) ? n : def;
 
     /// <summary>Routed read: LiteBox's DB for a DB-managed key (ProblemKeys), else Settings.xml.
     /// The single choke point that keeps GameplaySettings and LbSettingsStore consistent.</summary>
@@ -159,6 +162,6 @@ internal static class GameplaySettings
         return d.TryGetValue(key, out var v) ? v : fallback;
     }
 
-    private static int GIntRouted(Dictionary<string, string> d, string key, int def)
-        => int.TryParse(GRouted(d, key, null), out var n) ? n : def;
+    private static int GIntRouted(Dictionary<string, string> d, string key)
+        => int.TryParse(GRouted(d, key, Data.SettingDefaults.Get(key)), out var n) ? n : 0;
 }

@@ -191,9 +191,12 @@ internal sealed class LbSettingsStore
     // the running LB would drop/ignore the key. One choke point: every global setting flows here.
     public string Get(string field, string fallback = "")
     {
+        // Centralised default (SettingDefaults) applies when the value is absent from BOTH
+        // stores, so the XML-read and DB-read paths never disagree on "no value → what".
+        string def = SettingDefaults.Get(field, fallback);
         if (ProblemKeys.IsDbManaged(field))
-            return LiteBoxOptionsDb.GetGlobal(field) ?? fallback;
-        return _f.TryGetValue(field, out var v) ? v : fallback;
+            return LiteBoxOptionsDb.GetGlobal(field) ?? def;
+        return _f.TryGetValue(field, out var v) ? v : def;
     }
 
     public bool GetBool(string field, bool fallback = false)

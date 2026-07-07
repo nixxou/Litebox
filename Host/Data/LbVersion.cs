@@ -44,15 +44,18 @@ internal static class LbVersion
             DotNetMajor = Environment.Version.Major;   // authoritative: we run on Core's runtime
             if (!string.IsNullOrEmpty(lbRoot))
             {
-                string exe = Path.Combine(lbRoot!, "LaunchBox.exe");
-                if (File.Exists(exe))
+                // Core\LaunchBox.dll carries the real product version (e.g. 13.27.0.0 / 13.28.0.3);
+                // LaunchBox.exe is only a thin launcher and reports 1.0.0. Fall back to the exe.
+                foreach (var cand in new[] { Path.Combine(lbRoot!, "Core", "LaunchBox.dll"), Path.Combine(lbRoot!, "LaunchBox.exe") })
                 {
-                    var fi = FileVersionInfo.GetVersionInfo(exe);
-                    if (fi.ProductMajorPart > 0 || fi.FileMajorPart > 0)
-                        Product = new Version(
-                            Math.Max(fi.ProductMajorPart, fi.FileMajorPart),
-                            Math.Max(fi.ProductMinorPart, fi.FileMinorPart),
-                            Math.Max(fi.ProductBuildPart, fi.FileBuildPart));
+                    if (!File.Exists(cand)) continue;
+                    var fi = FileVersionInfo.GetVersionInfo(cand);
+                    int maj = Math.Max(fi.ProductMajorPart, fi.FileMajorPart);
+                    if (maj <= 1) continue;   // launcher stub → try the next candidate
+                    Product = new Version(maj,
+                        Math.Max(fi.ProductMinorPart, fi.FileMinorPart),
+                        Math.Max(fi.ProductBuildPart, fi.FileBuildPart));
+                    break;
                 }
             }
             Console.WriteLine($"[lbversion] .NET major={DotNetMajor} product={Product?.ToString() ?? "?"} is1328+={Is1328OrLater}");

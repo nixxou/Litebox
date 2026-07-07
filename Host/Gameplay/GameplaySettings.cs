@@ -43,14 +43,11 @@ internal static class GameplaySettings
         var r = new Resolved
         {
             UseStartup    = GBool(d, "UseStartupScreen", true),
-            // Display times: LB 13.28 RENAMED the global keys (its Post-Launch / Post-Ready
-            // sliders write StartupScreenPostLaunchDisplayTime / ShutdownScreenPostReady-
-            // DisplayTime) while 13.27 only has the Minimum* pair. Policy: the NEW format is
-            // canonical — key present in Settings.xml (13.28-line library) → use it; absent
-            // (13.27, which would strip unknown keys on rewrite) → the setting lives in
-            // LiteBox.ini under the same name, seeded once from the pre-rename key.
-            StartupMinMs  = GIntVersioned(d, "StartupScreenPostLaunchDisplayTime", "MinimumStartupScreenDisplayTime", 1000),
-            ShutdownMinMs = GIntVersioned(d, "ShutdownScreenPostReadyDisplayTime", "MinimumShutdownScreenDisplayTime", 1000),
+            // Display times use the 13.28 key names. Routed: shared in LB's XML on 13.28+,
+            // in LiteBox's own DB on 13.27 (where those key names don't exist) — the boot
+            // seed carried the pre-rename value over. Single mechanism, no version branching here.
+            StartupMinMs  = GIntRouted(d, "StartupScreenPostLaunchDisplayTime", 1000),
+            ShutdownMinMs = GIntRouted(d, "ShutdownScreenPostReadyDisplayTime", 1000),
             HideCursor    = GBool(d, "HideMouseCursorOnStartupScreens", true),
             UsePause      = GBool(d, "UsePauseScreen", true),
             Fading        = GBool(d, "PauseScreenFading", true),
@@ -101,15 +98,7 @@ internal static class GameplaySettings
     /// web kiosk when one is up (it relaunches after the game), else the LiteBox window.</summary>
     public static bool ForceFrontendFocusOnShutdown()
     {
-        try
-        {
-            // 13.28-only key: present in Settings.xml → LB's value; absent (13.27 library)
-            // → LiteBox.ini under the same name (same policy as the renamed display times).
-            var d = ReadSettings();
-            if (d.TryGetValue("ForceFrontendFocusOnShutdown", out var v))
-                return string.Equals(v, "true", StringComparison.OrdinalIgnoreCase);
-            return LiteBoxConfig.LoadForExe().GetBool("ForceFrontendFocusOnShutdown", true);
-        }
+        try { return string.Equals(GRouted(ReadSettings(), "ForceFrontendFocusOnShutdown", "true"), "true", StringComparison.OrdinalIgnoreCase); }
         catch { return true; }
     }
 
@@ -162,13 +151,14 @@ internal static class GameplaySettings
     private static int GInt(Dictionary<string, string> d, string name, int def)
         => d.TryGetValue(name, out var v) && int.TryParse(v, out var n) ? n : def;
 
-    /// <summary>New-format key resolution: Settings.xml when the library carries the key
-    /// (13.28-line), else LiteBox.ini under the same name (LiteBox-owned on a 13.27 library),
-    /// else the pre-rename Settings.xml key as a one-time seed, else the default.</summary>
-    private static int GIntVersioned(Dictionary<string, string> d, string key, string oldKey, int def)
+    /// <summary>Routed read: LiteBox's DB for a DB-managed key (ProblemKeys), else Settings.xml.
+    /// The single choke point that keeps GameplaySettings and LbSettingsStore consistent.</summary>
+    private static string? GRouted(Dictionary<string, string> d, string key, string? fallback)
     {
-        if (d.TryGetValue(key, out var v) && int.TryParse(v, out var n)) return n;
-        try { if (int.TryParse(LiteBoxConfig.LoadForExe().Get(key, ""), out var m)) return m; } catch { }
-        return GInt(d, oldKey, def);
+        if (Data.ProblemKeys.IsDbManaged(key)) return Data.LiteBoxOptionsDb.GetGlobal(key) ?? fallback;
+        return d.TryGetValue(key, out var v) ? v : fallback;
     }
+
+    private static int GIntRouted(Dictionary<string, string> d, string key, int def)
+        => int.TryParse(GRouted(d, key, null), out var n) ? n : def;
 }

@@ -154,23 +154,8 @@ internal static class LbGlobalOptions
         void BindTxt(TextBox tb, string field) => applies.Add(() => { if (tb.Text != s.Get(field)) s.Set(field, tb.Text); });
         void BindIniHk(HotkeyCaptureBox hb, string key) => applies.Add(() => { if (hb.HotkeyValue != ini.Get(key)) { ini.Set(key, hb.HotkeyValue); iniDirty = true; } });
         void BindIniChk(CheckBox cb, string key, bool def = false) => applies.Add(() => { if (cb.Checked != ini.GetBool(key, def)) { ini.SetBool(key, cb.Checked); iniDirty = true; } });
-        // New-format keys (13.28 renames/additions): the NEW name is canonical. When the
-        // library's Settings.xml carries the key (13.28-line) we read/write it THERE; on an
-        // older library (13.27 would strip unknown keys on rewrite) the setting lives in
-        // LiteBox.ini under the same name, seeded once from the pre-rename key when present.
-        bool HasKey(string key) => !string.IsNullOrEmpty(s.Get(key));
-        string GetVersioned(string key, string oldKey, string def)
-        {
-            if (HasKey(key)) return s.Get(key);
-            var iv = ini.Get(key, "");
-            if (!string.IsNullOrEmpty(iv)) return iv;
-            return oldKey != null && HasKey(oldKey) ? s.Get(oldKey) : def;
-        }
-        void BindVersioned(string key, Func<string> val) => applies.Add(() =>
-        {
-            if (HasKey(key)) { if (val() != s.Get(key)) s.Set(key, val()); }
-            else if (val() != ini.Get(key, "")) { ini.Set(key, val()); iniDirty = true; }
-        });
+        // The 13.28-format keys route through LbSettingsStore transparently (ProblemKeys →
+        // LB XML on 13.28+, LiteBox DB on 13.27), so plain s.Get/s.Set is all this page needs.
 
         var tabs = NewDarkTabControl(dpiS);
         TabPage Page(string t) { var p = new TabPage(t) { BackColor = Bg, Padding = new Padding(S(12)) }; tabs.TabPages.Add(p); return p; }
@@ -182,15 +167,15 @@ internal static class LbGlobalOptions
             p.Controls.Add(use);
             p.Controls.Add(Lbl("(also shows the end “GAME OVER” screen)", new Point(S(28), S(30)), Dim));
             p.Controls.Add(Lbl("Post-Launch Display Time (ms)", new Point(S(4), S(64))));
-            var st = Txt(GetVersioned("StartupScreenPostLaunchDisplayTime", "MinimumStartupScreenDisplayTime", "1000"), new Point(S(320), S(61)), 90); p.Controls.Add(st);
+            var st = Txt(s.Get("StartupScreenPostLaunchDisplayTime", "1000"), new Point(S(320), S(61)), 90); p.Controls.Add(st);
             p.Controls.Add(Lbl("Shutdown Screen Post-Ready Display Time (ms)", new Point(S(4), S(96))));
-            var sh = Txt(GetVersioned("ShutdownScreenPostReadyDisplayTime", "MinimumShutdownScreenDisplayTime", "1000"), new Point(S(320), S(93)), 90); p.Controls.Add(sh);
+            var sh = Txt(s.Get("ShutdownScreenPostReadyDisplayTime", "1000"), new Point(S(320), S(93)), 90); p.Controls.Add(sh);
             var hc = Chk("Hide Mouse Cursor on Startup Screens", s.GetBool("HideMouseCursorOnStartupScreens", true), new Point(S(4), S(128)));
             p.Controls.Add(hc);
             // LB parity: reclaim the frontend's focus when the shutdown screen closes. Under
             // LiteBox the "frontend" is the ExtendDB web kiosk when one is up (it relaunches
             // after the game), else the LiteBox window itself. LB's own Settings.xml key.
-            var ff = Chk("Force frontend back into focus when the shutdown screen closes", GetVersioned("ForceFrontendFocusOnShutdown", null, "true") == "true", new Point(S(4), S(154)));
+            var ff = Chk("Force frontend back into focus when the shutdown screen closes", s.GetBool("ForceFrontendFocusOnShutdown", true), new Point(S(4), S(154)));
             p.Controls.Add(ff);
             // LiteBox-specific (LiteBox.ini): startup/end screens stay TOPMOST for their whole
             // duration WITHOUT ever taking focus — the emulator loads and runs behind the
@@ -199,10 +184,10 @@ internal static class LbGlobalOptions
             p.Controls.Add(stp);
             p.Controls.Add(Lbl("The screen covers the display while the game keeps the focus behind it.", new Point(S(28), S(202)), Dim));
             BindChk(use, "UseStartupScreen");
-            BindVersioned("StartupScreenPostLaunchDisplayTime", () => st.Text);
-            BindVersioned("ShutdownScreenPostReadyDisplayTime", () => sh.Text);
+            BindTxt(st, "StartupScreenPostLaunchDisplayTime");
+            BindTxt(sh, "ShutdownScreenPostReadyDisplayTime");
             BindChk(hc, "HideMouseCursorOnStartupScreens");
-            BindVersioned("ForceFrontendFocusOnShutdown", () => ff.Checked ? "true" : "false");
+            BindChk(ff, "ForceFrontendFocusOnShutdown");
             BindIniChk(stp, "StartupStayOnTop");
         }
 

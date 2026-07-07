@@ -186,15 +186,26 @@ internal sealed class LbSettingsStore
         _store?.RecordEntityReplace("StartupAppSettings", "Settings", json);
     }
 
+    // A key the current LaunchBox can't safely host in its XML (ProblemKeys, version-gated)
+    // is read/written from LiteBox's own DB instead — shared-with-LB by default, DB only when
+    // the running LB would drop/ignore the key. One choke point: every global setting flows here.
     public string Get(string field, string fallback = "")
-        => _f.TryGetValue(field, out var v) ? v : fallback;
+    {
+        if (ProblemKeys.IsDbManaged(field))
+            return LiteBoxOptionsDb.GetGlobal(field) ?? fallback;
+        return _f.TryGetValue(field, out var v) ? v : fallback;
+    }
 
     public bool GetBool(string field, bool fallback = false)
-        => _f.TryGetValue(field, out var v) ? string.Equals(v, "true", StringComparison.OrdinalIgnoreCase) : fallback;
+    {
+        var v = Get(field, fallback ? "true" : "false");
+        return string.Equals(v, "true", StringComparison.OrdinalIgnoreCase);
+    }
 
     public void Set(string field, string value)
     {
         if (string.IsNullOrEmpty(field)) return;
+        if (ProblemKeys.IsDbManaged(field)) { LiteBoxOptionsDb.SetGlobal(field, value ?? ""); return; }
         _f[field] = value ?? "";
         _store?.RecordEntityModify("Settings", "Settings", field, value ?? "");
     }

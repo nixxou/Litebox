@@ -88,19 +88,33 @@ internal static class PauseManager
             _proc = proc; _emu = emulator; _game = game;
             _paused = _suspended = false;
 
-            // Pause hotkey resolved per-emulator → global (LiteBox-own option, litebox-options.db):
-            // an emulator can override the combo or disable it outright ("None"). Empty ⇒ no hotkey.
-            string pauseKey = Data.LiteBoxOption.ResolveString("PauseHotkey", Safe(() => emulator.Id), Gameplay.GameplaySettings.PauseKey());
-            if (string.IsNullOrWhiteSpace(pauseKey) || pauseKey.Equals("None", StringComparison.OrdinalIgnoreCase))
-            { Console.WriteLine("[pause] pause hotkey disabled (emulator setting) — off"); return; }
-            var (mod, vk, label) = ParseHotkey(pauseKey);
-            UiThread.Invoke(() =>
+            string? emuId = Safe(() => emulator.Id);
+
+            // Keyboard pause hotkey, resolved per-emulator → global (litebox-options.db): an
+            // emulator can override the combo or disable it outright ("None"). Empty ⇒ no keyboard
+            // trigger, but the CONTROLLER trigger below is independent (either can pause).
+            string pauseKey = Data.LiteBoxOption.ResolveString("PauseHotkey", emuId, Gameplay.GameplaySettings.PauseKey());
+            if (!string.IsNullOrWhiteSpace(pauseKey) && !pauseKey.Equals("None", StringComparison.OrdinalIgnoreCase))
             {
-                _hkWin = new HotkeyWindow(OnHotkey);
-                if (!RegisterHotKey(_hkWin.Handle, HotkeyId, mod | MOD_NOREPEAT, vk))
-                { Console.WriteLine($"[pause] RegisterHotKey({label}) failed — pause hotkey unavailable"); _hkWin.DestroyHandle(); _hkWin = null; }
-                else Console.WriteLine($"[pause] armed — hotkey {label}");
-            });
+                var (mod, vk, label) = ParseHotkey(pauseKey);
+                UiThread.Invoke(() =>
+                {
+                    _hkWin = new HotkeyWindow(OnHotkey);
+                    if (!RegisterHotKey(_hkWin.Handle, HotkeyId, mod | MOD_NOREPEAT, vk))
+                    { Console.WriteLine($"[pause] RegisterHotKey({label}) failed — pause hotkey unavailable"); _hkWin.DestroyHandle(); _hkWin = null; }
+                    else Console.WriteLine($"[pause] armed — hotkey {label}");
+                });
+            }
+            else Console.WriteLine("[pause] keyboard pause hotkey disabled");
+
+            // Controller pause trigger (XInput 0), resolved per-emulator → global. Enabled +
+            // button both overridable per emulator, same tri-state as the rest. Off by default.
+            bool padOn = Data.LiteBoxOption.ResolveBool("PadPauseEnabled", emuId, Gameplay.GameplaySettings.PadPauseEnabled());
+            if (padOn)
+            {
+                string combo = Data.LiteBoxOption.ResolveString("PadPauseButton", emuId, Gameplay.GameplaySettings.PadPauseButton());
+                PadPauseWatcher.Start(combo, OnHotkey);
+            }
         }
     }
 
@@ -119,6 +133,7 @@ internal static class PauseManager
         }
         catch { }
         UnmuteIfWeMuted();   // a game killed while paused must not stay muted (session may outlive us)
+        PadPauseWatcher.Stop();
         _suspended = false; _paused = false;
         var w = _hkWin; _hkWin = null;
         var s = _screen; _screen = null;

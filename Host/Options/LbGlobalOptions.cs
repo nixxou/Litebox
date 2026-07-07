@@ -208,8 +208,24 @@ internal static class LbGlobalOptions
             var fade = Chk("Enable Fading", s.GetBool("PauseScreenFading", true), new Point(S(4), S(76)));
             var mute = Chk("Mute Audio During Transitions", s.GetBool("PauseScreenMuting", true), new Point(S(4), S(102)));
             p.Controls.AddRange(new Control[] { fade, mute });
+            // Controller pause (LiteBox-own, LiteBox.ini): a button/combo on XInput controller 1
+            // pauses the game — twin of the keyboard key. The pause menu is already gamepad-navigable.
+            var padEn = Chk("Pause with a controller (XInput) button/combo", ini.GetBool("PadPauseEnabled", false), new Point(S(4), S(136)));
+            p.Controls.Add(padEn);
+            p.Controls.Add(Lbl("Button:", new Point(S(24), S(166))));
+            var padBtn = new ComboBox { Location = new Point(S(120), S(163)), Width = S(220), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat };
+            padBtn.Items.AddRange(Pause.XInputPad.ComboPresets);
+            var padBtnCur = ini.Get("PadPauseButton"); if (string.IsNullOrEmpty(padBtnCur)) padBtnCur = "Back+Start";
+            padBtn.SelectedIndex = Math.Max(0, Array.IndexOf(Pause.XInputPad.ComboPresets, padBtnCur));
+            p.Controls.Add(padBtn);
             BindChk(use, "UsePauseScreen"); BindIniHkFrom(pk, "PauseHotkey", pkInit);
             BindChk(fade, "PauseScreenFading"); BindChk(mute, "PauseScreenMuting");
+            applies.Add(() =>
+            {
+                if (padEn.Checked != ini.GetBool("PadPauseEnabled", false)) { ini.SetBool("PadPauseEnabled", padEn.Checked); iniDirty = true; }
+                var bv = padBtn.SelectedItem as string ?? "Back+Start";
+                if (bv != ini.Get("PadPauseButton")) { ini.Set("PadPauseButton", bv); iniDirty = true; }
+            });
         }
 
         // ── Screen Capture ──

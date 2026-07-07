@@ -143,6 +143,21 @@ internal static class GameplaySettings
         catch { return ""; }
     }
 
+    /// <summary>Controller-pause master switch (LiteBox-own, LiteBox.ini). Off by default —
+    /// opt-in. LaunchBox has no equivalent, so this never touches Settings.xml.</summary>
+    public static bool PadPauseEnabled()
+    {
+        try { return LiteBoxConfig.LoadForExe().GetBool("PadPauseEnabled", false); }
+        catch { return false; }
+    }
+
+    /// <summary>Controller-pause button/combo (LiteBox.ini), e.g. "Back+Start". Default a safe combo.</summary>
+    public static string PadPauseButton()
+    {
+        try { var v = LiteBoxConfig.LoadForExe().Get("PadPauseButton"); return string.IsNullOrEmpty(v) ? "Back+Start" : v; }
+        catch { return "Back+Start"; }
+    }
+
     /// <summary>An int Settings.xml value (LB-native keys, never DB-routed).</summary>
     private static int GIntXml(string key, int def)
     {

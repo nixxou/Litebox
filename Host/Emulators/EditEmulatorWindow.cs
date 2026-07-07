@@ -575,10 +575,30 @@ internal static class EditEmulatorWindow
         p.Controls.Add(Lab("Screenshot hotkey:", 80));
         var cap = HotkeyTri(82, "ScreenCaptureKey", "ScreenCaptureKey");
 
+        // 4. Controller pause enable (bool tri-state).
+        p.Controls.Add(Lab("Pause with controller:", 116));
+        var padGlobalOn = Gameplay.GameplaySettings.PadPauseEnabled();
+        var padEnCbo = Cbo(114, 220);
+        padEnCbo.Items.AddRange(new object[] { $"Use global ({(padGlobalOn ? "On" : "Off")})", "On", "Off" });
+        var padEnOv = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PadPauseEnabled");
+        padEnCbo.SelectedIndex = string.IsNullOrEmpty(padEnOv) ? 0 : (string.Equals(padEnOv, "true", StringComparison.OrdinalIgnoreCase) ? 1 : 2);
+        p.Controls.Add(padEnCbo);
+
+        // 5. Controller pause button (preset tri-state).
+        p.Controls.Add(Lab("Controller pause button:", 152));
+        var padBtnGlobal = Gameplay.GameplaySettings.PadPauseButton();
+        var padBtnCbo = Cbo(150, 220);
+        padBtnCbo.Items.Add($"Use global ({padBtnGlobal})");
+        padBtnCbo.Items.AddRange(Pause.XInputPad.ComboPresets);
+        var padBtnOv = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PadPauseButton");
+        padBtnCbo.SelectedIndex = string.IsNullOrEmpty(padBtnOv) ? 0
+            : Math.Max(0, Array.IndexOf(Pause.XInputPad.ComboPresets, padBtnOv) + 1);   // +1: index 0 is "Use global"
+        p.Controls.Add(padBtnCbo);
+
         p.Controls.Add(new Label
         {
             Text = "These are LiteBox-only options (LaunchBox has no equivalent). They are stored\nseparately and do not affect a real LaunchBox running on the same library.",
-            Location = new Point(S(8), S(122)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
+            Location = new Point(S(8), S(194)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
         });
 
         return (p, () =>
@@ -586,6 +606,12 @@ internal static class EditEmulatorWindow
             // stay-on-top: index 0 = inherit (clear row), 1 = On, 2 = Off.
             Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "StartupStayOnTop",
                 stayCbo.SelectedIndex switch { 1 => "true", 2 => "false", _ => null });
+            // controller pause enable: 0 = inherit, 1 = On, 2 = Off.
+            Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PadPauseEnabled",
+                padEnCbo.SelectedIndex switch { 1 => "true", 2 => "false", _ => null });
+            // controller pause button: index 0 = inherit (clear), else the preset at [index-1].
+            Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PadPauseButton",
+                padBtnCbo.SelectedIndex <= 0 ? null : Pause.XInputPad.ComboPresets[padBtnCbo.SelectedIndex - 1]);
             // hotkeys: value getter yields null (inherit) / Disabled sentinel / custom combo.
             Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PauseHotkey", pause.value());
             Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "ScreenCaptureKey", cap.value());

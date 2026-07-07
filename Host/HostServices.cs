@@ -321,14 +321,25 @@ internal static class HostLaunch
                         AhkScript.StartGameScript(SafeStr(() => emulator.AutoHotkeyScript), _lbRoot);
                     // Pause screen: arm the global hotkey + remember the emulator
                     // process for suspend/resume (PauseManager.Disarm in the finally).
+                    // SmartCapture: reveal the cover when the game actually renders, not on a
+                    // blind timer. Resolved game → emulator → global; when on, the cover uses a
+                    // safety-max and the coordinator closes it early (GameScreens.Close).
+                    var scCfg = Gameplay.GameplaySettings.ResolveSmartCapture(SafeStr(() => emulator?.Id), SafeStr(() => game?.Id));
+                    // No StartupLoadDelay floor: the "sustained FPS ≥ SustainMs" requirement already
+                    // guards against a transient window, and flooring by a large per-emulator delay
+                    // (RetroArch's 5s) would defeat the point — reveal AS SOON as it truly renders.
+                    int scFloor = 0;
+                    int scMax = Math.Max(SafeNullableInt(() => Gameplay.GameplaySettings.Resolve(LaunchedGame.Current)?.StartupMinMs) ?? 2000, 15000);
                     Action<Process> onSpawned = p =>
                     {
                         if (main.Value.useEmu && emulator != null) Pause.PauseManager.Arm(p, emulator, game);
                         Diag.RenderProbe.MaybeStart(p);   // no-op unless LITEBOX_RENDERPROBE=1
+                        if (scCfg.Enabled && !DryRun)
+                            Gameplay.SmartCapture.Start(p.Id, scCfg, scFloor, scMax, () => Gameplay.GameScreens.Close());
                     };
-                    // Startup screen ("NOW LOADING…") — shown just before the emulator
-                    // spawns, auto-closed after the min display time (non-blocking).
-                    if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current);
+                    // Startup screen ("NOW LOADING…") — shown just before the emulator spawns.
+                    // SmartCapture on → cover held to the safety-max (coordinator reveals earlier).
+                    if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scMax : (int?)null);
                     RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main", onSpawned);
                 }
                 else if (!DryRun)
@@ -349,6 +360,7 @@ internal static class HostLaunch
         {
             Pause.PauseManager.Disarm();  // hotkey off + resume a still-frozen process + close the screen
             Gameplay.ScreenCapture.Disarm();
+            Gameplay.SmartCapture.Stop();  // stop the reveal watcher (game exited before/after detection)
             Gameplay.GameScreens.Close(); // drop any lingering startup overlay
             AhkScript.KillGameScript();   // running script dies with the game (LB parity)
             var endSnap = LaunchedGame.Current;   // capture cosmetics before clearing (end screen needs them)

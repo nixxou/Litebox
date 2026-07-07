@@ -27,12 +27,14 @@ internal static class GameScreens
 
     /// <summary>Show the startup screen (if enabled), auto-closing after the minimum
     /// display time. Returns immediately — the game keeps launching behind it.</summary>
-    public static void ShowStartup(LaunchedGame? snap)
+    public static void ShowStartup(LaunchedGame? snap, int? coverMsOverride = null)
     {
         if (snap == null) return;
         GameplaySettings.Resolved? rr = Safe(() => GameplaySettings.Resolve(snap));
         if (rr is not { UseStartup: true }) return;
-        int ms = Math.Max(0, rr.StartupMinMs);
+        // SmartCapture (coverMsOverride set): the cover stays for the SAFETY-MAX; the coordinator
+        // calls Close() earlier the moment the game actually renders. Else the display-time timer.
+        int ms = Math.Max(0, coverMsOverride ?? rr.StartupMinMs);
         var ctx = BuildCtx(snap);
         bool hide = rr.HideCursor;
 

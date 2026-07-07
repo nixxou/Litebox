@@ -143,6 +143,29 @@ internal static class GameplaySettings
         catch { return ""; }
     }
 
+    /// <summary>SmartCapture config resolved game → emulator → global (LiteBox-own). Per-entity
+    /// overrides live in litebox-options.db; the global default in LiteBox.ini.</summary>
+    public static SmartCaptureConfig ResolveSmartCapture(string? emuId, string? gameId)
+    {
+        var ini = LiteBoxConfig.LoadForExe();
+        string R(string key, string def)
+        {
+            if (!string.IsNullOrEmpty(gameId)) { var g = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeGame, gameId!, key); if (!string.IsNullOrEmpty(g)) return g; }
+            if (!string.IsNullOrEmpty(emuId)) { var e = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId!, key); if (!string.IsNullOrEmpty(e)) return e; }
+            return ini.Get(key) ?? def;
+        }
+        int I(string key, int def) => int.TryParse(R(key, def.ToString()), out var n) ? n : def;
+        return new SmartCaptureConfig
+        {
+            Enabled    = R("SmartCaptureEnabled", "true").Equals("true", StringComparison.OrdinalIgnoreCase),
+            Mode       = R("SmartCaptureMode", "fps"),
+            MinFps     = I("SmartCaptureMinFps", 10),
+            SustainMs  = I("SmartCaptureSustainMs", 600),
+            MinSizePct = I("SmartCaptureMinSizePct", 50),
+            Title      = R("SmartCaptureTitle", ""),
+        };
+    }
+
     /// <summary>Controller-pause master switch (LiteBox-own, LiteBox.ini). Off by default —
     /// opt-in. LaunchBox has no equivalent, so this never touches Settings.xml.</summary>
     public static bool PadPauseEnabled()

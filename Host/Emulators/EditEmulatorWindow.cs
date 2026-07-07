@@ -546,22 +546,39 @@ internal static class EditEmulatorWindow
             : (string.Equals(stayOv, "true", StringComparison.OrdinalIgnoreCase) ? 1 : 2);
         p.Controls.Add(stayCbo);
 
-        // 2. Screenshot hotkey (string tri-state: use global / disabled / custom).
-        p.Controls.Add(Lab("Screenshot hotkey:", 44));
-        var capGlobal = Gameplay.GameplaySettings.ScreenCaptureKey();
-        var capOv = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "ScreenCaptureKey");
-        bool capCustom = !string.IsNullOrEmpty(capOv) && capOv != Data.LiteBoxOption.Disabled;
-        var capCbo = Cbo(42, 220);
-        capCbo.Items.AddRange(new object[] { $"Use global ({(string.IsNullOrEmpty(capGlobal) ? "Off" : capGlobal)})", "Disabled", "Custom…" });
-        capCbo.SelectedIndex = string.IsNullOrEmpty(capOv) ? 0 : (capOv == Data.LiteBoxOption.Disabled ? 1 : 2);
-        var capBox = new HotkeyCaptureBox(capCustom ? capOv : "") { Location = new Point(S(490), S(42)), Width = S(150), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Visible = capCustom };
-        p.Controls.Add(capBox);
-        capCbo.SelectedIndexChanged += (_, _) => capBox.Visible = capCbo.SelectedIndex == 2;
+        // A string tri-state (Use global / Disabled / Custom + capture box) for a hotkey option.
+        // Returns the combo, the capture box, and a getter for the value to persist (null = inherit).
+        (ComboBox cbo, HotkeyCaptureBox box, Func<string?> value) HotkeyTri(int y, string globalKey, string optKey)
+        {
+            var glob = optKey == "PauseHotkey" ? Gameplay.GameplaySettings.PauseKey() : Gameplay.GameplaySettings.ScreenCaptureKey();
+            var ov = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, optKey);
+            bool custom = !string.IsNullOrEmpty(ov) && ov != Data.LiteBoxOption.Disabled;
+            var cbo = Cbo(y - 2, 220);
+            cbo.Items.AddRange(new object[] { $"Use global ({(string.IsNullOrEmpty(glob) ? "Off" : glob)})", "Disabled", "Custom…" });
+            cbo.SelectedIndex = string.IsNullOrEmpty(ov) ? 0 : (ov == Data.LiteBoxOption.Disabled ? 1 : 2);
+            var box = new HotkeyCaptureBox(custom ? ov : "") { Location = new Point(S(490), S(y - 2)), Width = S(150), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Visible = custom };
+            p.Controls.Add(box);
+            cbo.SelectedIndexChanged += (_, _) => box.Visible = cbo.SelectedIndex == 2;
+            return (cbo, box, () => cbo.SelectedIndex switch
+            {
+                1 => Data.LiteBoxOption.Disabled,
+                2 => string.IsNullOrWhiteSpace(box.HotkeyValue) ? null : box.HotkeyValue,
+                _ => null,
+            });
+        }
+
+        // 2. Pause hotkey (string tri-state).
+        p.Controls.Add(Lab("Pause hotkey:", 44));
+        var pause = HotkeyTri(46, "PauseHotkey", "PauseHotkey");
+
+        // 3. Screenshot hotkey (string tri-state).
+        p.Controls.Add(Lab("Screenshot hotkey:", 80));
+        var cap = HotkeyTri(82, "ScreenCaptureKey", "ScreenCaptureKey");
 
         p.Controls.Add(new Label
         {
             Text = "These are LiteBox-only options (LaunchBox has no equivalent). They are stored\nseparately and do not affect a real LaunchBox running on the same library.",
-            Location = new Point(S(8), S(84)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
+            Location = new Point(S(8), S(122)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
         });
 
         return (p, () =>
@@ -569,14 +586,9 @@ internal static class EditEmulatorWindow
             // stay-on-top: index 0 = inherit (clear row), 1 = On, 2 = Off.
             Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "StartupStayOnTop",
                 stayCbo.SelectedIndex switch { 1 => "true", 2 => "false", _ => null });
-            // screenshot key: 0 = inherit (clear), 1 = disabled (sentinel), 2 = custom text (or clear if empty).
-            string? capVal = capCbo.SelectedIndex switch
-            {
-                1 => Data.LiteBoxOption.Disabled,
-                2 => string.IsNullOrWhiteSpace(capBox.HotkeyValue) ? null : capBox.HotkeyValue,
-                _ => null,
-            };
-            Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "ScreenCaptureKey", capVal);
+            // hotkeys: value getter yields null (inherit) / Disabled sentinel / custom combo.
+            Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PauseHotkey", pause.value());
+            Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "ScreenCaptureKey", cap.value());
         });
     }
 

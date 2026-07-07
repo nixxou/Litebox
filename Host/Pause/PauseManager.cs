@@ -88,7 +88,12 @@ internal static class PauseManager
             _proc = proc; _emu = emulator; _game = game;
             _paused = _suspended = false;
 
-            var (mod, vk, label) = ParseHotkey(Gameplay.GameplaySettings.PauseKey());
+            // Pause hotkey resolved per-emulator → global (LiteBox-own option, litebox-options.db):
+            // an emulator can override the combo or disable it outright ("None"). Empty ⇒ no hotkey.
+            string pauseKey = Data.LiteBoxOption.ResolveString("PauseHotkey", Safe(() => emulator.Id), Gameplay.GameplaySettings.PauseKey());
+            if (string.IsNullOrWhiteSpace(pauseKey) || pauseKey.Equals("None", StringComparison.OrdinalIgnoreCase))
+            { Console.WriteLine("[pause] pause hotkey disabled (emulator setting) — off"); return; }
+            var (mod, vk, label) = ParseHotkey(pauseKey);
             UiThread.Invoke(() =>
             {
                 _hkWin = new HotkeyWindow(OnHotkey);

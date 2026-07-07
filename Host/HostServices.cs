@@ -321,9 +321,11 @@ internal static class HostLaunch
                         AhkScript.StartGameScript(SafeStr(() => emulator.AutoHotkeyScript), _lbRoot);
                     // Pause screen: arm the global hotkey + remember the emulator
                     // process for suspend/resume (PauseManager.Disarm in the finally).
-                    Action<Process> onSpawned = (main.Value.useEmu && emulator != null)
-                        ? p => Pause.PauseManager.Arm(p, emulator, game)
-                        : null;
+                    Action<Process> onSpawned = p =>
+                    {
+                        if (main.Value.useEmu && emulator != null) Pause.PauseManager.Arm(p, emulator, game);
+                        Diag.RenderProbe.MaybeStart(p);   // no-op unless LITEBOX_RENDERPROBE=1
+                    };
                     // Startup screen ("NOW LOADING…") — shown just before the emulator
                     // spawns, auto-closed after the min display time (non-blocking).
                     if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current);

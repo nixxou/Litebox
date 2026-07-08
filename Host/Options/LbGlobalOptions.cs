@@ -197,7 +197,9 @@ internal static class LbGlobalOptions
             BindChk(ff, "ForceFrontendFocusOnShutdown");
 
             // ── LiteBox-specific group (blue frame): stay-on-top + Smart Capture + exit-screen-early ──
-            var grp = LiteBoxGroup("LiteBox-specific", 2, 176, 700, 416); p.Controls.Add(grp);
+            // (+ the web-return timing when ExtendDB is loaded — that combo is what makes the frame taller).
+            bool webAvail = Media.KioskBridge.Available;
+            var grp = LiteBoxGroup("LiteBox-specific", 2, 176, 700, webAvail ? 500 : 416); p.Controls.Add(grp);
             void GAdd(Control c) => grp.Controls.Add(c);
             var stp = new CheckBox { Text = "Keep startup/end screens on top without taking focus (non-blocking)", Location = new Point(S(12), S(22)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = ini.GetBool("StartupStayOnTop", false), Enabled = !readOnly };
             GAdd(stp);
@@ -243,6 +245,29 @@ internal static class LbGlobalOptions
                 var ev = exEn.Checked ? (int)exMs.Value : -1;
                 if (ev != curEager) { ini.Set("ExitScreenEagerMs", ev.ToString()); iniDirty = true; }
             });
+
+            // Web-return timing — WHEN the ExtendDB web kiosk (BigBox Web / LaunchBox Web) reappears
+            // after a game, relative to the GAME OVER screen. Only shown when ExtendDB is loaded (no
+            // kiosk otherwise). Applies to both kiosk themes. No end screen → all behave "immediate".
+            if (webAvail)
+            {
+                GAdd(new Label { Text = "Web frontend (BigBox / LaunchBox Web kiosk) return after a game:", Location = new Point(S(12), S(410)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
+                var wrItems = new[]
+                {
+                    "Behind the GAME OVER screen (loads hidden, shown at close)",
+                    "After the GAME OVER screen (returns once it closes)",
+                    "At game exit (immediate — may appear before it)",
+                };
+                var wrCur = Gameplay.GameplaySettings.WebReturnTiming();
+                var wr = Cbo(wrItems, wrItems[wrCur == "after" ? 1 : wrCur == "immediate" ? 2 : 0], new Point(S(12), S(434)), 470);
+                GAdd(wr);
+                GAdd(new Label { Text = "Behind = reloaded during GAME OVER, no wait after. After = delays the whole exit cleanup by the screen's time. Immediate = LaunchBox parity.", Location = new Point(S(12), S(464)), AutoSize = true, ForeColor = Dim, BackColor = Bg });
+                applies.Add(() =>
+                {
+                    var v = wr.SelectedIndex == 1 ? "after" : wr.SelectedIndex == 2 ? "immediate" : "behind";
+                    if (v != ini.Get("WebReturnTiming", "behind")) { ini.Set("WebReturnTiming", v); iniDirty = true; }
+                });
+            }
         }
 
         // ── Game Pause ──

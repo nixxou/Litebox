@@ -97,16 +97,28 @@ internal static class GameScreens
         Console.WriteLine("[gamescreens] exit screen shown early");
     }
 
-    /// <summary>Show the end ("GAME OVER") screen (if enabled) and BLOCK the caller for
-    /// the minimum display time, then close. Call on the launch worker after exit.</summary>
-    public static void ShowEndBlocking(LaunchedGame? snap)
+    /// <summary>True when an end ("GAME OVER") screen would actually be shown for <paramref name="snap"/>
+    /// (master toggle on, not per-game disabled, non-zero hold). The caller uses this to degrade the
+    /// WebReturnTiming to "immediate" when there's no screen to time against.</summary>
+    public static bool EndScreenWillShow(LaunchedGame? snap)
+    {
+        if (snap == null) return false;
+        var rr = Safe(() => GameplaySettings.Resolve(snap));
+        return rr is { UseStartup: true } && rr.ShutdownMinMs > 0;
+    }
+
+    /// <summary>Show the end ("GAME OVER") screen (if enabled) and BLOCK the caller for the minimum
+    /// display time, then close. Call on the launch worker after exit. <paramref name="betweenHoldAndClose"/>
+    /// (WebReturnTiming "after") runs AFTER the hold but BEFORE the cover closes — so the web kiosk it
+    /// reopens comes up OVER the still-present cover and the close happens behind it (no LiteBox flash).</summary>
+    public static void ShowEndBlocking(LaunchedGame? snap, Action? betweenHoldAndClose = null)
     {
         if (snap == null) { FinishEnd(snap); return; }
         GameplaySettings.Resolved? rr = Safe(() => GameplaySettings.Resolve(snap));
-        if (rr is not { UseStartup: true }) { FinishEnd(snap); return; }   // same master toggle as startup
-        if (rr.ShutdownMinMs < 0) { FinishEnd(snap); return; }             // per-game DisableShutdownScreen
+        if (rr is not { UseStartup: true }) { FinishEnd(snap); betweenHoldAndClose?.Invoke(); return; }   // same master toggle as startup
+        if (rr.ShutdownMinMs < 0) { FinishEnd(snap); betweenHoldAndClose?.Invoke(); return; }             // per-game DisableShutdownScreen
         int ms = Math.Max(0, rr.ShutdownMinMs);
-        if (ms == 0) { FinishEnd(snap); return; }
+        if (ms == 0) { FinishEnd(snap); betweenHoldAndClose?.Invoke(); return; }
         var ctx = BuildCtx(snap);
         bool hide = rr.HideCursor;
 
@@ -126,6 +138,11 @@ internal static class GameScreens
             }
         });
         try { Thread.Sleep(ms); } catch { }
+        if (betweenHoldAndClose != null)
+        {
+            try { betweenHoldAndClose(); } catch { }   // "after": reopen the kiosk over the cover…
+            try { Thread.Sleep(600); } catch { }        // …let its (async) window come up before we drop the cover
+        }
         // LB's "Force LaunchBox or Big Box back into focus when the shutdown screen closes":
         // decide BEFORE closing, apply AFTER — the frontend is the ExtendDB web kiosk when
         // one is up (it relaunched during the exit), else the LiteBox window. When OFF the

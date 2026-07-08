@@ -192,6 +192,22 @@ internal static class GameplaySettings
         catch { return -1; }
     }
 
+    /// <summary>When the web frontend (ExtendDB kiosk) comes back after a game, relative to the GAME
+    /// OVER screen (LiteBox.ini WebReturnTiming). Only meaningful when ExtendDB is loaded and an end
+    /// screen actually shows — the caller degrades to "immediate" otherwise.
+    ///   • "immediate" — OnGameExited fires at process exit (LB parity); the kiosk may flash first.
+    ///   • "after"     — OnGameExited fires once GAME OVER closes (delays all exit cleanup by that time).
+    ///   • "behind"    — kiosk reloads hidden BEHIND GAME OVER, revealed the instant it closes (default).</summary>
+    public static string WebReturnTiming()
+    {
+        try
+        {
+            var v = (LiteBoxConfig.LoadForExe().Get("WebReturnTiming") ?? "").Trim().ToLowerInvariant();
+            return v is "immediate" or "after" or "behind" ? v : "behind";
+        }
+        catch { return "behind"; }
+    }
+
     /// <summary>Controller-pause master switch (LiteBox-own, LiteBox.ini). Off by default —
     /// opt-in. LaunchBox has no equivalent, so this never touches Settings.xml.</summary>
     public static bool PadPauseEnabled()

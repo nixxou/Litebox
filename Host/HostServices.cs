@@ -233,16 +233,15 @@ internal static class HostLaunch
                 }
                 catch { }
             }
-            Gameplay.GameScreens.Close();
             var endSnap = LaunchedGame.Current;          // capture cosmetics before clearing
+            if (!DryRun) Gameplay.GameScreens.ShowEndEager(endSnap);   // cover the exit transition (was Close())
             LaunchedGame.Clear();
             StoreTrace.Log("store-launch END → GameEnded (hide running screen)");
             // Record play time only if the game process was actually observed (else the launch likely
             // failed, or we couldn't track it — don't bill the watcher's wait as play time).
             if (!DryRun && seen && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             if (!DryRun && seen) { try { Data.ProgressAutomation.ApplyToGame(game); } catch { } }   // LB parity (see RunAndWait)
-            Fire(p => p.OnGameExited());                  // ExtendDB: reopen the kiosk (mirror RunAndWait)
-            if (!DryRun) Gameplay.GameScreens.ShowEndBlocking(endSnap);   // "GAME OVER"
+            EndOfGameFinish(endSnap);                     // OnGameExited (kiosk reopen) + GAME OVER, per WebReturnTiming
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
         }
     }
@@ -381,14 +380,34 @@ internal static class HostLaunch
             // Automatic Progress Tracking (LB parity): re-evaluate this game's Progress now that its
             // play time / last-played moved. Gated internally on EnableAutoProgressTracking.
             if (!DryRun) { try { Data.ProgressAutomation.ApplyToGame(game); } catch { } }
-            Fire(p => p.OnGameExited());
-            // End screen ("GAME OVER") — held for the min display time before the UI reloads.
-            if (!DryRun) Gameplay.GameScreens.ShowEndBlocking(endSnap);
+            // OnGameExited (reopens the ExtendDB kiosk) + the GAME OVER screen, ordered per WebReturnTiming.
+            EndOfGameFinish(endSnap);
             try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
             try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) { Gc.HostGameCache.Reload(); Console.WriteLine("[gamecache] rebuilding after game exit"); } } catch { }
             // GUI: game over + data reloaded → reload its list and restore selection.
             try { GameEnded?.Invoke(game); } catch { }
         }
+    }
+
+    /// <summary>Fire OnGameExited (which, under ExtendDB, reopens the web kiosk) and show the GAME OVER
+    /// screen, ordered by the WebReturnTiming option so the kiosk doesn't reappear before the shutdown
+    /// screen. Degrades to "immediate" when ExtendDB isn't loaded, no end screen will show, or the plugin
+    /// is too old for the deferred path. The GAME OVER cover was already put up (ShowEndEager) by the caller.
+    ///   • immediate — OnGameExited now; GAME OVER (may reuse/re-assert the cover) holds then closes.
+    ///   • after     — GAME OVER holds; OnGameExited fires over the cover; the cover then closes behind it.
+    ///   • behind     — kiosk reopens HIDDEN now (PrepareDeferredReopen); GAME OVER holds+closes; reveal it.</summary>
+    private static void EndOfGameFinish(LaunchedGame endSnap)
+    {
+        string timing = (!DryRun && Media.KioskBridge.Available && Gameplay.GameScreens.EndScreenWillShow(endSnap))
+            ? Gameplay.GameplaySettings.WebReturnTiming() : "immediate";
+        if (timing == "behind" && !Media.KioskBridge.SupportsDeferredReopen) timing = "immediate";
+
+        if (timing == "behind") Media.KioskBridge.PrepareDeferredReopen();   // next OnGameExited restore → hidden
+        if (timing != "after") Fire(p => p.OnGameExited());                  // immediate + behind fire now
+        if (!DryRun)
+            Gameplay.GameScreens.ShowEndBlocking(endSnap,
+                timing == "after" ? (Action)(() => Fire(p => p.OnGameExited())) : null);
+        if (timing == "behind") Media.KioskBridge.RevealDeferredKiosk();     // reveal the kiosk loaded under the cover
     }
 
     /// <summary>Row index for a game (via the store's id map), or -1.</summary>

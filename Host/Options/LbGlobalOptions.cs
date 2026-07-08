@@ -196,8 +196,8 @@ internal static class LbGlobalOptions
             BindTxt(sh, "ShutdownScreenPostReadyDisplayTime"); BindChk(hc, "HideMouseCursorOnStartupScreens");
             BindChk(ff, "ForceFrontendFocusOnShutdown");
 
-            // ── LiteBox-specific group (blue frame): stay-on-top + Smart Capture ──
-            var grp = LiteBoxGroup("LiteBox-specific", 2, 176, 700, 360); p.Controls.Add(grp);
+            // ── LiteBox-specific group (blue frame): stay-on-top + Smart Capture + exit-screen-early ──
+            var grp = LiteBoxGroup("LiteBox-specific", 2, 176, 700, 416); p.Controls.Add(grp);
             void GAdd(Control c) => grp.Controls.Add(c);
             var stp = new CheckBox { Text = "Keep startup/end screens on top without taking focus (non-blocking)", Location = new Point(S(12), S(22)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = ini.GetBool("StartupStayOnTop", false), Enabled = !readOnly };
             GAdd(stp);
@@ -225,6 +225,24 @@ internal static class LbGlobalOptions
             BindIniTxt(scFps, "SmartCaptureMinFps"); BindIniTxt(scSus, "SmartCaptureSustainMs");
             BindIniTxt(scSz, "SmartCaptureMinSizePct"); BindIniTxt(scTitle, "SmartCaptureTitle");
             BindIniChk(scStop, "SmartCaptureStopOnWindowClose");
+
+            // Exit / end screen early (LiteBox-own): on a pause-menu Exit, show the end screen N ms
+            // after the exit script (Escape by default) rather than waiting for the process to close.
+            GAdd(new Label { Text = "Exit / end screen — cover the display sooner on exit:", Location = new Point(S(12), S(326)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
+            var exG = Gameplay.GameplaySettings.ExitScreenEagerMsGlobal();
+            var exEn = new CheckBox { Text = "Show the exit/end screen early (after the pause-menu exit script)", Location = new Point(S(12), S(350)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = exG >= 0, Enabled = !readOnly };
+            GAdd(exEn);
+            GAdd(new Label { Text = "Delay after exit script:", Location = new Point(S(30), S(382)), AutoSize = true, ForeColor = Fg, BackColor = Bg });
+            var exMs = new NumericUpDown { Location = new Point(S(200), S(379)), Width = S(90), Minimum = 0, Maximum = 10000, Increment = 100, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Value = Math.Max(0, Math.Min(10000, exG < 0 ? 250 : exG)), Enabled = !readOnly && exG >= 0 };
+            GAdd(exMs);
+            GAdd(new Label { Text = "ms", Location = new Point(S(296), S(382)), AutoSize = true, ForeColor = Dim, BackColor = Bg });
+            exEn.CheckedChanged += (_, _) => exMs.Enabled = !readOnly && exEn.Checked;
+            applies.Add(() =>
+            {
+                int curEager = int.TryParse(ini.Get("ExitScreenEagerMs"), out var ce) ? ce : -1;
+                var ev = exEn.Checked ? (int)exMs.Value : -1;
+                if (ev != curEager) { ini.Set("ExitScreenEagerMs", ev.ToString()); iniDirty = true; }
+            });
         }
 
         // ── Game Pause ──
@@ -256,16 +274,6 @@ internal static class LbGlobalOptions
             pmode.Items.AddRange(new object[] { "legacy", "advanced" }); pmode.SelectedItem = ini.Get("PauseMode", "legacy") ?? "legacy"; if (pmode.SelectedIndex < 0) pmode.SelectedIndex = 0;
             p.Controls.Add(pmode);
             p.Controls.Add(Lbl("legacy = native overlay · advanced = WebView (not implemented yet, falls back to legacy)", new Point(S(24), S(222)), Dim));
-            // Exit screen early (LiteBox-own): on a pause-menu exit, show the end screen N ms after the
-            // exit script rather than waiting for the process to close. -1 in the ini = disabled.
-            var eagerG = Gameplay.GameplaySettings.ExitScreenEagerMsGlobal();
-            var eagerEn = Chk("Show the exit screen early (after the pause-menu exit script)", eagerG >= 0, new Point(S(4), S(252)));
-            p.Controls.Add(eagerEn);
-            p.Controls.Add(Lbl("Delay after exit script:", new Point(S(24), S(284))));
-            var eagerMs = new NumericUpDown { Location = new Point(S(180), S(281)), Width = S(90), Minimum = 0, Maximum = 10000, Increment = 100, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Value = Math.Max(0, Math.Min(10000, eagerG < 0 ? 250 : eagerG)), Enabled = !readOnly && eagerG >= 0 };
-            p.Controls.Add(eagerMs);
-            p.Controls.Add(Lbl("ms", new Point(S(276), S(284)), Dim));
-            eagerEn.CheckedChanged += (_, _) => eagerMs.Enabled = !readOnly && eagerEn.Checked;
             BindChk(use, "UsePauseScreen"); BindIniHkFrom(pk, "PauseHotkey", pkInit);
             BindChk(fade, "PauseScreenFading"); BindChk(mute, "PauseScreenMuting");
             applies.Add(() =>
@@ -275,9 +283,6 @@ internal static class LbGlobalOptions
                 if (bv != ini.Get("PadPauseButton")) { ini.Set("PadPauseButton", bv); iniDirty = true; }
                 var pm = pmode.SelectedItem as string ?? "legacy";
                 if (pm != ini.Get("PauseMode")) { ini.Set("PauseMode", pm); iniDirty = true; }
-                int curEager = int.TryParse(ini.Get("ExitScreenEagerMs"), out var ce) ? ce : -1;
-                var eagerVal = eagerEn.Checked ? (int)eagerMs.Value : -1;
-                if (eagerVal != curEager) { ini.Set("ExitScreenEagerMs", eagerVal.ToString()); iniDirty = true; }
             });
         }
 

@@ -241,6 +241,9 @@ internal static class HostLaunch
             // failed, or we couldn't track it — don't bill the watcher's wait as play time).
             if (!DryRun && seen && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             if (!DryRun && seen) { try { Data.ProgressAutomation.ApplyToGame(game); } catch { } }   // LB parity (see RunAndWait)
+            // Restore the optional data dropped at launch BEFORE the kiosk reopens / GUI reloads (see RunAndWait).
+            try { _store?.ReloadOptional(); } catch { }
+            try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) Gc.HostGameCache.Reload(); } catch { }
             EndOfGameFinish(endSnap);                     // OnGameExited (kiosk reopen) + GAME OVER, per WebReturnTiming
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
         }
@@ -380,10 +383,15 @@ internal static class HostLaunch
             // Automatic Progress Tracking (LB parity): re-evaluate this game's Progress now that its
             // play time / last-played moved. Gated internally on EnableAutoProgressTracking.
             if (!DryRun) { try { Data.ProgressAutomation.ApplyToGame(game); } catch { } }
-            // OnGameExited (reopens the ExtendDB kiosk) + the GAME OVER screen, ordered per WebReturnTiming.
-            EndOfGameFinish(endSnap);
+            // Rebuild the data LiteBox dropped during the game (optional game fields: notes, extra/GOG,
+            // sub-entities) BEFORE OnGameExited reopens the ExtendDB web kiosk / GameEnded reloads the GUI
+            // — otherwise they read INCOMPLETE games. This bit the "behind" timing hardest: the kiosk
+            // preloads its data hidden during the GAME OVER hold, so it must be complete by then. All of
+            // this runs behind the GAME OVER cover (already shown at the top of the finally).
             try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
             try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) { Gc.HostGameCache.Reload(); Console.WriteLine("[gamecache] rebuilding after game exit"); } } catch { }
+            // OnGameExited (reopens the ExtendDB kiosk) + the GAME OVER screen, ordered per WebReturnTiming.
+            EndOfGameFinish(endSnap);
             // GUI: game over + data reloaded → reload its list and restore selection.
             try { GameEnded?.Invoke(game); } catch { }
         }

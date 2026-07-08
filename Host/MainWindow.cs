@@ -1450,18 +1450,9 @@ internal sealed class MainWindow : Form, IMessageFilter
                 "Customise the shared LiteBox palette. Takes full effect after restarting LiteBox."),
         });
 
-        w.AddSection("Pause screen", new[]
-        {
-            Options.OptionItem.Toggle("Pause", "Enable pause screens",
-                () => _cfg.GetBool("PauseEnabled", true), v => _cfg.SetBool("PauseEnabled", v),
-                "Master switch. Each emulator (and each game) can still opt out individually."),
-            Options.OptionItem.Text("Pause", "Pause hotkey",
-                () => _cfg.Get("PauseHotkey", "Pause"), v => _cfg.Set("PauseHotkey", v),
-                "Global hotkey opening the pause screen, e.g. Pause, F12, Ctrl+F12, Ctrl+Shift+P. Applies to the next launch."),
-            Options.OptionItem.Choice("Pause", "Pause mode", new[] { "legacy", "advanced" },
-                () => _cfg.Get("PauseMode", "legacy"), v => _cfg.Set("PauseMode", v),
-                "legacy = LaunchBox-style native overlay. advanced = LiteBox WebView mode (not implemented yet — falls back to legacy)."),
-        });
+        // (The standalone "Pause screen" section was merged into LB · Gameplay → Game Pause:
+        //  "Use Game Pause Screen" is the master switch, "Pause Key" the hotkey, "Pause mode" the
+        //  legacy/advanced choice — the old PauseEnabled ini key was dead, the hotkey duplicated.)
 
         // LiteBox-local caches — a maintenance button (always enabled, even in read-only: it only
         // touches LiteBox's own Core cache folders, never the LaunchBox files).

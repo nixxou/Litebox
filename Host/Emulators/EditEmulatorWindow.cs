@@ -47,15 +47,18 @@ internal static class EditEmulatorWindow
         var deps = BuildDependencies(emu, lbRoot, s);
         if (deps != null) w.AddSection("Dependency Files", deps);
 
-        // Startup Screen + Pause Screen each carry a blue "LiteBox-specific" frame folding in the
-        // LiteBox-only options that used to sit on their own tabs (Smart Capture / stay-on-top →
-        // Startup; pause & screenshot hotkeys + controller pause → Pause), mirroring how the general
-        // Options window integrates them. No standalone "LiteBox"/"Smart Capture" sections anymore.
+        // Startup Screen / Pause Screen keep the LB-native (Emulators.xml) settings only; the LiteBox-only
+        // options (stay-on-top, Smart Capture, exit-early, pause/screenshot hotkeys, controller pause)
+        // live in their own "LiteBox" section, mirroring the general Options window's "LiteBox-Options" tab.
         var (startup, applyStartup) = BuildStartup(emu, readOnly, s);
         w.AddSection("Startup Screen", startup, applyStartup);
 
         var (pause, applyPause) = BuildPause(emu, readOnly, s);
         w.AddSection("Pause Screen", pause, applyPause);
+
+        var (lbx, lbxSave) = Gameplay.LiteBoxGameplayEditor.Build(
+            Data.LiteBoxOption.ScopeEmulator, Safe(() => emu.Id) ?? "", s, Bg, Fg, SubFg, Panel2, readOnly);
+        w.AddSection("LiteBox", lbx, readOnly ? null : lbxSave);
 
         AddScript(w, emu, "Pause Script", e => e.PauseAutoHotkeyScript, (e, v) => e.PauseAutoHotkeyScript = v);
         AddScript(w, emu, "Resume Script", e => e.ResumeAutoHotkeyScript, (e, v) => e.ResumeAutoHotkeyScript = v);
@@ -528,44 +531,8 @@ internal static class EditEmulatorWindow
             Location = new Point(S(8), y2 + S(36)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
         };
         p.Controls.Add(dlyLbl); p.Controls.Add(dly); p.Controls.Add(note);
-
-        // ── LiteBox-specific frame: stay-on-top + exit-screen-early + Smart Capture (folded in from the old LiteBox tab) ──
-        string emuId = Safe(() => emu.Id) ?? "";
-        var grp = UiKit.LiteBoxFrame.Make("LiteBox-specific (LaunchBox ignores these)",
-            new Point(S(4), y2 + S(64)), new Size(S(668), S(366)), s, Bg);
-        p.Controls.Add(grp);
-
-        grp.Controls.Add(new Label { Text = "Keep startup/end screens on top (non-blocking):", Location = new Point(S(12), S(22)), AutoSize = true, ForeColor = Fg, BackColor = Bg });
-        var stayGlobal = Gameplay.GameplaySettings.StartupStayOnTop();
-        var stayCbo = new ComboBox { Location = new Point(S(330), S(19)), Width = S(200), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat };
-        stayCbo.Items.AddRange(new object[] { $"Use global ({(stayGlobal ? "On" : "Off")})", "On", "Off" });
-        var stayOv = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "StartupStayOnTop");
-        stayCbo.SelectedIndex = string.IsNullOrEmpty(stayOv) ? 0 : (string.Equals(stayOv, "true", StringComparison.OrdinalIgnoreCase) ? 1 : 2);
-        grp.Controls.Add(stayCbo);
-
-        // Exit/end screen early (tri-state + a ms box when Custom): on a pause-menu Exit (which sends
-        // the exit script — Escape by default), show the end screen N ms after it, instead of waiting
-        // for the process to fully close. This belongs with the end screen, hence the Startup tab.
-        grp.Controls.Add(new Label { Text = "Show exit/end screen early:", Location = new Point(S(12), S(52)), AutoSize = true, ForeColor = Fg, BackColor = Bg });
-        var eagerGlobal = Gameplay.GameplaySettings.ExitScreenEagerMsGlobal();
-        var eagerCbo = new ComboBox { Location = new Point(S(330), S(49)), Width = S(170), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat };
-        eagerCbo.Items.AddRange(new object[] { $"Use global ({(eagerGlobal < 0 ? "Off" : eagerGlobal + " ms")})", "Disabled", "Custom…" });
-        var eagerOv = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "ExitScreenEagerMs");
-        int eagerOvNum = int.TryParse(eagerOv, out var _ev) ? _ev : int.MinValue;
-        eagerCbo.SelectedIndex = string.IsNullOrEmpty(eagerOv) ? 0 : (eagerOvNum >= 0 ? 2 : 1);
-        grp.Controls.Add(eagerCbo);
-        var eagerMs = new NumericUpDown { Location = new Point(S(508), S(49)), Width = S(66), Minimum = 0, Maximum = 10000, Increment = 100, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Value = eagerOvNum >= 0 ? Math.Min(10000, eagerOvNum) : Math.Max(0, Math.Min(10000, eagerGlobal)), Visible = eagerCbo.SelectedIndex == 2 };
-        grp.Controls.Add(eagerMs);
-        var eagerMsLbl = new Label { Text = "ms", Location = new Point(S(578), S(52)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Visible = eagerCbo.SelectedIndex == 2 };
-        grp.Controls.Add(eagerMsLbl);
-        eagerCbo.SelectedIndexChanged += (_, _) => { eagerMs.Visible = eagerMsLbl.Visible = eagerCbo.SelectedIndex == 2; };
-
-        grp.Controls.Add(new Label { Text = "Smart Capture — reveal the startup screen when the game actually renders:", Location = new Point(S(12), S(84)), AutoSize = true, ForeColor = UiKit.LiteBoxFrame.Accent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
-        var (scPanel, scSave) = Gameplay.SmartCaptureEditor.Build(
-            Data.LiteBoxOption.ScopeEmulator, emuId, s, Bg, Fg, SubFg, Panel2, readOnly);
-        scPanel.Location = new Point(S(8), S(106));
-        scPanel.Size = new Size(S(652), S(250));
-        grp.Controls.Add(scPanel);
+        // (LiteBox-only startup extras — stay-on-top / Smart Capture / exit-early — now live in the
+        //  dedicated "LiteBox" section, built by LiteBoxGameplayEditor; see Open().)
 
         return (p, () =>
         {
@@ -578,15 +545,6 @@ internal static class EditEmulatorWindow
             // null ⇒ inherit: SetField("") drops the element so the emulator falls back to the global.
             Set(() => ef?.SetField("StartupScreenPostLaunchDisplayTime", postGet()?.ToString() ?? ""));
             Set(() => ef?.SetField("ShutdownScreenPostReadyDisplayTime", shutGet()?.ToString() ?? ""));
-            if (!readOnly)
-            {
-                Set(() => Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "StartupStayOnTop",
-                    stayCbo.SelectedIndex switch { 1 => "true", 2 => "false", _ => null }));
-                // exit screen early: 0 = inherit (clear), 1 = Disabled (-1), 2 = Custom ms value.
-                Set(() => Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "ExitScreenEagerMs",
-                    eagerCbo.SelectedIndex switch { 1 => "-1", 2 => ((int)eagerMs.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), _ => null }));
-                Set(scSave);
-            }
         });
     }
 
@@ -597,94 +555,23 @@ internal static class EditEmulatorWindow
     private static (Control, Action) BuildPause(IEmulator emu, bool readOnly, float s)
     {
         int S(int px) => (int)Math.Round(px * s);
-        var p = new Panel { BackColor = Bg, AutoScroll = true };
+        var p = new Panel { BackColor = Bg };
         var lf = emu as ILiteBoxFields;
-        string emuId = Safe(() => emu.Id) ?? "";
         bool GetB(string k, bool def) { var v = lf?.GetField(k); return string.IsNullOrEmpty(v) ? def : string.Equals(v, "true", StringComparison.OrdinalIgnoreCase); }
 
         var use = Chk(p, new Point(S(8), S(6)), "Enable Game Pause Screen", GetB("UsePauseScreen", true));
         var susp = Chk(p, new Point(S(8), S(30)), "Suspend Emulator Process While Paused", GetB("SuspendProcessOnPause", true));
         var force = Chk(p, new Point(S(8), S(54)), "Forceful Pause Screen Activation (enable this if the pause screen is not showing)", GetB("ForcefulPauseScreenActivation", true));
 
-        // ── LiteBox-specific frame: pause / screenshot hotkeys + controller pause ──
-        var grp = UiKit.LiteBoxFrame.Make("LiteBox-specific (LaunchBox ignores these)",
-            new Point(S(4), S(88)), new Size(S(668), S(212)), s, Bg);
-        p.Controls.Add(grp);
-
-        ComboBox Cbo(int y, int w) => new()
-        {
-            Location = new Point(S(260), S(y)), Width = S(w), DropDownStyle = ComboBoxStyle.DropDownList,
-            BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
-        };
-        Label Lab(string t, int y) => new() { Text = t, Location = new Point(S(12), S(y + 3)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
-
-        // string tri-state (Use global / Disabled / Custom + capture box) for a hotkey option.
-        (ComboBox cbo, HotkeyCaptureBox box, Func<string?> value) HotkeyTri(int y, string optKey)
-        {
-            var glob = optKey == "PauseHotkey" ? Gameplay.GameplaySettings.PauseKey() : Gameplay.GameplaySettings.ScreenCaptureKey();
-            var ov = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, optKey);
-            bool custom = !string.IsNullOrEmpty(ov) && ov != Data.LiteBoxOption.Disabled;
-            var cbo = Cbo(y - 2, 200);
-            cbo.Items.AddRange(new object[] { $"Use global ({(string.IsNullOrEmpty(glob) ? "Off" : glob)})", "Disabled", "Custom…" });
-            cbo.SelectedIndex = string.IsNullOrEmpty(ov) ? 0 : (ov == Data.LiteBoxOption.Disabled ? 1 : 2);
-            var box = new HotkeyCaptureBox(custom ? ov : "") { Location = new Point(S(470), S(y - 2)), Width = S(150), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Visible = custom };
-            grp.Controls.Add(cbo); grp.Controls.Add(box);
-            cbo.SelectedIndexChanged += (_, _) => box.Visible = cbo.SelectedIndex == 2;
-            return (cbo, box, () => cbo.SelectedIndex switch
-            {
-                1 => Data.LiteBoxOption.Disabled,
-                2 => string.IsNullOrWhiteSpace(box.HotkeyValue) ? null : box.HotkeyValue,
-                _ => null,
-            });
-        }
-
-        grp.Controls.Add(Lab("Pause hotkey:", 18));
-        var pauseHk = HotkeyTri(20, "PauseHotkey");
-        grp.Controls.Add(Lab("Screenshot hotkey:", 54));
-        var capHk = HotkeyTri(56, "ScreenCaptureKey");
-
-        grp.Controls.Add(Lab("Pause with controller:", 90));
-        var padGlobalOn = Gameplay.GameplaySettings.PadPauseEnabled();
-        var padEnCbo = Cbo(88, 200);
-        padEnCbo.Items.AddRange(new object[] { $"Use global ({(padGlobalOn ? "On" : "Off")})", "On", "Off" });
-        var padEnOv = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PadPauseEnabled");
-        padEnCbo.SelectedIndex = string.IsNullOrEmpty(padEnOv) ? 0 : (string.Equals(padEnOv, "true", StringComparison.OrdinalIgnoreCase) ? 1 : 2);
-        grp.Controls.Add(padEnCbo);
-
-        grp.Controls.Add(Lab("Controller pause button:", 126));
-        var padBtnGlobal = Gameplay.GameplaySettings.PadPauseButton();
-        var padBtnCbo = Cbo(124, 200);
-        padBtnCbo.Items.Add($"Use global ({padBtnGlobal})");
-        padBtnCbo.Items.AddRange(Pause.XInputPad.ComboPresets);
-        var padBtnOv = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PadPauseButton");
-        padBtnCbo.SelectedIndex = string.IsNullOrEmpty(padBtnOv) ? 0
-            : Math.Max(0, Array.IndexOf(Pause.XInputPad.ComboPresets, padBtnOv) + 1);   // +1: index 0 is "Use global"
-        grp.Controls.Add(padBtnCbo);
-
-        grp.Controls.Add(new Label
-        {
-            Text = "Stored separately from LaunchBox — a real LaunchBox on the same library is unaffected.",
-            Location = new Point(S(12), S(168)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
-        });
+        // (LiteBox-only pause extras — pause/screenshot hotkeys, controller pause — now live in the
+        //  dedicated "LiteBox" section, built by LiteBoxGameplayEditor; see Open().)
 
         return (p, () =>
         {
-            if (lf != null)
-            {
-                Set(() => lf.SetField("UsePauseScreen", use.Checked ? "true" : "false"));
-                Set(() => lf.SetField("SuspendProcessOnPause", susp.Checked ? "true" : "false"));
-                Set(() => lf.SetField("ForcefulPauseScreenActivation", force.Checked ? "true" : "false"));
-            }
-            if (readOnly) return;
-            // controller pause enable: 0 = inherit (clear row), 1 = On, 2 = Off.
-            Set(() => Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PadPauseEnabled",
-                padEnCbo.SelectedIndex switch { 1 => "true", 2 => "false", _ => null }));
-            // controller pause button: index 0 = inherit (clear), else the preset at [index-1].
-            Set(() => Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PadPauseButton",
-                padBtnCbo.SelectedIndex <= 0 ? null : Pause.XInputPad.ComboPresets[padBtnCbo.SelectedIndex - 1]));
-            // hotkeys: value getter yields null (inherit) / Disabled sentinel / custom combo.
-            Set(() => Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "PauseHotkey", pauseHk.value()));
-            Set(() => Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeEmulator, emuId, "ScreenCaptureKey", capHk.value()));
+            if (lf == null) return;
+            Set(() => lf.SetField("UsePauseScreen", use.Checked ? "true" : "false"));
+            Set(() => lf.SetField("SuspendProcessOnPause", susp.Checked ? "true" : "false"));
+            Set(() => lf.SetField("ForcefulPauseScreenActivation", force.Checked ? "true" : "false"));
         });
     }
 

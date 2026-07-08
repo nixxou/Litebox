@@ -35,10 +35,12 @@ internal static class HostBoot
     //   --edit-page "<page>"          page for --edit-game, by node tag or label, case/space-insensitive
     //                                 (Metadata, Notes, "Additional Versions", GameSaves, Emulation, …)
     //   --edit-gamesaves "<title|id>" sugar for --edit-game X --edit-page GameSaves
+    //   --edit-emu "<title|id>"       open Edit Emulator for that emulator (id exact → title match)
     //   --options ["<section>"]       open the Options window, optionally on the named section
     //                                 (fuzzy: "gameplay" → "LB · Gameplay")
     public static string AutoPlay;      // --play "<title|id>" → launch on boot (pair with --drylaunch to audit)
     public static string AutoEditGame;
+    public static string AutoEditEmu;   // --edit-emu "<title|id>" → open Edit Emulator on boot
     public static string AutoEditPage;
     public static string AutoOptions;   // null = not requested; "" = open on the first section
 
@@ -193,6 +195,7 @@ internal static class HostBoot
         // hands-free way to audit a launch: DOSBox args, emulator command, working dir).
         AutoPlay = GetArg(args, "--play");
         AutoEditGame = GetArg(args, "--edit-game");
+        AutoEditEmu = GetArg(args, "--edit-emu");
         AutoEditPage = GetArg(args, "--edit-page");
         string legacySaves = GetArg(args, "--edit-gamesaves");
         if (legacySaves != null) { AutoEditGame = legacySaves; AutoEditPage ??= "GameSaves"; }

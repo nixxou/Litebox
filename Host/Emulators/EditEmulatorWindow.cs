@@ -47,7 +47,7 @@ internal static class EditEmulatorWindow
         var deps = BuildDependencies(emu, lbRoot, s);
         if (deps != null) w.AddSection("Dependency Files", deps);
 
-        var (startup, applyStartup) = BuildStartup(emu, s);
+        var (startup, applyStartup) = BuildStartup(emu, readOnly, s);
         w.AddSection("Startup Screen", startup, applyStartup);
 
         var (pause, applyPause) = BuildPause(emu, s);
@@ -488,7 +488,12 @@ internal static class EditEmulatorWindow
     }
 
     // ── Startup Screen ─────────────────────────────────────────────────
-    private static (Control, Action) BuildStartup(IEmulator emu, float s)
+    // The two display-time sliders are OVERRIDE-AWARE: their inherited baseline is the global
+    // Settings.xml value (LB's Options → Game Startup). While an emulator sits on the baseline it
+    // carries no <StartupScreenPostLaunchDisplayTime>/<ShutdownScreenPostReadyDisplayTime> element,
+    // so it inherits live; drag it away and the amber value + ↺ button surface the override. On save,
+    // an inherited slider persists as an empty field ⇒ the element is dropped (see HostEmulator.SetField).
+    private static (Control, Action) BuildStartup(IEmulator emu, bool readOnly, float s)
     {
         int S(int px) => (int)Math.Round(px * s);
         var p = new Panel { BackColor = Bg, AutoScroll = true };
@@ -498,17 +503,32 @@ internal static class EditEmulatorWindow
         var aggressive = Chk(p, new Point(S(330), S(30)), "Aggressive Startup Window Hiding", Safe(() => emu.AggressiveWindowHiding));
         var hideAll = Chk(p, new Point(S(8), S(54)), "Hide All Windows that are not in Exclusive Fullscreen Mode", Safe(() => emu.HideAllNonExclusiveFullscreenWindows));
 
-        var dlyLbl = new Label { Text = "Startup Load Delay (ms):", Location = new Point(S(8), S(88)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+        var ef = emu as ILiteBoxFields;
+        int? Ov(string key) => int.TryParse(ef?.GetField(key), out var v) ? v : (int?)null;
+        var glob = Gameplay.GameplaySettings.Resolve(null);   // snap=null ⇒ pure global (the inherited baseline)
+        int width = S(560);
+
+        int y = S(88);
+        var (y1, postGet) = UiKit.OverrideUi.Slider(p, s, S(8), y, width,
+            "Post-Launch Display Time : ", glob.StartupMinMs, Ov("StartupScreenPostLaunchDisplayTime"),
+            10000, 250, ms => $"{ms / 1000.0:0.###} s", Fg, SubFg, Bg, readOnly);
+        var (y2, shutGet) = UiKit.OverrideUi.Slider(p, s, S(8), y1, width,
+            "Shutdown Screen Post-Ready Display Time : ", Math.Max(0, glob.ShutdownMinMs), Ov("ShutdownScreenPostReadyDisplayTime"),
+            10000, 250, ms => $"{ms / 1000.0:0.###} s", Fg, SubFg, Bg, readOnly);
+
+        // Startup Load Delay has NO global counterpart (LB's global tab omits it) — purely per-emulator,
+        // so it stays a plain field (default 0), not an override slider.
+        var dlyLbl = new Label { Text = "Startup Load Delay (ms):", Location = new Point(S(8), y2 + S(4)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
         var dly = new NumericUpDown
         {
-            Location = new Point(S(170), S(85)), Width = S(90), Minimum = 0, Maximum = 60000, Increment = 250,
+            Location = new Point(S(200), y2 + S(1)), Width = S(90), Minimum = 0, Maximum = 60000, Increment = 250,
             BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
             Value = Math.Max(0, Math.Min(60000, Safe(() => emu.StartupLoadDelay))),
         };
         var note = new Label
         {
-            Text = "These settings round-trip to Emulators.xml and are honoured by both LaunchBox and LiteBox\n(resolved global → emulator → game). See the LiteBox section for LiteBox-only options.",
-            Location = new Point(S(8), S(122)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
+            Text = "These settings round-trip to Emulators.xml and are honoured by both LaunchBox and LiteBox\n(resolved global → emulator → game). An amber value is an override of the global default; ↺ drops it.",
+            Location = new Point(S(8), y2 + S(36)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.25f),
         };
         p.Controls.Add(dlyLbl); p.Controls.Add(dly); p.Controls.Add(note);
 
@@ -520,6 +540,9 @@ internal static class EditEmulatorWindow
             Set(() => emu.AggressiveWindowHiding = aggressive.Checked);
             Set(() => emu.HideAllNonExclusiveFullscreenWindows = hideAll.Checked);
             Set(() => emu.StartupLoadDelay = (int)dly.Value);
+            // null ⇒ inherit: SetField("") drops the element so the emulator falls back to the global.
+            Set(() => ef?.SetField("StartupScreenPostLaunchDisplayTime", postGet()?.ToString() ?? ""));
+            Set(() => ef?.SetField("ShutdownScreenPostReadyDisplayTime", shutGet()?.ToString() ?? ""));
         });
     }
 
@@ -712,7 +735,7 @@ internal static class EditEmulatorWindow
     {
         foreach (Control c in root.Controls)
         {
-            if (c is TextBox or CheckBox or ComboBox or NumericUpDown or DataGridView) c.Enabled = false;
+            if (c is TextBox or CheckBox or ComboBox or NumericUpDown or DataGridView or TrackBar) c.Enabled = false;
             else if (c is Button b && b.Text != "Cancel" && b.Text != "OK") b.Enabled = false;
             if (c.HasChildren) DisableAllInputs(c);
         }

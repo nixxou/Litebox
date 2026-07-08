@@ -531,6 +531,24 @@ internal sealed class MainWindow : Form, IMessageFilter
                 }
                 catch (Exception ex) { Console.WriteLine("[edit-game] " + ex.Message); }
             }
+            else if (!string.IsNullOrEmpty(HostBoot.AutoEditEmu))
+            {
+                try
+                {
+                    var key = HostBoot.AutoEditEmu;
+                    var emu = (_dm.GetAllEmulators() ?? Array.Empty<IEmulator>()).FirstOrDefault(e =>
+                        string.Equals(Safe(() => e.Id), key, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(Safe(() => e.Title), key, StringComparison.OrdinalIgnoreCase)
+                        || (Safe(() => e.Title) ?? "").IndexOf(key, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (emu != null)
+                    {
+                        Console.WriteLine($"[edit-emu] opening \"{Safe(() => emu.Title)}\"");
+                        BeginInvoke((Action)(() => Emulators.EditEmulatorWindow.Open(emu, false, this, LbApiHost.Host.Media.MediaResolver.LbRoot ?? "")));
+                    }
+                    else Console.WriteLine($"[edit-emu] emulator not found: \"{key}\"");
+                }
+                catch (Exception ex) { Console.WriteLine("[edit-emu] " + ex.Message); }
+            }
             else if (HostBoot.AutoOptions != null)
             {
                 BeginInvoke((Action)(() =>

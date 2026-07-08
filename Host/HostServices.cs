@@ -325,11 +325,13 @@ internal static class HostLaunch
                     // blind timer. Resolved game → emulator → global; when on, the cover uses a
                     // safety-max and the coordinator closes it early (GameScreens.Close).
                     var scCfg = Gameplay.GameplaySettings.ResolveSmartCapture(SafeStr(() => emulator?.Id), SafeStr(() => game?.Id));
-                    // No StartupLoadDelay floor: the "sustained FPS ≥ SustainMs" requirement already
-                    // guards against a transient window, and flooring by a large per-emulator delay
-                    // (RetroArch's 5s) would defeat the point — reveal AS SOON as it truly renders.
-                    int scFloor = 0;
-                    int scMax = Math.Max(SafeNullableInt(() => Gameplay.GameplaySettings.Resolve(LaunchedGame.Current)?.StartupMinMs) ?? 2000, 15000);
+                    // The Post-Launch Display Time stays a MINIMUM even with SmartCapture: the cover
+                    // shows for at least that long, and SmartCapture only avoids revealing EARLY when
+                    // the game isn't ready yet (reveal = max(detection, displayTime)). The safety max
+                    // is the ceiling if detection never fires (exclusive fullscreen).
+                    int scDisplay = SafeNullableInt(() => Gameplay.GameplaySettings.Resolve(LaunchedGame.Current)?.StartupMinMs) ?? 2000;
+                    int scFloor = scDisplay;
+                    int scMax = Math.Max(scDisplay, 15000);
                     Action<Process> onSpawned = p =>
                     {
                         if (main.Value.useEmu && emulator != null) Pause.PauseManager.Arm(p, emulator, game);

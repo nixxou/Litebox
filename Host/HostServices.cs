@@ -208,6 +208,20 @@ internal static class HostLaunch
         try
         {
             if (DryRun) { Thread.Sleep(2500); return; }
+            // SmartCapture GLOBAL scan for the store game: the game is spawned by the store client, NOT as
+            // a descendant of the shell-opened URI, so a process tree can't find it. Instead we snapshot
+            // every window that's open BEFORE launching and then watch for a NEW window that renders — that
+            // is the game. The cover holds on a long backstop (like the emulator path) and SmartCapture
+            // lifts it the moment the game renders, instead of the old blind Post-Launch-Display-Time timer.
+            var scCfg = Gameplay.GameplaySettings.ResolveSmartCapture(null, SafeStr(() => game?.Id));
+            scCfg.GlobalScan = true;
+            scCfg.Baseline = Diag.WinScan.BaselineHwnds();
+            int scDisplay = SafeNullableInt(() => Gameplay.GameplaySettings.Resolve(LaunchedGame.Current)?.StartupMinMs) ?? 2000;
+            // Store games load slower (client hand-off + install-dir process + render) than an emulator, so
+            // give the fallback safety-max more room — else it would reveal before a game that renders late.
+            int scMax = Math.Max(scDisplay, 30000);
+            int scBackstop = scMax + scDisplay + 5000;
+
             if (!StoreSupport.ShellOpen(target)) { Console.WriteLine("[store-launch] ShellOpen failed: " + target); StoreTrace.Log("store-launch ShellOpen FAILED"); return; }
             if (gi >= 0) { try { _store.JournalPlayStart(gi); } catch { } }
             // Notify launching plugins the game is up — same as the emulator path.
@@ -215,7 +229,8 @@ internal static class HostLaunch
             // OnGameExited) to tear down + REOPEN the BigBox-web kiosk around a
             // store game; without OnGameExited the kiosk never comes back.
             Fire(p => p.OnAfterGameLaunched(game, null, null));
-            if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current);   // "NOW LOADING…"
+            if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null);   // "NOW LOADING…"
+            if (scCfg.Enabled) Gameplay.SmartCapture.Start(0, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close());
             sw.Restart();
             StoreTrace.Log("store-launch ShellOpen ok — watching for game process…");
             seen = StoreProcessWatcher.WaitForGame(installDir, regainedFocus);   // process-under-install-dir; focus only if opted in
@@ -233,6 +248,7 @@ internal static class HostLaunch
                 }
                 catch { }
             }
+            Gameplay.SmartCapture.Stop();                // stop the global reveal watcher (game exited or never detected)
             var endSnap = LaunchedGame.Current;          // capture cosmetics before clearing
             if (!DryRun) Gameplay.GameScreens.ShowEndEager(endSnap);   // cover the exit transition (was Close())
             LaunchedGame.Clear();

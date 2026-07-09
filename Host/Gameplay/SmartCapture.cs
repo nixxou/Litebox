@@ -32,6 +32,11 @@ internal sealed class SmartCaptureConfig
     public string Title = "";          // wildcard, "" = any window
     public bool StopOnWindowClose;     // end the session when the game WINDOW closes (else process exit)
     public HashSet<string>? IgnoreExes; // exe filenames to skip (store clients) — resolved from the global blacklist
+    // Global-scan mode (store launches): the game isn't a descendant of anything we spawned, so instead
+    // of a process tree we watch EVERY top-level window and keep only NEW ones — those not in Baseline
+    // (the pre-launch snapshot) and not owned by LiteBox itself (cover / kiosk / main window).
+    public bool GlobalScan;
+    public HashSet<IntPtr>? Baseline;
 
     /// <summary>The keys stored in LiteBox.ini (global) / litebox-options.db (per-entity).</summary>
     public static readonly string[] Keys =
@@ -61,7 +66,8 @@ internal static class SmartCapture
         _thread = new Thread(() => Run(rootPid, cfg, Math.Max(0, displayMs), Math.Max(1000, safetyMaxMs), onReveal))
         { IsBackground = true, Name = "LiteBox-smartcapture" };
         _thread.Start();
-        Console.WriteLine($"[smartcapture] watching pid={rootPid} mode={cfg.Mode} minFps={cfg.MinFps} sustain={cfg.SustainMs}ms " +
+        Console.WriteLine($"[smartcapture] watching {(cfg.GlobalScan ? $"GLOBAL (baseline={cfg.Baseline?.Count ?? 0} pre-launch windows)" : $"tree(pid={rootPid})")} " +
+                          $"mode={cfg.Mode} minFps={cfg.MinFps} sustain={cfg.SustainMs}ms " +
                           $"minSize={cfg.MinSizePct}% title='{cfg.Title}' displayTime={displayMs}ms max={safetyMaxMs}ms " +
                           $"blacklist={cfg.IgnoreExes?.Count ?? 0} exes");
     }
@@ -76,6 +82,7 @@ internal static class SmartCapture
         long lastPoll = 0;
         bool fps = cfg.Mode.Equals("fps", StringComparison.OrdinalIgnoreCase);
         bool size = cfg.Mode.Equals("size", StringComparison.OrdinalIgnoreCase);
+        uint ownPid = (uint)Environment.ProcessId;   // global scan: exclude LiteBox's own windows (cover / kiosk / main)
         IntPtr metHwnd = IntPtr.Zero;
         long revealAt = -1;   // absolute ms: render-start + displayTime, set when detected
 
@@ -91,10 +98,18 @@ internal static class SmartCapture
                     WinScan.Win matched = default; string reason = "";
                     try
                     {
-                        var tree = WinScan.BuildTree((uint)rootPid);
-                        var wins = WinScan.TreeWindows(tree);
+                        // Store launches: watch EVERY window and keep only NEW ones (not in the pre-launch
+                        // baseline, not LiteBox's own). Emulator/app launches: the process tree of what we spawned.
+                        var wins = cfg.GlobalScan
+                            ? WinScan.AllTopLevelWindows()
+                            : WinScan.TreeWindows(WinScan.BuildTree((uint)rootPid));
                         foreach (var w in wins)
                         {
+                            if (cfg.GlobalScan)
+                            {
+                                if (w.Pid == ownPid) continue;                                        // our cover / kiosk / main window
+                                if (cfg.Baseline != null && cfg.Baseline.Contains(w.Hwnd)) continue;   // already open before launch
+                            }
                             // A store client (Steam/Epic/GOG/…) in the tree shows its OWN windows —
                             // launcher, "preparing to launch", overlay, login — which are NOT the game.
                             // Skip them so we detect the actual game window, not the store UI. The list

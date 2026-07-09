@@ -12,6 +12,21 @@ using System.Runtime.InteropServices;
 if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves"))
     DebugConsole.Enable();
 
+// Persist ALL Console output to <LB>\Core\litebox\litebox-debug.log too — a normal WinExe launch has no
+// console (DebugConsole.Enable only runs for --debug), so the [smartcapture]/[gamescreens]/… trace would
+// otherwise vanish. Fresh file each launch; tee'd with the console when one exists.
+try
+{
+    var exeDir0 = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    var logDir = string.Equals(Path.GetFileName(exeDir0), "Core", StringComparison.OrdinalIgnoreCase)
+        ? Path.Combine(exeDir0, "litebox") : exeDir0;
+    Directory.CreateDirectory(logDir);
+    var fw = new StreamWriter(Path.Combine(logDir, "litebox-debug.log"), append: false, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
+    Console.SetOut(new TeeTextWriter(Console.Out, fw));
+    Console.SetError(Console.Out);
+}
+catch { }
+
 // Act like LaunchBox's root launcher: LiteBox.exe lives in <LB>\Core (so
 // ExtendDB's Process.MainModule-based paths — LBPath = grand-parent of the exe —
 // resolve correctly), but the WORKING DIRECTORY must be the LB root, because
@@ -187,6 +202,18 @@ if (LbApiHost.Host.Install.Installer.TryRun(args, out int installExit))
 
 // Default (no args, or --host): run the host GUI.
 return HostBoot.Run(args);
+
+// Writes to two TextWriters at once (the console, if any, + the debug-log file).
+sealed class TeeTextWriter : System.IO.TextWriter
+{
+    private readonly System.IO.TextWriter _a, _b;
+    public TeeTextWriter(System.IO.TextWriter a, System.IO.TextWriter b) { _a = a; _b = b; }
+    public override System.Text.Encoding Encoding => _b.Encoding;
+    public override void Write(char c) { try { _a.Write(c); } catch { } try { _b.Write(c); } catch { } }
+    public override void Write(string? s) { try { _a.Write(s); } catch { } try { _b.Write(s); } catch { } }
+    public override void WriteLine(string? s) { try { _a.WriteLine(s); } catch { } try { _b.WriteLine(s); } catch { } }
+    public override void Flush() { try { _a.Flush(); } catch { } try { _b.Flush(); } catch { } }
+}
 
 // Console allocation for --debug / --headless (WinExe has no console otherwise).
 static class DebugConsole

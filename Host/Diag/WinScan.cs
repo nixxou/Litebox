@@ -82,7 +82,13 @@ internal static class WinScan
 
     /// <summary>Visible top-level windows whose pid is in <paramref name="tree"/> (each carries its
     /// owning process's exe filename, so consumers can skip store-client windows).</summary>
-    public static List<Win> TreeWindows(HashSet<uint> tree)
+    public static List<Win> TreeWindows(HashSet<uint> tree) => EnumTopLevel(tree);
+
+    /// <summary>EVERY visible top-level window on the desktop (no process filter) — for the global-scan
+    /// SmartCapture mode used by store launches, where the game is not a descendant of anything we spawned.</summary>
+    public static List<Win> AllTopLevelWindows() => EnumTopLevel(null);
+
+    private static List<Win> EnumTopLevel(HashSet<uint>? tree)
     {
         var exeOf = ExeMap();
         var list = new List<Win>();
@@ -92,7 +98,7 @@ internal static class WinScan
             {
                 if (!IsWindowVisible(h)) return true;
                 GetWindowThreadProcessId(h, out uint pid);
-                if (!tree.Contains(pid)) return true;
+                if (tree != null && !tree.Contains(pid)) return true;
                 GetWindowRect(h, out var r);
                 var tit = new StringBuilder(160); GetWindowText(h, tit, 160);
                 var cls = new StringBuilder(96); GetClassName(h, cls, 96);
@@ -102,6 +108,15 @@ internal static class WinScan
             return true;
         }, IntPtr.Zero);
         return list;
+    }
+
+    /// <summary>hwnds of every currently-visible top-level window — the pre-launch baseline the global
+    /// scan EXCLUDES, so only NEW windows (the launched game) are considered.</summary>
+    public static HashSet<IntPtr> BaselineHwnds()
+    {
+        var set = new HashSet<IntPtr>();
+        EnumWindows((h, _) => { try { if (IsWindowVisible(h)) set.Add(h); } catch { } return true; }, IntPtr.Zero);
+        return set;
     }
 
     /// <summary>pid → executable file name (e.g. "steam.exe"), from one toolhelp snapshot.</summary>

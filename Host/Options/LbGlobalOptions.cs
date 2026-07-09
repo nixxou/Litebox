@@ -241,6 +241,21 @@ internal static class LbGlobalOptions
             p.Controls.Add(new Label { Text = "Smart Capture — reveal the startup screen when the game actually renders:", Location = new Point(S(12), S(84)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
             var scEn = Chk("Enable Smart Capture", ini.GetBool("SmartCaptureEnabled", true), new Point(S(12), S(108)));
             p.Controls.Add(scEn);
+            // Ignored-windows blacklist: exes whose windows SmartCapture skips (store launchers) so it
+            // detects the game, not the store UI. Editable modal, seeded with the built-in defaults.
+            var ignoreList = Gameplay.GameplaySettings.SmartCaptureIgnoreExesRaw();
+            bool ignoreEdited = false;
+            var ignBtn = new Button { Text = "Ignored windows…", Location = new Point(S(310), S(105)), AutoSize = true, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, Enabled = !readOnly, Padding = new Padding(S(6), S(1), S(6), S(1)) };
+            ignBtn.FlatAppearance.BorderColor = LbxAccent;
+            var ignTip = new ToolTip(); ignTip.SetToolTip(ignBtn, "Exe filenames whose windows are NOT the game (store launchers — Steam / Epic / GOG / …). SmartCapture skips them.");
+            ignBtn.Click += (_, _) => { var v = EditIgnoreListModal(ignoreList, readOnly, dpiS); if (v != null) { ignoreList = v; ignoreEdited = true; } };
+            p.Controls.Add(ignBtn);
+            applies.Add(() =>
+            {
+                if (!ignoreEdited) return;   // untouched → leave the ini (default) alone
+                var toStore = ignoreList == Gameplay.GameplaySettings.SmartCaptureIgnoreDefaultRaw() ? "" : ignoreList;
+                if (toStore != (ini.Get("SmartCaptureIgnoreExes") ?? "")) { ini.Set("SmartCaptureIgnoreExes", toStore); iniDirty = true; }
+            });
             p.Controls.Add(Lbl("Detection mode:", new Point(S(12), S(138))));
             var scMode = Cbo(new[] { "fps", "size", "any" }, ini.Get("SmartCaptureMode", "fps") ?? "fps", new Point(S(150), S(135)), 200); p.Controls.Add(scMode);
             p.Controls.Add(Lbl("fps = rendering (robust) · size = window ≥ % of screen · any = any window", new Point(S(30), S(160)), Dim));
@@ -338,6 +353,34 @@ internal static class LbGlobalOptions
             if (iniDirty) { try { ini.Save(); } catch { } }
         };
         return host;
+    }
+
+    // ── SmartCapture "ignored windows" blacklist editor (store launchers) ────────
+    // A simple modal: one exe filename per line + Reset-to-defaults. Returns the normalised list
+    // (trimmed lines, empties dropped, newline-joined) on OK, or null on Cancel.
+    private static string? EditIgnoreListModal(string current, bool readOnly, float dpiS)
+    {
+        int S(int px) => (int)Math.Round(px * dpiS);
+        var Bg = LiteBoxTheme.Bg; var Fg = LiteBoxTheme.Fg; var Panel2 = LiteBoxTheme.Panel2; var Dim = LiteBoxTheme.SubFg;
+        using var f = new Form
+        {
+            Text = "Ignored windows — game-window detection", StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+            BackColor = Bg, ForeColor = Fg, ClientSize = new Size(S(470), S(430)), ShowInTaskbar = false,
+        };
+        var lbl = new Label { Text = "One executable filename per line (e.g. steam.exe). SmartCapture ignores windows\nowned by these processes (store launchers) so it detects the game, not the store UI.", Location = new Point(S(12), S(10)), AutoSize = true, ForeColor = Dim, BackColor = Bg };
+        var tb = new TextBox { Location = new Point(S(12), S(50)), Size = new Size(S(446), S(310)), Multiline = true, ScrollBars = ScrollBars.Vertical, WordWrap = false, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Consolas", 9.5f), Text = current.Replace("\n", "\r\n"), ReadOnly = readOnly };
+        var reset = new Button { Text = "Reset to defaults", Location = new Point(S(12), S(370)), AutoSize = true, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, Enabled = !readOnly };
+        reset.FlatAppearance.BorderColor = Color.FromArgb(96, 156, 224);
+        reset.Click += (_, _) => tb.Text = Gameplay.GameplaySettings.SmartCaptureIgnoreDefaultRaw().Replace("\n", "\r\n");
+        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(S(300), S(396)), Width = S(70), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Ok, ForeColor = Color.White, Enabled = !readOnly };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(S(378), S(396)), Width = S(80), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.CancelBtn, ForeColor = Fg };
+        f.Controls.AddRange(new Control[] { lbl, tb, reset, ok, cancel });
+        f.AcceptButton = ok; f.CancelButton = cancel;
+        if (f.ShowDialog() != DialogResult.OK) return null;
+        var clean = new List<string>();
+        foreach (var line in tb.Text.Replace("\r\n", "\n").Split('\n')) { var t = line.Trim(); if (t.Length > 0) clean.Add(t); }
+        return string.Join("\n", clean);
     }
 
     // ── Startup Applications grid (LB parity; LiteBox LAUNCHES the LaunchBox-

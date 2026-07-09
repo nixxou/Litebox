@@ -164,7 +164,32 @@ internal static class GameplaySettings
             MinSizePct        = I("SmartCaptureMinSizePct", 50),
             Title             = R("SmartCaptureTitle", ""),
             StopOnWindowClose = R("SmartCaptureStopOnWindowClose", "false").Equals("true", StringComparison.OrdinalIgnoreCase),
+            IgnoreExes        = SmartCaptureIgnoredExes(),   // global blacklist (store clients by default)
         };
+    }
+
+    /// <summary>The default game-window-detection blacklist (store clients), newline-separated + sorted.
+    /// This is what seeds the editable list in the options.</summary>
+    public static string SmartCaptureIgnoreDefaultRaw()
+        => string.Join("\n", System.Linq.Enumerable.OrderBy(Diag.WinScan.StoreClientExes, x => x, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>The effective blacklist as a newline-separated string (LiteBox.ini SmartCaptureIgnoreExes,
+    /// else the built-in default). This is what the options modal edits.</summary>
+    public static string SmartCaptureIgnoreExesRaw()
+    {
+        try { var v = LiteBoxConfig.LoadForExe().Get("SmartCaptureIgnoreExes"); return string.IsNullOrWhiteSpace(v) ? SmartCaptureIgnoreDefaultRaw() : v.Replace("\r\n", "\n"); }
+        catch { return SmartCaptureIgnoreDefaultRaw(); }
+    }
+
+    /// <summary>The effective blacklist as a case-insensitive set of exe filenames. SmartCapture skips
+    /// any window whose owning process's exe is in here — so the store client's own UI isn't taken for
+    /// the game. Falls back to the built-in default when the config is empty.</summary>
+    public static HashSet<string> SmartCaptureIgnoredExes()
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in SmartCaptureIgnoreExesRaw().Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+        { var e = line.Trim(); if (e.Length > 0) set.Add(e); }
+        return set.Count > 0 ? set : Diag.WinScan.StoreClientExes;
     }
 
     /// <summary>LiteBox-own: on an explicit exit (pause-menu "Exit Game"), show the end/exit screen

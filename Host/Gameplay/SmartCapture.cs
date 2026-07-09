@@ -31,6 +31,7 @@ internal sealed class SmartCaptureConfig
     public int MinSizePct = 50;
     public string Title = "";          // wildcard, "" = any window
     public bool StopOnWindowClose;     // end the session when the game WINDOW closes (else process exit)
+    public HashSet<string>? IgnoreExes; // exe filenames to skip (store clients) — resolved from the global blacklist
 
     /// <summary>The keys stored in LiteBox.ini (global) / litebox-options.db (per-entity).</summary>
     public static readonly string[] Keys =
@@ -93,8 +94,9 @@ internal static class SmartCapture
                         {
                             // A store client (Steam/Epic/GOG/…) in the tree shows its OWN windows —
                             // launcher, "preparing to launch", overlay, login — which are NOT the game.
-                            // Skip them so we detect the actual game window, not the store UI.
-                            if (WinScan.IsStoreClientExe(w.Exe)) continue;
+                            // Skip them so we detect the actual game window, not the store UI. The list
+                            // is the editable global blacklist (Options → LiteBox-Options → Smart Capture).
+                            if (cfg.IgnoreExes != null && cfg.IgnoreExes.Contains(w.Exe)) continue;
                             if (!WinScan.WildcardMatch(cfg.Title, w.Title)) continue;
                             if (!fps && !size) { metHwnd = w.Hwnd; break; }   // "any"
                             if (size)

@@ -24,15 +24,23 @@ internal sealed class InfoOverlay : Form
     private Bitmap? _bg;
     private bool _cursorHidden;
 
+    // Startup progress bar (startup cover only): fills 0→~90% over the predicted ETA (the game's past
+    // launch→detection time), then snaps to 100% when the reveal fade starts. null ⇒ no bar.
+    private readonly int? _etaMs;
+    private double _progress;   // UI-thread only (progress timer + paint)
+    private System.Diagnostics.Stopwatch? _progressSw;
+    private System.Windows.Forms.Timer? _progressTimer;
+
     // Full-screen overlay (own art, no app chrome) rather than a themed dialog, same as
     // LegacyPauseScreen - so a local DPI scale factor instead of deriving from LiteBoxForm.
     private readonly float _s;
     private int S(int px) => (int)Math.Round(px * _s);
 
-    public InfoOverlay(PauseContext ctx, string banner, bool hideCursor, bool noActivate = false)
+    public InfoOverlay(PauseContext ctx, string banner, bool hideCursor, bool noActivate = false, int? etaMs = null)
     {
         _banner = banner ?? "";
         _noActivate = noActivate;
+        _etaMs = etaMs.HasValue && etaMs.Value > 0 ? etaMs : null;
         _s = DeviceDpi / 96f;
 
         FormBorderStyle = FormBorderStyle.None;
@@ -75,6 +83,21 @@ internal sealed class InfoOverlay : Form
         // Banner shows instantly (drawn in OnPaintBackground); the full art swaps in
         // a moment later (image loads off the UI thread).
         BuildBackgroundAsync(Bounds.Size, ctx);
+
+        // Progress bar: advance toward the ETA, capped at 90% until the reveal snaps it to 100%.
+        if (_etaMs != null)
+        {
+            _progressSw = System.Diagnostics.Stopwatch.StartNew();
+            _progressTimer = new System.Windows.Forms.Timer { Interval = 33 };
+            _progressTimer.Tick += (_, _) =>
+            {
+                if (IsDisposed) return;
+                double frac = (double)_progressSw!.ElapsedMilliseconds / _etaMs!.Value;
+                double p = Math.Min(0.90, frac);
+                if (p > _progress) { _progress = p; try { Invalidate(); } catch { } }
+            };
+            _progressTimer.Start();
+        }
     }
 
     /// <summary>WS_EX_COMPOSITED: window + children drawn into one buffer (no flicker).
@@ -122,18 +145,69 @@ internal sealed class InfoOverlay : Form
 
     protected override void OnPaintBackground(PaintEventArgs e)
     {
-        if (_bg != null) { e.Graphics.DrawImageUnscaled(_bg, 0, 0); return; }
-        // Pre-art fallback: solid background + the banner so it's visible immediately.
-        e.Graphics.Clear(ScreenArt.Bg);
-        if (_banner.Length == 0) return;
+        if (_bg != null) e.Graphics.DrawImageUnscaled(_bg, 0, 0);
+        else
+        {
+            // Pre-art fallback: solid background + the banner so it's visible immediately.
+            e.Graphics.Clear(ScreenArt.Bg);
+            if (_banner.Length > 0)
+            {
+                int fbH = Math.Max(S(120), ClientSize.Height / 7);
+                int fbY = (ClientSize.Height - fbH) / 2;
+                using var band = new SolidBrush(Color.FromArgb(150, 0, 0, 0));
+                e.Graphics.FillRectangle(band, 0, fbY, ClientSize.Width, fbH);
+                using var f = new Font("Segoe UI", 34f);
+                using var br = new SolidBrush(ScreenArt.Fg);
+                var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                e.Graphics.DrawString(_banner, f, br, new RectangleF(0, fbY, ClientSize.Width, fbH), sf);
+            }
+        }
+        DrawProgress(e.Graphics);
+    }
+
+    /// <summary>A thin, centred rounded progress bar just under the banner band — discreet, accent-tinted,
+    /// with a soft trailing glow at the leading edge. Only drawn when an ETA was supplied.</summary>
+    private void DrawProgress(Graphics g)
+    {
+        if (_etaMs == null) return;
+        double p = Math.Max(0.0, Math.Min(1.0, _progress));
+        int barW = Math.Min(S(560), (int)(ClientSize.Width * 0.32));
+        int barH = S(6);
+        int x = (ClientSize.Width - barW) / 2;
         int bandH = Math.Max(S(120), ClientSize.Height / 7);
-        int bandY = (ClientSize.Height - bandH) / 2;
-        using var band = new SolidBrush(Color.FromArgb(150, 0, 0, 0));
-        e.Graphics.FillRectangle(band, 0, bandY, ClientSize.Width, bandH);
-        using var f = new Font("Segoe UI", 34f);
-        using var br = new SolidBrush(ScreenArt.Fg);
-        var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        e.Graphics.DrawString(_banner, f, br, new RectangleF(0, bandY, ClientSize.Width, bandH), sf);
+        int y = (ClientSize.Height - bandH) / 2 + bandH + S(30);
+        var old = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        // track
+        using (var tp = RoundRect(x, y, barW, barH, barH / 2f))
+        using (var tb = new SolidBrush(Color.FromArgb(64, 255, 255, 255)))
+            g.FillPath(tb, tp);
+        // fill
+        int fw = (int)Math.Round(barW * p);
+        if (fw >= barH)
+        {
+            var accent = Color.FromArgb(235, 120, 180, 255);
+            using (var fp = RoundRect(x, y, fw, barH, barH / 2f))
+            using (var fb = new SolidBrush(accent))
+                g.FillPath(fb, fp);
+            // leading-edge glow
+            using (var glow = new SolidBrush(Color.FromArgb(90, accent)))
+                g.FillEllipse(glow, x + fw - barH, y - barH / 2, barH * 2, barH * 2);
+        }
+        g.SmoothingMode = old;
+    }
+
+    private static System.Drawing.Drawing2D.GraphicsPath RoundRect(float x, float y, float w, float h, float r)
+    {
+        r = Math.Min(r, Math.Min(w, h) / 2f);
+        var gp = new System.Drawing.Drawing2D.GraphicsPath();
+        if (w <= 0 || h <= 0) return gp;
+        gp.AddArc(x, y, 2 * r, 2 * r, 180, 90);
+        gp.AddArc(x + w - 2 * r, y, 2 * r, 2 * r, 270, 90);
+        gp.AddArc(x + w - 2 * r, y + h - 2 * r, 2 * r, 2 * r, 0, 90);
+        gp.AddArc(x, y + h - 2 * r, 2 * r, 2 * r, 90, 90);
+        gp.CloseFigure();
+        return gp;
     }
 
     private System.Windows.Forms.Timer? _frontTimer;
@@ -192,6 +266,9 @@ internal sealed class InfoOverlay : Form
     private System.Windows.Forms.Timer? _fadeTimer;
     public void FadeOutClose(int fadeMs)
     {
+        // The reveal is happening → snap the progress bar to 100% for the moment before it dissolves.
+        try { _progressTimer?.Stop(); } catch { }
+        if (_etaMs != null && _progress < 1.0) { _progress = 1.0; try { Invalidate(); Update(); } catch { } }
         if (fadeMs <= 0 || IsDisposed) { HideThenClose(); try { Dispose(); } catch { } return; }
         const int stepMs = 30;
         int steps = Math.Max(1, fadeMs / stepMs);
@@ -220,6 +297,8 @@ internal sealed class InfoOverlay : Form
             _topTimer = null;
             try { _fadeTimer?.Stop(); _fadeTimer?.Dispose(); } catch { }
             _fadeTimer = null;
+            try { _progressTimer?.Stop(); _progressTimer?.Dispose(); } catch { }
+            _progressTimer = null;
             if (_cursorHidden) { try { Cursor.Show(); } catch { } _cursorHidden = false; }
             _bg?.Dispose();
         }

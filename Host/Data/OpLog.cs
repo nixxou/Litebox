@@ -74,10 +74,16 @@ internal sealed class OpLog : IDisposable
                     // never tracks the ROM, so extracted_rom_path stays NULL here.
                     "CREATE TABLE IF NOT EXISTS launch_history(" +
                     " game_id TEXT NOT NULL PRIMARY KEY, additional_app_id TEXT, emulator_id TEXT," +
-                    " extracted_rom_path TEXT, last_launched_utc TEXT NOT NULL);" +
+                    // detection_ms: launch → SmartCapture-detection latency (LiteBox-only; NULL until a
+                    // launch under LiteBox actually detects the game window). Reused to extend the reveal
+                    // ceiling and feed the startup progress bar. Same column added to ExtendDB's schema.
+                    " extracted_rom_path TEXT, last_launched_utc TEXT NOT NULL, detection_ms INTEGER);" +
                     $"PRAGMA user_version={cur};";
                 cmd.ExecuteNonQuery();
             }
+            // Migrate pre-existing launch_history tables (created before detection_ms): add the column.
+            try { using var alter = log._conn.CreateCommand(); alter.CommandText = "ALTER TABLE launch_history ADD COLUMN detection_ms INTEGER;"; alter.ExecuteNonQuery(); }
+            catch { /* column already present */ }
             if (reset) Console.WriteLine($"[oplog] schema reset (user_version {uv} < {resetBelow})");
             log._insert = log._conn.CreateCommand();
             log._insert.CommandText =
@@ -213,9 +219,13 @@ internal sealed class OpLog : IDisposable
             try
             {
                 using var cmd = _conn.CreateCommand();
+                // UPSERT (NOT INSERT OR REPLACE, which deletes+reinserts the whole row and would WIPE
+                // detection_ms every launch — the value the progress bar / ceiling read back next time).
                 cmd.CommandText =
-                    "INSERT OR REPLACE INTO launch_history(game_id, additional_app_id, emulator_id, extracted_rom_path, last_launched_utc) " +
-                    "VALUES($g,$a,$e,NULL,$t)";
+                    "INSERT INTO launch_history(game_id, additional_app_id, emulator_id, extracted_rom_path, last_launched_utc) " +
+                    "VALUES($g,$a,$e,NULL,$t) " +
+                    "ON CONFLICT(game_id) DO UPDATE SET additional_app_id=excluded.additional_app_id, " +
+                    "emulator_id=excluded.emulator_id, last_launched_utc=excluded.last_launched_utc";
                 cmd.Parameters.AddWithValue("$g", gameId);
                 cmd.Parameters.AddWithValue("$a", (object)additionalAppId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$e", (object)emulatorId ?? DBNull.Value);
@@ -262,6 +272,50 @@ internal sealed class OpLog : IDisposable
                     return (r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1));
             }
             catch (Exception ex) { Console.WriteLine("[oplog] launch get failed: " + ex.Message); }
+        }
+        return null;
+    }
+
+    /// <summary>Record the launch → SmartCapture-detection latency (ms) for a game. UPSERT that ONLY
+    /// touches detection_ms — preserves the emulator/app/rom columns (RecordLaunch wrote them). Creates
+    /// a bare row (with last_launched_utc) for a game that has none yet (e.g. a store launch). No-op
+    /// when disabled.</summary>
+    public void RecordDetection(string gameId, long detectionMs)
+    {
+        if (!Enabled || string.IsNullOrEmpty(gameId)) return;
+        lock (_lock)
+        {
+            try
+            {
+                using var cmd = _conn.CreateCommand();
+                cmd.CommandText =
+                    "INSERT INTO launch_history(game_id, last_launched_utc, detection_ms) VALUES($g,$t,$d) " +
+                    "ON CONFLICT(game_id) DO UPDATE SET detection_ms=excluded.detection_ms";
+                cmd.Parameters.AddWithValue("$g", gameId);
+                cmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("o"));
+                cmd.Parameters.AddWithValue("$d", detectionMs);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex) { Console.WriteLine("[oplog] detection record failed: " + ex.Message); }
+        }
+    }
+
+    /// <summary>The last recorded launch→detection latency (ms) for a game, or null if none / never
+    /// detected. Used to extend the reveal ceiling and drive the startup progress bar.</summary>
+    public long? GetLastDetectionMs(string gameId)
+    {
+        if (!Enabled || string.IsNullOrEmpty(gameId)) return null;
+        lock (_lock)
+        {
+            try
+            {
+                using var cmd = _conn.CreateCommand();
+                cmd.CommandText = "SELECT detection_ms FROM launch_history WHERE game_id=$g";
+                cmd.Parameters.AddWithValue("$g", gameId);
+                using var r = cmd.ExecuteReader();
+                if (r.Read() && !r.IsDBNull(0)) return r.GetInt64(0);
+            }
+            catch (Exception ex) { Console.WriteLine("[oplog] detection get failed: " + ex.Message); }
         }
         return null;
     }

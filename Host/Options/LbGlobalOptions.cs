@@ -200,9 +200,11 @@ internal static class LbGlobalOptions
             p.Controls.Add(Lbl("Startup Load Delay (ms)", new Point(S(4), S(178))));
             var sld = Txt(ini.Get("StartupLoadDelay", "5000"), new Point(S(320), S(175)), 90); p.Controls.Add(sld);
             p.Controls.Add(Lbl("Reveal ceiling: max wait for a render before SmartCapture reveals anyway (0 = 5s default). Per-emulator/game overrides win.", new Point(S(28), S(200)), Dim));
+            var pbar = Chk("Show a startup progress bar (fills to 100% at the fade, from the game's past detection time)", ini.GetBool("StartupProgressBar", true), new Point(S(4), S(226)));
+            p.Controls.Add(pbar);
             BindChk(use, "UseStartupScreen"); BindTxt(st, "StartupScreenPostLaunchDisplayTime");
             BindTxt(sh, "ShutdownScreenPostReadyDisplayTime"); BindChk(hc, "HideMouseCursorOnStartupScreens");
-            BindChk(ff, "ForceFrontendFocusOnShutdown"); BindIniTxt(sld, "StartupLoadDelay");
+            BindChk(ff, "ForceFrontendFocusOnShutdown"); BindIniTxt(sld, "StartupLoadDelay"); BindIniChk(pbar, "StartupProgressBar", true);
             // (LiteBox-only startup extras — stay-on-top / Smart Capture / exit-early / web-return —
             //  now live on the dedicated "LiteBox-Options" tab, not appended here.)
         }

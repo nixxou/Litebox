@@ -71,6 +71,10 @@ internal static class SmartCapture
     /// multi-second process-gone debounce, so GAME OVER shows right when the game window disappears.</summary>
     public static IntPtr DetectedGameWindow { get; private set; }
 
+    /// <summary>ms from SmartCapture start (≈ launch) to the ★ MATCH, or null if not yet detected /
+    /// after Stop. Recorded to launch_history to extend the reveal ceiling + drive the progress bar.</summary>
+    public static long? DetectedAtMs { get; private set; }
+
     /// <summary>True once a game window was detected AND it has since closed — the game really ended.</summary>
     public static bool GameWindowDetectedAndGone()
         => DetectedGameWindow != IntPtr.Zero && !WinScan.Alive(DetectedGameWindow);
@@ -94,7 +98,7 @@ internal static class SmartCapture
                           $"displayTime={displayMs}ms max={safetyMaxMs}ms blacklist={cfg.IgnoreExes?.Count ?? 0} exes");
     }
 
-    public static void Stop() { _run = false; _thread = null; DetectedGameWindow = IntPtr.Zero; }
+    public static void Stop() { _run = false; _thread = null; DetectedGameWindow = IntPtr.Zero; DetectedAtMs = null; }
 
     private static void Run(int rootPid, SmartCaptureConfig cfg, int displayMs, int maxMs, Action onReveal, int fadeMs = 0)
     {
@@ -212,6 +216,7 @@ internal static class SmartCapture
                     {
                         DetectedGameWindow = metHwnd;   // expose to StoreProcessWatcher for a window-close exit signal
                         detectAt = now;
+                        DetectedAtMs = now;             // launch → detection latency, recorded to launch_history at exit
                         // The Post-Launch Display Time counts from when the game STARTED rendering — which
                         // was ~SustainMs before this fps confirmation (the detection window). So the hold
                         // after detection = displayMs − detWindow. The reveal then fires fadeMs earlier so

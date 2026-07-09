@@ -544,6 +544,12 @@ internal sealed class GameStore
     /// <summary>Cancels the game's LiteBox launch-history row (reset-to-default button).</summary>
     public void ClearLaunch(string gameId) { _oplog?.ClearLaunch(gameId); }
 
+    /// <summary>Record the launch→SmartCapture-detection latency (ms) for a game (LiteBox-only).</summary>
+    public void RecordDetection(string gameId, long detectionMs) { _oplog?.RecordDetection(gameId, detectionMs); }
+
+    /// <summary>The last recorded launch→detection latency (ms) for a game, or null.</summary>
+    public long? GetLastDetectionMs(string gameId) { return _oplog?.GetLastDetectionMs(gameId); }
+
     /// <summary>Generic IGame scalar write-back: <paramref name="xmlName"/> is the XML element name
     /// (e.g. "Developer"), <paramref name="value"/> the serialized value ("" = clear). Updates memory
     /// + logs the op. Unknown field names are ignored (logged once).</summary>

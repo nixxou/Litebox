@@ -26,7 +26,7 @@ internal static class RomBridge
     private static bool _probed;
     private static Type _t;
     private static PropertyInfo _featureEnabled, _raModuleActive;
-    private static MethodInfo _getInfo, _pick, _arm, _entries, _heal, _healSync, _clearHist;
+    private static MethodInfo _getInfo, _pick, _arm, _entries, _heal, _healSync, _clearHist, _recordDetection;
 
     private static void Probe()
     {
@@ -48,8 +48,18 @@ internal static class RomBridge
             _heal = _t.GetMethod("HealRa", F, null, new[] { typeof(IGame) }, null);
             _healSync = _t.GetMethod("HealRaSync", F, null, new[] { typeof(IGame) }, null);
             _clearHist = _t.GetMethod("ClearLaunchHistory", F, null, new[] { typeof(IGame) }, null);
+            _recordDetection = _t.GetMethod("RecordDetectionMs", F, null, new[] { typeof(IGame), typeof(long) }, null);
         }
         catch { }
+    }
+
+    /// <summary>Mirror the launch→detection latency (ms) into ExtendDB's launch-history.db too, so both
+    /// copies stay in sync. No-op when ExtendDB is absent or predates the method (LiteBox's own op-log
+    /// copy is the one the feature reads).</summary>
+    public static void RecordDetection(IGame game, long detectionMs)
+    {
+        Probe();
+        try { _recordDetection?.Invoke(null, new object[] { game, detectionMs }); } catch { }
     }
 
     /// <summary>Select-time RA heal (plugin-side): reconciles a present-but-possibly-wrong

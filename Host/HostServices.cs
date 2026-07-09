@@ -220,6 +220,10 @@ internal static class HostLaunch
             // Fallback safety-max ("reveal anyway after"): reveal the cover if a render is never detected.
             // Sourced from the LB "Startup Load Delay" (per-emulator/game), default 5s, floored at display.
             int scMax = Math.Max(scDisplay, Gameplay.GameplaySettings.RevealMaxMs(LaunchedGame.Current));
+            // If this game was slow to detect last time, keep the cover up past the blind ceiling so we
+            // don't reveal prematurely (extend to historical detection + 3s, capped at 2 min).
+            long? histDet = null; try { histDet = _store.GetLastDetectionMs(SafeStr(() => game?.Id)); } catch { }
+            if (histDet.HasValue) scMax = Math.Max(scMax, (int)Math.Min(120000, histDet.Value + 3000));
             int scBackstop = scMax + scDisplay + 5000;
 
             if (!StoreSupport.ShellOpen(target)) { Console.WriteLine("[store-launch] ShellOpen failed: " + target); StoreTrace.Log("store-launch ShellOpen FAILED"); return; }
@@ -230,8 +234,11 @@ internal static class HostLaunch
             // store game; without OnGameExited the kiosk never comes back.
             Fire(p => p.OnAfterGameLaunched(game, null, null));
             int scFade = Gameplay.GameplaySettings.FadeMs(LaunchedGame.Current, scDisplay);   // ≤1s dissolve at the reveal
-            Console.WriteLine($"[store-launch] startup timing: display={scDisplay}ms fade={scFade}ms reveal-ceiling={scMax}ms (hold from detection, dissolve over last fade)");
-            if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null);   // "NOW LOADING…"
+            // Progress-bar ETA: predicted fade-start = past detection + hold − fade (null = no bar / first launch).
+            int? scEta = (Gameplay.GameplaySettings.StartupProgressBar() && histDet.HasValue)
+                ? (int?)Math.Max(500, (int)(histDet.Value + Math.Max(0, scDisplay - (scCfg.UseFps ? scCfg.SustainMs : 0)) - scFade)) : null;
+            Console.WriteLine($"[store-launch] startup timing: display={scDisplay}ms fade={scFade}ms reveal-ceiling={scMax}ms histDet={(histDet?.ToString() ?? "none")} barEta={(scEta?.ToString() ?? "off")}");
+            if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null, scEta);   // "NOW LOADING…"
             if (scCfg.Enabled) Gameplay.SmartCapture.Start(0, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close(scFade), scFade);
             sw.Restart();
             StoreTrace.Log("store-launch ShellOpen ok — watching for game process…");
@@ -253,6 +260,9 @@ internal static class HostLaunch
                 }
                 catch { }
             }
+            // Record the launch → detection latency (LiteBox-only) BEFORE Stop() clears it — reused next
+            // launch to extend the reveal ceiling + drive the progress bar. Null when never detected.
+            if (!DryRun) { var det = Gameplay.SmartCapture.DetectedAtMs; if (det.HasValue) { string gid = SafeStr(() => game?.Id); try { _store.RecordDetection(gid, det.Value); } catch { } try { Media.RomBridge.RecordDetection(game, det.Value); } catch { } } }
             Gameplay.SmartCapture.Stop();                // stop the global reveal watcher (game exited or never detected)
             var endSnap = LaunchedGame.Current;          // capture cosmetics before clearing
             if (!DryRun) Gameplay.GameScreens.ShowEndEager(endSnap);   // cover the exit transition (was Close())
@@ -354,9 +364,15 @@ internal static class HostLaunch
                     // is never detected (exclusive fullscreen).
                     int scDisplay = SafeNullableInt(() => Gameplay.GameplaySettings.Resolve(LaunchedGame.Current)?.StartupMinMs) ?? 2000;
                     int scMax = Math.Max(scDisplay, Gameplay.GameplaySettings.RevealMaxMs(LaunchedGame.Current));   // "reveal anyway after" = LB Startup Load Delay (default 5s)
+                    // Slow-to-detect last time → keep the cover past the blind ceiling (historical + 3s, cap 2 min).
+                    long? histDet = null; try { histDet = _store.GetLastDetectionMs(SafeStr(() => game?.Id)); } catch { }
+                    if (histDet.HasValue) scMax = Math.Max(scMax, (int)Math.Min(120000, histDet.Value + 3000));
                     int scBackstop = scMax + scDisplay + 5000;   // the coordinator owns the reveal; this is a last-resort cover timer
                     int scFade = Gameplay.GameplaySettings.FadeMs(LaunchedGame.Current, scDisplay);   // ≤1s dissolve at the reveal
-                    Console.WriteLine($"[emu-launch] startup timing: display={scDisplay}ms fade={scFade}ms reveal-ceiling={scMax}ms (hold from detection, dissolve over last fade)");
+                    // Progress-bar ETA: predicted fade-start = past detection + hold − fade (null = no bar / first launch).
+                    int? scEta = (Gameplay.GameplaySettings.StartupProgressBar() && histDet.HasValue)
+                        ? (int?)Math.Max(500, (int)(histDet.Value + Math.Max(0, scDisplay - (scCfg.UseFps ? scCfg.SustainMs : 0)) - scFade)) : null;
+                    Console.WriteLine($"[emu-launch] startup timing: display={scDisplay}ms fade={scFade}ms reveal-ceiling={scMax}ms histDet={(histDet?.ToString() ?? "none")} barEta={(scEta?.ToString() ?? "off")}");
                     Action<Process> onSpawned = p =>
                     {
                         if (main.Value.useEmu && emulator != null) Pause.PauseManager.Arm(p, emulator, game);
@@ -366,7 +382,7 @@ internal static class HostLaunch
                     };
                     // Startup screen ("NOW LOADING…"). SmartCapture on → cover held to a generous
                     // backstop; the coordinator closes it at render-start + displayTime.
-                    if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null);
+                    if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null, scEta);
                     RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main", onSpawned);
                 }
                 else if (!DryRun)
@@ -387,6 +403,8 @@ internal static class HostLaunch
         {
             Pause.PauseManager.Disarm();  // hotkey off + resume a still-frozen process + close the screen
             Gameplay.ScreenCapture.Disarm();
+            // Record the launch → detection latency (LiteBox-only) BEFORE Stop() clears it.
+            if (!DryRun) { var det = Gameplay.SmartCapture.DetectedAtMs; if (det.HasValue) { string gid = SafeStr(() => game?.Id); try { _store.RecordDetection(gid, det.Value); } catch { } try { Media.RomBridge.RecordDetection(game, det.Value); } catch { } } }
             Gameplay.SmartCapture.Stop();  // stop the reveal watcher (game exited before/after detection)
             var endSnap = LaunchedGame.Current;   // capture cosmetics before clearing (end screen needs them)
             // Cover the exit transition RIGHT NOW — before the cleanup below AND before OnGameExited

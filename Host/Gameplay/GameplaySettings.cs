@@ -144,6 +144,14 @@ internal static class GameplaySettings
         catch { return false; }
     }
 
+    /// <summary>Global toggle (LiteBox.ini) for the startup-cover progress bar (the ≤100%-at-fade bar fed
+    /// by the game's historical detection latency). Default ON; only shows once a game has history.</summary>
+    public static bool StartupProgressBar()
+    {
+        try { return LiteBoxConfig.LoadForExe().GetBool("StartupProgressBar", true); }
+        catch { return true; }
+    }
+
     /// <summary>True when "Mute Audio During Transitions" is on (Settings.xml
     /// PauseScreenMuting, LB default true). Read fresh — an options change applies
     /// to the next pause without a restart.</summary>

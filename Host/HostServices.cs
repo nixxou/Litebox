@@ -217,9 +217,10 @@ internal static class HostLaunch
             scCfg.GlobalScan = true;
             scCfg.Baseline = Diag.WinScan.BaselineHwnds();
             int scDisplay = SafeNullableInt(() => Gameplay.GameplaySettings.Resolve(LaunchedGame.Current)?.StartupMinMs) ?? 2000;
-            // Store games load slower (client hand-off + install-dir process + render) than an emulator, so
-            // give the fallback safety-max more room — else it would reveal before a game that renders late.
-            int scMax = Math.Max(scDisplay, 30000);
+            // Fallback safety-max: reveal the cover anyway if a render is never detected. Configurable
+            // (LiteBox-Options → Smart Capture), floored at the display time. Store games load slower
+            // (client hand-off + install-dir process + render) so the default (30s) leaves room.
+            int scMax = Math.Max(scDisplay, scCfg.MaxWaitMs);
             int scBackstop = scMax + scDisplay + 5000;
 
             if (!StoreSupport.ShellOpen(target)) { Console.WriteLine("[store-launch] ShellOpen failed: " + target); StoreTrace.Log("store-launch ShellOpen FAILED"); return; }
@@ -233,7 +234,10 @@ internal static class HostLaunch
             if (scCfg.Enabled) Gameplay.SmartCapture.Start(0, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close());
             sw.Restart();
             StoreTrace.Log("store-launch ShellOpen ok — watching for game process…");
-            seen = StoreProcessWatcher.WaitForGame(installDir, regainedFocus);   // process-under-install-dir; focus only if opted in
+            // When SmartCapture is on, its detected game window closing is a faster, more precise exit
+            // signal than the process-gone debounce — pass it so GAME OVER fires the moment the window dies.
+            Func<bool>? windowGone = scCfg.Enabled ? Gameplay.SmartCapture.GameWindowDetectedAndGone : (Func<bool>?)null;
+            seen = StoreProcessWatcher.WaitForGame(installDir, regainedFocus, windowGone);   // process-under-install-dir; focus only if opted in
             StoreTrace.Log($"store-launch watch done: seen={seen} elapsed={(int)sw.Elapsed.TotalSeconds}s");
         }
         catch (Exception ex) { Console.WriteLine("[store-launch] error: " + ex.Message); StoreTrace.Log("store-launch EX: " + ex.Message); }
@@ -348,7 +352,7 @@ internal static class HostLaunch
                     // — the detection window is subtracted inside). Safety max = fallback if the game
                     // is never detected (exclusive fullscreen).
                     int scDisplay = SafeNullableInt(() => Gameplay.GameplaySettings.Resolve(LaunchedGame.Current)?.StartupMinMs) ?? 2000;
-                    int scMax = Math.Max(scDisplay, 15000);
+                    int scMax = Math.Max(scDisplay, scCfg.MaxWaitMs);   // fallback safety-max, configurable (LiteBox-Options → Smart Capture)
                     int scBackstop = scMax + scDisplay + 5000;   // the coordinator owns the reveal; this is a last-resort cover timer
                     Action<Process> onSpawned = p =>
                     {

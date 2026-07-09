@@ -3,14 +3,14 @@
 // is met, floored by StartupLoadDelay and backed by a safety-max (so a case WGC can't see —
 // exclusive fullscreen — never hangs; it falls back to a timed reveal).
 //
-// Detection MODE (configurable — global, later per-emulator/game):
-//   • "fps"  — a window renders: WGC-measured presentation ≥ MinFps sustained ≥ SustainMs.
-//              Robust: API-agnostic, size-agnostic, works for GPU-light / windowed games.
-//   • "size" — a window ≥ MinSizePct % of its monitor appears (no WGC — for setups where
-//              capture is unavailable).
-//   • "any"  — any (title-matching) top-level window of the tree appears.
-// A TitleWildcard (case-insensitive *,? — empty = any) filters which windows count, so you can
-// pin the actual game window by title.
+// Detection is a BOOLEAN EXPRESSION (configurable — global / per-emulator / per-game):
+//     detected(window) = titleMatch(if a title is set)  OR  ( fps-test  [AND|OR]  size-test )
+//   • Title (wildcard, case-insensitive *,?): if set, a window whose title matches IS the game on
+//     its own (OR-priority). A window that does NOT match can still be caught by fps/size.
+//   • fps-test — WGC-measured presentation ≥ MinFps sustained ≥ SustainMs (API/size-agnostic).
+//   • size-test — window ≥ MinSizePct % of its monitor (no WGC — for capture-unavailable setups).
+//   • fps & size are toggled independently; when BOTH on, Combine ("and"/"or") joins them.
+//   • Nothing on at all (no title, no fps, no size) ⇒ the first NEW window (legacy "any").
 //
 // Shutdown stays PROCESS-driven (the launch already waits on the process); SmartCapture only
 // owns the reveal (startup) half.
@@ -25,11 +25,21 @@ namespace LbApiHost.Host.Gameplay;
 internal sealed class SmartCaptureConfig
 {
     public bool Enabled = true;
-    public string Mode = "fps";       // fps | size | any
+    // Detection is a boolean expression, NOT a single mode:
+    //   detected(window) = titleMatch(if a title is set)  OR  ( fps-test [Combine] size-test )
+    // • Title (wildcard): if set, a window whose title matches IS the game on its own (OR-priority).
+    //   Empty ⇒ no title term. A window that does NOT match the title can still be caught by fps/size.
+    // • fps / size: each toggled independently; when BOTH on, Combine ("and"/"or") joins them.
+    // • Nothing on at all (no title, no fps, no size) ⇒ fall back to the first NEW window (old "any").
+    public bool UseFps = true;         // fps-test enabled
+    public bool UseSize;               // size-test enabled
+    public string Combine = "and";     // how fps & size join when BOTH on: "and" | "or"
     public int MinFps = 10;
     public int SustainMs = 600;
     public int MinSizePct = 50;
-    public string Title = "";          // wildcard, "" = any window
+    public string Title = "";          // wildcard, "" = no title term
+    public int MaxWaitMs = 30000;      // safety-max: reveal the cover anyway after this (render never detected)
+    public bool ShowBorder;            // keep the yellow WGC capture border (hidden ini opt-in; default off)
     public bool StopOnWindowClose;     // end the session when the game WINDOW closes (else process exit)
     public HashSet<string>? IgnoreExes; // exe filenames to skip (store clients) — resolved from the global blacklist
     // Global-scan mode (store launches): the game isn't a descendant of anything we spawned, so instead
@@ -41,8 +51,9 @@ internal sealed class SmartCaptureConfig
     /// <summary>The keys stored in LiteBox.ini (global) / litebox-options.db (per-entity).</summary>
     public static readonly string[] Keys =
     {
-        "SmartCaptureEnabled", "SmartCaptureMode", "SmartCaptureMinFps", "SmartCaptureSustainMs",
-        "SmartCaptureMinSizePct", "SmartCaptureTitle", "SmartCaptureStopOnWindowClose",
+        "SmartCaptureEnabled", "SmartCaptureUseFps", "SmartCaptureUseSize", "SmartCaptureCombine",
+        "SmartCaptureMinFps", "SmartCaptureSustainMs", "SmartCaptureMinSizePct", "SmartCaptureTitle",
+        "SmartCaptureMaxMs", "SmartCaptureStopOnWindowClose",
     };
 }
 
@@ -52,6 +63,15 @@ internal static class SmartCapture
 
     private static Thread? _thread;
     private static volatile bool _run;
+
+    /// <summary>The game window SmartCapture locked onto (Zero until detected, reset on Start/Stop). Store
+    /// launches use its CLOSE as a fast, precise exit signal — far quicker than StoreProcessWatcher's
+    /// multi-second process-gone debounce, so GAME OVER shows right when the game window disappears.</summary>
+    public static IntPtr DetectedGameWindow { get; private set; }
+
+    /// <summary>True once a game window was detected AND it has since closed — the game really ended.</summary>
+    public static bool GameWindowDetectedAndGone()
+        => DetectedGameWindow != IntPtr.Zero && !WinScan.Alive(DetectedGameWindow);
 
     /// <summary>Start watching. Reveals via <paramref name="onReveal"/> once the game is detected
     /// rendering, then <paramref name="displayMs"/> (the Post-Launch Display Time) AFTER the render
@@ -67,12 +87,12 @@ internal static class SmartCapture
         { IsBackground = true, Name = "LiteBox-smartcapture" };
         _thread.Start();
         Console.WriteLine($"[smartcapture] watching {(cfg.GlobalScan ? $"GLOBAL (baseline={cfg.Baseline?.Count ?? 0} pre-launch windows)" : $"tree(pid={rootPid})")} " +
-                          $"mode={cfg.Mode} minFps={cfg.MinFps} sustain={cfg.SustainMs}ms " +
-                          $"minSize={cfg.MinSizePct}% title='{cfg.Title}' displayTime={displayMs}ms max={safetyMaxMs}ms " +
-                          $"blacklist={cfg.IgnoreExes?.Count ?? 0} exes");
+                          $"title='{cfg.Title}'(OR-priority) fps={(cfg.UseFps ? $"on≥{cfg.MinFps}/{cfg.SustainMs}ms" : "off")} " +
+                          $"size={(cfg.UseSize ? $"on≥{cfg.MinSizePct}%" : "off")} combine={(cfg.UseFps && cfg.UseSize ? cfg.Combine.ToUpperInvariant() : "n/a")} " +
+                          $"displayTime={displayMs}ms max={safetyMaxMs}ms blacklist={cfg.IgnoreExes?.Count ?? 0} exes");
     }
 
-    public static void Stop() { _run = false; _thread = null; }
+    public static void Stop() { _run = false; _thread = null; DetectedGameWindow = IntPtr.Zero; }
 
     private static void Run(int rootPid, SmartCaptureConfig cfg, int displayMs, int maxMs, Action onReveal)
     {
@@ -80,8 +100,11 @@ internal static class SmartCapture
         var meters = new Dictionary<IntPtr, (WgcFps meter, int sustainedMs)>();
         var announced = new HashSet<IntPtr>();   // log each window's skip/consider verdict once
         long lastPoll = 0;
-        bool fps = cfg.Mode.Equals("fps", StringComparison.OrdinalIgnoreCase);
-        bool size = cfg.Mode.Equals("size", StringComparison.OrdinalIgnoreCase);
+        bool useFps = cfg.UseFps, useSize = cfg.UseSize;
+        bool titleSet = !string.IsNullOrEmpty(cfg.Title) && cfg.Title != "*";
+        bool combineOr = cfg.Combine.Equals("or", StringComparison.OrdinalIgnoreCase);
+        bool nothingSet = !titleSet && !useFps && !useSize;   // → first NEW window (legacy "any")
+        bool matchedFps = false;   // did THIS match rely on sustained fps? (drives the display-time subtraction)
         uint ownPid = (uint)Environment.ProcessId;   // global scan: exclude LiteBox's own windows (cover / kiosk / main)
         IntPtr metHwnd = IntPtr.Zero;
         long revealAt = -1;   // absolute ms: render-start + displayTime, set when detected
@@ -116,38 +139,67 @@ internal static class SmartCapture
                             // is the editable global blacklist (Options → LiteBox-Options → Smart Capture).
                             if (cfg.IgnoreExes != null && cfg.IgnoreExes.Contains(w.Exe))
                             { if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[blacklist] {WinInfo(w)}"); continue; }
-                            if (!WinScan.WildcardMatch(cfg.Title, w.Title))
-                            { if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[title!='{cfg.Title}'] {WinInfo(w)}"); continue; }
 
-                            if (!fps && !size) { matched = w; reason = "mode=any: first title-matching window"; metHwnd = w.Hwnd; break; }
-                            if (size)
+                            // (1) TITLE — OR-priority: a title-matching window IS the game on its own.
+                            if (titleSet && WinScan.WildcardMatch(cfg.Title, w.Title))
+                            { matched = w; reason = $"title matches '{cfg.Title}'"; matchedFps = false; metHwnd = w.Hwnd; break; }
+
+                            // (2) Nothing configured at all → first NEW window (legacy "any").
+                            if (nothingSet)
+                            { matched = w; reason = "any: first new window (no condition set)"; matchedFps = false; metHwnd = w.Hwnd; break; }
+
+                            // (3) Only a title is set (no fps/size term) → a non-title window can't match; wait.
+                            if (!useFps && !useSize) continue;
+
+                            // (4) fps and/or size tests. size is instantaneous; fps needs sustained metering.
+                            bool sizePass = false;
+                            if (useSize)
                             {
                                 var mon = WinScan.MonitorBounds(w.Hwnd);
                                 long monArea = (long)mon.W * mon.H;
                                 int pct = monArea > 0 ? (int)(w.Area * 100L / monArea) : 0;
                                 if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   consider[size] {WinInfo(w)} mon={mon.W}x{mon.H} pct={pct}% (need ≥ {cfg.MinSizePct}%)");
-                                if (monArea > 0 && w.Area * 100L >= monArea * cfg.MinSizePct)
-                                { matched = w; reason = $"mode=size: window is {pct}% ≥ {cfg.MinSizePct}% of the {mon.W}x{mon.H} monitor"; metHwnd = w.Hwnd; break; }
+                                sizePass = monArea > 0 && w.Area * 100L >= monArea * cfg.MinSizePct;
                             }
-                            else // fps: attach a meter, accumulate sustained-above-threshold time.
+                            bool fpsPass = false; double lastFps = 0;
+                            if (useFps)
                             {
                                 if (!meters.TryGetValue(w.Hwnd, out var m))
                                 {
-                                    var meter = WgcFps.TryCreate(w.Hwnd);
-                                    if (meter == null) { if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[no WGC capture] {WinInfo(w)}"); continue; }
-                                    m = (meter, 0); meters[w.Hwnd] = m;
-                                    Console.WriteLine($"[smartcapture]   consider[fps] {WinInfo(w)} — metering (need ≥{cfg.MinFps}fps for {cfg.SustainMs}ms)");
+                                    var meter = WgcFps.TryCreate(w.Hwnd, cfg.ShowBorder);
+                                    if (meter == null)
+                                    {
+                                        if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[no WGC capture] {WinInfo(w)}");
+                                        if (!useSize) continue;   // fps required but unmeasurable, and no size term to decide
+                                    }
+                                    else
+                                    {
+                                        m = (meter, 0); meters[w.Hwnd] = m;
+                                        Console.WriteLine($"[smartcapture]   consider[fps] {WinInfo(w)} — metering (need ≥{cfg.MinFps}fps for {cfg.SustainMs}ms)");
+                                    }
                                 }
-                                double secs = dt / 1000.0;
-                                double curFps = secs > 0 ? m.meter.TakeFrames() / secs : 0;
-                                int sustained = curFps >= cfg.MinFps ? m.sustainedMs + dt : 0;
-                                meters[w.Hwnd] = (m.meter, sustained);
-                                Console.WriteLine($"[smartcapture]   fps exe='{w.Exe}' class='{w.Class}' title='{w.Title}' → {curFps:0.#}fps sustained={sustained}ms");
-                                if (sustained >= cfg.SustainMs)
-                                { matched = w; reason = $"mode=fps: {curFps:0.#}fps sustained {sustained}ms ≥ {cfg.SustainMs}ms threshold"; metHwnd = w.Hwnd; break; }
+                                if (meters.TryGetValue(w.Hwnd, out m))
+                                {
+                                    double secs = dt / 1000.0;
+                                    lastFps = secs > 0 ? m.meter.TakeFrames() / secs : 0;
+                                    int sustained = lastFps >= cfg.MinFps ? m.sustainedMs + dt : 0;
+                                    meters[w.Hwnd] = (m.meter, sustained);
+                                    Console.WriteLine($"[smartcapture]   fps exe='{w.Exe}' class='{w.Class}' title='{w.Title}' → {lastFps:0.#}fps sustained={sustained}ms");
+                                    fpsPass = sustained >= cfg.SustainMs;
+                                }
+                            }
+
+                            bool ok = (useFps && useSize) ? (combineOr ? (fpsPass || sizePass) : (fpsPass && sizePass))
+                                                          : (useFps ? fpsPass : sizePass);
+                            if (ok)
+                            {
+                                reason = (useFps && useSize)
+                                    ? $"fps+size {(combineOr ? "OR" : "AND")}: fps={(fpsPass ? $"{lastFps:0.#}fps✓" : "✗")} size={(sizePass ? "✓" : "✗")}"
+                                    : useFps ? $"fps: {lastFps:0.#}fps sustained ≥ {cfg.SustainMs}ms" : $"size: ≥ {cfg.MinSizePct}% of screen";
+                                matchedFps = fpsPass; matched = w; metHwnd = w.Hwnd; break;
                             }
                         }
-                        if (fps && meters.Count > 0)
+                        if (useFps && meters.Count > 0)
                             foreach (var h in new List<IntPtr>(meters.Keys))
                                 if (!WinScan.Alive(h)) { try { meters[h].meter.Dispose(); } catch { } meters.Remove(h); }
                     }
@@ -155,10 +207,12 @@ internal static class SmartCapture
 
                     if (metHwnd != IntPtr.Zero)
                     {
+                        DetectedGameWindow = metHwnd;   // expose to StoreProcessWatcher for a window-close exit signal
                         // The display time counts from when the game STARTED rendering, not from
-                        // this confirmation. In fps mode the render started SustainMs ago (that
-                        // window was spent confirming), so subtract it. size/any are instantaneous.
-                        int detWindow = fps ? cfg.SustainMs : 0;
+                        // this confirmation. When the match relied on sustained fps, the render started
+                        // SustainMs ago (that window was spent confirming), so subtract it. A title /
+                        // size / any match is instantaneous.
+                        int detWindow = matchedFps ? cfg.SustainMs : 0;
                         revealAt = now + Math.Max(0, displayMs - detWindow);
                         Console.WriteLine($"[smartcapture] ★ MATCH @ {now}ms — {WinInfo(matched)}");
                         Console.WriteLine($"[smartcapture]   reason: {reason}");

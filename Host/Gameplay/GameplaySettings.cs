@@ -155,15 +155,21 @@ internal static class GameplaySettings
             return ini.Get(key) ?? def;
         }
         int I(string key, int def) => int.TryParse(R(key, def.ToString()), out var n) ? n : def;
+        bool B(string key, bool def) => R(key, def ? "true" : "false").Equals("true", StringComparison.OrdinalIgnoreCase);
+
         return new SmartCaptureConfig
         {
-            Enabled           = R("SmartCaptureEnabled", "true").Equals("true", StringComparison.OrdinalIgnoreCase),
-            Mode              = R("SmartCaptureMode", "fps"),
+            Enabled           = B("SmartCaptureEnabled", true),
+            UseFps            = B("SmartCaptureUseFps",  true),
+            UseSize           = B("SmartCaptureUseSize", false),
+            Combine           = R("SmartCaptureCombine", "and"),
             MinFps            = I("SmartCaptureMinFps", 10),
             SustainMs         = I("SmartCaptureSustainMs", 600),
             MinSizePct        = I("SmartCaptureMinSizePct", 50),
             Title             = R("SmartCaptureTitle", ""),
-            StopOnWindowClose = R("SmartCaptureStopOnWindowClose", "false").Equals("true", StringComparison.OrdinalIgnoreCase),
+            MaxWaitMs         = I("SmartCaptureMaxMs", 30000),
+            ShowBorder        = B("SmartCaptureShowBorder", false),   // hidden ini opt-in: keep the yellow WGC border
+            StopOnWindowClose = B("SmartCaptureStopOnWindowClose", false),
             IgnoreExes        = SmartCaptureIgnoredExes(),   // global blacklist (store clients by default)
         };
     }

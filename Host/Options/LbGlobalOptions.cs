@@ -259,24 +259,59 @@ internal static class LbGlobalOptions
                 var toStore = ignoreList == Gameplay.GameplaySettings.SmartCaptureIgnoreDefaultRaw() ? "" : ignoreList;
                 if (toStore != (ini.Get("SmartCaptureIgnoreExes") ?? "")) { ini.Set("SmartCaptureIgnoreExes", toStore); iniDirty = true; }
             });
-            p.Controls.Add(Lbl("Detection mode:", new Point(S(12), S(138))));
-            var scMode = Cbo(new[] { "fps", "size", "any" }, ini.Get("SmartCaptureMode", "fps") ?? "fps", new Point(S(150), S(135)), 200); p.Controls.Add(scMode);
-            p.Controls.Add(Lbl("fps = rendering (robust) · size = window ≥ % of screen · any = any window", new Point(S(30), S(160)), Dim));
-            p.Controls.Add(Lbl("Minimum FPS:", new Point(S(12), S(190))));
-            var scFps = Txt(ini.Get("SmartCaptureMinFps", "10"), new Point(S(150), S(187)), 70); p.Controls.Add(scFps);
-            p.Controls.Add(Lbl("sustained (ms):", new Point(S(250), S(190))));
-            var scSus = Txt(ini.Get("SmartCaptureSustainMs", "600"), new Point(S(370), S(187)), 70); p.Controls.Add(scSus);
-            p.Controls.Add(Lbl("Min window size (% of screen):", new Point(S(12), S(220))));
-            var scSz = Txt(ini.Get("SmartCaptureMinSizePct", "50"), new Point(S(250), S(217)), 70); p.Controls.Add(scSz);
-            p.Controls.Add(Lbl("Window title filter (wildcard):", new Point(S(12), S(250))));
-            var scTitle = Txt(ini.Get("SmartCaptureTitle", ""), new Point(S(250), S(247)), 220); p.Controls.Add(scTitle);
-            var scStop = Chk("End the session when the game window closes (instead of process exit)", ini.GetBool("SmartCaptureStopOnWindowClose", false), new Point(S(12), S(282)));
+            // Detection = titleMatch(if set) OR (fps [AND/OR] size). See SmartCapture.cs.
+            // TITLE — OR-priority: a matching window is the game on its own.
+            p.Controls.Add(Lbl("Title filter (wildcard) — optional, matches on its own if set:", new Point(S(12), S(136)), Dim));
+            var scTitle = Txt(ini.Get("SmartCaptureTitle", ""), new Point(S(12), S(156)), 420); p.Controls.Add(scTitle);
+
+            p.Controls.Add(Lbl("— otherwise, detect the game window by: —", new Point(S(12), S(184)), Dim));
+            // fps test:  [x] Renders at ≥ [fps] fps for [sus] ms
+            var scUseFps = Chk("Renders at ≥", ini.GetBool("SmartCaptureUseFps", true), new Point(S(12), S(206)));
+            p.Controls.Add(scUseFps);
+            var scFps = Txt(ini.Get("SmartCaptureMinFps", "10"), new Point(S(140), S(204)), 50); p.Controls.Add(scFps);
+            p.Controls.Add(Lbl("fps for", new Point(S(196), S(207))));
+            var scSus = Txt(ini.Get("SmartCaptureSustainMs", "600"), new Point(S(248), S(204)), 50); p.Controls.Add(scSus);
+            p.Controls.Add(Lbl("ms", new Point(S(304), S(207))));
+            // size test:  [x] Window covers ≥ [sz] % of the screen
+            var scUseSize = Chk("Window covers ≥", ini.GetBool("SmartCaptureUseSize", false), new Point(S(12), S(232)));
+            p.Controls.Add(scUseSize);
+            var scSz = Txt(ini.Get("SmartCaptureMinSizePct", "50"), new Point(S(160), S(230)), 50); p.Controls.Add(scSz);
+            p.Controls.Add(Lbl("% of the screen", new Point(S(218), S(233))));
+            // combine (live only when BOTH tests on) — radios isolated in a sub-panel so they don't group
+            // with any other RadioButton on the page.
+            var scLblComb = Lbl("When both are on, combine with:", new Point(S(12), S(260)));
+            p.Controls.Add(scLblComb);
+            bool scIsOr = (ini.Get("SmartCaptureCombine", "and") ?? "and").Equals("or", StringComparison.OrdinalIgnoreCase);
+            var scCombPanel = new Panel { Location = new Point(S(230), S(258)), Size = new Size(S(150), S(22)), BackColor = Bg };
+            var scAnd = new RadioButton { Text = "AND", Location = new Point(0, S(1)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = !scIsOr, Enabled = !readOnly };
+            var scOr = new RadioButton { Text = "OR", Location = new Point(S(64), S(1)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = scIsOr, Enabled = !readOnly };
+            scCombPanel.Controls.Add(scAnd); scCombPanel.Controls.Add(scOr);
+            p.Controls.Add(scCombPanel);
+
+            p.Controls.Add(Lbl("Reveal anyway after (ms):", new Point(S(12), S(286))));
+            var scMax = Txt(ini.Get("SmartCaptureMaxMs", "30000"), new Point(S(200), S(283)), 70); p.Controls.Add(scMax);
+
+            var scStop = Chk("End the session when the game window closes (instead of process exit)", ini.GetBool("SmartCaptureStopOnWindowClose", false), new Point(S(12), S(310)));
             p.Controls.Add(scStop);
-            p.Controls.Add(Lbl("The Post-Launch Display Time (Game Startup tab) then counts from when the game starts rendering.", new Point(S(30), S(306)), Dim));
-            BindIniChk(scEn, "SmartCaptureEnabled", true); BindIniCbo(scMode, "SmartCaptureMode");
+
+            BindIniChk(scEn, "SmartCaptureEnabled", true);
+            BindIniChk(scUseFps, "SmartCaptureUseFps", true);
+            BindIniChk(scUseSize, "SmartCaptureUseSize", false);
             BindIniTxt(scFps, "SmartCaptureMinFps"); BindIniTxt(scSus, "SmartCaptureSustainMs");
             BindIniTxt(scSz, "SmartCaptureMinSizePct"); BindIniTxt(scTitle, "SmartCaptureTitle");
-            BindIniChk(scStop, "SmartCaptureStopOnWindowClose");
+            BindIniTxt(scMax, "SmartCaptureMaxMs"); BindIniChk(scStop, "SmartCaptureStopOnWindowClose");
+            applies.Add(() => { var v = scOr.Checked ? "or" : "and"; if (v != (ini.Get("SmartCaptureCombine") ?? "and")) { ini.Set("SmartCaptureCombine", v); iniDirty = true; } });
+
+            void ScSync()
+            {
+                scFps.Enabled = scSus.Enabled = !readOnly && scUseFps.Checked;
+                scSz.Enabled = !readOnly && scUseSize.Checked;
+                bool both = scUseFps.Checked && scUseSize.Checked;
+                scAnd.Enabled = scOr.Enabled = scLblComb.Enabled = !readOnly && both;
+            }
+            scUseFps.CheckedChanged += (_, _) => ScSync();
+            scUseSize.CheckedChanged += (_, _) => ScSync();
+            ScSync();
 
             p.Controls.Add(new Label { Text = "Exit / end screen — cover the display sooner on exit:", Location = new Point(S(12), S(338)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
             var exG = Gameplay.GameplaySettings.ExitScreenEagerMsGlobal();

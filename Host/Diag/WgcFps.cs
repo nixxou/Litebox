@@ -26,7 +26,7 @@ internal sealed class WgcFps : IDisposable
     private readonly IDirect3DDevice _device;
     private int _frames;
 
-    private WgcFps(GraphicsCaptureItem item, IDirect3DDevice device)
+    private WgcFps(GraphicsCaptureItem item, IDirect3DDevice device, bool showBorder)
     {
         _device = device;
         var size = item.Size;
@@ -41,24 +41,45 @@ internal sealed class WgcFps : IDisposable
         };
         _session = _pool.CreateCaptureSession(item);
         try { _session.IsCursorCaptureEnabled = false; } catch { }
-        try { _session.IsBorderRequired = false; } catch { }   // Win11 — no yellow capture border
+        // The yellow WGC capture border. Off by default (SmartCapture only measures fps — the pixels
+        // are discarded — so the border is pure noise). On Win11 clearing it needs the "borderless"
+        // capture grant first (else the set throws and the border stays) — done in TryCreate. The
+        // hidden LiteBox.ini key SmartCaptureShowBorder=true forces it back on.
+        try { _session.IsBorderRequired = showBorder; }
+        catch (Exception ex) { Console.WriteLine($"[wgc] IsBorderRequired={showBorder} failed: {ex.GetType().Name}: {ex.Message}"); }
         _session.StartCapture();
+    }
+
+    // Windows 11 requires an explicit "borderless" grant before IsBorderRequired=false is honoured.
+    // Requested once per process; harmless / no-op on OSes without the API (older Win10 draws no border).
+    private static int _borderlessTried;
+    private static void EnsureBorderlessAccess()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _borderlessTried, 1) != 0) return;
+        try
+        {
+            var r = GraphicsCaptureAccess.RequestAccessAsync(GraphicsCaptureAccessKind.Borderless).GetAwaiter().GetResult();
+            Console.WriteLine($"[wgc] borderless access: {r}");
+        }
+        catch (Exception ex) { Console.WriteLine($"[wgc] borderless access request failed: {ex.GetType().Name}: {ex.Message}"); }
     }
 
     /// <summary>Frames counted since the last call, reset to 0. Divide by the elapsed seconds for FPS.</summary>
     public int TakeFrames() => System.Threading.Interlocked.Exchange(ref _frames, 0);
 
-    /// <summary>Start measuring the given window, or null if WGC is unavailable / the HWND can't be captured.</summary>
-    public static WgcFps? TryCreate(IntPtr hwnd)
+    /// <summary>Start measuring the given window, or null if WGC is unavailable / the HWND can't be captured.
+    /// <paramref name="showBorder"/> keeps the yellow WGC capture border (hidden LiteBox.ini opt-in).</summary>
+    public static WgcFps? TryCreate(IntPtr hwnd, bool showBorder = false)
     {
         string step = "supported";
         try
         {
             if (!GraphicsCaptureSession.IsSupported()) { Console.WriteLine("[wgc] not supported"); return null; }
+            if (!showBorder) EnsureBorderlessAccess();
             step = "device"; var device = CreateDevice();
             step = "item"; var item = CreateItemForWindow(hwnd);
             if (item == null) { Console.WriteLine("[wgc] item null"); return null; }
-            step = "session"; return new WgcFps(item, device);
+            step = "session"; return new WgcFps(item, device, showBorder);
         }
         catch (Exception ex) { Console.WriteLine($"[wgc] TryCreate failed at '{step}': {ex.GetType().Name}: {ex.Message}"); return null; }
     }

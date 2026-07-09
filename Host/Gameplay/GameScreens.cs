@@ -83,8 +83,10 @@ internal static class GameScreens
         if (snap == null) return;
         lock (_lock) { if (_endDone || _endCoverUp) return; }
         GameplaySettings.Resolved? rr = Safe(() => GameplaySettings.Resolve(snap));
-        if (rr is not { UseStartup: true }) return;        // same master toggle as the end screen
-        if (rr.ShutdownMinMs < 0) return;                  // per-game DisableShutdownScreen
+        // The GAME OVER / shutdown screen is INDEPENDENT of the startup screen: its own LB field
+        // ("Enable Game Shutdown Screen" = !DisableShutdownScreen) governs it. So "no startup cover,
+        // still a game over" is a valid config (startup off + shutdown on). ShutdownMinMs < 0 ⇒ disabled.
+        if (rr == null || rr.ShutdownMinMs < 0) return;
         var ctx = BuildCtx(snap);
         bool hide = rr.HideCursor;
         bool stayTop = snap?.StayOnTop ?? Safe2(GameplaySettings.StartupStayOnTop);
@@ -108,7 +110,7 @@ internal static class GameScreens
     {
         if (snap == null) return false;
         var rr = Safe(() => GameplaySettings.Resolve(snap));
-        return rr is { UseStartup: true } && rr.ShutdownMinMs > 0;
+        return rr is { ShutdownMinMs: > 0 };   // shutdown screen is independent of the startup screen
     }
 
     /// <summary>Show the end ("GAME OVER") screen (if enabled) and BLOCK the caller for the minimum
@@ -119,8 +121,9 @@ internal static class GameScreens
     {
         if (snap == null) { FinishEnd(snap); return; }
         GameplaySettings.Resolved? rr = Safe(() => GameplaySettings.Resolve(snap));
-        if (rr is not { UseStartup: true }) { FinishEnd(snap); betweenHoldAndClose?.Invoke(); return; }   // same master toggle as startup
-        if (rr.ShutdownMinMs < 0) { FinishEnd(snap); betweenHoldAndClose?.Invoke(); return; }             // per-game DisableShutdownScreen
+        // Independent of the startup screen — gated ONLY by "Enable Game Shutdown Screen"
+        // (!DisableShutdownScreen ⇒ ShutdownMinMs >= 0). Lets "startup off, game over on" work.
+        if (rr == null || rr.ShutdownMinMs < 0) { FinishEnd(snap); betweenHoldAndClose?.Invoke(); return; }
         int ms = Math.Max(0, rr.ShutdownMinMs);
         if (ms == 0) { FinishEnd(snap); betweenHoldAndClose?.Invoke(); return; }
         var ctx = BuildCtx(snap);

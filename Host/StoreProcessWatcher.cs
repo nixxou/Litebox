@@ -114,7 +114,7 @@ internal static class StoreProcessWatcher
     /// inside the install folder (a different PID, still under installDir). If a re-sweep then finds nothing
     /// either, the gone-debounce elapses and the game is over.
     /// </remarks>
-    public static bool WaitForGame(string? installDir, Func<bool>? regainedFocus = null)
+    public static bool WaitForGame(string? installDir, Func<bool>? regainedFocus = null, Func<bool>? gameWindowGone = null)
     {
         string? dir = string.IsNullOrWhiteSpace(installDir) ? null : installDir!.TrimEnd('\\', '/') + "\\";
         DateTime startedAt = DateTime.UtcNow;
@@ -122,6 +122,7 @@ internal static class StoreProcessWatcher
         DateTime lastDiag = DateTime.MinValue; int diagCount = 0;
         int trackedPid = -1;   // PID we're locked onto; -1 = hunting (full sweeps)
         bool Regained() { try { return regainedFocus?.Invoke() ?? false; } catch { return false; } }
+        bool WindowGone() { try { return gameWindowGone?.Invoke() ?? false; } catch { return false; } }
 
         while (true)
         {
@@ -152,8 +153,15 @@ internal static class StoreProcessWatcher
             }
             else if (firstSeen != null)
             {
-                // Saw the game's process under installDir, and it's now gone (debounced).
-                // Primary, focus-independent end signal.
+                // Saw the game's process under installDir, and it's now gone. Normally we debounce
+                // GoneConfirmSeconds to bridge a launcher.exe → game.exe handoff. But if SmartCapture
+                // locked onto the actual game WINDOW and it has closed, the game truly ended (a handoff
+                // keeps a game window up) — end at once, no debounce, so GAME OVER isn't ~8s late.
+                if (WindowGone())
+                { StoreTrace.Log("watch: end (game window closed — SmartCapture signal, skipping gone-debounce)"); return true; }
+
+                // Otherwise the primary, focus-independent end signal: all install-dir processes gone
+                // for the full debounce (covers games SmartCapture never locked a window onto).
                 if (lastRunningAt != null && (now - lastRunningAt.Value).TotalSeconds >= GoneConfirmSeconds)
                 { StoreTrace.Log("watch: end (install-dir process gone)"); return true; }
             }

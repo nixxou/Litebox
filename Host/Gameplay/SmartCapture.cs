@@ -91,6 +91,10 @@ internal static class SmartCapture
                         var wins = WinScan.TreeWindows(tree);
                         foreach (var w in wins)
                         {
+                            // A store client (Steam/Epic/GOG/…) in the tree shows its OWN windows —
+                            // launcher, "preparing to launch", overlay, login — which are NOT the game.
+                            // Skip them so we detect the actual game window, not the store UI.
+                            if (WinScan.IsStoreClientExe(w.Exe)) continue;
                             if (!WinScan.WildcardMatch(cfg.Title, w.Title)) continue;
                             if (!fps && !size) { metHwnd = w.Hwnd; break; }   // "any"
                             if (size)

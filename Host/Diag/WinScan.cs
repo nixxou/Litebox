@@ -39,10 +39,26 @@ internal static class WinScan
 
     public readonly struct Win
     {
-        public readonly IntPtr Hwnd; public readonly uint Pid; public readonly RECT Rect; public readonly string Title; public readonly string Class;
-        public Win(IntPtr h, uint pid, RECT r, string title, string cls) { Hwnd = h; Pid = pid; Rect = r; Title = title; Class = cls; }
+        public readonly IntPtr Hwnd; public readonly uint Pid; public readonly RECT Rect; public readonly string Title; public readonly string Class; public readonly string Exe;
+        public Win(IntPtr h, uint pid, RECT r, string title, string cls, string exe) { Hwnd = h; Pid = pid; Rect = r; Title = title; Class = cls; Exe = exe; }
         public int Area => Rect.W * Rect.H;
     }
+
+    /// <summary>Store-CLIENT executables whose own windows are never the game — the launcher UI,
+    /// "preparing to launch" splash, login, the WebView helper, the overlay browser. The game-window
+    /// detection (SmartCapture) skips them so it doesn't reveal the cover on the store client instead
+    /// of the actual game (which runs as its own, differently-named .exe). Filename match, case-insensitive.</summary>
+    public static readonly HashSet<string> StoreClientExes = new(System.StringComparer.OrdinalIgnoreCase)
+    {
+        "steam.exe", "steamwebhelper.exe",
+        "epicgameslauncher.exe", "epicwebhelper.exe",
+        "galaxyclient.exe", "galaxyclientservice.exe",
+        "battle.net.exe",
+        "origin.exe", "eadesktop.exe", "eabackgroundservice.exe",
+        "upc.exe", "ubisoftconnect.exe", "uplaywebcore.exe",
+    };
+
+    public static bool IsStoreClientExe(string? exe) => !string.IsNullOrEmpty(exe) && StoreClientExes.Contains(exe);
 
     /// <summary>root pid + all descendant pids (one toolhelp snapshot).</summary>
     public static HashSet<uint> BuildTree(uint root)
@@ -64,9 +80,11 @@ internal static class WinScan
         return tree;
     }
 
-    /// <summary>Visible top-level windows whose pid is in <paramref name="tree"/>.</summary>
+    /// <summary>Visible top-level windows whose pid is in <paramref name="tree"/> (each carries its
+    /// owning process's exe filename, so consumers can skip store-client windows).</summary>
     public static List<Win> TreeWindows(HashSet<uint> tree)
     {
+        var exeOf = ExeMap();
         var list = new List<Win>();
         EnumWindows((h, _) =>
         {
@@ -78,12 +96,28 @@ internal static class WinScan
                 GetWindowRect(h, out var r);
                 var tit = new StringBuilder(160); GetWindowText(h, tit, 160);
                 var cls = new StringBuilder(96); GetClassName(h, cls, 96);
-                list.Add(new Win(h, pid, r, tit.ToString(), cls.ToString()));
+                list.Add(new Win(h, pid, r, tit.ToString(), cls.ToString(), exeOf.TryGetValue(pid, out var e) ? e : ""));
             }
             catch { }
             return true;
         }, IntPtr.Zero);
         return list;
+    }
+
+    /// <summary>pid → executable file name (e.g. "steam.exe"), from one toolhelp snapshot.</summary>
+    public static Dictionary<uint, string> ExeMap()
+    {
+        var map = new Dictionary<uint, string>();
+        IntPtr snap = CreateToolhelp32Snapshot(0x2 /*SNAPPROCESS*/, 0);
+        if (snap == (IntPtr)(-1)) return map;
+        try
+        {
+            var pe = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
+            if (Process32First(snap, ref pe))
+                do { map[pe.th32ProcessID] = pe.szExeFile ?? ""; } while (Process32Next(snap, ref pe));
+        }
+        finally { CloseHandle(snap); }
+        return map;
     }
 
     public static bool Alive(IntPtr hwnd) { try { return IsWindow(hwnd); } catch { return false; } }

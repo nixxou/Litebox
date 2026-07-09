@@ -42,6 +42,10 @@ internal static class GameScreens
         int ms = Math.Max(0, coverMsOverride ?? rr.StartupMinMs);
         var ctx = BuildCtx(snap);
         bool hide = rr.HideCursor;
+        Console.WriteLine($"[gamescreens] startup cover shown for \"{snap.Title}\": {ms}ms — " +
+            (coverMsOverride.HasValue
+                ? "SmartCapture backstop (closes early when the game actually renders)"
+                : "BLIND TIMER = Post-Launch Display Time (no SmartCapture on this launch → closes on the timer, NOT on the game window)"));
 
         // StartupStayOnTop: the overlay never activates (WS_EX_NOACTIVATE) and keeps
         // TOPMOST for its whole duration — the emulator spawns, takes the focus and RUNS
@@ -63,7 +67,7 @@ internal static class GameScreens
 
                 if (ms <= 0) { CloseLocked(); return; }
                 _timer = new System.Windows.Forms.Timer { Interval = ms };
-                _timer.Tick += (_, _) => { lock (_lock) { _timer?.Stop(); CloseLocked(); } };
+                _timer.Tick += (_, _) => { lock (_lock) { _timer?.Stop(); Console.WriteLine($"[gamescreens] startup cover closed by timer ({ms}ms elapsed)"); CloseLocked(); } };
                 _timer.Start();
             }
         });

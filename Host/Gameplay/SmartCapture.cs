@@ -62,7 +62,8 @@ internal static class SmartCapture
         { IsBackground = true, Name = "LiteBox-smartcapture" };
         _thread.Start();
         Console.WriteLine($"[smartcapture] watching pid={rootPid} mode={cfg.Mode} minFps={cfg.MinFps} sustain={cfg.SustainMs}ms " +
-                          $"minSize={cfg.MinSizePct}% title='{cfg.Title}' displayTime={displayMs}ms max={safetyMaxMs}ms");
+                          $"minSize={cfg.MinSizePct}% title='{cfg.Title}' displayTime={displayMs}ms max={safetyMaxMs}ms " +
+                          $"blacklist={cfg.IgnoreExes?.Count ?? 0} exes");
     }
 
     public static void Stop() { _run = false; _thread = null; }
@@ -71,6 +72,7 @@ internal static class SmartCapture
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var meters = new Dictionary<IntPtr, (WgcFps meter, int sustainedMs)>();
+        var announced = new HashSet<IntPtr>();   // log each window's skip/consider verdict once
         long lastPoll = 0;
         bool fps = cfg.Mode.Equals("fps", StringComparison.OrdinalIgnoreCase);
         bool size = cfg.Mode.Equals("size", StringComparison.OrdinalIgnoreCase);
@@ -86,6 +88,7 @@ internal static class SmartCapture
 
                 if (metHwnd == IntPtr.Zero)
                 {
+                    WinScan.Win matched = default; string reason = "";
                     try
                     {
                         var tree = WinScan.BuildTree((uint)rootPid);
@@ -96,35 +99,44 @@ internal static class SmartCapture
                             // launcher, "preparing to launch", overlay, login — which are NOT the game.
                             // Skip them so we detect the actual game window, not the store UI. The list
                             // is the editable global blacklist (Options → LiteBox-Options → Smart Capture).
-                            if (cfg.IgnoreExes != null && cfg.IgnoreExes.Contains(w.Exe)) continue;
-                            if (!WinScan.WildcardMatch(cfg.Title, w.Title)) continue;
-                            if (!fps && !size) { metHwnd = w.Hwnd; break; }   // "any"
+                            if (cfg.IgnoreExes != null && cfg.IgnoreExes.Contains(w.Exe))
+                            { if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[blacklist] {WinInfo(w)}"); continue; }
+                            if (!WinScan.WildcardMatch(cfg.Title, w.Title))
+                            { if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[title!='{cfg.Title}'] {WinInfo(w)}"); continue; }
+
+                            if (!fps && !size) { matched = w; reason = "mode=any: first title-matching window"; metHwnd = w.Hwnd; break; }
                             if (size)
                             {
                                 var mon = WinScan.MonitorBounds(w.Hwnd);
                                 long monArea = (long)mon.W * mon.H;
-                                if (monArea > 0 && w.Area * 100L >= monArea * cfg.MinSizePct) { metHwnd = w.Hwnd; break; }
+                                int pct = monArea > 0 ? (int)(w.Area * 100L / monArea) : 0;
+                                if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   consider[size] {WinInfo(w)} mon={mon.W}x{mon.H} pct={pct}% (need ≥ {cfg.MinSizePct}%)");
+                                if (monArea > 0 && w.Area * 100L >= monArea * cfg.MinSizePct)
+                                { matched = w; reason = $"mode=size: window is {pct}% ≥ {cfg.MinSizePct}% of the {mon.W}x{mon.H} monitor"; metHwnd = w.Hwnd; break; }
                             }
                             else // fps: attach a meter, accumulate sustained-above-threshold time.
                             {
                                 if (!meters.TryGetValue(w.Hwnd, out var m))
                                 {
                                     var meter = WgcFps.TryCreate(w.Hwnd);
-                                    if (meter == null) continue;
+                                    if (meter == null) { if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[no WGC capture] {WinInfo(w)}"); continue; }
                                     m = (meter, 0); meters[w.Hwnd] = m;
+                                    Console.WriteLine($"[smartcapture]   consider[fps] {WinInfo(w)} — metering (need ≥{cfg.MinFps}fps for {cfg.SustainMs}ms)");
                                 }
                                 double secs = dt / 1000.0;
                                 double curFps = secs > 0 ? m.meter.TakeFrames() / secs : 0;
                                 int sustained = curFps >= cfg.MinFps ? m.sustainedMs + dt : 0;
                                 meters[w.Hwnd] = (m.meter, sustained);
-                                if (sustained >= cfg.SustainMs) { metHwnd = w.Hwnd; break; }
+                                Console.WriteLine($"[smartcapture]   fps exe='{w.Exe}' class='{w.Class}' title='{w.Title}' → {curFps:0.#}fps sustained={sustained}ms");
+                                if (sustained >= cfg.SustainMs)
+                                { matched = w; reason = $"mode=fps: {curFps:0.#}fps sustained {sustained}ms ≥ {cfg.SustainMs}ms threshold"; metHwnd = w.Hwnd; break; }
                             }
                         }
                         if (fps && meters.Count > 0)
                             foreach (var h in new List<IntPtr>(meters.Keys))
                                 if (!WinScan.Alive(h)) { try { meters[h].meter.Dispose(); } catch { } meters.Remove(h); }
                     }
-                    catch { }
+                    catch (Exception ex) { Console.WriteLine("[smartcapture] scan error: " + ex.Message); }
 
                     if (metHwnd != IntPtr.Zero)
                     {
@@ -133,8 +145,9 @@ internal static class SmartCapture
                         // window was spent confirming), so subtract it. size/any are instantaneous.
                         int detWindow = fps ? cfg.SustainMs : 0;
                         revealAt = now + Math.Max(0, displayMs - detWindow);
-                        Console.WriteLine($"[smartcapture] rendering detected at {now}ms (hwnd=0x{metHwnd.ToInt64():X}) — " +
-                                          $"revealing at {revealAt}ms ({displayMs}ms display − {detWindow}ms det window after detection)");
+                        Console.WriteLine($"[smartcapture] ★ MATCH @ {now}ms — {WinInfo(matched)}");
+                        Console.WriteLine($"[smartcapture]   reason: {reason}");
+                        Console.WriteLine($"[smartcapture]   → revealing startup screen at {revealAt}ms ({displayMs}ms display − {detWindow}ms detection window)");
                     }
                 }
 
@@ -172,4 +185,8 @@ internal static class SmartCapture
     }
 
     private static void Fire(Action a) { try { a(); } catch { } }
+
+    /// <summary>One-line dump of a window for the detection log — every field that could explain a match.</summary>
+    private static string WinInfo(WinScan.Win w)
+        => $"hwnd=0x{w.Hwnd.ToInt64():X} pid={w.Pid} exe='{w.Exe}' class='{w.Class}' size={w.Rect.W}x{w.Rect.H} area={w.Area} title='{w.Title}'";
 }

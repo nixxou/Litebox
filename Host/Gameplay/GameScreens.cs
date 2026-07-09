@@ -164,6 +164,10 @@ internal static class GameScreens
         // the global for an emulator launch.
         bool refocus = snap?.EmuForceFocus ?? Safe2(GameplaySettings.ForceFrontendFocusOnShutdown);
         UiThread.Invoke(() => { lock (_lock) { CloseLocked(fadeMs); _endCoverUp = false; _endDone = true; } });
+        // BLOCK until the dissolve has finished before returning: the caller then fires GameEnded (the GUI
+        // list/details reload). If we returned while the overlay was still fading, that reload would repaint
+        // the main window UNDER the fading layered overlay and leak ghost fragments as it dissolves.
+        if (fadeMs > 0) { try { Thread.Sleep(fadeMs + 80); } catch { } }
         if (refocus) FocusFrontend();
     }
 

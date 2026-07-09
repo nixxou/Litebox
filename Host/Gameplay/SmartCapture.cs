@@ -80,12 +80,12 @@ internal static class SmartCapture
     /// actually started — the detection window (SustainMs in fps mode) is subtracted because it
     /// already elapsed while confirming. Falls back to <paramref name="safetyMaxMs"/> if the game
     /// is never detected (exclusive fullscreen). No-op if disabled.</summary>
-    public static void Start(int rootPid, SmartCaptureConfig cfg, int displayMs, int safetyMaxMs, Action onReveal)
+    public static void Start(int rootPid, SmartCaptureConfig cfg, int displayMs, int safetyMaxMs, Action onReveal, int fadeMs = 0)
     {
         Stop();
         if (!cfg.Enabled) return;
         _run = true;
-        _thread = new Thread(() => Run(rootPid, cfg, Math.Max(0, displayMs), Math.Max(1000, safetyMaxMs), onReveal))
+        _thread = new Thread(() => Run(rootPid, cfg, Math.Max(0, displayMs), Math.Max(1000, safetyMaxMs), onReveal, Math.Max(0, fadeMs)))
         { IsBackground = true, Name = "LiteBox-smartcapture" };
         _thread.Start();
         Console.WriteLine($"[smartcapture] watching {(cfg.GlobalScan ? $"GLOBAL (baseline={cfg.Baseline?.Count ?? 0} pre-launch windows)" : $"tree(pid={rootPid})")} " +
@@ -96,7 +96,7 @@ internal static class SmartCapture
 
     public static void Stop() { _run = false; _thread = null; DetectedGameWindow = IntPtr.Zero; }
 
-    private static void Run(int rootPid, SmartCaptureConfig cfg, int displayMs, int maxMs, Action onReveal)
+    private static void Run(int rootPid, SmartCaptureConfig cfg, int displayMs, int maxMs, Action onReveal, int fadeMs = 0)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var meters = new Dictionary<IntPtr, (WgcFps meter, int sustainedMs)>();
@@ -109,7 +109,8 @@ internal static class SmartCapture
         bool matchedFps = false;   // did THIS match rely on sustained fps? (drives the display-time subtraction)
         uint ownPid = (uint)Environment.ProcessId;   // global scan: exclude LiteBox's own windows (cover / kiosk / main)
         IntPtr metHwnd = IntPtr.Zero;
-        long revealAt = -1;   // absolute ms: render-start + displayTime, set when detected
+        long revealAt = -1;   // absolute ms: detection + (displayTime − detWindow), set when detected
+        long detectAt = -1;   // absolute ms of the MATCH (for the "held since detection" log)
 
         try
         {
@@ -210,21 +211,25 @@ internal static class SmartCapture
                     if (metHwnd != IntPtr.Zero)
                     {
                         DetectedGameWindow = metHwnd;   // expose to StoreProcessWatcher for a window-close exit signal
-                        // The display time counts from when the game STARTED rendering, not from
-                        // this confirmation. When the match relied on sustained fps, the render started
-                        // SustainMs ago (that window was spent confirming), so subtract it. A title /
-                        // size / any match is instantaneous.
+                        detectAt = now;
+                        // The Post-Launch Display Time counts from when the game STARTED rendering — which
+                        // was ~SustainMs before this fps confirmation (the detection window). So the hold
+                        // after detection = displayMs − detWindow. The reveal then fires fadeMs earlier so
+                        // the dissolve lands right at revealAt.
                         int detWindow = matchedFps ? cfg.SustainMs : 0;
-                        revealAt = now + Math.Max(0, displayMs - detWindow);
+                        int hold = Math.Max(0, displayMs - detWindow);
+                        revealAt = now + hold;
                         Console.WriteLine($"[smartcapture] ★ MATCH @ {now}ms — {WinInfo(matched)}");
-                        Console.WriteLine($"[smartcapture]   reason: {reason}");
-                        Console.WriteLine($"[smartcapture]   → revealing startup screen at {revealAt}ms ({displayMs}ms display − {detWindow}ms detection window)");
+                        Console.WriteLine($"[smartcapture]   reason: {reason} (matchedFps={matchedFps})");
+                        Console.WriteLine($"[smartcapture]   → hold {hold}ms ({displayMs}ms display − {detWindow}ms detWindow) → revealAt {revealAt}ms; fade last {fadeMs}ms (starts {revealAt - fadeMs}ms)");
                     }
                 }
 
-                if (revealAt >= 0 && now >= revealAt)
+                // Fire fadeMs early so the reveal fade (onReveal → GameScreens.Close(fadeMs)) dissolves
+                // over the LAST fadeMs and completes right at revealAt — total display time unchanged.
+                if (revealAt >= 0 && now >= revealAt - fadeMs)
                 {
-                    Console.WriteLine($"[smartcapture] revealing at {now}ms");
+                    Console.WriteLine($"[smartcapture] REVEAL at {now}ms (held {now - detectAt}ms since detection, fade {fadeMs}ms → done ~{revealAt}ms)");
                     Fire(onReveal);
                     break;
                 }

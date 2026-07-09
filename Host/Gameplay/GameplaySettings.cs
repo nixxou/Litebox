@@ -82,12 +82,23 @@ internal static class GameplaySettings
     }
 
     /// <summary>The SmartCapture "reveal anyway" ceiling (ms): how long to wait for a render before
-    /// revealing the cover regardless. Sourced from the resolved LB "Startup Load Delay" (per-emulator /
-    /// per-game), defaulting to 5s when unset (0 would reveal instantly and defeat detection).</summary>
+    /// revealing the cover regardless. Resolved LB "Startup Load Delay" per-emulator/game (Emulators.xml)
+    /// wins; else the LiteBox-managed GLOBAL default (LiteBox.ini StartupLoadDelay); else 5s.</summary>
     public static int RevealMaxMs(LaunchedGame? snap)
     {
         int d = 0; try { d = Resolve(snap).LoadDelayMs; } catch { }
-        return d > 0 ? d : 5000;
+        if (d > 0) return d;
+        int g = 0; try { g = int.TryParse(LiteBoxConfig.LoadForExe().Get("StartupLoadDelay"), out var v) ? v : 0; } catch { }
+        return g > 0 ? g : 5000;
+    }
+
+    /// <summary>Fade-out duration for a display screen: min(1s, displayMs), or 0 when LB's "Enable
+    /// Fading" (PauseScreenFading) is off. The fade occupies the LAST fadeMs of the display window
+    /// (total timing unchanged) so the startup / GAME OVER screen dissolves instead of popping.</summary>
+    public static int FadeMs(LaunchedGame? snap, int displayMs)
+    {
+        bool on; try { on = Resolve(snap).Fading; } catch { on = false; }
+        return on && displayMs > 0 ? Math.Min(1000, displayMs) : 0;
     }
 
     /// <summary>Pause hotkey string (LiteBox.ini, combo-capable). When the user never set one in

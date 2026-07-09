@@ -185,12 +185,41 @@ internal sealed class InfoOverlay : Form
         try { Close(); } catch { }
     }
 
+    /// <summary>Dissolve the overlay over <paramref name="fadeMs"/> — animate the window Opacity 1→0
+    /// (revealing whatever is behind it: the game, or the frontend), then HideThenClose + Dispose.
+    /// Keeps re-asserting TOPMOST during the fade so it stays above a fullscreen emulator. fadeMs ≤ 0 or
+    /// no message loop ⇒ immediate close. Must run on the overlay's UI thread.</summary>
+    private System.Windows.Forms.Timer? _fadeTimer;
+    public void FadeOutClose(int fadeMs)
+    {
+        if (fadeMs <= 0 || IsDisposed) { HideThenClose(); try { Dispose(); } catch { } return; }
+        const int stepMs = 30;
+        int steps = Math.Max(1, fadeMs / stepMs);
+        int i = 0;
+        _fadeTimer = new System.Windows.Forms.Timer { Interval = stepMs };
+        _fadeTimer.Tick += (_, _) =>
+        {
+            i++;
+            try { if (!IsDisposed) Opacity = Math.Max(0.0, 1.0 - (double)i / steps); } catch { }
+            if (i >= steps || IsDisposed)
+            {
+                try { _fadeTimer?.Stop(); _fadeTimer?.Dispose(); } catch { }
+                _fadeTimer = null;
+                try { HideThenClose(); } catch { }
+                try { Dispose(); } catch { }
+            }
+        };
+        _fadeTimer.Start();
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             try { _topTimer?.Stop(); _topTimer?.Dispose(); } catch { }
             _topTimer = null;
+            try { _fadeTimer?.Stop(); _fadeTimer?.Dispose(); } catch { }
+            _fadeTimer = null;
             if (_cursorHidden) { try { Cursor.Show(); } catch { } _cursorHidden = false; }
             _bg?.Dispose();
         }

@@ -40,6 +40,10 @@ internal static class GameScreens
         // SmartCapture (coverMsOverride set): the cover stays for the SAFETY-MAX; the coordinator
         // calls Close() earlier the moment the game actually renders. Else the display-time timer.
         int ms = Math.Max(0, coverMsOverride ?? rr.StartupMinMs);
+        // Blind display timer (SmartCapture off) dissolves over its LAST fadeMs (total time unchanged).
+        // The SmartCapture backstop (coverMsOverride set) stays instant — SmartCapture's onReveal owns
+        // the reveal fade for the detected path; this backstop is a last-resort catch.
+        int fadeMs = (coverMsOverride == null && rr.Fading) ? Math.Min(1000, ms) : 0;
         var ctx = BuildCtx(snap);
         bool hide = rr.HideCursor;
         Console.WriteLine($"[gamescreens] startup cover shown for \"{snap.Title}\": {ms}ms — " +
@@ -66,8 +70,8 @@ internal static class GameScreens
                 catch { CloseLocked(); return; }
 
                 if (ms <= 0) { CloseLocked(); return; }
-                _timer = new System.Windows.Forms.Timer { Interval = ms };
-                _timer.Tick += (_, _) => { lock (_lock) { _timer?.Stop(); Console.WriteLine($"[gamescreens] startup cover closed by timer ({ms}ms elapsed)"); CloseLocked(); } };
+                _timer = new System.Windows.Forms.Timer { Interval = Math.Max(1, ms - fadeMs) };
+                _timer.Tick += (_, _) => { lock (_lock) { _timer?.Stop(); Console.WriteLine($"[gamescreens] startup cover close ({ms}ms window, fade {fadeMs}ms)"); CloseLocked(fadeMs); } };
                 _timer.Start();
             }
         });
@@ -126,6 +130,7 @@ internal static class GameScreens
         if (rr == null || rr.ShutdownMinMs < 0) { FinishEnd(snap); betweenHoldAndClose?.Invoke(); return; }
         int ms = Math.Max(0, rr.ShutdownMinMs);
         if (ms == 0) { FinishEnd(snap); betweenHoldAndClose?.Invoke(); return; }
+        int fadeMs = rr.Fading ? Math.Min(1000, ms) : 0;   // dissolve over the LAST fadeMs of the hold
         var ctx = BuildCtx(snap);
         bool hide = rr.HideCursor;
 
@@ -144,7 +149,7 @@ internal static class GameScreens
                 catch { CloseLocked(); }
             }
         });
-        try { Thread.Sleep(ms); } catch { }
+        try { Thread.Sleep(Math.Max(0, ms - fadeMs)); } catch { }   // solid hold; the fade takes the last fadeMs
         if (betweenHoldAndClose != null)
         {
             try { betweenHoldAndClose(); } catch { }   // "after": reopen the kiosk over the cover…
@@ -158,7 +163,7 @@ internal static class GameScreens
         // carries its own copy of this flag (Edit Emulator → Startup Screen) → it wins over
         // the global for an emulator launch.
         bool refocus = snap?.EmuForceFocus ?? Safe2(GameplaySettings.ForceFrontendFocusOnShutdown);
-        UiThread.Invoke(() => { lock (_lock) { CloseLocked(); _endCoverUp = false; _endDone = true; } });
+        UiThread.Invoke(() => { lock (_lock) { CloseLocked(fadeMs); _endCoverUp = false; _endDone = true; } });
         if (refocus) FocusFrontend();
     }
 
@@ -236,19 +241,23 @@ internal static class GameScreens
         UiThread.Invoke(() => { lock (_lock) { try { _overlay?.ReleaseTopFront(); } catch { } } });
     }
 
-    public static void Close()
+    public static void Close(int fadeMs = 0)
     {
-        UiThread.Invoke(() => { lock (_lock) CloseLocked(); });
+        UiThread.Invoke(() => { lock (_lock) CloseLocked(fadeMs); });
     }
 
-    private static void CloseLocked()
+    private static void CloseLocked(int fadeMs = 0)
     {
         _endCoverUp = false;
         try { _timer?.Stop(); _timer?.Dispose(); } catch { }
         _timer = null;
-        try { _overlay?.HideThenClose(); } catch { }   // never yank the foreground off the game
-        try { _overlay?.Dispose(); } catch { }
-        _overlay = null;
+        var ov = _overlay; _overlay = null;
+        if (ov == null) return;
+        // fadeMs > 0 ⇒ dissolve (Opacity 1→0, revealing what's behind), then close/dispose itself.
+        if (fadeMs > 0) { Console.WriteLine($"[gamescreens] cover fade-out {fadeMs}ms"); try { ov.FadeOutClose(fadeMs); return; } catch { } }
+        Console.WriteLine("[gamescreens] cover close (instant)");
+        try { ov.HideThenClose(); } catch { }   // never yank the foreground off the game
+        try { ov.Dispose(); } catch { }
     }
 
     private static PauseContext BuildCtx(LaunchedGame snap) => new()

@@ -195,9 +195,14 @@ internal static class LbGlobalOptions
             p.Controls.Add(hc);
             var ff = Chk("Force frontend back into focus when the shutdown screen closes", s.GetBool("ForceFrontendFocusOnShutdown", true), new Point(S(4), S(146)));
             p.Controls.Add(ff);
+            // Startup Load Delay — LiteBox-managed GLOBAL default (LiteBox.ini). Per-emulator/game values
+            // (LB-native, Emulators.xml) override it; it's the SmartCapture "reveal anyway" ceiling.
+            p.Controls.Add(Lbl("Startup Load Delay (ms)", new Point(S(4), S(178))));
+            var sld = Txt(ini.Get("StartupLoadDelay", "5000"), new Point(S(320), S(175)), 90); p.Controls.Add(sld);
+            p.Controls.Add(Lbl("Reveal ceiling: max wait for a render before SmartCapture reveals anyway (0 = 5s default). Per-emulator/game overrides win.", new Point(S(28), S(200)), Dim));
             BindChk(use, "UseStartupScreen"); BindTxt(st, "StartupScreenPostLaunchDisplayTime");
             BindTxt(sh, "ShutdownScreenPostReadyDisplayTime"); BindChk(hc, "HideMouseCursorOnStartupScreens");
-            BindChk(ff, "ForceFrontendFocusOnShutdown");
+            BindChk(ff, "ForceFrontendFocusOnShutdown"); BindIniTxt(sld, "StartupLoadDelay");
             // (LiteBox-only startup extras — stay-on-top / Smart Capture / exit-early / web-return —
             //  now live on the dedicated "LiteBox-Options" tab, not appended here.)
         }

@@ -229,8 +229,10 @@ internal static class HostLaunch
             // OnGameExited) to tear down + REOPEN the BigBox-web kiosk around a
             // store game; without OnGameExited the kiosk never comes back.
             Fire(p => p.OnAfterGameLaunched(game, null, null));
+            int scFade = Gameplay.GameplaySettings.FadeMs(LaunchedGame.Current, scDisplay);   // ≤1s dissolve at the reveal
+            Console.WriteLine($"[store-launch] startup timing: display={scDisplay}ms fade={scFade}ms reveal-ceiling={scMax}ms (hold from detection, dissolve over last fade)");
             if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null);   // "NOW LOADING…"
-            if (scCfg.Enabled) Gameplay.SmartCapture.Start(0, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close());
+            if (scCfg.Enabled) Gameplay.SmartCapture.Start(0, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close(scFade), scFade);
             sw.Restart();
             StoreTrace.Log("store-launch ShellOpen ok — watching for game process…");
             // When SmartCapture is on, its detected game window closing is a faster, more precise exit
@@ -353,12 +355,14 @@ internal static class HostLaunch
                     int scDisplay = SafeNullableInt(() => Gameplay.GameplaySettings.Resolve(LaunchedGame.Current)?.StartupMinMs) ?? 2000;
                     int scMax = Math.Max(scDisplay, Gameplay.GameplaySettings.RevealMaxMs(LaunchedGame.Current));   // "reveal anyway after" = LB Startup Load Delay (default 5s)
                     int scBackstop = scMax + scDisplay + 5000;   // the coordinator owns the reveal; this is a last-resort cover timer
+                    int scFade = Gameplay.GameplaySettings.FadeMs(LaunchedGame.Current, scDisplay);   // ≤1s dissolve at the reveal
+                    Console.WriteLine($"[emu-launch] startup timing: display={scDisplay}ms fade={scFade}ms reveal-ceiling={scMax}ms (hold from detection, dissolve over last fade)");
                     Action<Process> onSpawned = p =>
                     {
                         if (main.Value.useEmu && emulator != null) Pause.PauseManager.Arm(p, emulator, game);
                         Diag.RenderProbe.MaybeStart(p);   // no-op unless LITEBOX_RENDERPROBE=1
                         if (scCfg.Enabled && !DryRun)
-                            Gameplay.SmartCapture.Start(p.Id, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close());
+                            Gameplay.SmartCapture.Start(p.Id, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close(scFade), scFade);
                     };
                     // Startup screen ("NOW LOADING…"). SmartCapture on → cover held to a generous
                     // backstop; the coordinator closes it at render-start + displayTime.

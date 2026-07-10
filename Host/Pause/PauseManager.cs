@@ -125,11 +125,12 @@ internal static class PauseManager
             _paused = _suspended = false;
 
             string? emuId = Safe(() => emulator?.Id);
+            string? gameId = Safe(() => game?.Id);
 
-            // Keyboard pause hotkey, resolved per-emulator → global (litebox-options.db): an
+            // Keyboard pause hotkey, resolved game → emulator → global (litebox-options.db): a game or
             // emulator can override the combo or disable it outright ("None"). Empty ⇒ no keyboard
             // trigger, but the CONTROLLER trigger below is independent (either can pause).
-            string pauseKey = Data.LiteBoxOption.ResolveString("PauseHotkey", emuId, Gameplay.GameplaySettings.PauseKey());
+            string pauseKey = Data.LiteBoxOption.ResolveString("PauseHotkey", emuId, Gameplay.GameplaySettings.PauseKey(), gameId);
             if (!string.IsNullOrWhiteSpace(pauseKey) && !pauseKey.Equals("None", StringComparison.OrdinalIgnoreCase))
             {
                 var (mod, vk, label) = ParseHotkey(pauseKey);
@@ -138,12 +139,12 @@ internal static class PauseManager
             }
             else Console.WriteLine("[pause] keyboard pause hotkey disabled");
 
-            // Controller pause trigger (XInput 0), resolved per-emulator → global. Enabled +
-            // button both overridable per emulator, same tri-state as the rest. Off by default.
-            bool padOn = Data.LiteBoxOption.ResolveBool("PadPauseEnabled", emuId, Gameplay.GameplaySettings.PadPauseEnabled());
+            // Controller pause trigger (XInput 0), resolved game → emulator → global. Enabled +
+            // button both overridable per game/emulator, same tri-state as the rest. Off by default.
+            bool padOn = Data.LiteBoxOption.ResolveBool("PadPauseEnabled", emuId, Gameplay.GameplaySettings.PadPauseEnabled(), gameId);
             if (padOn)
             {
-                string combo = Data.LiteBoxOption.ResolveString("PadPauseButton", emuId, Gameplay.GameplaySettings.PadPauseButton());
+                string combo = Data.LiteBoxOption.ResolveString("PadPauseButton", emuId, Gameplay.GameplaySettings.PadPauseButton(), gameId);
                 PadPauseWatcher.Start(combo, OnHotkey);
             }
         }
@@ -460,7 +461,8 @@ internal static class PauseManager
         // the emulator closing / desktop). -1 = off (default). Per-emulator. Runs off-thread so the
         // exit sequence below (WaitForExit / kill) is unaffected; ShowEndBlocking reuses this cover.
         string? emuId = null; try { emuId = _emu?.Id; } catch { }
-        int eagerMs = Gameplay.GameplaySettings.ResolveExitScreenEagerMs(emuId);
+        string? gid = null; try { gid = _game?.Id; } catch { }
+        int eagerMs = Gameplay.GameplaySettings.ResolveExitScreenEagerMs(emuId, gid);
         if (eagerMs >= 0)
         {
             var snap = LaunchedGame.Current;

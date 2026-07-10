@@ -31,7 +31,7 @@ internal static class GameScreens
 
     /// <summary>Show the startup screen (if enabled), auto-closing after the minimum
     /// display time. Returns immediately — the game keeps launching behind it.</summary>
-    public static void ShowStartup(LaunchedGame? snap, int? coverMsOverride = null, int? etaMs = null)
+    public static void ShowStartup(LaunchedGame? snap, int? coverMsOverride = null, int? etaMs = null, bool aggressive = false)
     {
         if (snap == null) return;
         lock (_lock) { _endDone = false; _endCoverUp = false; }   // fresh session
@@ -63,7 +63,7 @@ internal static class GameScreens
                 CloseLocked();
                 try
                 {
-                    _overlay = new InfoOverlay(ctx, "NOW LOADING…", hide, noActivate: stayTop, etaMs: etaMs);
+                    _overlay = new InfoOverlay(ctx, "NOW LOADING…", hide, noActivate: stayTop, etaMs: etaMs, aggressive: aggressive);
                     _overlay.Show();
                     _overlay.ForceToFront(8);   // no-op in stay-on-top mode
                 }

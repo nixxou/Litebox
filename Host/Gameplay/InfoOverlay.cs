@@ -21,6 +21,7 @@ internal sealed class InfoOverlay : Form
 
     private readonly string _banner;
     private readonly bool _noActivate;   // StartupStayOnTop: cover the screen, NEVER take focus
+    private readonly bool _aggressive;   // AggressiveWindowHiding: re-assert TOPMOST on a tight loop
     private Bitmap? _bg;
     private bool _cursorHidden;
 
@@ -36,10 +37,11 @@ internal sealed class InfoOverlay : Form
     private readonly float _s;
     private int S(int px) => (int)Math.Round(px * _s);
 
-    public InfoOverlay(PauseContext ctx, string banner, bool hideCursor, bool noActivate = false, int? etaMs = null)
+    public InfoOverlay(PauseContext ctx, string banner, bool hideCursor, bool noActivate = false, int? etaMs = null, bool aggressive = false)
     {
         _banner = banner ?? "";
         _noActivate = noActivate;
+        _aggressive = aggressive;
         _etaMs = etaMs.HasValue && etaMs.Value > 0 ? etaMs : null;
         _s = DeviceDpi / 96f;
 
@@ -62,10 +64,13 @@ internal sealed class InfoOverlay : Form
         // single TopMost=true loses the cover after a second. Re-assert our spot at the top
         // of the band every 300 ms, WITHOUT activation, for as long as the cover is up: the
         // emulator asserts once at window creation, we assert continuously, we win.
-        if (_noActivate)
+        // Re-assert TOPMOST for stay-on-top OR aggressive hiding. Aggressive uses a much TIGHTER interval
+        // (100 ms) so an emulator that changes resolution / recreates its window during load (Daphne, some
+        // DOS/arcade cores) can't jump above the cover between ticks. The game is forced active at the reveal.
+        if (_noActivate || _aggressive)
         {
             int ticks = 0;
-            _topTimer = new System.Windows.Forms.Timer { Interval = 300 };
+            _topTimer = new System.Windows.Forms.Timer { Interval = _aggressive ? 100 : 300 };
             _topTimer.Tick += (_, _) =>
             {
                 try

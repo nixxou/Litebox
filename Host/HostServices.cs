@@ -239,16 +239,30 @@ internal static class HostLaunch
             int? scEta = (Gameplay.GameplaySettings.StartupProgressBar() && histDet.HasValue)
                 ? (int?)Math.Max(500, (int)(histDet.Value + Math.Max(0, scDisplay - (scCfg.UseFps ? scCfg.SustainMs : 0)) - scFade)) : null;
             Console.WriteLine($"[store-launch] startup timing: display={scDisplay}ms fade={scFade}ms reveal-ceiling={scMax}ms histDet={(histDet?.ToString() ?? "none")} barEta={(scEta?.ToString() ?? "off")}");
-            if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null, scEta);   // "NOW LOADING…"
-            if (scCfg.Enabled) Gameplay.SmartCapture.Start(0, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close(scFade), scFade);
+            bool aggressive = AggressiveHiding(game, null);   // store game: no emulator, resolve from the game
+            if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null, scEta, aggressive);   // "NOW LOADING…"
+            if (scCfg.Enabled) Gameplay.SmartCapture.Start(0, scCfg, scDisplay, scMax, () =>
+            {
+                Gameplay.GameScreens.Close(scFade);
+                if (aggressive) Gameplay.WindowHider.Activate(Gameplay.SmartCapture.DetectedGameWindow);   // force the game active at the reveal
+            }, scFade);
             sw.Restart();
             StoreTrace.Log("store-launch ShellOpen ok — watching for game process…");
             // When SmartCapture is on, its detected game window closing is a faster, more precise exit
             // signal than the process-gone debounce — pass it so GAME OVER fires the moment the window dies.
             Func<bool>? windowGone = scCfg.Enabled ? Gameplay.SmartCapture.GameWindowDetectedAndGone : (Func<bool>?)null;
             // Arm the pause screen on the STORE game process the watcher locks onto (store games have no
-            // IEmulator; Arm falls back to the global/per-game hotkey + process suspend). Disarm in finally.
-            Action<int> armPause = pid => { try { Pause.PauseManager.Arm(Process.GetProcessById(pid), null, game); } catch { } };
+            // IEmulator; Arm falls back to the global/per-game hotkey + process suspend). Also arm the
+            // "Hide Mouse Cursor During Game" / "Hide All Windows…" flags (game-only, no emulator) now that
+            // the game process + window are up. All restored in the finally.
+            bool hideCursor = HideCursorInGame(game, null);
+            bool hideOthers = HideOtherWindows(game, null);
+            Action<int> armPause = pid =>
+            {
+                try { Pause.PauseManager.Arm(Process.GetProcessById(pid), null, game); } catch { }
+                if (hideCursor) Gameplay.GameCursor.Hide();
+                if (hideOthers) Gameplay.WindowHider.Hide(pid);
+            };
             seen = StoreProcessWatcher.WaitForGame(installDir, regainedFocus, windowGone, armPause);   // process-under-install-dir; focus only if opted in
             StoreTrace.Log($"store-launch watch done: seen={seen} elapsed={(int)sw.Elapsed.TotalSeconds}s");
         }
@@ -256,6 +270,8 @@ internal static class HostLaunch
         finally
         {
             Pause.PauseManager.Disarm();   // hotkey hook off + resume a still-frozen game + close the screen
+            Gameplay.GameCursor.Show();        // undo "Hide Mouse Cursor During Game" (no-op if off)
+            Gameplay.WindowHider.Restore();    // undo "Hide All Windows…" (no-op if off)
             if (killLauncherAfter && !DryRun)
             {
                 try
@@ -383,6 +399,12 @@ internal static class HostLaunch
                     int? scEta = (Gameplay.GameplaySettings.StartupProgressBar() && histDet.HasValue)
                         ? (int?)Math.Max(500, (int)(histDet.Value + Math.Max(0, scDisplay - (scCfg.UseFps ? scCfg.SustainMs : 0)) - scFade)) : null;
                     Console.WriteLine($"[emu-launch] startup timing: display={scDisplay}ms fade={scFade}ms reveal-ceiling={scMax}ms histDet={(histDet?.ToString() ?? "none")} barEta={(scEta?.ToString() ?? "off")}");
+                    // LB "Hide Mouse Cursor During Game" / "Hide All Windows not in Exclusive Fullscreen":
+                    // resolved game → emulator (the game wins when it overrides the default startup settings,
+                    // or has no emulator). Armed on spawn, restored in the finally.
+                    bool hideCursor = HideCursorInGame(game, emulator);
+                    bool hideOthers = HideOtherWindows(game, emulator);
+                    bool aggressive = AggressiveHiding(game, emulator);
                     Action<Process> onSpawned = p =>
                     {
                         // Pause works for ALL launch types, not just emulators: a direct-exe game (useEmu
@@ -390,12 +412,20 @@ internal static class HostLaunch
                         // the null emulator (global/per-game hotkey, process suspend, pause screen).
                         Pause.PauseManager.Arm(p, emulator, game);
                         Diag.RenderProbe.MaybeStart(p);   // no-op unless LITEBOX_RENDERPROBE=1
+                        if (!DryRun && hideCursor) Gameplay.GameCursor.Hide();
+                        if (!DryRun && hideOthers) Gameplay.WindowHider.ArmFor(p.Id, () => { try { p.Refresh(); return p.MainWindowHandle; } catch { return IntPtr.Zero; } });
                         if (scCfg.Enabled && !DryRun)
-                            Gameplay.SmartCapture.Start(p.Id, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close(scFade), scFade);
+                            Gameplay.SmartCapture.Start(p.Id, scCfg, scDisplay, scMax, () =>
+                            {
+                                Gameplay.GameScreens.Close(scFade);
+                                // Aggressive hiding kept the game behind the cover during load → force it
+                                // active at the reveal so it gets focus/input (detected window, else main).
+                                if (aggressive) { IntPtr h = Gameplay.SmartCapture.DetectedGameWindow; if (h == IntPtr.Zero) { try { p.Refresh(); h = p.MainWindowHandle; } catch { } } Gameplay.WindowHider.Activate(h); }
+                            }, scFade);
                     };
                     // Startup screen ("NOW LOADING…"). SmartCapture on → cover held to a generous
                     // backstop; the coordinator closes it at render-start + displayTime.
-                    if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null, scEta);
+                    if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null, scEta, aggressive);
                     RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main", onSpawned);
                 }
                 else if (!DryRun)
@@ -416,6 +446,8 @@ internal static class HostLaunch
         {
             Pause.PauseManager.Disarm();  // hotkey off + resume a still-frozen process + close the screen
             Gameplay.ScreenCapture.Disarm();
+            Gameplay.GameCursor.Show();        // undo "Hide Mouse Cursor During Game" (no-op if off)
+            Gameplay.WindowHider.Restore();    // undo "Hide All Windows…" (no-op if off)
             // Record the launch → detection latency (LiteBox-only) BEFORE Stop() clears it.
             if (!DryRun) { var det = Gameplay.SmartCapture.DetectedAtMs; if (det.HasValue) { string gid = SafeStr(() => game?.Id); try { _store.RecordDetection(gid, det.Value); } catch { } try { Media.RomBridge.RecordDetection(game, det.Value); } catch { } } }
             Gameplay.SmartCapture.Stop();  // stop the reveal watcher (game exited before/after detection)
@@ -829,11 +861,35 @@ internal static class HostLaunch
     /// game's folder as C:, CALL the entry file, with the per-game .conf (or the default
     /// dosbox.conf). Mirrors LB's exact command line.
     /// </summary>
+    /// <summary>Resolve a native LB startup flag game → emulator: the game's value wins when it overrides
+    /// the default startup settings (or has no emulator), else the emulator's. Used for the two window/cursor
+    /// hiding flags, which — like the rest of the startup group — follow OverrideDefaultStartupScreenSettings.</summary>
+    private static bool HideCursorInGame(IGame game, IEmulator emulator)
+        => (SafeBool(() => game.OverrideDefaultStartupScreenSettings) || emulator == null)
+            ? SafeBool(() => game.HideMouseCursorInGame)
+            : SafeBool(() => emulator.HideMouseCursorInGame);
+
+    private static bool HideOtherWindows(IGame game, IEmulator emulator)
+        => (SafeBool(() => game.OverrideDefaultStartupScreenSettings) || emulator == null)
+            ? SafeBool(() => game.HideAllNonExclusiveFullscreenWindows)
+            : SafeBool(() => emulator.HideAllNonExclusiveFullscreenWindows);
+
+    private static bool AggressiveHiding(IGame game, IEmulator emulator)
+        => (SafeBool(() => game.OverrideDefaultStartupScreenSettings) || emulator == null)
+            ? SafeBool(() => game.AggressiveWindowHiding)
+            : SafeBool(() => emulator.AggressiveWindowHiding);
+
     private static void RunDosBox(IGame game, string targetPath, string label)
         => Spawn(DosBoxExe(game), BuildDosBoxArgs(game, targetPath, SafeStr(() => game.CommandLine)), label,
                  // Pause the DOS game too — DOSBox has no IEmulator record (it's our bundle), so arm with a
                  // null emulator; suspend/resume + the pause screen work the same. Disarm runs in RunGame's finally.
-                 onSpawned: p => { if (!DryRun) Pause.PauseManager.Arm(p, null, game); });
+                 onSpawned: p =>
+                 {
+                     if (DryRun) return;
+                     Pause.PauseManager.Arm(p, null, game);
+                     if (HideCursorInGame(game, null)) Gameplay.GameCursor.Hide();
+                     if (HideOtherWindows(game, null)) Gameplay.WindowHider.ArmFor(p.Id, () => { try { p.Refresh(); return p.MainWindowHandle; } catch { return IntPtr.Zero; } });
+                 });
 
     /// <summary>The DOSBox exe: per-game Custom DOSBox Version EXE, else the bundle.</summary>
     private static string DosBoxExe(IGame game)

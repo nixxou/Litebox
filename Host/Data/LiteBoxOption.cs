@@ -4,9 +4,10 @@
 // absence INHERITS it. Tri-state by design: no row = inherit, a row = an explicit override
 // (a bool "true"/"false", or a string incl. an explicit "disabled" sentinel).
 //
-// The resolution order mirrors the LB-native tier (game < emulator < global); today only the
-// emulator + global scopes are wired. One place so every consumer resolves identically, and
-// adding the next per-emulator LiteBox option is a couple of lines.
+// The resolution order mirrors the LB-native tier (game < emulator < global): a per-GAME override
+// wins over a per-emulator one, which wins over the global. One place so every consumer resolves
+// identically. Consumers that have a game in hand MUST pass its id, or the per-game overrides the
+// Edit Game LiteBox tabs write are silently ignored.
 
 #nullable enable
 
@@ -26,19 +27,23 @@ internal static class LiteBoxOption
     public static void SetOverride(string scope, string entityId, string key, string? value)
         => LiteBoxOptionsDb.Set(scope, entityId, key, value);
 
-    /// <summary>Effective bool for an emulator launch: the emulator override when set, else the
-    /// global value. (Extend with a game scope the same way when a per-game tier is added.)</summary>
-    public static bool ResolveBool(string key, string? emulatorId, bool globalValue)
+    /// <summary>Effective bool resolved game → emulator → global. Pass <paramref name="gameId"/> when a
+    /// game is in hand so its per-game override (Edit Game LiteBox tabs) is honoured.</summary>
+    public static bool ResolveBool(string key, string? emulatorId, bool globalValue, string? gameId = null)
     {
+        var g = GetOverride(ScopeGame, gameId ?? "", key);
+        if (!string.IsNullOrEmpty(g)) return string.Equals(g, "true", System.StringComparison.OrdinalIgnoreCase);
         var ov = GetOverride(ScopeEmulator, emulatorId ?? "", key);
         return string.IsNullOrEmpty(ov) ? globalValue
                                         : string.Equals(ov, "true", System.StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Effective string for an emulator launch: the emulator override when set, else the
-    /// global value. An override of the DISABLED sentinel resolves to empty (feature off).</summary>
-    public static string ResolveString(string key, string? emulatorId, string globalValue)
+    /// <summary>Effective string resolved game → emulator → global. An override of the DISABLED sentinel
+    /// resolves to empty (feature off). Pass <paramref name="gameId"/> to honour the per-game override.</summary>
+    public static string ResolveString(string key, string? emulatorId, string globalValue, string? gameId = null)
     {
+        var g = GetOverride(ScopeGame, gameId ?? "", key);
+        if (!string.IsNullOrEmpty(g)) return g == Disabled ? "" : g;
         var ov = GetOverride(ScopeEmulator, emulatorId ?? "", key);
         if (string.IsNullOrEmpty(ov)) return globalValue;
         return ov == Disabled ? "" : ov;

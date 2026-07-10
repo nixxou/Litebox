@@ -283,11 +283,16 @@ internal static class GameplaySettings
     /// <summary>LiteBox-own: on an explicit exit (pause-menu "Exit Game"), show the end/exit screen
     /// this many ms AFTER the exit AutoHotkey script runs — covering the display while the emulator
     /// is still closing, instead of waiting for the process to fully exit. -1 = disabled (default).
-    /// Per-emulator override (litebox-options.db) wins over the global (LiteBox.ini).</summary>
-    public static int ResolveExitScreenEagerMs(string? emuId)
+    /// Resolved game → emulator → global (litebox-options.db over LiteBox.ini).</summary>
+    public static int ResolveExitScreenEagerMs(string? emuId, string? gameId = null)
     {
         try
         {
+            if (!string.IsNullOrEmpty(gameId))
+            {
+                var gv = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeGame, gameId!, "ExitScreenEagerMs");
+                if (!string.IsNullOrEmpty(gv)) return int.TryParse(gv, out var gn) ? gn : -1;
+            }
             if (!string.IsNullOrEmpty(emuId))
             {
                 var ov = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId!, "ExitScreenEagerMs");

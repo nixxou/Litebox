@@ -171,11 +171,12 @@ internal sealed class LaunchedGame
             try
             {
                 string? emuId = emulator != null ? Safe(() => emulator.Id) : null;
+                string? gameId = Safe(() => game.Id);
                 lg.StayOnTop = LbApiHost.Host.Data.LiteBoxOption.ResolveBool(
-                    "StartupStayOnTop", emuId, Gameplay.GameplaySettings.StartupStayOnTop());
+                    "StartupStayOnTop", emuId, Gameplay.GameplaySettings.StartupStayOnTop(), gameId);
                 lg.ScreenCaptureKey = LbApiHost.Host.Data.LiteBoxOption.ResolveString(
-                    "ScreenCaptureKey", emuId, Gameplay.GameplaySettings.ScreenCaptureKey());
-                Console.WriteLine($"[litebox-opt] resolved stayOnTop={lg.StayOnTop} screenshotKey='{lg.ScreenCaptureKey}' (emu={emuId ?? "none"})");
+                    "ScreenCaptureKey", emuId, Gameplay.GameplaySettings.ScreenCaptureKey(), gameId);
+                Console.WriteLine($"[litebox-opt] resolved stayOnTop={lg.StayOnTop} screenshotKey='{lg.ScreenCaptureKey}' (emu={emuId ?? "none"} game={gameId ?? "none"})");
             }
             catch { }
 

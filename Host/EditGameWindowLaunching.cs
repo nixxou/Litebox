@@ -78,7 +78,218 @@ internal sealed partial class EditGameWindow
     private static bool LchBool(string v) => string.Equals(v, "true", StringComparison.OrdinalIgnoreCase);
     private static string LchB(bool v) => v ? "true" : "false";
 
+    // ── Dirty-tracking bridge for the main Launching fields (revert ↺ + modified colour + multi merge) ──
+    // Reuses the shared core (Track / _baseline / OnField / Modified) so these fields behave exactly like the
+    // Metadata / Notes fields: an overlay ↺ appears when changed, the text goes reddish, and in multi-select
+    // they merge to "‹multiple values›" and write only the ones actually edited, to every selected game.
+
+    /// <summary>Seed value for a launching field: the game's own value in solo, or the merged value
+    /// ("‹multiple values›" when the selected games differ) in multi.</summary>
+    private string LchVal(string field, Func<IGame, string> get) => IsMulti ? LchMerge(get) : LchGet(field);
+
+    private string LchMerge(Func<IGame, string> get)
+    {
+        string? first = null;
+        foreach (var g in _editGames) { var v = (Safe(() => get(g)) ?? "").Trim(); if (first == null) first = v; else if (first != v) return Multi; }
+        return first ?? "";
+    }
+
+    /// <summary>Register a launching text box with the shared dirty-tracker: overlay ↺, reddish-when-changed,
+    /// baseline = its current (loaded/merged) value.</summary>
+    private void LchTrack(TextBox t)
+    {
+        t.TextChanged += (_, _) => OnField(t);
+        Track(t, (Panel)t.Parent!);
+        _baseline[t] = t.Text;
+        RefreshFieldState(t);   // greys the placeholder; ↺ starts hidden (baseline == current)
+    }
+
+    /// <summary>Re-baseline a tracked field to its current text (after a navigate/reload), so it reads clean.</summary>
+    private void LchRebase(TextBox? t)
+    {
+        if (t == null || !_baseline.ContainsKey(t)) return;
+        _baseline[t] = t.Text; RefreshFieldState(t);
+    }
+
+    private void LchRebaseChk(CheckBox? cb)
+    {
+        if (cb == null || !_baseline.ContainsKey(cb)) return;
+        _baseline[cb] = ValueStrOf(cb); RefreshFieldState(cb);
+    }
+
+    private void LchRebaseCbo(ComboBox? cb)
+    {
+        if (cb == null || !_baseline.ContainsKey(cb)) return;
+        _baseline[cb] = ValueStr(cb); RefreshFieldState(cb);
+    }
+
+    /// <summary>Multi save for a Startup/Pause "Override Default …" toggle: write the bool to all edited games,
+    /// and when it goes OFF clear that concern's per-game LiteBox overrides (as the solo save does), so they
+    /// stop taking effect. Skipped while Indeterminate ("‹multiple values›").</summary>
+    private void WriteOverrideMulti(CheckBox? cb, string field, string[] clearLiteBoxWhenOff, string[] clearNativeWhenOff)
+    {
+        if (cb == null || !Modified(cb) || cb.CheckState == CheckState.Indeterminate) return;
+        string v = LchB(cb.Checked);
+        foreach (var g in _editGames)
+        {
+            var lf = g as ILiteBoxFields;
+            try { lf?.SetField(field, v); } catch { }
+            if (!cb.Checked)
+            {
+                foreach (var nf in clearNativeWhenOff) { try { lf?.SetField(nf, ""); } catch { } }   // wipe the native modal fields
+                string gid = Safe(() => g.Id) ?? "";
+                if (gid.Length > 0)
+                    foreach (var k in clearLiteBoxWhenOff) { try { Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeGame, gid, k, null); } catch { } }
+            }
+        }
+        _lchLoaded[field] = v; _baseline[cb] = ValueStrOf(cb); RefreshFieldState(cb);
+    }
+
+    /// <summary>Multi save for the emulator assignment (from the 3-state "use emulator" + the emulator list):
+    /// turning it OFF clears the emulator for all; picking a specific one sets it for all; the "‹multiple
+    /// values›" row / Indeterminate leaves each game's own emulator untouched.</summary>
+    private void WriteEmulatorMulti()
+    {
+        if (_lchUseEmu is { CheckState: CheckState.Unchecked } && Modified(_lchUseEmu))
+        {
+            foreach (var g in _editGames) { try { (g as ILiteBoxFields)?.SetField("Emulator", ""); } catch { } }
+            LchRebaseChk(_lchUseEmu); LchRebaseCbo(_lchEmuCombo);
+            return;
+        }
+        if (_lchEmuCombo != null && Modified(_lchEmuCombo) && !IsPlaceholder(_lchEmuCombo))
+        {
+            string id = SelectedEmulatorId();
+            if (id.Length > 0 && id != LchMultiEmuId)
+            {
+                foreach (var g in _editGames) { try { (g as ILiteBoxFields)?.SetField("Emulator", id); } catch { } }
+                LchRebaseCbo(_lchEmuCombo); LchRebaseChk(_lchUseEmu);
+            }
+        }
+    }
+
+    /// <summary>Write a tracked launching field to EVERY edited game when it was actually changed and isn't the
+    /// "‹multiple values›" placeholder, then re-baseline it (a re-save becomes a no-op). Mirrors SaveCurrent.</summary>
+    private void WriteLch(TextBox? t, string field)
+    {
+        if (t == null || !Modified(t) || IsPlaceholder(t)) return;
+        string v = t.Text.Trim();
+        foreach (var g in _editGames) { try { (g as ILiteBoxFields)?.SetField(field, v); } catch { } }
+        _lchLoaded[field] = v; _baseline[t] = t.Text;
+        RefreshFieldState(t);
+    }
+
+    /// <summary>Merged bool across the selection: the common value, or null when the games differ
+    /// (→ the 3-state checkbox shows Indeterminate + a red "‹multiple values›" label).</summary>
+    private bool? LchMergeBool(Func<IGame, bool> get)
+    {
+        bool? first = null;
+        foreach (var g in _editGames) { bool v; try { v = get(g); } catch { v = false; } if (first == null) first = v; else if (first != v) return null; }
+        return first;
+    }
+
+    /// <summary>A hidden "‹multiple values›" label at (x,y) — shown while its 3-state checkbox is Indeterminate.
+    /// GREY (SubFg), exactly like the placeholder text of the multi text-fields: grey = "the games differ /
+    /// not set", RED is reserved for an actual modification (which also gets the ↺).</summary>
+    private Label LchMultiLabel(Panel p, int x, int y)
+    {
+        var l = new Label { Text = Multi, AutoSize = true, ForeColor = SubFg, BackColor = Bg, Location = new Point(x, y), Visible = false };
+        p.Controls.Add(l);
+        l.BringToFront();   // added after the checkbox → would sit BEHIND it; keep it drawn on top
+        return l;
+    }
+
+    /// <summary>Set up a Use-* checkbox: 3-state in multi (Indeterminate when the games differ, with a red
+    /// "‹multiple values›" label beside it), dirty-tracked (reddish text when changed). The 3rd state is
+    /// DISPLAY-ONLY — a user click only toggles Checked↔Unchecked, it never cycles back INTO Indeterminate
+    /// ("multiple values" isn't a choice you make); a ↺ restores the Indeterminate baseline. Returns the
+    /// multi label (null in solo).</summary>
+    private Label? LchTrackChk(CheckBox cb, string field, Func<IGame, bool> get, Panel p)
+        => LchTrackChk3(cb, LchMergeBool(get), LchBool(LchGet(field)), p);
+
+    /// <summary>As LchTrackChk but with the merged (multi, null = differ) and solo values passed directly —
+    /// for a checkbox derived from a NON-bool field (e.g. "use an emulator" from the Emulator id).</summary>
+    private Label? LchTrackChk3(CheckBox cb, bool? merged, bool solo, Panel p)
+    {
+        cb.ThreeState = IsMulti;
+        if (IsMulti)
+        {
+            cb.CheckState = merged.HasValue ? (merged.Value ? CheckState.Checked : CheckState.Unchecked) : CheckState.Indeterminate;
+            // AutoCheck off: the default 3-state cycle (Unchecked→Checked→Indeterminate) would let a click
+            // land on Indeterminate, which makes no sense. Toggle manually between the two real choices.
+            cb.AutoCheck = false;
+            cb.Click += (_, _) => { if (!_readOnly) cb.CheckState = cb.CheckState == CheckState.Checked ? CheckState.Unchecked : CheckState.Checked; };
+        }
+        else cb.Checked = solo;
+
+        // Position the label/↺ just PAST the checkbox text. PreferredSize can under-measure at build time
+        // (before layout) and leave the label overlapping — behind — the box, so measure the text directly
+        // and add the glyph width + a gap.
+        int rx = cb.Left + S(22) + TextRenderer.MeasureText(cb.Text, cb.Font).Width + S(8);
+        Label? multi = IsMulti ? LchMultiLabel(p, rx, cb.Top + S(1)) : null;
+        cb.CheckStateChanged += (_, _) => { OnField(cb); if (multi != null) multi.Visible = cb.CheckState == CheckState.Indeterminate; };
+        _fields.Add(cb);
+        _baseline[cb] = ValueStrOf(cb);
+
+        if (IsMulti)
+        {
+            // ↺ revert, at the SAME spot as the multi label — they're mutually exclusive: the label shows while
+            // Indeterminate (== baseline, so "not modified"), the ↺ shows once the user picks a definite value.
+            var rb = LchRevertButton(cb, new Point(rx, cb.Top - S(1)));
+            p.Controls.Add(rb); rb.BringToFront();
+            _revert[cb] = rb;
+        }
+
+        if (multi != null) multi.Visible = cb.CheckState == CheckState.Indeterminate;
+        RefreshFieldState(cb);
+        return multi;
+    }
+
+    // CheckState string for the baseline (ValueStr is private static in the core partial — expose a local shim).
+    private static string ValueStrOf(CheckBox cb) => cb.CheckState.ToString();
+
+    /// <summary>A hidden ↺ revert button (same style as the core Track button) that restores a control's
+    /// baseline. Shown/hidden by RefreshFieldState via the _revert map.</summary>
+    private Button LchRevertButton(Control target, Point loc)
+    {
+        var b = new Button
+        {
+            Text = "↺", Size = new Size(S(18), S(18)), Location = loc, Visible = false, TabStop = false, Cursor = Cursors.Hand,
+            FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(92, 46, 42), ForeColor = Color.FromArgb(255, 180, 165),
+            Font = new Font("Segoe UI Symbol", 9.5f), FlatAppearance = { BorderSize = 1 },
+        };
+        b.FlatAppearance.BorderColor = Color.FromArgb(150, 72, 64);
+        b.Click += (_, _) => RevertField(target);
+        _tips.SetToolTip(b, "Restore the original value");
+        return b;
+    }
+
+    /// <summary>Write a tracked 3-state checkbox to EVERY edited game when changed and not Indeterminate.</summary>
+    private void WriteLchBool(CheckBox? cb, string field)
+    {
+        if (cb == null || !Modified(cb) || cb.CheckState == CheckState.Indeterminate) return;
+        string v = LchB(cb.Checked);
+        foreach (var g in _editGames) { try { (g as ILiteBoxFields)?.SetField(field, v); } catch { } }
+        _lchLoaded[field] = v; _baseline[cb] = ValueStrOf(cb);
+        RefreshFieldState(cb);
+    }
+
     private bool _lchSnapped;
+    private bool _lchDosEmuGuard;   // re-entrancy guard for the DOSBox ↔ emulator mutual-exclusion handlers
+    private bool _lchEmuDiffer;      // multi: the selected games use different emulators → the combo carries a "‹multiple values›" row
+    private const string LchMultiEmuId = "multi";   // sentinel id for that row (never a real GUID)
+
+    /// <summary>Merged emulator id across the selection: "" (all none), a shared id, or the sentinel when they differ.</summary>
+    private string LchMergeEmuId()
+    {
+        string? first = null;
+        foreach (var g in _editGames)
+        {
+            string e = (Safe(() => g.EmulatorId) ?? "").Trim();
+            if (e == Guid.Empty.ToString()) e = "";
+            if (first == null) first = e; else if (!string.Equals(first, e, StringComparison.OrdinalIgnoreCase)) return LchMultiEmuId;
+        }
+        return first ?? "";
+    }
 
     /// <summary>Snapshot ONCE per game: a second launching page building must not clear the
     /// pending edits (e.g. a Customize… done before that page was first opened).</summary>
@@ -210,17 +421,21 @@ internal sealed partial class EditGameWindow
         int y = S(14);
 
         _lchAppCaption = LchCap(p, "Application Path:", ref y);
-        _lchAppPath = LchTxt(p, LchGet("ApplicationPath"), ref y, out _, browse: true, onBrowse: t => LchBrowseFile(t, "Select the application / ROM file"));
+        _lchAppPath = LchTxt(p, LchVal("ApplicationPath", g => g.ApplicationPath), ref y, out _, browse: true, onBrowse: t => LchBrowseFile(t, "Select the application / ROM file"));
+        LchTrack(_lchAppPath);
 
         LchCap(p, "Application Command-Line Parameters:", ref y);
-        _lchCmd = LchTxt(p, LchGet("CommandLine"), ref y, out _);
+        _lchCmd = LchTxt(p, LchVal("CommandLine", g => g.CommandLine), ref y, out _);
         _lchCmd.TextChanged += (_, _) => { if (_lchCustomCmd != null && !_lchCustomCmd.Focused) _lchCustomCmd.Text = _lchCmd.Text; };
+        LchTrack(_lchCmd);
 
         LchCap(p, "Configuration Application Path:", ref y);
-        _lchCfgPath = LchTxt(p, LchGet("ConfigurationPath"), ref y, out _lchCfgBrowse, browse: true, onBrowse: t => LchBrowseFile(t, "Select the configuration application"));
+        _lchCfgPath = LchTxt(p, LchVal("ConfigurationPath", g => g.ConfigurationPath), ref y, out _lchCfgBrowse, browse: true, onBrowse: t => LchBrowseFile(t, "Select the configuration application"));
+        LchTrack(_lchCfgPath);
 
         LchCap(p, "Configuration Command-Line Parameters:", ref y);
-        _lchCfgCmd = LchTxt(p, LchGet("ConfigurationCommandLine"), ref y, out _);
+        _lchCfgCmd = LchTxt(p, LchVal("ConfigurationCommandLine", g => g.ConfigurationCommandLine), ref y, out _);
+        LchTrack(_lchCfgCmd);
 
         _lchLaunchNote = new Label
         {
@@ -245,14 +460,21 @@ internal sealed partial class EditGameWindow
         {
             Text = "Use DOSBox to play this game (only for old MS-DOS games)", AutoSize = true,
             Location = new Point(S(14), y), ForeColor = Fg, BackColor = Bg,
-            Checked = LchBool(LchGet("UseDosBox")),
         };
         p.Controls.Add(_lchUseDos);
-        _lchUseDos.CheckedChanged += (_, _) => UpdateLaunchingEnablement();
+        LchTrackChk(_lchUseDos, "UseDosBox", g => g.UseDosBox, p);   // 3-state + grey "‹multiple values›" in multi, dirty-tracked
+        _lchUseDos.Enabled = !_readOnly;   // set ONCE (never via LchEnable, which would clobber AutoCheck/colour)
+        _lchUseDos.CheckStateChanged += (_, _) =>
+        {
+            // Solo: DOSBox and an emulator are mutually exclusive. Instead of greying the box out, let the user
+            // check it and confirm turning emulation OFF (Yes) or undo the check (No).
+            if (!_lchDosEmuGuard && !IsMulti && _lchUseDos.Checked && LchEmuOn) ConfirmDosBoxVsEmulation();
+            UpdateLaunchingEnablement();
+        };
         y += S(32);
 
         LchCap(p, "Custom DOSBox Configuration File (dosbox.conf):", ref y);
-        _lchDosConf = LchTxt(p, LchGet("DosBoxConfigurationPath"), ref y, out var confBrowse, browse: true,
+        _lchDosConf = LchTxt(p, LchVal("DosBoxConfigurationPath", g => g.DosBoxConfigurationPath), ref y, out var confBrowse, browse: true,
             onBrowse: t => LchBrowseFile(t, "Select a dosbox.conf file"));
         var create = DlgBtn("Create…", Color.FromArgb(60, 60, 72));
         if (confBrowse != null)
@@ -265,14 +487,16 @@ internal sealed partial class EditGameWindow
             create.Click += (_, _) => LchCreateDosBoxConf();
             p.Controls.Add(create);
         }
+        LchTrack(_lchDosConf);   // after the width shrink so the ↺ lands at the field's real right edge
         LchHelp(p,
             "Leave blank for the default DOSBox configuration. Click the Browse button to browse for and select an "
             + "existing dosbox.conf file. Click the Create button to create a new dosbox.conf file and base it off of "
             + "the default DOSBox configuration.", ref y, 3);
 
         LchCap(p, "Custom DOSBox Version EXE Path:", ref y);
-        _lchDosExe = LchTxt(p, LchGet("CustomDosBoxVersionPath"), ref y, out _, browse: true,
+        _lchDosExe = LchTxt(p, LchVal("CustomDosBoxVersionPath", g => (g as ILiteBoxFields)?.GetField("CustomDosBoxVersionPath") ?? ""), ref y, out _, browse: true,
             onBrowse: t => LchBrowseFile(t, "Select a DOSBox executable"));
+        LchTrack(_lchDosExe);
         LchHelp(p,
             "Leave blank for the default version of DOSBox that comes with LaunchBox. Click the Browse button to "
             + "browse for and select a custom version/copy of DOSBox.", ref y, 2);
@@ -281,11 +505,32 @@ internal sealed partial class EditGameWindow
         {
             Dock = DockStyle.Bottom, Height = S(26), ForeColor = SubFg, BackColor = Bg,
             Font = new Font("Segoe UI", 9f, FontStyle.Italic),
-            Text = "DOSBox cannot be enabled while Emulation is active.",
+            Text = "DOSBox and an emulator can't both be used — enabling DOSBox will turn emulation off for this game.",
         };
         p.Controls.Add(_lchDosNote);
         UpdateLaunchingEnablement();
         return p;
+    }
+
+    /// <summary>The user checked "Use DOSBox" while an emulator is assigned (solo). Ask whether to turn
+    /// emulation off (Yes → clear the emulator + keep DOSBox on) or undo the check (No). Guarded so the
+    /// state changes it makes don't re-trigger the handlers.</summary>
+    private void ConfirmDosBoxVsEmulation()
+    {
+        var r = MessageBox.Show(this,
+            "DOSBox can't be used at the same time as an emulator.\n\nTurn off emulation for this game so it runs through DOSBox?",
+            "DOSBox vs. Emulator", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        _lchDosEmuGuard = true;
+        try
+        {
+            if (r == DialogResult.Yes)
+            {
+                _lchPending["Emulator"] = "";                    // clear the emulator assignment (persists on save)
+                if (_lchUseEmu != null) _lchUseEmu.Checked = false;   // reflect it if the Emulation page is built
+            }
+            else if (_lchUseDos != null) _lchUseDos.Checked = false;  // keep emulation; undo the DOSBox check
+        }
+        finally { _lchDosEmuGuard = false; }
     }
 
     private void LchCreateDosBoxConf()
@@ -444,12 +689,22 @@ internal sealed partial class EditGameWindow
 
         string curEmu = LchGet("Emulator");
         bool emuOn = curEmu.Length > 0 && curEmu != Guid.Empty.ToString();
+        if (IsMulti)
+        {
+            var mm = LchMergeEmuId();          // "", a shared id, or the sentinel when they differ
+            _lchEmuDiffer = mm == LchMultiEmuId;
+            curEmu = mm;                        // the combo then selects the "‹multiple values›" row / shared emulator
+        }
         _lchUseEmu = new CheckBox
         {
             Text = "Use an emulator to play this game (primarily for console games)", AutoSize = true,
-            Location = new Point(S(14), y), ForeColor = Fg, BackColor = Bg, Checked = emuOn, Enabled = !_readOnly,
+            Location = new Point(S(14), y), ForeColor = Fg, BackColor = Bg,
         };
         p.Controls.Add(_lchUseEmu);
+        // 3-state in multi (merged from "the game has an emulator"); dirty-tracked in both modes.
+        bool HasEmu(IGame g0) { var e = Safe(() => g0.EmulatorId) ?? ""; return e.Length > 0 && e != Guid.Empty.ToString(); }
+        LchTrackChk3(_lchUseEmu, IsMulti ? LchMergeBool(HasEmu) : (bool?)null, emuOn, p);
+        _lchUseEmu.Enabled = !_readOnly;
         y += S(30);
 
         LchCap(p, "Choose an emulator:", ref y);
@@ -460,6 +715,11 @@ internal sealed partial class EditGameWindow
         };
         p.Controls.Add(_lchEmuCombo);
         RefreshEmulatorCombo(curEmu);
+        // Dirty-track the list: revert ↺ + colour, and the "‹multiple values›" row shows grey while a real pick goes red.
+        _lchEmuCombo.SelectedIndexChanged += (_, _) => OnField(_lchEmuCombo);
+        Track(_lchEmuCombo, p);
+        _baseline[_lchEmuCombo] = ValueStr(_lchEmuCombo);
+        RefreshFieldState(_lchEmuCombo);
         y += S(32);
 
         var add = DlgBtn("Add…", Color.FromArgb(60, 60, 72));
@@ -468,7 +728,10 @@ internal sealed partial class EditGameWindow
         add.Location = new Point(S(14), y);
         edit.Location = new Point(S(90), y);
         del.Location = new Point(S(166), y);
-        add.Enabled = edit.Enabled = del.Enabled = !_readOnly;
+        // Add / Delete act in a single game's context — disabled across a multi-selection. Edit stays enabled
+        // (it edits the emulator DEFINITION, which is global).
+        add.Enabled = del.Enabled = !_readOnly && !IsMulti;
+        edit.Enabled = !_readOnly;
         add.Click += (_, _) =>
         {
             using var w = new Emulators.AddEmulatorWindow(SaveManager.LbRoot);
@@ -494,19 +757,35 @@ internal sealed partial class EditGameWindow
         p.Controls.AddRange(new Control[] { add, edit, del });
         y += S(40);
 
+        // "Use Custom Command-line Parameters" — the emulator's FORCED arguments. Same <CommandLine> field the
+        // main Launching page shows as "Application Command-Line" (which only matters for a direct-exe game);
+        // the two controls MIRROR each other. Shown in multi too — this is the emulator-args view.
         _lchCustomCmdChk = new CheckBox
         {
             Text = "Use Custom Command-line Parameters:", AutoSize = true,
             Location = new Point(S(14), y), ForeColor = Fg, BackColor = Bg,
-            Checked = LchGet("CommandLine").Trim().Length > 0, Enabled = !_readOnly,
         };
         p.Controls.Add(_lchCustomCmdChk);
-        y += S(26);
-        _lchCustomCmd = LchTxt(p, LchGet("CommandLine"), ref y, out _);
-        _lchCustomCmd.TextChanged += (_, _) => { if (_lchCmd != null && !_lchCmd.Focused) _lchCmd.Text = _lchCustomCmd.Text; };
+        bool HasCmd(IGame g0) => (Safe(() => g0.CommandLine) ?? "").Trim().Length > 0;
+        LchTrackChk3(_lchCustomCmdChk, IsMulti ? LchMergeBool(HasCmd) : (bool?)null, LchGet("CommandLine").Trim().Length > 0, p);
         _lchCustomCmdChk.CheckedChanged += (_, _) => UpdateLaunchingEnablement();
+        y += S(26);
+        _lchCustomCmd = LchTxt(p, LchVal("CommandLine", g => g.CommandLine), ref y, out _);
+        _lchCustomCmd.TextChanged += (_, _) => { if (_lchCmd != null && !_lchCmd.Focused) _lchCmd.Text = _lchCustomCmd.Text; };
+        LchTrack(_lchCustomCmd);   // revert + modified colour + merge (mirrors the main Launching CommandLine)
 
-        _lchUseEmu.CheckedChanged += (_, _) => UpdateLaunchingEnablement();
+        _lchUseEmu.CheckedChanged += (_, _) =>
+        {
+            // Symmetric exclusivity (solo only): turning an emulator ON silently turns DOSBox OFF (the user is
+            // choosing the emulator, so no prompt needed). Guarded against the DOSBox-side handler's re-entrancy.
+            if (!IsMulti && !_lchDosEmuGuard && _lchUseEmu.Checked && (_lchUseDos?.Checked ?? LchBool(LchGet("UseDosBox"))))
+            {
+                _lchDosEmuGuard = true;
+                try { if (_lchUseDos != null) _lchUseDos.Checked = false; _lchPending["UseDosBox"] = LchB(false); }
+                finally { _lchDosEmuGuard = false; }
+            }
+            UpdateLaunchingEnablement();
+        };
         UpdateLaunchingEnablement();
         return p;
     }
@@ -527,6 +806,8 @@ internal sealed partial class EditGameWindow
         }
         catch { }
         _lchEmus.Sort((a, b) => string.Compare(a.title, b.title, StringComparison.OrdinalIgnoreCase));
+        // Multi-select with differing emulators: a "‹multiple values›" row at the top (grey placeholder).
+        if (IsMulti && _lchEmuDiffer) _lchEmus.Insert(0, (LchMultiEmuId, Multi));
         _lchEmuCombo.Items.Clear();
         foreach (var e in _lchEmus) _lchEmuCombo.Items.Add(e.title);
         int ix = _lchEmus.FindIndex(e => string.Equals(e.id, selectId, StringComparison.OrdinalIgnoreCase));
@@ -553,7 +834,8 @@ internal sealed partial class EditGameWindow
         var p = new Panel { BackColor = Bg, Padding = new Padding(S(6)) };
         int y = S(14);
         LchCap(p, "Root Folder:", ref y);
-        _lchRoot = LchTxt(p, LchGet("RootFolder"), ref y, out _, browse: true, onBrowse: t => LchBrowseFolder(t, "Select the root folder"));
+        _lchRoot = LchTxt(p, LchVal("RootFolder", g => g.RootFolder), ref y, out _, browse: true, onBrowse: t => LchBrowseFolder(t, "Select the root folder"));
+        LchTrack(_lchRoot);
         LchHelp(p,
             "The root folder is used when mounting the C drive in DOSBox and when importing and exporting games. "
             + "It is automatically populated, but can be changed.", ref y, 2);
@@ -580,9 +862,10 @@ internal sealed partial class EditGameWindow
         {
             Text = "Override Default Startup Screen Settings", AutoSize = true,
             Location = new Point(S(14), y), ForeColor = Fg, BackColor = Bg,
-            Checked = LchBool(LchGet("OverrideDefaultStartupScreenSettings")), Enabled = !_readOnly,
         };
         p.Controls.Add(_lchOvrStart);
+        LchTrackChk(_lchOvrStart, "OverrideDefaultStartupScreenSettings", g => { try { return g.OverrideDefaultStartupScreenSettings; } catch { return false; } }, p);
+        _lchOvrStart.Enabled = !_readOnly;
         y += S(26);
         var custStart = DlgBtn("Customize…", Color.FromArgb(60, 60, 72));
         custStart.Location = new Point(S(14), y);
@@ -594,23 +877,27 @@ internal sealed partial class EditGameWindow
         {
             Text = "Override Default Pause Screen Settings", AutoSize = true,
             Location = new Point(S(14), y), ForeColor = Fg, BackColor = Bg,
-            Checked = LchBool(LchGet("OverrideDefaultPauseScreenSettings")), Enabled = !_readOnly,
         };
         p.Controls.Add(_lchOvrPause);
+        LchTrackChk(_lchOvrPause, "OverrideDefaultPauseScreenSettings", g => LchBool((g as ILiteBoxFields)?.GetField("OverrideDefaultPauseScreenSettings") ?? ""), p);
+        _lchOvrPause.Enabled = !_readOnly;
         y += S(26);
         var custPause = DlgBtn("Customize…", Color.FromArgb(60, 60, 72));
         custPause.Location = new Point(S(14), y);
         custPause.Click += (_, _) => ShowPauseCustomizeDialog();
         p.Controls.Add(custPause);
 
-        // Customize… is reachable ONLY while its Override checkbox is checked (LB parity). Everything
-        // behind it — the LB-native fields AND the "LiteBox" tab — applies only when checked: the LB
-        // fields are gated at launch (StartupOverride / PauseOverride), and SaveLaunching clears the
-        // per-game LiteBox overrides for an unchecked concern so they take no effect either.
+        // Customize… is reachable ONLY while its Override checkbox is checked (LB parity) — and only in SOLO:
+        // the modals' content isn't multi-ready yet, so they stay disabled across a multi-selection. The base
+        // override toggles still work in multi (enable/disable the override en masse).
+        // Customize… is reachable while its Override box is Checked OR partially-checked (Indeterminate, i.e.
+        // the games differ) — in solo and multi alike. Only "all unchecked" disables it.
         void SyncCust()
         {
-            custStart.Enabled = !_readOnly && _lchOvrStart.Checked;
-            custPause.Enabled = !_readOnly && _lchOvrPause.Checked;
+            // Both Customize modals are multi-ready: reachable while their Override box is Checked OR partially
+            // checked (Indeterminate = the games differ), in solo and multi.
+            custStart.Enabled = !_readOnly && _lchOvrStart.CheckState != CheckState.Unchecked;
+            custPause.Enabled = !_readOnly && _lchOvrPause.CheckState != CheckState.Unchecked;
         }
         _lchOvrStart.CheckedChanged += (_, _) => SyncCust();
         _lchOvrPause.CheckedChanged += (_, _) => SyncCust();
@@ -628,28 +915,97 @@ internal sealed partial class EditGameWindow
         pgMain.Controls.Add(host);
 
         int x = S(16), y = S(14);
-        CheckBox Chk(string text, string field, bool invert, int cx, int cy)
+
+        // Modal-LOCAL dirty tracking (the window's _fields/_baseline belong to the persistent pages, not this
+        // transient dialog). Multi: a checkbox is 3-state (Indeterminate = the games differ); a click only
+        // toggles Checked↔Unchecked; a ↺ reverts to the differ/baseline. mVals = what OK writes (null = skip).
+        var mBase = new Dictionary<Control, string>();
+        var mRev = new Dictionary<Control, Button>();
+        var mVals = new List<Func<(string field, string? value)>>();
+        string MVal(Control c) => c is CheckBox cb ? cb.CheckState.ToString() : "";
+        void MRefresh(Control c)
         {
-            bool v = LchBool(LchGet(field));
-            var cb = new CheckBox
+            bool mod = mBase.TryGetValue(c, out var b) && b != MVal(c);
+            c.ForeColor = mod ? ModifiedColor : Fg;
+            if (mRev.TryGetValue(c, out var rb)) rb.Visible = mod && !_readOnly;
+        }
+        Button MRevBtn(Action onClick, Point loc)
+        {
+            var rb = new Button { Text = "↺", Size = new Size(S(18), S(18)), Location = loc, Visible = false, TabStop = false, Cursor = Cursors.Hand, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(92, 46, 42), ForeColor = Color.FromArgb(255, 180, 165), Font = new Font("Segoe UI Symbol", 9.5f), FlatAppearance = { BorderSize = 1 } };
+            rb.FlatAppearance.BorderColor = Color.FromArgb(150, 72, 64);
+            rb.Click += (_, _) => onClick();
+            return rb;
+        }
+
+        // get(g) = the game's raw field value; `invert` shows its opposite (Enable Shutdown = !DisableShutdown).
+        // Multi → 3-state. On OK: solo always writes; multi writes only when definite (not Indeterminate) AND changed.
+        CheckBox Chk(string text, string field, bool invert, int cx, int cy, Func<IGame, bool> get)
+        {
+            var cb = new CheckBox { Text = text, AutoSize = true, Location = new Point(cx, cy), ForeColor = Fg, BackColor = Bg, Enabled = !_readOnly };
+            if (IsMulti)
             {
-                Text = text, AutoSize = true, Location = new Point(cx, cy), ForeColor = Fg, BackColor = Bg,
-                Checked = invert ? !v : v, Enabled = !_readOnly,
-            };
+                var m = LchMergeBool(g => invert ? !get(g) : get(g));
+                cb.ThreeState = true;
+                cb.CheckState = m.HasValue ? (m.Value ? CheckState.Checked : CheckState.Unchecked) : CheckState.Indeterminate;
+                cb.AutoCheck = false;
+                cb.Click += (_, _) => { if (!_readOnly) cb.CheckState = cb.CheckState == CheckState.Checked ? CheckState.Unchecked : CheckState.Checked; };
+            }
+            else { bool v = LchBool(LchGet(field)); cb.Checked = invert ? !v : v; }
             host.Controls.Add(cb);
+            cb.CheckStateChanged += (_, _) => MRefresh(cb);
+            mBase[cb] = MVal(cb);
+            if (IsMulti)
+            {
+                int rx = cx + S(22) + TextRenderer.MeasureText(cb.Text, cb.Font).Width + S(6);
+                var rb = MRevBtn(() => { cb.CheckState = mBase.TryGetValue(cb, out var b) && Enum.TryParse<CheckState>(b, out var cs) ? cs : CheckState.Indeterminate; MRefresh(cb); }, new Point(rx, cy - S(1)));
+                host.Controls.Add(rb); rb.BringToFront(); mRev[cb] = rb;
+            }
+            MRefresh(cb);
+            mVals.Add(() =>
+            {
+                if (cb.CheckState == CheckState.Indeterminate) return (field, null);
+                if (!(mBase.TryGetValue(cb, out var b) && b != MVal(cb))) return (field, null);   // only write what the user CHANGED
+                bool stored = invert ? !cb.Checked : cb.Checked;
+                return (field, LchB(stored));
+            });
             return cb;
         }
-        var enStart = Chk("Enable Game Startup Screen", "UseStartupScreen", false, x, y);
-        var enShut = Chk("Enable Game Shutdown Screen", "DisableShutdownScreen", true, S(360), y);
+        Chk("Enable Game Startup Screen", "UseStartupScreen", false, x, y, g => g.UseStartupScreen);
+        // Bound directly to the raw field (NOT the inverted "Enable Shutdown") so a fresh game — where every
+        // field is false — shows every box UNCHECKED. Unchecked = DisableShutdownScreen false = shutdown stays
+        // enabled (the default), so behaviour is unchanged; only the default visual is a clean slate.
+        Chk("Disable Game Shutdown Screen", "DisableShutdownScreen", false, S(360), y, g => g.DisableShutdownScreen);
         y += S(26);
-        var hideMouse = Chk("Hide Mouse Cursor During Game", "HideMouseCursorInGame", false, x, y);
-        var aggressive = Chk("Aggressive Startup Window Hiding", "AggressiveWindowHiding", false, S(360), y);
+        Chk("Hide Mouse Cursor During Game", "HideMouseCursorInGame", false, x, y, g => g.HideMouseCursorInGame);
+        Chk("Aggressive Startup Window Hiding", "AggressiveWindowHiding", false, S(360), y, g => g.AggressiveWindowHiding);
         y += S(34);
 
-        (TrackBar bar, Label cap) Slider(string caption, string field, int max, int step, Func<int, string> fmt, ref int sy)
+        // Global defaults for the two duration sliders, so an un-overridden game shows the value it would
+        // ACTUALLY use rather than a bare 0 (LB parity request). Returns a value-getter that keeps the field
+        // EMPTY (= inherit) when the game hadn't set it and the user didn't touch the slider — so opening the
+        // modal + OK never freezes the global into the game.
+        int postGlobal = 1000; try { postGlobal = Gameplay.GameplaySettings.Resolve(null)?.StartupMinMs ?? 1000; } catch { }
+        int delayGlobal = 5000; try { delayGlobal = Gameplay.GameplaySettings.RevealMaxMs(null); } catch { }
+
+        // Duration slider. Multi: caption "‹multiple values›" (grey) when the games differ; the FIRST move sets
+        // a definite value (red) applied to all, and a ↺ reverts to "don't touch". Solo: shows the value or the
+        // global default; writing stays EMPTY (inherit) unless the game had it set or the user moved the slider.
+        void SliderRow(string caption, string field, int max, int step, Func<int, string> fmt, int globalDefault, Func<IGame, string> rawGet, ref int sy)
         {
-            int val = int.TryParse(LchGet(field), out var v) ? Math.Max(0, Math.Min(max, v)) : 0;
-            var cap = new Label { AutoSize = true, Location = new Point(x, sy), ForeColor = Fg, BackColor = Bg, Text = caption + fmt(val) };
+            bool differ = false; string mergedRaw;
+            if (IsMulti)
+            {
+                string? first = null;
+                foreach (var g in _editGames) { var v = (Safe(() => rawGet(g)) ?? "").Trim(); if (first == null) first = v; else if (first != v) { differ = true; break; } }
+                mergedRaw = first ?? "";
+            }
+            else mergedRaw = (LchGet(field) ?? "").Trim();
+
+            bool wasSet = !differ && mergedRaw.Length > 0 && int.TryParse(mergedRaw, out _);
+            int val = Math.Max(0, Math.Min(max, wasSet ? int.Parse(mergedRaw, CultureInfo.InvariantCulture) : globalDefault));
+            bool touched = false;
+
+            var cap = new Label { AutoSize = true, Location = new Point(x, sy), BackColor = Bg };
             host.Controls.Add(cap);
             sy += S(22);
             var bar = new TrackBar
@@ -658,16 +1014,33 @@ internal sealed partial class EditGameWindow
                 LargeChange = step, TickFrequency = max / 20, Value = val, Enabled = !_readOnly,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, BackColor = Bg,
             };
-            bar.ValueChanged += (_, _) => cap.Text = caption + fmt(bar.Value);
             host.Controls.Add(bar);
+            Button? rb = null;
+            void Paint()
+            {
+                bool placeholder = differ && !touched;
+                cap.ForeColor = touched ? ModifiedColor : (placeholder ? SubFg : Fg);
+                cap.Text = placeholder ? caption + Multi
+                         : caption + fmt(bar.Value) + (!IsMulti && !wasSet && !touched ? "   (global default)" : "");
+                if (rb != null) rb.Visible = touched && !_readOnly;
+            }
+            bar.ValueChanged += (_, _) => { touched = true; Paint(); };
+            if (IsMulti)
+            {
+                rb = MRevBtn(() => { bar.Value = val; touched = false; Paint(); }, new Point(x + S(626), sy + S(2)));
+                host.Controls.Add(rb); rb.BringToFront();
+            }
+            Paint();
             sy += S(48);
-            return (bar, cap);
+            mVals.Add(() => IsMulti
+                ? (field, touched ? bar.Value.ToString(CultureInfo.InvariantCulture) : (string?)null)
+                : (field, (wasSet || touched) ? bar.Value.ToString(CultureInfo.InvariantCulture) : ""));
         }
 
-        var (postBar, _) = Slider("Post-Launch Display Time: ", "StartupScreenPostLaunchDisplayTime",
-            10000, 250, ms => $"{ms / 1000.0:0.###} Second(s)", ref y);
+        SliderRow("Post-Launch Display Time: ", "StartupScreenPostLaunchDisplayTime", 10000, 250,
+            ms => $"{ms / 1000.0:0.###} Second(s)", postGlobal, g => (g as ILiteBoxFields)?.GetField("StartupScreenPostLaunchDisplayTime") ?? "", ref y);
 
-        var hideAll = Chk("Hide All Windows that are not in Exclusive Fullscreen Mode", "HideAllNonExclusiveFullscreenWindows", false, x, y);
+        Chk("Hide All Windows that are not in Exclusive Fullscreen Mode", "HideAllNonExclusiveFullscreenWindows", false, x, y, g => g.HideAllNonExclusiveFullscreenWindows);
         y += S(24);
         var help1 = new Label
         {
@@ -681,8 +1054,9 @@ internal sealed partial class EditGameWindow
         host.Controls.Add(help1);
         y += S(56);
 
-        var (delayBar, _) = Slider("Startup Load Delay: ", "StartupLoadDelay",
-            60000, 250, ms => $"{ms / 1000.0:0.000} second(s)", ref y);
+        SliderRow("Startup Load Delay: ", "StartupLoadDelay", 60000, 250,
+            ms => $"{ms / 1000.0:0.000} second(s)", delayGlobal,
+            g => { try { var d = g.StartupLoadDelay; return d > 0 ? d.ToString(CultureInfo.InvariantCulture) : ""; } catch { return ""; } }, ref y);
         var help2 = new Label
         {
             Location = new Point(x, y), Size = new Size(S(620), S(34)), ForeColor = SubFg, BackColor = Bg,
@@ -694,22 +1068,26 @@ internal sealed partial class EditGameWindow
         host.Controls.Add(help2);
 
         // LiteBox tab — the startup-related LiteBox-only overrides (stay-on-top, exit-early, Smart Capture).
+        // Multi-aware: each option merges across the games (‹multiple values›) and writes to all on OK.
+        var lbxIds = _editGames.Select(g => Safe(() => g.Id) ?? "").Where(id => id.Length > 0).ToArray();
         var (lbxPanel, lbxSave) = Gameplay.LiteBoxGameplayEditor.Build(Data.LiteBoxOption.ScopeGame,
-            Safe(() => _editGames[0].Id) ?? "", _s, Bg, Fg, SubFg, Field, _readOnly, Gameplay.GameplaySection.Startup);
+            lbxIds, _s, Bg, Fg, SubFg, Field, _readOnly, Gameplay.GameplaySection.Startup);
         lbxPanel.Dock = DockStyle.Fill;
         pgLbx.Controls.Add(lbxPanel);
 
         var bottom = DialogButtons(f, out var ok, out var cancel);
         ok.Click += (_, _) =>
         {
-            _lchPending["UseStartupScreen"] = LchB(enStart.Checked);
-            _lchPending["DisableShutdownScreen"] = LchB(!enShut.Checked);
-            _lchPending["HideMouseCursorInGame"] = LchB(hideMouse.Checked);
-            _lchPending["AggressiveWindowHiding"] = LchB(aggressive.Checked);
-            _lchPending["HideAllNonExclusiveFullscreenWindows"] = LchB(hideAll.Checked);
-            _lchPending["StartupScreenPostLaunchDisplayTime"] = postBar.Value.ToString(CultureInfo.InvariantCulture);
-            _lchPending["StartupLoadDelay"] = delayBar.Value.ToString(CultureInfo.InvariantCulture);
-            if (!_readOnly) { try { lbxSave(); } catch { } }
+            // Native fields: solo → pending (flushed by SaveLaunching); multi → straight to every edited game
+            // (only definite + changed values; the mVals getters return null to skip).
+            foreach (var getv in mVals)
+            {
+                var (field, value) = getv();
+                if (value == null) continue;
+                if (IsMulti) foreach (var g in _editGames) { try { (g as ILiteBoxFields)?.SetField(field, value); } catch { } }
+                else _lchPending[field] = value;
+            }
+            if (!_readOnly) { try { lbxSave?.Invoke(); } catch { } }
             f.DialogResult = DialogResult.OK; f.Close();
         };
         cancel.Click += (_, _) => { f.DialogResult = DialogResult.Cancel; f.Close(); };
@@ -768,20 +1146,61 @@ internal sealed partial class EditGameWindow
         pgMain.Controls.Add(host);
 
         int x = S(16), y = S(14);
-        CheckBox Chk(string text, string field, int cx, int cy)
+
+        // Modal-LOCAL dirty tracking (same pattern as the Startup modal). Multi: 3-state checkboxes + ↺; the
+        // AHK script boxes merge to "‹multiple values›". OK writes only what changed, to every edited game.
+        var mBase = new Dictionary<Control, string>();
+        var mRev = new Dictionary<Control, Button>();
+        var mVals = new List<Func<(string field, string? value)>>();
+        string MVal(Control c) => c is CheckBox cb ? cb.CheckState.ToString() : "";
+        void MRefresh(Control c)
         {
-            var cb = new CheckBox
+            bool mod = mBase.TryGetValue(c, out var b) && b != MVal(c);
+            c.ForeColor = mod ? ModifiedColor : Fg;
+            if (mRev.TryGetValue(c, out var rb)) rb.Visible = mod && !_readOnly;
+        }
+        Button MRevBtn(Action onClick, Point loc)
+        {
+            var rb = new Button { Text = "↺", Size = new Size(S(18), S(18)), Location = loc, Visible = false, TabStop = false, Cursor = Cursors.Hand, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(92, 46, 42), ForeColor = Color.FromArgb(255, 180, 165), Font = new Font("Segoe UI Symbol", 9.5f), FlatAppearance = { BorderSize = 1 } };
+            rb.FlatAppearance.BorderColor = Color.FromArgb(150, 72, 64);
+            rb.Click += (_, _) => onClick();
+            return rb;
+        }
+        bool EF(IGame g, string fld) => LchBool((g as ILiteBoxFields)?.GetField(fld) ?? "");
+        CheckBox Chk(string text, string field, int cx, int cy, Func<IGame, bool> get)
+        {
+            var cb = new CheckBox { Text = text, AutoSize = true, Location = new Point(cx, cy), ForeColor = Fg, BackColor = Bg, Enabled = !_readOnly };
+            if (IsMulti)
             {
-                Text = text, AutoSize = true, Location = new Point(cx, cy), ForeColor = Fg, BackColor = Bg,
-                Checked = LchBool(LchGet(field)), Enabled = !_readOnly,
-            };
+                var m = LchMergeBool(get);
+                cb.ThreeState = true;
+                cb.CheckState = m.HasValue ? (m.Value ? CheckState.Checked : CheckState.Unchecked) : CheckState.Indeterminate;
+                cb.AutoCheck = false;
+                cb.Click += (_, _) => { if (!_readOnly) cb.CheckState = cb.CheckState == CheckState.Checked ? CheckState.Unchecked : CheckState.Checked; };
+            }
+            else cb.Checked = LchBool(LchGet(field));
             host.Controls.Add(cb);
+            cb.CheckStateChanged += (_, _) => MRefresh(cb);
+            mBase[cb] = MVal(cb);
+            if (IsMulti)
+            {
+                int rx = cx + S(22) + TextRenderer.MeasureText(cb.Text, cb.Font).Width + S(6);
+                var rb = MRevBtn(() => { cb.CheckState = mBase.TryGetValue(cb, out var b) && Enum.TryParse<CheckState>(b, out var cs) ? cs : CheckState.Indeterminate; MRefresh(cb); }, new Point(rx, cy - S(1)));
+                host.Controls.Add(rb); rb.BringToFront(); mRev[cb] = rb;
+            }
+            MRefresh(cb);
+            mVals.Add(() =>
+            {
+                if (cb.CheckState == CheckState.Indeterminate) return (field, null);
+                if (!(mBase.TryGetValue(cb, out var b) && b != MVal(cb))) return (field, null);   // only write what CHANGED
+                return (field, LchB(cb.Checked));
+            });
             return cb;
         }
-        var enPause = Chk("Enable Game Pause Screen", "UsePauseScreen", x, y);
-        var suspend = Chk("Suspend Emulator Process While Paused", "SuspendProcessOnPause", S(360), y);
+        Chk("Enable Game Pause Screen", "UsePauseScreen", x, y, g => EF(g, "UsePauseScreen"));
+        Chk("Suspend Emulator Process While Paused", "SuspendProcessOnPause", S(360), y, g => EF(g, "SuspendProcessOnPause"));
         y += S(26);
-        var forceful = Chk("Forceful Pause Screen Activation (enable this if the pause screen is not showing)", "ForcefulPauseScreenActivation", x, y);
+        Chk("Forceful Pause Screen Activation (enable this if the pause screen is not showing)", "ForcefulPauseScreenActivation", x, y, g => EF(g, "ForcefulPauseScreenActivation"));
         y += S(28);
 
         host.Controls.Add(new Label { Text = "AutoHotkey Scripts:", AutoSize = true, Location = new Point(x, y), ForeColor = Fg, BackColor = Bg });
@@ -816,38 +1235,64 @@ internal sealed partial class EditGameWindow
             TextRenderer.DrawText(e.Graphics, stabs.TabPages[e.Index].Text, f.Font, e.Bounds,
                 sel ? Color.White : SubFg, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         };
-        var editors = new Dictionary<string, TextBox>(StringComparer.Ordinal);
         foreach (var (title, field) in scriptTabs)
         {
             var page = new TabPage(title) { BackColor = Bg, UseVisualStyleBackColor = false };
+            // Merge across the selection: the common script, or "‹multiple values›" (grey) when they differ.
+            bool differ = false; string merged;
+            if (IsMulti)
+            {
+                string? first = null;
+                foreach (var g in _editGames) { var v = (Safe(() => (g as ILiteBoxFields)?.GetField(field)) ?? ""); if (first == null) first = v; else if (first != v) { differ = true; break; } }
+                merged = differ ? Multi : (first ?? "");
+            }
+            else merged = LchGet(field);
             var tb = new TextBox
             {
                 Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical, AcceptsReturn = true,
-                BackColor = PanelC, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
+                BackColor = PanelC, ForeColor = differ ? SubFg : Fg, BorderStyle = BorderStyle.FixedSingle,
                 Font = new Font("Consolas", 9.5f), ReadOnly = _readOnly,
-                Text = LchGet(field).Replace("\r\n", "\n").Replace("\n", "\r\n"),
+                Text = differ ? Multi : merged.Replace("\r\n", "\n").Replace("\n", "\r\n"),
             };
-            page.Controls.Add(tb);
+            bool touched = false;
+            if (IsMulti)
+            {
+                string baseTxt = tb.Text;
+                if (differ) tb.Enter += (_, _) => { if (tb.Text == Multi) tb.SelectAll(); };
+                var rb = new Button { Text = "↺", Size = new Size(S(18), S(18)), Location = new Point(S(628), S(2)), Anchor = AnchorStyles.Top | AnchorStyles.Right, Visible = false, TabStop = false, Cursor = Cursors.Hand, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(92, 46, 42), ForeColor = Color.FromArgb(255, 180, 165), Font = new Font("Segoe UI Symbol", 9.5f), FlatAppearance = { BorderSize = 1 } };
+                rb.FlatAppearance.BorderColor = Color.FromArgb(150, 72, 64);
+                rb.Click += (_, _) => { tb.Text = baseTxt; };
+                tb.TextChanged += (_, _) => { touched = tb.Text != baseTxt; tb.ForeColor = tb.Text == Multi ? SubFg : (touched ? ModifiedColor : Fg); rb.Visible = touched && !_readOnly; };
+                page.Controls.Add(tb); page.Controls.Add(rb); rb.BringToFront();
+            }
+            else page.Controls.Add(tb);
             stabs.TabPages.Add(page);
-            editors[field] = tb;
+            mVals.Add(() => IsMulti
+                ? (field, (touched && tb.Text != Multi) ? tb.Text.Replace("\r\n", "\n") : (string?)null)
+                : (field, tb.Text.Replace("\r\n", "\n")));
         }
         host.Controls.Add(stabs);
 
-        // LiteBox tab — the pause-related LiteBox-only overrides (pause / screenshot hotkeys, controller pause).
+        // LiteBox tab — multi-aware (merges each option, writes to all on OK).
+        var lbxIds = _editGames.Select(g => Safe(() => g.Id) ?? "").Where(id => id.Length > 0).ToArray();
         var (lbxPanel, lbxSave) = Gameplay.LiteBoxGameplayEditor.Build(Data.LiteBoxOption.ScopeGame,
-            Safe(() => _editGames[0].Id) ?? "", _s, Bg, Fg, SubFg, Field, _readOnly, Gameplay.GameplaySection.Pause);
+            lbxIds, _s, Bg, Fg, SubFg, Field, _readOnly, Gameplay.GameplaySection.Pause);
         lbxPanel.Dock = DockStyle.Fill;
         pgLbx.Controls.Add(lbxPanel);
 
         var bottom = DialogButtons(f, out var ok, out var cancel);
         ok.Click += (_, _) =>
         {
-            _lchPending["UsePauseScreen"] = LchB(enPause.Checked);
-            _lchPending["SuspendProcessOnPause"] = LchB(suspend.Checked);
-            _lchPending["ForcefulPauseScreenActivation"] = LchB(forceful.Checked);
-            foreach (var (_, field) in scriptTabs)
-                _lchPending[field] = editors[field].Text.Replace("\r\n", "\n");
-            if (!_readOnly) { try { lbxSave(); } catch { } }
+            // Native fields + scripts: solo → pending (flushed by SaveLaunching); multi → straight to every game
+            // (only changed values; getters return null to skip).
+            foreach (var getv in mVals)
+            {
+                var (field, value) = getv();
+                if (value == null) continue;
+                if (IsMulti) foreach (var g in _editGames) { try { (g as ILiteBoxFields)?.SetField(field, value); } catch { } }
+                else _lchPending[field] = value;
+            }
+            if (!_readOnly) { try { lbxSave?.Invoke(); } catch { } }
             f.DialogResult = DialogResult.OK; f.Close();
         };
         cancel.Click += (_, _) => { f.DialogResult = DialogResult.Cancel; f.Close(); };
@@ -860,13 +1305,16 @@ internal sealed partial class EditGameWindow
     // boxes keep painting normally but stop accepting clicks (AutoCheck off) — same signal,
     // readable text.
 
-    private static void LchEnable(TextBox? t, bool on)
+    private void LchEnable(TextBox? t, bool on)
     {
         if (t == null) return;
         t.ReadOnly = !on;
-        t.ForeColor = on ? Fg : SubFg;
         t.BackColor = on ? Field : PanelC;
         t.TabStop = on;
+        // A dirty-tracked field owns its text colour (grey "‹multiple values›" placeholder / red modified) via
+        // RefreshFieldState — don't clobber it with Fg/SubFg here; the darker BackColor still signals disabled.
+        if (_baseline.ContainsKey(t)) RefreshFieldState(t);
+        else t.ForeColor = on ? Fg : SubFg;
     }
 
     private static void LchEnable(CheckBox? c, bool on)
@@ -879,8 +1327,30 @@ internal sealed partial class EditGameWindow
 
     private void UpdateLaunchingEnablement()
     {
-        bool emuOn = LchEmuOn;
         bool w = !_readOnly;
+        if (IsMulti)
+        {
+            // Multi-select shows only the main Launching + DOSBox pages (no emulator sub-page), and the games
+            // may have different emulators — so don't gate on any one game's emulator: keep every field editable
+            // and hide the "Emulation is active" notes.
+            if (_lchAppCaption != null) _lchAppCaption.Text = "Application Path:";
+            LchEnable(_lchAppPath, w); LchEnable(_lchCmd, w); LchEnable(_lchCfgPath, w);
+            if (_lchCfgBrowse != null) _lchCfgBrowse.Enabled = w;
+            LchEnable(_lchCfgCmd, w);
+            // NOT LchEnable(_lchUseDos / _lchUseEmu): the 3-state checkboxes own their AutoCheck (manual toggle)
+            // and colour (RefreshFieldState) — LchEnable would reset both. Just the text fields go through it.
+            LchEnable(_lchDosConf, w); LchEnable(_lchDosExe, w);
+            // Emulator list + custom-command-line field: enabled unless the relevant 3-state box is Unchecked.
+            if (_lchEmuCombo != null) _lchEmuCombo.Enabled = w && (_lchUseEmu == null || _lchUseEmu.CheckState != CheckState.Unchecked);
+            if (_lchCustomCmdChk != null) _lchCustomCmdChk.Enabled = w;
+            if (_lchCustomCmd != null) LchEnable(_lchCustomCmd, w && (_lchCustomCmdChk == null || _lchCustomCmdChk.CheckState != CheckState.Unchecked));
+            LchEnable(_lchRoot, w);   // Root Folder editable in multi (no per-game emulator gating)
+            if (_lchLaunchNote != null) _lchLaunchNote.Visible = false;
+            if (_lchDosNote != null) _lchDosNote.Visible = false;
+            if (_lchRootNote != null) _lchRootNote.Visible = false;
+            return;
+        }
+        bool emuOn = LchEmuOn;
         if (_lchAppCaption != null) _lchAppCaption.Text = emuOn ? "ROM File (Emulation is enabled):" : "Application Path:";
         LchEnable(_lchAppPath, w);
         LchEnable(_lchCmd, w && !emuOn);
@@ -889,7 +1359,9 @@ internal sealed partial class EditGameWindow
         LchEnable(_lchCfgCmd, w && !emuOn);
         if (_lchLaunchNote != null) _lchLaunchNote.Visible = emuOn;
 
-        LchEnable(_lchUseDos, w && !emuOn);
+        // _lchUseDos is NOT gated here: DOSBox stays clickable even with emulation on (checking it prompts to
+        // turn emulation off). Its Enabled/colour/AutoCheck are owned by the build + the dirty-tracker, so
+        // LchEnable must not touch it. The note becomes a hint about the switch-off.
         if (_lchDosNote != null) _lchDosNote.Visible = emuOn;
 
         LchEnable(_lchRoot, w && !emuOn);
@@ -897,7 +1369,9 @@ internal sealed partial class EditGameWindow
 
         bool useEmu = _lchUseEmu?.Checked ?? emuOn;
         if (_lchEmuCombo != null) _lchEmuCombo.Enabled = w && useEmu;
-        LchEnable(_lchCustomCmdChk, w && useEmu);
+        // Real .Enabled (not LchEnable): _lchCustomCmdChk is a dirty-tracked 3-state box, LchEnable would reset
+        // its AutoCheck/colour. The field still goes through LchEnable (it now preserves the tracked colour).
+        if (_lchCustomCmdChk != null) _lchCustomCmdChk.Enabled = w && useEmu;
         LchEnable(_lchCustomCmd, w && useEmu && (_lchCustomCmdChk?.Checked ?? false));
 
         // Mounts only make sense for a DOSBox game (LB's note says as much) — lock the whole
@@ -919,14 +1393,43 @@ internal sealed partial class EditGameWindow
 
     private void SaveLaunching()
     {
-        if (_readOnly || IsMulti) return;
+        if (_readOnly) return;
+
+        // Main launching fields are dirty-tracked (revert + colour + ‹multiple values›): write each to EVERY
+        // edited game, only when changed & not the placeholder. CommandLine's solo dual-meaning (emulator
+        // override vs plain app params) is resolved below; in multi it's a plain application command-line.
+        WriteLch(_lchAppPath, "ApplicationPath");
+        WriteLch(_lchCfgPath, "ConfigurationPath");
+        WriteLch(_lchCfgCmd, "ConfigurationCommandLine");
+        if (IsMulti)
+        {
+            // Multi covers the main Launching + DOSBox + Emulation pages; mounts / overrides stay single-game.
+            // CommandLine is one shared field (Launching "Application Command-Line" = Emulation custom params;
+            // the two controls mirror). "Use custom params" unchecked for all → clear it; else write the value.
+            if (_lchCustomCmdChk is { CheckState: CheckState.Unchecked } && Modified(_lchCustomCmdChk))
+            {
+                foreach (var g in _editGames) { try { (g as ILiteBoxFields)?.SetField("CommandLine", ""); } catch { } }
+                LchRebaseChk(_lchCustomCmdChk); LchRebase(_lchCmd); LchRebase(_lchCustomCmd);
+            }
+            else { WriteLch(_lchCmd, "CommandLine"); WriteLch(_lchCustomCmd, "CommandLine"); }
+            WriteLchBool(_lchUseDos, "UseDosBox");
+            WriteLch(_lchDosConf, "DosBoxConfigurationPath");
+            WriteLch(_lchDosExe, "CustomDosBoxVersionPath");
+            WriteEmulatorMulti();
+            WriteLch(_lchRoot, "RootFolder");
+            // Startup/Pause override toggles (base window only; the Customize modals stay solo). Clearing the
+            // per-game LiteBox overrides on an unchecked concern mirrors the solo save below.
+            WriteOverrideMulti(_lchOvrStart, "OverrideDefaultStartupScreenSettings",
+                new[] { "StartupStayOnTop", "ExitScreenEagerMs" }.Concat(Gameplay.SmartCaptureConfig.Keys).ToArray(), LchStartupFields);
+            WriteOverrideMulti(_lchOvrPause, "OverrideDefaultPauseScreenSettings",
+                new[] { "PauseHotkey", "ScreenCaptureKey", "PadPauseEnabled", "PadPauseButton" }, LchPauseFields);
+            return;
+        }
+
         var f = AppsGame as ILiteBoxFields;
         if (f == null) return;
 
-        // UI-bound fields → pending (only pages that were actually built contribute).
-        if (_lchAppPath != null) _lchPending["ApplicationPath"] = _lchAppPath.Text.Trim();
-        if (_lchCfgPath != null) _lchPending["ConfigurationPath"] = _lchCfgPath.Text.Trim();
-        if (_lchCfgCmd != null) _lchPending["ConfigurationCommandLine"] = _lchCfgCmd.Text.Trim();
+        // Remaining single-game fields → pending (only pages that were actually built contribute).
         if (_lchUseDos != null) _lchPending["UseDosBox"] = LchB(_lchUseDos.Checked);
         if (_lchDosConf != null) _lchPending["DosBoxConfigurationPath"] = _lchDosConf.Text.Trim();
         if (_lchDosExe != null) _lchPending["CustomDosBoxVersionPath"] = _lchDosExe.Text.Trim();
@@ -934,22 +1437,25 @@ internal sealed partial class EditGameWindow
         if (_lchOvrStart != null) _lchPending["OverrideDefaultStartupScreenSettings"] = LchB(_lchOvrStart.Checked);
         if (_lchOvrPause != null) _lchPending["OverrideDefaultPauseScreenSettings"] = LchB(_lchOvrPause.Checked);
 
-        // The per-game LiteBox-only options live behind these same override checkboxes (Customize →
-        // "LiteBox" tab). When a concern is NOT overridden, they must take no effect — clear the
-        // game-scope overrides so resolution falls back to emulator/global. (The LB-native fields are
-        // already gated at launch by StartupOverride / PauseOverride.) Only when the page was built.
+        // Unchecking an override RESETS the whole concern: its LB-native fields (the Customize modal's values)
+        // AND its per-game LiteBox-only overrides are wiped, so re-checking gives a clean slate — and nothing
+        // stale lingers. (The native fields are gated at launch by StartupOverride/PauseOverride anyway.)
         string gid = Safe(() => _editGames[0].Id) ?? "";
         if (!string.IsNullOrEmpty(gid))
         {
             void ClearGame(string k) { try { Data.LiteBoxOption.SetOverride(Data.LiteBoxOption.ScopeGame, gid, k, null); } catch { } }
             if (_lchOvrStart is { Checked: false })
             {
+                foreach (var fld in LchStartupFields) _lchPending[fld] = "";   // wipe the native Startup fields
                 ClearGame("StartupStayOnTop"); ClearGame("ExitScreenEagerMs");
                 foreach (var k in Gameplay.SmartCaptureConfig.Keys) ClearGame(k);
             }
             if (_lchOvrPause is { Checked: false })
+            {
+                foreach (var fld in LchPauseFields) _lchPending[fld] = "";   // wipe the native Pause fields + scripts
                 foreach (var k in new[] { "PauseHotkey", "ScreenCaptureKey", "PadPauseEnabled", "PadPauseButton" })
                     ClearGame(k);
+            }
         }
 
         // The emulator assignment + the dual-meaning CommandLine (see the header).
@@ -968,6 +1474,7 @@ internal sealed partial class EditGameWindow
             try { f.SetField(kv.Key, kv.Value); _lchLoaded[kv.Key] = kv.Value; } catch { }
         }
         _lchPending.Clear();
+        LchRebase(_lchCmd);   // CommandLine written via the dual-meaning path above → re-baseline so it reads clean
         SaveMounts();
     }
 
@@ -975,21 +1482,21 @@ internal sealed partial class EditGameWindow
     {
         if (IsMulti) return;
         LchSnapshot();
-        if (_lchAppPath != null) _lchAppPath.Text = LchGet("ApplicationPath");
-        if (_lchCmd != null) _lchCmd.Text = LchGet("CommandLine");
-        if (_lchCfgPath != null) _lchCfgPath.Text = LchGet("ConfigurationPath");
-        if (_lchCfgCmd != null) _lchCfgCmd.Text = LchGet("ConfigurationCommandLine");
-        if (_lchUseDos != null) _lchUseDos.Checked = LchBool(LchGet("UseDosBox"));
-        if (_lchDosConf != null) _lchDosConf.Text = LchGet("DosBoxConfigurationPath");
-        if (_lchDosExe != null) _lchDosExe.Text = LchGet("CustomDosBoxVersionPath");
-        if (_lchRoot != null) _lchRoot.Text = LchGet("RootFolder");
+        if (_lchAppPath != null) { _lchAppPath.Text = LchGet("ApplicationPath"); LchRebase(_lchAppPath); }
+        if (_lchCmd != null) { _lchCmd.Text = LchGet("CommandLine"); LchRebase(_lchCmd); }
+        if (_lchCfgPath != null) { _lchCfgPath.Text = LchGet("ConfigurationPath"); LchRebase(_lchCfgPath); }
+        if (_lchCfgCmd != null) { _lchCfgCmd.Text = LchGet("ConfigurationCommandLine"); LchRebase(_lchCfgCmd); }
+        if (_lchUseDos != null) { _lchUseDos.Checked = LchBool(LchGet("UseDosBox")); LchRebaseChk(_lchUseDos); }
+        if (_lchDosConf != null) { _lchDosConf.Text = LchGet("DosBoxConfigurationPath"); LchRebase(_lchDosConf); }
+        if (_lchDosExe != null) { _lchDosExe.Text = LchGet("CustomDosBoxVersionPath"); LchRebase(_lchDosExe); }
+        if (_lchRoot != null) { _lchRoot.Text = LchGet("RootFolder"); LchRebase(_lchRoot); }
         string emu = LchGet("Emulator");
-        if (_lchUseEmu != null) _lchUseEmu.Checked = emu.Length > 0 && emu != Guid.Empty.ToString();
-        if (_lchEmuCombo != null) RefreshEmulatorCombo(emu);
-        if (_lchCustomCmdChk != null) _lchCustomCmdChk.Checked = LchGet("CommandLine").Trim().Length > 0;
-        if (_lchCustomCmd != null) _lchCustomCmd.Text = LchGet("CommandLine");
-        if (_lchOvrStart != null) _lchOvrStart.Checked = LchBool(LchGet("OverrideDefaultStartupScreenSettings"));
-        if (_lchOvrPause != null) _lchOvrPause.Checked = LchBool(LchGet("OverrideDefaultPauseScreenSettings"));
+        if (_lchUseEmu != null) { _lchUseEmu.Checked = emu.Length > 0 && emu != Guid.Empty.ToString(); LchRebaseChk(_lchUseEmu); }
+        if (_lchEmuCombo != null) { RefreshEmulatorCombo(emu); LchRebaseCbo(_lchEmuCombo); }
+        if (_lchCustomCmdChk != null) { _lchCustomCmdChk.Checked = LchGet("CommandLine").Trim().Length > 0; LchRebaseChk(_lchCustomCmdChk); }
+        if (_lchCustomCmd != null) { _lchCustomCmd.Text = LchGet("CommandLine"); LchRebase(_lchCustomCmd); }
+        if (_lchOvrStart != null) { _lchOvrStart.Checked = LchBool(LchGet("OverrideDefaultStartupScreenSettings")); LchRebaseChk(_lchOvrStart); }
+        if (_lchOvrPause != null) { _lchOvrPause.Checked = LchBool(LchGet("OverrideDefaultPauseScreenSettings")); LchRebaseChk(_lchOvrPause); }
         LoadMounts();
         UpdateLaunchingEnablement();
     }

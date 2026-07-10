@@ -312,12 +312,12 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "AdditionalApps" => IsMulti ? Placeholder("Additional Apps") : BuildAdditionalAppsPage(),
                 "AlternateNames" => IsMulti ? Placeholder("Alternate Names") : BuildAlternateNamesPage(),
                 "ControllerSupport" => IsMulti ? BuildControllerSupportMultiPage() : BuildControllerSupportPage(),
-                "Launching" => IsMulti ? Placeholder("Launching") : BuildLaunchingPage(),
-                "DOSBox" => IsMulti ? Placeholder("DOSBox") : BuildDosBoxPage(),
+                "Launching" => BuildLaunchingPage(),   // main page supports multi (merged fields); sub-pages below stay solo
+                "DOSBox" => BuildDosBoxPage(),   // main DOSBox page supports multi (3-state Use-DOSBox + merged paths)
                 "Mounts" => IsMulti ? Placeholder("Mounts") : BuildMountsPage(),
-                "Emulation" => IsMulti ? Placeholder("Emulation") : BuildEmulationPage(),
-                "RootFolder" => IsMulti ? Placeholder("Root Folder") : BuildRootFolderPage(),
-                "StartupPause" => IsMulti ? Placeholder("Startup/Pause") : BuildStartupPausePage(),
+                "Emulation" => BuildEmulationPage(),   // main Emulation page supports multi (3-state use-emu + merged emulator list)
+                "RootFolder" => BuildRootFolderPage(),        // supports multi (merged path field)
+                "StartupPause" => BuildStartupPausePage(),     // base window supports multi (3-state override toggles); modals stay solo
                 _ => Placeholder(_tree.SelectedNode?.Text ?? key),
             };
             _pages[key] = page;

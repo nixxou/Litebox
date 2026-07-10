@@ -35,8 +35,32 @@ internal static class PauseManager
     [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
     [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+    private const int SW_RESTORE = 9;
     [DllImport("ntdll.dll")] private static extern int NtSuspendProcess(IntPtr processHandle);
     [DllImport("ntdll.dll")] private static extern int NtResumeProcess(IntPtr processHandle);
+
+    // Low-level keyboard hook (WH_KEYBOARD_LL) — the AHK-grade pause interception. RegisterHotKey is
+    // bypassed by raw-input / DirectInput fullscreen games; the LL hook sees every keystroke before any
+    // app and can SUPPRESS it (return 1). It captures BOTH hardware AND software (injected) keys — a game
+    // played over Remote Desktop delivers the pause key as injected, so skipping injected keys made
+    // interception silently fail over RDP. Our OWN AHK sends are recognised (KEY_IGNORE dwExtraInfo) and,
+    // for on-demand scripts, additionally run inside a pass-through window, so they still reach the game.
+    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+    [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)] private static extern IntPtr GetModuleHandle(string? lpModuleName);
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vKey);
+    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+    [StructLayout(LayoutKind.Sequential)] private struct KBDLLHOOKSTRUCT { public uint vkCode; public uint scanCode; public uint flags; public uint time; public IntPtr dwExtraInfo; }
+    private const int WH_KEYBOARD_LL = 13;
+    private const int WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_SYSKEYDOWN = 0x0104, WM_SYSKEYUP = 0x0105;
+    private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
+    // AHK tags every key it synthesizes with a dwExtraInfo in its KEY_IGNORE family (base 0xFFC3D449,
+    // plus SendLevel 0..100) — precisely so hooks can tell "this came from AHK". We use it to let our own
+    // pause-script sends through even when they LOOK physical (no INJECTED flag) or fire outside the window.
+    private const ulong AHK_EXTRAINFO_MIN = 0xFFC3D449, AHK_EXTRAINFO_MAX = 0xFFC3D4B0;
 
     private const int HotkeyId = 0xB0B;
     private const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8, MOD_NOREPEAT = 0x4000;
@@ -44,7 +68,6 @@ internal static class PauseManager
     private static readonly object _lock = new();
     private static LiteBoxConfig? _cfg;
     private static string _lbRoot = "";
-    private static HotkeyWindow? _hkWin;
     private static IPauseScreen? _screen;
 
     // Armed launch state.
@@ -52,6 +75,13 @@ internal static class PauseManager
     private static IEmulator? _emu;
     private static IGame? _game;
     private static bool _paused, _suspended;
+
+    // LL-hook pause interception state.
+    private static IntPtr _hook;
+    private static LowLevelKeyboardProc? _hookProc;   // keep the delegate alive while the hook is set
+    private static uint _hkVk, _hkMod;                 // target key + MOD_* modifier bits
+    private static bool _hkLatched;                    // fired-once-per-press guard (ignore auto-repeat)
+    private static long _passThroughUntilTicks;        // interception disabled while an on-demand script runs (≤5s)
 
     public static void Configure(LiteBoxConfig cfg, string lbRoot)
     {
@@ -69,16 +99,22 @@ internal static class PauseManager
     /// <summary>Registers the pause hotkey for this launch. No-op when pause is
     /// disabled (LiteBox.ini PauseEnabled=false) or the emulator opts out
     /// (UsePauseScreen=false).</summary>
-    public static void Arm(Process proc, IEmulator emulator, IGame game)
+    public static void Arm(Process proc, IEmulator? emulator, IGame game)
     {
-        if (proc == null || emulator == null) return;
+        // emulator may be null: store / direct-exe / DOSBox games pause too — the LL hotkey hook,
+        // process suspend and pause screen are all emulator-independent; only the AHK scripts and
+        // the per-emulator field lookups fall back to global / per-game defaults when it's null.
+        if (proc == null) return;
         // Global master switch now lives in Settings.xml (LB · Gameplay → Use Game
         // Pause Screen); read fresh so an options change applies to the next launch.
         if (!Gameplay.GameplaySettings.PauseEnabledGlobal()) return;
         // Per-game pause override (LaunchedGame snapshot, captured pre-drop) wins
         // over the emulator's setting — exactly LB's Edit Game pause panel.
         var snap0 = LaunchedGame.Current;
-        bool usePause = snap0 is { PauseOverride: true } ? snap0.PauseUse : FieldBool(emulator, "UsePauseScreen", true);
+        // Default when there's no per-emulator field: emulator games keep LB's true; non-emulator games
+        // (emulator null) take the global "use pause for non-emu games" default.
+        bool useDef = emulator != null ? true : Gameplay.GameplaySettings.NonEmuUsePause();
+        bool usePause = snap0 is { PauseOverride: true } ? snap0.PauseUse : FieldBool(emulator, "UsePauseScreen", useDef);
         if (!usePause)
         { Console.WriteLine("[pause] pause screen disabled (game/emulator setting) — off"); return; }
 
@@ -88,7 +124,7 @@ internal static class PauseManager
             _proc = proc; _emu = emulator; _game = game;
             _paused = _suspended = false;
 
-            string? emuId = Safe(() => emulator.Id);
+            string? emuId = Safe(() => emulator?.Id);
 
             // Keyboard pause hotkey, resolved per-emulator → global (litebox-options.db): an
             // emulator can override the combo or disable it outright ("None"). Empty ⇒ no keyboard
@@ -97,13 +133,8 @@ internal static class PauseManager
             if (!string.IsNullOrWhiteSpace(pauseKey) && !pauseKey.Equals("None", StringComparison.OrdinalIgnoreCase))
             {
                 var (mod, vk, label) = ParseHotkey(pauseKey);
-                UiThread.Invoke(() =>
-                {
-                    _hkWin = new HotkeyWindow(OnHotkey);
-                    if (!RegisterHotKey(_hkWin.Handle, HotkeyId, mod | MOD_NOREPEAT, vk))
-                    { Console.WriteLine($"[pause] RegisterHotKey({label}) failed — pause hotkey unavailable"); _hkWin.DestroyHandle(); _hkWin = null; }
-                    else Console.WriteLine($"[pause] armed — hotkey {label}");
-                });
+                InstallHook(mod, vk);
+                Console.WriteLine($"[pause] armed — hotkey {label} (LL keyboard hook)");
             }
             else Console.WriteLine("[pause] keyboard pause hotkey disabled");
 
@@ -135,14 +166,91 @@ internal static class PauseManager
         UnmuteIfWeMuted();   // a game killed while paused must not stay muted (session may outlive us)
         PadPauseWatcher.Stop();
         _suspended = false; _paused = false;
-        var w = _hkWin; _hkWin = null;
+        UninstallHook();
         var s = _screen; _screen = null;
+        UiThread.Invoke(() => { try { s?.Close(); } catch { } });
+        _proc = null; _emu = null; _game = null;
+    }
+
+    // ── Low-level keyboard hook (physical pause interception) ────────────
+
+    private static void InstallHook(uint mod, uint vk)
+    {
+        _hkVk = vk; _hkMod = mod; _hkLatched = false;
+        System.Threading.Interlocked.Exchange(ref _passThroughUntilTicks, 0);
+        // Install on the UiThread: the LL-hook callback is delivered on the installing thread, which must
+        // keep pumping messages (UiThread runs Application.Run) or the hook is silently timed out.
         UiThread.Invoke(() =>
         {
-            try { s?.Close(); } catch { }
-            try { if (w != null) { UnregisterHotKey(w.Handle, HotkeyId); w.DestroyHandle(); } } catch { }
+            try
+            {
+                _hookProc = HookProc;   // hold the delegate so the GC can't collect it under native code
+                _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _hookProc, GetModuleHandle(null), 0);
+                if (_hook == IntPtr.Zero) Console.WriteLine("[pause] SetWindowsHookEx failed — pause hotkey unavailable");
+            }
+            catch (Exception ex) { Console.WriteLine("[pause] hook install failed: " + ex.Message); }
         });
-        _proc = null; _emu = null; _game = null;
+    }
+
+    private static void UninstallHook()
+    {
+        var h = _hook; _hook = IntPtr.Zero; _hookProc = null;
+        if (h == IntPtr.Zero) return;
+        UiThread.Invoke(() => { try { UnhookWindowsHookEx(h); } catch { } });
+    }
+
+    private static IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0)
+        {
+            int msg = (int)wParam;
+            var data = System.Runtime.InteropServices.Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+            if (data.vkCode == _hkVk)
+            {
+                if (msg == WM_KEYUP || msg == WM_SYSKEYUP) _hkLatched = false;
+                else if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+                {
+                    // Capture BOTH hardware and software keys (RDP delivers the pause key as injected).
+                    // The one class we must never re-catch is our OWN AHK sends: AHK tags them with its
+                    // KEY_IGNORE dwExtraInfo, and on-demand scripts also run inside the pass-through window.
+                    ulong ei = unchecked((ulong)(long)data.dwExtraInfo);
+                    bool fromAhk = ei >= AHK_EXTRAINFO_MIN && ei <= AHK_EXTRAINFO_MAX;
+                    bool passThrough = DateTime.UtcNow.Ticks < System.Threading.Interlocked.Read(ref _passThroughUntilTicks);
+                    if (!fromAhk && !passThrough && ModifiersMatch(_hkMod))
+                    {
+                        // Fire once per press (swallow auto-repeat), off the hook thread, and SUPPRESS:
+                        // return 1 so the game never receives this key. An on-pause script can re-send it
+                        // (during the pass-through window) to reach the game itself.
+                        if (!_hkLatched) { _hkLatched = true; try { System.Threading.Tasks.Task.Run(OnHotkey); } catch { } }
+                        return (IntPtr)1;
+                    }
+                }
+            }
+        }
+        return CallNextHookEx(_hook, nCode, wParam, lParam);
+    }
+
+    private static bool ModifiersMatch(uint mod)
+    {
+        bool ctrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        bool alt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+        bool shift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+        bool win   = ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
+        return ctrl == ((mod & MOD_CONTROL) != 0) && alt == ((mod & MOD_ALT) != 0)
+            && shift == ((mod & MOD_SHIFT) != 0) && win == ((mod & MOD_WIN) != 0);
+    }
+
+    /// <summary>Run an on-demand pause script with keyboard interception PAUSED (≤5s) so the script's own
+    /// key sends — even "physical"-looking ones AHK can emit — reach the game instead of being caught by
+    /// our hook. Interception resumes when the script process exits or after 5s, whichever comes first.
+    /// (The persistent RUNNING script is NOT routed here, so pause stays interceptable during the game.)</summary>
+    private static Process? RunScriptPassThrough(string script)
+    {
+        System.Threading.Interlocked.Exchange(ref _passThroughUntilTicks, DateTime.UtcNow.AddSeconds(5).Ticks);
+        var p = AhkScript.RunOneOff(script, _lbRoot);
+        if (p == null) { System.Threading.Interlocked.Exchange(ref _passThroughUntilTicks, 0); return null; }
+        try { p.EnableRaisingEvents = true; p.Exited += (_, _) => System.Threading.Interlocked.Exchange(ref _passThroughUntilTicks, 0); } catch { }
+        return p;
     }
 
     // ── Hotkey → toggle ─────────────────────────────────────────────────
@@ -151,7 +259,9 @@ internal static class PauseManager
     {
         lock (_lock)
         {
-            if (_proc == null || _emu == null) return;
+            // Only the process is required — _emu is legitimately null for store / direct-exe / DOSBox
+            // games (all the _emu reads below fall back to global / per-game defaults).
+            if (_proc == null) return;
             try { if (_proc.HasExited) return; } catch { return; }
             if (_paused) ResumeLocked();
             else PauseLocked();
@@ -181,21 +291,19 @@ internal static class PauseManager
 
         // 1. Pause script BEFORE the freeze (it usually sends the emulator's own
         //    pause key, so the process must still be running).
-        var p = AhkScript.RunOneOff(ScriptStr("PauseAutoHotkeyScript"), _lbRoot);
+        var p = RunScriptPassThrough(ScriptStr("PauseAutoHotkeyScript"));
         if (p != null) { try { p.WaitForExit(1500); } catch { } }
 
-        // 2. Freeze (default ON, like LB; per-game override wins).
+        // 2. Freeze default (ON, like LB; per-game override wins). Non-emulator games (no _emu) take the
+        //    global "suspend non-emu games" default instead of a hardcoded true.
         var snapS = LaunchedGame.Current;
-        bool doSuspend = snapS is { PauseOverride: true } ? snapS.PauseSuspend : FieldBool(_emu!, "SuspendProcessOnPause", true);
-        if (doSuspend)
-        {
-            try { if (_proc is { HasExited: false }) { NtSuspendProcess(_proc.Handle); _suspended = true; } }
-            catch (Exception ex) { Console.WriteLine("[pause] suspend failed: " + ex.Message); }
-        }
+        bool suspendDef = _emu != null ? true : Gameplay.GameplaySettings.NonEmuSuspend();
+        bool doSuspend = snapS is { PauseOverride: true } ? snapS.PauseSuspend : FieldBool(_emu, "SuspendProcessOnPause", suspendDef);
 
-        // 3. Screen. Cosmetics come from the LaunchedGame snapshot (captured before
-        //    the launch memory drop) — never from the store / cache.
+        // 3. Screen. Cosmetics come from the LaunchedGame snapshot (captured before the launch memory
+        //    drop) — never from the store / cache. Forceful-activation default is non-emu-aware too.
         var snap = LaunchedGame.Current;
+        bool forceDef = _emu != null ? true : Gameplay.GameplaySettings.NonEmuForceful();
         var ctx = new PauseContext
         {
             GameTitle = snap?.Title ?? Safe(() => _game?.Title) ?? "",
@@ -211,15 +319,31 @@ internal static class PauseManager
             CanLoadState = !AhkScript.IsScriptEmpty(ScriptStr("LoadStateAutoHotkeyScript")),
             CanReset = !AhkScript.IsScriptEmpty(ScriptStr("ResetAutoHotkeyScript")),
             CanSwapDiscs = !AhkScript.IsScriptEmpty(ScriptStr("SwapDiscsAutoHotkeyScript")),
-            ForcefulActivation = snap is { PauseOverride: true } ? snap.PauseForceful : FieldBool(_emu!, "ForcefulPauseScreenActivation", true),
+            ForcefulActivation = snap is { PauseOverride: true } ? snap.PauseForceful : FieldBool(_emu, "ForcefulPauseScreenActivation", forceDef),
             EmulatorMainWindow = EmulatorWindow(),
             OnAction = a => System.Threading.Tasks.Task.Run(() => OnScreenAction(a)),
         };
-        UiThread.Invoke(() =>
+        void ShowScreen() => UiThread.Invoke(() =>
         {
             _screen ??= PauseScreenFactory.Create(_cfg!);
             _screen.Show(ctx);
         });
+        void Freeze()
+        {
+            try { if (_proc is { HasExited: false }) { NtSuspendProcess(_proc.Handle); _suspended = true; } }
+            catch (Exception ex) { Console.WriteLine("[pause] suspend failed: " + ex.Message); }
+        }
+
+        // Order freeze vs. screen per the timing option. "Before" paints the overlay over the STILL-RUNNING
+        // game then freezes; "after" (default) freezes first. The offset (ms) tunes the gap so the overlay
+        // lands exactly on the frozen frame — a bare freeze-then-show can flash the frozen game first.
+        if (doSuspend)
+        {
+            var (showBefore, offMs) = Gameplay.GameplaySettings.ResolvePauseScreenFreezeTiming(Safe(() => _emu?.Id), Safe(() => _game?.Id));
+            if (showBefore) { ShowScreen(); if (offMs > 0) { try { Thread.Sleep(offMs); } catch { } } Freeze(); }
+            else            { Freeze();     if (offMs > 0) { try { Thread.Sleep(offMs); } catch { } } ShowScreen(); }
+        }
+        else ShowScreen();
     }
 
     private static void ResumeLocked(bool runResumeScript = true, bool refocus = true)
@@ -231,7 +355,7 @@ internal static class PauseManager
         _suspended = false;
         if (runResumeScript)
         {
-            var p = AhkScript.RunOneOff(ScriptStr("ResumeAutoHotkeyScript"), _lbRoot);
+            var p = RunScriptPassThrough(ScriptStr("ResumeAutoHotkeyScript"));
             if (p != null) { try { p.WaitForExit(1500); } catch { } }
         }
         // Unmute AFTER the resume script — the whole transition stays silent, the game
@@ -258,7 +382,7 @@ internal static class PauseManager
     {
         lock (_lock)
         {
-            if (_emu == null || _proc == null) return;
+            if (_proc == null) return;   // _emu null is fine (store / direct-exe / DOSBox game)
             switch (a)
             {
                 case PauseAction.Resume:
@@ -297,7 +421,7 @@ internal static class PauseManager
         var script = ScriptStr(field);
         ResumeLocked(runResumeScript: false);
         try { Thread.Sleep(200); } catch { }   // let the emulator window settle into the foreground
-        AhkScript.RunOneOff(script, _lbRoot);
+        RunScriptPassThrough(script);
     }
 
     /// <summary>The AHK script for a pause action, resolved PER-SCRIPT: when the game's pause override
@@ -378,7 +502,14 @@ internal static class PauseManager
             {
                 _proc.Refresh();
                 var h = _proc.MainWindowHandle;
-                if (h != IntPtr.Zero) SetForegroundWindow(h);
+                if (h != IntPtr.Zero)
+                {
+                    // An exclusive-fullscreen game (esp. when NOT suspended) minimises itself when the pause
+                    // overlay steals the foreground; SetForegroundWindow alone leaves it minimised, so the
+                    // game stays hidden after Resume. Restore it first, then bring it forward.
+                    if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
+                    SetForegroundWindow(h);
+                }
             }
         }
         catch { }
@@ -386,8 +517,9 @@ internal static class PauseManager
 
     // ── Emulator fields beyond the SDK surface (ILiteBoxFields dict) ────
 
-    private static string? FieldStr(IEmulator emu, string xmlName)
+    private static string? FieldStr(IEmulator? emu, string xmlName)
     {
+        if (emu == null) return null;   // non-emulator game (store / direct-exe / DOSBox): no emulator scripts
         try
         {
             // SDK-surfaced scripts first (works for any IEmulator implementation).
@@ -406,8 +538,9 @@ internal static class PauseManager
         try { return (emu as ILiteBoxFields)?.GetField(xmlName); } catch { return null; }
     }
 
-    private static bool FieldBool(IEmulator emu, string xmlName, bool def)
+    private static bool FieldBool(IEmulator? emu, string xmlName, bool def)
     {
+        if (emu == null) return def;    // non-emulator game: fall back to the caller's default
         try
         {
             var v = (emu as ILiteBoxFields)?.GetField(xmlName);

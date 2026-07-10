@@ -372,6 +372,30 @@ internal static class LbGlobalOptions
             pmode.Items.AddRange(new object[] { "legacy", "advanced" }); pmode.SelectedItem = ini.Get("PauseMode", "legacy") ?? "legacy"; if (pmode.SelectedIndex < 0) pmode.SelectedIndex = 0;
             p.Controls.Add(pmode);
             p.Controls.Add(Lbl("legacy = native overlay · advanced = WebView (not implemented yet, falls back to legacy)", new Point(S(30), S(pauseY + 116)), Dim));
+
+            // Freeze ↔ screen timing (applies to every game that gets suspended).
+            int frzY = pauseY + 150;
+            p.Controls.Add(new Label { Text = "When freezing the game, show the pause screen:", Location = new Point(S(12), S(frzY)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
+            var frzCur = string.Equals(ini.Get("PauseScreenFreezeTiming", "after"), "before", StringComparison.OrdinalIgnoreCase) ? "before freezing" : "after freezing";
+            var frzTiming = Cbo(new[] { "after freezing", "before freezing" }, frzCur, new Point(S(12), S(frzY + 24)), 180); p.Controls.Add(frzTiming);
+            p.Controls.Add(Lbl("Delay (ms):", new Point(S(210), S(frzY + 27))));
+            var frzOff = Txt(ini.Get("PauseScreenFreezeOffsetMs", "0"), new Point(S(300), S(frzY + 24)), 70); p.Controls.Add(frzOff);
+            p.Controls.Add(Lbl("Tune so the overlay lands exactly on the frozen frame (avoids a flash of the frozen game).", new Point(S(30), S(frzY + 52)), Dim));
+
+            // Non-emulator pause defaults (store / direct-exe / DOSBox have no emulator to source them from).
+            int neY = frzY + 84;
+            p.Controls.Add(Head("Non-emulator games (Store / direct .exe / DOSBox)", neY));
+            var neUse = Chk("Use the pause screen", ini.GetBool("NonEmuUsePauseScreen", true), new Point(S(12), S(neY + 26)));
+            var neSusp = Chk("Suspend (freeze) the process on pause", ini.GetBool("NonEmuSuspendOnPause", true), new Point(S(12), S(neY + 52)));
+            var neForce = Chk("Force the pause screen to the foreground", ini.GetBool("NonEmuForcefulActivation", true), new Point(S(12), S(neY + 78)));
+            p.Controls.AddRange(new Control[] { neUse, neSusp, neForce });
+            p.Controls.Add(Lbl("Defaults for games without an emulator; a per-game pause override still wins.", new Point(S(30), S(neY + 104)), Dim));
+            BindIniChk(neUse, "NonEmuUsePauseScreen", true);
+            BindIniChk(neSusp, "NonEmuSuspendOnPause", true);
+            BindIniChk(neForce, "NonEmuForcefulActivation", true);
+            BindIniTxt(frzOff, "PauseScreenFreezeOffsetMs");
+            applies.Add(() => { var v = frzTiming.SelectedIndex == 1 ? "before" : "after"; if (v != ini.Get("PauseScreenFreezeTiming", "after")) { ini.Set("PauseScreenFreezeTiming", v); iniDirty = true; } });
+
             applies.Add(() =>
             {
                 if (padEn.Checked != ini.GetBool("PadPauseEnabled", false)) { ini.SetBool("PadPauseEnabled", padEn.Checked); iniDirty = true; }

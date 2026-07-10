@@ -2679,11 +2679,14 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         _storeLostFocus = false;
         _storeRegainedFocus = false;
+        // Read the store options FRESH from disk (not the cached _cfg, which can lag behind an options
+        // save) so a just-ticked "close the store client on exit" actually applies to this launch.
+        var cfgNow = LiteBoxConfig.LoadForExe();
         // Exit detection: install-folder process by default. The window-focus
         // fallback is opt-in (StoreExitFocusFallback) — pass no focus callback
         // when it's off so the watcher relies purely on the game process.
-        Func<bool> regained = _cfg.StoreExitFocusFallback ? (() => _storeRegainedFocus) : (Func<bool>)null;
-        try { HostLaunch.LaunchStore(g, regained, _cfg.KillStoreLauncherAfterGame, _cfg.KillStoreLauncherEvenIfPreRunning); } catch { }
+        Func<bool> regained = cfgNow.StoreExitFocusFallback ? (() => _storeRegainedFocus) : (Func<bool>)null;
+        try { HostLaunch.LaunchStore(g, regained, cfgNow.KillStoreLauncherAfterGame, cfgNow.KillStoreLauncherEvenIfPreRunning); } catch { }
     }
 
     private void OnActivatedStoreResync()

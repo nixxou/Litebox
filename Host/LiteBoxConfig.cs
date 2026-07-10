@@ -16,6 +16,10 @@ internal sealed class LiteBoxConfig
     private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
     private readonly string _path;
     private readonly Dictionary<string, string> _kv = new(StringComparer.OrdinalIgnoreCase);
+    // Keys this instance actually CHANGED since load. Save() persists ONLY these (merged into the current
+    // on-disk file), so two live instances (e.g. MainWindow._cfg + DependencyCheck's) never clobber each
+    // other's keys — each writes back only its own edits.
+    private readonly HashSet<string> _dirty = new(StringComparer.OrdinalIgnoreCase);
 
     public LiteBoxConfig(string path)
     {
@@ -47,10 +51,30 @@ internal sealed class LiteBoxConfig
     {
         try
         {
+            // MERGE-save: reload the CURRENT on-disk keys, then overlay ONLY the keys THIS instance changed.
+            // (Save used to rewrite the whole file from _kv, so a second live instance's Save clobbered any
+            // key changed by the first. Now each instance persists just its own edits; untouched keys are
+            // preserved from disk — fixes the config-clobber family, e.g. DependencyCheck vs MainWindow._cfg.)
+            var merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (File.Exists(_path))
+                    foreach (var raw in File.ReadAllLines(_path))
+                    {
+                        var t = raw.Trim();
+                        if (t.Length == 0 || t[0] == ';' || t[0] == '#' || t[0] == '[') continue;
+                        int eq = t.IndexOf('=');
+                        if (eq > 0) merged[t.Substring(0, eq).Trim()] = t.Substring(eq + 1).Trim();
+                    }
+            }
+            catch { }
+            foreach (var k in _dirty) merged[k] = _kv.TryGetValue(k, out var v) ? v : "";
             var sb = new StringBuilder();
             sb.AppendLine("; LiteBox configuration");
-            foreach (var kv in _kv) sb.AppendLine($"{kv.Key}={kv.Value}");
+            foreach (var kv in merged) sb.AppendLine($"{kv.Key}={kv.Value}");
             File.WriteAllText(_path, sb.ToString());
+            foreach (var kv in merged) _kv[kv.Key] = kv.Value;   // this instance is now consistent with disk
+            _dirty.Clear();
         }
         catch { }
     }
@@ -117,7 +141,7 @@ internal sealed class LiteBoxConfig
 
     // ── Raw accessors ────────────────────────────────────────────────────────
     public string Get(string key, string def = null) => _kv.TryGetValue(key, out var v) ? v : def;
-    public void Set(string key, string val) => _kv[key] = val ?? "";
+    public void Set(string key, string val) { _kv[key] = val ?? ""; _dirty.Add(key); }
 
     public bool GetBool(string key, bool def)
     {
@@ -125,11 +149,11 @@ internal sealed class LiteBoxConfig
         if (v == null) return def;
         return v == "1" || v.Equals("true", OIC) || v.Equals("yes", OIC) || v.Equals("on", OIC);
     }
-    public void SetBool(string key, bool val) => _kv[key] = val ? "true" : "false";
+    public void SetBool(string key, bool val) { _kv[key] = val ? "true" : "false"; _dirty.Add(key); }
 
     public int GetInt(string key, int def)
         => int.TryParse(Get(key), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : def;
-    public void SetInt(string key, int val) => _kv[key] = val.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public void SetInt(string key, int val) { _kv[key] = val.ToString(System.Globalization.CultureInfo.InvariantCulture); _dirty.Add(key); }
 
     // ── Enabled plugins (LiteBox.ini EnabledPlugins) ───────────────────────────
     // Comma-separated folder names under <LB>\Plugins. KEY ABSENT (null) means

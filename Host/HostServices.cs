@@ -233,6 +233,7 @@ internal static class HostLaunch
             // OnGameExited) to tear down + REOPEN the BigBox-web kiosk around a
             // store game; without OnGameExited the kiosk never comes back.
             Fire(p => p.OnAfterGameLaunched(game, null, null));
+            if (!DryRun) Gameplay.ScreenCapture.Arm();   // screenshot hotkey active during the store game too (parity with RunAndWait)
             int scFade = Gameplay.GameplaySettings.FadeMs(LaunchedGame.Current, scDisplay);   // ≤1s dissolve at the reveal
             // Progress-bar ETA: predicted fade-start = past detection + hold − fade (null = no bar / first launch).
             int? scEta = (Gameplay.GameplaySettings.StartupProgressBar() && histDet.HasValue)
@@ -245,12 +246,16 @@ internal static class HostLaunch
             // When SmartCapture is on, its detected game window closing is a faster, more precise exit
             // signal than the process-gone debounce — pass it so GAME OVER fires the moment the window dies.
             Func<bool>? windowGone = scCfg.Enabled ? Gameplay.SmartCapture.GameWindowDetectedAndGone : (Func<bool>?)null;
-            seen = StoreProcessWatcher.WaitForGame(installDir, regainedFocus, windowGone);   // process-under-install-dir; focus only if opted in
+            // Arm the pause screen on the STORE game process the watcher locks onto (store games have no
+            // IEmulator; Arm falls back to the global/per-game hotkey + process suspend). Disarm in finally.
+            Action<int> armPause = pid => { try { Pause.PauseManager.Arm(Process.GetProcessById(pid), null, game); } catch { } };
+            seen = StoreProcessWatcher.WaitForGame(installDir, regainedFocus, windowGone, armPause);   // process-under-install-dir; focus only if opted in
             StoreTrace.Log($"store-launch watch done: seen={seen} elapsed={(int)sw.Elapsed.TotalSeconds}s");
         }
         catch (Exception ex) { Console.WriteLine("[store-launch] error: " + ex.Message); StoreTrace.Log("store-launch EX: " + ex.Message); }
         finally
         {
+            Pause.PauseManager.Disarm();   // hotkey hook off + resume a still-frozen game + close the screen
             if (killLauncherAfter && !DryRun)
             {
                 try
@@ -260,6 +265,7 @@ internal static class HostLaunch
                 }
                 catch { }
             }
+            Gameplay.ScreenCapture.Disarm();             // screenshot hotkey off (parity with RunAndWait)
             // Record the launch → detection latency (LiteBox-only) BEFORE Stop() clears it — reused next
             // launch to extend the reveal ceiling + drive the progress bar. Null when never detected.
             if (!DryRun) { var det = Gameplay.SmartCapture.DetectedAtMs; if (det.HasValue) { string gid = SafeStr(() => game?.Id); try { _store.RecordDetection(gid, det.Value); } catch { } try { Media.RomBridge.RecordDetection(game, det.Value); } catch { } } }
@@ -297,8 +303,12 @@ internal static class HostLaunch
             var storeKind = StoreSupport.KindOf(game);
             if (storeKind != StoreKind.None)
             {
+                // Web-kiosk / GameLauncher path: honour the SAME "close the store client on exit" options
+                // as the GUI Play button (read fresh from LiteBox.ini), instead of the old hardcoded false.
+                var cfgNow = LiteBoxConfig.LoadForExe();
                 RunStoreAndWait(game, storeKind, StoreSupport.LaunchTarget(storeKind, game),
-                    StoreSupport.ResolveInstallDir(storeKind, game), null, false);
+                    StoreSupport.ResolveInstallDir(storeKind, game), null,
+                    cfgNow.KillStoreLauncherAfterGame, cfgNow.KillStoreLauncherEvenIfPreRunning);
                 return;
             }
         }
@@ -375,7 +385,10 @@ internal static class HostLaunch
                     Console.WriteLine($"[emu-launch] startup timing: display={scDisplay}ms fade={scFade}ms reveal-ceiling={scMax}ms histDet={(histDet?.ToString() ?? "none")} barEta={(scEta?.ToString() ?? "off")}");
                     Action<Process> onSpawned = p =>
                     {
-                        if (main.Value.useEmu && emulator != null) Pause.PauseManager.Arm(p, emulator, game);
+                        // Pause works for ALL launch types, not just emulators: a direct-exe game (useEmu
+                        // false / no emulator) is the main process itself, so we arm on it too. Arm handles
+                        // the null emulator (global/per-game hotkey, process suspend, pause screen).
+                        Pause.PauseManager.Arm(p, emulator, game);
                         Diag.RenderProbe.MaybeStart(p);   // no-op unless LITEBOX_RENDERPROBE=1
                         if (scCfg.Enabled && !DryRun)
                             Gameplay.SmartCapture.Start(p.Id, scCfg, scDisplay, scMax, () => Gameplay.GameScreens.Close(scFade), scFade);
@@ -817,7 +830,10 @@ internal static class HostLaunch
     /// dosbox.conf). Mirrors LB's exact command line.
     /// </summary>
     private static void RunDosBox(IGame game, string targetPath, string label)
-        => Spawn(DosBoxExe(game), BuildDosBoxArgs(game, targetPath, SafeStr(() => game.CommandLine)), label);
+        => Spawn(DosBoxExe(game), BuildDosBoxArgs(game, targetPath, SafeStr(() => game.CommandLine)), label,
+                 // Pause the DOS game too — DOSBox has no IEmulator record (it's our bundle), so arm with a
+                 // null emulator; suspend/resume + the pause screen work the same. Disarm runs in RunGame's finally.
+                 onSpawned: p => { if (!DryRun) Pause.PauseManager.Arm(p, null, game); });
 
     /// <summary>The DOSBox exe: per-game Custom DOSBox Version EXE, else the bundle.</summary>
     private static string DosBoxExe(IGame game)

@@ -132,11 +132,37 @@ internal static class LiteBoxGameplayEditor
             p.Controls.Add(padBtnCbo);
             saves.Add(() => LiteBoxOption.SetOverride(scope, entityId, "PadPauseButton", padBtnCbo.SelectedIndex <= 0 ? null : Pause.XInputPad.ComboPresets[padBtnCbo.SelectedIndex - 1]));
             y += 32;
+            // 7. Pause screen vs. process freeze — timing (After / Before) tri-state.
+            p.Controls.Add(Lab("Pause screen vs. freeze:", y));
+            var frzGlobal = GameplaySettings.PauseScreenFreezeTiming();
+            var frzCbo = Cbo(y - 2, 200);
+            frzCbo.Items.AddRange(new object[] { $"Use global ({(frzGlobal.showBefore ? "Before" : "After")})", "After freezing", "Before freezing" });
+            var frzOv = LiteBoxOption.GetOverride(scope, entityId, "PauseScreenFreezeTiming");
+            frzCbo.SelectedIndex = string.IsNullOrEmpty(frzOv) ? 0 : (string.Equals(frzOv, "before", StringComparison.OrdinalIgnoreCase) ? 2 : 1);
+            p.Controls.Add(frzCbo);
+            saves.Add(() => LiteBoxOption.SetOverride(scope, entityId, "PauseScreenFreezeTiming", frzCbo.SelectedIndex switch { 1 => "after", 2 => "before", _ => null }));
+            y += 32;
+            // 8. Freeze ↔ screen delay (int tri-state: Use global / Custom ms) — only meaningful when suspended.
+            p.Controls.Add(Lab("Freeze ↔ screen delay:", y));
+            var offCbo = Cbo(y - 2, 170);
+            offCbo.Items.AddRange(new object[] { $"Use global ({frzGlobal.offsetMs} ms)", "Custom…" });
+            var offOv = LiteBoxOption.GetOverride(scope, entityId, "PauseScreenFreezeOffsetMs");
+            int offOvNum = int.TryParse(offOv, out var _off) ? _off : int.MinValue;
+            offCbo.SelectedIndex = string.IsNullOrEmpty(offOv) ? 0 : 1;
+            p.Controls.Add(offCbo);
+            var oyy = y;
+            var offMs = new NumericUpDown { Location = new Point(S(458), S(oyy - 2)), Width = S(70), Minimum = 0, Maximum = 5000, Increment = 50, BackColor = panel2, ForeColor = fg, BorderStyle = BorderStyle.FixedSingle, Value = offOvNum >= 0 ? Math.Min(5000, offOvNum) : Math.Max(0, Math.Min(5000, frzGlobal.offsetMs)), Visible = offCbo.SelectedIndex == 1, Enabled = !readOnly };
+            p.Controls.Add(offMs);
+            var offMsLbl = new Label { Text = "ms", Location = new Point(S(534), S(oyy + 1)), AutoSize = true, ForeColor = subFg, BackColor = bg, Visible = offCbo.SelectedIndex == 1 };
+            p.Controls.Add(offMsLbl);
+            offCbo.SelectedIndexChanged += (_, _) => { offMs.Visible = offMsLbl.Visible = offCbo.SelectedIndex == 1; };
+            saves.Add(() => LiteBoxOption.SetOverride(scope, entityId, "PauseScreenFreezeOffsetMs", offCbo.SelectedIndex == 1 ? ((int)offMs.Value).ToString(System.Globalization.CultureInfo.InvariantCulture) : null));
+            y += 32;
         }
 
         if (wS)
         {
-            // 7. Smart Capture (its own "Override for this entity" block).
+            // 9. Smart Capture (its own "Override for this entity" block).
             p.Controls.Add(new Label { Text = "Smart Capture — reveal the startup screen when the game actually renders:", Location = new Point(S(12), S(y + 2)), AutoSize = true, ForeColor = UiKit.LiteBoxFrame.Accent, BackColor = bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
             var (scPanel, scSave) = SmartCaptureEditor.Build(scope, entityId, s, bg, fg, subFg, panel2, readOnly);
             scPanel.Location = new Point(S(8), S(y + 24));

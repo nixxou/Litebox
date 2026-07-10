@@ -29,7 +29,7 @@ internal static class StoreProcessWatcher
         StoreKind.Steam => new[] { "steam" },
         StoreKind.Epic  => new[] { "EpicGamesLauncher" },
         StoreKind.Uplay => new[] { "UbisoftConnect", "upc" },
-        StoreKind.Ea    => new[] { "EADesktop" },
+        StoreKind.Ea    => new[] { "EADesktop", "Origin" },
         _               => Array.Empty<string>(),
     };
 
@@ -114,7 +114,7 @@ internal static class StoreProcessWatcher
     /// inside the install folder (a different PID, still under installDir). If a re-sweep then finds nothing
     /// either, the gone-debounce elapses and the game is over.
     /// </remarks>
-    public static bool WaitForGame(string? installDir, Func<bool>? regainedFocus = null, Func<bool>? gameWindowGone = null)
+    public static bool WaitForGame(string? installDir, Func<bool>? regainedFocus = null, Func<bool>? gameWindowGone = null, Action<int>? onGamePid = null)
     {
         string? dir = string.IsNullOrWhiteSpace(installDir) ? null : installDir!.TrimEnd('\\', '/') + "\\";
         DateTime startedAt = DateTime.UtcNow;
@@ -141,7 +141,13 @@ internal static class StoreProcessWatcher
                 if (trackedPid == -1)
                 {
                     int pid = FirstPidUnder(dir);
-                    if (pid != -1) { trackedPid = pid; running = true; StoreTrace.Log($"watch: locked onto pid={pid} under install dir"); }
+                    if (pid != -1)
+                    {
+                        trackedPid = pid; running = true; StoreTrace.Log($"watch: locked onto pid={pid} under install dir");
+                        // Hand the game's PID to the caller so it can arm pause on the actual game process
+                        // (fires again after a launcher.exe → game.exe handoff so pause re-targets the game).
+                        try { onGamePid?.Invoke(pid); } catch { }
+                    }
                 }
             }
 

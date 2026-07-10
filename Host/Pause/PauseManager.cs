@@ -40,6 +40,20 @@ internal static class PauseManager
     private const int SW_RESTORE = 9;
     [DllImport("ntdll.dll")] private static extern int NtSuspendProcess(IntPtr processHandle);
     [DllImport("ntdll.dll")] private static extern int NtResumeProcess(IntPtr processHandle);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    // Process-tree walk (Toolhelp) — for the optional "freeze the whole process tree" pause option.
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
+    [DllImport("kernel32.dll")] private static extern bool Process32First(IntPtr snapshot, ref PROCESSENTRY32 pe);
+    [DllImport("kernel32.dll")] private static extern bool Process32Next(IntPtr snapshot, ref PROCESSENTRY32 pe);
+    [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr h);
+    private const uint TH32CS_SNAPPROCESS = 0x2;
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    private struct PROCESSENTRY32
+    {
+        public uint dwSize; public uint cntUsage; public uint th32ProcessID; public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID; public uint cntThreads; public uint th32ParentProcessID; public int pcPriClassBase;
+        public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
 
     // Low-level keyboard hook (WH_KEYBOARD_LL) — the AHK-grade pause interception. RegisterHotKey is
     // bypassed by raw-input / DirectInput fullscreen games; the LL hook sees every keystroke before any
@@ -75,6 +89,7 @@ internal static class PauseManager
     private static IEmulator? _emu;
     private static IGame? _game;
     private static bool _paused, _suspended;
+    private static readonly System.Collections.Generic.List<int> _suspendedPids = new();   // exact set to resume
 
     // LL-hook pause interception state.
     private static IntPtr _hook;
@@ -156,10 +171,7 @@ internal static class PauseManager
 
     private static void DisarmLocked()
     {
-        try
-        {
-            if (_suspended && _proc is { HasExited: false }) { NtResumeProcess(_proc.Handle); }
-        }
+        try { if (_suspended) ResumeTargets(); }   // a killed game must never leave a frozen orphan
         catch { }
         UnmuteIfWeMuted();   // a game killed while paused must not stay muted (session may outlive us)
         PadPauseWatcher.Stop();
@@ -326,11 +338,7 @@ internal static class PauseManager
             _screen ??= PauseScreenFactory.Create(_cfg!);
             _screen.Show(ctx);
         });
-        void Freeze()
-        {
-            try { if (_proc is { HasExited: false }) { NtSuspendProcess(_proc.Handle); _suspended = true; } }
-            catch (Exception ex) { Console.WriteLine("[pause] suspend failed: " + ex.Message); }
-        }
+        void Freeze() => SuspendTargets();
 
         // Order freeze vs. screen per the timing option. "Before" paints the overlay over the STILL-RUNNING
         // game then freezes; "after" (default) freezes first. The offset (ms) tunes the gap so the overlay
@@ -348,9 +356,7 @@ internal static class PauseManager
     {
         _paused = false;
         UiThread.Invoke(() => { try { _screen?.Close(); } catch { } });
-        try { if (_suspended && _proc is { HasExited: false }) NtResumeProcess(_proc.Handle); }
-        catch (Exception ex) { Console.WriteLine("[pause] resume failed: " + ex.Message); }
-        _suspended = false;
+        ResumeTargets();
         if (runResumeScript)
         {
             var p = RunScriptPassThrough(ScriptStr("ResumeAutoHotkeyScript"));
@@ -479,6 +485,76 @@ internal static class PauseManager
             catch (Exception ex) { Console.WriteLine("[pause] kill failed: " + ex.Message); }
         }
         // HostLaunch's WaitForExit returns → its finally runs Disarm + cleanup.
+    }
+
+    // ── Freeze target (which process the pause suspends) ─────────────────
+
+    /// <summary>The PID to freeze, resolved game → emulator → global. "smartcapture" (default) targets the
+    /// process that OWNS the SmartCapture-detected game window (its real render process — right for store
+    /// games and launcher→game handoffs), falling back to the launched process when nothing was detected.
+    /// "process" always uses the launched process (the old behaviour).</summary>
+    private static int PauseTargetPid()
+    {
+        string target = Data.LiteBoxOption.ResolveString("PauseTarget", Safe(() => _emu?.Id),
+            Gameplay.GameplaySettings.PauseTargetGlobal(), Safe(() => _game?.Id));
+        if (!string.Equals(target, "process", StringComparison.OrdinalIgnoreCase))
+        {
+            var hwnd = Gameplay.SmartCapture.DetectedGameWindow;
+            if (hwnd != IntPtr.Zero) { GetWindowThreadProcessId(hwnd, out uint wpid); if (wpid != 0) return (int)wpid; }
+        }
+        try { return _proc?.Id ?? 0; } catch { return 0; }
+    }
+
+    private static bool PauseFreezeTree()
+        => Data.LiteBoxOption.ResolveBool("PauseFreezeTree", Safe(() => _emu?.Id),
+            Gameplay.GameplaySettings.PauseFreezeTreeGlobal(), Safe(() => _game?.Id));
+
+    /// <summary>Every descendant PID of <paramref name="root"/> (Toolhelp parent-PID walk).</summary>
+    private static System.Collections.Generic.List<int> DescendantPids(int root)
+    {
+        var res = new System.Collections.Generic.List<int>();
+        var snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap == IntPtr.Zero || snap == new IntPtr(-1)) return res;
+        try
+        {
+            var byParent = new System.Collections.Generic.Dictionary<int, System.Collections.Generic.List<int>>();
+            var pe = new PROCESSENTRY32 { dwSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<PROCESSENTRY32>() };
+            if (Process32First(snap, ref pe))
+                do { int pid = (int)pe.th32ProcessID, ppid = (int)pe.th32ParentProcessID; if (!byParent.TryGetValue(ppid, out var l)) byParent[ppid] = l = new(); l.Add(pid); }
+                while (Process32Next(snap, ref pe));
+            var q = new System.Collections.Generic.Queue<int>(); q.Enqueue(root);
+            var seen = new System.Collections.Generic.HashSet<int> { root };
+            while (q.Count > 0) { var p = q.Dequeue(); if (byParent.TryGetValue(p, out var kids)) foreach (var k in kids) if (seen.Add(k)) { res.Add(k); q.Enqueue(k); } }
+        }
+        catch { }
+        finally { CloseHandle(snap); }
+        return res;
+    }
+
+    /// <summary>Freeze the resolved target (its whole tree if the option is on). Records the exact PID set so
+    /// resume undoes precisely what it suspended.</summary>
+    private static void SuspendTargets()
+    {
+        _suspendedPids.Clear();
+        int root = PauseTargetPid();
+        if (root <= 0) return;
+        var pids = new System.Collections.Generic.List<int> { root };
+        if (PauseFreezeTree()) pids.AddRange(DescendantPids(root));
+        foreach (var pid in pids)
+        {
+            try { var pr = Process.GetProcessById(pid); if (!pr.HasExited) { NtSuspendProcess(pr.Handle); _suspendedPids.Add(pid); } }
+            catch (Exception ex) { Console.WriteLine($"[pause] suspend pid={pid} failed: " + ex.Message); }
+        }
+        _suspended = _suspendedPids.Count > 0;
+        if (_suspended) Console.WriteLine($"[pause] frozen pid(s) [{string.Join(",", _suspendedPids)}] (target={root})");
+    }
+
+    private static void ResumeTargets()
+    {
+        foreach (var pid in _suspendedPids)
+        { try { var pr = Process.GetProcessById(pid); if (!pr.HasExited) NtResumeProcess(pr.Handle); } catch { } }
+        _suspendedPids.Clear();
+        _suspended = false;
     }
 
     /// <summary>The emulator's main window handle, or Zero. Works on a suspended

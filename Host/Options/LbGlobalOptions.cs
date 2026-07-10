@@ -382,8 +382,19 @@ internal static class LbGlobalOptions
             var frzOff = Txt(ini.Get("PauseScreenFreezeOffsetMs", "0"), new Point(S(300), S(frzY + 24)), 70); p.Controls.Add(frzOff);
             p.Controls.Add(Lbl("Tune so the overlay lands exactly on the frozen frame (avoids a flash of the frozen game).", new Point(S(30), S(frzY + 52)), Dim));
 
+            // Freeze target + tree (WHICH process the pause suspends).
+            int tgY = frzY + 84;
+            p.Controls.Add(new Label { Text = "When pausing, freeze:", Location = new Point(S(12), S(tgY)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
+            var tgtItems = new[] { "the SmartCapture-detected game (fallback: emulator/app)", "the emulator / app process" };
+            var tgtCur = string.Equals(ini.Get("PauseTarget", "smartcapture"), "process", StringComparison.OrdinalIgnoreCase) ? tgtItems[1] : tgtItems[0];
+            var tgtCbo = Cbo(tgtItems, tgtCur, new Point(S(12), S(tgY + 24)), 430); p.Controls.Add(tgtCbo);
+            var frzTree = Chk("Freeze the whole process tree (all child processes)", ini.GetBool("PauseFreezeTree", false), new Point(S(12), S(tgY + 54)));
+            p.Controls.Add(frzTree);
+            BindIniChk(frzTree, "PauseFreezeTree", false);
+            applies.Add(() => { var v = tgtCbo.SelectedIndex == 1 ? "process" : "smartcapture"; if (v != ini.Get("PauseTarget", "smartcapture")) { ini.Set("PauseTarget", v); iniDirty = true; } });
+
             // Non-emulator pause defaults (store / direct-exe / DOSBox have no emulator to source them from).
-            int neY = frzY + 84;
+            int neY = tgY + 92;
             p.Controls.Add(Head("Non-emulator games (Store / direct .exe / DOSBox)", neY));
             var neUse = Chk("Use the pause screen", ini.GetBool("NonEmuUsePauseScreen", true), new Point(S(12), S(neY + 26)));
             var neSusp = Chk("Suspend (freeze) the process on pause", ini.GetBool("NonEmuSuspendOnPause", true), new Point(S(12), S(neY + 52)));

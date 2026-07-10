@@ -67,6 +67,12 @@ internal sealed partial class EditGameWindow
         "PauseAutoHotkeyScript", "ResumeAutoHotkeyScript", "ResetAutoHotkeyScript",
         "SaveStateAutoHotkeyScript", "LoadStateAutoHotkeyScript", "SwapDiscsAutoHotkeyScript",
     };
+    // The per-game LiteBox-only pause overrides (litebox-options.db) — cleared when the pause override is off.
+    private static readonly string[] LchPauseLiteBoxKeys =
+    {
+        "PauseHotkey", "ScreenCaptureKey", "PadPauseEnabled", "PadPauseButton",
+        "PauseScreenFreezeTiming", "PauseScreenFreezeOffsetMs", "PauseTarget", "PauseFreezeTree",
+    };
 
     // ── Field IO (one chokepoint for modelled + extra fields) ─────────────
 
@@ -1421,8 +1427,7 @@ internal sealed partial class EditGameWindow
             // per-game LiteBox overrides on an unchecked concern mirrors the solo save below.
             WriteOverrideMulti(_lchOvrStart, "OverrideDefaultStartupScreenSettings",
                 new[] { "StartupStayOnTop", "ExitScreenEagerMs" }.Concat(Gameplay.SmartCaptureConfig.Keys).ToArray(), LchStartupFields);
-            WriteOverrideMulti(_lchOvrPause, "OverrideDefaultPauseScreenSettings",
-                new[] { "PauseHotkey", "ScreenCaptureKey", "PadPauseEnabled", "PadPauseButton" }, LchPauseFields);
+            WriteOverrideMulti(_lchOvrPause, "OverrideDefaultPauseScreenSettings", LchPauseLiteBoxKeys, LchPauseFields);
             return;
         }
 
@@ -1453,8 +1458,7 @@ internal sealed partial class EditGameWindow
             if (_lchOvrPause is { Checked: false })
             {
                 foreach (var fld in LchPauseFields) _lchPending[fld] = "";   // wipe the native Pause fields + scripts
-                foreach (var k in new[] { "PauseHotkey", "ScreenCaptureKey", "PadPauseEnabled", "PadPauseButton" })
-                    ClearGame(k);
+                foreach (var k in LchPauseLiteBoxKeys) ClearGame(k);
             }
         }
 

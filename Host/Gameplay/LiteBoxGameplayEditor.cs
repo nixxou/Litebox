@@ -205,6 +205,28 @@ internal static class LiteBoxGameplayEditor
             var offSkip = Multied(offCbo, offRaw, offMs, offMsLbl);
             saves.Add(() => { if (offSkip()) return; SetAll("PauseScreenFreezeOffsetMs", offCbo.SelectedIndex == 1 ? ((int)offMs.Value).ToString(System.Globalization.CultureInfo.InvariantCulture) : null); });
             y += 32;
+            // 9. Pause freeze TARGET (string tri-state): the SmartCapture game window's owner vs the launched process.
+            p.Controls.Add(Lab("Pause freeze target:", y));
+            var tgtGlobal = GameplaySettings.PauseTargetGlobal();
+            var tgtCbo = Cbo(y - 2, 200);
+            tgtCbo.Items.AddRange(new object[] { $"Use global ({(string.Equals(tgtGlobal, "process", StringComparison.OrdinalIgnoreCase) ? "Emulator/app" : "SmartCapture")})", "SmartCapture game", "Emulator / app" });
+            var tgtRaw = GetOv("PauseTarget"); var tgtOv = tgtRaw == DiffMark ? null : tgtRaw;
+            tgtCbo.SelectedIndex = string.IsNullOrEmpty(tgtOv) ? 0 : (string.Equals(tgtOv, "process", StringComparison.OrdinalIgnoreCase) ? 2 : 1);
+            p.Controls.Add(tgtCbo);
+            var tgtSkip = Multied(tgtCbo, tgtRaw);
+            saves.Add(() => { if (tgtSkip()) return; SetAll("PauseTarget", tgtCbo.SelectedIndex switch { 1 => "smartcapture", 2 => "process", _ => null }); });
+            y += 32;
+            // 10. Freeze whole process TREE (bool tri-state).
+            p.Controls.Add(Lab("Freeze whole process tree:", y));
+            var treeGlobal = GameplaySettings.PauseFreezeTreeGlobal();
+            var treeCbo = Cbo(y - 2, 200);
+            treeCbo.Items.AddRange(new object[] { $"Use global ({(treeGlobal ? "On" : "Off")})", "On", "Off" });
+            var treeRaw = GetOv("PauseFreezeTree"); var treeOv = treeRaw == DiffMark ? null : treeRaw;
+            treeCbo.SelectedIndex = string.IsNullOrEmpty(treeOv) ? 0 : (string.Equals(treeOv, "true", StringComparison.OrdinalIgnoreCase) ? 1 : 2);
+            p.Controls.Add(treeCbo);
+            var treeSkip = Multied(treeCbo, treeRaw);
+            saves.Add(() => { if (treeSkip()) return; SetAll("PauseFreezeTree", treeCbo.SelectedIndex switch { 1 => "true", 2 => "false", _ => null }); });
+            y += 32;
         }
 
         if (wS)

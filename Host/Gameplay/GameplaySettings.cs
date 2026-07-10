@@ -177,6 +177,15 @@ internal static class GameplaySettings
     public static bool NonEmuForceful()
     { try { return LiteBoxConfig.LoadForExe().GetBool("NonEmuForcefulActivation", true); } catch { return true; } }
 
+    /// <summary>Which process the pause FREEZES: "smartcapture" (default — the detected game window's owner,
+    /// fallback to the launched process) or "process" (always the launched emulator/app). LiteBox.ini.</summary>
+    public static string PauseTargetGlobal()
+    { try { var v = LiteBoxConfig.LoadForExe().Get("PauseTarget"); return string.IsNullOrWhiteSpace(v) ? "smartcapture" : v!; } catch { return "smartcapture"; } }
+
+    /// <summary>Freeze the whole process TREE on pause (not just the target process). LiteBox.ini, default false.</summary>
+    public static bool PauseFreezeTreeGlobal()
+    { try { return LiteBoxConfig.LoadForExe().GetBool("PauseFreezeTree", false); } catch { return false; } }
+
     /// <summary>When suspending, WHEN to show the pause screen relative to the freeze: (showBefore, offsetMs).
     /// showBefore=false (default) ⇒ freeze then show; true ⇒ show then freeze. offsetMs (0..5000) is the gap
     /// between the two, letting the overlay land exactly over the frozen frame instead of a flash. Only used

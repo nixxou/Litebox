@@ -156,6 +156,38 @@ internal sealed class LegacyPauseScreen : IPauseScreen
 
             // Compose the background off-thread (text-only immediately, art a moment later).
             BuildBackgroundAsync();
+
+            // Track the display resolution: an exclusive-fullscreen game may have changed it (e.g. 640×480),
+            // and it may change again when the game resumes. Re-fit the overlay to the CURRENT mode so it
+            // always covers the whole screen instead of a native-sized rectangle spilling off a small mode.
+            Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        }
+
+        private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+        {
+            try { if (IsHandleCreated && !IsDisposed) BeginInvoke(new Action(FitToScreen)); } catch { }
+        }
+
+        /// <summary>Resize the overlay to the CURRENT bounds of the monitor it sits on (the game may have
+        /// switched the display mode after this form was built) and re-centre the menu + re-render the art.</summary>
+        private void FitToScreen()
+        {
+            try
+            {
+                var b = Screen.FromHandle(Handle).Bounds;
+                if (b == Bounds) return;
+                Bounds = b;
+                LayoutMenu();
+                BuildBackgroundAsync();
+                Invalidate();
+            }
+            catch { }
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            FitToScreen();   // the resolution may have settled between construction and the actual show
         }
 
         /// <summary>WS_EX_COMPOSITED: the window and ALL children are drawn into one
@@ -274,6 +306,7 @@ internal sealed class LegacyPauseScreen : IPauseScreen
         {
             if (disposing)
             {
+                try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
                 try { _padTimer?.Stop(); _padTimer?.Dispose(); } catch { }
                 _bg?.Dispose();
             }

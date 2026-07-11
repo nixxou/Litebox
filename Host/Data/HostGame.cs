@@ -26,10 +26,25 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
     // in the sparse _extra), so serve them from the row — else GetField would read empty even though
     // SetField wrote them (SetGameField routes modelled → typed cell). All other non-IGame fields
     // (Origin*/Android*/Missing*/RetroAchievementsId/…) live in _extra and fall through below.
-    public string GetField(string xmlElementName) =>
-        xmlElementName == "GogAppId"              ? _s.Str(R.GogAppIdIdx) :
-        xmlElementName == "RetroAchievementsHash" ? _s.Str(R.RaHashIdx)   :
-        _s.GetExtraField(R.Id, xmlElementName);
+    // MODELLED fields live in typed cells / bit-flags, NOT the sparse _extra dict — GetField must map each
+    // one explicitly or a name-based reader silently gets "" (the class of bug that hid the per-game startup
+    // screen / cleared CustomDosBoxVersionPath). Concrete IGame props are the primary accessors; these keep
+    // GetField correct for every generic reader (LaunchedGame capture, the editor's snapshot, RA, …).
+    // Everything else genuinely lives in _extra and falls through.
+    public string GetField(string xmlElementName) => xmlElementName switch
+    {
+        "GogAppId"                             => _s.Str(R.GogAppIdIdx),
+        "RetroAchievementsHash"                => _s.Str(R.RaHashIdx),
+        "CustomDosBoxVersionPath"              => _s.Str(R.CustomDosBoxIdx),
+        "UseStartupScreen"                     => B(Flag(GFlags.UseStartup)),
+        "OverrideDefaultStartupScreenSettings" => B(Flag(GFlags.OverrideStartup)),
+        "HideAllNonExclusiveFullscreenWindows" => B(Flag(GFlags.HideNonExclusive)),
+        "HideMouseCursorInGame"                => B(Flag(GFlags.HideMouse)),
+        "DisableShutdownScreen"                => B(Flag(GFlags.DisableShutdown)),
+        "AggressiveWindowHiding"               => B(Flag(GFlags.AggressiveHiding)),
+        "StartupLoadDelay"                     => R.StartupLoadDelay > 0 ? N(R.StartupLoadDelay) : "",
+        _                                      => _s.GetExtraField(R.Id, xmlElementName),
+    };
     public void SetField(string xmlElementName, string value)
     {
         if (string.IsNullOrEmpty(xmlElementName)) return;

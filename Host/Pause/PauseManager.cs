@@ -37,6 +37,8 @@ internal static class PauseManager
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     private const int SW_RESTORE = 9;
     [DllImport("ntdll.dll")] private static extern int NtSuspendProcess(IntPtr processHandle);
     [DllImport("ntdll.dll")] private static extern int NtResumeProcess(IntPtr processHandle);
@@ -313,7 +315,7 @@ internal static class PauseManager
         // 3. Screen. Cosmetics come from the LaunchedGame snapshot (captured before the launch memory
         //    drop) — never from the store / cache. Forceful-activation default is non-emu-aware too.
         var snap = LaunchedGame.Current;
-        bool forceDef = _emu != null ? true : Gameplay.GameplaySettings.NonEmuForceful();
+        bool forceDef = _emu != null ? false : Gameplay.GameplaySettings.NonEmuForceful();
         var ctx = new PauseContext
         {
             GameTitle = snap?.Title ?? Safe(() => _game?.Title) ?? "",
@@ -340,9 +342,9 @@ internal static class PauseManager
         });
         void Freeze() => SuspendTargets();
 
-        // Order freeze vs. screen per the timing option. "Before" paints the overlay over the STILL-RUNNING
-        // game then freezes; "after" (default) freezes first. The offset (ms) tunes the gap so the overlay
-        // lands exactly on the frozen frame — a bare freeze-then-show can flash the frozen game first.
+        // Order freeze vs. screen per the timing option. "Before" (default) paints the overlay over the
+        // STILL-RUNNING game then freezes — no flash of a frozen frame; "after" freezes first. The offset (ms)
+        // tunes the gap so the overlay lands exactly on the frozen frame.
         if (doSuspend)
         {
             var (showBefore, offMs) = Gameplay.GameplaySettings.ResolvePauseScreenFreezeTiming(Safe(() => _emu?.Id), Safe(() => _game?.Id));
@@ -355,8 +357,14 @@ internal static class PauseManager
     private static void ResumeLocked(bool runResumeScript = true, bool refocus = true)
     {
         _paused = false;
-        UiThread.Invoke(() => { try { _screen?.Close(); } catch { } });
+        // 1. UNFREEZE FIRST, while the pause overlay still covers the screen, and give the game a beat to
+        //    actually start running again (re-acquire exclusive fullscreen / render a live frame) BEFORE we
+        //    reveal it. Revealing a still-frozen game flashes a dead frame, and refocusing one that hasn't
+        //    resumed yet can bounce it. Only then do the rest (close the overlay, resume script, refocus).
         ResumeTargets();
+        try { System.Threading.Thread.Sleep(100); } catch { }
+        // 2. Reveal — close the overlay now that the game is live behind it.
+        UiThread.Invoke(() => { try { _screen?.Close(); } catch { } });
         if (runResumeScript)
         {
             var p = RunScriptPassThrough(ScriptStr("ResumeAutoHotkeyScript"));
@@ -365,6 +373,7 @@ internal static class PauseManager
         // Unmute AFTER the resume script — the whole transition stays silent, the game
         // comes back audible only once it is actually running again. Only if WE muted.
         UnmuteIfWeMuted();
+        // 3. Refocus only if the game didn't already regain the foreground (FocusEmulator checks).
         if (refocus) FocusEmulator();
         Console.WriteLine("[pause] resumed");
     }
@@ -432,7 +441,8 @@ internal static class PauseManager
     /// is active, a NON-BLANK game script replaces the emulator's default; a BLANK one inherits the
     /// emulator's. A lone comment line (";…") is non-blank ⇒ it replaces AND, being a no-op to
     /// <see cref="AhkScript.IsScriptEmpty"/>, disables the default entirely. Off / no override ⇒ the
-    /// emulator's field. The per-game set never includes ExitAutoHotkeyScript (emulator-only, like LB).</summary>
+    /// emulator's field. Covers the full set INCLUDING ExitAutoHotkeyScript (a per-game exit script wins over
+    /// the emulator's; used by ExitGameLocked to decide graceful-close vs force-kill).</summary>
     private static string ScriptStr(string field)
     {
         var snap = LaunchedGame.Current;
@@ -453,8 +463,9 @@ internal static class PauseManager
         Console.WriteLine("[pause] exit game requested");
         ResumeLocked(runResumeScript: false, refocus: true);
 
-        var exitScript = FieldStr(_emu!, "ExitAutoHotkeyScript");
-        if (AhkScript.IsScriptEmpty(exitScript)) exitScript = DefaultExitScript;
+        var exitScript = ScriptStr("ExitAutoHotkeyScript");          // per-game override wins, else the emulator's
+        bool hasCustomExit = !AhkScript.IsScriptEmpty(exitScript);   // a user-authored exit script (game or emulator)
+        if (!hasCustomExit) exitScript = DefaultExitScript;
         bool graceful = false;
         try { Thread.Sleep(200); } catch { }   // let the emulator settle into the foreground
         var ahk = AhkScript.RunOneOff(exitScript, _lbRoot);
@@ -477,12 +488,24 @@ internal static class PauseManager
             }) { IsBackground = true, Name = "litebox-exitcover" }.Start();
         }
 
-        try { graceful = _proc!.WaitForExit(5000); } catch { }
-        if (graceful) Console.WriteLine("[pause] emulator closed by the exit script");
+        if (hasCustomExit)
+        {
+            // The emulator has a real, user-authored exit script: it OWNS closing the game (it may prompt to
+            // save, animate, or simply take longer than any timeout we'd pick). Respect it — NEVER force-kill.
+            // The process exits on its own terms and HostLaunch's WaitForExit then runs the normal cleanup.
+            Console.WriteLine("[pause] custom exit script ran — not force-killing; leaving the game to close itself");
+        }
         else
         {
-            try { if (_proc is { HasExited: false }) { _proc.Kill(entireProcessTree: true); Console.WriteLine("[pause] emulator killed"); } }
-            catch (Exception ex) { Console.WriteLine("[pause] kill failed: " + ex.Message); }
+            // Default path (Send {Escape}, or a non-emulator game with no script): give it a moment, then
+            // force-kill the whole tree if it's still up — nothing is responsible for a graceful close.
+            try { graceful = _proc!.WaitForExit(5000); } catch { }
+            if (graceful) Console.WriteLine("[pause] emulator closed by the default exit key");
+            else
+            {
+                try { if (_proc is { HasExited: false }) { _proc.Kill(entireProcessTree: true); Console.WriteLine("[pause] emulator killed"); } }
+                catch (Exception ex) { Console.WriteLine("[pause] kill failed: " + ex.Message); }
+            }
         }
         // HostLaunch's WaitForExit returns → its finally runs Disarm + cleanup.
     }
@@ -557,35 +580,61 @@ internal static class PauseManager
         _suspended = false;
     }
 
-    /// <summary>The emulator's main window handle, or Zero. Works on a suspended
-    /// process too — the window still exists, only its threads are frozen.</summary>
+    /// <summary>The game window handle, or Zero. Mirrors the freeze-target resolution: prefer the
+    /// SmartCapture-detected window (what we actually covered/froze and that minimised itself) unless the
+    /// target is pinned to "process". Works on a suspended process too — the window still exists, only its
+    /// threads are frozen.</summary>
     private static IntPtr EmulatorWindow()
     {
+        // The launched process's CURRENT main window is the safe default — fresh and correct for the common
+        // case (emulator / single-process game, where _proc IS the game). The SmartCapture-detected window is
+        // only preferred when it belongs to a DIFFERENT process (store / launcher hand-off, where _proc isn't
+        // the game): using a possibly-stale detected handle for a same-process game would send
+        // SetForegroundWindow to the wrong window and make a "minimise on focus loss" game minimise itself.
+        IntPtr procWin = IntPtr.Zero;
+        try { if (_proc is { HasExited: false }) { _proc.Refresh(); procWin = _proc.MainWindowHandle; } } catch { }
         try
         {
-            if (_proc is { HasExited: false }) { _proc.Refresh(); return _proc.MainWindowHandle; }
+            string target = Data.LiteBoxOption.ResolveString("PauseTarget", Safe(() => _emu?.Id),
+                Gameplay.GameplaySettings.PauseTargetGlobal(), Safe(() => _game?.Id));
+            if (!string.Equals(target, "process", StringComparison.OrdinalIgnoreCase))
+            {
+                var hwnd = Gameplay.SmartCapture.DetectedGameWindow;
+                if (hwnd != IntPtr.Zero && IsWindow(hwnd))
+                {
+                    GetWindowThreadProcessId(hwnd, out uint wpid);
+                    if (wpid != 0 && (int)wpid != (_proc?.Id ?? -1)) return hwnd;   // different process → the detected window is the game
+                }
+            }
         }
         catch { }
-        return IntPtr.Zero;
+        return procWin;
     }
 
     private static void FocusEmulator()
     {
         try
         {
-            if (_proc is { HasExited: false })
+            var h = EmulatorWindow();
+            if (h == IntPtr.Zero || !IsWindow(h)) return;
+            // Only act if the game window does NOT already have the foreground (checked AFTER the resume
+            // settle delay). When closing the overlay already handed focus back to the game we must leave it
+            // ALONE — a redundant SetForegroundWindow can bounce a "minimise on focus loss" fullscreen game
+            // and produces the "resumes only every other time" flip-flop. We step in only when something else
+            // grabbed the foreground (LiteBox's own window revealed behind the overlay, or the game minimised
+            // itself): restore it if minimised, then bring it forward.
+            IntPtr fg = GetForegroundWindow();
+            if (fg == h) { Console.WriteLine("[pause] refocus: game already foreground — leaving it"); return; }
+            GetWindowThreadProcessId(h, out uint gamePid);
+            if (fg != IntPtr.Zero && gamePid != 0)
             {
-                _proc.Refresh();
-                var h = _proc.MainWindowHandle;
-                if (h != IntPtr.Zero)
-                {
-                    // An exclusive-fullscreen game (esp. when NOT suspended) minimises itself when the pause
-                    // overlay steals the foreground; SetForegroundWindow alone leaves it minimised, so the
-                    // game stays hidden after Resume. Restore it first, then bring it forward.
-                    if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
-                    SetForegroundWindow(h);
-                }
+                GetWindowThreadProcessId(fg, out uint fgPid);
+                if (fgPid == gamePid) { Console.WriteLine("[pause] refocus: game process already foreground — leaving it"); return; }
             }
+            bool ic = IsIconic(h);
+            if (ic) ShowWindow(h, SW_RESTORE);
+            bool ok = SetForegroundWindow(h);
+            Console.WriteLine($"[pause] refocus: forced game window 0x{h.ToInt64():X} (wasIconic={ic}) SetForeground={ok}");
         }
         catch { }
     }

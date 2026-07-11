@@ -175,7 +175,7 @@ internal static class GameplaySettings
 
     /// <summary>Default "force the pause screen to the foreground" for non-emulator games (LiteBox.ini, default true).</summary>
     public static bool NonEmuForceful()
-    { try { return LiteBoxConfig.LoadForExe().GetBool("NonEmuForcefulActivation", true); } catch { return true; } }
+    { try { return LiteBoxConfig.LoadForExe().GetBool("NonEmuForcefulActivation", false); } catch { return false; } }
 
     /// <summary>Which process the pause FREEZES: "smartcapture" (default — the detected game window's owner,
     /// fallback to the launched process) or "process" (always the launched emulator/app). LiteBox.ini.</summary>
@@ -187,19 +187,19 @@ internal static class GameplaySettings
     { try { return LiteBoxConfig.LoadForExe().GetBool("PauseFreezeTree", false); } catch { return false; } }
 
     /// <summary>When suspending, WHEN to show the pause screen relative to the freeze: (showBefore, offsetMs).
-    /// showBefore=false (default) ⇒ freeze then show; true ⇒ show then freeze. offsetMs (0..5000) is the gap
-    /// between the two, letting the overlay land exactly over the frozen frame instead of a flash. Only used
-    /// when the process is actually suspended.</summary>
+    /// showBefore=true (default) ⇒ show then freeze (paint the overlay over the still-running game so no flash
+    /// of the frozen frame); false ⇒ freeze then show. offsetMs (0..5000) is the gap between the two, letting
+    /// the overlay land exactly over the frozen frame. Only used when the process is actually suspended.</summary>
     public static (bool showBefore, int offsetMs) PauseScreenFreezeTiming()
     {
         try
         {
             var ini = LiteBoxConfig.LoadForExe();
-            bool before = string.Equals(ini.Get("PauseScreenFreezeTiming", "after"), "before", StringComparison.OrdinalIgnoreCase);
+            bool before = !string.Equals(ini.Get("PauseScreenFreezeTiming", "before"), "after", StringComparison.OrdinalIgnoreCase);
             int off = int.TryParse(ini.Get("PauseScreenFreezeOffsetMs"), out var v) ? Math.Max(0, Math.Min(5000, v)) : 0;
             return (before, off);
         }
-        catch { return (false, 0); }
+        catch { return (true, 0); }
     }
 
     /// <summary>Freeze↔screen timing resolved game → emulator → global (LiteBox.ini), like SmartCapture.
@@ -215,11 +215,11 @@ internal static class GameplaySettings
                 if (!string.IsNullOrEmpty(emuId)) { var e = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId!, key); if (!string.IsNullOrEmpty(e)) return e; }
                 return ini.Get(key);
             }
-            bool before = string.Equals(R("PauseScreenFreezeTiming") ?? "after", "before", StringComparison.OrdinalIgnoreCase);
+            bool before = !string.Equals(R("PauseScreenFreezeTiming") ?? "before", "after", StringComparison.OrdinalIgnoreCase);
             int off = int.TryParse(R("PauseScreenFreezeOffsetMs"), out var v) ? Math.Max(0, Math.Min(5000, v)) : 0;
             return (before, off);
         }
-        catch { return (false, 0); }
+        catch { return (true, 0); }
     }
 
     /// <summary>Screenshot hotkey string (LiteBox.ini). Empty/None ⇒ disabled. When never set in

@@ -17,7 +17,15 @@ internal sealed class InfoOverlay : Form
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
     private static readonly IntPtr HWND_TOPMOST = new(-1);
+    private static readonly IntPtr HWND_NOTOPMOST = new(-2);
     private const uint SWP_NOMOVE = 0x2, SWP_NOSIZE = 0x1, SWP_NOACTIVATE = 0x10;
+
+    // The screen resolution at the moment the cover appeared. When a game switches the display to an
+    // exclusive-fullscreen mode it CHANGES this — the signal that we must stop asserting TOPMOST: a topmost
+    // window on the same monitor stops a D3D app from holding exclusive mode, so it minimises itself ("the
+    // game launched minimised"). We stand down the instant the resolution changes.
+    private System.Drawing.Size _baseScreenSize;
+    private bool _stoodDown;
 
     private readonly string _banner;
     private readonly bool _noActivate;   // StartupStayOnTop: cover the screen, NEVER take focus
@@ -51,6 +59,7 @@ internal sealed class InfoOverlay : Form
         try { target = ctx.EmulatorMainWindow != IntPtr.Zero ? Screen.FromHandle(ctx.EmulatorMainWindow) : (Screen.PrimaryScreen ?? Screen.AllScreens[0]); }
         catch { target = Screen.PrimaryScreen ?? Screen.AllScreens[0]; }
         Bounds = target?.Bounds ?? new Rectangle(0, 0, 1280, 720);
+        _baseScreenSize = Bounds.Size;
         TopMost = true;
         ShowInTaskbar = false;
         BackColor = ScreenArt.Bg;
@@ -75,7 +84,22 @@ internal sealed class InfoOverlay : Form
             {
                 try
                 {
-                    if (IsDisposed || !Visible) return;
+                    if (IsDisposed || !Visible || _stoodDown) return;
+                    // A game switched the display to an exclusive-fullscreen resolution: STOP fighting for the
+                    // top. Staying topmost on that monitor blocks the game from holding exclusive mode and it
+                    // minimises itself ("launched minimised"). Drop out of the topmost band and stand down —
+                    // the game owns the screen now; SmartCapture / the backstop will still close the cover.
+                    System.Drawing.Size cur;
+                    try { cur = (Screen.FromHandle(Handle)?.Bounds ?? Bounds).Size; } catch { cur = _baseScreenSize; }
+                    if (cur != _baseScreenSize)
+                    {
+                        _stoodDown = true;
+                        try { TopMost = false; } catch { }   // stop WinForms from re-asserting topmost behind our back
+                        try { SetWindowPos(Handle, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); } catch { }
+                        try { _topTimer?.Stop(); } catch { }
+                        Console.WriteLine($"[startup] display mode changed ({_baseScreenSize.Width}x{_baseScreenSize.Height} → {cur.Width}x{cur.Height}) — cover standing down, no longer asserting TOPMOST (exclusive-fullscreen safe)");
+                        return;
+                    }
                     bool ok = SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                     if (++ticks == 1 || !ok)
                         Console.WriteLine($"[startup] top re-assert #{ticks} ok={ok} err={Marshal.GetLastWin32Error()}");

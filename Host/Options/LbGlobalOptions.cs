@@ -376,7 +376,7 @@ internal static class LbGlobalOptions
             // Freeze ↔ screen timing (applies to every game that gets suspended).
             int frzY = pauseY + 150;
             p.Controls.Add(new Label { Text = "When freezing the game, show the pause screen:", Location = new Point(S(12), S(frzY)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
-            var frzCur = string.Equals(ini.Get("PauseScreenFreezeTiming", "after"), "before", StringComparison.OrdinalIgnoreCase) ? "before freezing" : "after freezing";
+            var frzCur = string.Equals(ini.Get("PauseScreenFreezeTiming", "before"), "after", StringComparison.OrdinalIgnoreCase) ? "after freezing" : "before freezing";
             var frzTiming = Cbo(new[] { "after freezing", "before freezing" }, frzCur, new Point(S(12), S(frzY + 24)), 180); p.Controls.Add(frzTiming);
             p.Controls.Add(Lbl("Delay (ms):", new Point(S(210), S(frzY + 27))));
             var frzOff = Txt(ini.Get("PauseScreenFreezeOffsetMs", "0"), new Point(S(300), S(frzY + 24)), 70); p.Controls.Add(frzOff);
@@ -398,14 +398,14 @@ internal static class LbGlobalOptions
             p.Controls.Add(Head("Non-emulator games (Store / direct .exe / DOSBox)", neY));
             var neUse = Chk("Use the pause screen", ini.GetBool("NonEmuUsePauseScreen", true), new Point(S(12), S(neY + 26)));
             var neSusp = Chk("Suspend (freeze) the process on pause", ini.GetBool("NonEmuSuspendOnPause", true), new Point(S(12), S(neY + 52)));
-            var neForce = Chk("Force the pause screen to the foreground", ini.GetBool("NonEmuForcefulActivation", true), new Point(S(12), S(neY + 78)));
+            var neForce = Chk("Forceful Pause Screen Activation (enable this if the pause screen is not showing)", ini.GetBool("NonEmuForcefulActivation", false), new Point(S(12), S(neY + 78)));
             p.Controls.AddRange(new Control[] { neUse, neSusp, neForce });
             p.Controls.Add(Lbl("Defaults for games without an emulator; a per-game pause override still wins.", new Point(S(30), S(neY + 104)), Dim));
             BindIniChk(neUse, "NonEmuUsePauseScreen", true);
             BindIniChk(neSusp, "NonEmuSuspendOnPause", true);
-            BindIniChk(neForce, "NonEmuForcefulActivation", true);
+            BindIniChk(neForce, "NonEmuForcefulActivation", false);
             BindIniTxt(frzOff, "PauseScreenFreezeOffsetMs");
-            applies.Add(() => { var v = frzTiming.SelectedIndex == 1 ? "before" : "after"; if (v != ini.Get("PauseScreenFreezeTiming", "after")) { ini.Set("PauseScreenFreezeTiming", v); iniDirty = true; } });
+            applies.Add(() => { var v = frzTiming.SelectedIndex == 1 ? "before" : "after"; if (v != ini.Get("PauseScreenFreezeTiming", "before")) { ini.Set("PauseScreenFreezeTiming", v); iniDirty = true; } });
 
             applies.Add(() =>
             {

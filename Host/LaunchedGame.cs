@@ -121,27 +121,32 @@ internal sealed class LaunchedGame
                     lg.PauseSuspend = string.Equals(lf.GetField("SuspendProcessOnPause"), "true", StringComparison.OrdinalIgnoreCase);
                     lg.PauseForceful = string.Equals(lf.GetField("ForcefulPauseScreenActivation"), "true", StringComparison.OrdinalIgnoreCase);
                     foreach (var f in new[] { "PauseAutoHotkeyScript", "ResumeAutoHotkeyScript", "ResetAutoHotkeyScript",
-                                              "SaveStateAutoHotkeyScript", "LoadStateAutoHotkeyScript", "SwapDiscsAutoHotkeyScript" })
+                                              "SaveStateAutoHotkeyScript", "LoadStateAutoHotkeyScript", "SwapDiscsAutoHotkeyScript",
+                                              "ExitAutoHotkeyScript" })
                         lg.PauseScripts[f] = lf.GetField(f) ?? "";
                 }
             }
             catch { }
 
             // Per-game startup/end-screen override (LB "Override Default Startup Screen Settings").
+            // CRITICAL: these are MODELLED IGame fields (HostGame stores them as typed bit-flags / int cells,
+            // NOT in the sparse _extra dict). ILiteBoxFields.GetField only reads _extra, so it returns "" for
+            // every one of them — reading the override through GetField silently missed it and the startup
+            // screen kept using the GLOBAL default even when the game turned it off. Read the concrete IGame
+            // properties instead. (The pause block above is fine: its fields ARE _extra, so GetField works.)
             try
             {
-                if (game is LbApiHost.ILiteBoxFields lf2
-                    && string.Equals(lf2.GetField("OverrideDefaultStartupScreenSettings"), "true", StringComparison.OrdinalIgnoreCase))
+                if (game.OverrideDefaultStartupScreenSettings)
                 {
                     lg.StartupOverride = true;
-                    lg.StartupUse = string.Equals(lf2.GetField("UseStartupScreen"), "true", StringComparison.OrdinalIgnoreCase);
-                    lg.StartupHideCursor = string.Equals(lf2.GetField("HideMouseCursorInGame"), "true", StringComparison.OrdinalIgnoreCase);
-                    lg.ShutdownDisabled = string.Equals(lf2.GetField("DisableShutdownScreen"), "true", StringComparison.OrdinalIgnoreCase);
-                    // Display time of the "NOW LOADING…" screen — the Customize slider
-                    // (StartupScreenPostLaunchDisplayTime, ms).
-                    lg.StartupMinMs = int.TryParse(lf2.GetField("StartupScreenPostLaunchDisplayTime"), out var ld) ? ld : -1;
-                    // Startup Load Delay — the SmartCapture reveal-anyway ceiling under LiteBox.
-                    lg.StartupLoadDelay = int.TryParse(lf2.GetField("StartupLoadDelay"), out var lds) ? lds : -1;
+                    lg.StartupUse = game.UseStartupScreen;
+                    lg.StartupHideCursor = game.HideMouseCursorInGame;
+                    lg.ShutdownDisabled = game.DisableShutdownScreen;
+                    // Display time of the "NOW LOADING…" screen (StartupScreenPostLaunchDisplayTime, ms) is NOT
+                    // a modelled property — it lives in _extra, so GetField is the correct accessor for it.
+                    lg.StartupMinMs = (game is LbApiHost.ILiteBoxFields lf2
+                        && int.TryParse(lf2.GetField("StartupScreenPostLaunchDisplayTime"), out var ld)) ? ld : -1;
+                    lg.StartupLoadDelay = game.StartupLoadDelay > 0 ? game.StartupLoadDelay : -1;
                 }
             }
             catch { }

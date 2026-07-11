@@ -62,6 +62,11 @@ internal sealed class SmartCaptureConfig
 internal static class SmartCapture
 {
     private const int PollMs = 200;
+    // After the cover reveals on the safety-max fallback (game not detected in time), keep hunting the game
+    // window in the BACKGROUND up to this long (from launch) so a slow-loading game still populates the
+    // detected-window (freeze-target / window-close signal / progress-bar detection time). Bounded so a game
+    // that never shows a capturable window (WGC-blind exclusive fullscreen) doesn't scan for the whole session.
+    private const int BackgroundDetectMaxMs = 180_000;   // 3 min
 
     private static Thread? _thread;
     private static volatile bool _run;
@@ -115,6 +120,7 @@ internal static class SmartCapture
         IntPtr metHwnd = IntPtr.Zero;
         long revealAt = -1;   // absolute ms: detection + (displayTime − detWindow), set when detected
         long detectAt = -1;   // absolute ms of the MATCH (for the "held since detection" log)
+        bool revealed = false; // the cover has been closed (either on the hold, or on the safety-max fallback)
 
         try
         {
@@ -230,21 +236,41 @@ internal static class SmartCapture
                     }
                 }
 
-                // Fire fadeMs early so the reveal fade (onReveal → GameScreens.Close(fadeMs)) dissolves
-                // over the LAST fadeMs and completes right at revealAt — total display time unchanged.
-                if (revealAt >= 0 && now >= revealAt - fadeMs)
+                // Detected within the cover window: fire fadeMs early so the reveal fade dissolves over the
+                // LAST fadeMs and completes right at revealAt — total display time unchanged. Then we're done.
+                if (!revealed && revealAt >= 0 && now >= revealAt - fadeMs)
                 {
                     Console.WriteLine($"[smartcapture] REVEAL at {now}ms (held {now - detectAt}ms since detection, fade {fadeMs}ms → done ~{revealAt}ms)");
                     Fire(onReveal);
-                    break;
+                    revealed = true;
+                    break;   // normal path → StopOnWindowClose watch below
                 }
-                if (metHwnd == IntPtr.Zero && now >= maxMs)
+                // Safety-max fallback: reveal the cover so the user isn't stuck staring at it, but DO NOT stop —
+                // keep hunting the game window in the background (freeze-target / close-signal / progress-bar
+                // time all need it). Drop the expensive WGC fps metering; background detection is size/title
+                // only (cheap) and capped by BackgroundDetectMaxMs.
+                if (!revealed && metHwnd == IntPtr.Zero && now >= maxMs)
                 {
-                    Console.WriteLine($"[smartcapture] safety max {maxMs}ms — revealing (fallback, no render detected)");
+                    Console.WriteLine($"[smartcapture] safety max {maxMs}ms — revealing (no render detected yet); keeping LIGHT background detection up to {BackgroundDetectMaxMs}ms");
                     Fire(onReveal);
+                    revealed = true;
+                    useFps = false;
+                    foreach (var kv in meters) { try { kv.Value.meter.Dispose(); } catch { } }
+                    meters.Clear();
+                }
+                // Late detection AFTER the safety-max reveal: we captured the window — done scanning.
+                if (revealed && metHwnd != IntPtr.Zero)
+                {
+                    Console.WriteLine($"[smartcapture] late detection @ {now}ms (cover already gone) — window 0x{metHwnd.ToInt64():X} captured for freeze/close/progress");
+                    break;   // → StopOnWindowClose watch below
+                }
+                // Give up the background hunt after the hard cap (game never showed a capturable window).
+                if (revealed && metHwnd == IntPtr.Zero && now >= BackgroundDetectMaxMs)
+                {
+                    Console.WriteLine($"[smartcapture] background detection give-up at {now}ms — no capturable game window appeared");
                     return;
                 }
-                Thread.Sleep(PollMs);
+                Thread.Sleep(revealed ? 500 : PollMs);   // lighter cadence once we're only background-hunting
             }
             if (metHwnd == IntPtr.Zero) return;
         }

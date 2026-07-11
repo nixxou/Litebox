@@ -28,6 +28,7 @@ internal static class WindowHider
     [DllImport("user32.dll")] private static extern int GetClassName(IntPtr hWnd, StringBuilder buf, int max);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     private const uint GW_OWNER = 4;
     private const int GWL_EXSTYLE = -20, WS_EX_TOOLWINDOW = 0x80;
     private const int SW_HIDE = 0, SW_RESTORE = 9, SW_SHOWNA = 8;
@@ -40,6 +41,19 @@ internal static class WindowHider
         if (hWnd == IntPtr.Zero) return;
         try
         {
+            // Do NOT yank the foreground onto a window that already has it. An exclusive-fullscreen game owns
+            // the display + focus during load, so it is already the foreground window even while our cover is
+            // topmost over it; a redundant SetForegroundWindow there can knock it out of exclusive mode and
+            // glitch its resolution switch. Only step in when the game was genuinely kept behind (something
+            // else holds the foreground) — that's the only case aggressive hiding actually needs the nudge.
+            IntPtr fg = GetForegroundWindow();
+            if (fg == hWnd) { Console.WriteLine("[windowhide] reveal: game already foreground — not re-activating (exclusive-fullscreen safe)"); return; }
+            GetWindowThreadProcessId(hWnd, out uint gamePid);
+            if (fg != IntPtr.Zero && gamePid != 0)
+            {
+                GetWindowThreadProcessId(fg, out uint fgPid);
+                if (fgPid == gamePid) { Console.WriteLine("[windowhide] reveal: game process already foreground — not re-activating"); return; }
+            }
             if (IsIconic(hWnd)) ShowWindow(hWnd, SW_RESTORE);
             SetForegroundWindow(hWnd);
             Console.WriteLine($"[windowhide] activated game window 0x{hWnd.ToInt64():X}");

@@ -590,7 +590,7 @@ internal static class EditEmulatorWindow
 
         var use = Chk(p, new Point(S(8), S(6)), "Enable Game Pause Screen", GetB("UsePauseScreen", true));
         var susp = Chk(p, new Point(S(8), S(30)), "Suspend Emulator Process While Paused", GetB("SuspendProcessOnPause", true));
-        var force = Chk(p, new Point(S(8), S(54)), "Forceful Pause Screen Activation (enable this if the pause screen is not showing)", GetB("ForcefulPauseScreenActivation", true));
+        var force = Chk(p, new Point(S(8), S(54)), "Forceful Pause Screen Activation (enable this if the pause screen is not showing)", GetB("ForcefulPauseScreenActivation", false));
 
         // (LiteBox-only pause extras — pause/screenshot hotkeys, controller pause — live on this
         //  section's "LiteBox" tab, built by LiteBoxGameplayEditor(Pause) and wrapped in Open().)

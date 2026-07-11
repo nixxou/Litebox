@@ -66,6 +66,7 @@ internal sealed partial class EditGameWindow
         "UsePauseScreen", "SuspendProcessOnPause", "ForcefulPauseScreenActivation",
         "PauseAutoHotkeyScript", "ResumeAutoHotkeyScript", "ResetAutoHotkeyScript",
         "SaveStateAutoHotkeyScript", "LoadStateAutoHotkeyScript", "SwapDiscsAutoHotkeyScript",
+        "ExitAutoHotkeyScript",
     };
     // The per-game LiteBox-only pause overrides (litebox-options.db) — cleared when the pause override is off.
     private static readonly string[] LchPauseLiteBoxKeys =
@@ -83,6 +84,37 @@ internal sealed partial class EditGameWindow
 
     private static bool LchBool(string v) => string.Equals(v, "true", StringComparison.OrdinalIgnoreCase);
     private static string LchB(bool v) => v ? "true" : "false";
+
+    /// <summary>Symmetric to the wipe-on-uncheck (SaveLaunching): the instant the user ENABLES the Startup
+    /// override on a game that didn't have it, seed the modal's native fields with the DEFAULT (global)
+    /// settings. Without this, a stale leftover field — e.g. an imported UseStartupScreen=false — would show
+    /// through and silently disable the screen the moment the override goes on. Solo only. Writes into the
+    /// pending dict (LchGet reads it first), so the Customize modal opens on a clean default slate.</summary>
+    private void LchSeedStartupDefaults()
+    {
+        var r = Safe(() => Gameplay.GameplaySettings.Resolve(null));
+        _lchPending["UseStartupScreen"] = LchB(r?.UseStartup ?? true);
+        _lchPending["DisableShutdownScreen"] = LchB((r?.ShutdownMinMs ?? 0) < 0);
+        _lchPending["HideMouseCursorInGame"] = LchB(r?.HideCursor ?? false);
+        _lchPending["AggressiveWindowHiding"] = LchB(false);
+        _lchPending["HideAllNonExclusiveFullscreenWindows"] = LchB(false);
+        _lchPending["StartupScreenPostLaunchDisplayTime"] = "";   // inherit (modal shows the global default)
+        _lchPending["StartupLoadDelay"] = "";                     // inherit
+    }
+
+    /// <summary>Pause counterpart of <see cref="LchSeedStartupDefaults"/> — seed the pause override's native
+    /// fields with the defaults when the user first enables it (solo).</summary>
+    private void LchSeedPauseDefaults()
+    {
+        var r = Safe(() => Gameplay.GameplaySettings.Resolve(null));
+        _lchPending["UsePauseScreen"] = LchB(r?.UsePause ?? true);
+        _lchPending["SuspendProcessOnPause"] = LchB(true);
+        _lchPending["ForcefulPauseScreenActivation"] = LchB(false);
+        foreach (var s in new[] { "PauseAutoHotkeyScript", "ResumeAutoHotkeyScript", "ResetAutoHotkeyScript",
+                                  "SaveStateAutoHotkeyScript", "LoadStateAutoHotkeyScript", "SwapDiscsAutoHotkeyScript",
+                                  "ExitAutoHotkeyScript" })
+            _lchPending[s] = "";
+    }
 
     // ── Dirty-tracking bridge for the main Launching fields (revert ↺ + modified colour + multi merge) ──
     // Reuses the shared core (Track / _baseline / OnField / Modified) so these fields behave exactly like the
@@ -340,7 +372,7 @@ internal sealed partial class EditGameWindow
             "OverrideDefaultPauseScreenSettings", "UsePauseScreen", "SuspendProcessOnPause",
             "ForcefulPauseScreenActivation", "PauseAutoHotkeyScript", "ResumeAutoHotkeyScript",
             "ResetAutoHotkeyScript", "SaveStateAutoHotkeyScript", "LoadStateAutoHotkeyScript",
-            "SwapDiscsAutoHotkeyScript",
+            "SwapDiscsAutoHotkeyScript", "ExitAutoHotkeyScript",
         })
             try { _lchLoaded[name] = f2?.GetField(name) ?? ""; } catch { _lchLoaded[name] = ""; }
     }
@@ -905,8 +937,24 @@ internal sealed partial class EditGameWindow
             custStart.Enabled = !_readOnly && _lchOvrStart.CheckState != CheckState.Unchecked;
             custPause.Enabled = !_readOnly && _lchOvrPause.CheckState != CheckState.Unchecked;
         }
-        _lchOvrStart.CheckedChanged += (_, _) => SyncCust();
-        _lchOvrPause.CheckedChanged += (_, _) => SyncCust();
+        // Seed defaults the moment the user ENABLES an override on a game that didn't have it (solo, off→on) —
+        // the symmetric counterpart of the wipe-on-uncheck in SaveLaunching. So the Customize modal opens on a
+        // clean default slate instead of showing a stale leftover field that would silently flip the screen.
+        // Baseline read = the game's SAVED field (bypasses pending edits) so we only seed when the override is
+        // being turned on for a game that didn't already have it — never re-seed (and clobber) an existing one.
+        bool WasOverrideOn(string key) { try { return LchBool((AppsGame as ILiteBoxFields)?.GetField(key) ?? ""); } catch { return false; } }
+        _lchOvrStart.CheckedChanged += (_, _) =>
+        {
+            SyncCust();
+            if (!IsMulti && _lchOvrStart.Checked && !WasOverrideOn("OverrideDefaultStartupScreenSettings"))
+                LchSeedStartupDefaults();
+        };
+        _lchOvrPause.CheckedChanged += (_, _) =>
+        {
+            SyncCust();
+            if (!IsMulti && _lchOvrPause.Checked && !WasOverrideOn("OverrideDefaultPauseScreenSettings"))
+                LchSeedPauseDefaults();
+        };
         SyncCust();
         return p;
     }
@@ -1226,6 +1274,7 @@ internal sealed partial class EditGameWindow
             ("On Pause", "PauseAutoHotkeyScript"), ("On Resume", "ResumeAutoHotkeyScript"),
             ("Reset Game", "ResetAutoHotkeyScript"), ("Save State", "SaveStateAutoHotkeyScript"),
             ("Load State", "LoadStateAutoHotkeyScript"), ("Swap Discs", "SwapDiscsAutoHotkeyScript"),
+            ("Exit Game", "ExitAutoHotkeyScript"),
         };
         var stabs = new TabControl
         {

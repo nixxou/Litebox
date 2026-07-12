@@ -54,6 +54,9 @@ internal static class MediaResolver
 
     private static string _lbRoot;
     private static string[] _regions = Array.Empty<string>(); // priority order; root handled separately
+    // Full pick order: user priorities → LaunchBox's hard-coded fallback → root ("none") last. See LbRegions.
+    private static List<string> _regionOrder = LbRegions.Order(Array.Empty<string>());
+    private static List<string> RegionOrder() => _regionOrder;
 
     /// <summary>The LaunchBox Images root (or null before Init).</summary>
     public static string ImagesRoot => string.IsNullOrEmpty(_lbRoot) ? null : Path.Combine(_lbRoot, "Images");
@@ -117,6 +120,7 @@ internal static class MediaResolver
     {
         _lbRoot = lbRoot;
         _regions = ReadRegionPriorities(lbRoot);
+        _regionOrder = LbRegions.Order(_regions);   // + LaunchBox's hard-coded fallback, root ("none") last
         Console.WriteLine($"[media] init lbRoot={lbRoot} regions=[{string.Join(", ", _regions)}]");
     }
 
@@ -147,14 +151,13 @@ internal static class MediaResolver
             string folder = SafeFolder(plat, type);
             if (folder == null || !Directory.Exists(folder)) continue;
 
-            // Region priority, then root (no region sub-folder) last.
-            foreach (var region in _regions)
+            // User priorities → LaunchBox's hard-coded fallback → root ("none", no region sub-folder) last.
+            foreach (var region in RegionOrder())
             {
-                var hit = BestInDir(Path.Combine(folder, region), id, sani, ImageExts);
+                var dir = region == LbRegions.None ? folder : Path.Combine(folder, region);
+                var hit = BestInDir(dir, id, sani, ImageExts);
                 if (hit != null) return hit;
             }
-            var root = BestInDir(folder, id, sani, ImageExts);
-            if (root != null) return root;
         }
         return null;
     }
@@ -272,9 +275,11 @@ internal static class MediaResolver
         string folder = SafeFolder(plat, imageType);
         if (folder == null || !Directory.Exists(folder)) return result;
         string sani = Sanitize(title);
-        foreach (var region in _regions)
-            result.AddRange(AllInDir(Path.Combine(folder, region), id, sani, ImageExts));
-        result.AddRange(AllInDir(folder, id, sani, ImageExts));   // root (no region) last
+        foreach (var region in RegionOrder())   // priorities → LB fallback → root ("none") last
+        {
+            var dir = region == LbRegions.None ? folder : Path.Combine(folder, region);
+            result.AddRange(AllInDir(dir, id, sani, ImageExts));
+        }
         return result;
     }
 

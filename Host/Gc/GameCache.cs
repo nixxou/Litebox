@@ -652,10 +652,9 @@ namespace LbApiHost.Host.Gc
             var regroupements = SettingsWatcher.GetImageRegroupementPriorities();
             if (!regroupements.TryGetValue(regroupement, out var typeNames)) return null;
 
-            var regionPriorities = SettingsWatcher.GetRegionPriorities()
-                .Select(r => r.ToLowerInvariant()).ToList();
-            if (!regionPriorities.Contains("none"))
-                regionPriorities.Add("none");
+            // User priorities → LaunchBox's own hard-coded fallback → root ("none") last. Stopping at the
+            // user's list made images in an unlisted region (e.g. "Japan") permanently unpickable.
+            var regionPriorities = SettingsWatcher.GetRegionOrder();
 
             var data = _data;
 
@@ -700,10 +699,9 @@ namespace LbApiHost.Host.Gc
             if (string.IsNullOrEmpty(typeName)) return null;
             if (!ImageTypeRegistry.TryGetIndex(typeName, out byte typeIndex)) return null;
 
-            var regionPriorities = SettingsWatcher.GetRegionPriorities()
-                .Select(r => r.ToLowerInvariant()).ToList();
-            if (!regionPriorities.Contains("none"))
-                regionPriorities.Add("none");
+            // User priorities → LaunchBox's own hard-coded fallback → root ("none") last. Stopping at the
+            // user's list made images in an unlisted region (e.g. "Japan") permanently unpickable.
+            var regionPriorities = SettingsWatcher.GetRegionOrder();
 
             var data = _data;
             foreach (var region in regionPriorities)
@@ -739,14 +737,20 @@ namespace LbApiHost.Host.Gc
 
             var data = _data;
 
-            // Region order: configured priorities (+ "none"), then any other region this game has.
-            var order = SettingsWatcher.GetRegionPriorities().Select(r => r.ToLowerInvariant()).ToList();
-            if (!order.Contains("none")) order.Add("none");
+            // Region order: user priorities → LaunchBox's fallback list → any other region this game happens
+            // to have (inserted before the root entry) → root ("none") last.
+            var order = SettingsWatcher.GetRegionOrder();
+            var extra = new List<string>();
             for (int i = 0; i < data.Images.Length; i++)
             {
                 if (data.Images[i].ImageTypeIndex != typeIndex) continue;
                 var reg = (data.Images[i].Region ?? "").ToLowerInvariant();
-                if (!order.Contains(reg)) order.Add(reg);
+                if (!order.Contains(reg) && !extra.Contains(reg)) extra.Add(reg);
+            }
+            if (extra.Count > 0)
+            {
+                int at = order.IndexOf(Media.LbRegions.None);
+                order.InsertRange(at >= 0 ? at : order.Count, extra);
             }
 
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -786,10 +790,9 @@ namespace LbApiHost.Host.Gc
             var regroupements = SettingsWatcher.GetImageRegroupementPriorities();
             if (!regroupements.TryGetValue(regroupement, out var typeNames)) return result;
 
-            var regionPriorities = SettingsWatcher.GetRegionPriorities()
-                .Select(r => r.ToLowerInvariant()).ToList();
-            if (!regionPriorities.Contains("none"))
-                regionPriorities.Add("none");
+            // User priorities → LaunchBox's own hard-coded fallback → root ("none") last. Stopping at the
+            // user's list made images in an unlisted region (e.g. "Japan") permanently unpickable.
+            var regionPriorities = SettingsWatcher.GetRegionOrder();
 
             var data = _data;
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -834,8 +837,9 @@ namespace LbApiHost.Host.Gc
             var regroupements = SettingsWatcher.GetImageRegroupementPriorities();
             if (!regroupements.TryGetValue(regroupement, out var typeNames)) return null;
 
-            var regionPriorities = SettingsWatcher.GetRegionPriorities()
-                .Select(r => r.ToLowerInvariant()).ToList();
+            // User priorities → LaunchBox's fallback → root last (an unlisted region used to be skipped
+            // outright by the regionRank lookup below).
+            var regionPriorities = SettingsWatcher.GetRegionOrder();
 
             // Type rank (1-based), excluding forced types
             var typeRank = new Dictionary<byte, int>();

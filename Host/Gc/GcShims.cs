@@ -91,6 +91,14 @@ namespace LbApiHost.Host.Gc
             }
         }
 
+        /// <summary>
+        /// The region order to PICK images with: the user's RegionPriorities, then LaunchBox's own hard-coded
+        /// fallback list, then the root ("none") last. Using only GetRegionPriorities() made images in an
+        /// unlisted region (e.g. "Japan") permanently unpickable — see <see cref="Media.LbRegions"/>.
+        /// Lower-cased. Not cached: LbRegions.Order is cheap and RegionPriorities is already memoised.
+        /// </summary>
+        public static List<string> GetRegionOrder() => Media.LbRegions.Order(GetRegionPriorities());
+
         public static Dictionary<string, List<string>> GetImageRegroupementPriorities()
         {
             if (_regroup != null) return _regroup;

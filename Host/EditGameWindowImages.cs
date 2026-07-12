@@ -56,6 +56,62 @@ internal sealed partial class EditGameWindow
     private bool _imgShowWeb;        // the "show web images" toggle (per category page)
     private System.Net.Http.HttpClient? _imgHttp;
 
+    /// <summary>Winner of its image TYPE (one per type) — see <see cref="ImgLbPicks"/>.</summary>
+    private HashSet<string> _imgLbPicks = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The ONE image LaunchBox actually displays for this regroupement — see <see cref="ImgLbSlotPick"/>.</summary>
+    private string? _imgLbSlotPick;
+
+    private static readonly Color LbSlotColor = Color.FromArgb(235, 190, 70);    // gold — the image LB really shows
+    private static readonly Color LbTypeColor = Color.FromArgb(120, 126, 142);   // neutral steel — wins its type only
+
+    /// <summary>
+    /// The image LaunchBox picks for each image TYPE among <paramref name="files"/>: the first region in the
+    /// canonical order (user RegionPriorities → LaunchBox's hard-coded fallback → root last) that has an image
+    /// of that type, then the lowest number within it. Mirrors GamesDb/GameCache selection — see LbRegions.
+    /// </summary>
+    private static HashSet<string> ImgLbPicks(List<ImgFile> files)
+    {
+        var picks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var order = LbRegions.Order(LbApiHost.Host.Gc.SettingsWatcher.GetRegionPriorities());
+        foreach (var type in files.Select(f => f.Type).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var ofType = files.Where(f => string.Equals(f.Type, type, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var region in order)
+            {
+                var inRegion = ofType.Where(f => string.Equals(f.Region, region, StringComparison.OrdinalIgnoreCase))
+                                     .OrderBy(f => f.NumVal).ToList();
+                if (inRegion.Count == 0) continue;
+                picks.Add(inRegion[0].Path);   // first region that has one wins
+                break;
+            }
+        }
+        return picks;
+    }
+
+    /// <summary>
+    /// The SINGLE image LaunchBox actually displays for a regroupement (slot). Mirrors GameCache's
+    /// GetBestImageTypeFirst: the image TYPE is the dominant axis, so the first type of the regroupement (in
+    /// its priority order) that has any image wins outright — region and number only break ties INSIDE that
+    /// type. So the winner of a lower-ranked type (e.g. "Screenshot - Game Title") is never displayed when a
+    /// higher-ranked one (e.g. "Screenshot - Gameplay") has an image. Null when the slot has no image.
+    /// </summary>
+    private static string? ImgLbSlotPick(List<ImgFile> files, List<string> types)
+    {
+        var order = LbRegions.Order(LbApiHost.Host.Gc.SettingsWatcher.GetRegionPriorities());
+        foreach (var type in types)   // already in the regroupement's priority order
+        {
+            var ofType = files.Where(f => string.Equals(f.Type, type, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (ofType.Count == 0) continue;
+            foreach (var region in order)
+            {
+                var inRegion = ofType.Where(f => string.Equals(f.Region, region, StringComparison.OrdinalIgnoreCase))
+                                     .OrderBy(f => f.NumVal).ToList();
+                if (inRegion.Count > 0) return inRegion[0].Path;
+            }
+        }
+        return null;
+    }
+
     private Panel ImgBuildActionBar()
     {
         // Tall enough for the buttons to WRAP onto a second row instead of hiding behind a horizontal
@@ -418,6 +474,8 @@ internal sealed partial class EditGameWindow
         var types = ImgTypesOf(regroupement);
         var imgs = all.Where(f => types.Any(t => string.Equals(t, f.Type, StringComparison.OrdinalIgnoreCase))).ToList();
         _imgCatAllPaths = imgs.Select(i => i.Path).ToList();
+        _imgLbPicks = ImgLbPicks(imgs);                 // winner of each image TYPE
+        _imgLbSlotPick = ImgLbSlotPick(imgs, types);    // the ONE image LaunchBox actually displays here
 
         int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
         bool webAvail = MetadataDb.Available && dbId > 0;
@@ -760,11 +818,28 @@ internal sealed partial class EditGameWindow
     private Panel ImgCell(ImgFile img, string regroupement)
     {
         var cell = new Panel { Size = new Size(ImgCellW, ImgCellH), BackColor = Bg };
+        bool isSlotPick = _imgLbSlotPick != null && string.Equals(_imgLbSlotPick, img.Path, StringComparison.OrdinalIgnoreCase);
+        bool isTypePick = !isSlotPick && _imgLbPicks.Contains(img.Path);
         var pic = new PictureBox
         {
             SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 18, 24), Cursor = Cursors.Hand,
         };
-        pic.SetBounds(S(4), S(4), ImgCellW - S(8), ImgCellH - S(30));
+        var picBounds = new Rectangle(S(4), S(4), ImgCellW - S(8), ImgCellH - S(30));
+        if (isSlotPick || isTypePick)
+        {
+            // Gold + thick = the image LaunchBox actually displays for this slot. Neutral + thin = merely the
+            // winner of its own image type (a lower-ranked type never gets displayed — see ImgLbSlotPick).
+            var frame = new Panel
+            {
+                BackColor = isSlotPick ? LbSlotColor : LbTypeColor,
+                Padding = new Padding(isSlotPick ? S(3) : S(2)),
+            };
+            frame.Bounds = picBounds;
+            pic.Dock = DockStyle.Fill;
+            frame.Controls.Add(pic);
+            cell.Controls.Add(frame);
+        }
+        else pic.Bounds = picBounds;
         ImgLoadThumb(pic, img.Path);
         pic.MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) { _imgPressKind = 1; _imgPressKey = img.Path; ImgStartLongPress(); } };
         pic.MouseUp += (_, e) =>
@@ -776,7 +851,25 @@ internal sealed partial class EditGameWindow
             if (_imgSelMode) ImgToggleSel(img.Path);
             else ShowImageFullscreenPath(img.Path);   // left = fullscreen
         };
-        cell.Controls.Add(pic);
+        if (!isSlotPick && !isTypePick) cell.Controls.Add(pic);   // otherwise pic already lives inside the frame
+
+        if (isSlotPick || isTypePick)
+        {
+            int w = isSlotPick ? S(44) : S(36);
+            var badge = new Label
+            {
+                Text = isSlotPick ? "★★ LB" : "★ LB",
+                ForeColor = isSlotPick ? Color.FromArgb(30, 25, 5) : Color.FromArgb(235, 238, 245),
+                BackColor = isSlotPick ? LbSlotColor : LbTypeColor,
+                Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), AutoSize = false,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Size = new Size(w, S(16)), Location = new Point(ImgCellW - w - S(6), S(8)),
+            };
+            cell.Controls.Add(badge); badge.BringToFront();
+            new ToolTip().SetToolTip(badge, isSlotPick
+                ? "LaunchBox DISPLAYS this image for this slot (its image type outranks the others here)"
+                : "Best image of its own type — but LaunchBox displays a higher-ranked type instead");
+        }
 
         // Multi-select checkbox (top-left) — hidden until select mode is on.
         var chk = new CheckBox
@@ -865,11 +958,18 @@ internal sealed partial class EditGameWindow
 
     private static List<string> ImgRegionOrder(List<ImgFile> all)
     {
+        // Rows: root first (display convention), then the canonical LB order (priorities → LB's fallback),
+        // then anything else this game happens to have. Rows with no image are skipped by the caller.
+        // Built from the ORIGINAL-cased sources — LbRegions.Order lower-cases (it feeds the cache lookups),
+        // and these strings are shown as the row labels.
         var order = new List<string> { "none" };
-        order.AddRange(LbApiHost.Host.Gc.SettingsWatcher.GetRegionPriorities().Where(r => !r.Equals("none", StringComparison.OrdinalIgnoreCase)));
-        var known = new HashSet<string>(order, StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(order, StringComparer.OrdinalIgnoreCase);
+        foreach (var r in LbApiHost.Host.Gc.SettingsWatcher.GetRegionPriorities())
+            if (!string.IsNullOrWhiteSpace(r) && seen.Add(r.Trim())) order.Add(r.Trim());
+        foreach (var r in LbRegions.Fallback)
+            if (seen.Add(r)) order.Add(r);
         foreach (var r in all.Select(i => i.Region).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(r => r, StringComparer.OrdinalIgnoreCase))
-            if (!known.Contains(r)) order.Add(r);
+            if (seen.Add(r)) order.Add(r);
         return order;
     }
 

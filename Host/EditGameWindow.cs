@@ -312,7 +312,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "AdditionalApps" => IsMulti ? Placeholder("Additional Apps") : BuildAdditionalAppsPage(),
                 "AlternateNames" => IsMulti ? Placeholder("Alternate Names") : BuildAlternateNamesPage(),
                 "ControllerSupport" => IsMulti ? BuildControllerSupportMultiPage() : BuildControllerSupportPage(),
-                "Images" => IsMulti ? Placeholder("Images") : BuildImagesPage(),
+                "Images" => IsMulti ? BuildImagesMatrixPage() : BuildImagesPage(),   // multi → media-coverage matrix
                 "ImageQuery" => BuildImageQueryPage(),   // works for 1..N games (single or multi selection)
                 "Launching" => BuildLaunchingPage(),   // main page supports multi (merged fields); sub-pages below stay solo
                 "DOSBox" => BuildDosBoxPage(),   // main DOSBox page supports multi (3-state Use-DOSBox + merged paths)

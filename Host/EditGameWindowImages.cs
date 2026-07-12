@@ -30,6 +30,11 @@ namespace LbApiHost.Host;
 
 internal sealed partial class EditGameWindow
 {
+    /// <summary>The game every image page operates on. Normally the single edited game; the multi-game media
+    /// matrix re-points it at a row's game while that row's category modal is open (see ImgOpenCategoryModal).</summary>
+    private IGame ImgGame => _imgGame ?? _editGames[0];
+    private IGame? _imgGame;
+
     private readonly HashSet<string> _imgTouchedPlatforms = new(StringComparer.OrdinalIgnoreCase);
     // Lock buttons per regroupement, for "Lock All" to re-style them all at once.
     private readonly Dictionary<string, List<(Button btn, string path)>> _imgLockBtns = new();
@@ -54,6 +59,7 @@ internal sealed partial class EditGameWindow
     private string? _imgPressKey;    // local path or web url
     private bool _imgSuppressClick;
     private bool _imgShowWeb;        // the "show web images" toggle (per category page)
+    private bool _imgOpenWithWeb;    // set by the matrix: open the next category page with the web toggle ON
     private System.Net.Http.HttpClient? _imgHttp;
 
     /// <summary>Winner of its image TYPE (one per type) — see <see cref="ImgLbPicks"/>.</summary>
@@ -229,7 +235,7 @@ internal sealed partial class EditGameWindow
     private void ImgBulkTransfer(string? targetType, string? targetRegion, bool copy)
     {
         if (_readOnly || _imgSel.Count == 0) return;
-        var g = _editGames[0];
+        var g = ImgGame;
         string plat = Safe(() => g.Platform) ?? "";
         var sel = ImgScan(g).Where(f => _imgSel.Contains(f.Path)).ToList();
         foreach (var img in sel) ImgDoTransfer(g, img, targetType ?? img.Type, targetRegion ?? img.Region, copy);
@@ -245,7 +251,7 @@ internal sealed partial class EditGameWindow
         int fail = 0;
         foreach (var p in _imgSel.ToList()) { try { File.Delete(p); } catch { fail++; } }
         _imgSel.Clear(); _imgSelMode = false;
-        ImgAfterOp(Safe(() => _editGames[0].Platform) ?? "");
+        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
         if (fail > 0) MessageBox.Show(this, $"{fail} file(s) couldn't be deleted (locked / in use).", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
@@ -254,7 +260,7 @@ internal sealed partial class EditGameWindow
         if (!ImageLockBridge.Available || _imgSel.Count == 0) return;
         foreach (var p in _imgSel.ToList()) { if (doLock) ImageLockBridge.Lock(p); else ImageLockBridge.Unlock(p); }
         _imgSelMode = false; _imgSel.Clear();
-        ImgAfterOp(Safe(() => _editGames[0].Platform) ?? "");   // rebuild → lock glyphs refresh
+        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");   // rebuild → lock glyphs refresh
     }
 
     private int ImgPadX => S(12);
@@ -333,7 +339,7 @@ internal sealed partial class EditGameWindow
     private void ImgNavRefresh()
     {
         if (_imgNavPic == null || IsMulti) return;
-        _imgNavList = ImgScan(_editGames[0]);
+        _imgNavList = ImgScan(ImgGame);
         ImgNavShow(0);
     }
 
@@ -361,7 +367,7 @@ internal sealed partial class EditGameWindow
     private void ImgNavAdd()
     {
         if (_readOnly || IsMulti || _imgNavPic == null) return;
-        var g = _editGames[0];
+        var g = ImgGame;
         string plat = Safe(() => g.Platform) ?? ""; string idStr = Safe(() => g.Id) ?? "";
         if (string.IsNullOrEmpty(idStr) || string.IsNullOrEmpty(plat)) { MessageBox.Show(this, "This game has no platform / id.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         string sani = MediaResolver.Sanitize(Safe(() => g.Title) ?? "");
@@ -427,7 +433,7 @@ internal sealed partial class EditGameWindow
         var old = _imgNavPic.Image; _imgNavPic.Image = null; old?.Dispose();
         try { File.Delete(img.Path); }
         catch (Exception ex) { MessageBox.Show(this, "Delete failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
-        ImgAfterOp(Safe(() => _editGames[0].Platform) ?? "");
+        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
         ImgNavShow(Math.Min(keep, _imgNavList.Count - 1));
     }
 
@@ -440,7 +446,7 @@ internal sealed partial class EditGameWindow
         var old = _imgNavPic.Image; _imgNavPic.Image = null; old?.Dispose();
         int fail = 0;
         foreach (var f in _imgNavList.ToList()) { try { File.Delete(f.Path); } catch { fail++; } }
-        ImgAfterOp(Safe(() => _editGames[0].Platform) ?? "");
+        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
         if (fail > 0) MessageBox.Show(this, $"{fail} file(s) couldn't be deleted.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
@@ -449,7 +455,10 @@ internal sealed partial class EditGameWindow
     {
         _imgCurRegroupement = regroupement;
         _imgSelMode = false; _imgSel.Clear(); _imgWebSel.Clear(); _imgSelKind = 0;
-        _imgShowWeb = false;   // web images off by default per category — never compute CRCs during basic browsing
+        // Off by default per category: browsing must never pay for CRCs / network. The media matrix forces it
+        // ON when you click a PURPLE (web-only) cell — the category has nothing locally, so an unchecked page
+        // would just be empty.
+        _imgShowWeb = _imgOpenWithWeb;
         var container = new Panel { BackColor = Bg, Dock = DockStyle.Fill };
         var grid = new Panel { BackColor = Bg, AutoScroll = true, Dock = DockStyle.Fill };
         var bar = ImgBuildActionBar();       // docked TOP, hidden until multi-select is on
@@ -469,7 +478,7 @@ internal sealed partial class EditGameWindow
         _imgWebByKey.Clear();
         _imgCatAllWebKeys = new List<string>();
 
-        var g = _editGames[0];
+        var g = ImgGame;
         var all = ImgScan(g);
         var types = ImgTypesOf(regroupement);
         var imgs = all.Where(f => types.Any(t => string.Equals(t, f.Type, StringComparison.OrdinalIgnoreCase))).ToList();
@@ -617,7 +626,7 @@ internal sealed partial class EditGameWindow
             var ofType = web.Where(w => string.Equals(w.Type, type, StringComparison.OrdinalIgnoreCase)).ToList();
             if (ofType.Count == 0) continue;
             int typeHeaderY = y; y += S(28);
-            string RgKey(MetadataDb.WebImage w) => string.IsNullOrEmpty(w.Region) ? "none" : w.Region;
+            string RgKey(MetadataDb.WebImage w) => string.IsNullOrEmpty(w.Region) ? "World" : w.Region;   // GamesDb: blank == World
             foreach (var region in ofType.Select(RgKey).Distinct(StringComparer.OrdinalIgnoreCase)
                                          .OrderBy(r => r.Equals("none", StringComparison.OrdinalIgnoreCase) ? "" : r, StringComparer.OrdinalIgnoreCase))
             {
@@ -700,7 +709,7 @@ internal sealed partial class EditGameWindow
             bool nonLb = !w.IsLaunchbox;
             if (MediaApiBridge.UseWizardPath || (nonLb && MediaApiBridge.Available))
             {
-                var b = MediaApiBridge.FetchBytes(w, Safe(() => _editGames[0].Platform) ?? "");
+                var b = MediaApiBridge.FetchBytes(w, Safe(() => ImgGame.Platform) ?? "");
                 if (b != null && b.Length > 0) return b;
                 if (nonLb) return null;            // no CDN for non-launchbox origins
             }
@@ -745,7 +754,7 @@ internal sealed partial class EditGameWindow
     private void ImgDownloadWebList(List<MetadataDb.WebImage> picks)
     {
         if (_readOnly || picks == null || picks.Count == 0) return;
-        var g = _editGames[0];
+        var g = ImgGame;
         string plat = Safe(() => g.Platform) ?? "";
         int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
         int ok = 0, fail = 0;
@@ -764,7 +773,10 @@ internal sealed partial class EditGameWindow
         {
             string idStr = Safe(() => g.Id) ?? "";
             string sani = MediaResolver.Sanitize(Safe(() => g.Title) ?? "");
-            string region = (string.IsNullOrEmpty(w.Region) || w.Region.Equals("World", StringComparison.OrdinalIgnoreCase)) ? "none" : w.Region;
+            // GamesDb: a blank DB region IS "World", and LaunchBox stores World images under <type>\World\
+            // (this library has 14k files there) — NOT at the type-folder root. The root is only for images
+            // that genuinely carry no region.
+            string region = string.IsNullOrEmpty(w.Region) ? "World" : w.Region;
             string? baseFolder = MediaResolver.TypeFolder(plat, w.Type);
             if (string.IsNullOrEmpty(baseFolder)) return false;
             string dir = ImgSearchDir(baseFolder, region);
@@ -1049,7 +1061,7 @@ internal sealed partial class EditGameWindow
     private void ImgTransfer(ImgFile img, string targetType, string targetRegion, bool copy)
     {
         if (_readOnly) return;
-        var g = _editGames[0];
+        var g = ImgGame;
         if (ImgDoTransfer(g, img, targetType, targetRegion, copy)) ImgAfterOp(Safe(() => g.Platform) ?? "");
     }
 
@@ -1060,14 +1072,14 @@ internal sealed partial class EditGameWindow
                 "Delete Image", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
         try { File.Delete(img.Path); }
         catch (Exception ex) { MessageBox.Show(this, "Delete failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
-        ImgAfterOp(Safe(() => _editGames[0].Platform) ?? "");
+        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
     }
 
     private void ImgDeleteAllExcept(ImgFile keep, string regroupement)
     {
         if (_readOnly) return;
         var types = ImgTypesOf(regroupement);
-        var victims = ImgScan(_editGames[0])
+        var victims = ImgScan(ImgGame)
             .Where(f => types.Any(t => string.Equals(t, f.Type, StringComparison.OrdinalIgnoreCase)))
             .Where(f => !string.Equals(f.Path, keep.Path, StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -1076,14 +1088,14 @@ internal sealed partial class EditGameWindow
                 "Delete all except this", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
         int fail = 0;
         foreach (var v in victims) { try { File.Delete(v.Path); } catch { fail++; } }
-        ImgAfterOp(Safe(() => _editGames[0].Platform) ?? "");
+        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
         if (fail > 0) MessageBox.Show(this, $"{fail} file(s) couldn't be deleted (locked / in use).", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     private void ImgToggleGuid(ImgFile img)
     {
         if (_readOnly) return;
-        var g = _editGames[0];
+        var g = ImgGame;
         string idStr = Safe(() => g.Id) ?? "";
         string sani = MediaResolver.Sanitize(Safe(() => g.Title) ?? "");
         string dir = Path.GetDirectoryName(img.Path) ?? "";
@@ -1104,7 +1116,7 @@ internal sealed partial class EditGameWindow
         if (_readOnly) return;
         int? target = ImgPromptNumber(img.NumVal);
         if (target == null) return;
-        var g = _editGames[0];
+        var g = ImgGame;
         string idStr = Safe(() => g.Id) ?? "";
         string sani = MediaResolver.Sanitize(Safe(() => g.Title) ?? "");
         string dir = Path.GetDirectoryName(img.Path) ?? "";
@@ -1212,6 +1224,11 @@ internal sealed partial class EditGameWindow
     private void ImgAfterOp(string plat)
     {
         if (!string.IsNullOrEmpty(plat)) _imgTouchedPlatforms.Add(plat);
+
+        // The media matrix opens a category in a MODAL: the tree's selected node is still "Images", so refresh
+        // the modal's page rather than the (non-existent) tree page.
+        if (_imgModalHolder != null && _imgModalCat != null) { ImgModalRefresh(); return; }
+
         string? cur = _tree.SelectedNode?.Tag?.ToString();
         // A move can shift an image to ANOTHER category, so drop every OTHER regroupement page from the cache
         // (they rebuild on next visit) and refresh whatever image view is showing now.

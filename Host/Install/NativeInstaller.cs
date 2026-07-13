@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -40,6 +41,19 @@ internal static class NativeInstaller
         ("VCRUNTIME140_1.dll.api",        "RetroAchievements", "VCRUNTIME140_1.dll"),
         ("steam_api64.dll.api",           "Steam",             "steam_api64.dll"),
     };
+
+    /// <summary>
+    /// libvlc is NOT part of our payload: LaunchBox already ships a full libvlc 3.0.23 (366 plugins) at
+    /// &lt;LB&gt;\ThirdParty\VLC\x64 — the one it plays videos with. VlcService points straight at it, which is
+    /// why LiteBox adds 0 MB of native video code. Nothing to deploy; this only says where it lives.
+    /// </summary>
+    public static string VlcDir(string lbRoot) => Path.Combine(lbRoot, "ThirdParty", "VLC", "x64");
+
+    /// <summary>
+    /// Same story for ffmpeg/ffprobe: LaunchBox ships a full build (8.1.1) at &lt;LB&gt;\ThirdParty\FFMPEG.
+    /// FfmpegService points at it (video trimming / keyframe indexing). Nothing to deploy.
+    /// </summary>
+    public static string FfmpegDir(string lbRoot) => Path.Combine(lbRoot, "ThirdParty", "FFMPEG");
 
     /// <summary>Deploys the payload into &lt;lbRoot&gt;\ThirdParty\… . Only-if-absent unless
     /// <paramref name="refresh"/>. Safe + cheap to call repeatedly.</summary>

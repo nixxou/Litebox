@@ -264,6 +264,8 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         var images = N("Images", "Images");
         if (!IsMulti) foreach (var r in ImgRegroupements()) images.Nodes.Add(N(r, r));   // one child per image category
         media.Nodes.Add(images);
+        // Videos: ONE page, no per-type children. A game has a handful of videos at most — the page already
+        // groups them by type, so sub-nodes only added clicks (unlike Images, where a category can hold dozens).
         media.Nodes.Add(N("Videos", "Videos"));
         media.Nodes.Add(N("3D Model Settings", "ModelSettings"));
         media.Nodes.Add(N("Image Query", "ImageQuery"));   // batch tool — works for 1..N selected games
@@ -303,7 +305,8 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         _titleBar.Text = _tree.SelectedNode?.Text ?? key;
         if (!_pages.TryGetValue(key, out var page))
         {
-            page = (!IsMulti && ImgIsRegroupement(key)) ? BuildImageCategoryPage(key) : key switch
+            page = (!IsMulti && ImgIsRegroupement(key)) ? BuildImageCategoryPage(key)
+                 : key switch
             {
                 "Metadata" => BuildMetadataPage(),
                 "CustomFields" => BuildCustomFieldsPage(),
@@ -313,6 +316,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "AlternateNames" => IsMulti ? Placeholder("Alternate Names") : BuildAlternateNamesPage(),
                 "ControllerSupport" => IsMulti ? BuildControllerSupportMultiPage() : BuildControllerSupportPage(),
                 "Images" => IsMulti ? BuildImagesMatrixPage() : BuildImagesPage(),   // multi → media-coverage matrix
+                "Videos" => IsMulti ? Placeholder("Videos") : BuildVideosPage(),     // one page, grouped by type
                 "ImageQuery" => BuildImageQueryPage(),   // works for 1..N games (single or multi selection)
                 "Launching" => BuildLaunchingPage(),   // main page supports multi (merged fields); sub-pages below stay solo
                 "DOSBox" => BuildDosBoxPage(),   // main DOSBox page supports multi (3-state Use-DOSBox + merged paths)

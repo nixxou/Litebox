@@ -164,6 +164,9 @@ internal static class HostLaunch
             _store?.DropOptional();
             if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame)
             { Gc.HostGameCache.ClearForMemory(); Console.WriteLine("[gamecache] cleared for game launch"); }
+            // libvlc holds ~50 MB once it has decoded frames. LiteBox is idle while the game runs, so hand it
+            // back; the next thumbnail re-creates the instance transparently (~200 ms).
+            Video.VlcService.Shutdown();
             Mem.Trim();
             Mem.Report("after drop+trim (launch)");
         }

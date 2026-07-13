@@ -63,7 +63,7 @@ $payload = @(
 # The ONLY files the light build ships (everything else the publish produced is the .NET runtime, which
 # LaunchBox\Core already provides). deps.json + runtimeconfig.json make it self-contained-flat. These four
 # are BOTH the zip contents AND what the universal installer embeds (per TFM) and extracts into Core.
-$appFiles = @('LiteBox.exe','LiteBox.dll','LiteBox.deps.json','LiteBox.runtimeconfig.json')
+$appFiles = @('LiteBox.exe','LiteBox.dll','LiteBox.deps.json','LiteBox.runtimeconfig.json','LibVLCSharp.dll')
 
 # net9.0-windows -> "net9" (uses Lb9Root), net10.0-windows -> "net10" (uses Lb10Root)
 $targets = @(

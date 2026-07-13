@@ -122,6 +122,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Managed wrapper over libvlc (video thumbnails now, in-app playback later). 225 KB, no transitive
+         managed deps, so it is simply a 5th app file (keep build-release.ps1 $appFiles + LightPayload.Files +
+         the light/<tfm>/* block below in sync).
+         We ship NO libvlc natives: LaunchBox ALREADY bundles a full libvlc 3.0.23 at ThirdParty\VLC\x64 (366
+         plugins) — the very one it plays videos with. VlcService points at it, so this costs 0 MB instead of
+         the ~13 MB a trimmed copy of our own would have added. -->
+    <PackageReference Include="LibVLCSharp" Version="3.10.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Fallback hero fanart, used when a game/node has no background of its own. -->
     <EmbeddedResource Include="defaultFanart.jpg" />
     <!-- App/window icon (also embedded so the WinForms window + taskbar use the multi-size icon). -->
@@ -154,10 +164,12 @@
     <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.dll"><LogicalName>light/net9/LiteBox.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.deps.json"><LogicalName>light/net9/LiteBox.deps.json</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.runtimeconfig.json"><LogicalName>light/net9/LiteBox.runtimeconfig.json</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\LibVLCSharp.dll"><LogicalName>light/net9/LibVLCSharp.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.exe"><LogicalName>light/net10/LiteBox.exe</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.dll"><LogicalName>light/net10/LiteBox.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.deps.json"><LogicalName>light/net10/LiteBox.deps.json</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.runtimeconfig.json"><LogicalName>light/net10/LiteBox.runtimeconfig.json</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\LibVLCSharp.dll"><LogicalName>light/net10/LibVLCSharp.dll</LogicalName></EmbeddedResource>
   </ItemGroup>
 
 </Project>

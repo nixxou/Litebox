@@ -61,6 +61,11 @@ internal static class ThumbCache
     public static void Init(string lbRoot)
         => _dir = Path.Combine(lbRoot, "Plugins", "ExtendDB", "cache", "thumbs");
 
+    /// <summary>The shared thumbs directory, created on demand. Video thumbnails (see
+    /// Host.Video.VideoThumbnailer) land here too: same folder, same 360 px / JPEG convention — only the KEY
+    /// differs (a video also keys on mtime, since replacing one must re-extract the frame).</summary>
+    public static string Folder => Dir;
+
     private static string Dir
     {
         get

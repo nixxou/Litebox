@@ -15,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.Data.Sqlite;
 
 namespace LbApiHost.Host.Media;
@@ -28,10 +29,14 @@ internal static class MetadataDb
         public readonly int DatabaseId, Duplicate;
         public readonly string FileName, Type, Region, Origin, FileType;
         public readonly long Crc32;
-        public WebImage(int db, string fn, string ty, string rg, long crc, string origin, int dup, string ft)
+        /// <summary>Byte size from the EXTENDED DB (base LaunchBox has no such column → 0). ExtendDB's second
+        /// dedup key after CRC — and the only usable one for videos, whose CRC is never recomputed.</summary>
+        public readonly long FileSize;
+        public WebImage(int db, string fn, string ty, string rg, long crc, string origin, int dup, string ft, long fs = 0)
         {
             DatabaseId = db; FileName = fn ?? ""; Type = ty ?? ""; Region = rg ?? ""; Crc32 = crc;
             Origin = string.IsNullOrEmpty(origin) ? "launchbox" : origin; Duplicate = dup; FileType = ft ?? "";
+            FileSize = fs;
         }
         /// <summary>Launchbox CDN URL — only correct when <see cref="Origin"/> is "launchbox".</summary>
         public string Url => ImageCdnBase + FileName.Replace("\\", "/");
@@ -53,6 +58,97 @@ internal static class MetadataDb
 
     /// <summary>Every image the online/merged DB has for a game (by its DatabaseId), or empty. Read-only.</summary>
     public static List<WebImage> ImagesForGame(int databaseId) => ImagesForGame(DbPath(), databaseId);
+
+    // ── Videos ────────────────────────────────────────────────────────────────
+    // Videos are read from the EXTENDED database, not from LaunchBox's own Metadata.db — the same source
+    // ExtendDB's own video downloader queries (ExtendMediaDownloader.QueryCandidates reads ExtendedDbPath
+    // directly). LaunchBox's DB has no video rows at all, and the LbDbMerger only pushes image types into it.
+    // They live in the same GameImages table, under Type 'Video' (146k rows: screenscraper / steam / emumovies)
+    // and 'VideoAdvert' (emumovies). CRC32 AND FileSize are always populated there — which matters, because a
+    // video's CRC is never recomputed from disk (see the owned-detection in the video page).
+
+    private static string? _extDb;
+    private static bool _extProbed;
+
+    /// <summary>ExtendDB's enriched DB (LaunchBox.Extended.Metadata.db), or null when it isn't on disk. Path
+    /// comes from ExtendDBPlugin.ExtendedDbPath when the plugin is loaded; else the conventional location.</summary>
+    public static string? ExtendedDbPath
+    {
+        get
+        {
+            if (_extProbed) return _extDb;
+            _extProbed = true;
+            try
+            {
+                var asm = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "ExtendDB");
+                var f = asm?.GetType("ExtendDB.ExtendDBPlugin")?.GetField("ExtendedDbPath",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (f?.GetValue(null) is string p && File.Exists(p)) { _extDb = p; return _extDb; }
+            }
+            catch { }
+            try
+            {
+                var root = MediaResolver.LbRoot;
+                if (!string.IsNullOrEmpty(root))
+                {
+                    var p = Path.Combine(root, "Plugins", "ExtendDB", "LaunchBox.Extended.Metadata.db");
+                    if (File.Exists(p)) _extDb = p;
+                }
+            }
+            catch { }
+            return _extDb;
+        }
+    }
+
+    /// <summary>Every video the extended DB has for a game, or empty when the DB isn't there.</summary>
+    public static List<WebImage> VideosForGame(int databaseId) => VideosForGame(ExtendedDbPath, databaseId);
+
+    /// <summary>Path-parameterized reader (also the unit-test seam).</summary>
+    internal static List<WebImage> VideosForGame(string? db, int databaseId)
+    {
+        var list = new List<WebImage>();
+        if (db == null || databaseId <= 0) return list;
+        try
+        {
+            var cs = new SqliteConnectionStringBuilder { DataSource = db, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Shared }.ToString();
+            using var con = new SqliteConnection(cs);
+            con.Open();
+
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pc = con.CreateCommand())
+            {
+                pc.CommandText = "PRAGMA table_info(\"GameImages\")";
+                using var pr = pc.ExecuteReader();
+                while (pr.Read()) cols.Add(pr.GetString(1));
+            }
+            if (!cols.Contains("FileName") || !cols.Contains("Type")) return list;
+            string Col(string name, string literal) => cols.Contains(name) ? "\"" + name + "\"" : literal;
+
+            using var cmd = con.CreateCommand();
+            cmd.CommandText =
+                $"SELECT \"FileName\", \"Type\", {Col("Region", "''")}, {Col("CRC32", "0")}, " +
+                $"{Col("Origin", "'launchbox'")}, {Col("duplicate", "0")}, {Col("FileSize", "0")} " +
+                "FROM \"GameImages\" WHERE \"DatabaseId\" = $id AND \"Type\" IN ('Video','VideoAdvert')";
+            cmd.Parameters.Add(new SqliteParameter("$id", databaseId));
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                string fn = r.IsDBNull(0) ? "" : r.GetString(0);
+                if (string.IsNullOrEmpty(fn)) continue;
+                list.Add(new WebImage(
+                    databaseId, fn,
+                    r.IsDBNull(1) ? "" : r.GetString(1),
+                    r.IsDBNull(2) ? "" : r.GetString(2),
+                    r.IsDBNull(3) ? 0 : r.GetInt64(3),
+                    r.IsDBNull(4) ? "launchbox" : r.GetString(4),
+                    r.IsDBNull(5) ? 0 : (int)r.GetInt64(5),
+                    ImageFileType.Extract(fn),          // the extended DB has no FileType column — derive it
+                    r.IsDBNull(6) ? 0 : r.GetInt64(6)));
+            }
+        }
+        catch { }
+        return list;
+    }
 
     /// <summary>Path-parameterized reader (also the unit-test seam): reads GameImages from an explicit DB file.</summary>
     internal static List<WebImage> ImagesForGame(string? db, int databaseId)

@@ -266,7 +266,40 @@ internal sealed partial class EditGameWindow
     private int ImgPadX => S(12);
     private int ImgPadY => S(10);
     private int ImgCellW => S(156);
-    private int ImgCellH => S(150);
+    /// <summary>Thumbnail + two caption lines (#num / lock, then the ADS provenance) — see ImgCell.</summary>
+    private int ImgCellH => S(168);
+    private int ImgThumbH => ImgCellH - S(48);
+
+    // ── ADS provenance caption (shared by the image AND video cells) ──────────
+    // ":info" is where a downloaded file records WHERE it came from — the origin (launchbox / screenscraper /
+    // steam / emumovies) and the region the source database gave it, which is NOT always the region folder the
+    // file ended up in. Both are otherwise invisible; putting them under the thumbnail costs one small ADS read
+    // per cell. Empty for a file that was never stamped (hand-copied, or downloaded before LiteBox wrote ADS).
+    private static readonly Color ProvFg = Color.FromArgb(132, 128, 158);
+
+    private static string AdsProvenance(string path)
+    {
+        var info = ImageInfoBridge.ReadAny(path);
+        if (info is not ImageInfo i) return "";
+        string o = (i.Origin ?? "").Trim();
+        string r = (i.NativeRegion ?? "").Trim();
+        if (o.Length == 0 && r.Length == 0) return "";
+        if (o.Length == 0) return r;
+        return r.Length == 0 ? o : o + "  ·  " + r;
+    }
+
+    private Label ProvLabel(string path, int x, int y, int w)
+    {
+        string text = AdsProvenance(path);
+        var l = new Label
+        {
+            Text = text, ForeColor = ProvFg, BackColor = Bg, Font = new Font("Segoe UI", 7.5f),
+            AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true,
+        };
+        l.SetBounds(x, y, w, S(16));
+        if (text.Length > 0) new ToolTip().SetToolTip(l, "From the file's ExtendDB metadata (:info) — origin · native region");
+        return l;
+    }
 
     private readonly struct ImgFile
     {
@@ -650,7 +683,7 @@ internal sealed partial class EditGameWindow
     {
         var cell = new Panel { Size = new Size(ImgCellW, ImgCellH), BackColor = Bg };
         var frame = new Panel { BackColor = Color.FromArgb(150, 90, 200), Padding = new Padding(S(2)) };   // purple = not owned
-        frame.SetBounds(S(4), S(4), ImgCellW - S(8), ImgCellH - S(30));
+        frame.SetBounds(S(4), S(4), ImgCellW - S(8), ImgThumbH);
         var pic = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 18, 24), Cursor = Cursors.Hand };
         ImgLoadThumbWeb(pic, w);
         string key = w.Key;
@@ -685,15 +718,26 @@ internal sealed partial class EditGameWindow
         cell.Controls.Add(chk); chk.BringToFront();
         _imgWebChk[key] = chk;
 
-        // Caption: mark non-launchbox sources so the user knows where a downloaded image comes from.
-        string src = w.IsLaunchbox ? "web" : "web · " + w.Origin;
+        // Caption: the same two lines the owned cells show (origin, then region) — so the tile you're about to
+        // download already reads like the file it will become. The values come from the DB row, not from ADS
+        // (nothing is stamped yet); ImageAdsWriter writes exactly these into :info on download.
         var cap = new Label
         {
-            Text = src, ForeColor = Color.FromArgb(190, 150, 230),
+            Text = w.IsLaunchbox ? "web" : "web · " + w.Origin, ForeColor = Color.FromArgb(190, 150, 230),
             BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
         };
-        cap.SetBounds(S(4), ImgCellH - S(24), ImgCellW - S(8), S(22));
+        cap.SetBounds(S(4), ImgCellH - S(42), ImgCellW - S(8), S(20));
         cell.Controls.Add(cap);
+
+        var rgn = new Label
+        {
+            Text = string.IsNullOrEmpty(w.Region) ? "World" : w.Region,   // GamesDb: a blank region IS World
+            ForeColor = ProvFg, BackColor = Bg, Font = new Font("Segoe UI", 7.5f), AutoSize = false,
+            TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true,
+        };
+        rgn.SetBounds(S(4), ImgCellH - S(22), ImgCellW - S(8), S(16));
+        cell.Controls.Add(rgn);
         return cell;
     }
 
@@ -836,7 +880,7 @@ internal sealed partial class EditGameWindow
         {
             SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 18, 24), Cursor = Cursors.Hand,
         };
-        var picBounds = new Rectangle(S(4), S(4), ImgCellW - S(8), ImgCellH - S(30));
+        var picBounds = new Rectangle(S(4), S(4), ImgCellW - S(8), ImgThumbH);
         if (isSlotPick || isTypePick)
         {
             // Gold + thick = the image LaunchBox actually displays for this slot. Neutral + thin = merely the
@@ -900,15 +944,17 @@ internal sealed partial class EditGameWindow
             Text = $"#{img.NumVal}" + (img.HasGuid ? "  [G]" : ""), ForeColor = SubFg, BackColor = Bg,
             Font = new Font("Segoe UI", 8f), AutoSize = false, TextAlign = ContentAlignment.MiddleLeft,
         };
-        num.SetBounds(S(4), ImgCellH - S(24), ImgCellW - (ImageLockBridge.Available ? S(34) : S(8)), S(22));
+        num.SetBounds(S(4), ImgCellH - S(42), ImgCellW - (ImageLockBridge.Available ? S(34) : S(8)), S(20));
         cell.Controls.Add(num);
+
+        cell.Controls.Add(ProvLabel(img.Path, S(4), ImgCellH - S(22), ImgCellW - S(8)));   // origin · native region (ADS)
 
         if (ImageLockBridge.Available)
         {
             bool locked = ImageLockBridge.IsLocked(img.Path);
             var lb = new Button { FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI Symbol", 8f), Cursor = Cursors.Hand, TabStop = false };
             lb.FlatAppearance.BorderSize = 0;
-            lb.SetBounds(ImgCellW - S(28), ImgCellH - S(24), S(22), S(20));
+            lb.SetBounds(ImgCellW - S(28), ImgCellH - S(42), S(22), S(20));
             ImgStyleLockBtn(lb, locked);
             string p = img.Path;
             lb.Click += (_, _) => ImgStyleLockBtn(lb, ImageLockBridge.Toggle(p));
@@ -1269,6 +1315,7 @@ internal sealed partial class EditGameWindow
             foreach (var img in _mxThumbs.Values) { try { img?.Dispose(); } catch { } }
             _mxThumbs.Clear(); _mxLru.Clear(); _mxLruNodes.Clear();
         }
+        VidDisposeThumbs();   // video frames: shared by the video pages, freed once, here
 
         base.OnFormClosed(e);
     }

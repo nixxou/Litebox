@@ -190,6 +190,52 @@ internal static class MediaResolver
         return BestInDir(dir, id, Sanitize(title), VideoExts);
     }
 
+    /// <summary>
+    /// The five LaunchBox video types (SDK: VideoTypes.GetList()) and the sub-folder each lives in.
+    /// A null sub-folder means the platform's video ROOT — that's the classic "Video Snap".
+    /// </summary>
+    public static readonly (string Type, string SubDir)[] VideoTypeDirs =
+    {
+        ("Video Snap",  null),
+        ("Trailer",     "Trailer"),
+        ("Theme Video", "Theme"),
+        ("Recording",   "Recordings"),
+        ("Marquee",     "Marquee"),
+    };
+
+    /// <summary>Every video file for a game as (path, type) — the video twin of <see cref="AllImageFiles"/>.
+    /// Always IO: the cache only exposes the BEST video per sub-dir, not the whole list.</summary>
+    public static List<(string path, string type)> AllVideoFiles(string platformName, Guid id, string title)
+    {
+        var result = new List<(string, string)>();
+        if (string.IsNullOrEmpty(platformName)) return result;
+        string baseDir = VideoFolder(platformName);
+        if (baseDir == null) return result;
+
+        string sani = Sanitize(title);
+        foreach (var (type, sub) in VideoTypeDirs)
+        {
+            string dir = sub == null ? baseDir : Path.Combine(baseDir, sub);
+            foreach (var p in AllInDir(dir, id, sani, VideoExts)) result.Add((p, type));
+        }
+        return result;
+    }
+
+    /// <summary>The on-disk folder a video of the given TYPE belongs in (not created). Null if unresolvable.
+    /// Used when ADDING or MOVING a video.</summary>
+    public static string VideoTypeFolder(string platformName, string videoType)
+    {
+        string baseDir = VideoFolder(platformName);
+        if (baseDir == null) return null;
+        foreach (var (type, sub) in VideoTypeDirs)
+            if (string.Equals(type, videoType, StringComparison.OrdinalIgnoreCase))
+                return sub == null ? baseDir : Path.Combine(baseDir, sub);
+        return null;
+    }
+
+    /// <summary>The extensions LiteBox recognises as a video (used by the Add Video picker).</summary>
+    public static IReadOnlyCollection<string> VideoExtensions => VideoExts;
+
     /// <summary>Manual file path (always IO — the GameCache does not index manuals). Null if none.</summary>
     public static string Manual(string platformName, Guid id, string title)
         => BestInDir(MediaFolder("Manuals", platformName), id, Sanitize(title), ManualExts);

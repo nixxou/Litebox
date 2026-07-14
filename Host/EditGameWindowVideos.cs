@@ -77,7 +77,7 @@ internal sealed partial class EditGameWindow
                 Checked = _vidShowWeb,
             };
             web.SetBounds(S(134), S(8), S(210), S(26));
-            web.CheckedChanged += (_, _) => { _vidShowWeb = web.Checked; VidPopulate(host, null); };
+            web.CheckedChanged += (_, _) => { _vidShowWeb = web.Checked; VidSourceToggle("web", web.Checked); VidPopulate(host, null); };
             bar.Controls.Add(web);
         }
 
@@ -92,8 +92,22 @@ internal sealed partial class EditGameWindow
                 Checked = _vidShowEmu,
             };
             emu.SetBounds(S(348), S(8), S(190), S(26));
-            emu.CheckedChanged += (_, _) => { _vidShowEmu = emu.Checked; VidPopulate(host, null); };
+            emu.CheckedChanged += (_, _) => { _vidShowEmu = emu.Checked; VidSourceToggle("emu", emu.Checked); VidPopulate(host, null); };
             bar.Controls.Add(emu);
+        }
+
+        // "Show Steam videos" (green) — live, only for a game with a Steam appid.
+        if (VidSteamAvailable(ImgGame))
+        {
+            var steam = new CheckBox
+            {
+                Text = "Show Steam videos", AutoSize = false, ForeColor = SteamGreen,
+                BackColor = Bg, Font = new Font("Segoe UI", 8.5f), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
+                Checked = _vidShowSteam,
+            };
+            steam.SetBounds(S(546), S(8), S(170), S(26));
+            steam.CheckedChanged += (_, _) => { _vidShowSteam = steam.Checked; VidSourceToggle("steam", steam.Checked); VidPopulate(host, null); };
+            bar.Controls.Add(steam);
         }
 
         if (!VlcService.Available)
@@ -102,7 +116,7 @@ internal sealed partial class EditGameWindow
             {
                 Text = "⚠  libvlc isn't installed — videos are listed, but without thumbnails.",
                 ForeColor = Color.FromArgb(235, 180, 100), BackColor = Bg, AutoSize = true,
-                Font = new Font("Segoe UI", 8.5f), Location = new Point(S(354), S(12)),
+                Font = new Font("Segoe UI", 8.5f), Location = new Point(S(724), S(12)),
             };
             bar.Controls.Add(warn);
         }
@@ -123,8 +137,9 @@ internal sealed partial class EditGameWindow
         var types = onlyType != null ? new List<string> { onlyType } : VidTypes().ToList();
         bool web = VidWebAvailable && _vidShowWeb;
         bool emu = _vidShowEmu && VidEmuAvailable(g);
+        bool steam = _vidShowSteam && VidSteamAvailable(g);
 
-        if (!all.Any(v => types.Contains(v.Type, StringComparer.OrdinalIgnoreCase)) && !web && !emu)
+        if (!all.Any(v => types.Contains(v.Type, StringComparer.OrdinalIgnoreCase)) && !web && !emu && !steam)
         {
             host.Controls.Add(new Label
             {
@@ -165,8 +180,176 @@ internal sealed partial class EditGameWindow
             y += VidCellH + S(8);
         }
 
-        if (web) VidAppendWebTiles(g, all, inner, ref y);
-        if (emu) VidAppendEmuTiles(g, all, inner, ref y);
+        VidAppendMergedWeb(g, all, inner, ref y);
+    }
+
+    // Track the order the user turns web video sources on, so the merged view interleaves them by check-order
+    // (like the multi-select grid / the images page). "web" = database (purple) · "emu" (blue) · "steam" (green).
+    private readonly List<string> _vidSourceOrder = new();
+    private void VidSourceToggle(string src, bool on)
+    {
+        if (on) { if (!_vidSourceOrder.Contains(src)) _vidSourceOrder.Add(src); }
+        else _vidSourceOrder.Remove(src);
+    }
+
+    private void VidRebuildIfCurrent()
+    {
+        if (_tree.SelectedNode?.Tag?.ToString() == "Videos") { _pages.Remove("Videos"); ShowPage("Videos"); }
+    }
+
+    // ── Merged "videos you don't own": database + EmuMovies + Steam in ONE flow — no per-source section headers,
+    // the tile border colour tells the origin (purple/blue/green). Sources interleave in the order the user
+    // checked them (_vidSourceOrder). Grouped by video type only when more than one is present (Video / VideoAdvert).
+    // Async sources show a compact "Querying…" note and rebuild the page when their fetch lands.
+    private void VidAppendMergedWeb(IGame g, List<VidFile> local, Panel inner, ref int y)
+    {
+        bool webOn   = VidWebAvailable && _vidShowWeb;
+        bool emuOn   = _vidShowEmu && VidEmuAvailable(g);
+        bool steamOn = _vidShowSteam && VidSteamAvailable(g);
+        if (!webOn && !emuOn && !steamOn) return;
+
+        bool On(string s) => (s == "web" && webOn) || (s == "emu" && emuOn) || (s == "steam" && steamOn);
+        var order = _vidSourceOrder.Where(On).ToList();
+        foreach (var s in new[] { "web", "emu", "steam" }) if (On(s) && !order.Contains(s)) order.Add(s);
+
+        int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
+        string emuKey = Safe(() => g.Id) ?? Safe(() => g.Title) ?? "";
+        string steamKey = "steam:" + (Safe(() => g.Id) ?? Safe(() => g.Title) ?? "");
+
+        var entries = new List<(string type, int rank, Panel cell)>();
+        var loading = new List<string>();
+
+        for (int rank = 0; rank < order.Count; rank++)
+        {
+            switch (order[rank])
+            {
+                case "web":
+                    foreach (var w in VidWebCandidates(dbId, local))
+                        entries.Add((string.IsNullOrEmpty(w.Type) ? "Video" : w.Type, rank, VidWebCell(w)));
+                    break;
+
+                case "emu":
+                    if (!_vidEmuCache.TryGetValue(emuKey, out var em)) { VidTriggerEmuFetch(g, emuKey); loading.Add("EmuMovies"); }
+                    else if (em == null) loading.Add("EmuMovies");
+                    else
+                    {
+                        var owned = BuildEmuOwned(local.Select(v => v.Path));
+                        foreach (var m in em.Where(m => !EmuOwns(owned, m.Crc, m.FileSize)))
+                            entries.Add((string.IsNullOrEmpty(m.LbType) ? "Video" : m.LbType, rank, VidEmuCell(m)));
+                    }
+                    break;
+
+                case "steam":
+                    if (!_vidSteamCache.TryGetValue(steamKey, out var st)) { VidTriggerSteamFetch(g, dbId, steamKey); loading.Add("Steam"); }
+                    else if (st == null) loading.Add("Steam");
+                    else
+                        foreach (var w in st)
+                            entries.Add((string.IsNullOrEmpty(w.Type) ? "Video" : w.Type, rank, VidSteamCell(w)));
+                    break;
+            }
+        }
+
+        if (entries.Count == 0 && loading.Count == 0) return;
+
+        y += S(12);
+        var hdr = new Label
+        {
+            Text = "⬇  Videos you don't own — left-click to stream, right-click to download  (border colour = source)",
+            ForeColor = SubFg, Font = new Font("Segoe UI", 9f, FontStyle.Italic), AutoSize = false, BackColor = Bg,
+        };
+        hdr.SetBounds(S(12), y, S(800), S(24)); inner.Controls.Add(hdr); y += S(30);
+
+        // Wrap tiles to the visible width so a merged (multi-source) row never forces horizontal scrolling.
+        int hostW = inner.Parent?.ClientSize.Width ?? 0;
+        int avail = (hostW > S(200) ? hostW : S(1100)) - S(12) - S(24);
+        int cols = Math.Max(1, avail / VidCellW);
+
+        var typeOrder = entries.Select(e => e.type).Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(t => t.Equals("Video", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(t => t, StringComparer.OrdinalIgnoreCase).ToList();
+        bool showTypeHeaders = typeOrder.Count > 1;   // "Video" only ⇒ a plain grid; add headers when adverts too
+
+        foreach (var type in typeOrder)
+        {
+            var cells = entries.Where(e => string.Equals(e.type, type, StringComparison.OrdinalIgnoreCase))
+                               .OrderBy(e => e.rank).Select(e => e.cell).ToList();   // OrderBy is stable → same-source order kept
+            if (cells.Count == 0) continue;
+            if (showTypeHeaders)
+            {
+                var th = new Label { Text = $"━━  {type}", ForeColor = Fg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg };
+                th.SetBounds(S(12), y, S(600), S(26)); inner.Controls.Add(th); y += S(30);
+            }
+            int x = S(12), col = 0;
+            foreach (var cell in cells)
+            {
+                if (col == cols) { col = 0; x = S(12); y += VidCellH + S(8); }
+                cell.Location = new Point(x, y); inner.Controls.Add(cell); x += VidCellW; col++;
+            }
+            y += VidCellH + S(8);
+        }
+
+        if (loading.Count > 0)
+        {
+            inner.Controls.Add(new Label { Text = "Querying " + string.Join(", ", loading) + "…", ForeColor = SubFg, BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 9f, FontStyle.Italic), Location = new Point(S(16), y) });
+            y += S(26);
+        }
+    }
+
+    /// <summary>Database web-video stand-ins for this game, filtered against owned (ADS CRC, then byte size).</summary>
+    private List<MetadataDb.WebImage> VidWebCandidates(int dbId, List<VidFile> local)
+    {
+        if (dbId <= 0) return new();
+        List<MetadataDb.WebImage> cands;
+        try { cands = MetadataDb.VideosForGame(dbId); } catch { cands = new List<MetadataDb.WebImage>(); }
+        if (cands.Count == 0) return new();
+        var ownedCrc = new HashSet<uint>();
+        var ownedSize = new HashSet<long>();
+        foreach (var v in local)
+        {
+            var s = FileMetaStore.Read(v.Path, FileMetaStore.StreamCrc32);
+            if (!string.IsNullOrEmpty(s) && long.TryParse(s, out var c) && c != 0) ownedCrc.Add(unchecked((uint)c));
+            try { ownedSize.Add(new FileInfo(v.Path).Length); } catch { }
+        }
+        return cands.Where(w => !ownedCrc.Contains(unchecked((uint)w.Crc32))
+                             && !(w.FileSize > 0 && ownedSize.Contains(w.FileSize))).ToList();
+    }
+
+    private void VidTriggerEmuFetch(IGame g, string idKey)
+    {
+        _vidEmuCache[idKey] = null;   // in-flight sentinel — a rebuild before the fetch lands won't re-trigger
+        string plat = Safe(() => g.Platform) ?? "";
+        string romPath = Safe(() => g.ApplicationPath) ?? "";
+        string title = Safe(() => g.Title) ?? "";
+        System.Threading.Tasks.Task.Run(async () =>
+        {
+            List<EmuMoviesCatalog.EmuMedia> found = new();
+            try { var api = EmuApi(); if (api != null) found = await EmuMoviesCatalog.ResolveForGameAsync(api, title, romPath, plat); }
+            catch { }
+            found = found.Where(m => m.LbType == "Video" || m.LbType == "VideoAdvert").ToList();
+            try
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke(new Action(() => { _vidEmuCache[idKey] = found; VidRebuildIfCurrent(); }));
+            }
+            catch { }
+        });
+    }
+
+    private void VidTriggerSteamFetch(IGame g, int dbId, string idKey)
+    {
+        _vidSteamCache[idKey] = null;
+        string appPath = Safe(() => g.ApplicationPath) ?? "";
+        System.Threading.Tasks.Task.Run(async () =>
+        {
+            List<MetadataDb.WebImage> found = new();
+            try { found = (await SteamCatalog.ResolveForGameAsync(dbId, appPath)).Where(w => string.Equals(w.Type, "Video", StringComparison.OrdinalIgnoreCase)).ToList(); } catch { }
+            try
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke(new Action(() => { _vidSteamCache[idKey] = found; VidRebuildIfCurrent(); }));
+            }
+            catch { }
+        });
     }
 
     private Panel VidCell(VidFile v)
@@ -462,60 +645,6 @@ internal sealed partial class EditGameWindow
 
     private static bool VidWebAvailable => MediaApiBridge.UseWizardPath && MetadataDb.ExtendedDbPath != null;
 
-    private void VidAppendWebTiles(IGame g, List<VidFile> local, Panel inner, ref int y)
-    {
-        int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
-        if (dbId <= 0) return;
-
-        List<MetadataDb.WebImage> cands;
-        try { cands = MetadataDb.VideosForGame(dbId); } catch { cands = new List<MetadataDb.WebImage>(); }
-        if (cands.Count == 0) return;
-
-        // Owned = same CRC (from ADS only — never computed for a video) or, failing that, same byte size.
-        var ownedCrc = new HashSet<uint>();
-        var ownedSize = new HashSet<long>();
-        foreach (var v in local)
-        {
-            var s = FileMetaStore.Read(v.Path, FileMetaStore.StreamCrc32);
-            if (!string.IsNullOrEmpty(s) && long.TryParse(s, out var c) && c != 0) ownedCrc.Add(unchecked((uint)c));
-            try { ownedSize.Add(new FileInfo(v.Path).Length); } catch { }
-        }
-        var web = cands.Where(w => !ownedCrc.Contains(unchecked((uint)w.Crc32))
-                                && !(w.FileSize > 0 && ownedSize.Contains(w.FileSize))).ToList();
-        if (web.Count == 0) return;
-
-        y += S(10);
-        var hdr = new Label
-        {
-            Text = "🌐  Database — videos you don't own (purple border · click to stream · right-click to download)",
-            ForeColor = Color.FromArgb(190, 150, 230), Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-            AutoSize = false, BackColor = Bg,
-        };
-        hdr.SetBounds(S(12), y, S(700), S(26)); inner.Controls.Add(hdr); y += S(32);
-
-        foreach (var type in web.Select(w => w.Type).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(t => t))
-        {
-            var ofType = web.Where(w => string.Equals(w.Type, type, StringComparison.OrdinalIgnoreCase))
-                            .OrderBy(w => w.Origin, StringComparer.OrdinalIgnoreCase).ToList();
-            var th = new Label
-            {
-                Text = $"━━  {type}", ForeColor = Fg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-                AutoSize = false, BackColor = Bg,
-            };
-            th.SetBounds(S(12), y, S(600), S(26)); inner.Controls.Add(th); y += S(30);
-
-            int x = S(12);
-            foreach (var w in ofType)
-            {
-                var cell = VidWebCell(w);
-                cell.Location = new Point(x, y);
-                inner.Controls.Add(cell);
-                x += VidCellW;
-            }
-            y += VidCellH + S(8);
-        }
-    }
-
     private Panel VidWebCell(MetadataDb.WebImage w)
     {
         var cell = new Panel { Size = new Size(VidCellW, VidCellH), BackColor = Bg };
@@ -739,86 +868,6 @@ internal sealed partial class EditGameWindow
         return _emuApi;
     }
 
-    private void VidAppendEmuTiles(IGame g, List<VidFile> local, Panel inner, ref int y)
-    {
-        string plat = Safe(() => g.Platform) ?? "";
-        if (!EmuMoviesCatalog.SupportsPlatform(plat)) return;
-        string idKey = Safe(() => g.Id) ?? Safe(() => g.Title) ?? "";
-
-        y += S(10);
-        var hdr = new Label
-        {
-            Text = "🎬  EmuMovies — videos for this game (blue border · click to stream · right-click to download)",
-            ForeColor = EmuBlue, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg,
-        };
-        hdr.SetBounds(S(12), y, S(760), S(26)); inner.Controls.Add(hdr); y += S(32);
-
-        // Not resolved yet → show a loading note and fetch off the UI thread, then rebuild from cache.
-        if (!_vidEmuCache.TryGetValue(idKey, out var media))
-        {
-            _vidEmuCache[idKey] = null;   // mark in-flight
-            var loading = new Label
-            {
-                Text = "Querying EmuMovies…", ForeColor = SubFg, BackColor = Bg, AutoSize = true,
-                Font = new Font("Segoe UI", 9f, FontStyle.Italic), Location = new Point(S(16), y),
-            };
-            inner.Controls.Add(loading);
-            string romPath = Safe(() => g.ApplicationPath) ?? "";
-            string title = Safe(() => g.Title) ?? "";
-            System.Threading.Tasks.Task.Run(async () =>
-            {
-                List<EmuMoviesCatalog.EmuMedia> found = new();
-                try
-                {
-                    var api = EmuApi();
-                    if (api != null)
-                        found = await EmuMoviesCatalog.ResolveForGameAsync(api, title, romPath, plat);
-                }
-                catch { }
-                // keep only video types
-                found = found.Where(m => m.LbType == "Video" || m.LbType == "VideoAdvert").ToList();
-                try
-                {
-                    if (IsDisposed || !IsHandleCreated) return;
-                    BeginInvoke(new Action(() =>
-                    {
-                        _vidEmuCache[idKey] = found;
-                        if (_tree.SelectedNode?.Tag?.ToString() == "Videos") { _pages.Remove("Videos"); ShowPage("Videos"); }
-                    }));
-                }
-                catch { }
-            });
-            return;
-        }
-
-        if (media == null) { /* still loading (shouldn't reach here after the branch above) */ return; }
-        if (media.Count == 0)
-        {
-            inner.Controls.Add(new Label
-            {
-                Text = "No EmuMovies video matched this game.", ForeColor = SubFg, BackColor = Bg, AutoSize = true,
-                Font = new Font("Segoe UI", 9f, FontStyle.Italic), Location = new Point(S(16), y),
-            });
-            y += S(26);
-            return;
-        }
-
-        var owned = BuildEmuOwned(local.Select(v => v.Path));
-        var show = media.Where(m => !EmuOwns(owned, m.Crc, m.FileSize)).ToList();
-        if (show.Count == 0) { inner.Controls.Add(new Label { Text = "All EmuMovies videos already owned.", ForeColor = SubFg, BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 9f, FontStyle.Italic), Location = new Point(S(16), y) }); y += S(26); return; }
-
-        int x = S(12);
-        foreach (var m in show)
-        {
-            var cell = VidEmuCell(m);
-            cell.Location = new Point(x, y);
-            inner.Controls.Add(cell);
-            x += VidCellW;
-            if (x + VidCellW > inner.Width && inner.Width > 0) { x = S(12); y += VidCellH + S(8); }
-        }
-        y += VidCellH + S(8);
-    }
-
     private Panel VidEmuCell(EmuMoviesCatalog.EmuMedia m)
     {
         var cell = new Panel { Size = new Size(VidCellW, VidCellH), BackColor = Bg };
@@ -951,6 +1000,101 @@ internal sealed partial class EditGameWindow
         {
             MessageBox.Show(this, "Download failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    // ── Steam videos (green) — LIVE, appdetails, only for games with a Steam appid ──
+    private bool _vidShowSteam;
+    private readonly Dictionary<string, List<MetadataDb.WebImage>?> _vidSteamCache = new(StringComparer.Ordinal);
+
+    private static bool VidSteamAvailable(IGame g)
+    {
+        try { return SteamCatalog.AppIdOf(Safe(() => g.ApplicationPath) ?? "", Safe(() => g.LaunchBoxDbId) ?? -1) != null; }
+        catch { return false; }
+    }
+
+    private Panel VidSteamCell(MetadataDb.WebImage w)
+    {
+        var cell = new Panel { Size = new Size(VidCellW, VidCellH), BackColor = Bg };
+        var frame = new Panel { BackColor = SteamGreen, Padding = new Padding(S(2)) };
+        frame.SetBounds(S(4), S(4), VidCellW - S(12), VidThumbH);
+        var pic = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 18, 24), Cursor = Cursors.Hand };
+        VidLoadThumbSteam(pic, w);
+        var wi = w;
+        pic.MouseUp += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Right)
+            {
+                var menu = ThemedMenu();
+                menu.Items.Add(new ToolStripMenuItem("▶  Play (stream)").WithClick(() => VidPlaySteam(wi)));
+                menu.Items.Add(new ToolStripSeparator());
+                menu.Items.Add(new ToolStripMenuItem("⬇  Download").WithClick(() => VidDownloadSteam(wi, "Video Snap")));
+                var asType = new ToolStripMenuItem("⬇  Download As");
+                foreach (var t in VidTypes()) { string tt = t; asType.DropDownItems.Add(new ToolStripMenuItem(tt).WithClick(() => VidDownloadSteam(wi, tt))); }
+                menu.Items.Add(asType);
+                menu.Show(pic, e.Location); return;
+            }
+            if (e.Button == MouseButtons.Left) VidPlaySteam(wi);
+        };
+        frame.Controls.Add(pic);
+        cell.Controls.Add(frame);
+
+        var name = new Label { Text = "Steam trailer", ForeColor = SteamGreen, BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
+        name.SetBounds(S(4), VidThumbH + S(8), VidCellW - S(12), S(18));
+        cell.Controls.Add(name);
+        return cell;
+    }
+
+    private void VidLoadThumbSteam(PictureBox pic, MetadataDb.WebImage w)
+    {
+        if (!VlcService.Available) return;
+        if (!pic.IsHandleCreated) { void OnCreated(object? _, EventArgs __) { pic.HandleCreated -= OnCreated; VidLoadThumbSteam(pic, w); } pic.HandleCreated += OnCreated; return; }
+        var url = w.FileName;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            Image? thumb = null;
+            try { thumb = VideoThumbnailer.GetFromUrl(url, SteamApi.Referer, "steam:" + url); } catch { }
+            if (thumb == null) return;
+            try
+            {
+                if (pic.IsDisposed || !pic.IsHandleCreated) { thumb.Dispose(); return; }
+                pic.BeginInvoke(new Action(() => { if (pic.IsDisposed) { thumb.Dispose(); return; } var old = pic.Image; pic.Image = thumb; old?.Dispose(); }));
+            }
+            catch { thumb.Dispose(); }
+        });
+    }
+
+    private void VidPlaySteam(MetadataDb.WebImage w)
+        => VideoPlayerDialog.PlayWeb(this, "Steam trailer", new[] { new VideoPlayerDialog.Source(w.FileName, SteamApi.Referer) });
+
+    private void VidDownloadSteam(MetadataDb.WebImage w, string targetType)
+    {
+        if (_readOnly) return;
+        var g = ImgGame;
+        string plat = Safe(() => g.Platform) ?? "";
+        string idStr = Safe(() => g.Id) ?? "";
+        int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
+        if (string.IsNullOrEmpty(plat) || string.IsNullOrEmpty(idStr)) return;
+
+        byte[]? bytes = null;
+        UseWaitCursor = true;
+        try { bytes = WebGetBytes(w.FileName, SteamApi.Referer); } catch { } finally { UseWaitCursor = false; }
+        if (bytes == null || bytes.Length == 0) { MessageBox.Show(this, "The Steam download failed.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+
+        try
+        {
+            string ext = string.IsNullOrEmpty(w.FileType) ? "mp4" : w.FileType;
+            string? dir = MediaResolver.VideoTypeFolder(plat, targetType);
+            if (string.IsNullOrEmpty(dir)) return;
+            Directory.CreateDirectory(dir);
+            string sani = MediaResolver.Sanitize(Safe(() => g.Title) ?? "");
+            string prefix = ImgPrefix(plat, idStr, sani, null, dir);
+            int num = ImgMaxNum(dir, prefix) + 1;
+            string target = Path.Combine(dir, $"{prefix}-{num:D2}.{ext.TrimStart('.')}");
+            File.WriteAllBytes(target, bytes);
+            ImageAdsWriter.WriteForDownload(target, w, dbId, plat);   // origin=steam
+            VidAfterOp(plat);
+        }
+        catch (Exception ex) { MessageBox.Show(this, "Download failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 
     // ── Disk scan ─────────────────────────────────────────────────────────────

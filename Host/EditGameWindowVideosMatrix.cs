@@ -43,10 +43,11 @@ internal sealed partial class EditGameWindow
     private readonly object _mvLock = new();
     private readonly Dictionary<int, MvCell[]> _mvRows = new();
 
-    private bool _mvShowWeb, _mvShowEmu;
-    private readonly List<string> _mvSourceOrder = new();                 // "web" / "emu", enable order = fill priority
+    private bool _mvShowWeb, _mvShowEmu, _mvShowSteam;
+    private readonly List<string> _mvSourceOrder = new();                 // "web" / "emu" / "steam" — enable order = fill priority
     private readonly Dictionary<int, List<MetadataDb.WebImage>> _mvWebVideos = new();       // row → DB videos
     private readonly Dictionary<int, List<EmuMoviesCatalog.EmuMedia>> _mvEmuVideos = new();  // row → EmuMovies videos
+    private readonly Dictionary<int, List<MetadataDb.WebImage>> _mvSteamVideos = new();      // row → Steam videos
     private Label? _mvStatus;
 
     // Thumbnails: a web-video frame is a network fetch + VLC decode — heavy — so cache (LRU) and queue (bounded,
@@ -72,8 +73,11 @@ internal sealed partial class EditGameWindow
     private const int MvColW = 168;
     private static readonly Color MvWebColor = Color.FromArgb(150, 90, 200);   // purple = database stand-in
     private static readonly Color MvEmuColor = Color.FromArgb(90, 150, 220);   // blue = EmuMovies stand-in
+    private static readonly Color MvSteamColor = Color.FromArgb(92, 172, 96);  // green = Steam stand-in
     private static Color MvStandinColor(MetadataDb.WebImage w)
-        => string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase) ? MvEmuColor : MvWebColor;
+        => string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase) ? MvEmuColor
+         : string.Equals(w.Origin, "steam", StringComparison.OrdinalIgnoreCase) ? MvSteamColor
+         : MvWebColor;
 
     /// <summary>Which matrix column a web/EmuMovies video's LbType lands in (null = not placeable here).</summary>
     private static string? MvColumnFor(string lbType) => lbType switch
@@ -106,25 +110,37 @@ internal sealed partial class EditGameWindow
             {
                 Text = "Show EmuMovies videos", AutoSize = true, ForeColor = MvEmuColor,
                 BackColor = Bg, Font = new Font("Segoe UI", 8.5f), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
-                Location = new Point(S(250), S(10)), Checked = false,
+                Location = new Point(S(228), S(10)), Checked = false,
+            };
+        }
+        CheckBox? chkSteam = null;
+        bool steamUsable = _editGames.Any(g => SteamCatalog.AppIdOf(Safe(() => g.ApplicationPath), Safe(() => g.LaunchBoxDbId) ?? -1) != null);
+        if (steamUsable)
+        {
+            chkSteam = new CheckBox
+            {
+                Text = "Show Steam videos", AutoSize = true, ForeColor = MvSteamColor,
+                BackColor = Bg, Font = new Font("Segoe UI", 8.5f), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
+                Location = new Point(S(396), S(10)), Checked = false,
             };
         }
         var btnAll = DlgBtn("⬇  Download all missing", Color.FromArgb(78, 52, 120));
-        btnAll.AutoSize = false; btnAll.SetBounds(S(410), S(5), S(170), S(28)); btnAll.Enabled = !_readOnly;
+        btnAll.AutoSize = false; btnAll.SetBounds(S(540), S(5), S(170), S(28)); btnAll.Enabled = !_readOnly;
         btnAll.Click += (_, _) => MvDownloadAllMissing();
 
         _mvStatus = new Label
         {
             Text = $"{_editGames.Count} games × {_mvCols.Count} video types", ForeColor = SubFg, BackColor = Bg,
-            Font = new Font("Segoe UI", 8.5f), AutoSize = true, Location = new Point(S(590), S(12)),
+            Font = new Font("Segoe UI", 8.5f), AutoSize = true, Location = new Point(S(720), S(12)),
         };
         bar.Controls.Add(chkWeb);
         if (chkEmu != null) bar.Controls.Add(chkEmu);
+        if (chkSteam != null) bar.Controls.Add(chkSteam);
         bar.Controls.Add(btnAll);
         bar.Controls.Add(_mvStatus);
 
         if (!VlcService.Available)
-            bar.Controls.Add(new Label { Text = "⚠ libvlc missing — no thumbnails", ForeColor = Color.FromArgb(235, 180, 100), BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 8.5f), Location = new Point(S(590), S(24)) });
+            bar.Controls.Add(new Label { Text = "⚠ libvlc missing — no thumbnails", ForeColor = Color.FromArgb(235, 180, 100), BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 8.5f), Location = new Point(S(720), S(24)) });
 
         var grid = new DataGridView
         {
@@ -178,6 +194,11 @@ internal sealed partial class EditGameWindow
             if (chkEmu.Checked) { _mvShowEmu = true; if (!_mvSourceOrder.Contains("emu")) _mvSourceOrder.Add("emu"); MvFillEmu(chkEmu); }
             else { _mvShowEmu = false; _mvSourceOrder.Remove("emu"); MvInvalidateAll(); MvSetStatus($"{_editGames.Count} games × {_mvCols.Count} video types"); }
         };
+        if (chkSteam != null) chkSteam.CheckedChanged += (_, _) =>
+        {
+            if (chkSteam.Checked) { _mvShowSteam = true; if (!_mvSourceOrder.Contains("steam")) _mvSourceOrder.Add("steam"); MvFillSteam(chkSteam); }
+            else { _mvShowSteam = false; _mvSourceOrder.Remove("steam"); MvInvalidateAll(); MvSetStatus($"{_editGames.Count} games × {_mvCols.Count} video types"); }
+        };
 
         return root;
     }
@@ -226,11 +247,16 @@ internal sealed partial class EditGameWindow
                 _mvWebVideos.TryGetValue(row, out var wl);
                 vids = wl ?? new();
             }
-            else
+            else if (src == "emu")
             {
                 _mvEmuVideos.TryGetValue(row, out var el);
                 vids = (el ?? new List<EmuMoviesCatalog.EmuMedia>())
                     .Select(m => new MetadataDb.WebImage(dbId, m.Url, m.LbType, m.Region, m.Crc, "emumovies", 0, m.Ext, m.FileSize)).ToList();
+            }
+            else // "steam"
+            {
+                _mvSteamVideos.TryGetValue(row, out var sl);
+                vids = sl ?? new();   // already WebImage (origin=steam, Type=Video)
             }
 
             foreach (var w in vids)
@@ -369,6 +395,8 @@ internal sealed partial class EditGameWindow
             string key = "vm:" + w.Crc32 + ":" + w.FileName;
             if (string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase))
                 return VideoThumbnailer.GetFromUrl(w.FileName, EmuMoviesApi.MediaReferer, key);
+            if (string.Equals(w.Origin, "steam", StringComparison.OrdinalIgnoreCase))
+                return VideoThumbnailer.GetFromUrl(w.FileName, SteamApi.Referer, key);   // live: FileName is a direct mp4
             // Database video: resolve the playable URL chain (turns a Steam .m3u8.mp4 into the real .m3u8).
             foreach (var s in MediaApiBridge.ListUrls(w))
             {
@@ -434,6 +462,22 @@ internal sealed partial class EditGameWindow
         });
     }
 
+    private void MvFillSteam(CheckBox chk)
+    {
+        MvFillBatch("Querying Steam…", (row, g, dbId, ct) =>
+        {
+            List<MetadataDb.WebImage> v = new();
+            try
+            {
+                v = SteamCatalog.ResolveForGameAsync(dbId, Safe(() => g.ApplicationPath) ?? "", ct).GetAwaiter().GetResult()
+                    .Where(w => string.Equals(w.Type, "Video", StringComparison.OrdinalIgnoreCase)).ToList();
+            }
+            catch { }
+            lock (_mvLock) _mvSteamVideos[row] = v;
+            return v.Count;
+        });
+    }
+
     private void MvFillBatch(string title, Func<int, IGame, int, CancellationToken, int> perGame)
     {
         using var dlg = NewDialog(title, 420, 150);
@@ -444,22 +488,27 @@ internal sealed partial class EditGameWindow
         var cts = new CancellationTokenSource();
         cancel.Click += (_, _) => cts.Cancel(); dlg.FormClosing += (_, _) => cts.Cancel();
 
+        void Ui(Action a) { try { if (!dlg.IsDisposed && dlg.IsHandleCreated) dlg.BeginInvoke(a); } catch { } }
+
         int found = 0;
-        System.Threading.Tasks.Task.Run(() =>
+        // Start on Shown so the handle exists — otherwise the very first (pre-call) update is dropped and the
+        // dialog sits on "Preparing…" for the whole first, possibly slow/retrying, query.
+        dlg.Shown += (_, _) => System.Threading.Tasks.Task.Run(() =>
         {
             for (int row = 0; row < _editGames.Count; row++)
             {
                 if (cts.IsCancellationRequested) break;
                 var g = _editGames[row];
                 int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
+                int cur = row + 1; string gt = Safe(() => g.Title) ?? $"game {cur}";
+                Ui(() => { if (!dlg.IsDisposed) { pb.Value = Math.Min(pb.Maximum, cur - 1); lbl.Text = $"{cur} / {_editGames.Count} · {gt}"; } });
                 int n = 0; try { n = perGame(row, g, dbId, cts.Token); } catch { }
                 lock (_mvLock) _mvRows.Remove(row);   // recompute with the new stand-ins
                 if (n > 0) found++;
-                int done = row + 1, f = found;
-                try { if (!dlg.IsDisposed && dlg.IsHandleCreated) dlg.BeginInvoke(new Action(() => { if (!dlg.IsDisposed) { pb.Value = Math.Min(pb.Maximum, done); lbl.Text = $"{done} / {_editGames.Count} games · {f} with videos"; } })); }
-                catch { }
+                int f = found;
+                Ui(() => { if (!dlg.IsDisposed) { pb.Value = Math.Min(pb.Maximum, cur); lbl.Text = $"{cur} / {_editGames.Count} games · {f} with videos"; } });
             }
-            try { if (!dlg.IsDisposed && dlg.IsHandleCreated) dlg.BeginInvoke(new Action(() => { if (!dlg.IsDisposed) dlg.Close(); })); } catch { }
+            Ui(() => { if (!dlg.IsDisposed) dlg.Close(); });
         }, cts.Token);
 
         dlg.ShowDialog(this);
@@ -495,9 +544,10 @@ internal sealed partial class EditGameWindow
         if (!cell.Web.HasValue) return;
         var w = cell.Web.Value;
         string title = $"{Safe(() => _editGames[row].Title)} — {_mvCols[col - 1]}";
-        List<VideoPlayerDialog.Source> srcs = string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase)
-            ? new() { new VideoPlayerDialog.Source(w.FileName, EmuMoviesApi.MediaReferer) }
-            : MediaApiBridge.ListUrls(w).Select(c => new VideoPlayerDialog.Source(c.Url, c.Referer)).ToList();
+        List<VideoPlayerDialog.Source> srcs =
+            string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase) ? new() { new VideoPlayerDialog.Source(w.FileName, EmuMoviesApi.MediaReferer) }
+          : string.Equals(w.Origin, "steam", StringComparison.OrdinalIgnoreCase)     ? new() { new VideoPlayerDialog.Source(w.FileName, SteamApi.Referer) }
+          : MediaApiBridge.ListUrls(w).Select(c => new VideoPlayerDialog.Source(c.Url, c.Referer)).ToList();
         VideoPlayerDialog.PlayWeb(this, title, srcs);
     }
 
@@ -518,8 +568,8 @@ internal sealed partial class EditGameWindow
         var game = _editGames[row];
         var prevGame = _imgGame; _imgGame = game;
         // Mirror the grid's enabled sources so the game's video page opens showing the same stand-ins.
-        bool prevWeb = _vidShowWeb, prevEmu = _vidShowEmu;
-        _vidShowWeb = _mvShowWeb; _vidShowEmu = _mvShowEmu;
+        bool prevWeb = _vidShowWeb, prevEmu = _vidShowEmu, prevSteam = _vidShowSteam;
+        _vidShowWeb = _mvShowWeb; _vidShowEmu = _mvShowEmu; _vidShowSteam = _mvShowSteam;
         try
         {
             using var dlg = NewDialog($"{Safe(() => game.Title)} — Videos", 940, 660);
@@ -536,7 +586,7 @@ internal sealed partial class EditGameWindow
         }
         finally
         {
-            _vidShowWeb = prevWeb; _vidShowEmu = prevEmu;
+            _vidShowWeb = prevWeb; _vidShowEmu = prevEmu; _vidShowSteam = prevSteam;
             _imgGame = prevGame;
             _imgTouchedPlatforms.Add(Safe(() => game.Platform) ?? "");   // the modal may have added videos
         }
@@ -610,9 +660,9 @@ internal sealed partial class EditGameWindow
             if (string.IsNullOrEmpty(plat) || string.IsNullOrEmpty(idStr)) return false;
 
             byte[]? bytes;
-            bool emu = string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase);
-            if (emu) bytes = EmuFetchBytes(w.FileName);
-            else bytes = MediaApiBridge.FetchBytes(w, plat);   // wizard: HLS-only Steam → null
+            if (string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase)) bytes = EmuFetchBytes(w.FileName);
+            else if (string.Equals(w.Origin, "steam", StringComparison.OrdinalIgnoreCase)) bytes = WebGetBytes(w.FileName, SteamApi.Referer);   // live Steam = direct mp4
+            else bytes = MediaApiBridge.FetchBytes(w, plat);   // database video via the wizard: HLS-only Steam → null
 
             if (bytes == null || bytes.Length == 0) return false;
             // Guard against a mirror handing back an HLS manifest as "bytes".

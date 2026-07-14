@@ -150,6 +150,59 @@ internal static class MetadataDb
         return list;
     }
 
+    // ── Steam appid ───────────────────────────────────────────────────────────
+    // The Games table carries a SteamAppId column (present on BOTH base LaunchBox's Metadata.db and the merged
+    // Extended DB), keyed by DatabaseId. That's how a game that ISN'T launched via a steam:// URI — a plain
+    // "Windows" import that merely matches a Steam title in the DB — still resolves to a Steam appid. We prefer
+    // the extended DB (richer / user-curated) then fall back to base LaunchBox.
+
+    private static readonly Dictionary<int, string?> _steamAppIdMemo = new();
+    private static readonly object _steamMemoLock = new();
+
+    /// <summary>The Steam appid LaunchBox's metadata associates with a game by its DatabaseId (extended DB
+    /// preferred, else base), or null when there is none. Memoized.</summary>
+    public static string? SteamAppIdForGame(int databaseId)
+    {
+        if (databaseId <= 0) return null;
+        lock (_steamMemoLock) { if (_steamAppIdMemo.TryGetValue(databaseId, out var m)) return m; }
+        string? appid = SteamAppIdFrom(ExtendedDbPath, databaseId) ?? SteamAppIdFrom(DbPath(), databaseId);
+        lock (_steamMemoLock) _steamAppIdMemo[databaseId] = appid;
+        return appid;
+    }
+
+    /// <summary>Path-parameterized reader (also the unit-test seam): reads Games.SteamAppId from an explicit DB.</summary>
+    internal static string? SteamAppIdFrom(string? db, int databaseId)
+    {
+        if (db == null || databaseId <= 0) return null;
+        try
+        {
+            var cs = new SqliteConnectionStringBuilder { DataSource = db, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Shared }.ToString();
+            using var con = new SqliteConnection(cs);
+            con.Open();
+
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pc = con.CreateCommand())
+            {
+                pc.CommandText = "PRAGMA table_info(\"Games\")";
+                using var pr = pc.ExecuteReader();
+                while (pr.Read()) cols.Add(pr.GetString(1));
+            }
+            if (!cols.Contains("SteamAppId")) return null;
+            string idCol = cols.Contains("DatabaseID") ? "DatabaseID" : (cols.Contains("DatabaseId") ? "DatabaseId" : "DatabaseID");
+
+            using var cmd = con.CreateCommand();
+            cmd.CommandText = $"SELECT \"SteamAppId\" FROM \"Games\" WHERE \"{idCol}\" = $id LIMIT 1";
+            cmd.Parameters.Add(new SqliteParameter("$id", databaseId));
+            var val = cmd.ExecuteScalar();
+            if (val == null || val is DBNull) return null;
+            string s = (Convert.ToString(val, System.Globalization.CultureInfo.InvariantCulture) ?? "").Trim();
+            if (s.Length == 0 || s == "0" || !s.All(char.IsDigit)) return null;   // stored as int; 0 == "no appid"
+            return s;
+        }
+        catch { }
+        return null;
+    }
+
     /// <summary>Path-parameterized reader (also the unit-test seam): reads GameImages from an explicit DB file.</summary>
     internal static List<WebImage> ImagesForGame(string? db, int databaseId)
     {

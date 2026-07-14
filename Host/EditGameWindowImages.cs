@@ -48,6 +48,7 @@ internal sealed partial class EditGameWindow
     private readonly Dictionary<string, CheckBox> _imgCellChk = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CheckBox> _imgWebChk = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, MetadataDb.WebImage> _imgWebByKey = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _imgWebSource = new(StringComparer.OrdinalIgnoreCase);   // key → "web"/"emu"/"steam"
     private List<string> _imgCatAllPaths = new();
     private List<string> _imgCatAllWebKeys = new();
     private string _imgCurRegroupement = "";
@@ -62,6 +63,7 @@ internal sealed partial class EditGameWindow
     private bool _imgShowWeb;        // the "show web images" toggle (per category page)
     private bool _imgOpenWithWeb;    // set by the matrix: open the next category page with the web toggle ON
     private bool _imgOpenWithEmu;    // …and/or the EmuMovies toggle ON (mirrors the grid's enabled sources)
+    private bool _imgOpenWithSteam;  // …and/or the Steam toggle ON
     private System.Net.Http.HttpClient? _imgHttp;
 
     /// <summary>Winner of its image TYPE (one per type) — see <see cref="ImgLbPicks"/>.</summary>
@@ -495,6 +497,7 @@ internal sealed partial class EditGameWindow
         // grid opens showing the same stand-ins it did there — an unchecked page would just look empty).
         _imgShowWeb = _imgOpenWithWeb;
         _imgShowEmu = _imgOpenWithEmu;
+        _imgShowSteam = _imgOpenWithSteam;
         var container = new Panel { BackColor = Bg, Dock = DockStyle.Fill };
         var grid = new Panel { BackColor = Bg, AutoScroll = true, Dock = DockStyle.Fill };
         var bar = ImgBuildActionBar();       // docked TOP, hidden until multi-select is on
@@ -512,6 +515,7 @@ internal sealed partial class EditGameWindow
         _imgCellChk.Clear();
         _imgWebChk.Clear();
         _imgWebByKey.Clear();
+        _imgWebSource.Clear();
         _imgCatAllWebKeys = new List<string>();
 
         var g = ImgGame;
@@ -540,7 +544,7 @@ internal sealed partial class EditGameWindow
                 Checked = _imgShowWeb,
             };
             web.SetBounds(ImgPadX + (imgs.Count > 0 && ImageLockBridge.Available ? S(122) : 0), y, S(220), S(26));
-            web.CheckedChanged += (_, _) => { _imgShowWeb = web.Checked; ImgPopulateCategory(regroupement, host); };
+            web.CheckedChanged += (_, _) => { _imgShowWeb = web.Checked; ImgSourceToggle("web", web.Checked); ImgPopulateCategory(regroupement, host); };
             inner.Controls.Add(web);
         }
 
@@ -554,13 +558,27 @@ internal sealed partial class EditGameWindow
                 Checked = _imgShowEmu,
             };
             emu.SetBounds(ImgPadX + (imgs.Count > 0 && ImageLockBridge.Available ? S(122) : 0) + S(230), y, S(210), S(26));
-            emu.CheckedChanged += (_, _) => { _imgShowEmu = emu.Checked; ImgPopulateCategory(regroupement, host); };
+            emu.CheckedChanged += (_, _) => { _imgShowEmu = emu.Checked; ImgSourceToggle("emu", emu.Checked); ImgPopulateCategory(regroupement, host); };
             inner.Controls.Add(emu);
+        }
+
+        // "Show Steam images" (green) — live, only for a game with a Steam appid.
+        if (ImgSteamAvailable(g))
+        {
+            var steam = new CheckBox
+            {
+                Text = "Show Steam images", AutoSize = false, ForeColor = SteamGreen,
+                BackColor = Bg, Font = new Font("Segoe UI", 8.5f), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
+                Checked = _imgShowSteam,
+            };
+            steam.SetBounds(ImgPadX + (imgs.Count > 0 && ImageLockBridge.Available ? S(122) : 0) + S(452), y, S(190), S(26));
+            steam.CheckedChanged += (_, _) => { _imgShowSteam = steam.Checked; ImgSourceToggle("steam", steam.Checked); ImgPopulateCategory(regroupement, host); };
+            inner.Controls.Add(steam);
         }
 
         // "No images" only when the category is empty AND NEITHER web source will fill it. Without the emu
         // clause an EmuMovies-only view (web off, EmuMovies on) short-circuited here and never rendered.
-        if (imgs.Count == 0 && !(webAvail && _imgShowWeb) && !(_imgShowEmu && ImgEmuAvailable(g)))
+        if (imgs.Count == 0 && !(webAvail && _imgShowWeb) && !(_imgShowEmu && ImgEmuAvailable(g)) && !(_imgShowSteam && ImgSteamAvailable(g)))
         {
             var none = new Label
             {
@@ -641,8 +659,255 @@ internal sealed partial class EditGameWindow
             else y = typeHeaderY;
         }
 
-        if (webAvail && _imgShowWeb) ImgAppendWebTiles(g, dbId, imgs, types, inner, ref y);
-        if (_imgShowEmu && ImgEmuAvailable(g)) ImgAppendEmuTiles(g, regroupement, imgs, types, host, inner, ref y);
+        ImgAppendMergedWeb(g, dbId, imgs, regroupement, types, host, inner, ref y);
+    }
+
+    // Track the order the user turns web sources on, so the merged view interleaves them by check-order (like the
+    // multi-select grid's fill priority). "web" = database (purple) · "emu" = EmuMovies (blue) · "steam" (green).
+    private readonly List<string> _imgSourceOrder = new();
+    private void ImgSourceToggle(string src, bool on)
+    {
+        if (on) { if (!_imgSourceOrder.Contains(src)) _imgSourceOrder.Add(src); }
+        else _imgSourceOrder.Remove(src);
+    }
+
+    // ── Merged "images you don't own": database + EmuMovies + Steam in ONE flow, grouped by image type only ────
+    // No per-source section headers — the tile border colour already says the origin (purple/blue/green). Within
+    // a type, sources appear in the order the user checked them (_imgSourceOrder). Async sources (EmuMovies /
+    // Steam) show a compact "Querying…" note and re-populate when their fetch lands (same cache model as before).
+    private void ImgAppendMergedWeb(IGame g, int dbId, List<ImgFile> catImgs, string regroupement, List<string> types, Panel host, Panel inner, ref int y)
+    {
+        bool webOn   = _imgShowWeb   && MetadataDb.Available && dbId > 0;
+        bool emuOn   = _imgShowEmu   && ImgEmuAvailable(g);
+        bool steamOn = _imgShowSteam && ImgSteamAvailable(g);
+        if (!webOn && !emuOn && !steamOn) return;
+
+        // Active sources in check-order; append any that predate the order list in a stable fallback order.
+        bool On(string s) => (s == "web" && webOn) || (s == "emu" && emuOn) || (s == "steam" && steamOn);
+        var order = _imgSourceOrder.Where(On).ToList();
+        foreach (var s in new[] { "web", "emu", "steam" }) if (On(s) && !order.Contains(s)) order.Add(s);
+
+        var typeSet = new HashSet<string>(types, StringComparer.OrdinalIgnoreCase);
+        string emuKey = Safe(() => g.Id) ?? Safe(() => g.Title) ?? "";
+        string steamKey = "steam:" + (Safe(() => g.Id) ?? Safe(() => g.Title) ?? "");
+
+        var entries = new List<(string type, int rank, Panel cell)>();
+        var loading = new List<string>();
+
+        for (int rank = 0; rank < order.Count; rank++)
+        {
+            switch (order[rank])
+            {
+                case "web":
+                    foreach (var w in ImgWebCandidates(dbId, catImgs, typeSet))
+                    {
+                        ImgRegisterWeb(w, "web");
+                        entries.Add((w.Type, rank, ImgWebCell(w)));
+                    }
+                    break;
+
+                case "emu":
+                    if (!_imgEmuCache.TryGetValue(emuKey, out var em)) { ImgTriggerEmuFetch(g, emuKey, regroupement, host); loading.Add("EmuMovies"); }
+                    else if (em == null) loading.Add("EmuMovies");
+                    else
+                    {
+                        var owned = BuildEmuOwned(catImgs.Select(f => f.Path));
+                        foreach (var m in em.Where(m => typeSet.Contains(m.LbType) && !EmuOwns(owned, m.Crc, m.FileSize)))
+                        {
+                            var wi = ImgEmuToWeb(m, dbId);          // the same WebImage the download path expects
+                            ImgRegisterWeb(wi, "emu");
+                            entries.Add((m.LbType, rank, ImgEmuCell(m, wi.Key)));
+                        }
+                    }
+                    break;
+
+                case "steam":
+                    if (!_imgSteamCache.TryGetValue(steamKey, out var st)) { ImgTriggerSteamFetch(g, dbId, steamKey, regroupement, host); loading.Add("Steam"); }
+                    else if (st == null) loading.Add("Steam");
+                    else
+                        foreach (var w in st.Where(w => typeSet.Contains(w.Type)))
+                        {
+                            ImgRegisterWeb(w, "steam");
+                            entries.Add((w.Type, rank, ImgSteamCell(w)));
+                        }
+                    break;
+            }
+        }
+
+        if (entries.Count == 0 && loading.Count == 0) return;
+
+        y += S(12);
+        var hdr = new Label
+        {
+            Text = "⬇  Images you don't own — left-click preview · right-click download · long-press to multi-select  (border colour = source)",
+            ForeColor = SubFg, Font = new Font("Segoe UI", 9f, FontStyle.Italic), AutoSize = false, BackColor = Bg,
+        };
+        hdr.SetBounds(ImgPadX, y, S(780), S(24)); inner.Controls.Add(hdr); y += S(30);
+
+        // Wrap tiles to the visible width so a merged (multi-source) type row never forces horizontal scrolling.
+        int avail = (host.ClientSize.Width > S(200) ? host.ClientSize.Width : S(1100)) - (ImgPadX + S(8)) - S(24);
+        int cols = Math.Max(1, avail / ImgCellW);
+
+        foreach (var type in types)
+        {
+            var cells = entries.Where(e => string.Equals(e.type, type, StringComparison.OrdinalIgnoreCase))
+                               .OrderBy(e => e.rank).Select(e => e.cell).ToList();   // OrderBy is stable → same-source order preserved
+            if (cells.Count == 0) continue;
+            var th = new Label { Text = $"━━  {type}", ForeColor = Fg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg };
+            th.SetBounds(ImgPadX, y, S(600), S(26)); inner.Controls.Add(th); y += S(30);
+            int x = ImgPadX + S(8), col = 0;
+            foreach (var cell in cells)
+            {
+                if (col == cols) { col = 0; x = ImgPadX + S(8); y += ImgCellH; }
+                cell.Location = new Point(x, y); inner.Controls.Add(cell); x += ImgCellW; col++;
+            }
+            y += ImgCellH;
+        }
+
+        if (loading.Count > 0)
+        {
+            inner.Controls.Add(new Label { Text = "Querying " + string.Join(", ", loading) + "…", ForeColor = SubFg, BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 9f, FontStyle.Italic), Location = new Point(ImgPadX + S(4), y) });
+            y += S(26);
+        }
+    }
+
+    // Register a stand-in from ANY web source into the shared selection model (key → WebImage / source / all-keys),
+    // so long-press select + batch download work uniformly across database, EmuMovies and Steam tiles.
+    private void ImgRegisterWeb(MetadataDb.WebImage w, string source)
+    {
+        _imgWebByKey[w.Key] = w;
+        _imgWebSource[w.Key] = source;
+        _imgCatAllWebKeys.Add(w.Key);
+    }
+
+    /// <summary>EmuMovies media → the WebImage the download path (ImgDownloadOne / ImageAdsWriter) expects.</summary>
+    private static MetadataDb.WebImage ImgEmuToWeb(EmuMoviesCatalog.EmuMedia m, int dbId)
+        => new MetadataDb.WebImage(dbId, m.Url, m.LbType, m.Region, m.Crc, "emumovies", 0, m.Ext, m.FileSize);
+
+    /// <summary>The per-tile selection checkbox shared by all three web sources (shown only in web select mode).</summary>
+    private CheckBox ImgWebSelCheckbox(string key)
+    {
+        var chk = new CheckBox
+        {
+            AutoCheck = false, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(40, 30, 55), ForeColor = Fg,
+            Size = new Size(S(18), S(18)), Location = new Point(S(8), S(8)), TabStop = false,
+            Visible = _imgSelMode && _imgSelKind == 2, Checked = _imgWebSel.Contains(key),
+        };
+        chk.Click += (_, _) => ImgWebToggle(key);
+        _imgWebChk[key] = chk;
+        return chk;
+    }
+
+    /// <summary>Database web stand-ins for this category (owned-by-CRC filtered; non-launchbox rows dropped when
+    /// ExtendDB's per-origin fetcher isn't reachable, as they have no plain CDN URL).</summary>
+    private List<MetadataDb.WebImage> ImgWebCandidates(int dbId, List<ImgFile> catImgs, HashSet<string> typeSet)
+    {
+        var owned = new HashSet<uint>();
+        foreach (var f in catImgs) { var c = CrcBridge.Crc(f.Path); if (c != 0) owned.Add(c); }
+        List<MetadataDb.WebImage> cands;
+        try { cands = MetadataDb.ImagesForGame(dbId); } catch { cands = new List<MetadataDb.WebImage>(); }
+        var web = cands.Where(w => typeSet.Contains(w.Type) && !owned.Contains(unchecked((uint)w.Crc32))).ToList();
+        if (!MediaApiBridge.Available) web = web.Where(x => x.IsLaunchbox).ToList();
+        return web;
+    }
+
+    private void ImgTriggerEmuFetch(IGame g, string idKey, string regroupement, Panel host)
+    {
+        _imgEmuCache[idKey] = null;   // loading sentinel — a re-populate before the fetch lands won't re-trigger
+        string romPath = Safe(() => g.ApplicationPath) ?? "";
+        string title = Safe(() => g.Title) ?? "";
+        string plat = Safe(() => g.Platform) ?? "";
+        System.Threading.Tasks.Task.Run(async () =>
+        {
+            List<EmuMoviesCatalog.EmuMedia> found = new();
+            try { var api = EmuApi(); if (api != null) found = await EmuMoviesCatalog.ResolveForGameAsync(api, title, romPath, plat); }
+            catch { }
+            try
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke(new Action(() => { _imgEmuCache[idKey] = found; if (_imgCurRegroupement == regroupement) ImgPopulateCategory(regroupement, host); }));
+            }
+            catch { }
+        });
+    }
+
+    private void ImgTriggerSteamFetch(IGame g, int dbId, string idKey, string regroupement, Panel host)
+    {
+        _imgSteamCache[idKey] = null;
+        string appPath = Safe(() => g.ApplicationPath) ?? "";
+        System.Threading.Tasks.Task.Run(async () =>
+        {
+            List<MetadataDb.WebImage> found = new();
+            try { found = await SteamCatalog.ResolveForGameAsync(dbId, appPath); } catch { }
+            try
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke(new Action(() => { _imgSteamCache[idKey] = found; if (_imgCurRegroupement == regroupement) ImgPopulateCategory(regroupement, host); }));
+            }
+            catch { }
+        });
+    }
+
+    // ── Steam images (green) — LIVE, appdetails, only for games with a Steam appid ──
+    private static readonly Color SteamGreen = Color.FromArgb(92, 172, 96);
+    private bool _imgShowSteam;
+    private readonly Dictionary<string, List<MetadataDb.WebImage>?> _imgSteamCache = new(StringComparer.Ordinal);
+
+    private bool ImgSteamAvailable(IGame g)
+    {
+        try { return SteamCatalog.AppIdOf(Safe(() => g.ApplicationPath) ?? "", Safe(() => g.LaunchBoxDbId) ?? -1) != null; }
+        catch { return false; }
+    }
+
+    private Panel ImgSteamCell(MetadataDb.WebImage w)
+    {
+        var cell = new Panel { Size = new Size(ImgCellW, ImgCellH), BackColor = Bg };
+        var frame = new Panel { BackColor = SteamGreen, Padding = new Padding(S(2)) };
+        frame.SetBounds(S(4), S(4), ImgCellW - S(8), ImgThumbH);
+        var pic = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 18, 24), Cursor = Cursors.Hand };
+        ImgLoadThumbWeb(pic, w);   // origin=steam → direct GET inside ImgFetchWebBytes
+        var wi = w;
+        string key = w.Key;
+        pic.MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) { _imgPressKind = 2; _imgPressKey = key; ImgStartLongPress(); } };
+        pic.MouseUp += (_, e) =>
+        {
+            ImgStopLongPress();
+            if (e.Button == MouseButtons.Right)
+            {
+                var menu = ThemedMenu();
+                menu.Items.Add(new ToolStripMenuItem("⬇  Download").WithClick(() => ImgDownloadSteam(wi)));
+                menu.Items.Add(new ToolStripMenuItem("🔍  View fullscreen").WithClick(() => ShowImageFullscreenWeb(wi)));
+                menu.Show(pic, e.Location);
+                return;
+            }
+            if (e.Button != MouseButtons.Left) return;
+            if (_imgSuppressClick) { _imgSuppressClick = false; return; }
+            if (_imgSelMode) ImgWebToggle(key);
+            else ShowImageFullscreenWeb(wi);
+        };
+        frame.Controls.Add(pic);
+        cell.Controls.Add(frame);
+
+        var chk = ImgWebSelCheckbox(key);
+        cell.Controls.Add(chk); chk.BringToFront();
+
+        var cap = new Label { Text = "Steam", ForeColor = SteamGreen, BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
+        cap.SetBounds(S(4), ImgCellH - S(42), ImgCellW - S(8), S(20));
+        cell.Controls.Add(cap);
+        return cell;
+    }
+
+    private void ImgDownloadSteam(MetadataDb.WebImage w)
+    {
+        if (_readOnly) return;
+        var g = ImgGame;
+        int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
+        UseWaitCursor = true;
+        bool ok;
+        try { ok = ImgDownloadOne(g, w, dbId, Safe(() => g.Platform) ?? ""); }   // origin=steam → direct GET + ADS
+        finally { UseWaitCursor = false; }
+        if (ok) ImgAfterOp(Safe(() => g.Platform) ?? "");
+        else MessageBox.Show(this, "The Steam download failed.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     // ── EmuMovies images (blue) — LIVE, the user's own account ────────────────
@@ -655,67 +920,7 @@ internal sealed partial class EditGameWindow
         catch { return false; }
     }
 
-    private void ImgAppendEmuTiles(IGame g, string regroupement, List<ImgFile> catImgs, List<string> types, Panel host, Panel inner, ref int y)
-    {
-        string idKey = Safe(() => g.Id) ?? Safe(() => g.Title) ?? "";
-        var typeSet = new HashSet<string>(types, StringComparer.OrdinalIgnoreCase);
-
-        y += S(10);
-        var hdr = new Label
-        {
-            Text = "🎬  EmuMovies — images you don't own (blue border · download to add)",
-            ForeColor = EmuBlue, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg,
-        };
-        hdr.SetBounds(ImgPadX, y, S(640), S(26)); inner.Controls.Add(hdr); y += S(32);
-
-        if (!_imgEmuCache.TryGetValue(idKey, out var media))
-        {
-            _imgEmuCache[idKey] = null;
-            inner.Controls.Add(new Label { Text = "Querying EmuMovies…", ForeColor = SubFg, BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 9f, FontStyle.Italic), Location = new Point(ImgPadX + S(4), y) });
-            string romPath = Safe(() => g.ApplicationPath) ?? "";
-            string title = Safe(() => g.Title) ?? "";
-            string plat = Safe(() => g.Platform) ?? "";
-            System.Threading.Tasks.Task.Run(async () =>
-            {
-                List<EmuMoviesCatalog.EmuMedia> found = new();
-                try { var api = EmuApi(); if (api != null) found = await EmuMoviesCatalog.ResolveForGameAsync(api, title, romPath, plat); }
-                catch { }
-                try
-                {
-                    if (IsDisposed || !IsHandleCreated) return;
-                    BeginInvoke(new Action(() => { _imgEmuCache[idKey] = found; if (_imgCurRegroupement == regroupement) ImgPopulateCategory(regroupement, host); }));
-                }
-                catch { }
-            });
-            return;
-        }
-        if (media == null) return;
-
-        // Owned from ADS (stored EmuMovies CRC / size), then disk size as a last resort — NOT a recomputed CRC:
-        // Cloudflare re-compresses EmuMovies images in transit, so the downloaded bytes' CRC won't match the
-        // API's. See BuildEmuOwned.
-        var owned = BuildEmuOwned(catImgs.Select(f => f.Path));
-        var show = media.Where(m => typeSet.Contains(m.LbType) && !EmuOwns(owned, m.Crc, m.FileSize)).ToList();
-        if (show.Count == 0)
-        {
-            inner.Controls.Add(new Label { Text = "No EmuMovies image for this category.", ForeColor = SubFg, BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 9f, FontStyle.Italic), Location = new Point(ImgPadX + S(4), y) });
-            y += S(26);
-            return;
-        }
-
-        foreach (var type in types)
-        {
-            var ofType = show.Where(m => string.Equals(m.LbType, type, StringComparison.OrdinalIgnoreCase)).ToList();
-            if (ofType.Count == 0) continue;
-            var th = new Label { Text = $"━━  {type}", ForeColor = Fg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg };
-            th.SetBounds(ImgPadX, y, S(600), S(26)); inner.Controls.Add(th); y += S(30);
-            int x = ImgPadX + S(8);
-            foreach (var m in ofType) { var cell = ImgEmuCell(m); cell.Location = new Point(x, y); inner.Controls.Add(cell); x += ImgCellW; }
-            y += ImgCellH;
-        }
-    }
-
-    private Panel ImgEmuCell(EmuMoviesCatalog.EmuMedia m)
+    private Panel ImgEmuCell(EmuMoviesCatalog.EmuMedia m, string key)
     {
         var cell = new Panel { Size = new Size(ImgCellW, ImgCellH), BackColor = Bg };
         var frame = new Panel { BackColor = EmuBlue, Padding = new Padding(S(2)) };   // blue = EmuMovies
@@ -723,8 +928,10 @@ internal sealed partial class EditGameWindow
         var pic = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 18, 24), Cursor = Cursors.Hand };
         ImgLoadThumbEmu(pic, m);
         var mi = m;
+        pic.MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) { _imgPressKind = 2; _imgPressKey = key; ImgStartLongPress(); } };
         pic.MouseUp += (_, e) =>
         {
+            ImgStopLongPress();
             if (e.Button == MouseButtons.Right)
             {
                 var menu = ThemedMenu();
@@ -733,10 +940,16 @@ internal sealed partial class EditGameWindow
                 menu.Show(pic, e.Location);
                 return;
             }
-            if (e.Button == MouseButtons.Left) ImgViewEmuFullscreen(mi);   // left = preview, like the purple tiles
+            if (e.Button != MouseButtons.Left) return;
+            if (_imgSuppressClick) { _imgSuppressClick = false; return; }
+            if (_imgSelMode) ImgWebToggle(key);
+            else ImgViewEmuFullscreen(mi);   // left = preview, like the purple tiles
         };
         frame.Controls.Add(pic);
         cell.Controls.Add(frame);
+
+        var chk = ImgWebSelCheckbox(key);
+        cell.Controls.Add(chk); chk.BringToFront();
 
         var cap = new Label { Text = "EmuMovies · " + (string.IsNullOrEmpty(m.Region) ? "World" : m.Region), ForeColor = EmuBlue, BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
         cap.SetBounds(S(4), ImgCellH - S(42), ImgCellW - S(8), S(20));
@@ -753,13 +966,16 @@ internal sealed partial class EditGameWindow
     }
 
     /// <summary>Direct GET of an EmuMovies media URL (no auth, just the Referer). Null on failure.</summary>
-    private byte[]? EmuFetchBytes(string url)
+    private byte[]? EmuFetchBytes(string url) => WebGetBytes(url, EmuMoviesApi.MediaReferer);
+
+    /// <summary>Direct GET of a public media URL with a Referer (EmuMovies / Steam CDNs). Null on failure.</summary>
+    private byte[]? WebGetBytes(string url, string? referer)
     {
         try
         {
             _imgHttp ??= NewHttp();
             using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url);
-            req.Headers.Referrer = new Uri(EmuMoviesApi.MediaReferer);
+            if (!string.IsNullOrEmpty(referer) && Uri.TryCreate(referer, UriKind.Absolute, out var r)) req.Headers.Referrer = r;
             using var resp = _imgHttp.Send(req);
             return resp.IsSuccessStatusCode ? resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult() : null;
         }
@@ -839,59 +1055,11 @@ internal sealed partial class EditGameWindow
     }
 
     // ── Web images (from the offline LaunchBox metadata DB) ───────────────────
-    // Appended AFTER the owned images, and ONLY when the user turns the web toggle on for THIS category — so a
-    // basic browse never pays for it. A web image is hidden when already OWNED — matched by CRC32 exactly the
-    // way ExtendDB dedups downloads (base-LB GameImages carries only CRC32, so it's the sole key). CRCs are
-    // computed (via CrcBridge: ":crc32" ADS first, computed on miss) ONLY for this category's local images
-    // (catImgs), never the whole game — the candidates are of these same types anyway.
-    private void ImgAppendWebTiles(IGame g, int dbId, List<ImgFile> catImgs, List<string> types, Panel inner, ref int y)
-    {
-        var owned = new HashSet<uint>();
-        foreach (var f in catImgs) { var c = CrcBridge.Crc(f.Path); if (c != 0) owned.Add(c); }
-
-        List<MetadataDb.WebImage> cands;
-        try { cands = MetadataDb.ImagesForGame(dbId); } catch { cands = new List<MetadataDb.WebImage>(); }
-        var typeSet = new HashSet<string>(types, StringComparer.OrdinalIgnoreCase);
-        var web = cands.Where(w => typeSet.Contains(w.Type) && !owned.Contains(unchecked((uint)w.Crc32))).ToList();
-        // Non-launchbox rows (screenscraper/steam/…) have no valid CDN URL — only ExtendDB's per-origin
-        // fetcher can retrieve them. If it isn't reachable, don't show dead tiles.
-        if (!MediaApiBridge.Available) web = web.Where(x => x.IsLaunchbox).ToList();
-        if (web.Count == 0) return;
-
-        y += S(10);
-        var hdr = new Label
-        {
-            Text = "🌐  Database — images you don't own (purple border · download to add)",
-            ForeColor = Color.FromArgb(190, 150, 230), Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-            AutoSize = false, BackColor = Bg,
-        };
-        hdr.SetBounds(ImgPadX, y, S(640), S(26)); inner.Controls.Add(hdr); y += S(32);
-
-        foreach (var type in types)
-        {
-            var ofType = web.Where(w => string.Equals(w.Type, type, StringComparison.OrdinalIgnoreCase)).ToList();
-            if (ofType.Count == 0) continue;
-            int typeHeaderY = y; y += S(28);
-            string RgKey(MetadataDb.WebImage w) => string.IsNullOrEmpty(w.Region) ? "World" : w.Region;   // GamesDb: blank == World
-            foreach (var region in ofType.Select(RgKey).Distinct(StringComparer.OrdinalIgnoreCase)
-                                         .OrderBy(r => r.Equals("none", StringComparison.OrdinalIgnoreCase) ? "" : r, StringComparer.OrdinalIgnoreCase))
-            {
-                var cells = ofType.Where(w => string.Equals(RgKey(w), region, StringComparison.OrdinalIgnoreCase)).ToList();
-                var rl = new Label
-                {
-                    Text = region == "none" ? "No Region" : region, ForeColor = Color.FromArgb(140, 160, 190),
-                    Font = new Font("Segoe UI", 8.5f, FontStyle.Italic), AutoSize = false, BackColor = Bg,
-                };
-                rl.SetBounds(ImgPadX + S(8), y, S(400), S(20)); inner.Controls.Add(rl); y += S(24);
-                int x = ImgPadX + S(8);
-                foreach (var w in cells) { _imgWebByKey[w.Key] = w; var cell = ImgWebCell(w); cell.Location = new Point(x, y); inner.Controls.Add(cell); x += ImgCellW; _imgCatAllWebKeys.Add(w.Key); }
-                y += ImgCellH;
-            }
-            var th = new Label { Text = $"━━  {type}", ForeColor = Fg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg };
-            th.SetBounds(ImgPadX, typeHeaderY, S(600), S(26)); inner.Controls.Add(th);
-        }
-    }
-
+    // Candidate stand-ins are computed by ImgWebCandidates and rendered by the merged ImgAppendMergedWeb (no
+    // standalone section any more). A web image is hidden when already OWNED — matched by CRC32 exactly the way
+    // ExtendDB dedups downloads (base-LB GameImages carries only CRC32, so it's the sole key). CRCs are computed
+    // (via CrcBridge: ":crc32" ADS first, computed on miss) ONLY for this category's local images, never the
+    // whole game — the candidates are of these same types anyway.
     private Panel ImgWebCell(MetadataDb.WebImage w)
     {
         var cell = new Panel { Size = new Size(ImgCellW, ImgCellH), BackColor = Bg };
@@ -921,15 +1089,8 @@ internal sealed partial class EditGameWindow
         frame.Controls.Add(pic);
         cell.Controls.Add(frame);
 
-        var chk = new CheckBox
-        {
-            AutoCheck = false, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(40, 20, 60), ForeColor = Fg,
-            Size = new Size(S(18), S(18)), Location = new Point(S(8), S(8)), TabStop = false,
-            Visible = _imgSelMode && _imgSelKind == 2, Checked = _imgWebSel.Contains(key),
-        };
-        chk.Click += (_, _) => ImgWebToggle(key);
+        var chk = ImgWebSelCheckbox(key);
         cell.Controls.Add(chk); chk.BringToFront();
-        _imgWebChk[key] = chk;
 
         // Caption: the same two lines the owned cells show (origin, then region) — so the tile you're about to
         // download already reads like the file it will become. The values come from the DB row, not from ADS
@@ -960,10 +1121,13 @@ internal sealed partial class EditGameWindow
     {
         try
         {
-            // A LIVE EmuMovies stand-in carries the full media.emumovies.com URL as its FileName and needs no
-            // auth (just the Referer) — a plain GET, independent of the extended DB.
+            // A LIVE EmuMovies / Steam stand-in carries a full public CDN URL as its FileName and needs no auth
+            // (just the Referer) — a plain GET, independent of the extended DB.
             if (string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase))
-                return EmuFetchBytes(w.FileName);
+                return WebGetBytes(w.FileName, EmuMoviesApi.MediaReferer);
+            if (string.Equals(w.Origin, "steam", StringComparison.OrdinalIgnoreCase)
+                && Uri.TryCreate(w.FileName, UriKind.Absolute, out _))
+                return WebGetBytes(w.FileName, SteamApi.Referer);
 
             // Per-origin wizard fetch when the extended-DB module is on, or (defensively) for any non-launchbox
             // row while ExtendDB's fetcher is reachable — those have no valid CDN URL. Launchbox rows always
@@ -1019,7 +1183,20 @@ internal sealed partial class EditGameWindow
     private void ImgDownloadSelected()
     {
         if (_imgWebSel.Count == 0) return;
-        ImgDownloadWebList(_imgWebSel.Where(_imgWebByKey.ContainsKey).Select(k => _imgWebByKey[k]).ToList());
+        // Download grouped BY SOURCE, in the order the source checkboxes were turned on (_imgSourceOrder), then in
+        // on-screen order within each source — so a mixed selection lands database → EmuMovies → Steam (or whatever
+        // order the user enabled them in), not hash-set order.
+        int SrcRank(string k)
+        {
+            var s = _imgWebSource.TryGetValue(k, out var v) ? v : "web";
+            int i = _imgSourceOrder.IndexOf(s);
+            return i < 0 ? int.MaxValue : i;
+        }
+        var picks = _imgWebSel.Where(_imgWebByKey.ContainsKey)
+                              .OrderBy(SrcRank)
+                              .ThenBy(k => _imgCatAllWebKeys.IndexOf(k))
+                              .Select(k => _imgWebByKey[k]).ToList();
+        ImgDownloadWebList(picks);
     }
 
     private void ImgDownloadWebList(List<MetadataDb.WebImage> picks)

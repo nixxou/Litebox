@@ -78,11 +78,13 @@ internal sealed partial class EditGameWindow
 
     private bool _mxShowWeb;
     private bool _mxShowEmu;
+    private bool _mxShowSteam;
     // Sources that fill gaps, in the ORDER the user enabled them = fill priority. A cell is filled by the first
-    // source (in this order) that has a candidate for it; a later source only fills what's STILL empty. So
-    // checking purple-then-blue prefers the database; blue-then-purple prefers EmuMovies.
-    private readonly List<string> _mxSourceOrder = new();                 // "web" (database) / "emu" (EmuMovies)
+    // source (in this order) that has a candidate for it; a later source only fills what's STILL empty. So the
+    // checkbox click order chooses which of database / EmuMovies / Steam wins each gap.
+    private readonly List<string> _mxSourceOrder = new();                 // "web" (database) / "emu" / "steam"
     private readonly Dictionary<int, List<EmuMoviesCatalog.EmuMedia>> _mxEmuMedia = new();   // row → resolved EmuMovies media
+    private readonly Dictionary<int, List<MetadataDb.WebImage>> _mxSteamMedia = new();       // row → resolved Steam media
     private Label? _mxStatus;
 
     // 3x taller rows: box art is portrait, so give height priority and keep the column narrow enough that 12
@@ -91,10 +93,13 @@ internal sealed partial class EditGameWindow
     private const int MxColW = 130;
     private static readonly Color MxWebColor = Color.FromArgb(150, 90, 200);   // purple = database stand-in
     private static readonly Color MxEmuColor = Color.FromArgb(90, 150, 220);   // blue = EmuMovies stand-in
+    private static readonly Color MxSteamColor = Color.FromArgb(92, 172, 96);  // green = Steam stand-in
 
-    /// <summary>The stand-in's border/badge colour by source (blue for EmuMovies, purple otherwise).</summary>
+    /// <summary>The stand-in's border/badge colour by source.</summary>
     private static Color MxStandinColor(MetadataDb.WebImage w)
-        => string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase) ? MxEmuColor : MxWebColor;
+        => string.Equals(w.Origin, "emumovies", StringComparison.OrdinalIgnoreCase) ? MxEmuColor
+         : string.Equals(w.Origin, "steam", StringComparison.OrdinalIgnoreCase) ? MxSteamColor
+         : MxWebColor;
 
     // ── Page ──────────────────────────────────────────────────────────────────
     private Control BuildImagesMatrixPage()
@@ -122,20 +127,33 @@ internal sealed partial class EditGameWindow
             {
                 Text = "Show EmuMovies images", AutoSize = true, ForeColor = MxEmuColor,
                 BackColor = Bg, Font = new Font("Segoe UI", 8.5f), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
-                Location = new Point(S(250), S(10)), Checked = false,
+                Location = new Point(S(228), S(10)), Checked = false,
+            };
+        }
+        // Green Steam "fill the gaps" — a THIRD source, only when some selected game has a Steam appid.
+        CheckBox? chkSteam = null;
+        bool steamUsable = _editGames.Any(g => SteamCatalog.AppIdOf(Safe(() => g.ApplicationPath), Safe(() => g.LaunchBoxDbId) ?? -1) != null);
+        if (steamUsable)
+        {
+            chkSteam = new CheckBox
+            {
+                Text = "Show Steam images", AutoSize = true, ForeColor = MxSteamColor,
+                BackColor = Bg, Font = new Font("Segoe UI", 8.5f), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
+                Location = new Point(S(396), S(10)), Checked = false,
             };
         }
         var btnAll = DlgBtn("⬇  Download all missing", Color.FromArgb(78, 52, 120));
-        btnAll.AutoSize = false; btnAll.SetBounds(S(410), S(5), S(170), S(28)); btnAll.Enabled = !_readOnly;
+        btnAll.AutoSize = false; btnAll.SetBounds(S(540), S(5), S(170), S(28)); btnAll.Enabled = !_readOnly;
         btnAll.Click += (_, _) => MxDownloadAllMissing();
 
         _mxStatus = new Label
         {
             Text = $"{_editGames.Count} games × {_mxCats.Count} categories", ForeColor = SubFg, BackColor = Bg,
-            Font = new Font("Segoe UI", 8.5f), AutoSize = true, Location = new Point(S(590), S(12)),
+            Font = new Font("Segoe UI", 8.5f), AutoSize = true, Location = new Point(S(720), S(12)),
         };
         bar.Controls.Add(chkWeb);
         if (chkEmu != null) bar.Controls.Add(chkEmu);
+        if (chkSteam != null) bar.Controls.Add(chkSteam);
         bar.Controls.Add(btnAll);
         bar.Controls.Add(_mxStatus);
 
@@ -230,6 +248,23 @@ internal sealed partial class EditGameWindow
             }
         };
 
+        if (chkSteam != null) chkSteam.CheckedChanged += (_, _) =>
+        {
+            if (chkSteam.Checked)
+            {
+                _mxShowSteam = true;
+                if (!_mxSourceOrder.Contains("steam")) _mxSourceOrder.Add("steam");
+                MxFillSteam(chkSteam);
+            }
+            else
+            {
+                _mxShowSteam = false;
+                _mxSourceOrder.Remove("steam");
+                MxInvalidateAllRows();
+                MxSetStatus($"{_editGames.Count} games × {_mxCats.Count} categories");
+            }
+        };
+
         return root;
     }
 
@@ -290,6 +325,7 @@ internal sealed partial class EditGameWindow
         int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
         List<MetadataDb.WebImage>? webList = null;                 // lazily loaded on first "web" use
         List<EmuMoviesCatalog.EmuMedia>? emuList = null;
+        List<MetadataDb.WebImage>? steamList = null;
 
         foreach (var src in _mxSourceOrder)
         {
@@ -309,10 +345,16 @@ internal sealed partial class EditGameWindow
                     var pick = MxWebSlotPick(webList, types, out int cnt);
                     if (pick != null) { cells[c].Web = pick; cells[c].WebCount = cnt; }
                 }
-                else // "emu"
+                else if (src == "emu")
                 {
                     if (emuList == null) { lock (_mxLock) _mxEmuMedia.TryGetValue(row, out emuList); emuList ??= new(); }
                     var pick = MxEmuSlotPick(emuList, dbId, types, out int cnt);
+                    if (pick != null) { cells[c].Web = pick; cells[c].WebCount = cnt; }
+                }
+                else // "steam"
+                {
+                    if (steamList == null) { lock (_mxLock) _mxSteamMedia.TryGetValue(row, out steamList); steamList ??= new(); }
+                    var pick = MxWebSlotPick(steamList, types, out int cnt);   // Steam media is already WebImage
                     if (pick != null) { cells[c].Web = pick; cells[c].WebCount = cnt; }
                 }
             }
@@ -845,8 +887,39 @@ internal sealed partial class EditGameWindow
             chk.Checked = false;
             return;
         }
+        MxFillBatch("Querying EmuMovies…", "EmuMovies", (row, g, dbId, ct) =>
+        {
+            string plat = Safe(() => g.Platform) ?? "";
+            List<EmuMoviesCatalog.EmuMedia> media = new();
+            if (EmuMoviesCatalog.SupportsPlatform(plat))
+            {
+                try { media = EmuMoviesCatalog.ResolveForGameAsync(api, Safe(() => g.Title) ?? "", Safe(() => g.ApplicationPath) ?? "", plat, ct).GetAwaiter().GetResult(); }
+                catch { }
+            }
+            lock (_mxLock) _mxEmuMedia[row] = media;
+            return media.Count;
+        });
+    }
 
-        using var dlg = NewDialog("Querying EmuMovies…", 420, 150);
+    // ── "Show Steam images": one appdetails call per Steam game, then fill gaps ──
+    private void MxFillSteam(CheckBox chk)
+    {
+        MxFillBatch("Querying Steam…", "Steam", (row, g, dbId, ct) =>
+        {
+            List<MetadataDb.WebImage> media = new();
+            try { media = SteamCatalog.ResolveForGameAsync(dbId, Safe(() => g.ApplicationPath) ?? "", ct).GetAwaiter().GetResult(); }
+            catch { }
+            lock (_mxLock) _mxSteamMedia[row] = media;
+            return media.Count;
+        });
+    }
+
+    // Shared "resolve one live source per game, fill gaps" batch (EmuMovies / Steam). perGame stores its stand-ins
+    // and returns how many it found. Progress shows the game being queried BEFORE the call — so a slow / retrying
+    // source (Steam's rate limit) advances visibly instead of sitting on "Preparing…".
+    private void MxFillBatch(string title, string source, Func<int, IGame, int, CancellationToken, int> perGame)
+    {
+        using var dlg = NewDialog(title, 420, 150);
         var lbl = new Label { Text = "Preparing…", ForeColor = Fg, BackColor = Bg, AutoSize = false, Location = new Point(S(16), S(14)), Size = new Size(S(380), S(20)) };
         var pb = new ProgressBar { Location = new Point(S(16), S(42)), Size = new Size(S(380), S(18)), Minimum = 0, Maximum = Math.Max(1, _editGames.Count) };
         var cancel = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.AutoSize = false; cancel.SetBounds(S(300), S(72), S(96), S(28));
@@ -856,44 +929,32 @@ internal sealed partial class EditGameWindow
         cancel.Click += (_, _) => cts.Cancel();
         dlg.FormClosing += (_, _) => cts.Cancel();
 
+        void Ui(Action a) { try { if (!dlg.IsDisposed && dlg.IsHandleCreated) dlg.BeginInvoke(a); } catch { } }
+
         int matched = 0;
-        System.Threading.Tasks.Task.Run(() =>
+        // Start on Shown so the handle exists — otherwise the very first (pre-call) update is dropped and the
+        // dialog sits on "Preparing…" for the whole first, possibly slow/retrying, query.
+        dlg.Shown += (_, _) => System.Threading.Tasks.Task.Run(() =>
         {
             for (int row = 0; row < _editGames.Count; row++)
             {
                 if (cts.IsCancellationRequested) break;
                 var g = _editGames[row];
-                string plat = Safe(() => g.Platform) ?? "";
-                List<EmuMoviesCatalog.EmuMedia> media = new();
-                if (EmuMoviesCatalog.SupportsPlatform(plat))
-                {
-                    try
-                    {
-                        media = EmuMoviesCatalog.ResolveForGameAsync(api,
-                            Safe(() => g.Title) ?? "", Safe(() => g.ApplicationPath) ?? "", plat, cts.Token)
-                            .GetAwaiter().GetResult();
-                    }
-                    catch { }
-                }
-                lock (_mxLock) { _mxEmuMedia[row] = media; _mxRows.Remove(row); }   // force recompute with the new stand-ins
-                if (media.Count > 0) matched++;
-
-                int done = row + 1, mm = matched;
-                try
-                {
-                    if (!dlg.IsDisposed && dlg.IsHandleCreated)
-                        dlg.BeginInvoke(new Action(() => { if (!dlg.IsDisposed) { pb.Value = Math.Min(pb.Maximum, done); lbl.Text = $"{done} / {_editGames.Count} games · {mm} matched"; } }));
-                }
-                catch { }
+                int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
+                int cur = row + 1; string gt = Safe(() => g.Title) ?? $"game {cur}";
+                Ui(() => { if (!dlg.IsDisposed) { pb.Value = Math.Min(pb.Maximum, cur - 1); lbl.Text = $"{cur} / {_editGames.Count} · {gt}"; } });
+                int n = 0; try { n = perGame(row, g, dbId, cts.Token); } catch { }
+                lock (_mxLock) _mxRows.Remove(row);   // recompute with the new stand-ins
+                if (n > 0) matched++;
+                int mm = matched;
+                Ui(() => { if (!dlg.IsDisposed) { pb.Value = Math.Min(pb.Maximum, cur); lbl.Text = $"{cur} / {_editGames.Count} games · {source} matched {mm}"; } });
             }
-            try { if (!dlg.IsDisposed && dlg.IsHandleCreated) dlg.BeginInvoke(new Action(() => { if (!dlg.IsDisposed) dlg.Close(); })); }
-            catch { }
+            Ui(() => { if (!dlg.IsDisposed) dlg.Close(); });
         }, cts.Token);
 
         dlg.ShowDialog(this);
         cts.Cancel();
-
-        MxSetStatus($"{_editGames.Count} games × {_mxCats.Count} categories · EmuMovies matched {matched} game(s)");
+        MxSetStatus($"{_editGames.Count} games × {_mxCats.Count} categories · {source} matched {matched} game(s)");
         _mxGrid?.Invalidate();
     }
 
@@ -927,21 +988,21 @@ internal sealed partial class EditGameWindow
         // Open the category page mirroring the GRID's enabled sources, so the same purple/blue stand-ins you see
         // in the grid are there in the modal (and the checkboxes match). A clicked stand-in cell also forces its
         // own source on (redundant — the grid had it on to show the cell — but explicit).
-        bool cellIsEmu = cell.Web.HasValue && string.Equals(cell.Web.Value.Origin, "emumovies", StringComparison.OrdinalIgnoreCase);
-        bool cellIsWeb = cell.Web.HasValue && !cellIsEmu;
+        string cellOrigin = cell.Web.HasValue ? cell.Web.Value.Origin : "";
+        bool cellIsEmu = string.Equals(cellOrigin, "emumovies", StringComparison.OrdinalIgnoreCase);
+        bool cellIsSteam = string.Equals(cellOrigin, "steam", StringComparison.OrdinalIgnoreCase);
+        bool cellIsWeb = cell.Web.HasValue && !cellIsEmu && !cellIsSteam;
         _imgOpenWithWeb = _mxShowWeb || cellIsWeb;
         _imgOpenWithEmu = _mxShowEmu || cellIsEmu;
+        _imgOpenWithSteam = _mxShowSteam || cellIsSteam;
 
-        // Hand the modal the EmuMovies media the grid ALREADY resolved for this game, so its category page shows
-        // it instantly instead of querying EmuMovies again (the platform dict was cached anyway, but this skips
-        // even the re-match). Keyed the same way ImgAppendEmuTiles keys _imgEmuCache.
-        if (_imgOpenWithEmu)
+        // Hand the modal the media the grid ALREADY resolved for this game, so its category page shows it
+        // instantly instead of re-querying. Keyed the same way the single-game sections key their caches.
+        string gk = Safe(() => game.Id) ?? Safe(() => game.Title) ?? "";
+        lock (_mxLock)
         {
-            lock (_mxLock)
-            {
-                if (_mxEmuMedia.TryGetValue(row, out var em))
-                    _imgEmuCache[Safe(() => game.Id) ?? Safe(() => game.Title) ?? ""] = em;
-            }
+            if (_imgOpenWithEmu && _mxEmuMedia.TryGetValue(row, out var em)) _imgEmuCache[gk] = em;
+            if (_imgOpenWithSteam && _mxSteamMedia.TryGetValue(row, out var sm)) _imgSteamCache["steam:" + gk] = sm;
         }
         try
         {
@@ -968,6 +1029,7 @@ internal sealed partial class EditGameWindow
             _imgModalCat = null;
             _imgOpenWithWeb = false;
             _imgOpenWithEmu = false;
+            _imgOpenWithSteam = false;
             _imgGame = prevGame;
             _pages.Remove(cat);      // that page was built for another game — never cache it
         }

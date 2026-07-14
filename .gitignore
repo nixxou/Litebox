@@ -13,3 +13,7 @@ release/
 # OS
 Thumbs.db
 desktop.ini
+
+# Local-only Claude Code context (not part of nixxou's repo)
+CLAUDE.local.md
+CLAUDE.md

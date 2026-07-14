@@ -381,7 +381,8 @@ internal sealed class GameListView : ListView
 
     public void RebuildView()
     {
-        var prev = SelectedGame;
+        var prevSel = SelectedGames;                        // FULL selection — restore multi across the rebuild
+        var prev = prevSel.Length > 0 ? prevSel[0] : null;  // focus / scroll anchor (was SelectedGame)
         int prevLen = _view.Length;   // to detect a shrink (see the scroll-clamp below)
         IEnumerable<IGame> q = _all;
         if (FilterPredicate != null) q = q.Where(SafeFilter);
@@ -417,7 +418,18 @@ internal sealed class GameListView : ListView
         AutoFit();
         try { SelectedIndices.Clear(); } catch { }
         int selIx = prev != null ? Array.IndexOf(_view, prev) : -1;
-        if (selIx >= 0) SetSelectedAndFocused(selIx);
+        if (prevSel.Length > 1)
+        {
+            // Preserve the WHOLE multi-selection: a sort / filter / edit-OK must not collapse it to one game.
+            // Map each surviving game to its new index (dict so it's O(n+m), not O(n·m) on big lists).
+            var pos = new Dictionary<IGame, int>(_view.Length);
+            for (int i = 0; i < _view.Length; i++) pos[_view[i]] = i;
+            var keep = new List<int>(prevSel.Length);
+            foreach (var g in prevSel) if (pos.TryGetValue(g, out var ix)) keep.Add(ix);
+            if (keep.Count > 0) { SetSelectedMulti(keep); if (selIx < 0) selIx = keep[0]; }
+            else if (selIx >= 0) SetSelectedAndFocused(selIx);
+        }
+        else if (selIx >= 0) SetSelectedAndFocused(selIx);
         // Scroll snap: on a swap, to the surviving selection or the top; on a same-set SHRINK
         // (search narrowing), back into range. EnsureVisible is a no-op when the target is
         // already visible, so a same-set same-size refresh keeps the user's scroll untouched.
@@ -551,6 +563,34 @@ internal sealed class GameListView : ListView
         SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref clear);
         var set = new LVITEM { stateMask = LVIS_SELECTED | LVIS_FOCUSED, state = LVIS_SELECTED | LVIS_FOCUSED };
         SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)index, ref set);
+    }
+
+    // Select several rows at once (restore a multi-selection). Clears all first, sets SELECTED on each,
+    // FOCUSED on the first. Virtual-mode safe (LVM_SETITEMSTATE; -1 clears everything in one call).
+    private void SetSelectedMulti(IReadOnlyList<int> indices)
+    {
+        if (!IsHandleCreated || indices.Count == 0) return;
+        var clear = new LVITEM { stateMask = LVIS_SELECTED | LVIS_FOCUSED, state = 0 };
+        SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref clear);
+        var sel = new LVITEM { stateMask = LVIS_SELECTED, state = LVIS_SELECTED };
+        foreach (var ix in indices) SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)ix, ref sel);
+        var foc = new LVITEM { stateMask = LVIS_FOCUSED, state = LVIS_FOCUSED };
+        SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)indices[0], ref foc);
+    }
+
+    /// <summary>Select a set of games (used by the poster view to mirror its multi-selection into this list).
+    /// No-op for games not in the current view. focus=false keeps keyboard focus where it is (the poster).</summary>
+    public void SelectGames(IReadOnlyList<IGame> games, bool focus)
+    {
+        if (games == null || games.Count == 0) return;
+        var pos = new Dictionary<IGame, int>(_view.Length);
+        for (int i = 0; i < _view.Length; i++) pos[_view[i]] = i;
+        var idx = new List<int>(games.Count);
+        foreach (var g in games) if (pos.TryGetValue(g, out var ix)) idx.Add(ix);
+        if (idx.Count == 0) return;
+        SetSelectedMulti(idx);
+        try { EnsureVisible(idx[0]); } catch { }
+        if (focus) { try { Focus(); } catch { } }
     }
 
     // Select every row (Ctrl+A). Virtual-mode friendly: LVM_SETITEMSTATE with item index -1 targets

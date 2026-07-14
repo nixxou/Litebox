@@ -137,11 +137,39 @@ internal static class GameplaySettings
     /// strips of unknown keys): the startup/end overlays keep TOPMOST for their whole
     /// configured duration WITHOUT ever taking the focus — non-blocking, so an emulator
     /// that pauses when unfocused (RetroArch pause_nonactive) keeps running behind the
-    /// cover. Off = historical behaviour (overlay yields top+front at spawn).</summary>
-    public static bool StartupStayOnTop()
+    /// cover. Off = historical behaviour (overlay yields top+front at spawn).
+    ///
+    /// SPLIT per launch type (StartupStayOnTop.{category}), since it works great for emulators
+    /// but less so for Windows/store games: emulators default ON, everything else OFF. This is
+    /// only the GLOBAL default — a per-emulator or per-game override still wins (see LiteBoxOption).
+    /// The no-arg overload is a defensive fallback (no launch context) → historical Off.</summary>
+    public static bool StartupStayOnTop() => false;
+
+    /// <summary>The launch categories the StartupStayOnTop default splits over (ini key · UI label).
+    /// Emulator defaults ON; App / DOSBox / every store default OFF. Store keys are "Store."+StoreKind.</summary>
+    public static readonly (string Key, string Label)[] StayOnTopCategories =
     {
-        try { return LiteBoxConfig.LoadForExe().GetBool("StartupStayOnTop", false); }
-        catch { return false; }
+        ("Emulator",    "Emulators"),
+        ("App",         "Windows apps"),
+        ("DosBox",      "DOSBox"),
+        ("Store.Gog",   "GOG"),
+        ("Store.Steam", "Steam"),
+        ("Store.Epic",  "Epic"),
+        ("Store.Uplay", "Ubisoft Connect"),
+        ("Store.Ea",    "EA"),
+    };
+
+    public static bool StayOnTopDefault(string category) => string.Equals(category, "Emulator", StringComparison.OrdinalIgnoreCase);
+    public static string StayOnTopIniKey(string category) => "StartupStayOnTop." + category;
+
+    /// <summary>The GLOBAL default for whether startup/end screens stay on top, for a given launch
+    /// <paramref name="category"/> (Emulator / App / DosBox / Store.Gog / …). Emulator defaults ON, the
+    /// rest OFF. A per-emulator / per-game override still overrides this (resolved in LiteBoxOption).</summary>
+    public static bool StartupStayOnTop(string category)
+    {
+        bool def = StayOnTopDefault(category);
+        try { return LiteBoxConfig.LoadForExe().GetBool(StayOnTopIniKey(category), def); }
+        catch { return def; }
     }
 
     /// <summary>Global toggle (LiteBox.ini) for the startup-cover progress bar (the ≤100%-at-fade bar fed

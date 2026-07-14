@@ -145,8 +145,11 @@ internal static class HostLaunch
         // 0. snapshot the launched game BEFORE anything is dropped — in-game
         //    surfaces (pause screen fanart/logo/session time) read this, never
         //    the store / cache (both are freed below). The emulator contributes its
-        //    startup/end-screen tier (global < emulator < game).
-        LaunchedGame.Capture(game, emulator);
+        //    startup/end-screen tier (global < emulator < game). The launch category
+        //    (DOSBox / emulator / plain app) selects the StartupStayOnTop global default.
+        bool useDosCat = SafeBool(() => app != null ? app.UseDosBox : game.UseDosBox);
+        string stayCat = useDosCat ? "DosBox" : (emulator != null ? "Emulator" : "App");
+        LaunchedGame.Capture(game, emulator, stayCat);
 
         // 0b. notify the GUI (it may show a "game running" screen / unload its list)
         //    BEFORE DropOptional so freed memory is reclaimed by the drop's GC.
@@ -192,7 +195,7 @@ internal static class HostLaunch
         Console.WriteLine($"[store-launch] {SafeStr(() => game.Title)} target={target} dir={installDir ?? "(unknown)"}");
         StoreTrace.Log($"store-launch START '{SafeStr(() => game.Title)}' kind={kind} dir={installDir ?? "(unknown)"} killLauncher={killLauncherAfter} evenIfPreRunning={killEvenIfPreRunning}");
 
-        LaunchedGame.Capture(game);                    // before any GUI unload, like the emulator path
+        LaunchedGame.Capture(game, null, "Store." + kind);   // before any GUI unload; per-store stay-on-top default
         try { GameStarted?.Invoke(game); } catch { }   // GUI shows the running screen + unloads its list
 
         var t = new Thread(() => RunStoreAndWait(game, kind, target, installDir, regainedFocus, killLauncherAfter, killEvenIfPreRunning))

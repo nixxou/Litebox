@@ -13,6 +13,7 @@
 #nullable enable
 
 using LbApiHost.Host.Data;
+using LbApiHost.Host.Integrations;
 using LbApiHost.Host.Store;
 using LbApiHost.Host.UiKit;
 
@@ -243,10 +244,32 @@ internal static class LbGlobalOptions
             Label Head(string t, int y) => new() { Text = t, Location = new Point(S(4), S(y)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
 
             p.Controls.Add(Head("Startup / end screens", 6));
-            var stp = Chk("Keep startup/end screens on top without taking focus (non-blocking)", ini.GetBool("StartupStayOnTop", false), new Point(S(12), S(30)));
-            p.Controls.Add(stp);
-            p.Controls.Add(Lbl("The screen covers the display while the game keeps the focus behind it.", new Point(S(30), S(52)), Dim));
-            BindIniChk(stp, "StartupStayOnTop");
+            // Keep startup/end screens on top without taking focus (non-blocking) — SPLIT per launch type: it works
+            // great for emulators but less so for Windows / store games, so emulators default ON and the rest OFF.
+            // This only sets the GLOBAL default; a per-emulator or per-game override still wins (see LiteBoxOption).
+            var stayTip = new ToolTip();
+            FlowLayoutPanel StayRow(int yy) => new()
+            { Location = new Point(S(12), S(yy)), Size = new Size(S(800), S(24)), BackColor = Bg, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0), Padding = new Padding(0) };
+            CheckBox StayChk(string label, string catKey)
+            {
+                bool def = Gameplay.GameplaySettings.StayOnTopDefault(catKey);
+                string key = Gameplay.GameplaySettings.StayOnTopIniKey(catKey);
+                var cb = new CheckBox { Text = label, AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = ini.GetBool(key, def), Enabled = !readOnly, Margin = new Padding(0, S(3), S(14), 0) };
+                BindIniChk(cb, key, def);
+                return cb;
+            }
+            Label StayPrefix(string t) => new() { Text = t, AutoSize = true, ForeColor = Dim, BackColor = Bg, Margin = new Padding(0, S(4), S(8), 0) };
+
+            var stayRow1 = StayRow(30);
+            var stayLbl1 = StayPrefix("Keep on top (non-blocking) for:");
+            stayTip.SetToolTip(stayLbl1, "The startup/end screen covers the display while the game keeps the focus behind it (non-blocking). Great for emulators, less reliable for Windows / store games — hence the per-type split. Per-emulator / per-game overrides still win.");
+            stayRow1.Controls.Add(stayLbl1);
+            var stayRow2 = StayRow(54);
+            stayRow2.Controls.Add(StayPrefix("Stores:"));
+            foreach (var (key, label) in Gameplay.GameplaySettings.StayOnTopCategories)
+                (key.StartsWith("Store.", StringComparison.Ordinal) ? stayRow2 : stayRow1).Controls.Add(StayChk(label, key));
+            p.Controls.Add(stayRow1);
+            p.Controls.Add(stayRow2);
 
             p.Controls.Add(new Label { Text = "Smart Capture — reveal the startup screen when the game actually renders:", Location = new Point(S(12), S(84)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
             var scEn = Chk("Enable Smart Capture", ini.GetBool("SmartCaptureEnabled", true), new Point(S(12), S(108)));
@@ -1188,6 +1211,62 @@ internal static class LbGlobalOptions
             var exe = Txt(s.Get("ObsExePath"), new Point(S(4), S(142)), 480); p.Controls.Add(exe);
             p.Controls.Add(Browse(new Point(S(490), S(141)), () => { using var d = new OpenFileDialog { Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*" }; if (d.ShowDialog() == DialogResult.OK) exe.Text = d.FileName; }));
             BindChk(auto, "AutoAddObsRecordings"); BindTxt(folder, "ObsRecordingsFolder"); BindChk(ensure, "StartObsWithGames"); BindTxt(exe, "ObsExePath");
+        }
+
+        // ── YT-DLP (YouTube video source) ── stored in youtube.json (YtConfig), SHARED with the video editor's
+        // gear dialog. Not an LB Settings.xml value, so it saves itself on Apply rather than through BindTxt.
+        {
+            var p = Page("YT-DLP");
+            var cfg = YtConfig.Load();
+            string YtVer() => YtDlp.Available ? ("installed" + (YtDlp.Version() is { } v ? "  ·  " + v : "")) : "not installed";
+
+            p.Controls.Add(Lbl("Default searches — one per line; tags {GameName} / {Platform} / {AltName1}…", new Point(S(4), S(8))));
+            var searches = new TextBox
+            {
+                Multiline = true, ScrollBars = ScrollBars.Vertical, Text = string.Join("\r\n", cfg.Searches),
+                Location = new Point(S(4), S(28)), Size = new Size(S(500), S(88)),
+                BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly,
+            };
+            p.Controls.Add(searches);
+            p.Controls.Add(Lbl("Tried in order. A line whose {AltNameN} the game doesn't have is skipped.", new Point(S(4), S(120))));
+
+            p.Controls.Add(Lbl("Quality", new Point(S(4), S(150))));
+            var quality = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(120), S(148)), Width = S(140), BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat, Enabled = !readOnly };
+            quality.Items.AddRange(YtConfig.QualityPresets);
+            quality.SelectedItem = Array.IndexOf(YtConfig.QualityPresets, cfg.Quality) >= 0 ? cfg.Quality : "1080p";
+            p.Controls.Add(quality);
+
+            p.Controls.Add(Lbl("Cookies from", new Point(S(4), S(186))));
+            var cookies = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(120), S(184)), Width = S(140), BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat, Enabled = !readOnly };
+            foreach (var n in YtConfig.CookieNames) cookies.Items.Add(n);
+            cookies.SelectedItem = Enum.GetName(typeof(YtDlp.CookieBrowser), cfg.CookieBrowser);
+            p.Controls.Add(cookies);
+            p.Controls.Add(Lbl("For age-gated / region-locked videos. Firefox is the most reliable; Chrome/Edge often fail.", new Point(S(4), S(214))));
+
+            p.Controls.Add(Lbl("yt-dlp", new Point(S(4), S(248))));
+            var ver = Lbl(YtVer(), new Point(S(120), S(248))); p.Controls.Add(ver);
+            Button YtBtn(string t, Point loc) => new() { Text = t, Location = loc, Size = new Size(S(110), S(26)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f), Enabled = !readOnly };
+            var dl = YtBtn("Download", new Point(S(4), S(274)));
+            var up = YtBtn("Update", new Point(S(120), S(274)));
+            async void Fetch(Button b, Func<System.Threading.CancellationToken, Task<bool>> op)
+            {
+                dl.Enabled = up.Enabled = false; string old = b.Text; b.Text = "…";
+                bool ok = false; try { ok = await op(System.Threading.CancellationToken.None); } catch { }
+                dl.Enabled = up.Enabled = !readOnly; b.Text = old; ver.Text = YtVer();
+                if (!ok) MessageBox.Show(p.FindForm(), "yt-dlp download failed.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            dl.Click += (_, _) => Fetch(dl, YtDlp.EnsureAsync);
+            up.Click += (_, _) => Fetch(up, YtDlp.UpdateAsync);
+            p.Controls.Add(dl); p.Controls.Add(up);
+
+            applies.Add(() =>
+            {
+                if (readOnly) return;
+                cfg.Searches = searches.Text.Replace("\r\n", "\n").Split('\n').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                cfg.Quality = quality.SelectedItem as string ?? "1080p";
+                cfg.Cookies = cookies.SelectedItem as string ?? "None";
+                cfg.Save();
+            });
         }
 
         apply = () => { foreach (var a in applies) a(); };

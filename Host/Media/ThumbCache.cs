@@ -72,6 +72,9 @@ internal static class ThumbCache
     /// <summary>Sub-folder for WEB-IMAGE preview thumbnails (database / EmuMovies / Steam stand-ins in the editor).</summary>
     public static string WebImgFolder => Sub("webimg");
 
+    /// <summary>Sub-folder for DOCUMENT thumbnails (PDF first-page renders, text/comic previews). See the Documents editor.</summary>
+    public static string DocFolder => Sub("docs");
+
     private static string Sub(string name)
     {
         var d = Path.Combine(Dir, name);

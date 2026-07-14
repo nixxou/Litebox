@@ -56,16 +56,26 @@ internal static class MetadataDb
     /// <summary>True when the offline metadata DB is on disk (so web images can be listed at all).</summary>
     public static bool Available => DbPath() != null;
 
+    /// <summary>
+    /// The DB the "Web (database)" source reads for EVERY media tab (images / videos / manuals). The rule: base
+    /// LaunchBox's own Metadata.db, EXCEPT when all three hold — the ExtendDB plugin is loaded, its Extended
+    /// Database module is Active, and the extended DB has been downloaded (= <see cref="MediaApiBridge.UseWizardPath"/>
+    /// + the file present) — in which case the richer merged DB is used. So we never open ExtendDB's 3.8 GB asset
+    /// unless ExtendDB is genuinely in play (and its non-launchbox rows are actually fetchable).
+    /// </summary>
+    public static string? WebDbPath()
+        => (MediaApiBridge.UseWizardPath && ExtendedDbPath != null) ? ExtendedDbPath : DbPath();
+
     /// <summary>Every image the online/merged DB has for a game (by its DatabaseId), or empty. Read-only.</summary>
-    public static List<WebImage> ImagesForGame(int databaseId) => ImagesForGame(DbPath(), databaseId);
+    public static List<WebImage> ImagesForGame(int databaseId) => ImagesForGame(WebDbPath(), databaseId);
 
     // ── Videos ────────────────────────────────────────────────────────────────
-    // Videos are read from the EXTENDED database, not from LaunchBox's own Metadata.db — the same source
-    // ExtendDB's own video downloader queries (ExtendMediaDownloader.QueryCandidates reads ExtendedDbPath
-    // directly). LaunchBox's DB has no video rows at all, and the LbDbMerger only pushes image types into it.
-    // They live in the same GameImages table, under Type 'Video' (146k rows: screenscraper / steam / emumovies)
-    // and 'VideoAdvert' (emumovies). CRC32 AND FileSize are always populated there — which matters, because a
-    // video's CRC is never recomputed from disk (see the owned-detection in the video page).
+    // Video rows ONLY exist in the EXTENDED database (LaunchBox's own Metadata.db has none — the LbDbMerger only
+    // pushes image types into it). So the video "Web (database)" source is meaningful only when ExtendDB is in
+    // play; WebDbPath returns the extended DB then, and the base DB (→ zero video rows) otherwise, so we never
+    // open ExtendDB's asset when the plugin isn't loaded. They live in GameImages under Type 'Video' (146k:
+    // screenscraper / steam / emumovies) and 'VideoAdvert'. CRC32 AND FileSize are always populated there —
+    // which matters, because a video's CRC is never recomputed from disk (see the owned-detection in the page).
 
     private static string? _extDb;
     private static bool _extProbed;
@@ -101,7 +111,7 @@ internal static class MetadataDb
     }
 
     /// <summary>Every video the extended DB has for a game, or empty when the DB isn't there.</summary>
-    public static List<WebImage> VideosForGame(int databaseId) => VideosForGame(ExtendedDbPath, databaseId);
+    public static List<WebImage> VideosForGame(int databaseId) => VideosForGame(WebDbPath(), databaseId);
 
     /// <summary>Path-parameterized reader (also the unit-test seam).</summary>
     internal static List<WebImage> VideosForGame(string? db, int databaseId)
@@ -143,6 +153,59 @@ internal static class MetadataDb
                     r.IsDBNull(4) ? "launchbox" : r.GetString(4),
                     r.IsDBNull(5) ? 0 : (int)r.GetInt64(5),
                     ImageFileType.Extract(fn),          // the extended DB has no FileType column — derive it
+                    r.IsDBNull(6) ? 0 : r.GetInt64(6)));
+            }
+        }
+        catch { }
+        return list;
+    }
+
+    // ── Manuals ─────────────────────────────────────────────────────────────────
+    // Manuals live in the SAME GameImages table under Type 'Manual' (screenscraper / emumovies; no launchbox).
+    // Same DB rule as every other tab (WebDbPath): extended only when ExtendDB is genuinely in play, else base
+    // LaunchBox. Download reuses the image path (a manual row is just a WebImage) — and since there are no
+    // launchbox rows, without ExtendDB's credentialed fetcher none are downloadable (the editor notes that).
+    public static List<WebImage> ManualsForGame(int databaseId) => ManualsForGame(WebDbPath(), databaseId);
+
+    internal static List<WebImage> ManualsForGame(string? db, int databaseId)
+    {
+        var list = new List<WebImage>();
+        if (db == null || databaseId <= 0) return list;
+        try
+        {
+            var cs = new SqliteConnectionStringBuilder { DataSource = db, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Shared }.ToString();
+            using var con = new SqliteConnection(cs);
+            con.Open();
+
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pc = con.CreateCommand())
+            {
+                pc.CommandText = "PRAGMA table_info(\"GameImages\")";
+                using var pr = pc.ExecuteReader();
+                while (pr.Read()) cols.Add(pr.GetString(1));
+            }
+            if (!cols.Contains("FileName") || !cols.Contains("Type")) return list;
+            string Col(string name, string literal) => cols.Contains(name) ? "\"" + name + "\"" : literal;
+
+            using var cmd = con.CreateCommand();
+            cmd.CommandText =
+                $"SELECT \"FileName\", \"Type\", {Col("Region", "''")}, {Col("CRC32", "0")}, " +
+                $"{Col("Origin", "'launchbox'")}, {Col("duplicate", "0")}, {Col("FileSize", "0")} " +
+                "FROM \"GameImages\" WHERE \"DatabaseId\" = $id AND \"Type\" = 'Manual'";
+            cmd.Parameters.Add(new SqliteParameter("$id", databaseId));
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                string fn = r.IsDBNull(0) ? "" : r.GetString(0);
+                if (string.IsNullOrEmpty(fn)) continue;
+                list.Add(new WebImage(
+                    databaseId, fn,
+                    r.IsDBNull(1) ? "Manual" : r.GetString(1),
+                    r.IsDBNull(2) ? "" : r.GetString(2),
+                    r.IsDBNull(3) ? 0 : r.GetInt64(3),
+                    r.IsDBNull(4) ? "launchbox" : r.GetString(4),
+                    r.IsDBNull(5) ? 0 : (int)r.GetInt64(5),
+                    ImageFileType.Extract(fn),
                     r.IsDBNull(6) ? 0 : r.GetInt64(6)));
             }
         }

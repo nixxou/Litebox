@@ -342,6 +342,25 @@ internal sealed class HostAdditionalApplication : DummyAdditionalApplication
     public override DateTime? LastPlayed { get => _a.LastPlayed; set { _a.LastPlayed = value; Rec(); } }
     public override bool? Installed { get => _a.Installed; set { _a.Installed = value; Rec(); } }
 
+    // LaunchBox "Section" — NOT on the SDK IAdditionalApplication, but the marker the Documents tab uses:
+    // an additional application with Section=="Document" is a game DOCUMENT (not a launchable app). LiteBox's
+    // Documents page reads/sets it by casting IAdditionalApplication to this concrete type.
+    public const string DocumentSection = "Document";
+    public string Section { get => _a.Section ?? ""; set { _a.Section = value; Rec(); } }
+    public bool IsDocument => string.Equals(_a.Section, DocumentSection, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Swap this record's position with another's in the game's additional-application list (the list
+    /// order IS the XML/display order). Used by the Documents page to reorder documents. No-op across games.</summary>
+    public void SwapPositionWith(HostAdditionalApplication other)
+    {
+        if (other == null || !ReferenceEquals(_s, other._s) || _gid != other._gid) return;
+        var list = _s.AddAppsMutable(_gid);
+        int i = list.IndexOf(_a), j = list.IndexOf(other._a);
+        if (i < 0 || j < 0 || i == j) return;
+        (list[i], list[j]) = (list[j], list[i]);
+        _s.RecordChildReplace(_gid, "AdditionalApplication");
+    }
+
     // LB semantics (SDK doc): the app's own CommandLine, else the appropriate emulator's — the app's
     // EmulatorId when set, else the parent game's; platform command line first, emulator-level second.
     public override string GetEffectiveCommandLine()

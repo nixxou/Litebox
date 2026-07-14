@@ -4,8 +4,8 @@
 // (locks released), deletes everything, and finally self-deletes.
 //
 // Always removed (LiteBox-exclusive): Core\LiteBox.exe (+ the light build's .dll/.json), Core\litebox\ (all
-// our data), the root re-launcher, ThirdParty\Steam, and every obsolete leftover from OLDER LiteBox versions
-// (LegacyCleanup: pre-litebox\ Core-root files, launcher markers, copied Magick DLLs, loose .api payload).
+// our data), the root re-launcher, ThirdParty\Steam, ThirdParty\Pdfium, and every obsolete leftover from OLDER
+// LiteBox versions (LegacyCleanup: pre-litebox\ Core-root files, launcher markers, copied Magick DLLs, loose .api payload).
 // Opt-in (shared with ExtendDB — off by default): the thumbnail cache (Plugins\ExtendDB\cache\thumbs) and
 // the shared ThirdParty tools (Everything / ImageMagick native / RAHasher).
 
@@ -70,6 +70,8 @@ internal static class Uninstaller
         sb.AppendLine($"del /q \"{root}\\LiteBox.exe\" 2>nul");
         sb.AppendLine($"del /q \"{root}\\ThirdParty\\Steam\\steam_api64.dll\" 2>nul");
         sb.AppendLine($"rmdir \"{root}\\ThirdParty\\Steam\" 2>nul");
+        sb.AppendLine($"del /q \"{root}\\ThirdParty\\Pdfium\\pdfium.dll\" 2>nul");   // LiteBox-only (PDF document thumbnails)
+        sb.AppendLine($"rmdir \"{root}\\ThirdParty\\Pdfium\" 2>nul");
 
         // Obsolete leftovers from OLDER LiteBox versions (pre-litebox\ Core-root config/journal/caches, old
         // launcher markers, copied Magick DLLs, loose .api payload, …) — the SAME list the boot sweep uses.

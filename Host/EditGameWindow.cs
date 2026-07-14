@@ -267,6 +267,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         // Videos: ONE page, no per-type children. A game has a handful of videos at most — the page already
         // groups them by type, so sub-nodes only added clicks (unlike Images, where a category can hold dozens).
         media.Nodes.Add(N("Videos", "Videos"));
+        media.Nodes.Add(N("Documents", "Documents"));
         media.Nodes.Add(N("3D Model Settings", "ModelSettings"));
         media.Nodes.Add(N("Image Query", "ImageQuery"));   // batch tool — works for 1..N selected games
 
@@ -317,6 +318,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "ControllerSupport" => IsMulti ? BuildControllerSupportMultiPage() : BuildControllerSupportPage(),
                 "Images" => IsMulti ? BuildImagesMatrixPage() : BuildImagesPage(),   // multi → media-coverage matrix
                 "Videos" => IsMulti ? BuildVideosMatrixPage() : BuildVideosPage(),   // multi → video-coverage matrix
+                "Documents" => IsMulti ? Placeholder("Documents") : BuildDocumentsPage(),   // manual + additional documents
                 "ImageQuery" => BuildImageQueryPage(),   // works for 1..N games (single or multi selection)
                 "Launching" => BuildLaunchingPage(),   // main page supports multi (merged fields); sub-pages below stay solo
                 "DOSBox" => BuildDosBoxPage(),   // main DOSBox page supports multi (3-state Use-DOSBox + merged paths)

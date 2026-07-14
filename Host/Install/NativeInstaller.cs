@@ -40,7 +40,12 @@ internal static class NativeInstaller
         ("VCRUNTIME140.dll.api",          "RetroAchievements", "VCRUNTIME140.dll"),
         ("VCRUNTIME140_1.dll.api",        "RetroAchievements", "VCRUNTIME140_1.dll"),
         ("steam_api64.dll.api",           "Steam",             "steam_api64.dll"),
+        ("pdfium.dll.api",                "Pdfium",            "pdfium.dll"),        // LiteBox-only: PDF document thumbnails
     };
+
+    // ThirdParty sub-folders that are LiteBox-only (not shared with ExtendDB) — a refresh overwrites them
+    // freely instead of prompting. The rest (ExtendDB / RetroAchievements / Everything) are shared.
+    private static bool IsLiteBoxOnlySub(string sub) => sub is "Steam" or "Pdfium";
 
     /// <summary>
     /// libvlc is NOT part of our payload: LaunchBox already ships a full libvlc 3.0.23 (366 plugins) at
@@ -54,6 +59,11 @@ internal static class NativeInstaller
     /// FfmpegService points at it (video trimming / keyframe indexing). Nothing to deploy.
     /// </summary>
     public static string FfmpegDir(string lbRoot) => Path.Combine(lbRoot, "ThirdParty", "FFMPEG");
+
+    /// <summary>Deployed pdfium.dll (PDF document thumbnails). Loaded by full path (PdfThumbnailer) so it need
+    /// not sit on the DLL search path. Empty lbRoot → empty (caller treats PDF rendering as unavailable).</summary>
+    public static string PdfiumPath(string? lbRoot)
+        => string.IsNullOrEmpty(lbRoot) ? "" : Path.Combine(lbRoot, "ThirdParty", "Pdfium", "pdfium.dll");
 
     /// <summary>Deploys the payload into &lt;lbRoot&gt;\ThirdParty\… . Only-if-absent unless
     /// <paramref name="refresh"/>. Safe + cheap to call repeatedly.</summary>
@@ -76,7 +86,7 @@ internal static class NativeInstaller
                 if (!refresh) continue;                                                        // present + normal → skip
                 if (SameContent(asm, resNames, src, target)) continue;                         // present + identical → skip
 
-                if (sub != "Steam")   // shared with ExtendDB
+                if (!IsLiteBoxOnlySub(sub))   // shared with ExtendDB
                 {
                     extendDbPresent ??= File.Exists(Path.Combine(lbRoot, "Plugins", "ExtendDB", "ExtendDB.dll"));
                     if (extendDbPresent == true) { sharedDiff.Add((src, target)); continue; }  // ask before touching

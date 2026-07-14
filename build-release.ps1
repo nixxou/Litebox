@@ -57,7 +57,7 @@ $Lb10Root   = [IO.Path]::GetFullPath($Lb10Root)
 # csproj EmbeddedResource block and NativeInstaller.Payload - keep the three in sync.
 $payload = @(
   'Everything64.dll.api','Magick.Native-Q16-x64.dll.api','RahasherExtendDB.exe','7z.dll.api',
-  'MSVCP140.dll.api','VCRUNTIME140.dll.api','VCRUNTIME140_1.dll.api','steam_api64.dll.api'
+  'MSVCP140.dll.api','VCRUNTIME140.dll.api','VCRUNTIME140_1.dll.api','steam_api64.dll.api','pdfium.dll.api'
 )
 
 # The ONLY files the light build ships (everything else the publish produced is the .NET runtime, which

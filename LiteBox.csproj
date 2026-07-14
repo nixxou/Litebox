@@ -172,6 +172,7 @@
     <EmbeddedResource Include="thirdparty\VCRUNTIME140.dll.api"><LogicalName>natives/VCRUNTIME140.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\VCRUNTIME140_1.dll.api"><LogicalName>natives/VCRUNTIME140_1.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\steam_api64.dll.api"><LogicalName>natives/steam_api64.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\pdfium.dll.api"><LogicalName>natives/pdfium.dll.api</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- A2 universal installer: the standalone single-file embeds the LIGHT multi-file host for BOTH runtime

@@ -64,16 +64,20 @@ internal static class StoreProcessWatcher
     public static void KillAllClients(StoreKind kind)
         => CloseOrKill(kind, ClientPids(kind, null), "all");
 
-    private static List<(string name, int pid)> ClientPids(StoreKind kind, HashSet<int>? exclude)
+    // startTime is carried alongside the PID everywhere below so a process can be re-identified before
+    // it's killed — a bare PID is not a safe identity to hold across the grace-wait period (see IsAlive).
+    private static List<(string name, int pid, DateTime startTime)> ClientPids(StoreKind kind, HashSet<int>? exclude)
     {
-        var list = new List<(string, int)>();
+        var list = new List<(string, int, DateTime)>();
         foreach (var name in ClientNames(kind))
             foreach (var p in Process.GetProcessesByName(name))
-            { try { if (exclude == null || !exclude.Contains(p.Id)) list.Add((name, p.Id)); } catch { } finally { try { p.Dispose(); } catch { } } }
+            { try { if (exclude == null || !exclude.Contains(p.Id)) list.Add((name, p.Id, SafeStartTime(p))); } catch { } finally { try { p.Dispose(); } catch { } } }
         return list;
     }
 
-    private static void CloseOrKill(StoreKind kind, List<(string name, int pid)> targets, string tag)
+    private static DateTime SafeStartTime(Process p) { try { return p.StartTime; } catch { return DateTime.MinValue; } }
+
+    private static void CloseOrKill(StoreKind kind, List<(string name, int pid, DateTime startTime)> targets, string tag)
     {
         if (targets.Count == 0) return;
 
@@ -96,21 +100,31 @@ internal static class StoreProcessWatcher
             while (sw.ElapsedMilliseconds < GracefulWaitMs)
             {
                 bool anyAlive = false;
-                foreach (var t in targets) if (IsAlive(t.pid)) { anyAlive = true; break; }
+                foreach (var t in targets) if (IsAlive(t.pid, t.startTime)) { anyAlive = true; break; }
                 if (!anyAlive) break;
                 System.Threading.Thread.Sleep(200);
             }
             foreach (var t in targets)
             {
-                if (!IsAlive(t.pid)) { StoreTrace.Log($"store close: {t.name} pid={t.pid} exited cleanly ({tag})"); continue; }
-                try { using var p = Process.GetProcessById(t.pid); p.Kill(); StoreTrace.Log($"store close: {t.name} pid={t.pid} ignored close — killed ({tag})"); }
+                if (!IsAlive(t.pid, t.startTime)) { StoreTrace.Log($"store close: {t.name} pid={t.pid} exited cleanly ({tag})"); continue; }
+                try
+                {
+                    using var p = Process.GetProcessById(t.pid);
+                    // Re-verify identity right before Kill — the PID could be reused in the instant between
+                    // the IsAlive check above and this one, and a bare PID match is not enough on its own.
+                    if (SafeStartTime(p) != t.startTime) { StoreTrace.Log($"store close: {t.name} pid={t.pid} was reused by an unrelated process — not killing ({tag})"); continue; }
+                    p.Kill(); StoreTrace.Log($"store close: {t.name} pid={t.pid} ignored close — killed ({tag})");
+                }
                 catch (Exception ex) { StoreTrace.Log($"store close: kill {t.name} pid={t.pid} failed: {ex.Message}"); }
             }
         }) { IsBackground = true, Name = "litebox-store-close" }.Start();
     }
 
-    private static bool IsAlive(int pid)
-    { try { using var p = Process.GetProcessById(pid); return !p.HasExited; } catch { return false; } }
+    // A bare PID is not a safe process identity once a grace period has elapsed — Windows can reassign an
+    // exited process's PID to an unrelated new process. startTime (only ever unique per real process
+    // lifetime) re-verifies we're still looking at the SAME process before treating it as alive/killable.
+    private static bool IsAlive(int pid, DateTime startTime)
+    { try { using var p = Process.GetProcessById(pid); return !p.HasExited && SafeStartTime(p) == startTime; } catch { return false; } }
 
     /// <summary>PostMessage WM_CLOSE to every visible top-level window owned by <paramref name="pid"/> — the
     /// same as clicking the X. Clean-exiting clients quit; tray-minimisers stay up and get killed as the

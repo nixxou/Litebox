@@ -491,9 +491,19 @@ internal static class PauseManager
         if (hasCustomExit)
         {
             // The emulator has a real, user-authored exit script: it OWNS closing the game (it may prompt to
-            // save, animate, or simply take longer than any timeout we'd pick). Respect it — NEVER force-kill.
-            // The process exits on its own terms and HostLaunch's WaitForExit then runs the normal cleanup.
-            Console.WriteLine("[pause] custom exit script ran — not force-killing; leaving the game to close itself");
+            // save, animate, or simply take longer than any timeout the default path gets). Respect it with a
+            // much longer grace period than the default 5s — but a broken/misconfigured script (wrong window
+            // title/class, an unhandled save-changes prompt) must not hang LiteBox forever waiting for a
+            // process that's never going to exit on its own; fall back to the same kill-tree safety net.
+            const int CustomExitGraceMs = 30000;
+            try { graceful = _proc!.WaitForExit(CustomExitGraceMs); } catch { }
+            if (graceful) Console.WriteLine("[pause] custom exit script closed the game");
+            else
+            {
+                Console.WriteLine($"[pause] custom exit script ran but the game is still up after {CustomExitGraceMs}ms — force-killing as a safety net");
+                try { if (_proc is { HasExited: false }) { _proc.Kill(entireProcessTree: true); Console.WriteLine("[pause] emulator killed"); } }
+                catch (Exception ex) { Console.WriteLine("[pause] kill failed: " + ex.Message); }
+            }
         }
         else
         {

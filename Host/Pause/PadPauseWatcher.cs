@@ -38,7 +38,13 @@ internal static class PadPauseWatcher
     public static void Stop()
     {
         _run = false;
-        _thread = null;   // the loop sees _run=false and exits; it's a background thread anyway
+        var t = _thread;
+        _thread = null;
+        // Join (bounded — PollMs is 66ms, so the loop notices _run=false almost immediately) so a
+        // fast Stop()-then-Start() (Start() always calls Stop() first) can't leave the old Loop()
+        // thread still alive when the new one spawns and _mask/_onPause get reassigned underneath it —
+        // that would let both threads poll concurrently and double-fire a single combo press.
+        if (t != null && t.IsAlive) { try { t.Join(500); } catch { } }
     }
 
     private static void Loop()

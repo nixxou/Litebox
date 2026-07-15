@@ -1653,22 +1653,35 @@ internal sealed class MainWindow : Form, IMessageFilter
     // Full self-uninstall (Options → Uninstall LiteBox). Red button + confirmation → detached .bat.
     private Control BuildUninstallSection()
     {
+        // FlowLayoutPanel (TopDown), not fixed Locations: `desc` wraps to however many lines its actual
+        // text needs (MaximumSize.Width forces the wrap, AutoSize grows the height to fit it) - a fixed Y
+        // for cbThumbs below it baked in an assumed height that the real wrapped text (3 lines at normal
+        // DPI, more at higher DPI/larger fonts) exceeds, so it silently overlapped the description. Same
+        // bug class as the original OptionsWindow overlap; same fix (derive layout from live PreferredSize).
+        float dpiS = LiteBoxTheme.DpiScale(this);
+        int S(int px) => (int)Math.Round(px * dpiS);
+
         var p = new Panel { BackColor = Bg, AutoScroll = true };
-        var title = new Label { Text = "Uninstall LiteBox", Location = new Point(4, 8), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) };
+        var flow = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Bg, Padding = new Padding(S(4), S(8), S(4), 0),
+        };
+        var title = new Label { Text = "Uninstall LiteBox", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold), Margin = new Padding(0, 0, 0, S(8)) };
         var desc = new Label
         {
             Text = "Removes LiteBox completely: LiteBox.exe (Core + root re-launcher), the Core\\litebox\\ data "
                  + "folder, and ThirdParty\\Steam. The ExtendDB plugin and the ThirdParty tools it shares are "
                  + "left untouched unless you tick a box below.",
-            Location = new Point(4, 32), AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = SubFg, BackColor = Bg,
-            Font = new Font("Segoe UI", 8.5f),
+            AutoSize = true, MaximumSize = new Size(S(560), 0), ForeColor = SubFg, BackColor = Bg,
+            Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(16)),
         };
-        var cbThumbs = new CheckBox { Text = "Also delete the shared thumbnail cache (Plugins\\ExtendDB\\cache\\thumbs)", Location = new Point(4, 92), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f) };
-        var cbTp = new CheckBox { Text = "Also remove the shared ThirdParty tools (Everything, ImageMagick, RAHasher)", Location = new Point(4, 116), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f) };
-        var shareNote = new Label { Text = "Both are shared with ExtendDB, which re-creates them on its next run.", Location = new Point(22, 140), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8f) };
+        var cbThumbs = new CheckBox { Text = "Also delete the shared thumbnail cache (Plugins\\ExtendDB\\cache\\thumbs)", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(4)) };
+        var cbTp = new CheckBox { Text = "Also remove the shared ThirdParty tools (Everything, ImageMagick, RAHasher)", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(4)) };
+        var shareNote = new Label { Text = "Both are shared with ExtendDB, which re-creates them on its next run.", AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8f), Margin = new Padding(S(18), 0, 0, S(32)) };
         var btn = new Button
         {
-            Text = "Uninstall LiteBox", Location = new Point(4, 172), Size = new Size(210, 32),
+            Text = "Uninstall LiteBox", AutoSize = false, Size = new Size(S(210), S(32)), Margin = new Padding(0),
             FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(150, 40, 40), ForeColor = Color.White,
             FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
         };
@@ -1683,7 +1696,8 @@ internal sealed class MainWindow : Form, IMessageFilter
             try { Install.Uninstaller.RunSelfUninstall(cbThumbs.Checked, cbTp.Checked); }   // launches the bat + exits
             catch (Exception ex) { MessageBox.Show(p.FindForm(), "Uninstall failed to start: " + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         };
-        p.Controls.Add(title); p.Controls.Add(desc); p.Controls.Add(cbThumbs); p.Controls.Add(cbTp); p.Controls.Add(shareNote); p.Controls.Add(btn);
+        flow.Controls.Add(title); flow.Controls.Add(desc); flow.Controls.Add(cbThumbs); flow.Controls.Add(cbTp); flow.Controls.Add(shareNote); flow.Controls.Add(btn);
+        p.Controls.Add(flow);
         return p;
     }
 

@@ -1311,6 +1311,22 @@ internal sealed class MainWindow : Form, IMessageFilter
         }
         foreach (var f in folders)
         {
+            // ExtendDB is integrated into LiteBox → shown greyed, never loaded, never part of the enabled set.
+            if (HostBoot.IntegrateExtendDb && HostBoot.IsExtendDb(f))
+            {
+                flow.Controls.Add(new CheckBox
+                {
+                    Text = f + "   —  integrated into LiteBox", AutoSize = true, ForeColor = SubFg,
+                    Enabled = false, Checked = false, Margin = new Padding(2, 5, 2, 0),
+                });
+                flow.Controls.Add(new Label
+                {
+                    Text = "Its functionality is now built into LiteBox, so the plugin is not loaded.",
+                    AutoSize = true, ForeColor = SubFg, Font = new Font("Segoe UI", 8f, FontStyle.Italic),
+                    Margin = new Padding(24, 0, 2, 6),
+                });
+                continue;
+            }
             var cb = new CheckBox
             {
                 Text = f, AutoSize = true, ForeColor = Fg, Margin = new Padding(2, 5, 2, 5),

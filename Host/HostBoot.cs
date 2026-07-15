@@ -29,6 +29,14 @@ internal static class HostBoot
     /// Options → Plugins section lists the same folders the host loads from.</summary>
     public static string PluginsRoot { get; private set; }
 
+    // ── ExtendDB integration (integration-extenddb branch) ────────────────────
+    // LiteBox is folding ExtendDB's functionality in natively. The plugin is therefore NEVER loaded here — its
+    // DLL would double-provide (and Harmony-patch) what LiteBox now does itself. The Options → Plugins list
+    // still SHOWS the folder, greyed out, with a note. Matched by the plugin folder name (Plugins\ExtendDB).
+    public const bool IntegrateExtendDb = true;
+    public const string ExtendDbFolder = "ExtendDB";
+    public static bool IsExtendDb(string folderName) => folderName.Equals(ExtendDbFolder, StringComparison.OrdinalIgnoreCase);
+
     // ── Hands-free UI drivers (diagnostics / remote testing) ──────────────────
     // Once the main window is shown:
     //   --edit-game "<title|id>"      open Edit Game for that game (id exact → title exact → title contains)
@@ -133,6 +141,14 @@ internal static class HostBoot
         var pluginCfg = LiteBoxConfig.LoadForExe();
         var enabled = pluginCfg.GetEnabledPluginsOrNull();
         List<string> names = enabled ?? ListPluginFolders(pluginsRoot);
+
+        // ExtendDB is integrated into LiteBox now → never load its plugin, whatever the enabled set says.
+        if (IntegrateExtendDb)
+        {
+            int before = names.Count;
+            names = names.Where(n => !IsExtendDb(n)).ToList();
+            if (names.Count != before) Console.WriteLine("[loader] ExtendDB skipped (functionality integrated into LiteBox)");
+        }
 
         // Sweep obsolete leftovers from OLDER LiteBox versions (pre-litebox\ Core-root config/journal/caches,
         // old launcher markers, whitelist.txt, copied Magick DLLs, loose .api payload) so an upgrade or a

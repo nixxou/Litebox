@@ -205,6 +205,32 @@ internal sealed partial class EditGameWindow
         }
     }
 
+    /// <summary>DOSBox and an emulator are mutually exclusive — the solo pages enforce it interactively
+    /// (ConfirmDosBoxVsEmulation on checking DOSBox; "enable emulator ⇒ DOSBox off" when picking one), but those
+    /// guards are <c>!IsMulti</c>, so a multi session that sets DOSBox on one page and an emulator on another could
+    /// otherwise leave a game with BOTH — a state solo never allows. Re-assert the invariant at save, DIRECTIONALLY,
+    /// mirroring the solo rules: whatever the user actually changed THIS session wins — assigning an emulator turns
+    /// DOSBox off (solo's automatic behaviour), checking DOSBox clears the emulator (solo's confirm-and-clear). If
+    /// neither field was touched, leave pre-existing states alone; if BOTH were changed (contradictory), DOSBox wins
+    /// (the solo DOSBox note's stated behaviour). Writes via SetField, like the other multi writes, for one persistence path.</summary>
+    private void EnforceDosBoxEmulatorExclusivityMulti()
+    {
+        bool dosCheckedNow = _lchUseDos is { Checked: true } && Modified(_lchUseDos);
+        bool emuAssignedNow = _lchEmuCombo != null && Modified(_lchEmuCombo) && !IsPlaceholder(_lchEmuCombo)
+                              && SelectedEmulatorId() is { Length: > 0 } sid && sid != LchMultiEmuId;
+        if (!dosCheckedNow && !emuAssignedNow) return;   // nothing exclusivity-relevant changed → touch nothing
+        foreach (var g in _editGames)
+        {
+            try
+            {
+                if (!g.UseDosBox || string.IsNullOrEmpty(g.EmulatorId)) continue;   // only the invalid both-set state
+                if (dosCheckedNow) (g as ILiteBoxFields)?.SetField("Emulator", "");            // DOSBox wins → clear the emulator
+                else               (g as ILiteBoxFields)?.SetField("UseDosBox", LchB(false));  // emulator wins → DOSBox off
+            }
+            catch { }
+        }
+    }
+
     /// <summary>Write a tracked launching field to EVERY edited game when it was actually changed and isn't the
     /// "‹multiple values›" placeholder, then re-baseline it (a re-save becomes a no-op). Mirrors SaveCurrent.</summary>
     private void WriteLch(TextBox? t, string field)
@@ -808,7 +834,11 @@ internal sealed partial class EditGameWindow
         LchTrackChk3(_lchCustomCmdChk, IsMulti ? LchMergeBool(HasCmd) : (bool?)null, LchGet("CommandLine").Trim().Length > 0, p);
         _lchCustomCmdChk.CheckedChanged += (_, _) => UpdateLaunchingEnablement();
         y += S(26);
-        _lchCustomCmd = LchTxt(p, LchVal("CommandLine", g => g.CommandLine), ref y, out _);
+        // Seed from the Launching page's LIVE textbox when it is already built, not from LchVal / the game's
+        // stored value — pages are built lazily and cached, so if the user already typed into _lchCmd before
+        // ever opening this tab, re-reading from the game here would silently drop that pending edit (this page's
+        // mirror below would then overwrite _lchCmd with the stale re-read the moment _lchCustomCmd is touched).
+        _lchCustomCmd = LchTxt(p, _lchCmd?.Text ?? LchVal("CommandLine", g => g.CommandLine), ref y, out _);
         _lchCustomCmd.TextChanged += (_, _) => { if (_lchCmd != null && !_lchCmd.Focused) _lchCmd.Text = _lchCustomCmd.Text; };
         LchTrack(_lchCustomCmd);   // revert + modified colour + merge (mirrors the main Launching CommandLine)
 
@@ -1471,6 +1501,7 @@ internal sealed partial class EditGameWindow
             WriteLch(_lchDosConf, "DosBoxConfigurationPath");
             WriteLch(_lchDosExe, "CustomDosBoxVersionPath");
             WriteEmulatorMulti();
+            EnforceDosBoxEmulatorExclusivityMulti();   // never leave a game with both DOSBox and an emulator
             WriteLch(_lchRoot, "RootFolder");
             // Startup/Pause override toggles (base window only; the Customize modals stay solo). Clearing the
             // per-game LiteBox overrides on an unchecked concern mirrors the solo save below.

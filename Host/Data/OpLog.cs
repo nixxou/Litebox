@@ -50,10 +50,7 @@ internal sealed class OpLog : IDisposable
         var log = new OpLog();
         try
         {
-            try { SQLitePCL.Batteries_V2.Init(); } catch { /* may already be initialised */ }
-            var csb = new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false };
-            log._conn = new SqliteConnection(csb.ToString());
-            log._conn.Open();
+            log._conn = SqliteBootstrap.OpenConnection(dbPath);
             // DB schema version (PRAGMA user_version): drop LiteBox's tables on a breaking bump, then stamp
             // the current version. On the current rollout ResetPendingDbBelow=0.0.0 → nothing is ever reset.
             int uv = ReadUserVersion(log._conn);

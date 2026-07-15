@@ -117,28 +117,22 @@ internal static class StoreProcessWatcher
     /// fallback. Async: the app handles it on its own thread while we poll for the real exit.</summary>
     private static void PostCloseToWindows(int pid, string name)
     {
+        // WinScan.AllTopLevelWindows() already does the EnumWindows/IsWindowVisible/GetWindowThreadProcessId
+        // pass (shared with WindowHider and the RenderProbe diagnostic) — no need for a third copy of that
+        // P/Invoke trio and loop here.
         int posted = 0;
         try
         {
-            EnumWindows((h, _) =>
+            foreach (var w in Diag.WinScan.AllTopLevelWindows())
             {
-                try
-                {
-                    GetWindowThreadProcessId(h, out uint wpid);
-                    if (wpid == (uint)pid && IsWindowVisible(h)) { PostMessage(h, WM_CLOSE, IntPtr.Zero, IntPtr.Zero); posted++; }
-                }
+                try { if (w.Pid == (uint)pid) { PostMessage(w.Hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero); posted++; } }
                 catch { }
-                return true;
-            }, IntPtr.Zero);
+            }
         }
         catch { }
         if (posted > 0) StoreTrace.Log($"store close: WM_CLOSE → {name} pid={pid} ({posted} window(s))");
     }
 
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
-    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
     private const uint WM_CLOSE = 0x0010;
 

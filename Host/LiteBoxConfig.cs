@@ -94,6 +94,7 @@ internal sealed class LiteBoxConfig
         _kv["Use16:9ForMainScreenshot"] = "true";
         _kv["GameRunningText"] = "Game running...";
         _kv["GameRunningColor"] = "#0F0F12";
+        _kv["DebugLog"] = "false";
         try
         {
             var sb = new StringBuilder();
@@ -122,6 +123,9 @@ internal sealed class LiteBoxConfig
             sb.AppendLine(";                            false reserves a poster-ratio (2:3) area instead.");
             sb.AppendLine("; GameRunningText       : message shown on the running screen");
             sb.AppendLine("; GameRunningColor      : base colour (#RRGGBB) behind the fanart");
+            sb.AppendLine("; DebugLog              : write litebox-debug.log (Core\\litebox\\) with the runtime trace.");
+            sb.AppendLine(";                         Off by default (no file, zero I/O). Set true to diagnose an issue,");
+            sb.AppendLine(";                         then reproduce it (or launch with --debug for a one-off).");
             sb.AppendLine($"ReadOnly={_kv["ReadOnly"]}");
             sb.AppendLine($"ShowGameRunningScreen={_kv["ShowGameRunningScreen"]}");
             sb.AppendLine($"UnloadListDuringGame={_kv["UnloadListDuringGame"]}");
@@ -134,6 +138,7 @@ internal sealed class LiteBoxConfig
             sb.AppendLine($"Use16:9ForMainScreenshot={_kv["Use16:9ForMainScreenshot"]}");
             sb.AppendLine($"GameRunningText={_kv["GameRunningText"]}");
             sb.AppendLine($"GameRunningColor={_kv["GameRunningColor"]}");
+            sb.AppendLine($"DebugLog={_kv["DebugLog"]}");
             File.WriteAllText(_path, sb.ToString());
         }
         catch { }

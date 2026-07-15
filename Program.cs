@@ -9,21 +9,47 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-if (args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves"))
+bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves");
+if (debugConsole)
     DebugConsole.Enable();
 
-// Persist ALL Console output to <LB>\Core\litebox\litebox-debug.log too — a normal WinExe launch has no
-// console (DebugConsole.Enable only runs for --debug), so the [smartcapture]/[gamescreens]/… trace would
-// otherwise vanish. Fresh file each launch; tee'd with the console when one exists.
+// True when LiteBox.ini (Core\litebox\) has DebugLog=true. Read inline: the config layer isn't up this early
+// and we must NOT write the ini template as a side effect here. Same key=value parse as LiteBoxConfig.
+static bool DebugLogWanted(string iniPath)
+{
+    try
+    {
+        if (!System.IO.File.Exists(iniPath)) return false;
+        foreach (var raw in System.IO.File.ReadAllLines(iniPath))
+        {
+            var t = raw.Trim();
+            if (t.Length == 0 || t[0] == ';' || t[0] == '#' || t[0] == '[') continue;
+            int eq = t.IndexOf('=');
+            if (eq <= 0 || !t.Substring(0, eq).Trim().Equals("DebugLog", StringComparison.OrdinalIgnoreCase)) continue;
+            var v = t.Substring(eq + 1).Trim();
+            return v.Equals("true", StringComparison.OrdinalIgnoreCase) || v == "1";
+        }
+    }
+    catch { }
+    return false;
+}
+
+// litebox-debug.log is written ONLY in "debug mode": a diagnostic flag above (--debug / --headless / …) OR
+// LiteBox.ini "DebugLog=true". A normal launch writes NO log (zero file I/O) — Console output goes to the
+// console when one exists, else nowhere. Set DebugLog=true (or pass --debug) to capture the [smartcapture]/…
+// trace. Fresh file each launch; tee'd with the console when one exists.
 try
 {
     var exeDir0 = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     var logDir = string.Equals(Path.GetFileName(exeDir0), "Core", StringComparison.OrdinalIgnoreCase)
         ? Path.Combine(exeDir0, "litebox") : exeDir0;
-    Directory.CreateDirectory(logDir);
-    var fw = new StreamWriter(Path.Combine(logDir, "litebox-debug.log"), append: false, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
-    Console.SetOut(new TeeTextWriter(Console.Out, fw));
-    Console.SetError(Console.Out);
+    if (debugConsole || DebugLogWanted(Path.Combine(logDir, "LiteBox.ini")))
+    {
+        Directory.CreateDirectory(logDir);
+        var fw = new StreamWriter(Path.Combine(logDir, "litebox-debug.log"), append: false, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
+        Console.SetOut(new TeeTextWriter(Console.Out, fw));
+        Console.SetError(Console.Out);
+    }
 }
 catch { }
 

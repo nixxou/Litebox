@@ -1608,20 +1608,31 @@ internal sealed class MainWindow : Form, IMessageFilter
 
     private Control BuildCachesSection()
     {
+        // FlowLayoutPanel (TopDown), not fixed Locations — same overlap bug/fix as BuildUninstallSection:
+        // `desc` wraps to however many lines its actual text needs, so a hardcoded Y for `size`/`btn` below
+        // it baked in an assumed height the real wrapped text can exceed.
+        float dpiS = LiteBoxTheme.DpiScale(this);
+        int S(int px) => (int)Math.Round(px * dpiS);
+
         var p = new Panel { BackColor = Bg, AutoScroll = true };
-        var title = new Label { Text = "Achievements cache", Location = new Point(4, 8), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold) };
+        var flow = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Bg, Padding = new Padding(S(4), S(8), S(4), 0),
+        };
+        var title = new Label { Text = "Achievements cache", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold), Margin = new Padding(0, 0, 0, S(8)) };
         var desc = new Label
         {
             Text = "RetroAchievements + GOG/Steam achievement data and downloaded badge images "
                  + "(Core\\ra-cache, ra-badges, store-ach-cache, store-ach-badges). Clearing forces a fresh "
                  + "fetch the next time you view a game.",
-            Location = new Point(4, 32), AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = SubFg, BackColor = Bg,
-            Font = new Font("Segoe UI", 8.5f),
+            AutoSize = true, MaximumSize = new Size(S(560), 0), ForeColor = SubFg, BackColor = Bg,
+            Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(16)),
         };
-        var size = new Label { Location = new Point(4, 84), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+        var size = new Label { AutoSize = true, ForeColor = Fg, BackColor = Bg, Margin = new Padding(0, 0, 0, S(8)) };
         var btn = new Button
         {
-            Text = "Clear achievements cache", Location = new Point(4, 108), Size = new Size(210, 28),
+            Text = "Clear achievements cache", AutoSize = false, Size = new Size(S(210), S(28)), Margin = new Padding(0),
             FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 },
             Font = new Font("Segoe UI", 9f),
         };
@@ -1646,7 +1657,8 @@ internal sealed class MainWindow : Form, IMessageFilter
             try { var g = _games?.SelectedGame; if (g != null) ScheduleMedia(g); } catch { }
         };
         RefreshSize();
-        p.Controls.Add(title); p.Controls.Add(desc); p.Controls.Add(size); p.Controls.Add(btn);
+        flow.Controls.Add(title); flow.Controls.Add(desc); flow.Controls.Add(size); flow.Controls.Add(btn);
+        p.Controls.Add(flow);
         return p;
     }
 

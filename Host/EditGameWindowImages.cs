@@ -941,7 +941,16 @@ internal sealed partial class EditGameWindow
             try
             {
                 if (IsDisposed || !IsHandleCreated) return;
-                BeginInvoke(new Action(() => { _imgEmuCache[idKey] = found; if (_imgCurRegroupement == regroupement) ImgPopulateCategory(regroupement, host); }));
+                // host is the modal's own Panel when this fetch was triggered from a per-cell matrix modal —
+                // it can be disposed (the modal closed) well before this deferred callback runs, independently
+                // of the main window's own IsDisposed check above. _imgCurRegroupement alone isn't enough:
+                // the modal's cleanup doesn't reset it, so a closed modal's category can still match here.
+                BeginInvoke(new Action(() =>
+                {
+                    _imgEmuCache[idKey] = found;
+                    if (host.IsDisposed || _imgCurRegroupement != regroupement) return;
+                    try { ImgPopulateCategory(regroupement, host); } catch { }
+                }));
             }
             catch { }
         });
@@ -958,7 +967,13 @@ internal sealed partial class EditGameWindow
             try
             {
                 if (IsDisposed || !IsHandleCreated) return;
-                BeginInvoke(new Action(() => { _imgSteamCache[idKey] = found; if (_imgCurRegroupement == regroupement) ImgPopulateCategory(regroupement, host); }));
+                // Same disposed-modal-Panel hazard as ImgTriggerEmuFetch above — see its comment.
+                BeginInvoke(new Action(() =>
+                {
+                    _imgSteamCache[idKey] = found;
+                    if (host.IsDisposed || _imgCurRegroupement != regroupement) return;
+                    try { ImgPopulateCategory(regroupement, host); } catch { }
+                }));
             }
             catch { }
         });
@@ -1413,6 +1428,12 @@ internal sealed partial class EditGameWindow
             if (string.IsNullOrEmpty(ext)) ext = ".jpg";
             byte[]? bytes = ImgFetchWebBytes(w);   // ExtendDB per-origin fetcher when the module is on, else CDN
             if (bytes == null || bytes.Length == 0) return false;
+            // Validate it's actually a decodable image before writing anything to disk or stamping metadata —
+            // a CDN can return HTTP 200 with an HTML error/redirect/consent-wall body for a stale or moved
+            // URL, which would otherwise get written verbatim with a guessed extension and have CRC/dimension
+            // metadata stamped on it as if it were real artwork.
+            try { using var ms = new MemoryStream(bytes); using var probe = Image.FromStream(ms); }
+            catch { return false; }
             string prefix = ImgPrefix(plat, idStr, sani, null, dir);
             int num = ImgMaxNum(dir, prefix) + 1;
             string target = Path.Combine(dir, $"{prefix}-{num:D2}{ext}");

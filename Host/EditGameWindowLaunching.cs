@@ -205,6 +205,21 @@ internal sealed partial class EditGameWindow
         }
     }
 
+    /// <summary>DOSBox and an emulator are mutually exclusive (the same rule the solo page enforces via
+    /// ConfirmDosBoxVsEmulation's confirm-and-clear) — but WriteLchBool(UseDosBox) and WriteEmulatorMulti()
+    /// write independently with no cross-check between them, so checking "Use DOSBox" on one page and
+    /// picking an emulator on another page in the same multi-select session could otherwise leave every
+    /// selected game with BOTH set, a state solo mode never allows. Re-assert the invariant right after both
+    /// writes land: DOSBox wins, matching the solo DOSBox note's stated behavior ("enabling DOSBox will turn
+    /// emulation off for this game").</summary>
+    private void EnforceDosBoxEmulatorExclusivityMulti()
+    {
+        foreach (var g in _editGames)
+        {
+            try { if (g.UseDosBox && !string.IsNullOrEmpty(g.EmulatorId)) g.EmulatorId = ""; } catch { }
+        }
+    }
+
     /// <summary>Write a tracked launching field to EVERY edited game when it was actually changed and isn't the
     /// "‹multiple values›" placeholder, then re-baseline it (a re-save becomes a no-op). Mirrors SaveCurrent.</summary>
     private void WriteLch(TextBox? t, string field)
@@ -808,7 +823,11 @@ internal sealed partial class EditGameWindow
         LchTrackChk3(_lchCustomCmdChk, IsMulti ? LchMergeBool(HasCmd) : (bool?)null, LchGet("CommandLine").Trim().Length > 0, p);
         _lchCustomCmdChk.CheckedChanged += (_, _) => UpdateLaunchingEnablement();
         y += S(26);
-        _lchCustomCmd = LchTxt(p, LchVal("CommandLine", g => g.CommandLine), ref y, out _);
+        // Seed from the Launching page's LIVE textbox when it's already built, not from LchVal/the game's
+        // stored value — pages are lazily built and cached, so if the user already typed into _lchCmd before
+        // ever opening this tab, re-reading from the game here would silently drop that pending edit (this
+        // page's mirror below then overwrites _lchCmd with the stale re-read the moment it's touched).
+        _lchCustomCmd = LchTxt(p, _lchCmd?.Text ?? LchVal("CommandLine", g => g.CommandLine), ref y, out _);
         _lchCustomCmd.TextChanged += (_, _) => { if (_lchCmd != null && !_lchCmd.Focused) _lchCmd.Text = _lchCustomCmd.Text; };
         LchTrack(_lchCustomCmd);   // revert + modified colour + merge (mirrors the main Launching CommandLine)
 
@@ -1471,6 +1490,7 @@ internal sealed partial class EditGameWindow
             WriteLch(_lchDosConf, "DosBoxConfigurationPath");
             WriteLch(_lchDosExe, "CustomDosBoxVersionPath");
             WriteEmulatorMulti();
+            EnforceDosBoxEmulatorExclusivityMulti();
             WriteLch(_lchRoot, "RootFolder");
             // Startup/Pause override toggles (base window only; the Customize modals stay solo). Clearing the
             // per-game LiteBox overrides on an unchecked concern mirrors the solo save below.

@@ -202,10 +202,17 @@ internal sealed partial class EditGameWindow
         return p;
     }
 
-    /// <summary>(Re)builds the Controller column's choices + the display↔id map from the catalog.</summary>
-    private void RefreshControllerColumn()
+    /// <summary>(Re)builds the single-game grid's Controller column — see the shared overload below.</summary>
+    private void RefreshControllerColumn() => RefreshControllerColumn(_csCtlCol, _csGrid);
+
+    /// <summary>(Re)builds a Controller combo column's choices + the shared display↔id map from the catalog.
+    /// <paramref name="gridToPreserveFrom"/> (optional): also keep any value already used by a cell in that
+    /// grid (unknown ids shown raw) so those cells keep rendering — the single-game grid needs it (a game can
+    /// carry a raw id no longer in the catalog); the multi-select matrix grid never has pre-existing raw
+    /// values to preserve, so it passes null.</summary>
+    private void RefreshControllerColumn(DataGridViewComboBoxColumn? col, DataGridView? gridToPreserveFrom)
     {
-        if (_csCtlCol == null) return;
+        if (col == null) return;
         _csDisplayToId.Clear();
         var displays = new List<string>();
         foreach (var r in ControllerCatalogStore.All())
@@ -213,13 +220,15 @@ internal sealed partial class EditGameWindow
             string d = r.Category.Length > 0 ? $"{r.Name} ({r.Category})" : r.Name;
             if (_csDisplayToId.TryAdd(d, r.Id)) displays.Add(d);
         }
-        // Keep any value already used by a grid cell (unknown ids shown raw) so cells keep rendering.
-        var keep = new HashSet<string>(displays, StringComparer.OrdinalIgnoreCase);
-        if (_csGrid != null)
-            foreach (DataGridViewRow r in _csGrid.Rows)
+        if (gridToPreserveFrom != null)
+        {
+            // Keep any value already used by a grid cell (unknown ids shown raw) so cells keep rendering.
+            var keep = new HashSet<string>(displays, StringComparer.OrdinalIgnoreCase);
+            foreach (DataGridViewRow r in gridToPreserveFrom.Rows)
                 if (!r.IsNewRow && r.Cells[0].Value is string v && v.Length > 0 && keep.Add(v)) displays.Add(v);
-        _csCtlCol.Items.Clear();
-        _csCtlCol.Items.AddRange(displays.Cast<object>().ToArray());
+        }
+        col.Items.Clear();
+        col.Items.AddRange(displays.Cast<object>().ToArray());
     }
 
     private string ControllerDisplay(string id)
@@ -676,19 +685,7 @@ internal sealed partial class EditGameWindow
     private static string NormLevel(string l) => int.TryParse(l, out var v) && v is >= 0 and <= 3 ? v.ToString() : "";
     private static int LevelOrder(string lvl) => lvl.Length == 0 ? 0 : (int.TryParse(lvl, out var v) ? v + 1 : 9);
 
-    private void RefreshMultiControllerColumn()
-    {
-        if (_csmCtlCol == null) return;
-        _csDisplayToId.Clear();
-        var displays = new List<string>();
-        foreach (var r in ControllerCatalogStore.All())
-        {
-            string d = r.Category.Length > 0 ? $"{r.Name} ({r.Category})" : r.Name;
-            if (_csDisplayToId.TryAdd(d, r.Id)) displays.Add(d);
-        }
-        _csmCtlCol.Items.Clear();
-        _csmCtlCol.Items.AddRange(displays.Cast<object>().ToArray());
-    }
+    private void RefreshMultiControllerColumn() => RefreshControllerColumn(_csmCtlCol, null);
 
     private IEnumerable<string> GamesWithPair(string ctl, string lvl)
         => _csmModel!.Where(kv => kv.Value.TryGetValue(ctl, out var l) && l == lvl).Select(kv => kv.Key);

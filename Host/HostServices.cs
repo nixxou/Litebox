@@ -1072,7 +1072,15 @@ internal static class HostLaunch
 
     private static IEnumerable<IAdditionalApplication> SafeAddApps(IGame game)
     {
-        try { return game.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>(); }
+        try
+        {
+            var all = game.GetAllAdditionalApplications();
+            if (all == null) return Array.Empty<IAdditionalApplication>();
+            // Documents (Section=="Document") are add-app records too, but never launchable apps/discs — every
+            // caller here means real apps (autorun-before/after) or discs (TryBuildM3u). Without this, TryBuildM3u
+            // would add a document file (a PDF, …) as a bogus disc in a multi-disc game's M3U playlist.
+            return all.Where(a => a is not Data.HostAdditionalApplication { IsDocument: true }).ToArray();
+        }
         catch { return Array.Empty<IAdditionalApplication>(); }
     }
 

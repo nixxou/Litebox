@@ -164,6 +164,11 @@ internal sealed partial class EditGameWindow
         IAdditionalApplication[] apps;
         try { apps = AppsGame.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>(); }
         catch { apps = Array.Empty<IAdditionalApplication>(); }
+        // Documents (Edit Game → Documents tab; Section=="Document") are additional-application records too,
+        // but IsLikelyVersion has no concept of them (its rule predates that tab) and routes every one into
+        // the "Apps" bucket below — exclude them here so they're managed exclusively by the dedicated Documents
+        // page instead of ALSO being editable/deletable/launchable from this generic one.
+        apps = apps.Where(a => a is not Data.HostAdditionalApplication { IsDocument: true }).ToArray();
         // The CURRENT DEFAULT (the row twinning the game's own ROM) sorts first and is tagged, so a
         // Make Default is immediately readable; the rest keeps the Priority order.
         string gPath = Safe(() => AppsGame.ApplicationPath) ?? "";

@@ -34,9 +34,9 @@ internal sealed class SmartCaptureConfig
     // • fps / size: each toggled independently; when BOTH on, Combine ("and"/"or") joins them.
     // • Nothing on at all (no title, no fps, no size) ⇒ fall back to the first NEW window (old "any").
     public bool UseFps = true;         // fps-test enabled
-    public bool UseSize;               // size-test enabled
+    public bool UseSize = true;        // size-test enabled
     public string Combine = "and";     // how fps & size join when BOTH on: "and" | "or"
-    public int MinFps = 10;
+    public int MinFps = 25;
     public int SustainMs = 600;
     public int MinSizePct = 50;
     public string Title = "";          // wildcard, "" = no title term

@@ -281,9 +281,9 @@ internal static class GameplaySettings
         {
             Enabled           = B("SmartCaptureEnabled", true),
             UseFps            = B("SmartCaptureUseFps",  true),
-            UseSize           = B("SmartCaptureUseSize", false),
+            UseSize           = B("SmartCaptureUseSize", true),
             Combine           = R("SmartCaptureCombine", "and"),
-            MinFps            = I("SmartCaptureMinFps", 10),
+            MinFps            = I("SmartCaptureMinFps", 25),
             SustainMs         = I("SmartCaptureSustainMs", 600),
             MinSizePct        = I("SmartCaptureMinSizePct", 50),
             Title             = R("SmartCaptureTitle", ""),

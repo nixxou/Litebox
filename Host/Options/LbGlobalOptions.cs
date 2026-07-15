@@ -298,12 +298,12 @@ internal static class LbGlobalOptions
             // fps test:  [x] Renders at ≥ [fps] fps for [sus] ms
             var scUseFps = Chk("Renders at ≥", ini.GetBool("SmartCaptureUseFps", true), new Point(S(12), S(206)));
             p.Controls.Add(scUseFps);
-            var scFps = Txt(ini.Get("SmartCaptureMinFps", "10"), new Point(S(140), S(204)), 50); p.Controls.Add(scFps);
+            var scFps = Txt(ini.Get("SmartCaptureMinFps", "25"), new Point(S(140), S(204)), 50); p.Controls.Add(scFps);
             p.Controls.Add(Lbl("fps for", new Point(S(196), S(207))));
             var scSus = Txt(ini.Get("SmartCaptureSustainMs", "600"), new Point(S(248), S(204)), 50); p.Controls.Add(scSus);
             p.Controls.Add(Lbl("ms", new Point(S(304), S(207))));
             // size test:  [x] Window covers ≥ [sz] % of the screen
-            var scUseSize = Chk("Window covers ≥", ini.GetBool("SmartCaptureUseSize", false), new Point(S(12), S(232)));
+            var scUseSize = Chk("Window covers ≥", ini.GetBool("SmartCaptureUseSize", true), new Point(S(12), S(232)));
             p.Controls.Add(scUseSize);
             var scSz = Txt(ini.Get("SmartCaptureMinSizePct", "50"), new Point(S(160), S(230)), 50); p.Controls.Add(scSz);
             p.Controls.Add(Lbl("% of the screen", new Point(S(218), S(233))));
@@ -327,7 +327,7 @@ internal static class LbGlobalOptions
 
             BindIniChk(scEn, "SmartCaptureEnabled", true);
             BindIniChk(scUseFps, "SmartCaptureUseFps", true);
-            BindIniChk(scUseSize, "SmartCaptureUseSize", false);
+            BindIniChk(scUseSize, "SmartCaptureUseSize", true);
             BindIniTxt(scFps, "SmartCaptureMinFps"); BindIniTxt(scSus, "SmartCaptureSustainMs");
             BindIniTxt(scSz, "SmartCaptureMinSizePct"); BindIniTxt(scTitle, "SmartCaptureTitle");
             BindIniChk(scStop, "SmartCaptureStopOnWindowClose");

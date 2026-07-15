@@ -296,6 +296,7 @@ internal sealed class GameStore
                             UseEmulator = ParseBool(V("UseEmulator")), UseDosBox = ParseBool(V("UseDosBox")),
                             WaitForExit = ParseBool(V("WaitForExit")), SideA = ParseBool(V("SideA")), SideB = ParseBool(V("SideB")),
                             ReleaseDate = ParseDateN(V("ReleaseDate")), LastPlayed = ParseDateN(V("LastPlayed")), Installed = ParseBoolN(V("Installed")),
+                            Section = V("Section"), HasCloudSynced = ParseBoolN(V("HasCloudSynced")),
                         });
                     }
                     continue;
@@ -1118,7 +1119,7 @@ internal sealed class GameStore
 
     internal static readonly Dictionary<string, string[]> ChildFieldOrder = new(StringComparer.Ordinal)
     {
-        ["AdditionalApplication"] = new[] { "Id", "GameID", "ApplicationPath", "Name", "CommandLine", "Developer", "Publisher", "Region", "Version", "Status", "EmulatorId", "Disc", "Priority", "PlayCount", "PlayTime", "AutoRunBefore", "AutoRunAfter", "UseEmulator", "UseDosBox", "WaitForExit", "SideA", "SideB", "ReleaseDate", "LastPlayed", "Installed" },
+        ["AdditionalApplication"] = new[] { "Id", "GameID", "ApplicationPath", "Name", "CommandLine", "Developer", "Publisher", "Region", "Version", "Status", "Section", "EmulatorId", "Disc", "Priority", "PlayCount", "PlayTime", "AutoRunBefore", "AutoRunAfter", "UseEmulator", "UseDosBox", "WaitForExit", "SideA", "SideB", "ReleaseDate", "LastPlayed", "Installed", "HasCloudSynced" },
         ["AlternateName"] = new[] { "GameID", "Name", "Region" },
         ["Mount"] = new[] { "GameID", "DriveLetter", "Filesystem", "MountType", "Path", "Type" },
         ["CustomField"] = new[] { "GameID", "Name", "Value" },
@@ -1156,6 +1157,8 @@ internal sealed class GameStore
                         ["ReleaseDate"] = a.ReleaseDate?.ToString("o", CultureInfo.InvariantCulture),
                         ["LastPlayed"] = a.LastPlayed?.ToString("o", CultureInfo.InvariantCulture),
                         ["Installed"] = a.Installed.HasValue ? CB(a.Installed.Value) : null,
+                        ["Section"] = a.Section,
+                        ["HasCloudSynced"] = a.HasCloudSynced.HasValue ? CB(a.HasCloudSynced.Value) : null,
                     });
                 break;
             case "AlternateName":
@@ -1191,6 +1194,7 @@ internal sealed class GameStore
                     UseEmulator = ParseBool(G(r, "UseEmulator")), UseDosBox = ParseBool(G(r, "UseDosBox")), WaitForExit = ParseBool(G(r, "WaitForExit")),
                     SideA = ParseBool(G(r, "SideA")), SideB = ParseBool(G(r, "SideB")),
                     ReleaseDate = ParseDateN(G(r, "ReleaseDate")), LastPlayed = ParseDateN(G(r, "LastPlayed")), Installed = ParseBoolN(G(r, "Installed")),
+                    Section = G(r, "Section"), HasCloudSynced = ParseBoolN(G(r, "HasCloudSynced")),
                 }).ToList();
                 break;
             case "AlternateName":
@@ -1567,6 +1571,11 @@ internal sealed class AddApp
     public bool AutoRunBefore, AutoRunAfter, UseEmulator, UseDosBox, WaitForExit, SideA, SideB;
     public DateTime? ReleaseDate, LastPlayed;
     public bool? Installed;
+    // LaunchBox "Section" — the Documents tab stores a game's additional DOCUMENTS as additional applications
+    // marked <Section>Document</Section> (regular launchable apps have no Section). The SDK IAdditionalApplication
+    // doesn't expose it, so LiteBox must round-trip it here or an edit-save would demote documents to apps.
+    public string Section;
+    public bool? HasCloudSynced;   // LB cloud-sync flag; preserved verbatim (nullable → not re-added when absent).
 }
 
 /// <summary>A game's alternate (regional) name, from the Platform XML.</summary>

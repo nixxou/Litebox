@@ -46,7 +46,15 @@ internal static class ImageAdsWriter
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    /// <summary>Stamp a freshly-downloaded image at <paramref name="path"/> with ExtendDB-format ADS.</summary>
+    /// <summary>The DB types that are NOT images. Their :info carries no dimensions — and must not: reading
+    /// them would mean handing a whole video/PDF to GDI+ (ExtendDB writes 0/0 for these too).</summary>
+    private static bool IsNonImageType(string? type) => type switch
+    {
+        "Video" or "VideoAdvert" or "Manual" or "Music" => true,
+        _ => false,
+    };
+
+    /// <summary>Stamp a freshly-downloaded file at <paramref name="path"/> with ExtendDB-format ADS.</summary>
     public static void WriteForDownload(string path, MetadataDb.WebImage web, int dbId, string platform)
     {
         try
@@ -57,9 +65,10 @@ internal static class ImageAdsWriter
             long crc = unchecked((uint)web.Crc32);
             FileMetaStore.Write(path, FileMetaStore.StreamCrc32, crc.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-            var (w, h) = ImageDims(path);
-            long fs = 0;
-            try { fs = new FileInfo(path).Length; } catch { }
+            bool nonImage = IsNonImageType(web.Type);
+            var (w, h) = nonImage ? (0, 0) : ImageDims(path);
+            long fs = web.FileSize;                                // extended DB knows it; base-LB doesn't
+            if (fs <= 0) { try { fs = new FileInfo(path).Length; } catch { } }
             var dto = new InfoDto
             {
                 Db = dbId,
@@ -67,12 +76,12 @@ internal static class ImageAdsWriter
                 R = web.Region ?? "",
                 Nr = web.Region ?? "",
                 Crc = crc,
-                O = "launchbox",                                   // base-LB GameImages carries no origin
-                Dup = 0,
-                Ft = Path.GetExtension(path) ?? "",
+                O = web.Origin ?? "launchbox",                     // "launchbox" for base-LB rows (the ctor defaults it)
+                Dup = web.Duplicate,
+                Ft = !string.IsNullOrEmpty(web.FileType) ? web.FileType : (Path.GetExtension(path) ?? ""),
                 P = platform ?? "",
                 Url = web.FileName ?? "",
-                Fs = fs,                                           // actual downloaded size (base-LB DB has none)
+                Fs = fs,
                 X = w,
                 Y = h,
                 Ar = (w > 0 && h > 0) ? (double)w / h : 0.0,

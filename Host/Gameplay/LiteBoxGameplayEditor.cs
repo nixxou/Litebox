@@ -109,11 +109,11 @@ internal static class LiteBoxGameplayEditor
 
         if (wS)
         {
-            // 1. Keep startup/end screens on top (bool tri-state).
+            // 1. Keep startup/end screens on top (bool tri-state). The global default is now split per launch
+            //    type (emulator on, apps/stores off), so "Use global" resolves at launch — don't show one On/Off.
             p.Controls.Add(Lab("Keep startup/end screens on top:", y));
-            var stayGlobal = GameplaySettings.StartupStayOnTop();
             var stayCbo = Cbo(y - 2, 200);
-            stayCbo.Items.AddRange(new object[] { $"Use global ({(stayGlobal ? "On" : "Off")})", "On", "Off" });
+            stayCbo.Items.AddRange(new object[] { "Use global (per launch type)", "On", "Off" });
             var stayRaw = GetOv("StartupStayOnTop"); var stayOv = stayRaw == DiffMark ? null : stayRaw;
             stayCbo.SelectedIndex = string.IsNullOrEmpty(stayOv) ? 0 : (string.Equals(stayOv, "true", StringComparison.OrdinalIgnoreCase) ? 1 : 2);
             p.Controls.Add(stayCbo);

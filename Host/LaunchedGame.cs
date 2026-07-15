@@ -79,8 +79,10 @@ internal sealed class LaunchedGame
 
     /// <summary>Capture everything the in-game surfaces may need. Call BEFORE
     /// DropOptional / GameCache clear. Never throws. <paramref name="emulator"/> (null
-    /// for a store / direct launch) contributes the emulator startup/end-screen tier.</summary>
-    public static void Capture(IGame game, IEmulator? emulator = null)
+    /// for a store / direct launch) contributes the emulator startup/end-screen tier.
+    /// <paramref name="stayCategory"/> (Emulator / App / DosBox / Store.Gog / …) selects the
+    /// GLOBAL StartupStayOnTop default for this launch — a per-emu / per-game override still wins.</summary>
+    public static void Capture(IGame game, IEmulator? emulator = null, string stayCategory = "Emulator")
     {
         try
         {
@@ -178,7 +180,7 @@ internal sealed class LaunchedGame
                 string? emuId = emulator != null ? Safe(() => emulator.Id) : null;
                 string? gameId = Safe(() => game.Id);
                 lg.StayOnTop = LbApiHost.Host.Data.LiteBoxOption.ResolveBool(
-                    "StartupStayOnTop", emuId, Gameplay.GameplaySettings.StartupStayOnTop(), gameId);
+                    "StartupStayOnTop", emuId, Gameplay.GameplaySettings.StartupStayOnTop(stayCategory), gameId);
                 lg.ScreenCaptureKey = LbApiHost.Host.Data.LiteBoxOption.ResolveString(
                     "ScreenCaptureKey", emuId, Gameplay.GameplaySettings.ScreenCaptureKey(), gameId);
                 Console.WriteLine($"[litebox-opt] resolved stayOnTop={lg.StayOnTop} screenshotKey='{lg.ScreenCaptureKey}' (emu={emuId ?? "none"} game={gameId ?? "none"})");

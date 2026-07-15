@@ -2045,18 +2045,122 @@ internal sealed class MainWindow : Form, IMessageFilter
     // developer, or a grey phantom for missing art) is composited ONCE into a Win32 image list and the
     // NATIVE control renders + scrolls it — no managed per-tile paint, so a held scroll stays smooth.
     // Tiles are built lazily on item retrieval / thumb load; image-list slots recycle LRU.
+    // The poster is a VIRTUAL ListView, where comctl32's Shift range-selection anchor is unreliable
+    // (LVM_SETSELECTIONMARK is ignored) — Shift+click / Shift+arrow ranged from index 0 and over-selected.
+    // So we own the Shift range: track our anchor, and on a Shift interaction re-select exactly [anchor..target].
+    // Plain / Ctrl clicks and plain navigation stay native (they were fine); we only note the new anchor after.
+    private sealed class PosterListView : ListView
+    {
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref LVITEM lvi);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LVITEM
+        {
+            public uint mask; public int iItem; public int iSubItem; public uint state; public uint stateMask;
+            public IntPtr pszText; public int cchTextMax; public int iImage; public IntPtr lParam;
+            public int iIndent; public int iGroupId; public uint cColumns; public IntPtr puColumns;
+            public IntPtr piColFmt; public int iGroup;
+        }
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        private const int LVM_FIRST = 0x1000;
+        private const int LVM_SETITEMSTATE = LVM_FIRST + 43;
+        private const int LVM_GETNEXTITEM = LVM_FIRST + 12;
+        private const int LVNI_FOCUSED = 0x0001;
+        private const uint LVIS_FOCUSED = 1, LVIS_SELECTED = 2;
+        private const int WM_LBUTTONDOWN = 0x0201, WM_KEYDOWN = 0x0100;
+
+        private int _anchor = -1;
+
+        protected override void WndProc(ref Message m)
+        {
+            if (VirtualListSize > 0 && (m.Msg == WM_LBUTTONDOWN || m.Msg == WM_KEYDOWN))
+            {
+                bool shift = (ModifierKeys & Keys.Shift) != 0;
+                bool ctrl = (ModifierKeys & Keys.Control) != 0;
+
+                if (m.Msg == WM_LBUTTONDOWN)
+                {
+                    int lp = unchecked((int)m.LParam.ToInt64());
+                    int idx = GetItemAt((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF))?.Index ?? -1;
+                    if (idx >= 0 && shift && !ctrl)
+                    {
+                        // Do NOT let the native handler run — its virtual-mode Shift range is wrong AND would
+                        // flash the wide selection before we correct it. We know the clicked item, so select
+                        // exactly [anchor..idx] ourselves and take focus.
+                        SelectRange(_anchor >= 0 ? _anchor : idx, idx);
+                        if (!Focused) Focus();
+                        return;
+                    }
+                    base.WndProc(ref m);
+                    if (idx >= 0 && !shift) _anchor = idx;   // plain / ctrl → new anchor
+                    return;
+                }
+
+                // WM_KEYDOWN: only take over grid navigation; everything else is native.
+                var key = (Keys)unchecked((int)m.WParam.ToInt64());
+                bool nav = key is Keys.Left or Keys.Right or Keys.Up or Keys.Down
+                                or Keys.Home or Keys.End or Keys.PageUp or Keys.PageDown;
+                if (nav)
+                {
+                    if (shift && !ctrl)
+                    {
+                        // Native knows the grid geometry, so let it MOVE the focus — but wrapped in
+                        // Begin/EndUpdate so its (wrong) intermediate selection never paints; we then set the
+                        // correct range from the anchor and paint once.
+                        BeginUpdate();
+                        try
+                        {
+                            base.WndProc(ref m);
+                            int f = (int)SendMessage(Handle, LVM_GETNEXTITEM, (IntPtr)(-1), (IntPtr)LVNI_FOCUSED);
+                            if (f >= 0) SelectRange(_anchor >= 0 ? _anchor : f, f);
+                        }
+                        finally { EndUpdate(); }
+                        return;
+                    }
+                    base.WndProc(ref m);
+                    int nf = (int)SendMessage(Handle, LVM_GETNEXTITEM, (IntPtr)(-1), (IntPtr)LVNI_FOCUSED);
+                    if (nf >= 0) _anchor = nf;   // plain nav → new anchor
+                    return;
+                }
+            }
+            base.WndProc(ref m);
+        }
+
+        // Select exactly [min(a,b)..max(a,b)], clearing the rest; focus the moving end. Anchor unchanged.
+        // Wrapped in Begin/EndUpdate so the clear-then-set sequence paints once, not as a flash of nothing.
+        private void SelectRange(int a, int b)
+        {
+            if (!IsHandleCreated) return;
+            int lo = Math.Min(a, b), hi = Math.Max(a, b);
+            BeginUpdate();
+            try
+            {
+                var clear = new LVITEM { stateMask = LVIS_SELECTED, state = 0 };
+                SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref clear);   // -1 = all items
+                var sel = new LVITEM { stateMask = LVIS_SELECTED, state = LVIS_SELECTED };
+                for (int i = lo; i <= hi; i++) SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)i, ref sel);
+                var foc = new LVITEM { stateMask = LVIS_FOCUSED, state = LVIS_FOCUSED };
+                SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)b, ref foc);
+            }
+            finally { EndUpdate(); }
+        }
+    }
+
     private ListView BuildPoster()
     {
         bool od = _posterOwnerDraw;
         if (od) _posterGeom = new ImageList { ColorDepth = ColorDepth.Depth32Bit, ImageSize = new Size(PCellW, PImgH + PLabelH) };
         else _himl = ImageList_Create(PCellW, PImgH + PLabelH, ILC_COLOR32, 0, 64);
-        var lv = new ListView
+        var lv = new PosterListView
         {
             // NOT docked: LayoutPoster gives it a left margin of (leftover/2) and extends it to the
             // panel's right edge — so icons (left-aligned) start at the centred position, the empty
             // slack falls on the right, and the vertical scrollbar stays at the right edge.
             Dock = DockStyle.None, View = View.LargeIcon, VirtualMode = true, OwnerDraw = od,
-            BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None, MultiSelect = false,
+            BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None, MultiSelect = true,
             Visible = false, HideSelection = false, Scrollable = true,
             LargeImageList = od ? _posterGeom : null,
         };
@@ -2213,7 +2317,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             // requiring central-panel keyboard focus made it miss right after a Ctrl-wheel zoom (the
             // wheel leaves focus wherever it was, so the list usually isn't keyboard-focused then).
             if (k == Keys.D0 || k == Keys.NumPad0) { ApplyZoomLevel(1.0); return true; }
-            // Ctrl+A → select every game (detail list only; the poster grid is single-select).
+            // Ctrl+A → select every game (detail list; the poster does its own range/multi-select natively).
             if (k == Keys.A && _games != null && _games.Focused) { _games.SelectAll(); return true; }
             if (CentralPanelHasFocus())
             {
@@ -2265,14 +2369,39 @@ internal sealed class MainWindow : Form, IMessageFilter
         }
     }
 
+    private bool _posterSyncPending;
+
     private void OnPosterSelectionChanged()
     {
         if (_poster.SelectedIndices.Count == 0) return;
-        var m = PosterModel(_poster.SelectedIndices[0]);
-        // focus:false — keep keyboard focus on the poster (SelectGame(...,true) would steal it to the
-        // hidden list, freezing poster arrow navigation after the first move). Selection still updates
-        // _games → OnGameSelectionChanged → ShowDetails + persists LastGame.
-        if (m != null) _games.SelectGame(m, false);
+        // Mirror the poster selection into the hidden list AFTER the native control finishes — doing it
+        // synchronously (mid mouse/key handling) manipulated another control's state during range selection.
+        // Coalesced: a Shift range fires many changes, we mirror once when it settles. (Range selection itself
+        // is handled correctly by PosterListView, which owns the Shift anchor.)
+        if (_posterSyncPending) return;
+        _posterSyncPending = true;
+        try { BeginInvoke((Action)(() => { _posterSyncPending = false; MirrorPosterToList(); })); }
+        catch { _posterSyncPending = false; }
+    }
+
+    // focus:false — keep keyboard focus on the poster (SelectGame(...,true) would steal it to the hidden
+    // list, freezing poster arrow navigation). The list selection still drives ShowDetails + LastGame and
+    // feeds SelectedGamesProvider (so edits / plugin menus see the whole poster selection).
+    private void MirrorPosterToList()
+    {
+        if (_poster == null || _poster.SelectedIndices.Count == 0) return;
+        if (_poster.SelectedIndices.Count == 1) { var m = PosterModel(_poster.SelectedIndices[0]); if (m != null) _games.SelectGame(m, false); }
+        else { var games = PosterSelectedGames(); if (games.Count > 0) _games.SelectGames(games, false); }
+    }
+
+
+    // The games behind the poster's current selection, in display order.
+    private List<IGame> PosterSelectedGames()
+    {
+        var list = new List<IGame>();
+        try { foreach (int i in _poster.SelectedIndices) { var m = PosterModel(i); if (m != null) list.Add(m); } }
+        catch { }
+        return list;
     }
 
     private void OnPosterMouseUp(object sender, MouseEventArgs e)
@@ -2280,10 +2409,12 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (e.Button != MouseButtons.Right) return;
         var item = _poster.GetItemAt(e.X, e.Y);
         if (item == null) return;
+        // Match the list's right-click: if the clicked tile isn't part of the selection, select just it;
+        // otherwise keep the whole multi-selection and act on all of it (Play / Edit / plugin menus).
         if (!item.Selected) { _poster.SelectedIndices.Clear(); _poster.SelectedIndices.Add(item.Index); }
-        var m = PosterModel(item.Index);
-        if (m == null) return;
-        var menu = BuildGameContextMenu(new[] { m });   // Play / Play With / Play Version + plugin game menus
+        var games = PosterSelectedGames();
+        if (games.Count == 0) return;
+        var menu = BuildGameContextMenu(games.ToArray());
         if (menu.Items.Count > 0) menu.Show(_poster, e.Location);
     }
 
@@ -3819,10 +3950,29 @@ internal sealed class MainWindow : Form, IMessageFilter
         {
             bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;
             EditGameWindow.Open(games, _games.VisibleGames, ro, this);
-            try { _games.RebuildView(); } catch { }
+            try { _games.RebuildView(); } catch { }   // preserves the list's multi-selection (see GameListView)
+            if (_posterMode) RestorePosterSelection(games);   // its RefreshPoster (via ViewChanged) dropped the poster's
             RequestDetail(games[0]);
         }
         catch (Exception ex) { Console.WriteLine("[editgame] open failed: " + ex); }
+    }
+
+    // Re-select these games in the poster grid (display order == VisibleGames). Needed because RefreshPoster
+    // resets VirtualListSize, which clears the native selection — so an edit that ran on a multi-selection
+    // would otherwise leave the poster blank-selected.
+    private void RestorePosterSelection(IReadOnlyList<IGame> games)
+    {
+        if (_poster == null || games == null || games.Count == 0) return;
+        try
+        {
+            var view = _games.VisibleGames;
+            var pos = new Dictionary<IGame, int>(view.Count);
+            for (int i = 0; i < view.Count; i++) pos[view[i]] = i;
+            _poster.SelectedIndices.Clear();
+            foreach (var g in games) if (pos.TryGetValue(g, out var ix)) _poster.SelectedIndices.Add(ix);
+            if (_poster.SelectedIndices.Count > 0) { try { _poster.EnsureVisible(_poster.SelectedIndices[0]); } catch { } }
+        }
+        catch { }
     }
 
     private ToolStripMenuItem BuildGameMenuItem(IGameMenuItem mi, IGame[] games)

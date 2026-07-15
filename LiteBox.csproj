@@ -26,7 +26,7 @@
     <ApplicationIcon>litebox.ico</ApplicationIcon>
     <!-- LiteBox version, read back at boot for upgrade/migration (see Host\Install\LiteBoxVersion). Bump
          this on each release; also raise the matching …Below threshold when a change is breaking. -->
-    <Version>0.8.6</Version>
+    <Version>0.8.7</Version>
     <!-- Distribution: ONE self-contained single-file exe that is BOTH the installer and the host
          (Program.cs then Host\Install\Installer). Drop it at the LaunchBox root or in Core and it
          self-installs (copies itself to Core, unpacks the EMBEDDED native payload into ThirdParty\).
@@ -110,6 +110,13 @@
       <HintPath>..\..\..\LB\Core\SQLitePCLRaw.batteries_v2.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- BouncyCastle: LaunchBox ships it in Core and uses it for its settings cipher (Rijndael-256/CBC/PKCS7).
+         Compile-only (Private=false) — resolved from Core at runtime, version-agnostic like the refs above. Lets
+         LiteBox read/write LB's encrypted settings (EmuMovies password, …) in the exact same format. -->
+    <Reference Include="BouncyCastle.Crypto">
+      <HintPath>..\..\..\LB\Core\BouncyCastle.Crypto.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <!-- WinRT projection + runtime (Windows.Graphics.Capture etc.), resolved from LB\Core. -->
     <Reference Include="Microsoft.Windows.SDK.NET">
       <HintPath>$(WinRtRefDir)\Microsoft.Windows.SDK.NET.dll</HintPath>
@@ -119,6 +126,30 @@
       <HintPath>$(WinRtRefDir)\WinRT.Runtime.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- WebView2 (YouTube mini-player). LaunchBox 13.28 ships it in Core (Core + WinForms managed wrappers +
+         WebView2Loader native); 13.27 does NOT. Compile-only (Private=false) against the net10 Core copies — the
+         BOTH-TFM point at Lb10Root because only 13.28 has them. Its PKT (2a8ab48044d2601e) isn't in Program.cs's
+         framework skip-list, so the runtime resolver loads it from Core on 13.28; on 13.27 it's absent and
+         YouTubePlayerDialog.IsAvailable() catches the load failure → falls back to the system browser. Nothing new
+         is deployed (same version-agnostic pattern as the SDK / SQLite / WinRT refs above). -->
+    <Reference Include="Microsoft.Web.WebView2.Core">
+      <HintPath>$(Lb10Root)\Core\Microsoft.Web.WebView2.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.WinForms">
+      <HintPath>$(Lb10Root)\Core\Microsoft.Web.WebView2.WinForms.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Managed wrapper over libvlc (video thumbnails now, in-app playback later). 225 KB, no transitive
+         managed deps, so it is simply a 5th app file (keep build-release.ps1 $appFiles + LightPayload.Files +
+         the light/<tfm>/* block below in sync).
+         We ship NO libvlc natives: LaunchBox ALREADY bundles a full libvlc 3.0.23 at ThirdParty\VLC\x64 (366
+         plugins) — the very one it plays videos with. VlcService points at it, so this costs 0 MB instead of
+         the ~13 MB a trimmed copy of our own would have added. -->
+    <PackageReference Include="LibVLCSharp" Version="3.10.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -141,6 +172,7 @@
     <EmbeddedResource Include="thirdparty\VCRUNTIME140.dll.api"><LogicalName>natives/VCRUNTIME140.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\VCRUNTIME140_1.dll.api"><LogicalName>natives/VCRUNTIME140_1.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\steam_api64.dll.api"><LogicalName>natives/steam_api64.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\pdfium.dll.api"><LogicalName>natives/pdfium.dll.api</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- A2 universal installer: the standalone single-file embeds the LIGHT multi-file host for BOTH runtime
@@ -154,10 +186,12 @@
     <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.dll"><LogicalName>light/net9/LiteBox.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.deps.json"><LogicalName>light/net9/LiteBox.deps.json</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.runtimeconfig.json"><LogicalName>light/net9/LiteBox.runtimeconfig.json</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\LibVLCSharp.dll"><LogicalName>light/net9/LibVLCSharp.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.exe"><LogicalName>light/net10/LiteBox.exe</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.dll"><LogicalName>light/net10/LiteBox.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.deps.json"><LogicalName>light/net10/LiteBox.deps.json</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.runtimeconfig.json"><LogicalName>light/net10/LiteBox.runtimeconfig.json</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\LibVLCSharp.dll"><LogicalName>light/net10/LibVLCSharp.dll</LogicalName></EmbeddedResource>
   </ItemGroup>
 
 </Project>

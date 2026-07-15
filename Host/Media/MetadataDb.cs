@@ -15,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.Data.Sqlite;
 
 namespace LbApiHost.Host.Media;
@@ -28,10 +29,14 @@ internal static class MetadataDb
         public readonly int DatabaseId, Duplicate;
         public readonly string FileName, Type, Region, Origin, FileType;
         public readonly long Crc32;
-        public WebImage(int db, string fn, string ty, string rg, long crc, string origin, int dup, string ft)
+        /// <summary>Byte size from the EXTENDED DB (base LaunchBox has no such column → 0). ExtendDB's second
+        /// dedup key after CRC — and the only usable one for videos, whose CRC is never recomputed.</summary>
+        public readonly long FileSize;
+        public WebImage(int db, string fn, string ty, string rg, long crc, string origin, int dup, string ft, long fs = 0)
         {
             DatabaseId = db; FileName = fn ?? ""; Type = ty ?? ""; Region = rg ?? ""; Crc32 = crc;
             Origin = string.IsNullOrEmpty(origin) ? "launchbox" : origin; Duplicate = dup; FileType = ft ?? "";
+            FileSize = fs;
         }
         /// <summary>Launchbox CDN URL — only correct when <see cref="Origin"/> is "launchbox".</summary>
         public string Url => ImageCdnBase + FileName.Replace("\\", "/");
@@ -51,8 +56,215 @@ internal static class MetadataDb
     /// <summary>True when the offline metadata DB is on disk (so web images can be listed at all).</summary>
     public static bool Available => DbPath() != null;
 
+    /// <summary>
+    /// The DB the "Web (database)" source reads for EVERY media tab (images / videos / manuals). The rule: base
+    /// LaunchBox's own Metadata.db, EXCEPT when all three hold — the ExtendDB plugin is loaded, its Extended
+    /// Database module is Active, and the extended DB has been downloaded (= <see cref="MediaApiBridge.UseWizardPath"/>
+    /// + the file present) — in which case the richer merged DB is used. So we never open ExtendDB's 3.8 GB asset
+    /// unless ExtendDB is genuinely in play (and its non-launchbox rows are actually fetchable).
+    /// </summary>
+    public static string? WebDbPath()
+        => (MediaApiBridge.UseWizardPath && ExtendedDbPath != null) ? ExtendedDbPath : DbPath();
+
     /// <summary>Every image the online/merged DB has for a game (by its DatabaseId), or empty. Read-only.</summary>
-    public static List<WebImage> ImagesForGame(int databaseId) => ImagesForGame(DbPath(), databaseId);
+    public static List<WebImage> ImagesForGame(int databaseId) => ImagesForGame(WebDbPath(), databaseId);
+
+    // ── Videos ────────────────────────────────────────────────────────────────
+    // Video rows ONLY exist in the EXTENDED database (LaunchBox's own Metadata.db has none — the LbDbMerger only
+    // pushes image types into it). So the video "Web (database)" source is meaningful only when ExtendDB is in
+    // play; WebDbPath returns the extended DB then, and the base DB (→ zero video rows) otherwise, so we never
+    // open ExtendDB's asset when the plugin isn't loaded. They live in GameImages under Type 'Video' (146k:
+    // screenscraper / steam / emumovies) and 'VideoAdvert'. CRC32 AND FileSize are always populated there —
+    // which matters, because a video's CRC is never recomputed from disk (see the owned-detection in the page).
+
+    private static string? _extDb;
+    private static bool _extProbed;
+
+    /// <summary>ExtendDB's enriched DB (LaunchBox.Extended.Metadata.db), or null when it isn't on disk. Path
+    /// comes from ExtendDBPlugin.ExtendedDbPath when the plugin is loaded; else the conventional location.</summary>
+    public static string? ExtendedDbPath
+    {
+        get
+        {
+            if (_extProbed) return _extDb;
+            _extProbed = true;
+            try
+            {
+                var asm = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "ExtendDB");
+                var f = asm?.GetType("ExtendDB.ExtendDBPlugin")?.GetField("ExtendedDbPath",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (f?.GetValue(null) is string p && File.Exists(p)) { _extDb = p; return _extDb; }
+            }
+            catch { }
+            try
+            {
+                var root = MediaResolver.LbRoot;
+                if (!string.IsNullOrEmpty(root))
+                {
+                    var p = Path.Combine(root, "Plugins", "ExtendDB", "LaunchBox.Extended.Metadata.db");
+                    if (File.Exists(p)) _extDb = p;
+                }
+            }
+            catch { }
+            return _extDb;
+        }
+    }
+
+    /// <summary>Every video the extended DB has for a game, or empty when the DB isn't there.</summary>
+    public static List<WebImage> VideosForGame(int databaseId) => VideosForGame(WebDbPath(), databaseId);
+
+    /// <summary>Path-parameterized reader (also the unit-test seam).</summary>
+    internal static List<WebImage> VideosForGame(string? db, int databaseId)
+    {
+        var list = new List<WebImage>();
+        if (db == null || databaseId <= 0) return list;
+        try
+        {
+            var cs = new SqliteConnectionStringBuilder { DataSource = db, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Shared }.ToString();
+            using var con = new SqliteConnection(cs);
+            con.Open();
+
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pc = con.CreateCommand())
+            {
+                pc.CommandText = "PRAGMA table_info(\"GameImages\")";
+                using var pr = pc.ExecuteReader();
+                while (pr.Read()) cols.Add(pr.GetString(1));
+            }
+            if (!cols.Contains("FileName") || !cols.Contains("Type")) return list;
+            string Col(string name, string literal) => cols.Contains(name) ? "\"" + name + "\"" : literal;
+
+            using var cmd = con.CreateCommand();
+            cmd.CommandText =
+                $"SELECT \"FileName\", \"Type\", {Col("Region", "''")}, {Col("CRC32", "0")}, " +
+                $"{Col("Origin", "'launchbox'")}, {Col("duplicate", "0")}, {Col("FileSize", "0")} " +
+                "FROM \"GameImages\" WHERE \"DatabaseId\" = $id AND \"Type\" IN ('Video','VideoAdvert')";
+            cmd.Parameters.Add(new SqliteParameter("$id", databaseId));
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                string fn = r.IsDBNull(0) ? "" : r.GetString(0);
+                if (string.IsNullOrEmpty(fn)) continue;
+                list.Add(new WebImage(
+                    databaseId, fn,
+                    r.IsDBNull(1) ? "" : r.GetString(1),
+                    r.IsDBNull(2) ? "" : r.GetString(2),
+                    r.IsDBNull(3) ? 0 : r.GetInt64(3),
+                    r.IsDBNull(4) ? "launchbox" : r.GetString(4),
+                    r.IsDBNull(5) ? 0 : (int)r.GetInt64(5),
+                    ImageFileType.Extract(fn),          // the extended DB has no FileType column — derive it
+                    r.IsDBNull(6) ? 0 : r.GetInt64(6)));
+            }
+        }
+        catch { }
+        return list;
+    }
+
+    // ── Manuals ─────────────────────────────────────────────────────────────────
+    // Manuals live in the SAME GameImages table under Type 'Manual' (screenscraper / emumovies; no launchbox).
+    // Same DB rule as every other tab (WebDbPath): extended only when ExtendDB is genuinely in play, else base
+    // LaunchBox. Download reuses the image path (a manual row is just a WebImage) — and since there are no
+    // launchbox rows, without ExtendDB's credentialed fetcher none are downloadable (the editor notes that).
+    public static List<WebImage> ManualsForGame(int databaseId) => ManualsForGame(WebDbPath(), databaseId);
+
+    internal static List<WebImage> ManualsForGame(string? db, int databaseId)
+    {
+        var list = new List<WebImage>();
+        if (db == null || databaseId <= 0) return list;
+        try
+        {
+            var cs = new SqliteConnectionStringBuilder { DataSource = db, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Shared }.ToString();
+            using var con = new SqliteConnection(cs);
+            con.Open();
+
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pc = con.CreateCommand())
+            {
+                pc.CommandText = "PRAGMA table_info(\"GameImages\")";
+                using var pr = pc.ExecuteReader();
+                while (pr.Read()) cols.Add(pr.GetString(1));
+            }
+            if (!cols.Contains("FileName") || !cols.Contains("Type")) return list;
+            string Col(string name, string literal) => cols.Contains(name) ? "\"" + name + "\"" : literal;
+
+            using var cmd = con.CreateCommand();
+            cmd.CommandText =
+                $"SELECT \"FileName\", \"Type\", {Col("Region", "''")}, {Col("CRC32", "0")}, " +
+                $"{Col("Origin", "'launchbox'")}, {Col("duplicate", "0")}, {Col("FileSize", "0")} " +
+                "FROM \"GameImages\" WHERE \"DatabaseId\" = $id AND \"Type\" = 'Manual'";
+            cmd.Parameters.Add(new SqliteParameter("$id", databaseId));
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                string fn = r.IsDBNull(0) ? "" : r.GetString(0);
+                if (string.IsNullOrEmpty(fn)) continue;
+                list.Add(new WebImage(
+                    databaseId, fn,
+                    r.IsDBNull(1) ? "Manual" : r.GetString(1),
+                    r.IsDBNull(2) ? "" : r.GetString(2),
+                    r.IsDBNull(3) ? 0 : r.GetInt64(3),
+                    r.IsDBNull(4) ? "launchbox" : r.GetString(4),
+                    r.IsDBNull(5) ? 0 : (int)r.GetInt64(5),
+                    ImageFileType.Extract(fn),
+                    r.IsDBNull(6) ? 0 : r.GetInt64(6)));
+            }
+        }
+        catch { }
+        return list;
+    }
+
+    // ── Steam appid ───────────────────────────────────────────────────────────
+    // The Games table carries a SteamAppId column (present on BOTH base LaunchBox's Metadata.db and the merged
+    // Extended DB), keyed by DatabaseId. That's how a game that ISN'T launched via a steam:// URI — a plain
+    // "Windows" import that merely matches a Steam title in the DB — still resolves to a Steam appid. We prefer
+    // the extended DB (richer / user-curated) then fall back to base LaunchBox.
+
+    private static readonly Dictionary<int, string?> _steamAppIdMemo = new();
+    private static readonly object _steamMemoLock = new();
+
+    /// <summary>The Steam appid LaunchBox's metadata associates with a game by its DatabaseId (extended DB
+    /// preferred, else base), or null when there is none. Memoized.</summary>
+    public static string? SteamAppIdForGame(int databaseId)
+    {
+        if (databaseId <= 0) return null;
+        lock (_steamMemoLock) { if (_steamAppIdMemo.TryGetValue(databaseId, out var m)) return m; }
+        string? appid = SteamAppIdFrom(ExtendedDbPath, databaseId) ?? SteamAppIdFrom(DbPath(), databaseId);
+        lock (_steamMemoLock) _steamAppIdMemo[databaseId] = appid;
+        return appid;
+    }
+
+    /// <summary>Path-parameterized reader (also the unit-test seam): reads Games.SteamAppId from an explicit DB.</summary>
+    internal static string? SteamAppIdFrom(string? db, int databaseId)
+    {
+        if (db == null || databaseId <= 0) return null;
+        try
+        {
+            var cs = new SqliteConnectionStringBuilder { DataSource = db, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Shared }.ToString();
+            using var con = new SqliteConnection(cs);
+            con.Open();
+
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pc = con.CreateCommand())
+            {
+                pc.CommandText = "PRAGMA table_info(\"Games\")";
+                using var pr = pc.ExecuteReader();
+                while (pr.Read()) cols.Add(pr.GetString(1));
+            }
+            if (!cols.Contains("SteamAppId")) return null;
+            string idCol = cols.Contains("DatabaseID") ? "DatabaseID" : (cols.Contains("DatabaseId") ? "DatabaseId" : "DatabaseID");
+
+            using var cmd = con.CreateCommand();
+            cmd.CommandText = $"SELECT \"SteamAppId\" FROM \"Games\" WHERE \"{idCol}\" = $id LIMIT 1";
+            cmd.Parameters.Add(new SqliteParameter("$id", databaseId));
+            var val = cmd.ExecuteScalar();
+            if (val == null || val is DBNull) return null;
+            string s = (Convert.ToString(val, System.Globalization.CultureInfo.InvariantCulture) ?? "").Trim();
+            if (s.Length == 0 || s == "0" || !s.All(char.IsDigit)) return null;   // stored as int; 0 == "no appid"
+            return s;
+        }
+        catch { }
+        return null;
+    }
 
     /// <summary>Path-parameterized reader (also the unit-test seam): reads GameImages from an explicit DB file.</summary>
     internal static List<WebImage> ImagesForGame(string? db, int databaseId)

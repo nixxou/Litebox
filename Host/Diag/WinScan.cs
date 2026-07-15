@@ -54,7 +54,7 @@ internal static class WinScan
         "epicgameslauncher.exe", "epicwebhelper.exe",
         "galaxyclient.exe", "galaxyclientservice.exe",
         "battle.net.exe",
-        "origin.exe", "eadesktop.exe", "eabackgroundservice.exe",
+        "origin.exe", "eadesktop.exe", "eabackgroundservice.exe", "ealaunchhelper.exe",
         "upc.exe", "ubisoftconnect.exe", "uplaywebcore.exe",
     };
 

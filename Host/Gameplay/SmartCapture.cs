@@ -20,6 +20,7 @@
 
 using System.Collections.Generic;
 using LbApiHost.Host.Diag;
+using Windows.Graphics.DirectX.Direct3D11;
 
 namespace LbApiHost.Host.Gameplay;
 
@@ -109,6 +110,11 @@ internal static class SmartCapture
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var meters = new Dictionary<IntPtr, (WgcFps meter, int sustainedMs)>();
+        // One D3D11 device shared by every meter this run creates below (lazily — never created at all when
+        // useFps is off) instead of each meter making its own; several candidate windows appearing close
+        // together (a store launch, say) would otherwise stack up several live devices for no benefit. Disposed
+        // in the finally, after its meters.
+        IDirect3DDevice? sharedDevice = null;
         var announced = new HashSet<IntPtr>();   // log each window's skip/consider verdict once
         long lastPoll = 0;
         bool useFps = cfg.UseFps, useSize = cfg.UseSize;
@@ -179,7 +185,8 @@ internal static class SmartCapture
                             {
                                 if (!meters.TryGetValue(w.Hwnd, out var m))
                                 {
-                                    var meter = WgcFps.TryCreate(w.Hwnd, cfg.ShowBorder);
+                                    sharedDevice ??= WgcFps.CreateSharedDevice();
+                                    var meter = WgcFps.TryCreate(w.Hwnd, cfg.ShowBorder, sharedDevice);
                                     if (meter == null)
                                     {
                                         if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[no WGC capture] {WinInfo(w)}");
@@ -274,7 +281,11 @@ internal static class SmartCapture
             }
             if (metHwnd == IntPtr.Zero) return;
         }
-        finally { foreach (var kv in meters) { try { kv.Value.meter.Dispose(); } catch { } } }
+        finally
+        {
+            foreach (var kv in meters) { try { kv.Value.meter.Dispose(); } catch { } }
+            try { (sharedDevice as IDisposable)?.Dispose(); } catch { }   // release the shared device AFTER its meters
+        }
 
         // Stop-on-window-close: keep watching the game window; when it closes, force the process
         // tree to exit so the normal end-of-game flow (GAME OVER, cleanup) runs. Default off — the

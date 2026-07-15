@@ -118,6 +118,11 @@ internal sealed class MainWindow : Form, IMessageFilter
     private int PZ(int px) => (int)Math.Round(px * _zoom);           // scale a tile-internal offset by zoom
     private Font _posterTileFont;                                    // MainWindow.Font × zoom, for tile title/dev text
     private readonly ToolStripTextBox _search;
+    // Debounces the search box: ApplyFilter → RebuildView → MeasureContentFits re-scans every row of the
+    // (possibly ~15000-row) view to re-fit non-stretch columns, otherwise on EVERY keystroke — wasted CPU +
+    // input latency near that library size. 150ms feels instant once typing pauses, yet collapses a fast
+    // typist's whole word into one measure pass.
+    private readonly System.Windows.Forms.Timer _searchDebounce = new() { Interval = 150 };
     private readonly ToolStripComboBox _sortCombo;
     private readonly ToolStripButton _dirBtn;
     private readonly ToolStripLabel _count;
@@ -309,7 +314,8 @@ internal sealed class MainWindow : Form, IMessageFilter
             AutoSize = false, Width = 240, BorderStyle = BorderStyle.FixedSingle,
             BackColor = Panel, ForeColor = Fg,
         };
-        _search.TextChanged += (_, _) => ApplyFilter();
+        _searchDebounce.Tick += (_, _) => { _searchDebounce.Stop(); ApplyFilter(); };
+        _search.TextChanged += (_, _) => { _searchDebounce.Stop(); _searchDebounce.Start(); };
         bar.Items.Add(_search);
         bar.Items.Add(new ToolStripSeparator());
 

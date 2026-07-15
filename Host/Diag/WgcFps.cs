@@ -68,21 +68,31 @@ internal sealed class WgcFps : IDisposable
     public int TakeFrames() => System.Threading.Interlocked.Exchange(ref _frames, 0);
 
     /// <summary>Start measuring the given window, or null if WGC is unavailable / the HWND can't be captured.
-    /// <paramref name="showBorder"/> keeps the yellow WGC capture border (hidden LiteBox.ini opt-in).</summary>
-    public static WgcFps? TryCreate(IntPtr hwnd, bool showBorder = false)
+    /// <paramref name="showBorder"/> keeps the yellow WGC capture border (hidden LiteBox.ini opt-in).
+    /// <paramref name="sharedDevice"/>: a device from <see cref="CreateSharedDevice"/> to reuse across every
+    /// meter in one SmartCapture run, instead of each meter creating (and never releasing until RCW-GC) its own
+    /// D3D11 device — a store launch with several new top-level windows to consider can otherwise stack up
+    /// several live devices at once for no benefit, since one device can back many capture sessions. Omit to
+    /// create a private device for this instance alone.</summary>
+    public static WgcFps? TryCreate(IntPtr hwnd, bool showBorder = false, IDirect3DDevice? sharedDevice = null)
     {
         string step = "supported";
         try
         {
             if (!GraphicsCaptureSession.IsSupported()) { Console.WriteLine("[wgc] not supported"); return null; }
             if (!showBorder) EnsureBorderlessAccess();
-            step = "device"; var device = CreateDevice();
+            step = "device"; var device = sharedDevice ?? CreateDevice();
             step = "item"; var item = CreateItemForWindow(hwnd);
             if (item == null) { Console.WriteLine("[wgc] item null"); return null; }
             step = "session"; return new WgcFps(item, device, showBorder);
         }
         catch (Exception ex) { Console.WriteLine($"[wgc] TryCreate failed at '{step}': {ex.GetType().Name}: {ex.Message}"); return null; }
     }
+
+    /// <summary>One D3D11 device a caller shares across every <see cref="TryCreate"/> call in a single
+    /// SmartCapture run (passed as its <c>sharedDevice</c>). The caller owns it — dispose it once at the end,
+    /// after every meter built from it is disposed.</summary>
+    public static IDirect3DDevice CreateSharedDevice() => CreateDevice();
 
     public void Dispose()
     {

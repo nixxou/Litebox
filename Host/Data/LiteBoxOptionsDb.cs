@@ -46,11 +46,8 @@ internal static class LiteBoxOptionsDb
             _tried = true;
             try
             {
-                try { SQLitePCL.Batteries_V2.Init(); } catch { }
                 dbPath ??= LiteBoxPaths.File("litebox-options.db");
-                var csb = new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false };
-                _conn = new SqliteConnection(csb.ToString());
-                _conn.Open();
+                _conn = SqliteBootstrap.OpenConnection(dbPath);
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText =
                     "CREATE TABLE IF NOT EXISTS options(" +

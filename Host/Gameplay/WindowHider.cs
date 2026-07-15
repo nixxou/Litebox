@@ -17,15 +17,15 @@ namespace LbApiHost.Host.Gameplay;
 
 internal static class WindowHider
 {
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
-    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr hWnd);
+    // EnumWindows/IsWindowVisible/GetWindowThreadProcessId/GetClassName + the visible-top-level enumeration
+    // loop already live in Host.Diag.WinScan (shared with the RenderProbe diagnostic and SmartCapture) — Hide()
+    // reuses WinScan.AllTopLevelWindows() instead of a third copy of that P/Invoke set and loop. Only the checks
+    // WinScan.Win doesn't carry (owner-popup, tool-window style) keep their own declarations here.
+    // GetWindowThreadProcessId stays because Activate() below still calls it directly.
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
     [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hWnd, int idx);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int cmd);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-    [DllImport("user32.dll")] private static extern int GetClassName(IntPtr hWnd, StringBuilder buf, int max);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
@@ -77,28 +77,28 @@ internal static class WindowHider
             var toHide = new List<IntPtr>();
             try
             {
-                EnumWindows((h, _) =>
+                // WinScan.AllTopLevelWindows() already does the EnumWindows/IsWindowVisible pass (visible
+                // top-level windows only); only the owner-popup / tool-window / titleless / class checks below
+                // are specific to what Hide() must exclude.
+                foreach (var w in Diag.WinScan.AllTopLevelWindows())
                 {
+                    var h = w.Hwnd;
                     try
                     {
-                        if (!IsWindowVisible(h)) return true;
-                        if (GetWindow(h, GW_OWNER) != IntPtr.Zero) return true;               // owned popups
-                        if ((GetWindowLong(h, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) return true;
-                        if (GetWindowTextLength(h) == 0) return true;                          // titleless = not an app window
-                        GetWindowThreadProcessId(h, out var pid);
-                        if (pid == keepPid || pid == ownPid) return true;                     // the game / us
-                        var cn = new StringBuilder(64); GetClassName(h, cn, 64);
-                        switch (cn.ToString())
+                        if (GetWindow(h, GW_OWNER) != IntPtr.Zero) continue;               // owned popups
+                        if ((GetWindowLong(h, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) continue;
+                        if (w.Title.Length == 0) continue;                                 // titleless = not an app window
+                        if (w.Pid == keepPid || w.Pid == ownPid) continue;                // the game / us
+                        switch (w.Class)
                         {
                             case "Shell_TrayWnd": case "Shell_SecondaryTrayWnd":
                             case "Progman": case "WorkerW": case "Button":
-                                return true;                                                   // taskbar / desktop / start
+                                continue;                                                   // taskbar / desktop / start
                         }
                         toHide.Add(h);
                     }
                     catch { }
-                    return true;
-                }, IntPtr.Zero);
+                }
             }
             catch (Exception ex) { Console.WriteLine("[windowhide] enum failed: " + ex.Message); }
 

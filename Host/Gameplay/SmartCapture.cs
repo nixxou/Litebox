@@ -44,7 +44,8 @@ internal sealed class SmartCaptureConfig
     // Load Delay" (per-emulator/game), computed by GameplaySettings.RevealMaxMs and passed to Start().
     public bool ShowBorder;            // keep the yellow WGC capture border (hidden ini opt-in; default off)
     public bool StopOnWindowClose;     // end the session when the game WINDOW closes (else process exit)
-    public HashSet<string>? IgnoreExes; // exe filenames to skip (store clients) — resolved from the global blacklist
+    public HashSet<string>? IgnoreExes; // process exe/bat names to skip (store clients) — resolved from the blacklist
+    public List<string>? IgnoreTitles;  // window-title FRAGMENTS to skip (case-insensitive "contains", wildcard * ?)
     // Global-scan mode (store launches): the game isn't a descendant of anything we spawned, so instead
     // of a process tree we watch EVERY top-level window and keep only NEW ones — those not in Baseline
     // (the pre-launch snapshot) and not owned by LiteBox itself (cover / kiosk / main window).
@@ -101,7 +102,7 @@ internal static class SmartCapture
         Console.WriteLine($"[smartcapture] watching {(cfg.GlobalScan ? $"GLOBAL (baseline={cfg.Baseline?.Count ?? 0} pre-launch windows)" : $"tree(pid={rootPid})")} " +
                           $"title='{cfg.Title}'(OR-priority) fps={(cfg.UseFps ? $"on≥{cfg.MinFps}/{cfg.SustainMs}ms" : "off")} " +
                           $"size={(cfg.UseSize ? $"on≥{cfg.MinSizePct}%" : "off")} combine={(cfg.UseFps && cfg.UseSize ? cfg.Combine.ToUpperInvariant() : "n/a")} " +
-                          $"displayTime={displayMs}ms max={safetyMaxMs}ms blacklist={cfg.IgnoreExes?.Count ?? 0} exes");
+                          $"displayTime={displayMs}ms max={safetyMaxMs}ms blacklist={cfg.IgnoreExes?.Count ?? 0} exes+{cfg.IgnoreTitles?.Count ?? 0} titles");
     }
 
     public static void Stop() { _run = false; _thread = null; DetectedGameWindow = IntPtr.Zero; DetectedAtMs = null; }
@@ -157,7 +158,12 @@ internal static class SmartCapture
                             // Skip them so we detect the actual game window, not the store UI. The list
                             // is the editable global blacklist (Options → LiteBox-Options → Smart Capture).
                             if (cfg.IgnoreExes != null && cfg.IgnoreExes.Contains(w.Exe))
-                            { if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[blacklist] {WinInfo(w)}"); continue; }
+                            { if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[blacklist exe] {WinInfo(w)}"); continue; }
+                            // Same blacklist, its NON-exe/.bat lines: skip when the window TITLE contains one
+                            // (case-insensitive, wildcard) — e.g. a launcher splash titled "Preparing game...".
+                            if (cfg.IgnoreTitles is { Count: > 0 } && !string.IsNullOrEmpty(w.Title)
+                                && cfg.IgnoreTitles.Exists(t => WinScan.WildcardContains(t, w.Title)))
+                            { if (announced.Add(w.Hwnd)) Console.WriteLine($"[smartcapture]   skip[blacklist title] {WinInfo(w)}"); continue; }
 
                             // (1) TITLE — OR-priority: a title-matching window IS the game on its own.
                             if (titleSet && WinScan.WildcardMatch(cfg.Title, w.Title))

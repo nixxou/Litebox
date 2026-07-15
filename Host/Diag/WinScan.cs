@@ -158,4 +158,16 @@ internal static class WinScan
         try { return System.Text.RegularExpressions.Regex.IsMatch(text, rx, System.Text.RegularExpressions.RegexOptions.IgnoreCase); }
         catch { return false; }
     }
+
+    /// <summary>Case-insensitive "CONTAINS" wildcard match (* and ?): the pattern may match ANYWHERE in the
+    /// text — no ^…$ anchors — so a plain "fenetre" matches "ma fenetre de jeu" exactly like "ma*jeu" does.
+    /// Empty pattern never matches (unlike <see cref="WildcardMatch"/>, which is the whole-title term).</summary>
+    public static bool WildcardContains(string? pattern, string? text)
+    {
+        if (string.IsNullOrEmpty(pattern)) return false;
+        text ??= "";
+        var rx = System.Text.RegularExpressions.Regex.Escape(pattern).Replace("\\*", ".*").Replace("\\?", ".");
+        try { return System.Text.RegularExpressions.Regex.IsMatch(text, rx, System.Text.RegularExpressions.RegexOptions.IgnoreCase); }
+        catch { return false; }
+    }
 }

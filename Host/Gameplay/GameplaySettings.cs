@@ -289,7 +289,8 @@ internal static class GameplaySettings
             Title             = R("SmartCaptureTitle", ""),
             ShowBorder        = B("SmartCaptureShowBorder", false),   // hidden ini opt-in: keep the yellow WGC border
             StopOnWindowClose = B("SmartCaptureStopOnWindowClose", false),
-            IgnoreExes        = SmartCaptureIgnoredExes(),   // global blacklist (store clients by default)
+            IgnoreExes        = SmartCaptureIgnoredExes(),     // process-name entries (.exe/.bat) — store clients by default
+            IgnoreTitles      = SmartCaptureIgnoredTitles(),   // window-title fragments (every other blacklist line)
         };
     }
 
@@ -306,15 +307,37 @@ internal static class GameplaySettings
         catch { return SmartCaptureIgnoreDefaultRaw(); }
     }
 
-    /// <summary>The effective blacklist as a case-insensitive set of exe filenames. SmartCapture skips
-    /// any window whose owning process's exe is in here — so the store client's own UI isn't taken for
-    /// the game. Falls back to the built-in default when the config is empty.</summary>
+    // Blacklist entries split by TYPE: a line ending in .exe or .bat is a PROCESS name (matched against a
+    // window's owning-process exe); anything else is a window-TITLE fragment (case-insensitive "contains").
+    private static bool IsExeOrBatEntry(string e)
+        => e.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || e.EndsWith(".bat", StringComparison.OrdinalIgnoreCase);
+
+    // One trimmed, non-empty entry per line. Split on NEWLINES only (not ',' / ';') so a title fragment may
+    // itself contain commas or semicolons.
+    private static IEnumerable<string> SmartCaptureIgnoreEntries()
+    {
+        foreach (var line in SmartCaptureIgnoreExesRaw().Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+        { var e = line.Trim(); if (e.Length > 0) yield return e; }
+    }
+
+    /// <summary>The blacklist's PROCESS-name entries (lines ending in .exe/.bat), case-insensitive. SmartCapture
+    /// skips any window whose owning process's exe is in here — so the store client's own UI isn't taken for the
+    /// game. (Empty-config → store-client default is handled by <see cref="SmartCaptureIgnoreExesRaw"/>.)</summary>
     public static HashSet<string> SmartCaptureIgnoredExes()
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var line in SmartCaptureIgnoreExesRaw().Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
-        { var e = line.Trim(); if (e.Length > 0) set.Add(e); }
-        return set.Count > 0 ? set : Diag.WinScan.StoreClientExes;
+        foreach (var e in SmartCaptureIgnoreEntries()) if (IsExeOrBatEntry(e)) set.Add(e);
+        return set;
+    }
+
+    /// <summary>The blacklist's window-TITLE fragments (every line NOT ending in .exe/.bat). SmartCapture skips
+    /// a window when its title CONTAINS one (case-insensitive, wildcards * and ?; "fenetre" matches "ma fenetre
+    /// de jeu" like "ma*jeu" does — see <see cref="Diag.WinScan.WildcardContains"/>). Empty by default.</summary>
+    public static List<string> SmartCaptureIgnoredTitles()
+    {
+        var list = new List<string>();
+        foreach (var e in SmartCaptureIgnoreEntries()) if (!IsExeOrBatEntry(e)) list.Add(e);
+        return list;
     }
 
     /// <summary>LiteBox-own: on an explicit exit (pause-menu "Exit Game"), show the end/exit screen

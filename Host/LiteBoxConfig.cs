@@ -31,21 +31,42 @@ internal sealed class LiteBoxConfig
     /// <summary>LiteBox.ini under Core\litebox\ (the single home for LiteBox-created files).</summary>
     public static LiteBoxConfig LoadForExe() => new LiteBoxConfig(LiteBoxPaths.File("LiteBox.ini"));
 
+    // ── Sections ─────────────────────────────────────────────────────────────
+    // "[Name]" opens a section: keys under it are stored internally as "Name/Key" ('/' never occurs in the
+    // historical flat keys, unlike '.', which several root keys already contain — StartupStayOnTop.Store.Gog).
+    // Files with no sections parse exactly as before (all keys root). Used for the per-MODULE config blocks
+    // ([Base], [Rom], …) so the ini stays readable; root keys remain the LiteBox-global options.
+
+    /// <summary>Reads a whole ini file into a flat dict — section keys become "Section/Key".</summary>
+    private static Dictionary<string, string> ParseFile(string path)
+    {
+        var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in File.ReadAllLines(path))
+        {
+            var t = raw.Trim();
+            if (t.Length == 0 || t[0] == ';' || t[0] == '#') continue;
+            if (t[0] == '[') { var end = t.IndexOf(']'); d["\0section"] = end > 1 ? t.Substring(1, end - 1).Trim() : ""; continue; }
+            int eq = t.IndexOf('=');
+            if (eq <= 0) continue;
+            string sec = d.TryGetValue("\0section", out var s) ? s : "";
+            string key = t.Substring(0, eq).Trim();
+            d[(sec.Length > 0 ? sec + "/" : "") + key] = t.Substring(eq + 1).Trim();
+        }
+        d.Remove("\0section");
+        return d;
+    }
+
     private void Load()
     {
-        try
-        {
-            foreach (var raw in File.ReadAllLines(_path))
-            {
-                var t = raw.Trim();
-                if (t.Length == 0 || t[0] == ';' || t[0] == '#' || t[0] == '[') continue;
-                int eq = t.IndexOf('=');
-                if (eq <= 0) continue;
-                _kv[t.Substring(0, eq).Trim()] = t.Substring(eq + 1).Trim();
-            }
-        }
+        try { foreach (var kv in ParseFile(_path)) _kv[kv.Key] = kv.Value; }
         catch { }
     }
+
+    /// <summary>A key inside a module section ("[section] key=…"). Same semantics as Get.</summary>
+    public string GetSec(string section, string key, string def = null) => Get(section + "/" + key, def);
+    public bool GetSecBool(string section, string key, bool def) => GetBool(section + "/" + key, def);
+    /// <summary>Set a key inside a module section (persisted under "[section]" by Save).</summary>
+    public void SetSec(string section, string key, string value) => Set(section + "/" + key, value);
 
     public void Save()
     {
@@ -56,22 +77,21 @@ internal sealed class LiteBoxConfig
             // key changed by the first. Now each instance persists just its own edits; untouched keys are
             // preserved from disk — fixes the config-clobber family, e.g. DependencyCheck vs MainWindow._cfg.)
             var merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            try
-            {
-                if (File.Exists(_path))
-                    foreach (var raw in File.ReadAllLines(_path))
-                    {
-                        var t = raw.Trim();
-                        if (t.Length == 0 || t[0] == ';' || t[0] == '#' || t[0] == '[') continue;
-                        int eq = t.IndexOf('=');
-                        if (eq > 0) merged[t.Substring(0, eq).Trim()] = t.Substring(eq + 1).Trim();
-                    }
-            }
+            try { if (File.Exists(_path)) foreach (var kv in ParseFile(_path)) merged[kv.Key] = kv.Value; }
             catch { }
             foreach (var k in _dirty) merged[k] = _kv.TryGetValue(k, out var v) ? v : "";
+            // Root keys first (historical flat block), then one "[Section]" block per module section.
             var sb = new StringBuilder();
             sb.AppendLine("; LiteBox configuration");
-            foreach (var kv in merged) sb.AppendLine($"{kv.Key}={kv.Value}");
+            foreach (var kv in merged) { if (!kv.Key.Contains('/')) sb.AppendLine($"{kv.Key}={kv.Value}"); }
+            foreach (var group in merged.Where(kv => kv.Key.Contains('/'))
+                                        .GroupBy(kv => kv.Key.Substring(0, kv.Key.IndexOf('/')), StringComparer.OrdinalIgnoreCase)
+                                        .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                sb.AppendLine();
+                sb.AppendLine($"[{group.Key}]");
+                foreach (var kv in group) sb.AppendLine($"{kv.Key.Substring(kv.Key.IndexOf('/') + 1)}={kv.Value}");
+            }
             File.WriteAllText(_path, sb.ToString());
             foreach (var kv in merged) _kv[kv.Key] = kv.Value;   // this instance is now consistent with disk
             _dirty.Clear();

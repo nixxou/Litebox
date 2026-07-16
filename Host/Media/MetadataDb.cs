@@ -80,8 +80,9 @@ internal static class MetadataDb
     private static string? _extDb;
     private static bool _extProbed;
 
-    /// <summary>ExtendDB's enriched DB (LaunchBox.Extended.Metadata.db), or null when it isn't on disk. Path
-    /// comes from ExtendDBPlugin.ExtendedDbPath when the plugin is loaded; else the conventional location.</summary>
+    /// <summary>The enriched extended DB (LaunchBox.Extended.Metadata.db), or null when it isn't on disk.
+    /// LiteBox-own copy under Core\litebox\ first (where the ported downloader will put it); falls back to
+    /// the legacy plugin location so an existing install keeps working without re-downloading ~4 GB.</summary>
     public static string? ExtendedDbPath
     {
         get
@@ -90,10 +91,8 @@ internal static class MetadataDb
             _extProbed = true;
             try
             {
-                var asm = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "ExtendDB");
-                var f = asm?.GetType("ExtendDB.ExtendDBPlugin")?.GetField("ExtendedDbPath",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (f?.GetValue(null) is string p && File.Exists(p)) { _extDb = p; return _extDb; }
+                var own = LiteBoxPaths.File("LaunchBox.Extended.Metadata.db");
+                if (File.Exists(own)) { _extDb = own; return _extDb; }
             }
             catch { }
             try

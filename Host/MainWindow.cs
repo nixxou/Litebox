@@ -1717,7 +1717,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             AutoSize = true, MaximumSize = new Size(S(560), 0), ForeColor = SubFg, BackColor = Bg,
             Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(16)),
         };
-        var cbThumbs = new CheckBox { Text = "Also delete the shared thumbnail cache (Plugins\\ExtendDB\\cache\\thumbs)", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(4)) };
+        var cbThumbs = new CheckBox { Text = "Also delete the legacy shared thumbnail cache (Plugins\\ExtendDB\\cache\\thumbs)", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(4)) };
         var cbTp = new CheckBox { Text = "Also remove the shared ThirdParty tools (Everything, ImageMagick, RAHasher)", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(4)) };
         var shareNote = new Label { Text = "Both are shared with ExtendDB, which re-creates them on its next run.", AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8f), Margin = new Padding(S(18), 0, 0, S(32)) };
         var btn = new Button

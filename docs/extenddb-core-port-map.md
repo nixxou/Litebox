@@ -82,6 +82,25 @@ Keep: `Microsoft.Data.Sqlite` (already in LiteBox), `Newtonsoft.Json` or migrate
 Cut with the out-of-scope code: `Lib.Harmony`, `CefSharp`, `Microsoft.Web.WebView2`, `MessagePack`
 (verify — may be the kiosk serialization), `Magick.NET` (LiteBox drives Magick.Native directly).
 
+## Port directives (settled)
+
+- **Rewrite, not copy**: LiteBox code is authored natively (ExtendDB read as reference). No verbatim
+  vendored files in this public repo.
+- **Everything under `Core\litebox\`**: the extended DB copy, every cache (thumbs moved from
+  `Plugins\ExtendDB\cache\thumbs` to `Core\litebox\cache\thumbs` — legacy dir left for a real
+  LaunchBox+ExtendDB install), credentials, module state.
+- **DBs are LiteBox-OWN duplicates** — never read/write the plugin's own files (except the one legacy
+  fallback read of an already-downloaded extended DB, to spare a ~4 GB re-download).
+- **Config in `LiteBox.ini` with one `[Section]` per module** (`[Base]`, `[Rom]`, …) — LiteBoxConfig
+  gained section support (root keys unchanged; section keys are "Section/Key" internally). A future
+  ini→json flip was considered and parked (needs a migration converter; low value now).
+- **Module semantics = today's LiteBox+ExtendDB behaviour**: module OFF → LiteBox's native way (e.g.
+  the RA "lite" path), module ON → the ExtendDB way takes over. `LbModules.On()` is the gate — the
+  same pattern as the old `RomBridge.RaActive`.
+- **Skip the Harmony cache patches** (Directory.GetFiles / SQL intercept caches) — pointless when
+  LiteBox owns the code natively.
+- Generic tagged logging (`LbLog`) is a cross-cutting role OUTSIDE the module system.
+
 ## Suggested order
 
 1. Vendor Package 1 into `Host/Media/Ext/` (namespace `LbApiHost.Host.Media.Ext`), strip secrets,

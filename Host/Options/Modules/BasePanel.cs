@@ -153,16 +153,25 @@ internal static class BasePanel
         // ════════════════════════════════════════════════════════════════════
         var gBehavior = ModulePanelKit.Group("Behavior", dpiS);
         gBehavior.Location = new Point(S(4), S(524));
-        gBehavior.Size = new Size(S(GroupW), S(96));
+        gBehavior.Size = new Size(S(GroupW), S(122));
 
+        var chkMainDb = ModulePanelKit.Check("Use the Extended database as the main database", dpiS,
+            cfg.GetSecBool(Section, "UseAsMainDb", true), readOnly);
+        chkMainDb.Location = new Point(S(14), S(28));
         var chkAuto = ModulePanelKit.Check("Auto-download the Extended database at boot", dpiS,
             cfg.GetSecBool(Section, "AutoUpdateDb", true), readOnly);
-        chkAuto.Location = new Point(S(14), S(28));
+        chkAuto.Location = new Point(S(14), S(54));
         var chkOverview = ModulePanelKit.Check("Enable defaultOverview cache", dpiS,
             cfg.GetSecBool(Section, "EnableOverviewCache", true), readOnly);
-        chkOverview.Location = new Point(S(14), S(54));
+        chkOverview.Location = new Point(S(14), S(80));
+        var lblMainDbNote = ModulePanelKit.Caption(
+            "Unchecked: the legacy LaunchBox Metadata.db stays the primary source; the Extended database is still "
+            + "offered as an explicit extra source (editor download grids).", dpiS, GroupW - 40);
+        lblMainDbNote.Location = new Point(S(30), S(103));
+        gBehavior.Controls.Add(chkMainDb);
         gBehavior.Controls.Add(chkAuto);
         gBehavior.Controls.Add(chkOverview);
+        gBehavior.Controls.Add(lblMainDbNote);
         root.Controls.Add(gBehavior);
 
         // ════════════════════════════════════════════════════════════════════
@@ -376,6 +385,7 @@ internal static class BasePanel
                 var c = LiteBoxConfig.LoadForExe();
                 c.SetSec(Section, "RemoteImageBaseUrl", (mirror.Text ?? "").Trim());
                 c.SetSec(Section, "OverviewSources", string.Join(",", list.Items.Cast<object>().Select(o => o.ToString())));
+                c.SetSec(Section, "UseAsMainDb", chkMainDb.Checked ? "true" : "false");
                 c.SetSec(Section, "AutoUpdateDb", chkAuto.Checked ? "true" : "false");
                 c.SetSec(Section, "EnableOverviewCache", chkOverview.Checked ? "true" : "false");
                 c.Save();

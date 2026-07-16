@@ -71,14 +71,16 @@ internal sealed partial class EditGameWindow
         add.Click += (_, _) => DocAdd();
         bar.Controls.Add(add);
 
-        // Web download sources — same chips as the image/video editors. Purple = the offline database (native +
-        // ExtendDB), blue = EmuMovies (live). A manual is a GameImages row Type='Manual', so it downloads exactly
-        // like an image; downloaded manuals land managed (under Manuals\<Platform>\) with an ADS provenance stamp.
+        // Web download sources — same chips as the image/video editors. Purple "ExtendDB" = the extended
+        // database, the ONLY offline-DB manual source (LaunchBox's own Metadata.db has no manual rows, so no
+        // orange "LaunchBox DB" chip here — unlike the image pages); blue = EmuMovies (live). A manual is a
+        // GameImages row Type='Manual', so it downloads exactly like an image; downloaded manuals land managed
+        // (under Manuals\<Platform>\) with an ADS provenance stamp.
         int chipX = S(164);
         void AddChip(CheckBox c, int w) { c.SetBounds(chipX, S(8), w, S(26)); bar.Controls.Add(c); chipX += w + S(10); }
         int dbId0 = Safe(() => DocGame.LaunchBoxDbId) ?? -1;
-        if (MetadataDb.Available && dbId0 > 0)
-            AddChip(SourceChip("Web (database)", WebPurple, _docShowWeb, on => { _docShowWeb = on; DocRefresh(); }), S(158));
+        if (MediaApiBridge.ModuleActive && dbId0 > 0)   // Base module on + extended DB present
+            AddChip(SourceChip("ExtendDB", WebPurple, _docShowWeb, on => { _docShowWeb = on; DocRefresh(); }), S(112));
         if (ImgEmuAvailable(DocGame))
             AddChip(SourceChip("EmuMovies", EmuBlue, _docShowEmu, on => { _docShowEmu = on; DocRefresh(); }), S(124));
 
@@ -824,7 +826,7 @@ internal sealed partial class EditGameWindow
     {
         var g = DocGame;
         int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
-        bool webOn = _docShowWeb && MetadataDb.Available && dbId > 0;
+        bool webOn = _docShowWeb && MediaApiBridge.ModuleActive && dbId > 0;
         bool emuOn = _docShowEmu && ImgEmuAvailable(g);
         if (!webOn && !emuOn) return;
 
@@ -839,7 +841,10 @@ internal sealed partial class EditGameWindow
         if (webOn)
             try
             {
-                var rows = MetadataDb.ManualsForGame(dbId);
+                // Explicitly the EXTENDED DB — the "ExtendDB" source's label must stay true even when
+                // [Base] UseAsMainDb is off (WebDbPath() would then answer with LaunchBox's own DB,
+                // which has no manual rows anyway).
+                var rows = MetadataDb.ManualsForGame(MetadataDb.ExtendedDbPath, dbId);
                 int total = rows.Count;
                 // EVERY manual row is screenscraper / emumovies (there are no launchbox ones), and those need
                 // ExtendDB's per-origin fetcher (screenscraper needs API credentials). Without it, only launchbox
@@ -916,7 +921,7 @@ internal sealed partial class EditGameWindow
         }
         pic.MouseUp += (_, e) => { if (_readOnly) return; if (e.Button == MouseButtons.Left) DocDownloadWeb(w, asManualDefault); else if (e.Button == MouseButtons.Right) Menu(e.Location); };
 
-        var cap = new Label { Text = (source == "emu" ? "EmuMovies" : "Database") + (string.IsNullOrEmpty(w.Region) ? "" : "  ·  " + w.Region), ForeColor = border, BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, AutoEllipsis = true };
+        var cap = new Label { Text = (source == "emu" ? "EmuMovies" : "ExtendDB") + (string.IsNullOrEmpty(w.Region) ? "" : "  ·  " + w.Region), ForeColor = border, BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, AutoEllipsis = true };
         cap.SetBounds(S(4), DocThumbH + S(6), DocCellW - S(8), S(16)); cell.Controls.Add(cap);
         var info = new Label { Text = "download  ·  " + ext.TrimStart('.').ToUpperInvariant(), ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 7.5f), AutoSize = false };
         info.SetBounds(S(4), DocThumbH + S(24), DocCellW - S(8), S(16)); cell.Controls.Add(info);

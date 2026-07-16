@@ -101,7 +101,7 @@ internal sealed partial class EditGameWindow
 
         var chkWeb = new CheckBox
         {
-            Text = "Web (fill the gaps)", AutoSize = true, ForeColor = Color.FromArgb(190, 150, 230),
+            Text = "ExtendDB (fill the gaps)", AutoSize = true, ForeColor = Color.FromArgb(190, 150, 230),
             BackColor = Bg, Font = new Font("Segoe UI", 8.5f), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
             Location = new Point(S(4), S(10)), Checked = false, Visible = VidWebAvailable,
         };
@@ -485,7 +485,8 @@ internal sealed partial class EditGameWindow
         MvFillBatch("Loading database videos…", (row, g, dbId, ct) =>
         {
             if (MvVideoSnapCovered(row)) { lock (_mvLock) _mvWebVideos[row] = new(); return 0; }   // already has a Video Snap → skip
-            List<MetadataDb.WebImage> v; try { v = MetadataDb.VideosForGame(dbId); } catch { v = new(); }
+            // Explicitly the EXTENDED DB (the source is labelled "ExtendDB"; LaunchBox's own DB has no video rows).
+            List<MetadataDb.WebImage> v; try { v = MetadataDb.VideosForGame(MetadataDb.ExtendedDbPath, dbId); } catch { v = new(); }
             lock (_mvLock) _mvWebVideos[row] = v;
             return v.Count;
         });

@@ -66,14 +66,15 @@ internal sealed partial class EditGameWindow
         bar.Controls.Add(add);
 
         // Source toggles — filled-when-on chips (see SourceChip), laid out left-to-right after the Add button.
-        // Purple = the offline database (where video rows live; LaunchBox's own Metadata.db has none), blue =
+        // Purple "ExtendDB" = the extended database, the ONLY offline-DB video source (LaunchBox's own
+        // Metadata.db has no video rows, so no orange "LaunchBox DB" chip here — unlike the image pages). Blue =
         // EmuMovies (live, user's account), green = Steam (live, appid games), red = YouTube (yt-dlp, any game).
         int chipX = S(134);
         void AddChip(CheckBox c, int w) { c.SetBounds(chipX, S(8), w, S(26)); bar.Controls.Add(c); chipX += w + S(10); }
 
         if (VidWebAvailable)
-            AddChip(SourceChip("Web (database)", WebPurple, _vidShowWeb, on =>
-                { _vidShowWeb = on; VidSourceToggle("web", on); VidPopulate(host, null); }), S(158));
+            AddChip(SourceChip("ExtendDB", WebPurple, _vidShowWeb, on =>
+                { _vidShowWeb = on; VidSourceToggle("web", on); VidPopulate(host, null); }), S(112));
         if (VidEmuAvailable(ImgGame))
             AddChip(SourceChip("EmuMovies", EmuBlue, _vidShowEmu, on =>
                 { _vidShowEmu = on; VidSourceToggle("emu", on); VidPopulate(host, null); }), S(124));
@@ -284,7 +285,9 @@ internal sealed partial class EditGameWindow
     {
         if (dbId <= 0) return new();
         List<MetadataDb.WebImage> cands;
-        try { cands = MetadataDb.VideosForGame(dbId); } catch { cands = new List<MetadataDb.WebImage>(); }
+        // Explicitly the EXTENDED DB — the "ExtendDB" source's label must stay true even when [Base] UseAsMainDb
+        // is off (WebDbPath() would then answer with LaunchBox's own DB, which has no video rows anyway).
+        try { cands = MetadataDb.VideosForGame(MetadataDb.ExtendedDbPath, dbId); } catch { cands = new List<MetadataDb.WebImage>(); }
         if (cands.Count == 0) return new();
         var ownedCrc = new HashSet<uint>();
         var ownedSize = new HashSet<long>();
@@ -789,7 +792,7 @@ internal sealed partial class EditGameWindow
 
         var name = new Label
         {
-            Text = "web · " + w.Origin, ForeColor = Color.FromArgb(190, 150, 230), BackColor = Bg,
+            Text = "ExtendDB · " + w.Origin, ForeColor = Color.FromArgb(190, 150, 230), BackColor = Bg,
             Font = new Font("Segoe UI", 8f), AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true,
         };
         name.SetBounds(S(4), VidThumbH + S(8), VidCellW - S(12), S(18));

@@ -48,7 +48,7 @@ internal sealed partial class EditGameWindow
     private readonly Dictionary<string, CheckBox> _imgCellChk = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CheckBox> _imgWebChk = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, MetadataDb.WebImage> _imgWebByKey = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, string> _imgWebSource = new(StringComparer.OrdinalIgnoreCase);   // key → "web"/"emu"/"steam"
+    private readonly Dictionary<string, string> _imgWebSource = new(StringComparer.OrdinalIgnoreCase);   // key → "lbdb"/"web"/"emu"/"steam"
     private List<string> _imgCatAllPaths = new();
     private List<string> _imgCatAllWebKeys = new();
     private string _imgCurRegroupement = "";
@@ -60,8 +60,10 @@ internal sealed partial class EditGameWindow
     private int _imgPressKind;       // 1 local · 2 web
     private string? _imgPressKey;    // local path or web url
     private bool _imgSuppressClick;
-    private bool _imgShowWeb;        // the "show web images" toggle (per category page)
-    private bool _imgOpenWithWeb;    // set by the matrix: open the next category page with the web toggle ON
+    private bool _imgShowWeb;        // the "ExtendDB" (extended-database) source toggle (purple)
+    private bool _imgShowLbDb;       // the "LaunchBox DB" (LaunchBox's own Metadata.db) source toggle (orange)
+    private bool _imgOpenWithWeb;    // set by the matrix: open the next category page with the ExtendDB toggle ON
+    private bool _imgOpenWithLbDb;   // …and/or the LaunchBox-DB toggle ON
     private bool _imgOpenWithEmu;    // …and/or the EmuMovies toggle ON (mirrors the grid's enabled sources)
     private bool _imgOpenWithSteam;  // …and/or the Steam toggle ON
     private System.Net.Http.HttpClient? _imgHttp;
@@ -74,8 +76,18 @@ internal sealed partial class EditGameWindow
     private static readonly Color LbSlotColor = Color.FromArgb(235, 190, 70);    // gold — the image LB really shows
     private static readonly Color LbTypeColor = Color.FromArgb(120, 126, 142);   // neutral steel — wins its type only
 
-    // Web-database source colour (purple). The live sources have their own: EmuBlue / SteamGreen / YtRed.
+    // Database source colours. The image pages offer TWO independent DB sources: purple = "ExtendDB" (the
+    // extended DB, MetadataDb.ExtendedDbPath), orange = "LaunchBox DB" (LaunchBox's own Metadata.db). The live
+    // sources have their own: EmuBlue / SteamGreen / YtRed. Videos/documents keep the single purple source
+    // (LaunchBox's DB carries no videos/manuals).
     private static readonly Color WebPurple = Color.FromArgb(190, 150, 230);
+    private static readonly Color WebPurpleFrame = Color.FromArgb(150, 90, 200);   // tile border shade of purple
+    private static readonly Color LbDbOrange = Color.FromArgb(225, 165, 80);
+
+    /// <summary>The explicit "LaunchBox DB" image source: LaunchBox's own Metadata.db is on disk.</summary>
+    private static bool ImgLbDbAvailable => MetadataDb.LaunchBoxDbPath() != null;
+    /// <summary>The explicit "ExtendDB" image source: Base module ON and the extended DB downloaded.</summary>
+    private static bool ImgExtDbAvailable => MediaApiBridge.ModuleActive;
 
     private static Color BlendColor(Color a, Color b, float t)
         => Color.FromArgb(
@@ -603,13 +615,19 @@ internal sealed partial class EditGameWindow
         {
             // Matrix modal: mirror the GRID's enabled sources exactly (one-shot) so the same stand-ins show, and
             // rebuild the check-order to match. Isolated from the tree state — the matrix save/restores it.
+            _imgShowLbDb = _imgOpenWithLbDb;
             _imgShowWeb = _imgOpenWithWeb;
             _imgShowEmu = _imgOpenWithEmu;
             _imgShowSteam = _imgOpenWithSteam;
             _imgSourceOrder.Clear();
-            foreach (var s in new[] { "web", "emu", "steam" })
-                if ((s == "web" && _imgShowWeb) || (s == "emu" && _imgShowEmu) || (s == "steam" && _imgShowSteam))
-                    _imgSourceOrder.Add(s);
+            bool ModalOn(string s) => (s == "lbdb" && _imgShowLbDb) || (s == "web" && _imgShowWeb)
+                                   || (s == "emu" && _imgShowEmu) || (s == "steam" && _imgShowSteam);
+            // Mirror the GRID's check-order first (so the modal's fill/list priority matches what the grid
+            // showed), then any source the cell itself forced on, in a stable fallback order.
+            foreach (var s in _mxSourceOrder)
+                if (ModalOn(s) && !_imgSourceOrder.Contains(s)) _imgSourceOrder.Add(s);
+            foreach (var s in new[] { "lbdb", "web", "emu", "steam" })
+                if (ModalOn(s) && !_imgSourceOrder.Contains(s)) _imgSourceOrder.Add(s);
         }
         else
         {
@@ -617,6 +635,7 @@ internal sealed partial class EditGameWindow
             // edit session — the user asked once, we don't make them re-tick on every category. Cheap: the
             // EmuMovies/Steam fetch caches are keyed per game, so leaving a live source on costs one query total,
             // reused across every category. The matrix's open-with flags only ever force a source ON, never off.
+            if (_imgOpenWithLbDb)  { _imgShowLbDb = true;  ImgSourceToggle("lbdb", true); }
             if (_imgOpenWithWeb)   { _imgShowWeb = true;   ImgSourceToggle("web", true); }
             if (_imgOpenWithEmu)   { _imgShowEmu = true;   ImgSourceToggle("emu", true); }
             if (_imgOpenWithSteam) { _imgShowSteam = true; ImgSourceToggle("steam", true); }
@@ -650,15 +669,17 @@ internal sealed partial class EditGameWindow
         _imgLbSlotPick = ImgLbSlotPick(imgs, types);    // the ONE image LaunchBox actually displays here
 
         int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
-        bool webAvail = MetadataDb.Available && dbId > 0;
+        bool lbDbAvail = dbId > 0 && ImgLbDbAvailable;    // LaunchBox's own Metadata.db (orange)
+        bool extAvail = dbId > 0 && ImgExtDbAvailable;    // extended DB: Base module on + file present (purple)
 
         var inner = new Panel { BackColor = Bg, Location = Point.Empty, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowOnly };
         host.Controls.Add(inner);
         int y = ImgPadY;
 
         // Top bar (same row as Lock All): a green "＋ Add" that only offers THIS category's types (like the Videos
-        // page's Add), then the source toggles — filled-when-on chips (see SourceChip). Purple = the offline
-        // metadata DB, blue = EmuMovies (live), green = Steam (live). Only shown when that source is applicable.
+        // page's Add), then the source toggles — filled-when-on chips (see SourceChip). Orange = LaunchBox's own
+        // Metadata.db, purple = the extended DB (ExtendDB), blue = EmuMovies (live), green = Steam (live). Only
+        // shown when that source is applicable.
         int chipX = ImgPadX + (imgs.Count > 0 && ImageLockBridge.Available ? S(122) : 0);
         void AddBar(Control c, int w) { c.SetBounds(chipX, y, w, S(26)); inner.Controls.Add(c); chipX += w + S(10); }
 
@@ -666,9 +687,12 @@ internal sealed partial class EditGameWindow
         addBtn.Click += (_, _) => ImgAddToCategory(regroupement);
         AddBar(addBtn, S(92));
 
-        if (webAvail)
-            AddBar(SourceChip("Web (database)", WebPurple, _imgShowWeb, on =>
-                { _imgShowWeb = on; ImgSourceToggle("web", on); ImgInvalidateCachedCategories(regroupement); ImgPopulateCategory(regroupement, host); }), S(158));
+        if (lbDbAvail)
+            AddBar(SourceChip("LaunchBox DB", LbDbOrange, _imgShowLbDb, on =>
+                { _imgShowLbDb = on; ImgSourceToggle("lbdb", on); ImgInvalidateCachedCategories(regroupement); ImgPopulateCategory(regroupement, host); }), S(136));
+        if (extAvail)
+            AddBar(SourceChip("ExtendDB", WebPurple, _imgShowWeb, on =>
+                { _imgShowWeb = on; ImgSourceToggle("web", on); ImgInvalidateCachedCategories(regroupement); ImgPopulateCategory(regroupement, host); }), S(112));
         if (ImgEmuAvailable(g))
             AddBar(SourceChip("EmuMovies", EmuBlue, _imgShowEmu, on =>
                 { _imgShowEmu = on; ImgSourceToggle("emu", on); ImgInvalidateCachedCategories(regroupement); ImgPopulateCategory(regroupement, host); }), S(124));
@@ -676,9 +700,10 @@ internal sealed partial class EditGameWindow
             AddBar(SourceChip("Steam", SteamGreen, _imgShowSteam, on =>
                 { _imgShowSteam = on; ImgSourceToggle("steam", on); ImgInvalidateCachedCategories(regroupement); ImgPopulateCategory(regroupement, host); }), S(100));
 
-        // "No images" only when the category is empty AND NEITHER web source will fill it. Without the emu
+        // "No images" only when the category is empty AND NO web source will fill it. Without the emu
         // clause an EmuMovies-only view (web off, EmuMovies on) short-circuited here and never rendered.
-        if (imgs.Count == 0 && !(webAvail && _imgShowWeb) && !(_imgShowEmu && ImgEmuAvailable(g)) && !(_imgShowSteam && ImgSteamAvailable(g)))
+        if (imgs.Count == 0 && !(lbDbAvail && _imgShowLbDb) && !(extAvail && _imgShowWeb)
+                            && !(_imgShowEmu && ImgEmuAvailable(g)) && !(_imgShowSteam && ImgSteamAvailable(g)))
         {
             var none = new Label
             {
@@ -763,7 +788,8 @@ internal sealed partial class EditGameWindow
     }
 
     // Track the order the user turns web sources on, so the merged view interleaves them by check-order (like the
-    // multi-select grid's fill priority). "web" = database (purple) · "emu" = EmuMovies (blue) · "steam" (green).
+    // multi-select grid's fill priority). "lbdb" = LaunchBox's own DB (orange) · "web" = extended DB / ExtendDB
+    // (purple) · "emu" = EmuMovies (blue) · "steam" (green).
     private readonly List<string> _imgSourceOrder = new();
     private void ImgSourceToggle(string src, bool on)
     {
@@ -787,21 +813,22 @@ internal sealed partial class EditGameWindow
         }
     }
 
-    // ── Merged "images you don't own": database + EmuMovies + Steam in ONE flow, grouped by image type only ────
-    // No per-source section headers — the tile border colour already says the origin (purple/blue/green). Within
-    // a type, sources appear in the order the user checked them (_imgSourceOrder). Async sources (EmuMovies /
-    // Steam) show a compact "Querying…" note and re-populate when their fetch lands (same cache model as before).
+    // ── Merged "images you don't own": LaunchBox DB + ExtendDB + EmuMovies + Steam in ONE flow, grouped by image
+    // type only ── No per-source section headers — the tile border colour already says the source (orange/purple/
+    // blue/green). Within a type, sources appear in the order the user checked them (_imgSourceOrder). Async
+    // sources (EmuMovies / Steam) show a compact "Querying…" note and re-populate when their fetch lands.
     private void ImgAppendMergedWeb(IGame g, int dbId, List<ImgFile> catImgs, string regroupement, List<string> types, Panel host, Panel inner, ref int y)
     {
-        bool webOn   = _imgShowWeb   && MetadataDb.Available && dbId > 0;
+        bool lbOn    = _imgShowLbDb  && dbId > 0 && ImgLbDbAvailable;
+        bool webOn   = _imgShowWeb   && dbId > 0 && ImgExtDbAvailable;
         bool emuOn   = _imgShowEmu   && ImgEmuAvailable(g);
         bool steamOn = _imgShowSteam && ImgSteamAvailable(g);
-        if (!webOn && !emuOn && !steamOn) return;
+        if (!lbOn && !webOn && !emuOn && !steamOn) return;
 
         // Active sources in check-order; append any that predate the order list in a stable fallback order.
-        bool On(string s) => (s == "web" && webOn) || (s == "emu" && emuOn) || (s == "steam" && steamOn);
+        bool On(string s) => (s == "lbdb" && lbOn) || (s == "web" && webOn) || (s == "emu" && emuOn) || (s == "steam" && steamOn);
         var order = _imgSourceOrder.Where(On).ToList();
-        foreach (var s in new[] { "web", "emu", "steam" }) if (On(s) && !order.Contains(s)) order.Add(s);
+        foreach (var s in new[] { "lbdb", "web", "emu", "steam" }) if (On(s) && !order.Contains(s)) order.Add(s);
 
         var typeSet = new HashSet<string>(types, StringComparer.OrdinalIgnoreCase);
         string emuKey = Safe(() => g.Id) ?? Safe(() => g.Title) ?? "";
@@ -809,16 +836,23 @@ internal sealed partial class EditGameWindow
 
         var entries = new List<(string type, int rank, Panel cell)>();
         var loading = new List<string>();
+        // Dedup between the TWO database sources: the extended DB is a superset of LaunchBox's, so when both are
+        // checked a row already contributed by the earlier-checked one (key = WebImage.Key) must not repeat.
+        var dbSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         for (int rank = 0; rank < order.Count; rank++)
         {
             switch (order[rank])
             {
+                case "lbdb":
                 case "web":
-                    foreach (var w in ImgWebCandidates(dbId, catImgs, typeSet))
+                    bool fromLb = order[rank] == "lbdb";
+                    string? dbPath = fromLb ? MetadataDb.LaunchBoxDbPath() : MetadataDb.ExtendedDbPath;
+                    foreach (var w in ImgWebCandidates(dbPath, dbId, catImgs, typeSet))
                     {
-                        ImgRegisterWeb(w, "web");
-                        entries.Add((w.Type, rank, ImgWebCell(w)));
+                        if (!dbSeen.Add(w.Key)) continue;   // already offered by the earlier-checked DB source
+                        ImgRegisterWeb(w, fromLb ? "lbdb" : "web");
+                        entries.Add((w.Type, rank, ImgWebCell(w, fromLb)));
                     }
                     break;
 
@@ -914,14 +948,15 @@ internal sealed partial class EditGameWindow
         return chk;
     }
 
-    /// <summary>Database web stand-ins for this category (owned-by-CRC filtered; non-launchbox rows dropped when
-    /// ExtendDB's per-origin fetcher isn't reachable, as they have no plain CDN URL).</summary>
-    private List<MetadataDb.WebImage> ImgWebCandidates(int dbId, List<ImgFile> catImgs, HashSet<string> typeSet)
+    /// <summary>Database web stand-ins for this category, read from an EXPLICIT db file (LaunchBox's own
+    /// Metadata.db for the "LaunchBox DB" source, the extended DB for "ExtendDB") — owned-by-CRC filtered;
+    /// non-launchbox rows dropped when ExtendDB's per-origin fetcher isn't reachable (no plain CDN URL).</summary>
+    private List<MetadataDb.WebImage> ImgWebCandidates(string? db, int dbId, List<ImgFile> catImgs, HashSet<string> typeSet)
     {
         var owned = new HashSet<uint>();
         foreach (var f in catImgs) { var c = CrcBridge.Crc(f.Path); if (c != 0) owned.Add(c); }
         List<MetadataDb.WebImage> cands;
-        try { cands = MetadataDb.ImagesForGame(dbId); } catch { cands = new List<MetadataDb.WebImage>(); }
+        try { cands = MetadataDb.ImagesForGame(db, dbId); } catch { cands = new List<MetadataDb.WebImage>(); }
         var web = cands.Where(w => typeSet.Contains(w.Type) && !owned.Contains(unchecked((uint)w.Crc32))).ToList();
         if (!MediaApiBridge.Available) web = web.Where(x => x.IsLaunchbox).ToList();
         return web;
@@ -1191,10 +1226,11 @@ internal sealed partial class EditGameWindow
     // ExtendDB dedups downloads (base-LB GameImages carries only CRC32, so it's the sole key). CRCs are computed
     // (via CrcBridge: ":crc32" ADS first, computed on miss) ONLY for this category's local images, never the
     // whole game — the candidates are of these same types anyway.
-    private Panel ImgWebCell(MetadataDb.WebImage w)
+    private Panel ImgWebCell(MetadataDb.WebImage w, bool fromLbDb)
     {
         var cell = new Panel { Size = new Size(ImgCellW, ImgCellH), BackColor = Bg };
-        var frame = new Panel { BackColor = Color.FromArgb(150, 90, 200), Padding = new Padding(S(2)) };   // purple = not owned
+        // Border colour = SOURCE: orange = fetched from LaunchBox's own DB, purple = from the extended DB.
+        var frame = new Panel { BackColor = fromLbDb ? LbDbOrange : WebPurpleFrame, Padding = new Padding(S(2)) };
         frame.SetBounds(S(4), S(4), ImgCellW - S(8), ImgThumbH);
         var pic = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 18, 24), Cursor = Cursors.Hand };
         ImgLoadThumbWeb(pic, w);
@@ -1226,9 +1262,10 @@ internal sealed partial class EditGameWindow
         // Caption: the same two lines the owned cells show (origin, then region) — so the tile you're about to
         // download already reads like the file it will become. The values come from the DB row, not from ADS
         // (nothing is stamped yet); ImageAdsWriter writes exactly these into :info on download.
+        string srcLabel = fromLbDb ? "LaunchBox DB" : "ExtendDB";
         var cap = new Label
         {
-            Text = w.IsLaunchbox ? "web" : "web · " + w.Origin, ForeColor = Color.FromArgb(190, 150, 230),
+            Text = w.IsLaunchbox ? srcLabel : srcLabel + " · " + w.Origin, ForeColor = fromLbDb ? LbDbOrange : WebPurple,
             BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, TextAlign = ContentAlignment.MiddleLeft,
             AutoEllipsis = true,
         };

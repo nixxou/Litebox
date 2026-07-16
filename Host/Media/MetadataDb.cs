@@ -57,23 +57,37 @@ internal static class MetadataDb
     public static bool Available => DbPath() != null;
 
     /// <summary>
-    /// The DB the "Web (database)" source reads for EVERY media tab (images / videos / manuals). The rule: base
-    /// LaunchBox's own Metadata.db, EXCEPT when all three hold — the ExtendDB plugin is loaded, its Extended
-    /// Database module is Active, and the extended DB has been downloaded (= <see cref="MediaApiBridge.UseWizardPath"/>
-    /// + the file present) — in which case the richer merged DB is used. So we never open ExtendDB's 3.8 GB asset
-    /// unless ExtendDB is genuinely in play (and its non-launchbox rows are actually fetchable).
+    /// The DEFAULT db of the int-keyed readers below (used by the web server's covers etc. — the editor download
+    /// grids now name their DB explicitly: <see cref="LaunchBoxDbPath"/> for the orange "LaunchBox DB" source,
+    /// <see cref="ExtendedDbPath"/> for the purple "ExtendDB" one). The rule: base LaunchBox's own Metadata.db,
+    /// EXCEPT when all three hold — the ExtendDB plugin is loaded, its Extended Database module is Active, and
+    /// the extended DB has been downloaded (= <see cref="MediaApiBridge.UseWizardPath"/> + the file present) —
+    /// in which case the richer merged DB is used. So we never open ExtendDB's 3.8 GB asset unless ExtendDB is
+    /// genuinely in play (and its non-launchbox rows are actually fetchable).
     /// </summary>
     public static string? WebDbPath()
-        => (MediaApiBridge.UseWizardPath && ExtendedDbPath != null) ? ExtendedDbPath : DbPath();
+        => (MediaApiBridge.UseWizardPath && ExtendedDbPath != null && UseExtendedAsMain) ? ExtendedDbPath : DbPath();
+
+    /// <summary>[Base] UseAsMainDb (default true): with the Base module on and the extended DB present, it is
+    /// the MAIN metadata DB. Unchecked → the legacy LaunchBox Metadata.db stays primary (the extended DB is
+    /// still offered as an explicit extra source where surfaces expose it, e.g. the editor download grids).</summary>
+    public static bool UseExtendedAsMain
+    {
+        get { try { return LiteBoxConfig.LoadForExe().GetSecBool("Base", "UseAsMainDb", true); } catch { return true; } }
+    }
+
+    /// <summary>LaunchBox's own Metadata.db (never the extended one), or null when absent — the explicit
+    /// "LaunchBox DB" source of the editor download grids.</summary>
+    public static string? LaunchBoxDbPath() => DbPath();
 
     /// <summary>Every image the online/merged DB has for a game (by its DatabaseId), or empty. Read-only.</summary>
     public static List<WebImage> ImagesForGame(int databaseId) => ImagesForGame(WebDbPath(), databaseId);
 
     // ── Videos ────────────────────────────────────────────────────────────────
     // Video rows ONLY exist in the EXTENDED database (LaunchBox's own Metadata.db has none — the LbDbMerger only
-    // pushes image types into it). So the video "Web (database)" source is meaningful only when ExtendDB is in
-    // play; WebDbPath returns the extended DB then, and the base DB (→ zero video rows) otherwise, so we never
-    // open ExtendDB's asset when the plugin isn't loaded. They live in GameImages under Type 'Video' (146k:
+    // pushes image types into it). So the video "ExtendDB" source is meaningful only when ExtendDB is in play —
+    // which is why the videos editor reads ExtendedDbPath explicitly and gates the source on the Base module +
+    // the DB being present. They live in GameImages under Type 'Video' (146k:
     // screenscraper / steam / emumovies) and 'VideoAdvert'. CRC32 AND FileSize are always populated there —
     // which matters, because a video's CRC is never recomputed from disk (see the owned-detection in the page).
 

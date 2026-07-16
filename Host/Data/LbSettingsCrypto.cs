@@ -42,6 +42,20 @@ internal static class LbSettingsCrypto
     public static string EncryptEmuMoviesPassword(string? clear)
         => string.IsNullOrEmpty(clear) ? "" : Encrypt(clear!, EmuMoviesKeySeed);
 
+    /// <summary>The key / seed GUIDs (format "N") LaunchBox uses for BigBox's parental LockPin
+    /// (BigBoxSettings.xml). Unlike EmuMovies, key and seed DIFFER here. Fixed LB constants, verified by
+    /// round-tripping a real install's blob (see docs: lb-settings-crypto — blob qZt4x1Vb… → "0000").</summary>
+    private const string LockPinKey = "7b7fdf9d179643e0be4bea45c827b693";
+    private const string LockPinSeed = "cf2976b6f11c459bab7a3f2acc1795f3";
+
+    /// <summary>Decrypt a BigBox LockPin blob to the clear 4-digit PIN ("" when unset/not a blob).</summary>
+    public static string DecryptBigBoxLockPin(string? stored)
+        => TryDecrypt(stored, LockPinKey, LockPinSeed, out var clear) ? clear : "";
+
+    /// <summary>Encrypt a clear PIN to BigBox's LockPin blob format (real BigBox reads it back).</summary>
+    public static string EncryptBigBoxLockPin(string? clear)
+        => string.IsNullOrEmpty(clear) ? "" : Convert.ToBase64String(Run(true, Encoding.UTF8.GetBytes(clear!), LockPinKey, LockPinSeed));
+
     /// <summary>A LiteBox-OWN key/seed for values LiteBox stores at rest for itself (never round-tripped with
     /// LaunchBox) — e.g. a ScreenScraper account password in LiteBox.ini. Obfuscation-grade, same threat model
     /// as ExtendDB's shipped secrets: it keeps the value out of casual plain sight, not from a determined reader
@@ -58,6 +72,9 @@ internal static class LbSettingsCrypto
 
     // ── Core ──────────────────────────────────────────────────────────────────
     private static bool TryDecrypt(string? b64, string keySeed, out string clear)
+        => TryDecrypt(b64, keySeed, keySeed, out clear);
+
+    private static bool TryDecrypt(string? b64, string keyGuid, string seedGuid, out string clear)
     {
         clear = "";
         if (string.IsNullOrEmpty(b64)) return false;
@@ -67,7 +84,7 @@ internal static class LbSettingsCrypto
         if (data.Length == 0 || data.Length % 32 != 0) return false;   // Rijndael-256 blocks are 32 bytes
         try
         {
-            var outBytes = Run(false, data, keySeed);
+            var outBytes = Run(false, data, keyGuid, seedGuid);
             clear = Encoding.UTF8.GetString(outBytes);
             return true;
         }
@@ -75,12 +92,12 @@ internal static class LbSettingsCrypto
     }
 
     private static string Encrypt(string clear, string keySeed)
-        => Convert.ToBase64String(Run(true, Encoding.UTF8.GetBytes(clear), keySeed));
+        => Convert.ToBase64String(Run(true, Encoding.UTF8.GetBytes(clear), keySeed, keySeed));
 
-    private static byte[] Run(bool encrypt, byte[] data, string keySeed)
+    private static byte[] Run(bool encrypt, byte[] data, string keyGuid, string seedGuid)
     {
-        byte[] key = Encoding.ASCII.GetBytes(keySeed);
-        byte[] iv = (byte[])key.Clone();               // distinct array — the cipher mustn't share key and IV
+        byte[] key = Encoding.ASCII.GetBytes(keyGuid);
+        byte[] iv = Encoding.ASCII.GetBytes(seedGuid); // LB's primitive takes (key, seed) — may be equal or not
         var cipher = new PaddedBufferedBlockCipher(new CbcBlockCipher(new RijndaelEngine(256)), new Pkcs7Padding());
         cipher.Init(encrypt, new ParametersWithIV(new KeyParameter(key), iv));
         var buf = new byte[cipher.GetOutputSize(data.Length)];

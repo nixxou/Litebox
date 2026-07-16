@@ -22,10 +22,9 @@ internal enum LbModule
     Base,               // extended metadata DB + credentialed media download
     Rom,                // ROM extractor / ArchiveMGS
     Editor,             // game / media editor + Download Medias
-    Similar,            // similar-games suggestions
     RetroAchievements,  // per-ROM RA hashing with our RAHasher
-    Parental,           // PIN parental control
-    Web,                // embedded web frontend (LaunchBox / BigBox Web)
+    Parental,           // parental control on BigBox's native PIN
+    Web,                // embedded web frontends (LiteBox Web / BigBox Web / database Web)
 }
 
 internal static class LbModules
@@ -44,12 +43,10 @@ internal static class LbModules
             "Archive ROM extraction with in-archive ROM selection. Built into LiteBox's Play flow (flat/preserve modes, companions).", true, true),
         new(LbModule.RetroAchievements, "retroachievements", "RetroAchievements",
             "Per-ROM RetroAchievements hashing computed with our own RAHasher instead of LaunchBox's scan-on-select.", false, false),
-        new(LbModule.Similar, "similar", "Similar games",
-            "Similar-games suggestions from the extended database.", false, false),
         new(LbModule.Parental, "parental", "Parental control",
-            "A PIN gate for restricted games and platforms.", false, false),
-        new(LbModule.Web,    "web",    "Web frontend",
-            "The embedded web server that serves LaunchBox Web / BigBox Web from LiteBox.", false, false),
+            "A PIN gate for restricted content, using BigBox's own parental PIN (set or remove it here — BigBox sees the change).", false, true),
+        new(LbModule.Web,    "web",    "Web frontends",
+            "The embedded web server: LiteBox Web, BigBox Web and the database Web, each served from its own folder.", false, false),
     };
 
     public static Info Meta(LbModule m) => Catalog.First(c => c.Module == m);

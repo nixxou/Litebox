@@ -244,10 +244,33 @@ internal static class EmbeddedWebServer
             _router.Add(@"/launchbox/(?<path>.*)", _litebox.Handle);
         }
 
-        // Database site → web\database\, mounted at "/". Server-rendered in later slices; for S1 it serves a
-        // shipped index.html if present, else a built-in placeholder. Registered LAST as the catch-all.
+        // Database site → mounted at "/". S3 renders it server-side from the Extended DB (DbRepository); the
+        // page + API routes register BEFORE the static catch-all so "/" is the platform grid, not a placeholder.
         if (WebConfig.EnableDatabaseSite)
+        {
+            // Server-rendered pages.
+            _router.Add(@"/", HomeHandler.Handle);
+            _router.Add(@"/index\.html", HomeHandler.Handle);
+            _router.Add(@"/platforms\.html", PlatformsListHandler.Handle);
+            _router.Add(@"/platforms/(?<slug>[^/]+)\.html", PlatformDetailHandler.Handle);
+            _router.Add(@"/games/(?<id>\d+)\.html", GameDetailHandler.Handle);
+
+            // JSON API. ([^/]+ excludes '/', so the bare /api/platforms/{slug} route can't swallow the
+            // /games and facet sub-routes even though it's registered first — the $-anchor makes them disjoint.)
+            _router.Add(@"/api/platforms", PlatformsApi.Handle);
+            _router.Add(@"/api/platforms/(?<slug>[^/]+)", PlatformDetailApi.Handle);
+            _router.Add(@"/api/platforms/(?<slug>[^/]+)/games", PlatformGamesApi.Handle);
+            _router.Add(@"/api/platforms/(?<slug>[^/]+)/genres", PlatformFiltersApi.HandleGenres);
+            _router.Add(@"/api/platforms/(?<slug>[^/]+)/developers", PlatformFiltersApi.HandleDevelopers);
+            _router.Add(@"/api/platforms/(?<slug>[^/]+)/publishers", PlatformFiltersApi.HandlePublishers);
+            _router.Add(@"/api/platforms/(?<slug>[^/]+)/release-types", PlatformFiltersApi.HandleReleaseTypes);
+            _router.Add(@"/api/platforms/(?<slug>[^/]+)/origins", PlatformFiltersApi.HandleOrigins);
+            _router.Add(@"/api/games/(?<id>\d+)", GameDetailApi.Handle);
+            _router.Add(@"/api/search", SearchApi.Handle);
+
+            // Static catch-all LAST: web\database\ statics (favicon / overrides) + the built-in placeholder.
             _router.Add(@"/(?<path>.*)", DatabaseSite);
+        }
     }
 
     // "/" and "/{path}" → static from web\database\. When the requested index has no shipped index.html,

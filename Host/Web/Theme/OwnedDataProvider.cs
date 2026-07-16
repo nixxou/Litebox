@@ -424,8 +424,6 @@ internal static class OwnedDataProvider
         if (game == null) return null;
         if (st != null && !Allowed(game, st)) return null;
 
-        // S5: on-select RA resolve (RaResolveLite.Resolve) wires here — deferred to the RA glue slice.
-
         var cg = ResolveCacheGame(game);
         int votes = 0; try { votes = game.CommunityStarRatingTotalVotes; } catch { }
 
@@ -462,6 +460,9 @@ internal static class OwnedDataProvider
             // S6: alt-emulator / multi-disc / Select-ROM launch menu — Play is a flat entry until then.
             launchOptions = (object)null,
             lastLaunch = LastLaunchDto(game),
+            // S5: RetroAchievements progress + per-achievement badges from Host/Ra (null when RA is
+            // unconfigured / the game has no raid / nothing cached — theme then shows no RA panel).
+            ra = WebRa.Block(game),
         };
     }
 

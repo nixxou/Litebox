@@ -224,6 +224,8 @@ internal static class EmbeddedWebServer
         _router.Add(@"/api/media/(?<id>\d+)\.(?<ext>[a-z0-9]{1,6})", MediaProxy.HandleThumbById);
         _router.Add(@"/api/media/(?<token>[A-Z0-9]+)\.(?<sig>[A-Z0-9]+)\.(?<ext>[a-z0-9]{1,6})", MediaProxy.Handle);
         _router.Add(@"/api/badges/(?<name>[^/]+)\.png", BadgeApi.Handle);
+        // S5: RA achievement badge PNGs referenced by the `ra` block in detail.json (RaBadges disk cache).
+        _router.Add(@"/api/ra/badge/(?<name>[^/]+)\.png", WebRa.BadgeHandle);
         _router.Add(@"/api/recent/epoch", RecentEpochApi.Handle);
         _router.Add(@"/api/parental/state", ParentalApi.HandleState);
         _router.Add(@"/api/parental/unlock", ParentalApi.HandleUnlock);

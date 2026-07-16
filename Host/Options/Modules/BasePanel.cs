@@ -103,21 +103,23 @@ internal static class BasePanel
         gStatus.Controls.Add(btnRefresh);
         gStatus.Controls.Add(lblProgress);
 
-        // Merge actions — no native LB→ExtendDB merge engine exists in LiteBox, so these stay disabled.
+        // Merge actions — native LB→ExtendDB merge engine (ExtDbMerger). Manual merge is intentional, so it
+        // is gated only on !readOnly + own-DB present; [Base] EnableLbMerge gates only the boot auto-merge.
         var btnForce = ModulePanelKit.Button("Force re-merge", dpiS);
-        btnForce.Location = new Point(S(14), S(166)); btnForce.Enabled = false;
+        btnForce.Location = new Point(S(14), S(166));
         var btnUndo = ModulePanelKit.Button("Undo last merge", dpiS);
-        btnUndo.Location = new Point(S(154), S(166)); btnUndo.Enabled = false;
+        btnUndo.Location = new Point(S(154), S(166));
         var btnUnmerge = ModulePanelKit.Button("Unmerge", dpiS);
-        btnUnmerge.Location = new Point(S(300), S(166)); btnUnmerge.Enabled = false;
+        btnUnmerge.Location = new Point(S(300), S(166));
+        bool mergeEngine = File.Exists(ExtDbMerger.OwnExtendedDbPath);
+        btnForce.Enabled = btnUndo.Enabled = btnUnmerge.Enabled = !readOnly && mergeEngine;
         gStatus.Controls.Add(btnForce);
         gStatus.Controls.Add(btnUndo);
         gStatus.Controls.Add(btnUnmerge);
 
         var lblMergeGap = ModulePanelKit.Caption(
-            "Force re-merge / Undo / Unmerge need the LaunchBox → ExtendDB merge engine, which LiteBox does not "
-            + "include — it uses the Extended database read-only.", dpiS, GroupW - 40);
-        lblMergeGap.ForeColor = Color.Goldenrod;
+            "Fold your LaunchBox metadata into LiteBox's own Extended DB copy. Undo/Unmerge revert to the "
+            + "pristine downloaded database.", dpiS, GroupW - 40);
         lblMergeGap.Location = new Point(S(14), S(198));
         gStatus.Controls.Add(lblMergeGap);
         root.Controls.Add(gStatus);
@@ -383,6 +385,34 @@ internal static class BasePanel
                 StartRefresh();
             }
         };
+
+        // ── Merge operations (Force re-merge / Undo / Unmerge → ExtDbMerger) ──────
+        async void RunMergeOp(Func<IProgress<string>, ExtDbMerger.MergeResult> op)
+        {
+            if (readOnly) return;
+            btnForce.Enabled = btnUndo.Enabled = btnUnmerge.Enabled = false;
+            btnUpdate.Enabled = false; btnRefresh.Enabled = false;
+            var prog = new Progress<string>(m => Ui(() => { if (!lblProgress.IsDisposed) lblProgress.Text = m; }));
+            try
+            {
+                var res = await Task.Run(() => op(prog));
+                Ui(() => { if (!lblProgress.IsDisposed) lblProgress.Text = res.Message; });
+            }
+            catch (Exception ex) { Ui(() => { if (!lblProgress.IsDisposed) lblProgress.Text = "Failed: " + ex.Message; }); }
+            finally
+            {
+                Ui(() =>
+                {
+                    bool eng = File.Exists(ExtDbMerger.OwnExtendedDbPath);
+                    btnForce.Enabled = btnUndo.Enabled = btnUnmerge.Enabled = !readOnly && eng;
+                    btnUpdate.Enabled = !readOnly; btnRefresh.Enabled = true;
+                });
+                StartRefresh();
+            }
+        }
+        btnForce.Click   += (_, _) => RunMergeOp(p => ExtDbMerger.RunMerge(p));
+        btnUndo.Click    += (_, _) => RunMergeOp(p => ExtDbMerger.UndoLastMerge(p));
+        btnUnmerge.Click += (_, _) => RunMergeOp(p => ExtDbMerger.Unmerge(p));
 
         // Kick off the first status read once the panel has a window handle to marshal onto.
         void OnHandle(object? _, EventArgs __) => StartRefresh();

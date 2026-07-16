@@ -92,6 +92,14 @@ internal static class LaunchBoxDataApi
         return Json(outMap);
     }
 
+    // ── data/games/<id>/related.json + related/overviews.json (native suggester engine) ─
+
+    public static HttpResponse Related(RouteContext ctx)
+        => Json(OwnedDataProvider.Related(ctx.GetRoute("id"), WebParentalState.From(ctx.Request), ctx.Request.GetQueryInt("limit", 50)));
+
+    public static HttpResponse RelatedOverviews(RouteContext ctx)
+        => Json(RelatedProvider.Overviews(ctx.Request.GetQuery("ids"), WebParentalState.From(ctx.Request)));
+
     private static HttpResponse Json(object obj)
         => HttpResponse.Json(JsonSerializer.Serialize(obj, _json));
 }

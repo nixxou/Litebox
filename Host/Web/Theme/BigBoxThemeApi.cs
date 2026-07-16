@@ -37,7 +37,7 @@ internal static class BigBoxThemeApi
         {
             new { label = "Play",        action = "play" },
             new { label = "Star Rating", action = "rating" },
-            // S4: "View Related Games" withheld — the Similar-Games engine isn't ported to LiteBox.
+            new { label = "View Related Games", action = "related" },
             new { label = "Favorite",       action = "favorite" },
             new { label = "Hide",           action = "hide" },
             new { label = "Mark as Broken", action = "broken" },
@@ -132,7 +132,7 @@ internal static class BigBoxThemeApi
     }
 
     public static HttpResponse RelatedOverviews(RouteContext ctx)
-        => Json(new Dictionary<string, string>());
+        => Json(RelatedProvider.Overviews(ctx.Request.GetQuery("ids"), WebParentalState.From(ctx.Request)));
 
     // ── JSON helper ────────────────────────────────────────────────
 

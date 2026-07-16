@@ -508,17 +508,9 @@ internal static class OwnedDataProvider
     }
 
     // ── data/games/<id>/related.json ───────────────────────────────
-    // DEVIATION: the Similar-Games engine is not ported to LiteBox (out of S4 scope) — serve empty so the
-    // route contract exists end-to-end and the theme simply shows no related panel.
+    // Drives the native LiteBox suggester engine (Host/Similar/GameSuggester) via RelatedProvider.
 
-    public static object Related(string id, WebParentalState st, int limit) => EmptyRelated();
-
-    private static object EmptyRelated() => new
-    {
-        recommended = Array.Empty<object>(),
-        similar = Array.Empty<object>(),
-        ports = Array.Empty<object>(),
-    };
+    public static object Related(string id, WebParentalState st, int limit) => RelatedProvider.Related(id, st, limit);
 
     // ── Resolution helpers (SDK data manager) ──────────────────────
 

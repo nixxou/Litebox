@@ -258,6 +258,19 @@ internal static class HostBoot
             });
         }
 
+        // Opt-in boot merge (Base module + [Base] EnableLbMerge). RunMerge self-guards (needs LiteBox's own
+        // Extended DB copy + LB Metadata.db present) and is idempotent (restore-then-rebuild), so racing the
+        // background auto-download above is safe: a fresh install without the own copy yet simply no-ops here
+        // and merges on a later boot. It reads DuplicateHandling itself.
+        if (Modules.LbModules.On(Modules.LbModule.Base) && Data.ExtDbMerger.EnableMerge)
+        {
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                try { Data.ExtDbMerger.RunMerge(null); }
+                catch (Exception ex) { Diag.LbLog.Warn("extmerge", "boot merge: " + ex.Message); }
+            });
+        }
+
         EventBus.FirePluginInitialized(reg);
 
         // Let ExtendDB's Similar-Games viewer jump to an owned game in-host (instead of

@@ -47,41 +47,7 @@ internal static class WebKeyBindsApi
         ["zone"] = "Tab",
     };
 
-    public static HttpResponse Handle(RouteContext ctx) => Emit(BigBoxDefaults);
+    public static HttpResponse Handle(RouteContext ctx) => HttpResponse.Json(WebKeyBinds.BigBoxJson());
 
-    public static HttpResponse HandleLaunchBox(RouteContext ctx) => Emit(LaunchBoxDefaults);
-
-    private static HttpResponse Emit(Dictionary<string, string> defaults)
-    {
-        LiteBoxConfig cfg = null;
-        try { cfg = LiteBoxConfig.LoadForExe(); } catch { }
-
-        var map = new Dictionary<string, string[]>(defaults.Count);
-        foreach (var kv in defaults)
-        {
-            string csv = kv.Value;
-            try
-            {
-                var over = cfg?.GetSec("Web", "Keys." + kv.Key, null);
-                if (!string.IsNullOrWhiteSpace(over)) csv = over;
-            }
-            catch { }
-            map[kv.Key] = Split(csv);
-        }
-        return HttpResponse.Json(JsonSerializer.Serialize(map));
-    }
-
-    /// <summary>Splits a comma/semicolon-separated key list, trimming blanks and preserving case.</summary>
-    private static string[] Split(string csv)
-    {
-        if (string.IsNullOrWhiteSpace(csv)) return Array.Empty<string>();
-        var parts = csv.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
-        var list = new List<string>(parts.Length);
-        foreach (var p in parts)
-        {
-            var t = p.Trim();
-            if (t.Length > 0) list.Add(t);
-        }
-        return list.ToArray();
-    }
+    public static HttpResponse HandleLaunchBox(RouteContext ctx) => HttpResponse.Json(WebKeyBinds.LaunchBoxJson());
 }

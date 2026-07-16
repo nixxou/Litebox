@@ -24,6 +24,7 @@ using System.Threading.Tasks;
 using LbApiHost.Host;
 using LbApiHost.Host.Data;
 using LbApiHost.Host.Diag;
+using LbApiHost.Host.Parental;
 using LbApiHost.Host.Rom;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
@@ -136,7 +137,8 @@ internal static class BigBoxMutationApi
 
     private static HttpResponse SetRating(string id, string body, RouteContext ctx)
     {
-        if (IsLocked(ctx)) return Fail("parental_locked");
+        var deny = ParentalWebWriteGuard.DenyReason(IsLocked(ctx), "rating");
+        if (deny != null) return Fail(deny);
         if (!TryGetDouble(body, "value", out var value)) return Fail("missing value");
         value = Math.Clamp(value, 0, 5);
 
@@ -154,7 +156,8 @@ internal static class BigBoxMutationApi
 
     private static HttpResponse SetFlag(string id, RouteContext ctx, Action<IGame, bool> setter, string label)
     {
-        if (IsLocked(ctx)) return Fail("parental_locked");
+        var deny = ParentalWebWriteGuard.DenyReason(IsLocked(ctx), label);
+        if (deny != null) return Fail(deny);
         if (!TryGetBool(ctx.Request.Body, "value", out var value)) return Fail("missing value");
 
         var game = ResolveGame(id);
@@ -179,8 +182,9 @@ internal static class BigBoxMutationApi
     }
 
     // ── parental gating ─────────────────────────────────────────────────────────
-    // LiteBox's WebParentalState has no per-action allow flags (the plugin's AllowLockedUserToModify* config
-    // isn't ported), so a locked session simply cannot mutate library state.
+    // IsLocked returns this client's per-request web lock state (WebParentalState cookie); the per-action
+    // decision (allow-flags + BigBoxWriteMode Block/Merge) lives in ParentalWebWriteGuard.DenyReason.
+    // Fail-safe: deny on evaluation error.
     private static bool IsLocked(RouteContext ctx)
     {
         try { var st = WebParentalState.From(ctx?.Request); return st != null && st.IsLocked; }

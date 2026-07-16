@@ -282,6 +282,9 @@ internal static class EmbeddedWebServer
             _router.Add(@"/launchbox/data/platforms/(?<slug>[^/]+)/stars\.json", LaunchBoxDataApi.Stars);
             _router.Add(@"/launchbox/data/games/(?<id>[^/]+)/detail\.json", LaunchBoxDataApi.GameDetail);
             _router.Add(@"/launchbox/data/games/(?<id>[^/]+)/installstate\.json", LaunchBoxDataApi.InstallState);
+            // Batch-overviews (literal) BEFORE the per-game /games/{id}/related route so it can't be swallowed.
+            _router.Add(@"/launchbox/data/games/related/overviews\.json", LaunchBoxDataApi.RelatedOverviews);
+            _router.Add(@"/launchbox/data/games/(?<id>[^/]+)/related\.json", LaunchBoxDataApi.Related);
             // Combined recent / catmedia driven by the {kind} (platforms|playlists|categories) capture.
             _router.Add(@"/launchbox/data/(?<kind>[^/]+)/(?<slug>[^/]+)/recent\.json", LaunchBoxDataApi.Recent);
             _router.Add(@"/launchbox/data/(?<kind>[^/]+)/(?<slug>[^/]+)/catmedia\.json", LaunchBoxDataApi.CatMedia);

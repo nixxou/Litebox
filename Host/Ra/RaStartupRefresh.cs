@@ -4,6 +4,9 @@
 // games (pick up raids that appeared in RA since). Over successive launches this rolls through every console,
 // so already-resolved games keep gaining raids without a manual scan — and WITHOUT any RAHasher work (re-link
 // is a pure catalogue lookup). Gated: the checkbox is on, ExtendDB isn't resolving RA, and RA creds are set.
+// Per-platform: a platform the user disabled in the RA options panel (RaPlatformState.IsPlatformEnabled) is
+// skipped, so it stays honored here too. The auto-update trigger (select/launch) does NOT gate this rolling
+// relink — it is a catalogue re-link, not the on-select re-hash the trigger governs.
 //
 // Call RunIfEnabled on the UI thread (it enumerates platforms/games there); the network refresh + re-link run
 // on a background thread, and the op-log flush is marshalled back via the supplied action.
@@ -40,8 +43,11 @@ internal static class RaStartupRefresh
             foreach (var p in dm.GetAllPlatforms() ?? Array.Empty<IPlatform>())
             {
                 if (p == null) continue;
-                int cid = RaPlatformMap.ConsoleIdFor(Safe(() => p.Name)) ?? 0;
+                string? pname = Safe(() => p.Name);
+                int cid = RaPlatformMap.ConsoleIdFor(pname) ?? 0;
                 if (cid <= 0) continue;
+                if (!RaPlatformState.IsPlatformEnabled(pname)) continue;   // platform disabled in the RA panel → skip its startup relink
+
                 if (!byConsole.TryGetValue(cid, out var list)) { list = new List<IPlatform>(); byConsole[cid] = list; }
                 list.Add(p);
             }

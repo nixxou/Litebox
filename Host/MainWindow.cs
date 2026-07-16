@@ -3393,7 +3393,12 @@ internal sealed class MainWindow : Form, IMessageFilter
             try
             {
                 if (Media.RomBridge.RaActive) Media.RomBridge.HealRaSync(g);   // ExtendDB plugin present + its RA module on → it owns the hash/raid
-                else if (Modules.LbModules.On(Modules.LbModule.RetroAchievements)) RaResolveLite.Resolve(g);   // RetroAchievements module on → LiteBox's per-ROM RAHasher resolution (the "ExtendDB way", now native)
+                else if (Modules.LbModules.On(Modules.LbModule.RetroAchievements))
+                {
+                    string raPlat = null; try { raPlat = g.Platform; } catch { }
+                    if (RaPlatformState.ShouldAutoResolveOnSelect(raPlat)) RaResolveLite.Resolve(g);   // module on + platform RA-enabled + trigger == On select → LiteBox's per-ROM RAHasher resolution (the "ExtendDB way", now native)
+                    // else: module on, but this platform is RA-disabled OR the auto-update trigger is "On launch" → don't re-hash on select; the panel still shows whatever raid is already stored.
+                }
                 // module off → LiteBox does NOT re-hash per ROM; the panel still shows whatever raid is already stored.
             }
             catch { }

@@ -34,7 +34,6 @@ internal static class RaStartupRefresh
         try
         {
             if (!enabled || dm == null) return;
-            if (RomBridge.RaActive) return;        // ExtendDB plugin owns RA
             if (!Modules.LbModules.On(Modules.LbModule.RetroAchievements)) return;   // RetroAchievements module off → LiteBox doesn't do per-ROM RA resolution
             if (!RaService.Configured) return;     // no creds → can't resolve raids
 

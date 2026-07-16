@@ -183,12 +183,10 @@ internal sealed class LaunchButtons : Panel
             _versions.Add((Safe(() => a.Id), string.IsNullOrWhiteSpace(name) ? "(version)" : name!, a));
         }
 
-        // ROM layer: the ExtendDB plugin wins when loaded (in-process reflection, no HTTP); otherwise the
-        // native Rom module drives it. Either lights up the ROM button/dropdown/picker.
-        _romFeature = RomBridge.Available || Rom.RomExtractor.Available;
-        if (RomBridge.Available)
-            ParseLaunchInfo(RomBridge.GetLaunchInfoJson(game));   // plugin provides the same-shape JSON
-        else if (Rom.RomExtractor.Available)
+        // ROM layer: the native Rom module drives the ROM button/dropdown/picker (the ExtendDB plugin is never
+        // loaded under LiteBox — the reflection bridge is gone).
+        _romFeature = Rom.RomExtractor.Available;
+        if (Rom.RomExtractor.Available)
         {
             // Native ROM module (no plugin, no JSON round-trip): populate the SAME launch-info fields
             // ParseLaunchInfo sets, straight from the SDK.

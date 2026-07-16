@@ -1521,7 +1521,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             // per-ROM scan IS that module's feature — nothing to scan with it disabled).
             var raScan = new Options.RaScanHook
             {
-                Available = !Media.RomBridge.RaActive && Modules.LbModules.On(Modules.LbModule.RetroAchievements),
+                Available = Modules.LbModules.On(Modules.LbModule.RetroAchievements),
                 Configured = Ra.RaService.Configured,
                 Platforms = RaPlatformNamesSorted,
                 Run = RunRaScan,
@@ -3392,8 +3392,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             //    OnSelect mode. (Slow first time — hashes the ROM — hence off the UI thread.)
             try
             {
-                if (Media.RomBridge.RaActive) Media.RomBridge.HealRaSync(g);   // ExtendDB plugin present + its RA module on → it owns the hash/raid
-                else if (Modules.LbModules.On(Modules.LbModule.RetroAchievements))
+                if (Modules.LbModules.On(Modules.LbModule.RetroAchievements))
                 {
                     string raPlat = null; try { raPlat = g.Platform; } catch { }
                     if (RaPlatformState.ShouldAutoResolveOnSelect(raPlat)) RaResolveLite.Resolve(g);   // module on + platform RA-enabled + trigger == On select → LiteBox's per-ROM RAHasher resolution (the "ExtendDB way", now native)

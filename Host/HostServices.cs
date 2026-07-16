@@ -293,7 +293,7 @@ internal static class HostLaunch
             Gameplay.ScreenCapture.Disarm();             // screenshot hotkey off (parity with RunAndWait)
             // Record the launch → detection latency (LiteBox-only) BEFORE Stop() clears it — reused next
             // launch to extend the reveal ceiling + drive the progress bar. Null when never detected.
-            if (!DryRun) { var det = Gameplay.SmartCapture.DetectedAtMs; if (det.HasValue) { string gid = SafeStr(() => game?.Id); try { _store.RecordDetection(gid, det.Value); } catch { } try { Media.RomBridge.RecordDetection(game, det.Value); } catch { } } }
+            if (!DryRun) { var det = Gameplay.SmartCapture.DetectedAtMs; if (det.HasValue) { string gid = SafeStr(() => game?.Id); try { _store.RecordDetection(gid, det.Value); } catch { } } }
             Gameplay.SmartCapture.Stop();                // stop the global reveal watcher (game exited or never detected)
             var endSnap = LaunchedGame.Current;          // capture cosmetics before clearing
             if (!DryRun) Gameplay.GameScreens.ShowEndEager(endSnap);   // cover the exit transition (was Close())
@@ -458,7 +458,7 @@ internal static class HostLaunch
             Gameplay.GameCursor.Show();        // undo "Hide Mouse Cursor During Game" (no-op if off)
             Gameplay.WindowHider.Restore();    // undo "Hide All Windows…" (no-op if off)
             // Record the launch → detection latency (LiteBox-only) BEFORE Stop() clears it.
-            if (!DryRun) { var det = Gameplay.SmartCapture.DetectedAtMs; if (det.HasValue) { string gid = SafeStr(() => game?.Id); try { _store.RecordDetection(gid, det.Value); } catch { } try { Media.RomBridge.RecordDetection(game, det.Value); } catch { } } }
+            if (!DryRun) { var det = Gameplay.SmartCapture.DetectedAtMs; if (det.HasValue) { string gid = SafeStr(() => game?.Id); try { _store.RecordDetection(gid, det.Value); } catch { } } }
             Gameplay.SmartCapture.Stop();  // stop the reveal watcher (game exited before/after detection)
             var endSnap = LaunchedGame.Current;   // capture cosmetics before clearing (end screen needs them)
             // Cover the exit transition RIGHT NOW — before the cleanup below AND before OnGameExited

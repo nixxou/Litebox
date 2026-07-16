@@ -40,7 +40,7 @@ internal static class LbModules
         new(LbModule.Editor, "editor", "Game and media editor",
             "The per-game metadata editor with web media download. Built into LiteBox's Edit Game window; the non-LaunchBox sources need the Extended metadata database.", true, true),
         new(LbModule.Rom,    "rom",    "ROM extractor (ArchiveMGS)",
-            "Extract the picked ROM from an archive on launch, with the Archive Multi-Game Selector: per-emulator/platform profiles, extraction modes, an LRU disk cache, RAM disk, texture-pack and .m3u handling. Being ported natively (currently defers to the ExtendDB plugin when present).", true, false),
+            "Extract the picked ROM from an archive on launch, with the Archive Multi-Game Selector: per-emulator/platform profiles, extraction modes, an LRU disk cache, RAM disk, texture-pack and .m3u handling. Configurable here; the native extraction engine is landing incrementally (defers to the ExtendDB plugin at launch until it does).", true, true),
         new(LbModule.RetroAchievements, "retroachievements", "RetroAchievements",
             "Resolve each game's RetroAchievements set by hashing the actual ROM with our own RAHasher (per ROM / per version), and show the achievements panel. Off: LiteBox does no per-ROM hashing and only shows a set already linked to a game.", true, true),
         new(LbModule.Parental, "parental", "Parental control",

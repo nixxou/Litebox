@@ -1494,6 +1494,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         //  "Use Game Pause Screen" is the master switch, "Pause Key" the hotkey, "Pause mode" the
         //  legacy/advanced choice — the old PauseEnabled ini key was dead, the hotkey duplicated.)
 
+        // ExtendDB features, folded natively into LiteBox — enable/disable each + its own settings. LiteBox-own
+        // state (litebox-options.db), so editable even in LB read-only mode, like the Caches maintenance below.
+        {
+            var (modPanel, modApply) = Options.ModulesOptions.Build(LiteBoxTheme.DpiScale(this), readOnly: false);
+            w.AddSection("Modules", modPanel, modApply);
+        }
+
         // LiteBox-local caches — a maintenance button (always enabled, even in read-only: it only
         // touches LiteBox's own Core cache folders, never the LaunchBox files).
         w.AddSection("Caches", BuildCachesSection());

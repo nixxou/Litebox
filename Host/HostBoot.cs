@@ -236,6 +236,7 @@ internal static class HostBoot
         try { foreach (var e in dm.GetAllEmulators() ?? Array.Empty<IEmulator>()) EmuPlugins.ForEmulator(e); }
         catch (Exception ex) { Console.WriteLine("[emuplugin] warmup failed: " + ex.Message); }
         DependencyCheck.Configure(LiteBoxConfig.LoadForExe(), lbRoot);   // pre-launch bios/dependency check
+        Modules.LbModules.LogState();   // boot recap: "[modules] ON: … | OFF: …"
 
         EventBus.FirePluginInitialized(reg);
 

@@ -653,10 +653,11 @@ internal static class CandidateProvider
 
         try { SQLitePCL.Batteries.Init(); } catch { }
 
+        var ovExpr = Data.OverviewCache.ReadExpression(dbPath);   // priority-resolved description (cache-aware)
         string sql =
             "SELECT DatabaseID, Name, Platform, Genres, ESRB, MaxPlayers, ReleaseType, " +
             "Developer, Publisher, CommunityRating, ReleaseYear, " +
-            "(Overview IS NOT NULL AND Overview != '') AS HasOverview FROM Games";
+            $"({ovExpr} IS NOT NULL AND {ovExpr} != '') AS HasOverview FROM Games";
         if (!string.IsNullOrEmpty(releaseTypeEquals)) sql += " WHERE ReleaseType = $rt";
 
         try

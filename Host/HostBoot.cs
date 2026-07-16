@@ -250,13 +250,21 @@ internal static class HostBoot
                 try
                 {
                     var (upd, remote, local, bytes) = await Data.ExtDbDownloader.CheckAsync(System.Threading.CancellationToken.None);
-                    if (!upd) { Diag.LbLog.Info("extdb", $"up to date (local {local ?? "none"})"); return; }
-                    Diag.LbLog.Info("extdb", $"update {local ?? "none"} -> {remote} ({bytes / (1 << 20)} MB), downloading in background...");
-                    await Data.ExtDbDownloader.DownloadAndInstallAsync(null, System.Threading.CancellationToken.None);
+                    if (upd)
+                    {
+                        Diag.LbLog.Info("extdb", $"update {local ?? "none"} -> {remote} ({bytes / (1 << 20)} MB), downloading in background...");
+                        await Data.ExtDbDownloader.DownloadAndInstallAsync(null, System.Threading.CancellationToken.None);
+                    }
+                    else Diag.LbLog.Info("extdb", $"up to date (local {local ?? "none"})");
                 }
                 catch (Exception ex) { Diag.LbLog.Warn("extdb", "auto-update: " + ex.Message); }
+                // Keep the precomputed defaultOverview in step (fresh install / stale signature → rebuild;
+                // valid → no-op). Runs after the update so a new DB gets its column immediately.
+                Data.OverviewCache.RunSyncIfNeeded();
             });
         }
+        else if (Modules.LbModules.On(Modules.LbModule.Base))
+            Data.OverviewCache.RunSyncIfNeeded();   // auto-update off → still keep the overview cache valid
 
 
         EventBus.FirePluginInitialized(reg);

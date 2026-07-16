@@ -98,9 +98,12 @@ internal static class RelatedProvider
             using var con = new SqliteConnection(csb.ToString());
             con.Open();
             using var cmd = con.CreateCommand();
+            // The priority-resolved description: the precomputed defaultOverview column when valid,
+            // else the dynamic COALESCE over the source priority (Host/Data/OverviewCache).
+            var ovExpr = Data.OverviewCache.ReadExpression(dbPath);
             cmd.CommandText =
-                $"SELECT DatabaseID, Overview, ESRB FROM Games " +
-                $"WHERE DatabaseID IN ({inList}) AND Overview IS NOT NULL AND Overview != ''";
+                $"SELECT DatabaseID, {ovExpr} AS Overview, ESRB FROM Games " +
+                $"WHERE DatabaseID IN ({inList}) AND {ovExpr} IS NOT NULL AND {ovExpr} != ''";
             using var r = cmd.ExecuteReader();
             while (r.Read())
             {

@@ -358,6 +358,7 @@ internal static class BasePanel
                 finally { try { if (!close.IsDisposed) close.Enabled = true; } catch { } }
             };
             dlg.ShowDialog(gStatus.FindForm());
+            Data.OverviewCache.RunSyncIfNeeded();   // fresh/adopted DB → (re)build the defaultOverview column
             StartRefresh();
         };
 
@@ -378,6 +379,7 @@ internal static class BasePanel
                 c.SetSec(Section, "AutoUpdateDb", chkAuto.Checked ? "true" : "false");
                 c.SetSec(Section, "EnableOverviewCache", chkOverview.Checked ? "true" : "false");
                 c.Save();
+                Data.OverviewCache.RunSyncIfNeeded();   // priority reorder → rebuild the defaultOverview column
             }
             catch { }
         }

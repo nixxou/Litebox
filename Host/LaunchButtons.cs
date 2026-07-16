@@ -48,7 +48,7 @@ internal sealed class LaunchButtons : Panel
     private readonly ToolTip _tip = new();
     private readonly Action<IGame, IAdditionalApplication?, IEmulator?> _playGame;
     private readonly Action<IGame>? _storeLaunch;   // installed GOG/Steam game → store launch lifecycle
-    private readonly Func<IGame, (string? emuId, string? appId)?>? _lastLaunchFallback;   // LiteBox history (used when ExtendDB absent)
+    private readonly Func<IGame, (string? emuId, string? appId, string? romEntry)?>? _lastLaunchFallback;   // LiteBox history (used when ExtendDB absent): emu + version + last archive ROM
     private readonly Action<string>? _clearLastLaunch;   // reset button → cancel LiteBox's own history row
 
     // Every height/padding number below is a pure chrome pixel dimension (no text-flow to derive
@@ -80,7 +80,7 @@ internal sealed class LaunchButtons : Panel
     private StoreKind _storeKind;
 
     public LaunchButtons(Action<IGame, IAdditionalApplication?, IEmulator?> playGame, Action<IGame>? storeLaunch = null,
-        Func<IGame, (string? emuId, string? appId)?>? lastLaunchFallback = null,
+        Func<IGame, (string? emuId, string? appId, string? romEntry)?>? lastLaunchFallback = null,
         Action<string>? clearLastLaunch = null)
     {
         _playGame = playGame;
@@ -183,12 +183,26 @@ internal sealed class LaunchButtons : Panel
             _versions.Add((Safe(() => a.Id), string.IsNullOrWhiteSpace(name) ? "(version)" : name!, a));
         }
 
-        // ExtendDB ROM layer (in-process, reflection — no HTTP).
-        _romFeature = RomBridge.Available;
-        if (_romFeature) ParseLaunchInfo(RomBridge.GetLaunchInfoJson(game));
+        // ROM layer: the ExtendDB plugin wins when loaded (in-process reflection, no HTTP); otherwise the
+        // native Rom module drives it. Either lights up the ROM button/dropdown/picker.
+        _romFeature = RomBridge.Available || Rom.RomExtractor.Available;
+        if (RomBridge.Available)
+            ParseLaunchInfo(RomBridge.GetLaunchInfoJson(game));   // plugin provides the same-shape JSON
+        else if (Rom.RomExtractor.Available)
+        {
+            // Native ROM module (no plugin, no JSON round-trip): populate the SAME launch-info fields
+            // ParseLaunchInfo sets, straight from the SDK.
+            PopulateNativeLaunchInfo();
+            // Last launch from LiteBox's own op-log: emulator + version + the extractor's last archive entry.
+            if (_lastLaunchFallback != null)
+            {
+                var lb = Safe(() => _lastLaunchFallback(game));
+                if (lb != null) { _lastEmuId = lb.Value.emuId; _lastVerAppId = lb.Value.appId; _lastRomEntry = lb.Value.romEntry; }
+            }
+        }
         else if (_lastLaunchFallback != null)
         {
-            // No ExtendDB → fall back to LiteBox's own last-launch history (emulator + version; no ROM).
+            // Neither plugin nor native ROM module → no ROM UI; still seed emulator + version from history.
             var lb = Safe(() => _lastLaunchFallback(game));
             if (lb != null) { _lastEmuId = lb.Value.emuId; _lastVerAppId = lb.Value.appId; }
         }
@@ -663,6 +677,55 @@ internal sealed class LaunchButtons : Panel
         };
         MessageBox.Show(msg + "\nLiteBox will pick up the installed game once it's done (it re-checks automatically).",
             "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    // ── native launch-info (no plugin) ────────────────────────────────
+    /// <summary>Populate the SAME fields <see cref="ParseLaunchInfo"/> sets — <see cref="_mainPathIsArchive"/>,
+    /// <see cref="_verIsArchive"/>, <see cref="_emuAutoExtract"/> — directly from the SDK when the native ROM
+    /// module (not the plugin) drives the ROM UI. Last-launch (emu/version/ROM) is seeded separately from the
+    /// op-log by the caller. Mirrors ExtendDB.GameLauncher.BuildOptions' resolution.</summary>
+    private void PopulateNativeLaunchInfo()
+    {
+        if (_game == null) return;
+
+        // Main ROM path is an archive? (extension test sourced from RomConfig — same list the extractor uses).
+        _mainPathIsArchive = Rom.RomExtractor.IsArchive(Safe(() => _game.ApplicationPath) ?? "");
+
+        // Each additional-app version: is its own path an archive? (Base [appId == null] uses the main path.)
+        foreach (var v in _versions)
+        {
+            if (v.appId == null || v.app == null) continue;
+            var vp = v.app;   // capture for the closure
+            _verIsArchive[v.appId] = Rom.RomExtractor.IsArchive(Safe(() => vp.ApplicationPath) ?? "");
+        }
+
+        // Each candidate emulator: effective AutoExtract for THIS platform (platform override ?? emulator flag).
+        var platform = Safe(() => _game.Platform) ?? "";
+        foreach (var e in _emus)
+        {
+            var id = Safe(() => e.Id);
+            if (string.IsNullOrEmpty(id)) continue;
+            _emuAutoExtract[id!] = ResolveEffectiveAutoExtract(e, platform);
+        }
+    }
+
+    /// <summary>Effective AutoExtract for an emulator on <paramref name="platform"/>: the platform-level
+    /// nullable override when set, else the emulator's own flag — mirrors HostServices.ResolveLaunchRomPath
+    /// (<c>ep?.AutoExtract ?? emulator.AutoExtract</c>) and the plugin's ResolveEffectiveAutoExtract. The
+    /// platform is matched by name, else the emulator's default platform (same as ResolveEmulatorPlatform).</summary>
+    private static bool ResolveEffectiveAutoExtract(IEmulator emulator, string platform)
+    {
+        try
+        {
+            var eps = Safe(() => emulator.GetAllEmulatorPlatforms());
+            var ep = eps?.FirstOrDefault(x => string.Equals(Safe(() => x.Platform), platform, StringComparison.OrdinalIgnoreCase))
+                  ?? eps?.FirstOrDefault(x => Safe(() => x.IsDefault));
+            bool? pv = null;
+            try { pv = ep?.AutoExtract; } catch { }
+            if (pv.HasValue) return pv.Value;
+        }
+        catch { }
+        return Safe(() => emulator.AutoExtract);
     }
 
     // ── launch-info JSON (HostRomBridge) ──────────────────────────────

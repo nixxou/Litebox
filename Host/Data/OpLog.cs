@@ -297,6 +297,31 @@ internal sealed class OpLog : IDisposable
         return null;
     }
 
+    /// <summary>The last (emulatorId, additionalAppId, extractedRomPath) recorded for a game, or null if
+    /// none. Extends <see cref="GetLastLaunch"/> with the ROM extractor's last archive entry (the column
+    /// RecordLaunchRomEntry writes) so the native launch buttons can seed the last-played ROM without the
+    /// plugin. Any field may be null (default emulator / Base version / no ROM pick).</summary>
+    public (string emulatorId, string additionalAppId, string extractedRomPath)? GetLastLaunchFull(string gameId)
+    {
+        if (!Enabled || string.IsNullOrEmpty(gameId)) return null;
+        lock (_lock)
+        {
+            try
+            {
+                using var cmd = _conn.CreateCommand();
+                cmd.CommandText = "SELECT emulator_id, additional_app_id, extracted_rom_path FROM launch_history WHERE game_id=$g";
+                cmd.Parameters.AddWithValue("$g", gameId);
+                using var r = cmd.ExecuteReader();
+                if (r.Read())
+                    return (r.IsDBNull(0) ? null : r.GetString(0),
+                            r.IsDBNull(1) ? null : r.GetString(1),
+                            r.IsDBNull(2) ? null : r.GetString(2));
+            }
+            catch (Exception ex) { Console.WriteLine("[oplog] launch get(full) failed: " + ex.Message); }
+        }
+        return null;
+    }
+
     /// <summary>Record the launch → SmartCapture-detection latency (ms) for a game. UPSERT that ONLY
     /// touches detection_ms — preserves the emulator/app/rom columns (RecordLaunch wrote them). Creates
     /// a bare row (with last_launched_utc) for a game that has none yet (e.g. a store launch). No-op

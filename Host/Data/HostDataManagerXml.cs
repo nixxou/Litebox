@@ -64,6 +64,12 @@ internal sealed class HostDataManagerXml : DummyDataManager
     public (string emulatorId, string additionalAppId)? GetLastLaunch(string gameId)
     { try { return _store?.GetLastLaunch(gameId); } catch { return null; } }
 
+    /// <summary>LiteBox's last (emulatorId, additionalAppId, extractedRomPath) for a game — the launch
+    /// buttons' initial selection fallback INCLUDING the last archive ROM, used when ExtendDB is absent
+    /// but the native ROM module drives the ROM UI. Null if none recorded.</summary>
+    public (string emulatorId, string additionalAppId, string extractedRomPath)? GetLastLaunchFull(string gameId)
+    { try { return _store?.GetLastLaunchFull(gameId); } catch { return null; } }
+
     /// <summary>Cancels the game's LiteBox launch-history row — the launch buttons' reset-to-default
     /// button, so the next selection seeds pure defaults instead of the last launch.</summary>
     public void ClearLastLaunch(string gameId) { try { _store?.ClearLaunch(gameId); } catch { } }

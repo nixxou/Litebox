@@ -542,6 +542,12 @@ internal sealed class GameStore
     public (string emulatorId, string additionalAppId)? GetLastLaunch(string gameId)
     { return _oplog?.GetLastLaunch(gameId); }
 
+    /// <summary>LiteBox's last (emulatorId, additionalAppId, extractedRomPath) for a game, or null. Used
+    /// as the launch-button initial selection fallback (incl. the last archive ROM) when ExtendDB isn't
+    /// loaded but the native ROM module is.</summary>
+    public (string emulatorId, string additionalAppId, string extractedRomPath)? GetLastLaunchFull(string gameId)
+    { return _oplog?.GetLastLaunchFull(gameId); }
+
     /// <summary>Cancels the game's LiteBox launch-history row (reset-to-default button).</summary>
     public void ClearLaunch(string gameId) { _oplog?.ClearLaunch(gameId); }
 

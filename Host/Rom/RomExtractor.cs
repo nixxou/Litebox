@@ -84,6 +84,17 @@ internal static class RomExtractor
             .Any(e => string.Equals(e.TrimStart('.'), ext, StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>Archive-extension test, sourced from RomConfig.ArchiveExtensions — the SAME list the
+    /// extractor recognises, so callers never duplicate it. Extension only (no disk probe), matching the
+    /// plugin's GameLauncher.IsRecognisedArchive; returns false for a rooted-or-relative empty extension.</summary>
+    public static bool IsArchive(string path)
+    {
+        var ext = (Path.GetExtension(path ?? "") ?? "").TrimStart('.').ToLowerInvariant();
+        if (string.IsNullOrEmpty(ext)) return false;
+        return RomConfig.SplitCsv(RomConfig.Instance.ArchiveExtensions)
+            .Any(e => string.Equals(e.TrimStart('.'), ext, StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>Purge the ephemeral \tmp band after a game exits (the emulator has released the files).
     /// Persistent &lt;SIG&gt; cache entries survive (LRU-evicted on the next extraction).</summary>
     public static void OnGameExitCleanup()
@@ -126,10 +137,7 @@ internal static class RomExtractor
             }
 
             // R3 covers SmartExtract of archives. Copy/Convert of a bare disc image (no archive) is R4.
-            string ext = (Path.GetExtension(romAbs) ?? "").TrimStart('.').ToLowerInvariant();
-            bool isArchive = RomConfig.SplitCsv(RomConfig.Instance.ArchiveExtensions)
-                .Any(e => string.Equals(e.TrimStart('.'), ext, StringComparison.OrdinalIgnoreCase));
-            if (!isArchive) return RomLaunchResult.NotHandled;   // disc image / m3u → R4, host flat fallback
+            if (!IsArchive(romAbs)) return RomLaunchResult.NotHandled;   // disc image / m3u → R4, host flat fallback
 
             long archiveSize = 0; try { archiveSize = new FileInfo(romAbs).Length; } catch { }
             string sig = ArchiveSig.ComputePathSignature(romAbs, archiveSize);
@@ -403,10 +411,7 @@ internal static class RomExtractor
         var abs = RomPaths.ResolveAbsolute(rawPath);
         if (!File.Exists(abs)) return null;
 
-        var ext = (Path.GetExtension(abs) ?? "").TrimStart('.').ToLowerInvariant();
-        bool isArchive = RomConfig.SplitCsv(RomConfig.Instance.ArchiveExtensions)
-            .Any(e => string.Equals(e.TrimStart('.'), ext, StringComparison.OrdinalIgnoreCase));
-        return isArchive ? abs : null;
+        return IsArchive(abs) ? abs : null;
     }
 
     private static IAdditionalApplication? FindAdditionalApp(IGame game, string appId)

@@ -278,7 +278,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _launchButtons = new LaunchButtons(
             (g, app, emu) => Safe(() => PluginHelper.LaunchBoxMainViewModel.PlayGame(g, app, emu, null)),
             StoreLaunch,   // GOG/Steam: running screen + exit watch
-            g => (_dm as HostDataManagerXml)?.GetLastLaunch(Safe(() => g.Id)),    // launch-button initial selection fallback (no ExtendDB)
+            g => (_dm as HostDataManagerXml)?.GetLastLaunchFull(Safe(() => g.Id)),    // launch-button initial selection fallback (no ExtendDB): emu + version + last archive ROM
             id => (_dm as HostDataManagerXml)?.ClearLastLaunch(id));              // ↺ reset button cancels the LiteBox history row
         inner.Panel2.Controls.Add(_launchButtons);
         inner.Panel1.Resize += (_, _) => LayoutPoster();   // keep the poster grid centred on resize

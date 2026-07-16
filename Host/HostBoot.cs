@@ -286,6 +286,20 @@ internal static class HostBoot
         }
         catch (Exception ex) { Console.WriteLine("[gamecache] init error: " + ex.Message); }
 
+        // ── Embedded web server (Web module) ────────────────────────────────
+        // Deploy any bundled web assets, then start the local HTTP server (LiteBox Web / BigBox Web /
+        // database site). Only when the Web module is on; never started otherwise. Non-fatal.
+        try
+        {
+            if (Modules.LbModules.On(Modules.LbModule.Web))
+            {
+                Web.WebAssets.EnsureDeployed();
+                int webPort = int.TryParse(LiteBoxConfig.LoadForExe().GetSec("Web", "Port"), out var wp) ? wp : 8080;
+                Web.EmbeddedWebServer.Start(webPort);   // logs the listen URL itself
+            }
+        }
+        catch (Exception ex) { Console.WriteLine("[web] start failed: " + ex.Message); }
+
         for (int i = 0; i < reg.SystemMenus.Count; i++)
         {
             try

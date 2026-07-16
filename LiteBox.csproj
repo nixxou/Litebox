@@ -199,4 +199,11 @@
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LibVLCSharp.dll"><LogicalName>light/net10/LibVLCSharp.dll</LogicalName></EmbeddedResource>
   </ItemGroup>
 
+  <!-- Web frontend assets (embedded web server, slice S1). The folder is populated by the integrator (not by
+       this repo); copied to build output if present so WebAssets.EnsureDeployed can stage it into
+       Core\litebox\web\. Guarded on Exists so a build without the folder is unaffected. -->
+  <ItemGroup Condition="Exists('web-assets')">
+    <None Include="web-assets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

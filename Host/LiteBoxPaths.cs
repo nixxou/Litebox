@@ -34,4 +34,14 @@ internal static class LiteBoxPaths
         try { Directory.CreateDirectory(d); } catch { }
         return d;
     }
+
+    /// <summary>Web root for a site served by the embedded server:
+    /// <LB>\Core\litebox\web\<paramref name="site"/> — "bigbox", "litebox", "database" or "vendor".
+    /// Each of the three web frontends serves from its own folder; "vendor" is the shared JS/CSS lib root.</summary>
+    public static string Web(string site)
+    {
+        string d = Path.Combine(Data, "web", site);
+        try { Directory.CreateDirectory(d); } catch { }
+        return d;
+    }
 }

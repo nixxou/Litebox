@@ -252,10 +252,26 @@ internal static class HostBoot
                     var (upd, remote, local, bytes) = await Data.ExtDbDownloader.CheckAsync(System.Threading.CancellationToken.None);
                     if (upd)
                     {
-                        Diag.LbLog.Info("extdb", $"update {local ?? "none"} -> {remote} ({bytes / (1 << 20)} MB), downloading in background...");
-                        await Data.ExtDbDownloader.DownloadAndInstallAsync(null, System.Threading.CancellationToken.None);
+                        Diag.LbLog.Info("extdb", $"update {local ?? "none"} -> {remote} ({bytes / (1 << 20)} MB), downloading...");
+                        // ExtendDB-parity: a real download shows the update window. Start the SHARED operation
+                        // first (headless-safe), then try to attach the viewer once the UI is up; if no UI ever
+                        // comes (headless), the download simply completes in the background.
+                        var op = Data.ExtDbDownloader.RunSharedAsync();
+                        _ = System.Threading.Tasks.Task.Run(async () =>
+                        {
+                            for (int i = 0; i < 20 && !op.IsCompleted; i++)
+                            {
+                                try { UiThread.Invoke(() => Options.ExtDbUpdateWindow.ShowOrFocus()); return; }
+                                catch { await System.Threading.Tasks.Task.Delay(1000); }
+                            }
+                        });
+                        await op;
                     }
-                    else Diag.LbLog.Info("extdb", $"up to date (local {local ?? "none"})");
+                    else
+                    {
+                        Diag.LbLog.Info("extdb", $"up to date (local {local ?? "none"})");
+                        await Data.ExtDbDownloader.RunSharedAsync();   // silent no-op / legacy adoption when needed
+                    }
                 }
                 catch (Exception ex) { Diag.LbLog.Warn("extdb", "auto-update: " + ex.Message); }
                 // Keep the precomputed defaultOverview in step (fresh install / stale signature → rebuild;

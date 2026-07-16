@@ -337,36 +337,12 @@ internal static class BasePanel
         }
 
         btnRefresh.Click += (_, _) => StartRefresh();
-        btnUpdate.Click += (_, _) =>
+        btnUpdate.Click += async (_, _) =>
         {
             if (readOnly) return;
-            using var dlg = new Form
-            {
-                Text = "Extended database — update", StartPosition = FormStartPosition.CenterParent,
-                FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, ShowIcon = false,
-                ClientSize = new Size(S(480), S(150)), BackColor = ModulePanelKit.Bg, ForeColor = ModulePanelKit.Fg,
-            };
-            var lbl = new Label
-            {
-                Dock = DockStyle.Fill, Padding = new Padding(S(18), S(18), S(18), S(8)), ForeColor = ModulePanelKit.Fg,
-                BackColor = ModulePanelKit.Bg, Text = "Starting…", Font = new Font("Segoe UI", 9.5f),
-            };
-            var close = new Button
-            {
-                Text = "Close", Enabled = false, Dock = DockStyle.Bottom, Height = S(36), FlatStyle = FlatStyle.Flat,
-                BackColor = ModulePanelKit.Panel, ForeColor = ModulePanelKit.Fg,
-            };
-            close.FlatAppearance.BorderColor = ModulePanelKit.Panel;
-            close.Click += (_, _) => dlg.Close();
-            dlg.Controls.Add(lbl); dlg.Controls.Add(close);
-            var prog = new Progress<string>(m => { try { if (!lbl.IsDisposed) lbl.Text = m; } catch { } });
-            dlg.Shown += async (_, _) =>
-            {
-                try { await ExtDbDownloader.DownloadAndInstallAsync(prog, CancellationToken.None); }
-                catch (Exception ex) { try { if (!lbl.IsDisposed) lbl.Text = "Failed: " + ex.Message; } catch { } }
-                finally { try { if (!close.IsDisposed) close.Enabled = true; } catch { } }
-            };
-            dlg.ShowDialog(gStatus.FindForm());
+            // The ExtendDB-style progress window over the SHARED operation: if the boot auto-update is already
+            // downloading, this joins it (no ".part in use" collision) instead of starting a second download.
+            try { await ExtDbUpdateWindow.ShowOrFocus(gStatus.FindForm()); } catch { }
             Data.OverviewCache.RunSyncIfNeeded();   // fresh/adopted DB → (re)build the defaultOverview column
             StartRefresh();
         };

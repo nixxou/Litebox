@@ -97,6 +97,51 @@ internal static class ExtDbDownloader
     /// up to date afterwards — including the "staged as .todo because the live file was locked"
     /// case (the swap then completes on next boot). Returns false on any failure or cancel.
     /// </summary>
+    // ── Shared (single-flight) operation ──────────────────────────────────────
+    // The boot auto-update and the options-panel button may both want to run the update; racing two instances
+    // corrupts the .part download ("file in use"). One shared operation runs at a time; later callers JOIN it
+    // (their progress sink is fanned in, they await the same task). Cancel cancels for everyone.
+
+    private static readonly object _opLock = new();
+    private static Task<bool>? _op;
+    private static CancellationTokenSource? _opCts;
+    private static event Action<string>? _opProgress;
+    private static string _opLast = "";
+
+    /// <summary>An update/adopt operation is currently running.</summary>
+    public static bool OperationRunning { get { lock (_opLock) return _op is { IsCompleted: false }; } }
+
+    /// <summary>The last progress line of the running (or finished) shared operation.</summary>
+    public static string LastProgress { get { lock (_opLock) return _opLast; } }
+
+    /// <summary>Starts the update (download / adopt / no-op when up to date) — or JOINS the one already
+    /// running. <paramref name="onProgress"/> receives every subsequent progress line (marshal in the caller).</summary>
+    public static Task<bool> RunSharedAsync(Action<string>? onProgress = null)
+    {
+        lock (_opLock)
+        {
+            if (onProgress != null) _opProgress += onProgress;
+            if (_op is { IsCompleted: false }) return _op;
+
+            _opCts = new CancellationTokenSource();
+            var ct = _opCts.Token;
+            var fan = new Progress<string>(m =>
+            {
+                lock (_opLock) _opLast = m;
+                try { _opProgress?.Invoke(m); } catch { }
+            });
+            _op = Task.Run(async () =>
+            {
+                try { return await DownloadAndInstallAsync(fan, ct).ConfigureAwait(false); }
+                finally { lock (_opLock) { _opProgress = null; } }   // drop sinks — next run re-subscribes
+            });
+            return _op;
+        }
+    }
+
+    /// <summary>Cancels the running shared operation (no-op when idle).</summary>
+    public static void CancelShared() { lock (_opLock) { try { _opCts?.Cancel(); } catch { } } }
+
     /// <summary>Copies an existing legacy (plugin) Extended-DB into LiteBox's OWN Core\litebox copy so LiteBox
     /// owns/manages it (merge, atomic swaps) without a multi-GB re-download. Reports progress; atomic swap into place.</summary>
     private static async Task<bool> AdoptLegacyAsync(string legacy, string cacheDir, IProgress<string>? progress, CancellationToken ct)

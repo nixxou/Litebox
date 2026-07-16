@@ -233,6 +233,31 @@ internal static class EmbeddedWebServer
         if (WebConfig.EnableBigBoxWeb)
         {
             _router.Add(@"/bigbox", _ => HttpResponse.Redirect("/bigbox/", 301));
+
+            // ── S4: theme data + api. BEFORE the static catch-all so JSON/api routes match first. ──
+            _router.Add(@"/bigbox/data/cattree\.json", BigBoxThemeApi.CatTree);
+            _router.Add(@"/bigbox/data/detailmenu\.json", BigBoxThemeApi.DetailMenu);
+            _router.Add(@"/bigbox/data/system\.json", BigBoxThemeApi.SystemMenu);
+            _router.Add(@"/bigbox/data/platforms/(?<slug>[^/]+)/games\.json", BigBoxThemeApi.PlatformGames);
+            _router.Add(@"/bigbox/data/platforms/(?<slug>[^/]+)/stars\.json", BigBoxThemeApi.PlatformStars);
+            _router.Add(@"/bigbox/data/playlists/(?<slug>[^/]+)/games\.json", BigBoxThemeApi.PlaylistGames);
+            _router.Add(@"/bigbox/data/platforms/(?<slug>[^/]+)/recent\.json", BigBoxThemeApi.PlatformRecent);
+            _router.Add(@"/bigbox/data/playlists/(?<slug>[^/]+)/recent\.json", BigBoxThemeApi.PlaylistRecent);
+            _router.Add(@"/bigbox/data/categories/(?<slug>[^/]+)/recent\.json", BigBoxThemeApi.CategoryRecent);
+            _router.Add(@"/bigbox/data/platforms/(?<slug>[^/]+)/catmedia\.json", BigBoxThemeApi.PlatformCatMedia);
+            _router.Add(@"/bigbox/data/playlists/(?<slug>[^/]+)/catmedia\.json", BigBoxThemeApi.PlaylistCatMedia);
+            _router.Add(@"/bigbox/data/categories/(?<slug>[^/]+)/catmedia\.json", BigBoxThemeApi.CategoryCatMedia);
+            // Batch-overviews (literal) BEFORE the per-game /games/{id}/… routes so it can't be swallowed.
+            _router.Add(@"/bigbox/data/games/related/overviews\.json", BigBoxThemeApi.RelatedOverviews);
+            _router.Add(@"/bigbox/data/games/(?<id>[^/]+)/detail\.json", BigBoxThemeApi.GameDetail);
+            _router.Add(@"/bigbox/data/games/(?<id>[^/]+)/installstate\.json", BigBoxThemeApi.InstallState);
+            _router.Add(@"/bigbox/data/games/(?<id>[^/]+)/related\.json", BigBoxThemeApi.Related);
+            // S6: /bigbox/api/games/{id}/archive-{favorite,entries,metadata} — Select-ROM, deferred (the
+            // {kind} pattern below is [a-z]+ so the dashed archive-* verbs don't match it either).
+            _router.Add(@"/bigbox/api/games/(?<id>[^/]+)/(?<kind>[a-z]+)", BigBoxMutationApi.Handle);
+            _router.Add(@"/bigbox/api/keybinds", WebKeyBindsApi.Handle);
+
+            // Static catch-all LAST within the site so data/api routes above win.
             _router.Add(@"/bigbox/(?<path>.*)", _bigbox.Handle);
         }
 
@@ -241,6 +266,26 @@ internal static class EmbeddedWebServer
         if (WebConfig.EnableLiteBoxWeb)
         {
             _router.Add(@"/launchbox", _ => HttpResponse.Redirect("/launchbox/", 301));
+
+            // ── S4: theme data + api. BEFORE the static catch-all. Same data contract as /bigbox/. ──
+            _router.Add(@"/launchbox/data/cattree\.json", LaunchBoxDataApi.CatTree);
+            _router.Add(@"/launchbox/data/platforms/(?<slug>[^/]+)/games\.json", LaunchBoxDataApi.PlatformGames);
+            _router.Add(@"/launchbox/data/playlists/(?<slug>[^/]+)/games\.json", LaunchBoxDataApi.PlaylistGames);
+            _router.Add(@"/launchbox/data/platforms/(?<slug>[^/]+)/stars\.json", LaunchBoxDataApi.Stars);
+            _router.Add(@"/launchbox/data/games/(?<id>[^/]+)/detail\.json", LaunchBoxDataApi.GameDetail);
+            _router.Add(@"/launchbox/data/games/(?<id>[^/]+)/installstate\.json", LaunchBoxDataApi.InstallState);
+            // Combined recent / catmedia driven by the {kind} (platforms|playlists|categories) capture.
+            _router.Add(@"/launchbox/data/(?<kind>[^/]+)/(?<slug>[^/]+)/recent\.json", LaunchBoxDataApi.Recent);
+            _router.Add(@"/launchbox/data/(?<kind>[^/]+)/(?<slug>[^/]+)/catmedia\.json", LaunchBoxDataApi.CatMedia);
+            // Server-root API endpoints for the LiteBox web theme (registered here so they precede the
+            // database site's "/" catch-all).
+            _router.Add(@"/api/launchbox/icons/(?<name>[^/]+)\.(?<ext>[a-z0-9]{1,4})", LaunchBoxIconsApi.Handle);
+            _router.Add(@"/api/launchbox/platforms/stats", LaunchBoxStatsApi.Handle);
+            // S6: /launchbox/api/games/{id}/archive-* — Select-ROM, deferred ([a-z]+ excludes the dashed verbs).
+            _router.Add(@"/launchbox/api/games/(?<id>[^/]+)/(?<kind>[a-z]+)", LaunchBoxMutationApi.Handle);
+            _router.Add(@"/launchbox/api/keybinds", WebKeyBindsApi.HandleLaunchBox);
+
+            // Static catch-all LAST within the site so data/api routes above win.
             _router.Add(@"/launchbox/(?<path>.*)", _litebox.Handle);
         }
 

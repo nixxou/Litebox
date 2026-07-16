@@ -370,6 +370,38 @@ internal sealed class DbRepository
         return 0;
     }
 
+    /// <summary>Quality star tier (1/2/3) per game DatabaseID for a platform — the overlay the theme wheels
+    /// draw on posters (stars.json). Empty when the DB isn't ready or the platform has too few rated games for a
+    /// meaningful threshold. Global ranking (community rating + votes), NOT per-user state.</summary>
+    public Dictionary<int, int> GetStarTiers(string platform)
+    {
+        var map = new Dictionary<int, int>();
+        if (string.IsNullOrEmpty(platform) || !AnyDbReady()) return map;
+
+        int threshold = GetStarThreshold(platform);
+        if (threshold <= 0) return map;
+
+        const string sql = """
+            SELECT DatabaseID, CommunityRating, CommunityRatingCount
+            FROM   Games
+            WHERE  Platform = $p AND CommunityRating IS NOT NULL AND CommunityRating > 0
+            """;
+        using var con = Open();
+        using var cmd = con.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("$p", platform);
+        using var rdr = cmd.ExecuteReader();
+        while (rdr.Read())
+        {
+            int id = rdr.GetInt32(0);
+            double? rating = rdr.IsDBNull(1) ? null : rdr.GetDouble(1);
+            int cnt = rdr.IsDBNull(2) ? 0 : rdr.GetInt32(2);
+            int tier = ComputeStarTier(rating, cnt, threshold);
+            if (tier > 0) map[id] = tier;
+        }
+        return map;
+    }
+
     // ── Search ─────────────────────────────────────────────────────────────────
 
     public sealed class SearchResult

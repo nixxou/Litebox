@@ -1,0 +1,220 @@
+// POST endpoints that write to LiteBox's library / drive a launch on behalf of the theme surfaces:
+//
+//   POST /bigbox|launchbox/api/games/{id}/rating   body { "value": 0..5 }
+//   POST …/api/games/{id}/favorite                 body { "value": true|false }
+//   POST …/api/games/{id}/hide                     body { "value": true|false }
+//   POST …/api/games/{id}/broken                   body { "value": true|false }
+//   POST …/api/games/{id}/play                     (no body) → launch the game
+//   POST …/api/games/{id}/resethistory             clear last-launch memory
+//
+// {id} is the LaunchBox GUID string (or the metadata DatabaseID, matched against IGame.LaunchBoxDbId).
+//
+// Clean-room LiteBox rewrite of ExtendDB's Web/Theme/BigBoxMutationApi.cs, with the two seams cut:
+//   • PLAY — instead of WPF PluginHelper.*MainViewModel.PlayGame on Application.Current.Dispatcher, resolve the
+//     IGame and call LiteBox's native HostLaunch.Launch("web", game, null, null, null) on the WinForms UI
+//     thread (UiThread.Invoke). HostLaunch already owns emulator resolution, launch history (recorded in the
+//     launch pipeline) and extraction deferral — it is the native equivalent of the plugin's PlayGame.
+//   • favorite/hide/broken/rating — the game's setter (routes to the op-log) + DataManager.Save(false).
+//
+// Archive / Select-ROM mutations are OUT of S4 (S6) → 501 "not available". install is likewise deferred.
+
+using System;
+using System.Text.Json;
+using System.Threading.Tasks;
+using LbApiHost.Host;
+using LbApiHost.Host.Data;
+using LbApiHost.Host.Diag;
+using Unbroken.LaunchBox.Plugins;
+using Unbroken.LaunchBox.Plugins.Data;
+
+namespace LbApiHost.Host.Web;
+
+internal static class BigBoxMutationApi
+{
+    public static HttpResponse Handle(RouteContext ctx)
+    {
+        if (!string.Equals(ctx.Request?.Method, "POST", StringComparison.OrdinalIgnoreCase))
+            return HttpResponse.PlainText("Method not allowed", 405);
+
+        var kind = (ctx.GetRoute("kind") ?? "").ToLowerInvariant();
+        var id = ctx.GetRoute("id");
+        if (string.IsNullOrEmpty(id)) return Fail("bad id");
+
+        // S6: Select-ROM / archive mutations have no native backend yet.
+        if (kind.StartsWith("archive", StringComparison.OrdinalIgnoreCase))
+            return NotAvailable("archive routes are not available yet");
+
+        try
+        {
+            return kind switch
+            {
+                "rating"       => SetRating(id, ctx.Request.Body, ctx),
+                "favorite"     => SetFlag(id, ctx, (g, v) => g.Favorite = v, "favorite"),
+                "hide"         => SetFlag(id, ctx, (g, v) => g.Hide = v, "hide"),
+                "broken"       => SetFlag(id, ctx, (g, v) => g.Broken = v, "broken"),
+                "play"         => Play(id),
+                "launch"       => Play(id),   // alias
+                "resethistory" => ResetHistory(id),
+                "install"      => NotAvailable("install is not available yet"),
+                _              => Fail("unknown action"),
+            };
+        }
+        catch (Exception ex) { Log($"{kind}({id}) threw: {ex.Message}"); return Fail("server error"); }
+    }
+
+    // ── play (native launch — fire-and-forget on the WinForms UI thread) ────────
+
+    private static HttpResponse Play(string id)
+    {
+        // Server-authoritative anti-double-launch: refuse while one is already in flight.
+        if (RecentState.IsGameRunning) { Log($"play id={id} refused: a game is already running"); return Fail("game already running"); }
+        if (RecentState.IsExtractionInProgress) { Log($"play id={id} refused: an archive extraction is in progress"); return Fail("extraction in progress"); }
+
+        var game = ResolveGame(id);
+        if (game == null) return Fail("not in library");
+
+        // Marshal onto the WinForms UI thread; run in the background so the HTTP ack returns immediately.
+        // HostLaunch.Launch resolves the game's configured emulator itself (app/emulator null) and handles
+        // launch history + extraction deferral — the native equivalent of the plugin's PlayGame.
+        Task.Run(() =>
+        {
+            try { UiThread.Invoke(() => HostLaunch.Launch("web", game, null, null, null)); }
+            catch (Exception ex) { Log($"play id={id} launch failed: {ex.Message}"); }
+        });
+
+        Log($"play id={id} → HostLaunch.Launch(\"web\")");
+        return Ok(new { ok = true });
+    }
+
+    // ── rating (real write) ─────────────────────────────────────────────────────
+
+    private static HttpResponse SetRating(string id, string body, RouteContext ctx)
+    {
+        if (IsLocked(ctx)) return Fail("parental_locked");
+        if (!TryGetDouble(body, "value", out var value)) return Fail("missing value");
+        value = Math.Clamp(value, 0, 5);
+
+        var game = ResolveGame(id);
+        if (game == null) return Fail("not in library");
+
+        try { game.StarRatingFloat = (float)value; PluginHelper.DataManager.Save(false); }
+        catch (Exception ex) { Log($"SetRating save failed: {ex.Message}"); return Fail("save failed"); }
+
+        Log($"rating id={id} → {value:0.0}");
+        return Ok(new { ok = true, value });
+    }
+
+    // ── favorite / hide / broken (real write; body { "value": true|false }) ─────
+
+    private static HttpResponse SetFlag(string id, RouteContext ctx, Action<IGame, bool> setter, string label)
+    {
+        if (IsLocked(ctx)) return Fail("parental_locked");
+        if (!TryGetBool(ctx.Request.Body, "value", out var value)) return Fail("missing value");
+
+        var game = ResolveGame(id);
+        if (game == null) return Fail("not in library");
+
+        try { setter(game, value); PluginHelper.DataManager.Save(false); }
+        catch (Exception ex) { Log($"Set{label} save failed: {ex.Message}"); return Fail("save failed"); }
+
+        Log($"{label} id={id} → {(value ? "on" : "off")}");
+        return Ok(new { ok = true, value });
+    }
+
+    // ── resethistory ────────────────────────────────────────────────────────────
+
+    private static HttpResponse ResetHistory(string id)
+    {
+        var game = ResolveGame(id);
+        if (game == null) return Fail("not in library");
+        try { if (PluginHelper.DataManager is HostDataManagerXml hdm) hdm.ClearLastLaunch(game.Id); } catch { }
+        Log($"resethistory id={id}");
+        return Ok(new { ok = true });
+    }
+
+    // ── parental gating ─────────────────────────────────────────────────────────
+    // LiteBox's WebParentalState has no per-action allow flags (the plugin's AllowLockedUserToModify* config
+    // isn't ported), so a locked session simply cannot mutate library state.
+    private static bool IsLocked(RouteContext ctx)
+    {
+        try { var st = WebParentalState.From(ctx?.Request); return st != null && st.IsLocked; }
+        catch { return true; }   // fail safe: deny on evaluation error
+    }
+
+    // ── game resolution (opaque id → IGame) ─────────────────────────────────────
+
+    private static IGame ResolveGame(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+        if (Guid.TryParse(id, out _))
+        {
+            try { var g = PluginHelper.DataManager.GetGameById(id); if (g != null) return g; }
+            catch (Exception ex) { Log($"GetGameById({id}): {ex.Message}"); }
+        }
+        if (int.TryParse(id, out var dbId) && dbId > 0) return FindOwnedGame(dbId);
+        return null;
+    }
+
+    private static IGame FindOwnedGame(int dbId)
+    {
+        IGame[] games;
+        try { games = PluginHelper.DataManager.GetAllGames(); }
+        catch (Exception ex) { Log($"GetAllGames: {ex.Message}"); return null; }
+        if (games == null) return null;
+        foreach (var g in games)
+        {
+            try { if (g?.LaunchBoxDbId is int lid && lid == dbId) return g; }
+            catch { }
+        }
+        return null;
+    }
+
+    // ── body helpers ────────────────────────────────────────────────────────────
+
+    private static bool TryGetDouble(string body, string key, out double value)
+    {
+        value = 0;
+        if (string.IsNullOrWhiteSpace(body)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty(key, out var el)) return false;
+            if (el.ValueKind == JsonValueKind.Number) { value = el.GetDouble(); return true; }
+            if (el.ValueKind == JsonValueKind.String && double.TryParse(el.GetString(),
+                    System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v))
+            { value = v; return true; }
+            return false;
+        }
+        catch { return false; }
+    }
+
+    private static bool TryGetBool(string body, string key, out bool value)
+    {
+        value = false;
+        if (string.IsNullOrWhiteSpace(body)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty(key, out var el)) return false;
+            if (el.ValueKind == JsonValueKind.True) { value = true; return true; }
+            if (el.ValueKind == JsonValueKind.False) { value = false; return true; }
+            if (el.ValueKind == JsonValueKind.Number) { value = el.GetDouble() != 0; return true; }
+            if (el.ValueKind == JsonValueKind.String)
+            {
+                var s = el.GetString();
+                if (bool.TryParse(s, out var bv)) { value = bv; return true; }
+                if (s == "1") { value = true; return true; }
+                if (s == "0") { value = false; return true; }
+            }
+            return false;
+        }
+        catch { return false; }
+    }
+
+    private static HttpResponse NotAvailable(string reason)
+        => HttpResponse.Json(JsonSerializer.Serialize(new { ok = false, reason }), 501);
+
+    private static HttpResponse Ok(object obj) => HttpResponse.Json(JsonSerializer.Serialize(obj));
+    private static HttpResponse Fail(string reason) => HttpResponse.Json(JsonSerializer.Serialize(new { ok = false, reason }));
+    private static void Log(string msg) => LbLog.Info("web", "[theme] " + msg);
+}

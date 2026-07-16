@@ -26,13 +26,18 @@ internal static class RecentEpoch
 
 internal static class RecentEpochApi
 {
+    // S4 wired the placeholders to real state: RecentState (bumped on HostLaunch start/exit) drives the
+    // recent-row cache-buster + the running/extraction heartbeat; WebStoreState.Epoch bumps when a store
+    // install-state change is detected. The JSON shape is unchanged so the shipped theme JS reads it as-is.
     public static HttpResponse Handle(RouteContext ctx)
-        => HttpResponse.Json(JsonSerializer.Serialize(new
+    {
+        RecentState.EnsureWired();   // ensure the HostLaunch subscription is live
+        return HttpResponse.Json(JsonSerializer.Serialize(new
         {
-            epoch = RecentEpoch.Value,
-            // Wired in the theme-data slice; placeholders keep the client's polling loop happy meanwhile.
-            isGameRunning = false,
-            extractionInProgress = false,
-            installEpoch = 0L,
+            epoch = RecentState.Epoch,
+            isGameRunning = RecentState.IsGameRunning,
+            extractionInProgress = RecentState.IsExtractionInProgress,
+            installEpoch = (long)WebStoreState.Epoch,
         }));
+    }
 }

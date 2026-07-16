@@ -233,6 +233,30 @@ internal sealed class OpLog : IDisposable
         }
     }
 
+    /// <summary>Record the launched ROM entry (in-archive identity) for a game — the ROM extractor's
+    /// per-game "last ROM" hint. UPSERT that ONLY touches extracted_rom_path (preserves the emulator/app
+    /// columns RecordLaunch wrote, and detection_ms). Creates a bare row when none exists. No-op when
+    /// disabled. NOT gated by ReadOnly (LiteBox state, same as RecordLaunch).</summary>
+    public void RecordLaunchRomEntry(string gameId, string romEntry)
+    {
+        if (!Enabled || string.IsNullOrEmpty(gameId)) return;
+        lock (_lock)
+        {
+            try
+            {
+                using var cmd = _conn.CreateCommand();
+                cmd.CommandText =
+                    "INSERT INTO launch_history(game_id, extracted_rom_path, last_launched_utc) VALUES($g,$r,$t) " +
+                    "ON CONFLICT(game_id) DO UPDATE SET extracted_rom_path=excluded.extracted_rom_path";
+                cmd.Parameters.AddWithValue("$g", gameId);
+                cmd.Parameters.AddWithValue("$r", (object)romEntry ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("o"));
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex) { Console.WriteLine("[oplog] launch rom-entry record failed: " + ex.Message); }
+        }
+    }
+
     /// <summary>Deletes the game's launch-history row — the reset-to-default button cancels the
     /// entry so the next GetLastLaunch seeds pure defaults. NOT gated by ReadOnly (LiteBox state,
     /// same as RecordLaunch). No-op when disabled or no row exists.</summary>

@@ -119,6 +119,9 @@ internal static class HostLaunch
     public static void Configure(PluginRegistry reg, GameStore store, string lbRoot)
     {
         _reg = reg; _store = store; _lbRoot = lbRoot;
+        // The native ROM extractor writes the launched entry into LiteBox's op-log launch-history
+        // through this hook (keeps RomExtractor decoupled from GameStore).
+        Rom.RomExtractor.RecordLaunchEntryHook = (gid, entry) => { try { _store?.RecordLaunchRomEntry(gid, entry); } catch { } };
     }
 
     public static void Launch(string who, IGame game, IAdditionalApplication app, IEmulator emulator, string overrideCmd)
@@ -467,6 +470,9 @@ internal static class HostLaunch
             // exit already put an early cover up.
             if (!DryRun) Gameplay.GameScreens.ShowEndEager(endSnap);
             AhkScript.KillGameScript();   // running script dies with the game (LB parity)
+            // ROM extractor: purge the ephemeral \tmp band now the emulator has released the files
+            // (persistent <SIG> cache entries survive; LRU-evicted on the next extraction).
+            try { Rom.RomExtractor.OnGameExitCleanup(); } catch { }
             LaunchedGame.Clear();
             if (!DryRun && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             // Per-version play time — same elapsed seconds as the game's (see JournalPlayStart above).
@@ -698,18 +704,20 @@ internal static class HostLaunch
             bool autoExtract = (ep?.AutoExtract) ?? SafeBool(() => emulator.AutoExtract);
             if (autoExtract && IsArchive(romAbs))
             {
-                // ExtendDB owns archive extraction (Select-ROM pick, region/tag priority,
-                // smart-extract, cache, RA bonus). When its Archive MultiGame Selector is on,
-                // DEFER to it: leave the archive on the command line so the plugin's Process.Start
-                // patch extracts the CHOSEN entry. Our own 7z below would instead extract everything
-                // and launch the first file alphabetically — silently ignoring the user's selection.
-                // The fallback runs only when ExtendDB isn't handling archives, so launches still
-                // work if the plugin is absent/disabled (ROM stays the plugin's domain).
-                if (Media.RomBridge.Available)
+                // Native ROM extractor (Archive MultiGame Selector): pick the CHOSEN entry (armed by the
+                // Play button, else auto-pick by tag/region priority + last-played), selective extract to
+                // the LRU disk cache, and launch that loose ROM. Replaces the old defer-to-ExtendDB path —
+                // LiteBox owns the launch, so the "substitution" is simply returning a different path.
+                if (Modules.LbModules.On(Modules.LbModule.Rom))
                 {
-                    Console.WriteLine($"[launch] {label}: archive \"{Path.GetFileName(romAbs)}\" — ExtendDB owns extraction; passing the archive through (plugin picks the entry).");
-                    return romAbs;
+                    var res = Rom.RomExtractor.ResolveLaunch(game, emulator, ep, romAbs, label);
+                    if (res.Success && !string.IsNullOrEmpty(res.OutputFilePath))
+                    {
+                        Console.WriteLine($"[launch] {label}: rom-extractor \"{Path.GetFileName(romAbs)}\" → \"{res.OutputFilePath}\"");
+                        return res.OutputFilePath;
+                    }
                 }
+                // Module off / not an archive we handle / extraction failed → LiteBox's flat fallback.
                 var extracted = TryExtractArchive(romAbs, label);
                 if (!string.IsNullOrEmpty(extracted)) return extracted;
             }

@@ -545,6 +545,10 @@ internal sealed class GameStore
     /// <summary>Cancels the game's LiteBox launch-history row (reset-to-default button).</summary>
     public void ClearLaunch(string gameId) { _oplog?.ClearLaunch(gameId); }
 
+    /// <summary>Record the launched ROM entry (in-archive identity) for a game — the ROM extractor's
+    /// "last ROM" hint, written into LiteBox's op-log launch-history.</summary>
+    public void RecordLaunchRomEntry(string gameId, string romEntry) { _oplog?.RecordLaunchRomEntry(gameId, romEntry); }
+
     /// <summary>Record the launch→SmartCapture-detection latency (ms) for a game (LiteBox-only).</summary>
     public void RecordDetection(string gameId, long detectionMs) { _oplog?.RecordDetection(gameId, detectionMs); }
 

@@ -376,8 +376,9 @@ internal sealed class LaunchButtons : Panel
         var gid = Safe(() => _game.Id);
         if (!string.IsNullOrEmpty(gid))
         {
-            RomBridge.ClearLaunchHistory(_game);       // plugin's launch-history.db row (no-op sans ExtendDB)
-            try { _clearLastLaunch?.Invoke(gid!); } catch { }   // LiteBox's op-log row
+            // Native: the op-log launch-history row (emulator/version + the ROM extractor's last-entry
+            // column) is cleared below via _clearLastLaunch — no separate ExtendDB call.
+            try { _clearLastLaunch?.Invoke(gid!); } catch { }   // LiteBox's op-log row (also clears the last ROM entry)
             RomSelectionStore.ClearGame(gid!);         // pending ROM picks, all versions
         }
         // In-memory: forget history + user picks, back to factory defaults.
@@ -608,9 +609,11 @@ internal sealed class LaunchButtons : Panel
         // or steam://rungameid URI) or, if not installed, fire the client's Install URI.
         if (_storeKind != StoreKind.None) { OnStorePlay(); return; }
 
-        // Arm the ROM selection in ExtendDB BEFORE launching (the hook applies it).
+        // Arm the ROM selection in-process BEFORE launching — the native ResolveLaunch consumes it once
+        // (single-shot, same call stack; no cross-process registry). _selRom null + _forcePriority = the
+        // "Clear → pure priority" path.
         if (_romFeature && RomAppliesFor(_selVerAppId, CurrentEmuId()) && (!string.IsNullOrEmpty(_selRom) || _forcePriority))
-            RomBridge.ArmSelectedRom(_game, _selVerAppId, _selRom, _forcePriority);
+            Rom.RomLaunchPick.Arm(_game, _selVerAppId, _selRom, _forcePriority);
         _playGame(_game, CurrentVersionApp(), CurrentEmu());   // CurrentEmu null → host resolves the default
     }
 

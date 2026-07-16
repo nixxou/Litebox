@@ -54,7 +54,14 @@ internal static class ArchiveCacheDb
                         "  signature TEXT PRIMARY KEY, path TEXT, size INTEGER, short_sig TEXT, cached_at TEXT);" +
                         "CREATE TABLE IF NOT EXISTS archive_entry(" +
                         "  signature TEXT NOT NULL, filename TEXT, path_in_archive TEXT, size INTEGER," +
-                        "  PRIMARY KEY(signature, path_in_archive));";
+                        "  PRIMARY KEY(signature, path_in_archive));" +
+                        // R3 cache-manifest half: one row per on-disk <SIG> extraction (the eviction unit).
+                        // Rebuildable like the listing rows, so it shares this DB (never mixes with the
+                        // durable favourites/last-played state in rom-archive-history.db).
+                        "CREATE TABLE IF NOT EXISTS cache_entry(" +
+                        "  signature TEXT PRIMARY KEY, game_title TEXT, platform TEXT, emulator TEXT," +
+                        "  source_path TEXT, mode TEXT, output_file TEXT, size_bytes INTEGER," +
+                        "  cached_utc TEXT, last_played_utc TEXT);";
                     cmd.ExecuteNonQuery();
                     _ready = true;
                 }
@@ -166,6 +173,169 @@ internal static class ArchiveCacheDb
         cmd.Parameters.AddWithValue("$p", path);
         cmd.Parameters.AddWithValue("$s", sig);
         cmd.ExecuteNonQuery();
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  CACHE MANIFEST  (on-disk extractions) — the R3 half.
+    // ══════════════════════════════════════════════════════════════════
+
+    /// <summary>Upsert the manifest row for a persistent extraction. Insert stamps cached_utc once;
+    /// re-launches refresh size + last_played_utc but keep the original cached_utc.</summary>
+    public static void RecordCache(string cacheRoot, string sig, string title, string platform, string emulator,
+                                   string path, string mode, string outputFile)
+    {
+        if (string.IsNullOrEmpty(sig)) return;
+        try
+        {
+            long size = ArchiveCacheEvictor.DirSize(System.IO.Path.Combine(cacheRoot ?? "", sig));
+            using var conn = Open();
+            if (conn == null) return;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"INSERT INTO cache_entry
+                    (signature, game_title, platform, emulator, source_path, mode, output_file, size_bytes, cached_utc, last_played_utc)
+                    VALUES ($s,$g,$p,$e,$src,$m,$o,$z,$t,$t)
+                    ON CONFLICT(signature) DO UPDATE SET
+                        game_title=excluded.game_title, platform=excluded.platform, emulator=excluded.emulator,
+                        source_path=excluded.source_path, mode=excluded.mode, output_file=excluded.output_file,
+                        size_bytes=excluded.size_bytes, last_played_utc=excluded.last_played_utc;";
+            cmd.Parameters.AddWithValue("$s", sig);
+            cmd.Parameters.AddWithValue("$g", (object?)title ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$p", (object?)platform ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$e", (object?)emulator ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$src", (object?)path ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$m", (object?)mode ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$o", (object?)outputFile ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$z", size);
+            cmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("O"));
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex) { Log("RecordCache failed: " + ex.Message); }
+    }
+
+    public static void RemoveCache(string sig)
+    {
+        if (string.IsNullOrEmpty(sig)) return;
+        try
+        {
+            using var conn = Open();
+            if (conn == null) return;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM cache_entry WHERE signature=$s;";
+            cmd.Parameters.AddWithValue("$s", sig);
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex) { Log("RemoveCache failed: " + ex.Message); }
+    }
+
+    /// <summary>Deletes the cached &lt;SIG&gt; folder AND its manifest row. Returns bytes freed.</summary>
+    public static long DeleteCache(string cacheRoot, string sig)
+    {
+        long freed = 0;
+        try
+        {
+            var dir = System.IO.Path.Combine(cacheRoot ?? "", sig);
+            if (System.IO.Directory.Exists(dir)) { freed = ArchiveCacheEvictor.DirSize(dir); System.IO.Directory.Delete(dir, true); }
+        }
+        catch (Exception ex) { Log("DeleteCache folder failed: " + ex.Message); }
+        RemoveCache(sig);
+        return freed;
+    }
+
+    public static long TotalBytes()
+    {
+        try
+        {
+            using var conn = Open();
+            if (conn == null) return 0;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COALESCE(SUM(size_bytes),0) FROM cache_entry;";
+            var v = cmd.ExecuteScalar();
+            return v == null || v is DBNull ? 0 : Convert.ToInt64(v);
+        }
+        catch (Exception ex) { Log("TotalBytes failed: " + ex.Message); return 0; }
+    }
+
+    public static List<CacheEntry> CacheEntries()
+    {
+        var list = new List<CacheEntry>();
+        try
+        {
+            using var conn = Open();
+            if (conn == null) return list;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"SELECT signature, game_title, platform, emulator, source_path, mode,
+                                       output_file, size_bytes, cached_utc, last_played_utc FROM cache_entry;";
+            using var rd = cmd.ExecuteReader();
+            while (rd.Read())
+                list.Add(new CacheEntry
+                {
+                    Signature = rd.GetString(0),
+                    GameTitle = rd.IsDBNull(1) ? "" : rd.GetString(1),
+                    Platform = rd.IsDBNull(2) ? "" : rd.GetString(2),
+                    Emulator = rd.IsDBNull(3) ? "" : rd.GetString(3),
+                    SourcePath = rd.IsDBNull(4) ? "" : rd.GetString(4),
+                    Mode = rd.IsDBNull(5) ? "" : rd.GetString(5),
+                    OutputFile = rd.IsDBNull(6) ? "" : rd.GetString(6),
+                    SizeBytes = rd.GetInt64(7),
+                    CachedUtc = ParseUtc(rd.IsDBNull(8) ? null : rd.GetString(8)),
+                    LastPlayedUtc = ParseUtc(rd.IsDBNull(9) ? null : rd.GetString(9)),
+                });
+        }
+        catch (Exception ex) { Log("CacheEntries failed: " + ex.Message); }
+        return list;
+    }
+
+    /// <summary>Repairs drift: drop manifest rows whose &lt;SIG&gt; folder vanished, and index any folder
+    /// not yet listed (pre-existing cache or folders LiteBox didn't create).</summary>
+    public static void Reconcile(string cacheRoot)
+    {
+        var root = cacheRoot;
+        if (string.IsNullOrEmpty(root) || !System.IO.Directory.Exists(root)) return;
+        try
+        {
+            var onDisk = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in System.IO.Directory.GetDirectories(root))
+            {
+                var name = System.IO.Path.GetFileName(d);
+                if (string.Equals(name, ArchiveCacheEvictor.TmpFolderName, StringComparison.OrdinalIgnoreCase)) continue;
+                onDisk.Add(name);
+            }
+
+            using var conn = Open();
+            if (conn == null) return;
+
+            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var sel = conn.CreateCommand())
+            {
+                sel.CommandText = "SELECT signature FROM cache_entry;";
+                using var rd = sel.ExecuteReader();
+                while (rd.Read()) known.Add(rd.GetString(0));
+            }
+            foreach (var sig in known)
+                if (!onDisk.Contains(sig))
+                {
+                    using var del = conn.CreateCommand();
+                    del.CommandText = "DELETE FROM cache_entry WHERE signature=$s;";
+                    del.Parameters.AddWithValue("$s", sig);
+                    del.ExecuteNonQuery();
+                }
+
+            foreach (var sig in onDisk)
+            {
+                if (known.Contains(sig)) continue;
+                string dir = System.IO.Path.Combine(root, sig);
+                DateTime when; try { when = System.IO.Directory.GetLastWriteTimeUtc(dir); } catch { when = DateTime.UtcNow; }
+                using var ins = conn.CreateCommand();
+                ins.CommandText = @"INSERT OR IGNORE INTO cache_entry
+                        (signature, game_title, platform, emulator, source_path, mode, output_file, size_bytes, cached_utc, last_played_utc)
+                        VALUES ($s,'(unindexed)','','','','','',$z,$t,$t);";
+                ins.Parameters.AddWithValue("$s", sig);
+                ins.Parameters.AddWithValue("$z", ArchiveCacheEvictor.DirSize(dir));
+                ins.Parameters.AddWithValue("$t", when.ToString("O"));
+                ins.ExecuteNonQuery();
+            }
+        }
+        catch (Exception ex) { Log("Reconcile failed: " + ex.Message); }
     }
 
     private static DateTime ParseUtc(string? s)

@@ -145,7 +145,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         _readOnly = readOnly;
         _index = games.Count > 1 ? -1 : IndexOf(games[0]);
 
-        Size = new Size(S(1080), S(730));
+        Size = new Size(S(1120), S(730));   // +40 over the old 1080 so the right-column lock padlocks clear the content edge (no h-scroll)
         MinimumSize = new Size(S(880), S(600));
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Bg; ForeColor = Fg;
@@ -185,7 +185,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         var cancel = FooterBtn("Cancel", Color.FromArgb(70, 70, 82));
         ok.Location = new Point(S(12), S(9));
         cancel.Location = new Point(S(112), S(9));
-        ok.Click += (_, _) => { SaveCurrent(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching(); DialogResult = DialogResult.OK; Close(); };
+        ok.Click += (_, _) => { SaveCurrent(); SaveLocks(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching(); DialogResult = DialogResult.OK; Close(); };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
 
         var hint = new Label
@@ -218,6 +218,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         _pages["Metadata"] = BuildMetadataPage();
         _pages["Notes"] = BuildNotesPage();
         if (!IsMulti) _pages["SortTitle"] = BuildSortTitlePage();   // single-game only
+        SetupLocks();   // per-field padlocks on the Metadata + Notes pages (native LockStore) — see EditGameWindowLocks.cs
         LoadMetadata();
         _tree.SelectedNode = _tree.Nodes[0];   // Metadata
         ShowPage("Metadata");
@@ -663,7 +664,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
 
         // Title (full width) + a disabled "Search for Metadata" placeholder (scraping is ExtendDB's job).
         Cap("Title", Lx, y, Lw, p);
-        _title = Txt("", LFx, y, FullW - 168, p);
+        _title = Txt("", LFx, y, FullW - 168 - 26, p);   // -26: reserve a gutter for the lock padlock before the Search button
         var search = MiniBtn("Search for Metadata", new Point(LFx + FullW - 158, y - 1), 158);
         search.Enabled = false;
         var tip = new ToolTip(); tip.SetToolTip(search, "Metadata scraping is provided by the ExtendDB plugin.");
@@ -933,6 +934,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             // (all clean at this point → normal colour, ↺ hidden).
             foreach (var c in _fields) { _baseline[c] = ValueStr(c); RefreshFieldState(c); }
             _loading = false;
+            RefreshLocks();   // repaint the padlocks for the current game(s) (covers navigate too)
         }
 
         void SetText(TextBox t, string v) { t.Text = v; t.ForeColor = v == Multi ? SubFg : Fg; }

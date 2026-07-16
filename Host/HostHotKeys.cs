@@ -26,6 +26,7 @@
 using System;
 using System.Windows.Forms;
 using LbApiHost.Host.Media;
+using LbApiHost.Host.Web.Kiosk;
 
 namespace LbApiHost.Host;
 
@@ -90,7 +91,36 @@ internal sealed class HostHotKeys : IMessageFilter
                 case Keys.F12: if (!Debounced()) Try(KioskBridge.ShowDevTools, "kiosk DevTools"); return true;
             }
         }
+
+        // 3) Native LiteBox kiosk — used only when ExtendDB's own kiosk is NOT available (no plugin)
+        //    but LiteBox's WebView2 kiosk is. Keys are user-configurable in [Web]
+        //    (KioskLaunchBoxKey / KioskBigBoxKey, gated by KioskHotKeys); F12 → DevTools.
+        //    The embedded server (LbModule.Web) must be running for the kiosk to load.
+        if (Control.ModifierKeys == Keys.None && !KioskBridge.Available && WebKioskWindow.IsAvailable() && NativeKioskEnabled())
+        {
+            if (key == NativeKey("KioskLaunchBoxKey", Keys.F10)) { if (!Debounced()) Try(WebKioskWindow.ToggleLaunchBox, "LaunchBox kiosk toggle (native)"); return true; }
+            if (key == NativeKey("KioskBigBoxKey", Keys.F11)) { if (!Debounced()) Try(WebKioskWindow.ToggleBigBox, "BigBox kiosk toggle (native)"); return true; }
+            if (key == Keys.F12) { if (!Debounced()) Try(WebKioskWindow.ShowDevTools, "kiosk DevTools (native)"); return true; }
+        }
         return false;
+    }
+
+    // The native kiosk hotkeys are opt-in via [Web] KioskHotKeys (default on).
+    private static bool NativeKioskEnabled()
+    {
+        try { return LiteBoxConfig.LoadForExe().GetSecBool("Web", "KioskHotKeys", true); }
+        catch { return false; }
+    }
+
+    // Resolve a configured [Web] key name (e.g. "F11") to a Keys value; falls back to def.
+    private static Keys NativeKey(string cfgKey, Keys def)
+    {
+        try
+        {
+            var s = LiteBoxConfig.LoadForExe().GetSec("Web", cfgKey, def.ToString());
+            return Enum.TryParse<Keys>((s ?? "").Trim(), true, out var k) && k != Keys.None ? k : def;
+        }
+        catch { return def; }
     }
 
     // True when the press lands inside the debounce window (swallow it). Otherwise records the

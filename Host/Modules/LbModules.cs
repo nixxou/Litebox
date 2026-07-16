@@ -42,7 +42,7 @@ internal static class LbModules
         new(LbModule.Rom,    "rom",    "ROM extractor",
             "Archive ROM extraction with in-archive ROM selection. Built into LiteBox's Play flow (flat/preserve modes, companions).", true, true),
         new(LbModule.RetroAchievements, "retroachievements", "RetroAchievements",
-            "Per-ROM RetroAchievements hashing computed with our own RAHasher instead of LaunchBox's scan-on-select.", false, false),
+            "Resolve each game's RetroAchievements set by hashing the actual ROM with our own RAHasher (per ROM / per version), and show the achievements panel. Off: LiteBox does no per-ROM hashing and only shows a set already linked to a game.", true, true),
         new(LbModule.Parental, "parental", "Parental control",
             "A PIN gate for restricted content, using BigBox's own parental PIN (set or remove it here — BigBox sees the change).", false, true),
         new(LbModule.Web,    "web",    "Web frontends",

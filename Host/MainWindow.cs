@@ -1510,10 +1510,11 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (_dm is HostDataManagerXml hdm2)
         {
             // Hand the RA scan over to the LB · Integrations → RetroAchievements tab. Greyed out (Available
-            // = false) when ExtendDB is resolving RA itself — it takes over and the manual scan is disabled.
+            // = false) when the ExtendDB plugin owns RA, OR when the RetroAchievements module is off (the
+            // per-ROM scan IS that module's feature — nothing to scan with it disabled).
             var raScan = new Options.RaScanHook
             {
-                Available = !Media.RomBridge.RaActive,
+                Available = !Media.RomBridge.RaActive && Modules.LbModules.On(Modules.LbModule.RetroAchievements),
                 Configured = Ra.RaService.Configured,
                 Platforms = RaPlatformNamesSorted,
                 Run = RunRaScan,
@@ -3384,8 +3385,9 @@ internal sealed class MainWindow : Form, IMessageFilter
             //    OnSelect mode. (Slow first time — hashes the ROM — hence off the UI thread.)
             try
             {
-                if (Media.RomBridge.RaActive) Media.RomBridge.HealRaSync(g);   // ExtendDB present + RA module on → it owns the hash/raid
-                else RaResolveLite.Resolve(g);                                 // ExtendDB absent / RA module off → LiteBox-native fallback
+                if (Media.RomBridge.RaActive) Media.RomBridge.HealRaSync(g);   // ExtendDB plugin present + its RA module on → it owns the hash/raid
+                else if (Modules.LbModules.On(Modules.LbModule.RetroAchievements)) RaResolveLite.Resolve(g);   // RetroAchievements module on → LiteBox's per-ROM RAHasher resolution (the "ExtendDB way", now native)
+                // module off → LiteBox does NOT re-hash per ROM; the panel still shows whatever raid is already stored.
             }
             catch { }
             if (IsDisposed || token != _detailsLoadToken) return;

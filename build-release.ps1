@@ -63,7 +63,7 @@ $payload = @(
 # The ONLY files the light build ships (everything else the publish produced is the .NET runtime, which
 # LaunchBox\Core already provides). deps.json + runtimeconfig.json make it self-contained-flat. These four
 # are BOTH the zip contents AND what the universal installer embeds (per TFM) and extracts into Core.
-$appFiles = @('LiteBox.exe','LiteBox.dll','LiteBox.deps.json','LiteBox.runtimeconfig.json','LibVLCSharp.dll')
+$appFiles = @('LiteBox.exe','LiteBox.dll','LiteBox.deps.json','LiteBox.runtimeconfig.json','LibVLCSharp.dll','ZstdSharp.dll')
 
 # net9.0-windows -> "net9" (uses Lb9Root), net10.0-windows -> "net10" (uses Lb10Root)
 $targets = @(
@@ -141,6 +141,19 @@ foreach ($t in $targets) {
     if (-not (Test-Path $src)) { throw "payload file missing: $src" }
     Copy-Item $src (Join-Path $tpDir $p)
   }
+  # c) Web frontend theme assets (optional; gitignored web-assets\ on the build machine). Shipped at the zip
+  #    root as web-assets\ (extracts to Core\web-assets\); WebAssets.EnsureDeployed installs them to
+  #    Core\litebox\web\ at boot. Absent -> the Web module serves its placeholder until assets are dropped in.
+  $waSrc = Join-Path $PSScriptRoot 'web-assets'
+  if (Test-Path $waSrc) { Copy-Item $waSrc (Join-Path $stageZip 'web-assets') -Recurse -Force; Write-Host "  + web-assets bundled ($label)" }
+  else { Write-Host "  (note: no web-assets\ - Web module ships without its theme this build)" }
+
+  # d) ROM-extractor tools (optional): chdman.exe / DolphinTool.exe / RamDiskHelper.exe are NOT bundled here
+  #    (they live at <LB>\ThirdParty\RomExtractor\, outside Core, and need a NativeInstaller deploy step). The
+  #    extractor's tool resolver ALSO reuses the ExtendDB plugin's thirdparty\ when installed, and every convert/
+  #    RAM-disk feature degrades gracefully when a tool is absent. Drop the three into <LB>\ThirdParty\RomExtractor\
+  #    (RamDiskHelper.exe under ...\ramdisk\) to enable them standalone. See BUILD-RELEASE.md.
+
   Compress-Archive -Path (Join-Path $stageZip '*') -DestinationPath (Join-Path $lightRel "LiteBox-$liteBoxVer-$label.zip") -Force
 }
 

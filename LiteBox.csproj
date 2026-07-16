@@ -192,11 +192,13 @@
     <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.deps.json"><LogicalName>light/net9/LiteBox.deps.json</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\LiteBox.runtimeconfig.json"><LogicalName>light/net9/LiteBox.runtimeconfig.json</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\LibVLCSharp.dll"><LogicalName>light/net9/LibVLCSharp.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\ZstdSharp.dll"><LogicalName>light/net9/ZstdSharp.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.exe"><LogicalName>light/net10/LiteBox.exe</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.dll"><LogicalName>light/net10/LiteBox.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.deps.json"><LogicalName>light/net10/LiteBox.deps.json</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.runtimeconfig.json"><LogicalName>light/net10/LiteBox.runtimeconfig.json</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LibVLCSharp.dll"><LogicalName>light/net10/LibVLCSharp.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\ZstdSharp.dll"><LogicalName>light/net10/ZstdSharp.dll</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- Web frontend assets (embedded web server, slice S1). The folder is populated by the integrator (not by

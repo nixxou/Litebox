@@ -160,8 +160,29 @@ internal static class ModulesOptions
             if (readOnly) return;
             foreach (var kv in state) LbModules.SetOn(kv.Key, kv.Value);
             foreach (var kv in configTabs) { try { kv.Value.apply?.Invoke(); } catch { } }
+            ReconcileRuntime();   // apply toggles that own a live service (the web server) without a restart
         }
         return (root, Apply);
+    }
+
+    /// <summary>Apply module toggles that own a live background service so they take effect WITHOUT a restart.
+    /// Only the Web module runs a persistent server (started once at boot); the others gate their behaviour at
+    /// call time (they read LbModules.On live), so toggling them needs no reconcile here.</summary>
+    private static void ReconcileRuntime()
+    {
+        try
+        {
+            bool want = LbModules.On(LbModule.Web);
+            bool running = Web.EmbeddedWebServer.IsRunning;
+            if (want && !running)
+            {
+                Web.WebAssets.EnsureDeployed();
+                int port = int.TryParse(LiteBoxConfig.LoadForExe().GetSec("Web", "Port"), out var p) ? p : 8080;
+                Web.EmbeddedWebServer.Start(port);
+            }
+            else if (!want && running) Web.EmbeddedWebServer.Stop();
+        }
+        catch { }
     }
 
     /// <summary>Short, consistent tab label for a module's config tab (the catalog Title is often too long).</summary>

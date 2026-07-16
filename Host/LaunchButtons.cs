@@ -538,7 +538,7 @@ internal sealed class LaunchButtons : Panel
     private void OpenAdvancedPicker()
     {
         if (_game == null) return;
-        var chosen = RomBridge.PickRomModal(_game, _selVerAppId);   // selection mode ("Select", not Play)
+        var chosen = Rom.RomExtractor.PickRomModal(_game, _selVerAppId);   // selection mode ("Select", not Play)
         if (chosen == null) return;                                  // cancelled
         _selRom = chosen; _forcePriority = false; PersistRomSelection();
         Refresh2();
@@ -548,7 +548,7 @@ internal sealed class LaunchButtons : Panel
     {
         try
         {
-            var json = RomBridge.GetArchiveEntriesJson(_game!, _selVerAppId);
+            var json = Rom.RomExtractor.GetArchiveEntriesJson(_game!, _selVerAppId);
             if (string.IsNullOrEmpty(json)) return null;
             using var doc = JsonDocument.Parse(json!);
             if (!doc.RootElement.TryGetProperty("entries", out var arr) || arr.ValueKind != JsonValueKind.Array) return null;

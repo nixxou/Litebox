@@ -44,6 +44,18 @@ internal sealed class RomEntryView
     public string RaTitle { get; init; } = ""; // RA module
 }
 
+/// <summary>The archive's scored+decorated entry list together with the archive metadata every
+/// ROM-list surface needs (absolute path, listing key, short content signature). The single value
+/// the dropdown, the picker AND the web archive-entries route all render from.</summary>
+internal sealed class RomEntryListing
+{
+    public string ArchivePath { get; init; } = "";       // absolute path of the listed archive
+    public string Key { get; init; } = "";               // md5(portable-path|size) — the listing-cache key
+    public string ShortSignature { get; init; } = "";    // content signature (favourites/last-played key)
+    public IReadOnlyList<RomEntryView> Entries { get; init; } = Array.Empty<RomEntryView>();
+    public static readonly RomEntryListing Empty = new();
+}
+
 /// <summary>Outcome of a launch-time resolve. <see cref="Handled"/>+<see cref="Success"/> with an
 /// <see cref="OutputFilePath"/> = the host launches against that path; Success=false = the host falls back
 /// to its flat TryExtractArchive.</summary>
@@ -374,16 +386,27 @@ internal static class RomExtractor
             && !rel.Equals(ArchiveCacheEvictor.TmpFolderName, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>The archive's playable entries, in scored display order. The single source
-    /// the dropdown JSON + the picker both render from. Empty when unavailable (module off,
-    /// not an archive, unreadable).</summary>
+    /// <summary>The archive's playable entries, in scored display order. Thin wrapper over
+    /// <see cref="ListEntriesDetailed"/> — the SINGLE source the dropdown JSON, the picker AND the
+    /// web archive-entries route render from. Empty when unavailable (module off, not an archive,
+    /// unreadable).</summary>
     public static IReadOnlyList<RomEntryView> ListEntries(IGame game, string? appId)
+        => ListEntriesDetailed(game, appId).Entries;
+
+    /// <summary>The archive's playable entries — scored, DECORATED (favourites/last-played from the
+    /// durable per-archive history), and floated by <see cref="ArchiveAnalyzer.SortForDisplay"/> — plus
+    /// the archive path/key/short-signature the web route echoes back. The one listing+scoring impl every
+    /// surface shares (memory: rom-list-surfaces-sync); no caller re-lists or re-scores. RA per-entry
+    /// titles are NOT sourced here (the RA module keeps them in its own per-archive DB, not yet ported to
+    /// the native side) so <see cref="RomEntryView.RaTitle"/> stays empty and the theme simply shows no
+    /// 🏆 marker.</summary>
+    public static RomEntryListing ListEntriesDetailed(IGame game, string? appId)
     {
-        if (game == null || !Available) return Array.Empty<RomEntryView>();
+        if (game == null || !Available) return RomEntryListing.Empty;
         try
         {
             var absPath = ResolveArchivePath(game, appId);
-            if (absPath == null) return Array.Empty<RomEntryView>();
+            if (absPath == null) return RomEntryListing.Empty;
 
             var platform = Safe(() => game.Platform) ?? "";
             var emuTitle = ResolveEmuTitle(game);
@@ -394,16 +417,18 @@ internal static class RomExtractor
             var key = ArchiveListingCache.ComputeKey(absPath, size);
             var rec = ArchiveListingCache.TryGetRecord(key);
             List<ArchiveListingEntry> entries;
-            if (rec != null) entries = rec.Entries;
+            string shortSig;
+            if (rec != null) { entries = rec.Entries; shortSig = rec.ShortSignature ?? ""; }
             else
             {
                 var analysis = ArchiveAnalyzer.Analyze(absPath, RomConfig.Instance, row.Priority, row.RomExtensions, row.IgnoredExtensions);
                 entries = analysis.StandaloneFiles
                     .Select(f => new ArchiveListingEntry { FileName = f.FileName ?? "", PathInArchive = f.PathInArchive ?? "", Size = (long)f.Size })
                     .ToList();
-                ArchiveListingCache.Set(key, entries, absPath, size, analysis.Signature?.ShortSignature ?? "");
+                shortSig = analysis.Signature?.ShortSignature ?? "";
+                ArchiveListingCache.Set(key, entries, absPath, size, shortSig);
             }
-            if (entries.Count == 0) return Array.Empty<RomEntryView>();
+            if (entries.Count == 0) return new RomEntryListing { ArchivePath = absPath, Key = key, ShortSignature = shortSig };
 
             var infoEntries = entries.Select(e => new ArchiveEntryInfo
             {
@@ -411,22 +436,64 @@ internal static class RomExtractor
                 Extension = (Path.GetExtension(e.FileName) ?? "").TrimStart('.').ToLowerInvariant(),
             }).ToList();
 
-            // R2: no favourites / last-played / RA decoration (R3 history DB + RA module).
-            var favs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var lastPlayed = Array.Empty<string>();
+            // Decorate + float from the durable per-archive history (favourites never drive auto-launch;
+            // last-played floats to the top). Keyed by the archive's SHORT signature (survives rename/move).
+            var favs = ArchiveHistory.GetFavorites(shortSig);
+            var lastPlayed = ArchiveHistory.GetLastPlayed(shortSig);
+            var lastPlayedSet = new HashSet<string>(lastPlayed, StringComparer.OrdinalIgnoreCase);
             var sorted = ArchiveAnalyzer.SortForDisplay(infoEntries, row.Priority, favs, lastPlayed,
                 row.TagWeights, row.RetroAchievementsBonus, null);
 
-            return sorted.Select(e => new RomEntryView
+            var views = sorted.Select(e => new RomEntryView
             {
                 FileName = e.FileName,
                 PathInArchive = e.PathInArchive,
                 Size = (long)e.Size,
                 Extension = e.Extension,
                 Score = ArchiveAnalyzer.ScoreEntry(e.FileName, row.TagWeights),
+                // Favourites / last-played are keyed by PathInArchive; fall back to basename for flat
+                // archives (and rows recorded before the switch) — matches the source's OkSorted.
+                IsFavorite = favs.Contains(e.PathInArchive) || favs.Contains(e.FileName),
+                IsLastPlayed = lastPlayedSet.Contains(e.PathInArchive) || lastPlayedSet.Contains(e.FileName),
             }).ToList();
+
+            return new RomEntryListing { ArchivePath = absPath, Key = key, ShortSignature = shortSig, Entries = views };
         }
-        catch (Exception ex) { LbLog.Info("rom", "ListEntries failed: " + ex.Message); return Array.Empty<RomEntryView>(); }
+        catch (Exception ex) { LbLog.Info("rom", "ListEntriesDetailed failed: " + ex.Message); return RomEntryListing.Empty; }
+    }
+
+    /// <summary>The absolute path of the archive to act on for (game, version-appId), or null when the
+    /// game/version has no on-disk recognised archive. Used by the web metadata route (which needs the
+    /// path but not the entry list). Same resolution as the listing.</summary>
+    public static string? ResolveArchiveAbsolutePath(IGame game, string? appId)
+        => game == null || !Available ? null : ResolveArchivePath(game, appId);
+
+    /// <summary>The archive's SHORT content signature for (game, version-appId) — the key the favourite
+    /// toggle needs — resolved through the listing cache (analyse + memoise on a miss). "" when there is
+    /// no on-disk recognised archive. Lighter than <see cref="ListEntriesDetailed"/> (no decoration/sort).</summary>
+    public static string ResolveArchiveShortSig(IGame game, string? appId)
+    {
+        if (game == null || !Available) return "";
+        try
+        {
+            var absPath = ResolveArchivePath(game, appId);
+            if (absPath == null) return "";
+            long size; try { size = new FileInfo(absPath).Length; } catch { size = 0; }
+            var key = ArchiveListingCache.ComputeKey(absPath, size);
+            var rec = ArchiveListingCache.TryGetRecord(key);
+            if (rec != null) return rec.ShortSignature ?? "";
+
+            var platform = Safe(() => game.Platform) ?? "";
+            var row = RomConfig.Instance.Resolve(platform, ResolveEmuTitle(game));
+            var analysis = ArchiveAnalyzer.Analyze(absPath, RomConfig.Instance, row.Priority, row.RomExtensions, row.IgnoredExtensions);
+            var shortSig = analysis.Signature?.ShortSignature ?? "";
+            var entries = analysis.StandaloneFiles
+                .Select(f => new ArchiveListingEntry { FileName = f.FileName ?? "", PathInArchive = f.PathInArchive ?? "", Size = (long)f.Size })
+                .ToList();
+            ArchiveListingCache.Set(key, entries, absPath, size, shortSig);   // memoise so a later archive-entries fast-hits
+            return shortSig;
+        }
+        catch (Exception ex) { LbLog.Info("rom", "ResolveArchiveShortSig failed: " + ex.Message); return ""; }
     }
 
     /// <summary>Sorted + decorated archive entries, as JSON with field names byte-identical

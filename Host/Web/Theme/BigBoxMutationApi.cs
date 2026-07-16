@@ -24,6 +24,7 @@ using System.Threading.Tasks;
 using LbApiHost.Host;
 using LbApiHost.Host.Data;
 using LbApiHost.Host.Diag;
+using LbApiHost.Host.Rom;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -40,9 +41,11 @@ internal static class BigBoxMutationApi
         var id = ctx.GetRoute("id");
         if (string.IsNullOrEmpty(id)) return Fail("bad id");
 
-        // S6: Select-ROM / archive mutations have no native backend yet.
+        // Archive verbs (archive-entries / archive-favorite / archive-metadata) are DASHED, so they don't
+        // match the [a-z]+ {kind} capture — they route to ArchiveListingApi/ArchiveMetadataApi directly. If
+        // one still reaches here (mis-registration), fail closed rather than silently 200.
         if (kind.StartsWith("archive", StringComparison.OrdinalIgnoreCase))
-            return NotAvailable("archive routes are not available yet");
+            return NotAvailable("archive routes are served by the dedicated handlers");
 
         try
         {
@@ -52,8 +55,8 @@ internal static class BigBoxMutationApi
                 "favorite"     => SetFlag(id, ctx, (g, v) => g.Favorite = v, "favorite"),
                 "hide"         => SetFlag(id, ctx, (g, v) => g.Hide = v, "hide"),
                 "broken"       => SetFlag(id, ctx, (g, v) => g.Broken = v, "broken"),
-                "play"         => Play(id),
-                "launch"       => Play(id),   // alias
+                "play"         => Play(id, ctx),
+                "launch"       => Play(id, ctx),   // alias
                 "resethistory" => ResetHistory(id),
                 "install"      => NotAvailable("install is not available yet"),
                 _              => Fail("unknown action"),
@@ -64,7 +67,7 @@ internal static class BigBoxMutationApi
 
     // ── play (native launch — fire-and-forget on the WinForms UI thread) ────────
 
-    private static HttpResponse Play(string id)
+    private static HttpResponse Play(string id, RouteContext ctx)
     {
         // Server-authoritative anti-double-launch: refuse while one is already in flight.
         if (RecentState.IsGameRunning) { Log($"play id={id} refused: a game is already running"); return Fail("game already running"); }
@@ -73,17 +76,60 @@ internal static class BigBoxMutationApi
         var game = ResolveGame(id);
         if (game == null) return Fail("not in library");
 
+        // Optional launch selection carried by the Select-ROM / Select-Version sub-menus (all optional):
+        //   emulatorId / additionalAppId  → the alt emulator / disc the archive is resolved from,
+        //   archiveEntryFileName          → the explicitly picked in-archive entry (PathInArchive identity),
+        //   forcePriority                 → the ROM "Clear" path (auto-pick, last-played ignored).
+        var body = ctx?.Request?.Body;
+        var emulatorId = TryGetString(body, "emulatorId");
+        var additionalAppId = TryGetString(body, "additionalAppId");
+        var archiveEntryFileName = TryGetString(body, "archiveEntryFileName");
+        TryGetBool(body, "forcePriority", out var forcePriority);
+
+        var emulator = FindEmulator(emulatorId);
+        var app = FindAdditionalApp(game, additionalAppId);
+
         // Marshal onto the WinForms UI thread; run in the background so the HTTP ack returns immediately.
-        // HostLaunch.Launch resolves the game's configured emulator itself (app/emulator null) and handles
-        // launch history + extraction deferral — the native equivalent of the plugin's PlayGame.
+        // Arm the ROM pick in-process IMMEDIATELY before HostLaunch.Launch — RomExtractor.ResolveLaunch
+        // consumes it once on the launch worker thread (single-shot; no cross-process registry — same
+        // pattern as the GUI's LaunchButtons.OnPlay). HostLaunch owns emulator resolution, launch history
+        // and extraction deferral — the native equivalent of the plugin's PlayGame.
+        bool armPick = RomExtractor.Available && (!string.IsNullOrEmpty(archiveEntryFileName) || forcePriority);
         Task.Run(() =>
         {
-            try { UiThread.Invoke(() => HostLaunch.Launch("web", game, null, null, null)); }
+            try
+            {
+                UiThread.Invoke(() =>
+                {
+                    if (armPick) RomLaunchPick.Arm(game, additionalAppId, archiveEntryFileName, forcePriority);
+                    HostLaunch.Launch("web", game, app, emulator, null);
+                });
+            }
             catch (Exception ex) { Log($"play id={id} launch failed: {ex.Message}"); }
         });
 
-        Log($"play id={id} → HostLaunch.Launch(\"web\")");
+        Log($"play id={id} emu={emulatorId ?? "default"} app={additionalAppId ?? "default"} entry={archiveEntryFileName ?? "<none>"} forcePriority={forcePriority} → HostLaunch.Launch(\"web\")");
         return Ok(new { ok = true });
+    }
+
+    // ── launch-target resolution (emulator / additional app by id) ──────────────
+
+    private static IEmulator FindEmulator(string emuId)
+    {
+        if (string.IsNullOrEmpty(emuId)) return null;
+        try { return PluginHelper.DataManager.GetEmulatorById(emuId); } catch { return null; }
+    }
+
+    private static IAdditionalApplication FindAdditionalApp(IGame game, string appId)
+    {
+        if (game == null || string.IsNullOrEmpty(appId)) return null;
+        try
+        {
+            foreach (var a in game.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>())
+                try { if (a != null && string.Equals(a.Id, appId, StringComparison.Ordinal)) return a; } catch { }
+        }
+        catch { }
+        return null;
     }
 
     // ── rating (real write) ─────────────────────────────────────────────────────
@@ -170,6 +216,19 @@ internal static class BigBoxMutationApi
     }
 
     // ── body helpers ────────────────────────────────────────────────────────────
+
+    private static string TryGetString(string body, string key)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty(key, out var el)) return null;
+            var s = el.ValueKind == JsonValueKind.String ? el.GetString() : null;
+            return string.IsNullOrEmpty(s) ? null : s;
+        }
+        catch { return null; }
+    }
 
     private static bool TryGetDouble(string body, string key, out double value)
     {

@@ -254,8 +254,14 @@ internal static class EmbeddedWebServer
             _router.Add(@"/bigbox/data/games/(?<id>[^/]+)/detail\.json", BigBoxThemeApi.GameDetail);
             _router.Add(@"/bigbox/data/games/(?<id>[^/]+)/installstate\.json", BigBoxThemeApi.InstallState);
             _router.Add(@"/bigbox/data/games/(?<id>[^/]+)/related\.json", BigBoxThemeApi.Related);
-            // S6: /bigbox/api/games/{id}/archive-{favorite,entries,metadata} — Select-ROM, deferred (the
-            // {kind} pattern below is [a-z]+ so the dashed archive-* verbs don't match it either).
+            // R5: /bigbox/api/games/{id}/archive-{entries,favorite,metadata} — the Select-ROM sub-menu.
+            // Registered BEFORE the {kind} mutation route: the dashed archive-* verbs don't match its
+            // [a-z]+ capture anyway, but keeping them first makes the intent explicit. Each handler gates
+            // on RomExtractor.Available (LbModule.Rom) → 404 when the module is off, so the theme hides
+            // Select-ROM. Reuses RomExtractor's single listing/scoring impl (no re-list, no re-score).
+            _router.Add(@"/bigbox/api/games/(?<id>[^/]+)/archive-entries", ArchiveListingApi.Handle);
+            _router.Add(@"/bigbox/api/games/(?<id>[^/]+)/archive-favorite", ArchiveListingApi.HandleFavorite);
+            _router.Add(@"/bigbox/api/games/(?<id>[^/]+)/archive-metadata", ArchiveMetadataApi.Handle);
             _router.Add(@"/bigbox/api/games/(?<id>[^/]+)/(?<kind>[a-z]+)", BigBoxMutationApi.Handle);
             _router.Add(@"/bigbox/api/keybinds", WebKeyBindsApi.Handle);
 
@@ -283,7 +289,11 @@ internal static class EmbeddedWebServer
             // database site's "/" catch-all).
             _router.Add(@"/api/launchbox/icons/(?<name>[^/]+)\.(?<ext>[a-z0-9]{1,4})", LaunchBoxIconsApi.Handle);
             _router.Add(@"/api/launchbox/platforms/stats", LaunchBoxStatsApi.Handle);
-            // S6: /launchbox/api/games/{id}/archive-* — Select-ROM, deferred ([a-z]+ excludes the dashed verbs).
+            // R5: /launchbox/api/games/{id}/archive-{entries,favorite} — Select-ROM (the LiteBox-Web theme
+            // uses a modal table, not the per-entry overlay, so it has no archive-metadata route). Same
+            // handlers + gate as /bigbox/. Registered before the [a-z]+ {kind} mutation route.
+            _router.Add(@"/launchbox/api/games/(?<id>[^/]+)/archive-entries", ArchiveListingApi.Handle);
+            _router.Add(@"/launchbox/api/games/(?<id>[^/]+)/archive-favorite", ArchiveListingApi.HandleFavorite);
             _router.Add(@"/launchbox/api/games/(?<id>[^/]+)/(?<kind>[a-z]+)", LaunchBoxMutationApi.Handle);
             _router.Add(@"/launchbox/api/keybinds", WebKeyBindsApi.HandleLaunchBox);
 

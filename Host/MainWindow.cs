@@ -1501,6 +1501,13 @@ internal sealed class MainWindow : Form, IMessageFilter
             w.AddSection("Modules", modPanel, modApply);
         }
 
+        // Similar Games — a standalone feature, NOT one of the modules; its own section (stub for now, filled by
+        // the parallel port). LiteBox-own state, so editable even in LB read-only mode.
+        {
+            var (simPanel, simApply) = Options.SimilarOptions.Build(LiteBoxTheme.DpiScale(this), readOnly: false);
+            w.AddSection("Similar Games", simPanel, simApply);
+        }
+
         // LiteBox-local caches — a maintenance button (always enabled, even in read-only: it only
         // touches LiteBox's own Core cache folders, never the LaunchBox files).
         w.AddSection("Caches", BuildCachesSection());

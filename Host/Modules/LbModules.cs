@@ -21,7 +21,6 @@ internal enum LbModule
 {
     Base,               // extended metadata DB + credentialed media download
     Rom,                // ROM extractor / ArchiveMGS
-    Editor,             // game / media editor + Download Medias
     RetroAchievements,  // per-ROM RA hashing with our RAHasher
     Parental,           // parental control on BigBox's native PIN
     Web,                // embedded web frontends (LiteBox Web / BigBox Web / database Web)
@@ -37,8 +36,6 @@ internal static class LbModules
     {
         new(LbModule.Base,   "base",   "Extended metadata database",
             "A second metadata database (ScreenScraper, VNDB, IGDB, Steam) with richer overviews, locked fields, and credentialed media downloads.", false, true),
-        new(LbModule.Editor, "editor", "Game and media editor",
-            "The per-game metadata editor with web media download. Built into LiteBox's Edit Game window; the non-LaunchBox sources need the Extended metadata database.", true, true),
         new(LbModule.Rom,    "rom",    "ROM extractor (ArchiveMGS)",
             "Extract the picked ROM from an archive on launch, with the Archive Multi-Game Selector: per-emulator/platform profiles, extraction modes, an LRU disk cache, RAM disk, texture-pack and .m3u handling. Configurable here; the native extraction engine is landing incrementally (defers to the ExtendDB plugin at launch until it does).", true, true),
         new(LbModule.RetroAchievements, "retroachievements", "RetroAchievements",

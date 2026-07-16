@@ -31,8 +31,8 @@ internal sealed class OptionsWindow : LiteBoxForm
     public OptionsWindow(string title)
     {
         Text = title;
-        Size = new Size(S(860), S(560));
-        MinimumSize = new Size(S(700), S(420));
+        Size = new Size(S(1160), S(800));
+        MinimumSize = new Size(S(860), S(560));
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = false; MaximizeBox = false;
 

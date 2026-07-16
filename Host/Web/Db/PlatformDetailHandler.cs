@@ -95,7 +95,14 @@ internal static class PlatformDetailHandler
                   <div class="adv-row"><label>Développeur</label><input type="text" id="adv-dev" list="adv-dev-list" placeholder="Rechercher..."><datalist id="adv-dev-list"></datalist></div>
                   <div class="adv-row"><label>Éditeur</label><input type="text" id="adv-pub" list="adv-pub-list" placeholder="Rechercher..."><datalist id="adv-pub-list"></datalist></div>
                   <div class="adv-row"><label>Type</label><select id="adv-type"><option value="">Tous</option></select></div>
+            """);
+        // Origin is an extended-DB-only column: on base the facet is empty → hide the whole row. The JS
+        // tolerates the absent #adv-origin element (v()/reset both null-check).
+        if (repo.IsExtended)
+            sb.Append("""
                   <div class="adv-row"><label>Origin</label><select id="adv-origin"><option value="">Toutes</option></select></div>
+            """);
+        sb.Append("""
                   <div class="adv-actions">
                     <button class="adv-btn adv-btn-apply" onclick="gdbApplyAdvSearch()">Appliquer</button>
                     <button class="adv-btn adv-btn-reset" onclick="gdbResetAdvSearch()">Réinitialiser</button>

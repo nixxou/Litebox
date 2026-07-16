@@ -352,7 +352,7 @@ internal static class HtmlShared
 
         function gdbApplyLang(lang,save){
           if(save)gdbSetCookie(GDB_COOKIE,lang);
-          document.querySelectorAll('.overview-block').forEach(el=>{el.style.display=(el.dataset.lang===lang)?'':'none';});
+          document.querySelectorAll('.overview-block').forEach(el=>{if(!el.dataset.lang)return;el.style.display=(el.dataset.lang===lang)?'':'none';});
           document.querySelectorAll('.lang-opt').forEach(el=>{el.classList.toggle('lang-opt-active',el.dataset.lang===lang);});
           const lbl=document.getElementById('lang-btn-label'); if(lbl)lbl.textContent=lang.toUpperCase();
           document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=gdbT(el.dataset.i18n,lang);});

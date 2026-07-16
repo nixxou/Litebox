@@ -19,7 +19,9 @@ internal static class HomeHandler
     {
         var parental = WebParentalState.From(ctx.Request);
 
-        // Extended DB absent → the database site can't show anything. Point the user at the Base module.
+        // NEITHER DB usable (no Extended DB and no base LaunchBox Metadata.db) → the database site can't show
+        // anything. Point the user at the Base module. With just the base DB present the site runs degraded
+        // (notice below) instead.
         if (!DbRepository.AnyDbReady())
         {
             var w = new StringBuilder();
@@ -27,7 +29,7 @@ internal static class HomeHandler
             w.Append(HtmlShared.BodyOpen(null, parental));
             w.Append("<div class=\"page-header\" style=\"padding-top:3rem\">");
             w.Append("<h1>Game Database</h1>");
-            w.Append("<p class=\"subtitle\">The extended metadata database is not installed yet.</p>");
+            w.Append("<p class=\"subtitle\">No metadata database was found (neither LaunchBox&rsquo;s Metadata.db nor the Extended Database).</p>");
             w.Append("<p class=\"subtitle\">Enable the &laquo;&nbsp;Base&nbsp;/&nbsp;Database&nbsp;&raquo; module in LiteBox and download the Extended Database to browse games here.</p>");
             w.Append("</div>");
             w.Append(HtmlShared.BodyClose);
@@ -45,6 +47,14 @@ internal static class HomeHandler
         sb.Append("<div class=\"page-header\" style=\"padding-top:3rem\">");
         sb.Append("<h1>Game Database</h1>");
         sb.Append($"<p class=\"subtitle\">{platforms.Count} plateformes · {totalGames:N0} jeux</p>");
+        if (!repo.IsExtended)
+        {
+            // Degraded mode: the site runs off LaunchBox's base Metadata.db (no videos/manuals, single
+            // Overview, no origins) — say so quietly instead of the old "install required" full stop.
+            sb.Append("<p class=\"subtitle\" style=\"font-size:.8rem;color:var(--muted);max-width:44rem;margin-left:auto;margin-right:auto\">");
+            sb.Append("Running on LaunchBox&rsquo;s base database &mdash; enable the Base module and download the Extended database for videos, manuals and multi-source descriptions.");
+            sb.Append("</p>");
+        }
         sb.Append("</div>");
 
         var byCategory = platforms

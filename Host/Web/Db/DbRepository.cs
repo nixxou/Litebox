@@ -1,13 +1,19 @@
 // Read-only data-access layer for the database site. Clean-room LiteBox rewrite of ExtendDB's
-// Web/Backend/DbRepository.cs, reduced to the Extended-DB-only path:
+// Web/Backend/DbRepository.cs, restored to its dual-DB behaviour:
 //
-//   • The DB path comes from MetadataDb.ExtendedDbPath (LiteBox's own resolver). There is NO native-DB
-//     fallback and NO SqliteConnectionPatches.BypassRedirect dance — LiteBox has no read-intercept, so we
-//     open the Extended DB directly (Microsoft.Data.Sqlite, read-only). WAL is a property of the file; a
-//     read-only connection reads a WAL DB fine. Pooling is off so a mid-session DB swap isn't pinned to a
-//     stale handle.
-//   • Every read first checks AnyDbReady(); when the Extended DB isn't installed the handlers degrade to an
-//     empty result / a "not installed" page rather than throwing "no such table: Platforms".
+//   • ResolveDb() picks the backing file: the EXTENDED DB (LaunchBox.Extended.Metadata.db) when the Base
+//     module is on, the file is on disk AND the user keeps it as the main DB ([Base] UseAsMainDb); otherwise
+//     LaunchBox's own BASE Metadata.db — present on any LaunchBox install — so the site stays functional
+//     (degraded: no videos/manuals rows, single Overview, no per-source overviews, no Origin facet).
+//   • IsExtended is the `_ext` flag of the original plugin: every query that touches extended-only columns
+//     (per-source Overview*, Origin, GameImages.duplicate/Sex/FileSize, the GameRoms side-table) branches on
+//     it, NULL-aliasing the missing columns so the SQL never names a column the base schema lacks while the
+//     mappers keep a single shape.
+//   • There is NO SqliteConnectionPatches.BypassRedirect dance — LiteBox has no read-intercept, so we open
+//     the DB directly (Microsoft.Data.Sqlite, read-only). WAL is a property of the file; a read-only
+//     connection reads a WAL DB fine. Pooling is off so a mid-session DB swap isn't pinned to a stale handle.
+//   • Every read first checks AnyDbReady(); when NEITHER DB exists the handlers degrade to an empty result /
+//     a "not installed" page rather than throwing "no such table: Platforms".
 //
 // No plugin, no reflection, no Harmony. Each method opens and disposes its own connection.
 
@@ -29,6 +35,32 @@ internal sealed class DbRepository
         try { SQLitePCL.Batteries.Init(); } catch { /* idempotent, may already be initialised by the host */ }
     }
 
+    // ── DB resolution ──────────────────────────────────────────────────────────
+    // One rule (the ExtendDB plugin's `_ext`): the Extended DB is in play only when the Base module is on,
+    // the file is on disk (MediaApiBridge.ModuleActive covers both) AND [Base] UseAsMainDb is checked.
+    // Anything else falls back to LaunchBox's own base Metadata.db (null when even that is absent).
+
+    /// <summary>The DB backing the site right now: (path, isExtended). Path is null when neither DB exists.</summary>
+    internal static (string Path, bool IsExtended) ResolveDb()
+    {
+        if (MediaApiBridge.ModuleActive && MetadataDb.UseExtendedAsMain)
+            return (MetadataDb.ExtendedDbPath, true);   // ModuleActive ⇒ ExtendedDbPath != null
+        return (MetadataDb.LaunchBoxDbPath(), false);
+    }
+
+    // Captured once per instance (one instance per request) so a mid-request module toggle can't mix schemas.
+    private readonly string _dbPath;
+    private readonly bool _ext;
+
+    /// <summary>True when this repository reads the Extended DB; false on the base-LaunchBox fallback.
+    /// Handlers use it to hide extended-only UI (origins facet, …).</summary>
+    public bool IsExtended => _ext;
+
+    public DbRepository()
+    {
+        (_dbPath, _ext) = ResolveDb();
+    }
+
     // ── Connection ─────────────────────────────────────────────────────────────
 
     private static string ConnectionString(string path) =>
@@ -40,10 +72,10 @@ internal sealed class DbRepository
             Cache = SqliteCacheMode.Private,
         }.ToString();
 
-    private static SqliteConnection Open()
+    private SqliteConnection Open()
     {
-        var path = MetadataDb.ExtendedDbPath
-                   ?? throw new InvalidOperationException("Extended DB not installed.");
+        var path = _dbPath
+                   ?? throw new InvalidOperationException("No metadata DB available (neither Extended nor base LaunchBox).");
         var con = new SqliteConnection(ConnectionString(path));
         con.Open();
         ApplyPragmas(con);
@@ -65,8 +97,9 @@ internal sealed class DbRepository
     }
 
     // ── Availability guard ─────────────────────────────────────────────────────
-    // True only when the Extended DB exists AND carries the core "Platforms" table. Throttled (≤ one FS check
-    // per 3 s) and re-probed only when the file timestamp changes, so it stays cheap on hot paths.
+    // True only when the given DB exists AND carries the core "Platforms" table (both the Extended and the
+    // base LaunchBox Metadata.db do). Throttled (≤ one FS check per 3 s) and re-probed only when the file
+    // timestamp changes, so it stays cheap on hot paths.
 
     private static readonly ConcurrentDictionary<string, (long checkedTick, long stamp, bool ok)> _readyCache = new();
     private const long ReadyThrottleMs = 3000;
@@ -105,11 +138,17 @@ internal sealed class DbRepository
         catch { return false; }
     }
 
-    /// <summary>The Extended DB is on disk and carries the core schema.</summary>
+    /// <summary>The Extended DB is on disk and carries the core schema. Kept for the theme APIs' cache keying
+    /// (their "e|"/"n|" prefix) — availability of the SITE is <see cref="AnyDbReady"/>.</summary>
     internal static bool ExtendedDbReady() => DbReady(MetadataDb.ExtendedDbPath);
 
-    /// <summary>Any browsable DB — false when the Extended DB isn't installed (handlers degrade gracefully).</summary>
-    internal static bool AnyDbReady() => ExtendedDbReady();
+    /// <summary>The DB the site resolves to (extended when in play, else base LaunchBox) exists and passes the
+    /// schema probe — false only when NEITHER is usable (handlers degrade gracefully).</summary>
+    internal static bool AnyDbReady()
+    {
+        var (path, _) = ResolveDb();
+        return path != null && DbReady(path);
+    }
 
     // ── Platforms ──────────────────────────────────────────────────────────────
 
@@ -137,14 +176,27 @@ internal sealed class DbRepository
 
     public DbGame GetGameById(int id)
     {
-        const string sql = """
+        // Base LaunchBox's Games table lacks the per-source overview columns, SteamId, VNDBID,
+        // ScreenscraperId, IgdbSlug and Origin — NULL-alias them there so the SQL never names a missing
+        // column while the mapper keeps a single shape (SafeStr reads the NULLs as absent).
+        string extCols = _ext
+            ? """
+              OverviewAiFr, OverviewAiEn, OverviewAiDe, OverviewAiEs, OverviewAiIt, OverviewAiPt,
+              OverviewSteamFr, OverviewScFr, OverviewSteamEn, OverviewScEn,
+              SteamId, VNDBID, ScreenscraperId, IgdbSlug, Origin
+              """
+            : """
+              NULL AS OverviewAiFr, NULL AS OverviewAiEn, NULL AS OverviewAiDe,
+              NULL AS OverviewAiEs, NULL AS OverviewAiIt, NULL AS OverviewAiPt,
+              NULL AS OverviewSteamFr, NULL AS OverviewScFr, NULL AS OverviewSteamEn, NULL AS OverviewScEn,
+              NULL AS SteamId, NULL AS VNDBID, NULL AS ScreenscraperId, NULL AS IgdbSlug, NULL AS Origin
+              """;
+        var sql = $"""
             SELECT DatabaseID, Name, ReleaseDate, ReleaseYear, Overview,
                    MaxPlayers, ReleaseType, Cooperative, VideoURL,
                    CommunityRating, CommunityRatingCount, WikipediaURL,
-                   Platform, ESRB, Genres, Developer, Publisher,
-                   OverviewAiFr, OverviewAiEn, OverviewAiDe, OverviewAiEs, OverviewAiIt, OverviewAiPt,
-                   OverviewSteamFr, OverviewScFr, OverviewSteamEn, OverviewScEn,
-                   SteamId, SteamAppId, VNDBID, ScreenscraperId, IgdbSlug, Origin
+                   Platform, ESRB, Genres, Developer, Publisher, SteamAppId,
+                   {extCols}
             FROM   Games
             WHERE  DatabaseID = $id
             """;
@@ -208,7 +260,8 @@ internal sealed class DbRepository
         if (opt.Coop.HasValue)
             where.Add(opt.Coop.Value ? "g.Cooperative = 1" : "(g.Cooperative IS NULL OR g.Cooperative = 0)");
         if (!string.IsNullOrEmpty(opt.ReleaseType)) { where.Add("g.ReleaseType = $rt"); prms["$rt"] = opt.ReleaseType; }
-        if (!string.IsNullOrEmpty(opt.Origin)) { where.Add("g.Origin = $origin"); prms["$origin"] = opt.Origin; }
+        // Origin is an extended-only column — the facet is hidden on base, but guard the filter anyway.
+        if (_ext && !string.IsNullOrEmpty(opt.Origin)) { where.Add("g.Origin = $origin"); prms["$origin"] = opt.Origin; }
         if (opt.Adult == 0) where.Add("(g.ESRB IS NULL OR g.ESRB NOT LIKE 'AO%')");
         if (opt.OwnedOnly)
         {
@@ -254,7 +307,7 @@ internal sealed class DbRepository
                 SELECT g.DatabaseID, g.Name, g.Platform, g.ReleaseYear, g.Genres, g.ESRB,
                        g.CompareName, g.ReleaseDate,
                        g.CommunityRating, g.CommunityRatingCount,
-                       g.MaxPlayers, g.Cooperative, g.Origin, g.ReleaseType,
+                       g.MaxPlayers, g.Cooperative, {(_ext ? "g.Origin" : "NULL AS Origin")}, g.ReleaseType,
                        g.Developer, g.Publisher
                 FROM   Games g
                 {whereClause}
@@ -314,7 +367,8 @@ internal sealed class DbRepository
         => GetDistinctSingle("ReleaseType", platform, null, 200);
 
     public List<string> GetDistinctOrigins(string platform)
-        => GetDistinctSingle("Origin", platform, null, 200);
+        => _ext ? GetDistinctSingle("Origin", platform, null, 200)
+                : new List<string>();   // extended-only column → empty facet on base (the page hides the block)
 
     private List<string> GetDistinctSingle(string column, string platform, string queryFilter, int limit)
     {
@@ -464,12 +518,15 @@ internal sealed class DbRepository
 
     public List<DbGameImage> GetImagesForGame(int id)
     {
-        const string sql = """
-            SELECT FileName, DatabaseId, Type, Region, CRC32, Origin, Sex, FileSize
+        // Base GameImages carries only FileName/DatabaseId/Type/Region/CRC32 — no Origin/Sex/FileSize columns
+        // and no duplicate/FileSize quality gates. NULL-aliased there → Origin defaults 'launchbox', Sex 0
+        // (NeedsBlur false), FileSize 0.
+        var sql = $"""
+            SELECT FileName, DatabaseId, Type, Region, CRC32,
+                   {(_ext ? "Origin, Sex, FileSize" : "NULL AS Origin, NULL AS Sex, NULL AS FileSize")}
             FROM   GameImages
             WHERE  DatabaseId = $id
-            AND    (duplicate IS NULL OR duplicate < 100)
-            AND    (FileSize IS NULL OR FileSize >= 500)
+            {(_ext ? "AND (duplicate IS NULL OR duplicate < 100) AND (FileSize IS NULL OR FileSize >= 500)" : "")}
             ORDER  BY CASE Type
                         WHEN 'Poster' THEN 1
                         WHEN 'Box - Front' THEN 2
@@ -542,6 +599,7 @@ internal sealed class DbRepository
             ORDER  BY FileName
             """;
         var list = new List<DbGameRom>();
+        if (!_ext) return list;   // GameRoms is an Extended-DB side-table — base has none (section hidden)
         try
         {
             using var con = Open();
@@ -571,14 +629,16 @@ internal sealed class DbRepository
         var idList = string.Join(",", gameIds);
 
         // Join Games to read each game's ESRB so the "steam-blur ONLY when AO" rule can consult the rating.
+        // On base, Origin/Sex/duplicate/FileSize don't exist: NULL-alias the columns (→ origin 'launchbox',
+        // blur false) and drop the quality gates.
         var sql = $"""
-            SELECT gi.DatabaseId, gi.FileName, gi.CRC32, gi.Origin, gi.Sex, g.ESRB
+            SELECT gi.DatabaseId, gi.FileName, gi.CRC32,
+                   {(_ext ? "gi.Origin, gi.Sex" : "NULL AS Origin, NULL AS Sex")}, g.ESRB
             FROM   GameImages gi
             JOIN   Games g ON g.DatabaseID = gi.DatabaseId
             WHERE  gi.DatabaseId IN ({idList})
             AND    gi.Type NOT IN ('Icon', 'Manual', 'Press', 'Map', 'Music', 'Video', 'VideoAdvert')
-            AND    (gi.duplicate IS NULL OR gi.duplicate < 100)
-            AND    (gi.FileSize IS NULL OR gi.FileSize >= 500)
+            {(_ext ? "AND (gi.duplicate IS NULL OR gi.duplicate < 100) AND (gi.FileSize IS NULL OR gi.FileSize >= 500)" : "")}
             ORDER  BY gi.DatabaseId, CASE gi.Type
                         WHEN 'Poster' THEN 1
                         WHEN 'Box - Front' THEN 2

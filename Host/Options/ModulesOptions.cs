@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
+using LbApiHost.Host.Media;
 using LbApiHost.Host.Modules;
 using LbApiHost.Host.UiKit;
 
@@ -80,10 +81,13 @@ internal static class ModulesOptions
         tabs.TabPages.Add(listPage);
 
         // ── Tabs 2..N: one per module (its own settings) ──────────────────────────
+        var configApplies = new List<Action>();
         foreach (var m in LbModules.Catalog)
         {
             var page = new TabPage(m.Title.Length > 16 ? m.Key : m.Title) { BackColor = Bg, UseVisualStyleBackColor = false };
-            page.Controls.Add(ModuleConfigPanel(m, dpiS));
+            var (cfgPanel, cfgApply) = ModuleConfigPanel(m, dpiS, readOnly);
+            page.Controls.Add(cfgPanel);
+            if (cfgApply != null) configApplies.Add(cfgApply);
             tabs.TabPages.Add(page);
         }
 
@@ -93,13 +97,20 @@ internal static class ModulesOptions
         {
             if (readOnly) return;
             foreach (var (module, cb) in checks) LbModules.SetOn(module, cb.Checked);
+            foreach (var a in configApplies) a();
         }
         return (root, Apply);
     }
 
-    /// <summary>The per-module settings panel. A placeholder for now; each module's real config replaces this
-    /// as it is ported (media sources + credentials for Base, ArchiveMGS options for Rom, and so on).</summary>
-    private static Control ModuleConfigPanel(LbModules.Info m, float dpiS)
+    /// <summary>The per-module settings panel + its optional apply. Base has real settings (ScreenScraper
+    /// account + image mirror); the others are placeholders until each port lands.</summary>
+    private static (Control panel, Action? apply) ModuleConfigPanel(LbModules.Info m, float dpiS, bool readOnly)
+    {
+        if (m.Module == LbModule.Base) return BaseConfigPanel(dpiS, readOnly);
+        return (Placeholder(m, dpiS), null);
+    }
+
+    private static Control Placeholder(LbModules.Info m, float dpiS)
     {
         int S(int px) => (int)Math.Round(px * dpiS);
         var p = new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg, AutoScroll = true, Padding = new Padding(S(16), S(14), S(16), S(8)) };
@@ -121,5 +132,53 @@ internal static class ModulesOptions
             Location = new Point(S(4), S(72)), Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
         });
         return p;
+    }
+
+    /// <summary>Extended-database settings: the ScreenScraper account used for credentialed media downloads, and
+    /// the image-mirror base URL. The password is stored encrypted (LbSettingsCrypto); values persist to
+    /// LiteBox.ini [Base] via BaseCredentials on apply.</summary>
+    private static (Control panel, Action? apply) BaseConfigPanel(float dpiS, bool readOnly)
+    {
+        int S(int px) => (int)Math.Round(px * dpiS);
+        var Bg = LiteBoxTheme.Bg; var Fg = LiteBoxTheme.Fg; var Sub = LiteBoxTheme.SubFg; var PanelC = LiteBoxTheme.PanelC;
+        var p = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(16), S(14), S(16), S(10)) };
+
+        Label Head(string t, int y) => new() { Text = t, AutoSize = true, ForeColor = Fg, BackColor = Bg, Location = new Point(S(4), S(y)), Font = new Font("Segoe UI", 10f, FontStyle.Bold) };
+        Label Cap(string t, int y) => new() { Text = t, AutoSize = true, ForeColor = Sub, BackColor = Bg, Location = new Point(S(4), S(y)), Font = new Font("Segoe UI", 8.5f) };
+        TextBox Field(int y, bool pw = false) => new() { Location = new Point(S(4), S(y)), Width = S(300), BackColor = PanelC, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 9f), UseSystemPasswordChar = pw, ReadOnly = readOnly };
+
+        p.Controls.Add(Head("ScreenScraper account", 6));
+        p.Controls.Add(Cap("Used to download medias through your personal ScreenScraper quota. Leave blank to use the other sources only.", 30));
+        p.Controls.Add(Cap("Username", 58));
+        var user = Field(76); p.Controls.Add(user);
+        p.Controls.Add(Cap("Password", 106));
+        var pass = Field(124, pw: true); p.Controls.Add(pass);
+
+        p.Controls.Add(Head("Image mirror", 164));
+        p.Controls.Add(Cap("Base URL of the ExtendDB image mirror. Leave as the default unless you have a custom endpoint.", 188));
+        var mirror = Field(214); mirror.Width = S(440); p.Controls.Add(mirror);
+
+        // Prefill.
+        try
+        {
+            var acc = BaseCredentials.UserAccount();
+            if (acc is { } a) { user.Text = a.User; pass.Text = a.Password; }
+            mirror.Text = BaseCredentials.RemoteImageBaseUrl();
+        }
+        catch { }
+
+        void Apply()
+        {
+            if (readOnly) return;
+            BaseCredentials.SetUserAccount(user.Text, pass.Text);
+            try
+            {
+                var cfg = LiteBoxConfig.LoadForExe();
+                cfg.SetSec(BaseCredentials.Section, "RemoteImageBaseUrl", (mirror.Text ?? "").Trim());
+                cfg.Save();
+            }
+            catch { }
+        }
+        return (p, Apply);
     }
 }

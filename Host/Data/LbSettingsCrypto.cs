@@ -42,6 +42,20 @@ internal static class LbSettingsCrypto
     public static string EncryptEmuMoviesPassword(string? clear)
         => string.IsNullOrEmpty(clear) ? "" : Encrypt(clear!, EmuMoviesKeySeed);
 
+    /// <summary>A LiteBox-OWN key/seed for values LiteBox stores at rest for itself (never round-tripped with
+    /// LaunchBox) — e.g. a ScreenScraper account password in LiteBox.ini. Obfuscation-grade, same threat model
+    /// as ExtendDB's shipped secrets: it keeps the value out of casual plain sight, not from a determined reader
+    /// of an open-source build. Distinct from the EmuMovies seed so the two never cross-decrypt.</summary>
+    private const string LiteBoxLocalKeySeed = "9f3ac1e07d6b4c2f8a15e93b42d0c6e1";
+
+    /// <summary>Encrypt a LiteBox-own value to a base64 blob (empty in → empty out).</summary>
+    public static string EncryptLocal(string? clear)
+        => string.IsNullOrEmpty(clear) ? "" : Encrypt(clear!, LiteBoxLocalKeySeed);
+
+    /// <summary>Decrypt a LiteBox-own blob; returns the input unchanged when it isn't one (already clear/empty).</summary>
+    public static string DecryptLocal(string? stored)
+        => TryDecrypt(stored, LiteBoxLocalKeySeed, out var clear) ? clear : (stored ?? "");
+
     // ── Core ──────────────────────────────────────────────────────────────────
     private static bool TryDecrypt(string? b64, string keySeed, out string clear)
     {

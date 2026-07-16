@@ -128,6 +128,18 @@ if (args.Contains("--gen-stubs"))
 if (args.Contains("--dump-ctors"))
     return CtorDump.Run();
 
+// Write the encrypted ScreenScraper dev-credentials file (Core\litebox\config\ss-dev.dat) from clear args and
+// exit. Maintenance one-off for whoever owns a ScreenScraper dev account: the clear values never live in source
+// or config — only this run's command line. Usage: --write-ss-dev <devid> <devpassword> <softname>
+if (args.Contains("--write-ss-dev"))
+{
+    int wi = Array.IndexOf(args, "--write-ss-dev");
+    if (wi + 3 >= args.Length) { Console.WriteLine("usage: --write-ss-dev <devid> <devpassword> <softname>"); return 2; }
+    LbApiHost.Host.Media.BaseCredentials.WriteDevCredsFile(args[wi + 1], args[wi + 2], args[wi + 3]);
+    Console.WriteLine("ss-dev.dat written.");
+    return 0;
+}
+
 // Empirical probe of the RetroArch integration plugin's command-line behaviour.
 if (args.Contains("--probe-emuplugin"))
     return EmuPluginProbe.Run();

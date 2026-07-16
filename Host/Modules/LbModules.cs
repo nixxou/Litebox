@@ -37,7 +37,7 @@ internal static class LbModules
     public static readonly Info[] Catalog =
     {
         new(LbModule.Base,   "base",   "Extended metadata database",
-            "A second metadata database (ScreenScraper, VNDB, IGDB, Steam) with richer overviews, locked fields, and credentialed media downloads.", false, false),
+            "A second metadata database (ScreenScraper, VNDB, IGDB, Steam) with richer overviews, locked fields, and credentialed media downloads.", false, true),
         new(LbModule.Editor, "editor", "Game and media editor",
             "The per-game metadata editor and \"Download Medias\", backed by the extended database.", false, false),
         new(LbModule.Rom,    "rom",    "ROM extractor",

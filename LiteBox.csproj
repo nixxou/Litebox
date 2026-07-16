@@ -150,6 +150,11 @@
          plugins) — the very one it plays videos with. VlcService points at it, so this costs 0 MB instead of
          the ~13 MB a trimmed copy of our own would have added. -->
     <PackageReference Include="LibVLCSharp" Version="3.10.0" />
+    <!-- zstd decompression for the Extended-DB release archives (Host\Data\ExtDbDownloader). Managed-only
+         (no native deps) — the same codec the ExtendDB plugin restores with, so archives decode identically.
+         Like LibVLCSharp above, it becomes an extra loose app DLL: keep build-release.ps1 $appFiles +
+         LightPayload.Files + the light/<tfm>/* EmbeddedResource block in sync when shipping it. -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.1" />
   </ItemGroup>
 
   <ItemGroup>

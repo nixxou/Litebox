@@ -80,6 +80,10 @@ internal static class MetadataDb
     private static string? _extDb;
     private static bool _extProbed;
 
+    /// <summary>Forget the cached extended-DB probe — call after installing/refreshing the DB so the new file
+    /// is visible without a restart.</summary>
+    public static void InvalidateExtendedDbProbe() { _extProbed = false; _extDb = null; }
+
     /// <summary>The enriched extended DB (LaunchBox.Extended.Metadata.db), or null when it isn't on disk.
     /// LiteBox-own copy under Core\litebox\ first (where the ported downloader will put it); falls back to
     /// the legacy plugin location so an existing install keeps working without re-downloading ~4 GB.</summary>

@@ -100,6 +100,7 @@ internal static class HostBoot
             lbRoot = Path.GetFullPath(Path.Combine(dataDir, ".."));                   // ...\LB
             string imagesRoot = Path.Combine(lbRoot, "Images");                       // ...\LB\Images
             LbApiHost.Host.Media.MediaResolver.Init(lbRoot);                          // media (IO + GameCache fast path)
+            Data.ExtDbDownloader.ApplyPendingTodoIfAny();                             // finish a deferred extended-DB swap BEFORE anything opens it
             SetLaunchBoxCoreRootFolder(lbRoot);                                       // process-wide LB-root static the integration plugins read (save scans, …)
             LbApiHost.Host.Install.NativeInstaller.EnsureDeployed(lbRoot, refreshNatives);  // deploy embedded natives → ThirdParty (only-if-absent; a refresh pass on a version bump). Single owner of ThirdParty placement.
             LbApiHost.Host.Media.MagickSupport.Init(lbRoot);                          // point the native-lib search dir at ThirdParty\ExtendDB (already deployed above)
@@ -237,6 +238,25 @@ internal static class HostBoot
         catch (Exception ex) { Console.WriteLine("[emuplugin] warmup failed: " + ex.Message); }
         DependencyCheck.Configure(LiteBoxConfig.LoadForExe(), lbRoot);   // pre-launch bios/dependency check
         Modules.LbModules.LogState();   // boot recap: "[modules] ON: … | OFF: …"
+
+        // Extended-DB auto-update (Base module): the same keep-fresh behaviour the plugin has at boot, but in
+        // the background — check the release, and download/install silently when missing or out of date.
+        // Opt-out via LiteBox.ini [Base] AutoUpdateDb=false. Progress goes to the [extdb] log only.
+        if (Modules.LbModules.On(Modules.LbModule.Base)
+            && LiteBoxConfig.LoadForExe().GetSecBool("Base", "AutoUpdateDb", true))
+        {
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    var (upd, remote, local, bytes) = await Data.ExtDbDownloader.CheckAsync(System.Threading.CancellationToken.None);
+                    if (!upd) { Diag.LbLog.Info("extdb", $"up to date (local {local ?? "none"})"); return; }
+                    Diag.LbLog.Info("extdb", $"update {local ?? "none"} -> {remote} ({bytes / (1 << 20)} MB), downloading in background...");
+                    await Data.ExtDbDownloader.DownloadAndInstallAsync(null, System.Threading.CancellationToken.None);
+                }
+                catch (Exception ex) { Diag.LbLog.Warn("extdb", "auto-update: " + ex.Message); }
+            });
+        }
 
         EventBus.FirePluginInitialized(reg);
 

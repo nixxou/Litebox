@@ -158,6 +158,40 @@ internal static class ModulesOptions
         p.Controls.Add(Cap("Base URL of the ExtendDB image mirror. Leave as the default unless you have a custom endpoint.", 188));
         var mirror = Field(214); mirror.Width = S(440); p.Controls.Add(mirror);
 
+        // ── Extended database (download / update) ─────────────────────────────
+        p.Controls.Add(Head("Extended database", 256));
+        var dbStatus = Cap("", 280); dbStatus.MaximumSize = new Size(S(640), 0); p.Controls.Add(dbStatus);
+        void RefreshDbStatus()
+        {
+            try
+            {
+                var path = Data.ExtDbDownloader.TargetPath;
+                dbStatus.Text = System.IO.File.Exists(path)
+                    ? $"Installed: {path} ({new System.IO.FileInfo(path).Length / (1 << 20)} MB)"
+                    : MetadataDb.ExtendedDbPath != null
+                        ? $"Using the legacy plugin copy: {MetadataDb.ExtendedDbPath}"
+                        : "Not installed. The extra metadata and non-LaunchBox medias need it.";
+            }
+            catch { dbStatus.Text = "Status unavailable."; }
+        }
+        RefreshDbStatus();
+        var dbBtn = new Button
+        {
+            Text = "Check for updates && install", AutoSize = true, Location = new Point(S(4), S(306)),
+            FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Panel2, ForeColor = Fg, Enabled = !readOnly,
+        };
+        dbBtn.FlatAppearance.BorderColor = LiteBoxTheme.Panel2;
+        var dbProg = Cap("", 340); dbProg.MaximumSize = new Size(S(640), 0); p.Controls.Add(dbProg);
+        p.Controls.Add(dbBtn);
+        dbBtn.Click += async (_, _) =>
+        {
+            dbBtn.Enabled = false;
+            var prog = new Progress<string>(msg => { try { if (!dbProg.IsDisposed) dbProg.Text = msg; } catch { } });
+            try { await Data.ExtDbDownloader.DownloadAndInstallAsync(prog, System.Threading.CancellationToken.None); }
+            catch (Exception ex) { try { dbProg.Text = "Failed: " + ex.Message; } catch { } }
+            finally { try { if (!dbBtn.IsDisposed) { dbBtn.Enabled = true; RefreshDbStatus(); } } catch { } }
+        };
+
         // Prefill.
         try
         {

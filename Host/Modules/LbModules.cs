@@ -43,7 +43,7 @@ internal static class LbModules
         new(LbModule.Parental, "parental", "Parental control",
             "A PIN gate for restricted content, using BigBox's own parental PIN (set or remove it here — BigBox sees the change).", false, true),
         new(LbModule.Web,    "web",    "Web frontends",
-            "The embedded web server: LiteBox Web, BigBox Web and the database Web, each served from its own folder.", false, false),
+            "The embedded web server: LiteBox Web, BigBox Web and the database Web, each served from its own folder.", false, true),
     };
 
     public static Info Meta(LbModule m) => Catalog.First(c => c.Module == m);

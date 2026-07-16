@@ -31,7 +31,7 @@ internal static class ModulesOptions
         var tabs = new TabControl
         {
             Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed, SizeMode = TabSizeMode.Fixed,
-            ItemSize = new Size(S(116), S(26)),
+            ItemSize = new Size(S(144), S(27)),
         };
         tabs.DrawItem += (_, e) =>
         {
@@ -42,36 +42,23 @@ internal static class ModulesOptions
                 sel ? Color.White : Sub, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         };
 
-        // ── Tab 1: the module list ────────────────────────────────────────────────
+        // ── Tab 1: the module list, as a card grid (ExtendDB-style) ───────────────
         var listPage = new TabPage("Modules") { BackColor = Bg, UseVisualStyleBackColor = false };
-        var scroll = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(14), S(12), S(14), S(8)) };
-        var flow = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Bg,
-        };
-        flow.Controls.Add(new Label
-        {
-            Text = "Enable the ExtendDB features you want, natively in LiteBox. Each is independent; a module's own settings tab appears here while it is enabled.",
-            AutoSize = true, MaximumSize = new Size(S(680), 0), ForeColor = Sub, BackColor = Bg,
-            Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(14)),
-        });
+        var ok = LiteBoxTheme.Ok;                       // enabled accent (green)
+        var borderCol = Color.FromArgb(64, 64, 68);     // disabled card border
 
         // ── Config tabs (dynamic): one per ENABLED module, in catalog order ───────
-        // configTabs maps a live module → its open tab + apply. Adding/removing keeps Apply's collection current.
         var configTabs = new Dictionary<LbModule, (TabPage page, Action? apply)>();
 
         void AddConfigTab(LbModule module)
         {
             if (configTabs.ContainsKey(module)) return;
-            var meta = LbModules.Meta(module);
-            var page = new TabPage(meta.Title.Length > 16 ? meta.Key : meta.Title) { BackColor = Bg, UseVisualStyleBackColor = false };
+            var page = new TabPage(TabLabel(module)) { BackColor = Bg, UseVisualStyleBackColor = false };
             var (cfgPanel, cfgApply) = ModuleConfigPanel(module, dpiS, readOnly);
             cfgPanel.Dock = DockStyle.Fill;
             page.Controls.Add(cfgPanel);
 
-            // Insert after the list tab, preserving catalog order among the currently-open config tabs.
-            int idx = 1;
+            int idx = 1;                                 // after the list tab, in catalog order
             foreach (var c in LbModules.Catalog)
             {
                 if (c.Module == module) break;
@@ -89,34 +76,77 @@ internal static class ModulesOptions
             configTabs.Remove(module);
         }
 
-        var checks = new List<(LbModule module, CheckBox cb)>();
+        var intro = new Label
+        {
+            Text = "Enable the ExtendDB features you want, natively in LiteBox. Each is independent; a module's own settings tab appears above while it is enabled. Click a card to toggle it.",
+            Dock = DockStyle.Top, AutoSize = false, Height = S(46), ForeColor = Sub, BackColor = Bg,
+            Font = new Font("Segoe UI", 8.5f), Padding = new Padding(S(16), S(12), S(16), S(6)),
+        };
+        var grid = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, FlowDirection = FlowDirection.LeftToRight,
+            BackColor = Bg, Padding = new Padding(S(12), S(4), S(12), S(8)),
+        };
+
+        var state = new Dictionary<LbModule, bool>();
         foreach (var m in LbModules.Catalog)
         {
-            var cb = new CheckBox
-            {
-                Text = m.Title + (m.Ready ? "" : "   (coming soon)"),
-                AutoSize = true, Checked = LbModules.On(m.Module), Enabled = !readOnly,
-                ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold),
-                Margin = new Padding(0, 0, 0, S(1)),
-            };
             var module = m.Module;
-            cb.CheckedChanged += (_, _) =>
+            state[module] = LbModules.On(module);
+
+            var card = new Panel
             {
-                if (cb.Checked) AddConfigTab(module);
-                else RemoveConfigTab(module);
+                Width = S(524), BackColor = PanelC, Margin = new Padding(S(4), S(4), S(4), S(10)),
+                Cursor = readOnly ? Cursors.Default : Cursors.Hand,
+            };
+            var title = new Label
+            {
+                Text = m.Title + (m.Ready ? "" : "   (coming soon)"), AutoSize = true, ForeColor = Fg, BackColor = PanelC,
+                Font = new Font("Segoe UI", 10f, FontStyle.Bold), Location = new Point(S(14), S(11)),
+            };
+            var badge = new Label
+            {
+                AutoSize = true, BackColor = PanelC, Font = new Font("Segoe UI", 8.25f, FontStyle.Bold), Location = new Point(S(430), S(13)),
             };
             var desc = new Label
             {
-                Text = m.Description, AutoSize = true, MaximumSize = new Size(S(680), 0),
-                ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.5f),
-                Margin = new Padding(S(22), 0, 0, S(14)),
+                Text = m.Description, AutoSize = true, MaximumSize = new Size(S(496), 0), ForeColor = Sub, BackColor = PanelC,
+                Font = new Font("Segoe UI", 8.5f), Location = new Point(S(14), S(36)),
             };
-            flow.Controls.Add(cb);
-            flow.Controls.Add(desc);
-            checks.Add((m.Module, cb));
+
+            void Repaint()
+            {
+                bool en = state[module];
+                badge.Text = en ? "● ENABLED" : "● DISABLED";
+                badge.ForeColor = en ? ok : Sub;
+                badge.Location = new Point(card.Width - S(14) - badge.PreferredWidth, S(13));
+                card.Invalidate();
+            }
+            card.Paint += (_, e) =>
+            {
+                bool en = state[module];
+                using var pen = new Pen(en ? ok : borderCol, en ? 2f : 1f);
+                float o = en ? 1f : 0.5f;
+                e.Graphics.DrawRectangle(pen, o, o, card.Width - 1 - o, card.Height - 1 - o);
+            };
+            void Toggle()
+            {
+                if (readOnly) return;
+                state[module] = !state[module];
+                if (state[module]) AddConfigTab(module); else RemoveConfigTab(module);
+                Repaint();
+            }
+            EventHandler click = (_, _) => Toggle();
+            card.Click += click; title.Click += click; desc.Click += click; badge.Click += click;
+
+            card.Controls.Add(title); card.Controls.Add(badge); card.Controls.Add(desc);
+            card.Height = desc.Location.Y + desc.PreferredHeight + S(12);
+            Repaint();
+            grid.Controls.Add(card);
         }
-        scroll.Controls.Add(flow);
-        listPage.Controls.Add(scroll);
+
+        listPage.Controls.Add(grid);
+        listPage.Controls.Add(intro);
         tabs.TabPages.Add(listPage);
 
         // Seed the config tabs for modules that are already enabled.
@@ -128,14 +158,24 @@ internal static class ModulesOptions
         void Apply()
         {
             if (readOnly) return;
-            foreach (var (module, cb) in checks) LbModules.SetOn(module, cb.Checked);
+            foreach (var kv in state) LbModules.SetOn(kv.Key, kv.Value);
             foreach (var kv in configTabs) { try { kv.Value.apply?.Invoke(); } catch { } }
         }
         return (root, Apply);
     }
 
-    /// <summary>Dispatches to the module's own config panel file. Base/Parental/Rom have real settings; Web and
-    /// RetroAchievements are placeholders until their ports land.</summary>
+    /// <summary>Short, consistent tab label for a module's config tab (the catalog Title is often too long).</summary>
+    private static string TabLabel(LbModule m) => m switch
+    {
+        LbModule.Base              => "Base",
+        LbModule.Rom               => "ROM extractor",
+        LbModule.RetroAchievements => "RetroAchievements",
+        LbModule.Parental          => "Parental",
+        LbModule.Web               => "Web",
+        _                          => m.ToString(),
+    };
+
+    /// <summary>Dispatches to the module's own config panel file, each ported to native parity.</summary>
     private static (Control panel, Action? apply) ModuleConfigPanel(LbModule module, float dpiS, bool readOnly) => module switch
     {
         LbModule.Base             => BasePanel.Build(dpiS, readOnly),

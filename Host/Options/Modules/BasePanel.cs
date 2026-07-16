@@ -51,7 +51,6 @@ internal static class BasePanel
         "Ai-En", "Ai-Fr", "Ai-De", "Ai-Es", "Ai-It", "Ai-Pt",
     };
 
-    private static readonly string[] DuplicateModes = { "Off", "Skip", "Merge" };
 
     public static (Control panel, Action? apply) Build(float dpiS, bool readOnly)
     {
@@ -93,32 +92,15 @@ internal static class BasePanel
         gStatus.Controls.Add(lblGithub);
         gStatus.Controls.Add(lblDetails);
 
-        // Button layout mirrors the plugin: Update / Force re-merge on top, Undo / Unmerge below, Refresh right.
         var btnUpdate = ModulePanelKit.Button("Update from GitHub", dpiS, readOnly);
         btnUpdate.Location = new Point(S(14), S(104));
-        var btnForce = ModulePanelKit.Button("Force re-merge", dpiS);
-        btnForce.Location = new Point(S(176), S(104));
-        var btnUndo = ModulePanelKit.Button("Undo last merge", dpiS);
-        btnUndo.Location = new Point(S(14), S(138));
-        var btnUnmerge = ModulePanelKit.Button("Unmerge from cache", dpiS);
-        btnUnmerge.Location = new Point(S(176), S(138));
         var btnRefresh = ModulePanelKit.Button("Refresh", dpiS);
-        btnRefresh.Location = new Point(S(346), S(104));
-        // Merge is gated on !readOnly + LiteBox owning its OWN Extended-DB copy (a legacy plugin copy is
-        // read-only and adopted first — see Update-from-GitHub). [Base] EnableLbMerge gates only the boot auto-merge.
-        bool mergeEngine = File.Exists(ExtDbMerger.OwnExtendedDbPath);
-        btnForce.Enabled = btnUndo.Enabled = btnUnmerge.Enabled = !readOnly && mergeEngine;
-        gStatus.Controls.AddRange(new Control[] { btnUpdate, btnForce, btnUndo, btnUnmerge, btnRefresh });
+        btnRefresh.Location = new Point(S(176), S(104));
+        gStatus.Controls.AddRange(new Control[] { btnUpdate, btnRefresh });
 
         var lblProgress = ModulePanelKit.Caption("", dpiS, GroupW - 40);
-        lblProgress.Location = new Point(S(14), S(174));
+        lblProgress.Location = new Point(S(14), S(144));
         gStatus.Controls.Add(lblProgress);
-
-        var lblMergeGap = ModulePanelKit.Caption(
-            "Fold your LaunchBox metadata into LiteBox's own Extended DB copy. Undo/Unmerge revert to the "
-            + "pristine downloaded database.", dpiS, GroupW - 40);
-        lblMergeGap.Location = new Point(S(14), S(200));
-        gStatus.Controls.Add(lblMergeGap);
         root.Controls.Add(gStatus);
 
         // ════════════════════════════════════════════════════════════════════
@@ -171,39 +153,16 @@ internal static class BasePanel
         // ════════════════════════════════════════════════════════════════════
         var gBehavior = ModulePanelKit.Group("Behavior", dpiS);
         gBehavior.Location = new Point(S(4), S(524));
-        gBehavior.Size = new Size(S(GroupW), S(176));
+        gBehavior.Size = new Size(S(GroupW), S(96));
 
         var chkAuto = ModulePanelKit.Check("Auto-download the Extended database at boot", dpiS,
             cfg.GetSecBool(Section, "AutoUpdateDb", true), readOnly);
         chkAuto.Location = new Point(S(14), S(28));
-        var chkMerge = ModulePanelKit.Check("Enable LaunchBox → ExtendDB merge", dpiS,
-            cfg.GetSecBool(Section, "EnableLbMerge", false), readOnly);
-        chkMerge.Location = new Point(S(14), S(54));
         var chkOverview = ModulePanelKit.Check("Enable defaultOverview cache", dpiS,
             cfg.GetSecBool(Section, "EnableOverviewCache", true), readOnly);
-        chkOverview.Location = new Point(S(14), S(80));
+        chkOverview.Location = new Point(S(14), S(54));
         gBehavior.Controls.Add(chkAuto);
-        gBehavior.Controls.Add(chkMerge);
         gBehavior.Controls.Add(chkOverview);
-
-        var lblDup = new Label
-        {
-            AutoSize = true, ForeColor = Fg, BackColor = ModulePanelKit.Bg,
-            Font = new Font("Segoe UI", 9f),
-            Location = new Point(S(14), S(112)), Text = "Duplicate handling:",
-        };
-        var cmbDup = ModulePanelKit.Combo(dpiS, readOnly, width: 180);
-        cmbDup.Location = new Point(S(150), S(109));
-        cmbDup.Items.AddRange(DuplicateModes);
-        cmbDup.SelectedIndex = DuplicateIndex(cfg.GetSec(Section, "DuplicateHandling", "Off"));
-        gBehavior.Controls.Add(lblDup);
-        gBehavior.Controls.Add(cmbDup);
-
-        var lblBehaviorNote = ModulePanelKit.Caption(
-            "Merge and duplicate-handling are stored preferences; the LB→ExtendDB merge they drive is not "
-            + "performed by LiteBox yet (read-only use).", dpiS, GroupW - 40);
-        lblBehaviorNote.Location = new Point(S(14), S(140));
-        gBehavior.Controls.Add(lblBehaviorNote);
         root.Controls.Add(gBehavior);
 
         // ════════════════════════════════════════════════════════════════════
@@ -399,40 +358,8 @@ internal static class BasePanel
                 finally { try { if (!close.IsDisposed) close.Enabled = true; } catch { } }
             };
             dlg.ShowDialog(gStatus.FindForm());
-
-            // Adoption may have just created LiteBox's own copy → merge becomes available; refresh the status.
-            bool eng = File.Exists(ExtDbMerger.OwnExtendedDbPath);
-            btnForce.Enabled = btnUndo.Enabled = btnUnmerge.Enabled = !readOnly && eng;
             StartRefresh();
         };
-
-        // ── Merge operations (Force re-merge / Undo / Unmerge → ExtDbMerger) ──────
-        async void RunMergeOp(Func<IProgress<string>, ExtDbMerger.MergeResult> op)
-        {
-            if (readOnly) return;
-            btnForce.Enabled = btnUndo.Enabled = btnUnmerge.Enabled = false;
-            btnUpdate.Enabled = false; btnRefresh.Enabled = false;
-            var prog = new Progress<string>(m => Ui(() => { if (!lblProgress.IsDisposed) lblProgress.Text = m; }));
-            try
-            {
-                var res = await Task.Run(() => op(prog));
-                Ui(() => { if (!lblProgress.IsDisposed) lblProgress.Text = res.Message; });
-            }
-            catch (Exception ex) { Ui(() => { if (!lblProgress.IsDisposed) lblProgress.Text = "Failed: " + ex.Message; }); }
-            finally
-            {
-                Ui(() =>
-                {
-                    bool eng = File.Exists(ExtDbMerger.OwnExtendedDbPath);
-                    btnForce.Enabled = btnUndo.Enabled = btnUnmerge.Enabled = !readOnly && eng;
-                    btnUpdate.Enabled = !readOnly; btnRefresh.Enabled = true;
-                });
-                StartRefresh();
-            }
-        }
-        btnForce.Click   += (_, _) => RunMergeOp(p => ExtDbMerger.RunMerge(p));
-        btnUndo.Click    += (_, _) => RunMergeOp(p => ExtDbMerger.UndoLastMerge(p));
-        btnUnmerge.Click += (_, _) => RunMergeOp(p => ExtDbMerger.Unmerge(p));
 
         // Kick off the first status read once the panel has a window handle to marshal onto.
         void OnHandle(object? _, EventArgs __) => StartRefresh();
@@ -449,9 +376,7 @@ internal static class BasePanel
                 c.SetSec(Section, "RemoteImageBaseUrl", (mirror.Text ?? "").Trim());
                 c.SetSec(Section, "OverviewSources", string.Join(",", list.Items.Cast<object>().Select(o => o.ToString())));
                 c.SetSec(Section, "AutoUpdateDb", chkAuto.Checked ? "true" : "false");
-                c.SetSec(Section, "EnableLbMerge", chkMerge.Checked ? "true" : "false");
                 c.SetSec(Section, "EnableOverviewCache", chkOverview.Checked ? "true" : "false");
-                c.SetSec(Section, "DuplicateHandling", DuplicateModes[Math.Max(0, cmbDup.SelectedIndex)]);
                 c.Save();
             }
             catch { }
@@ -474,12 +399,6 @@ internal static class BasePanel
         return items;
     }
 
-    private static int DuplicateIndex(string? value)
-    {
-        for (int i = 0; i < DuplicateModes.Length; i++)
-            if (string.Equals(DuplicateModes[i], value, OIC)) return i;
-        return 0;
-    }
 
     /// <summary>The Extended-DB version is a compact UTC timestamp (yyyyMMddHHmmss); render it readably.</summary>
     private static string FormatVersion(string? v)

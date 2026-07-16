@@ -216,6 +216,19 @@ internal static class EmbeddedWebServer
         // Require a non-empty sub-path (matches the source's `.+`).
         _router.Add(@"/vendor/(?<path>.+)", _vendor.Handle);
 
+        // ── S2: media proxy + thumbs + badges + recent-epoch + parental ───────────
+        // Theme-agnostic → registered unconditionally, BEFORE the database catch-all. Order within the
+        // /api/media/ family: the id form (single dot, digits) precedes the signed-token form (two dots) — the
+        // two regexes are disjoint, but registering id-first keeps intent obvious.
+        _router.Add(@"/thumbs/(?<id>\d+)\.jpg", ThumbHandler.Handle);
+        _router.Add(@"/api/media/(?<id>\d+)\.(?<ext>[a-z0-9]{1,6})", MediaProxy.HandleThumbById);
+        _router.Add(@"/api/media/(?<token>[A-Z0-9]+)\.(?<sig>[A-Z0-9]+)\.(?<ext>[a-z0-9]{1,6})", MediaProxy.Handle);
+        _router.Add(@"/api/badges/(?<name>[^/]+)\.png", BadgeApi.Handle);
+        _router.Add(@"/api/recent/epoch", RecentEpochApi.Handle);
+        _router.Add(@"/api/parental/state", ParentalApi.HandleState);
+        _router.Add(@"/api/parental/unlock", ParentalApi.HandleUnlock);
+        _router.Add(@"/api/parental/lock", ParentalApi.HandleLock);
+
         // BigBox Web theme → web\bigbox\. Bare "/bigbox" 301s so relative fetches resolve against the dir.
         if (WebConfig.EnableBigBoxWeb)
         {

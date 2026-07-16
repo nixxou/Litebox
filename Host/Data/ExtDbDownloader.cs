@@ -97,6 +97,37 @@ internal static class ExtDbDownloader
     /// up to date afterwards — including the "staged as .todo because the live file was locked"
     /// case (the swap then completes on next boot). Returns false on any failure or cancel.
     /// </summary>
+    /// <summary>Copies an existing legacy (plugin) Extended-DB into LiteBox's OWN Core\litebox copy so LiteBox
+    /// owns/manages it (merge, atomic swaps) without a multi-GB re-download. Reports progress; atomic swap into place.</summary>
+    private static async Task<bool> AdoptLegacyAsync(string legacy, string cacheDir, IProgress<string>? progress, CancellationToken ct)
+    {
+        string tmp = Path.Combine(cacheDir, "adopt.tmp.db");
+        try
+        {
+            long total = 0; try { total = new FileInfo(legacy).Length; } catch { }
+            Report(progress, $"Adopting the existing database into LiteBox ({(total > 0 ? total / (1 << 20) + " MB" : "…")})...");
+            TryDelete(tmp);
+            await using (var src = File.OpenRead(legacy))
+            await using (var dst = File.Create(tmp))
+            {
+                var buf = new byte[1 << 20];
+                long done = 0; double lastPct = 0; int r;
+                while ((r = await src.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false)) > 0)
+                {
+                    await dst.WriteAsync(buf.AsMemory(0, r), ct).ConfigureAwait(false);
+                    done += r;
+                    if (total > 0) { double pct = 100.0 * done / total; if (pct - lastPct >= 5) { lastPct = pct; Report(progress, $"  adopting: {pct:F0}%"); } }
+                }
+            }
+            bool swapped = await SwapIntoPlaceAsync(tmp, ct).ConfigureAwait(false);
+            if (swapped) MetadataDb.InvalidateExtendedDbProbe();
+            Report(progress, swapped ? "Database is now managed by LiteBox." : "Adopted — applies on next start (the DB is in use).");
+            return true;
+        }
+        catch (OperationCanceledException) { TryDelete(tmp); Report(progress, "Adopt cancelled."); return false; }
+        catch (Exception ex) { TryDelete(tmp); LbLog.Warn("extdb", "adopt failed: " + ex.Message); Report(progress, "Adopt failed: " + ex.Message); return false; }
+    }
+
     public static async Task<bool> DownloadAndInstallAsync(IProgress<string>? progress, CancellationToken ct)
     {
         try
@@ -117,6 +148,16 @@ internal static class ExtDbDownloader
             }
             if (plan.UpToDate)
             {
+                // Up to date — but if LiteBox has no OWN copy yet and only a legacy (plugin) copy exists, ADOPT
+                // it (copy into Core\litebox) so LiteBox owns and manages the DB (merge, atomic swaps) without a
+                // multi-GB re-download.
+                if (!File.Exists(TargetPath))
+                {
+                    var legacy = MetadataDb.ExtendedDbPath;   // own is absent → this resolves to the legacy copy (or null)
+                    if (!string.IsNullOrEmpty(legacy) && File.Exists(legacy)
+                        && !string.Equals(Path.GetFullPath(legacy!), Path.GetFullPath(TargetPath), StringComparison.OrdinalIgnoreCase))
+                        return await AdoptLegacyAsync(legacy!, cacheDir, progress, ct).ConfigureAwait(false);
+                }
                 Report(progress, "Already up to date.");
                 return true;
             }

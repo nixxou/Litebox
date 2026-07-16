@@ -93,34 +93,31 @@ internal static class BasePanel
         gStatus.Controls.Add(lblGithub);
         gStatus.Controls.Add(lblDetails);
 
+        // Button layout mirrors the plugin: Update / Force re-merge on top, Undo / Unmerge below, Refresh right.
         var btnUpdate = ModulePanelKit.Button("Update from GitHub", dpiS, readOnly);
         btnUpdate.Location = new Point(S(14), S(104));
-        var btnRefresh = ModulePanelKit.Button("Refresh", dpiS);
-        btnRefresh.Location = new Point(S(184), S(104));
-        var lblProgress = ModulePanelKit.Caption("", dpiS, GroupW - 40);
-        lblProgress.Location = new Point(S(14), S(138));
-        gStatus.Controls.Add(btnUpdate);
-        gStatus.Controls.Add(btnRefresh);
-        gStatus.Controls.Add(lblProgress);
-
-        // Merge actions — native LB→ExtendDB merge engine (ExtDbMerger). Manual merge is intentional, so it
-        // is gated only on !readOnly + own-DB present; [Base] EnableLbMerge gates only the boot auto-merge.
         var btnForce = ModulePanelKit.Button("Force re-merge", dpiS);
-        btnForce.Location = new Point(S(14), S(166));
+        btnForce.Location = new Point(S(176), S(104));
         var btnUndo = ModulePanelKit.Button("Undo last merge", dpiS);
-        btnUndo.Location = new Point(S(154), S(166));
-        var btnUnmerge = ModulePanelKit.Button("Unmerge", dpiS);
-        btnUnmerge.Location = new Point(S(300), S(166));
+        btnUndo.Location = new Point(S(14), S(138));
+        var btnUnmerge = ModulePanelKit.Button("Unmerge from cache", dpiS);
+        btnUnmerge.Location = new Point(S(176), S(138));
+        var btnRefresh = ModulePanelKit.Button("Refresh", dpiS);
+        btnRefresh.Location = new Point(S(346), S(104));
+        // Merge is gated on !readOnly + LiteBox owning its OWN Extended-DB copy (a legacy plugin copy is
+        // read-only and adopted first — see Update-from-GitHub). [Base] EnableLbMerge gates only the boot auto-merge.
         bool mergeEngine = File.Exists(ExtDbMerger.OwnExtendedDbPath);
         btnForce.Enabled = btnUndo.Enabled = btnUnmerge.Enabled = !readOnly && mergeEngine;
-        gStatus.Controls.Add(btnForce);
-        gStatus.Controls.Add(btnUndo);
-        gStatus.Controls.Add(btnUnmerge);
+        gStatus.Controls.AddRange(new Control[] { btnUpdate, btnForce, btnUndo, btnUnmerge, btnRefresh });
+
+        var lblProgress = ModulePanelKit.Caption("", dpiS, GroupW - 40);
+        lblProgress.Location = new Point(S(14), S(174));
+        gStatus.Controls.Add(lblProgress);
 
         var lblMergeGap = ModulePanelKit.Caption(
             "Fold your LaunchBox metadata into LiteBox's own Extended DB copy. Undo/Unmerge revert to the "
             + "pristine downloaded database.", dpiS, GroupW - 40);
-        lblMergeGap.Location = new Point(S(14), S(198));
+        lblMergeGap.Location = new Point(S(14), S(200));
         gStatus.Controls.Add(lblMergeGap);
         root.Controls.Add(gStatus);
 
@@ -372,18 +369,41 @@ internal static class BasePanel
         }
 
         btnRefresh.Click += (_, _) => StartRefresh();
-        btnUpdate.Click += async (_, _) =>
+        btnUpdate.Click += (_, _) =>
         {
             if (readOnly) return;
-            btnUpdate.Enabled = false; btnRefresh.Enabled = false;
-            var prog = new Progress<string>(m => Ui(() => { if (!lblProgress.IsDisposed) lblProgress.Text = m; }));
-            try { await ExtDbDownloader.DownloadAndInstallAsync(prog, CancellationToken.None); }
-            catch (Exception ex) { Ui(() => { if (!lblProgress.IsDisposed) lblProgress.Text = "Failed: " + ex.Message; }); }
-            finally
+            using var dlg = new Form
             {
-                Ui(() => { btnUpdate.Enabled = !readOnly; btnRefresh.Enabled = true; });
-                StartRefresh();
-            }
+                Text = "Extended database — update", StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, ShowIcon = false,
+                ClientSize = new Size(S(480), S(150)), BackColor = ModulePanelKit.Bg, ForeColor = ModulePanelKit.Fg,
+            };
+            var lbl = new Label
+            {
+                Dock = DockStyle.Fill, Padding = new Padding(S(18), S(18), S(18), S(8)), ForeColor = ModulePanelKit.Fg,
+                BackColor = ModulePanelKit.Bg, Text = "Starting…", Font = new Font("Segoe UI", 9.5f),
+            };
+            var close = new Button
+            {
+                Text = "Close", Enabled = false, Dock = DockStyle.Bottom, Height = S(36), FlatStyle = FlatStyle.Flat,
+                BackColor = ModulePanelKit.Panel, ForeColor = ModulePanelKit.Fg,
+            };
+            close.FlatAppearance.BorderColor = ModulePanelKit.Panel;
+            close.Click += (_, _) => dlg.Close();
+            dlg.Controls.Add(lbl); dlg.Controls.Add(close);
+            var prog = new Progress<string>(m => { try { if (!lbl.IsDisposed) lbl.Text = m; } catch { } });
+            dlg.Shown += async (_, _) =>
+            {
+                try { await ExtDbDownloader.DownloadAndInstallAsync(prog, CancellationToken.None); }
+                catch (Exception ex) { try { if (!lbl.IsDisposed) lbl.Text = "Failed: " + ex.Message; } catch { } }
+                finally { try { if (!close.IsDisposed) close.Enabled = true; } catch { } }
+            };
+            dlg.ShowDialog(gStatus.FindForm());
+
+            // Adoption may have just created LiteBox's own copy → merge becomes available; refresh the status.
+            bool eng = File.Exists(ExtDbMerger.OwnExtendedDbPath);
+            btnForce.Enabled = btnUndo.Enabled = btnUnmerge.Enabled = !readOnly && eng;
+            StartRefresh();
         };
 
         // ── Merge operations (Force re-merge / Undo / Unmerge → ExtDbMerger) ──────
@@ -443,9 +463,12 @@ internal static class BasePanel
 
     /// <summary>Reads the persisted [Base] OverviewSources comma list, guaranteeing "Launchbox" is present
     /// (inserted at the front when absent) so the non-removable fallback always exists.</summary>
+    /// <summary>First-run default = the same priority list ExtendDB seeds.</summary>
+    private const string DefaultSources = "Launchbox,ScreenScraper-En,Steam-En,VNDB,Ai-En";
+
     private static List<string> LoadSources(LiteBoxConfig cfg)
     {
-        var raw = cfg.GetSec(Section, "OverviewSources", "Launchbox") ?? "Launchbox";
+        var raw = cfg.GetSec(Section, "OverviewSources", DefaultSources) ?? DefaultSources;
         var items = raw.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
         if (!items.Any(s => string.Equals(s, "Launchbox", OIC))) items.Insert(0, "Launchbox");
         return items;

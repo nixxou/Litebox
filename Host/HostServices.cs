@@ -702,22 +702,28 @@ internal static class HostLaunch
         try
         {
             bool autoExtract = (ep?.AutoExtract) ?? SafeBool(() => emulator.AutoExtract);
-            if (autoExtract && IsArchive(romAbs))
+            bool isArchive = IsArchive(romAbs);
+            // Native ROM extractor (Archive MultiGame Selector): pick the CHOSEN entry (armed by the Play
+            // button, else auto-pick by tag/region priority + last-played), selective extract to the LRU
+            // disk cache, and launch that loose ROM. LiteBox owns the launch, so the "substitution" is
+            // simply returning a different path.
+            //
+            // Route archives (only when auto-extract is on) PLUS disc images / .m3u playlists (regardless
+            // of auto-extract — the profile's Convert / Copy / m3u-rewrite ops don't depend on LB's extract
+            // flag). ResolveLaunch passthroughs (returns romAbs) when the resolved profile asks for nothing.
+            if (Modules.LbModules.On(Modules.LbModule.Rom)
+                && ((autoExtract && isArchive) || Rom.RomExtractor.IsDiscImage(romAbs) || Rom.RomExtractor.IsM3u(romAbs)))
             {
-                // Native ROM extractor (Archive MultiGame Selector): pick the CHOSEN entry (armed by the
-                // Play button, else auto-pick by tag/region priority + last-played), selective extract to
-                // the LRU disk cache, and launch that loose ROM. Replaces the old defer-to-ExtendDB path —
-                // LiteBox owns the launch, so the "substitution" is simply returning a different path.
-                if (Modules.LbModules.On(Modules.LbModule.Rom))
+                var res = Rom.RomExtractor.ResolveLaunch(game, emulator, ep, romAbs, label);
+                if (res.Success && !string.IsNullOrEmpty(res.OutputFilePath))
                 {
-                    var res = Rom.RomExtractor.ResolveLaunch(game, emulator, ep, romAbs, label);
-                    if (res.Success && !string.IsNullOrEmpty(res.OutputFilePath))
-                    {
-                        Console.WriteLine($"[launch] {label}: rom-extractor \"{Path.GetFileName(romAbs)}\" → \"{res.OutputFilePath}\"");
-                        return res.OutputFilePath;
-                    }
+                    Console.WriteLine($"[launch] {label}: rom-extractor \"{Path.GetFileName(romAbs)}\" → \"{res.OutputFilePath}\"");
+                    return res.OutputFilePath;
                 }
-                // Module off / not an archive we handle / extraction failed → LiteBox's flat fallback.
+            }
+            // Archive + module off / native resolve failed → LiteBox's flat extract-everything fallback.
+            if (autoExtract && isArchive)
+            {
                 var extracted = TryExtractArchive(romAbs, label);
                 if (!string.IsNullOrEmpty(extracted)) return extracted;
             }

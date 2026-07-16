@@ -330,10 +330,53 @@ internal static class ModulesOptions
         p.Controls.Add(Cap("Disc-image extensions", 388));
         var discExt = Field(4, 406, 560); discExt.Text = cfg.DiscImageExtensions ?? ""; p.Controls.Add(discExt);
 
+        // ── R4: the following controls edit the GlobalDefault profile (the bottom of the cascade). The full
+        //    per-(platform, emulator) editor is still deferred. ──
+        var gd = cfg.GlobalDefault;
+
+        CheckBox Check(string t, int y, bool val) => new()
+        {
+            Text = t, AutoSize = true, Checked = val, Enabled = !readOnly,
+            ForeColor = Fg, BackColor = Bg, Location = new Point(S(4), S(y)), Font = new Font("Segoe UI", 9f),
+        };
+
+        // ── Disc-image conversion ─────────────────────────────────────────────
+        p.Controls.Add(Head("Disc-image conversion", 440));
+        p.Controls.Add(Cap("One rule per line: inputExt = outputFormat (e.g. \"cue/bin = chd\", \"iso = rvz\"). Applies to Convert mode and to \"convert after extract\". Needs chdman.exe / DolphinTool.exe under ThirdParty\\RomExtractor (reused from the ExtendDB plugin if installed).", 464));
+        var convertBox = new TextBox
+        {
+            Location = new Point(S(4), S(506)), Width = S(400), Height = S(70), Multiline = true, ScrollBars = ScrollBars.Vertical,
+            BackColor = PanelC, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Consolas", 9f), ReadOnly = readOnly, WordWrap = false,
+        };
+        convertBox.Text = ConvertRulesToText(gd);
+        p.Controls.Add(convertBox);
+        var convertAfter = Check("Convert after extract (archived disc image → the format above)", 582, gd.ConvertAfterExtract);
+        p.Controls.Add(convertAfter);
+
+        p.Controls.Add(Cap("Copy extensions (Copy mode) — files with these extensions are copied to the cache instead of extracted.", 612));
+        var copyExt = Field(4, 636, 400); copyExt.Text = gd.CopyExtensions ?? ""; p.Controls.Add(copyExt);
+
+        // ── Texture pack ──────────────────────────────────────────────────────
+        p.Controls.Add(Head("Hi-res texture pack", 676));
+        var texEnabled = Check("Extract texture files from the archive on launch", 700, gd.TextureEnabled);
+        p.Controls.Add(texEnabled);
+        p.Controls.Add(Cap("Texture extensions (comma-separated, e.g. \"htc, hts\")", 728));
+        var texExt = Field(4, 746, 300); texExt.Text = gd.TextureExtensions ?? ""; p.Controls.Add(texExt);
+        p.Controls.Add(Cap("Install path — tokens: {EmuDir} {GameId} {GameTitle}", 776));
+        var texPath = Field(4, 794, 560); texPath.Text = gd.TextureExtractPath ?? ""; p.Controls.Add(texPath);
+
+        // ── RAM disk ──────────────────────────────────────────────────────────
+        p.Controls.Add(Head("RAM disk (ImDisk)", 834));
+        var ramEnabled = Check("Extract to a RAM drive when possible (falls back to the disk cache)", 858, gd.RamDiskEnabled);
+        p.Controls.Add(ramEnabled);
+        p.Controls.Add(CapAt("Max RAM drive (MB)", 4, 886));
+        var ramMax = Field(4, 904, 120); ramMax.Text = gd.RamDiskMaxMb.ToString(); p.Controls.Add(ramMax);
+        var ramNote = Cap(RamDiskCapabilityNote(), 936, 640); p.Controls.Add(ramNote);
+
         // ── Reset ─────────────────────────────────────────────────────────────
         var reset = new Button
         {
-            Text = "Reset to defaults", AutoSize = true, Location = new Point(S(4), S(444)),
+            Text = "Reset to defaults", AutoSize = true, Location = new Point(S(4), S(980)),
             FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Panel2, ForeColor = Fg, Enabled = !readOnly,
         };
         reset.FlatAppearance.BorderColor = LiteBoxTheme.Panel2;
@@ -351,6 +394,15 @@ internal static class ModulesOptions
             metaExt.Text = fresh.MetadataExtensions ?? "";
             arcExt.Text = fresh.ArchiveExtensions ?? "";
             discExt.Text = fresh.DiscImageExtensions ?? "";
+            var fgd = fresh.GlobalDefault;
+            convertBox.Text = ConvertRulesToText(fgd);
+            convertAfter.Checked = fgd.ConvertAfterExtract;
+            copyExt.Text = fgd.CopyExtensions ?? "";
+            texEnabled.Checked = fgd.TextureEnabled;
+            texExt.Text = fgd.TextureExtensions ?? "";
+            texPath.Text = fgd.TextureExtractPath ?? "";
+            ramEnabled.Checked = fgd.RamDiskEnabled;
+            ramMax.Text = fgd.RamDiskMaxMb.ToString();
         };
         p.Controls.Add(reset);
 
@@ -366,9 +418,68 @@ internal static class ModulesOptions
             c.MetadataExtensions = (metaExt.Text ?? "").Trim();
             c.ArchiveExtensions = (arcExt.Text ?? "").Trim();
             c.DiscImageExtensions = (discExt.Text ?? "").Trim();
+
+            // R4 — GlobalDefault profile fields.
+            var g2 = c.GlobalDefault;
+            g2.Conversions = TextToConvertRules(convertBox.Text);
+            g2.ConvertAfterExtract = convertAfter.Checked;
+            g2.CopyExtensions = (copyExt.Text ?? "").Trim();
+            g2.TextureEnabled = texEnabled.Checked;
+            g2.TextureExtensions = (texExt.Text ?? "").Trim();
+            g2.TextureExtractPath = (texPath.Text ?? "").Trim();
+            g2.RamDiskEnabled = ramEnabled.Checked;
+            if (int.TryParse((ramMax.Text ?? "").Trim(), out var rm) && rm > 0) g2.RamDiskMaxMb = rm;
+
             c.Save();
             RomConfig.Invalidate();   // next reader re-reads from disk
         }
         return (p, Apply);
+    }
+
+    /// <summary>Renders a profile's convert table as one "input = output" line per rule.</summary>
+    private static string ConvertRulesToText(ArchivePriorityRow row)
+    {
+        if (row?.Conversions == null || row.Conversions.Count == 0) return "";
+        var sb = new System.Text.StringBuilder();
+        foreach (var r in row.Conversions)
+        {
+            if (string.IsNullOrWhiteSpace(r.Input)) continue;
+            sb.Append(r.Input.Trim()).Append(" = ").Append((r.Output ?? "").Trim()).AppendLine();
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>Parses the "input = output" convert-rules text back into a ConvertRule list. Blank / malformed
+    /// lines are skipped.</summary>
+    private static System.Collections.Generic.List<ConvertRule> TextToConvertRules(string text)
+    {
+        var list = new System.Collections.Generic.List<ConvertRule>();
+        if (string.IsNullOrWhiteSpace(text)) return list;
+        foreach (var raw in text.Replace("\r", "").Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith("#")) continue;
+            int eq = line.IndexOf('=');
+            if (eq <= 0) continue;
+            var input = line.Substring(0, eq).Trim();
+            var output = line.Substring(eq + 1).Trim();
+            if (input.Length == 0) continue;
+            list.Add(new ConvertRule { Input = input, Output = output });
+        }
+        return list;
+    }
+
+    /// <summary>Live ImDisk availability note for the RAM-disk section.</summary>
+    private static string RamDiskCapabilityNote()
+    {
+        try
+        {
+            if (!ArchiveRamDisk.IsDriverInstalled())
+                return "ImDisk driver not detected — RAM disk unavailable; extractions use the disk cache.";
+            if (ArchiveRamDisk.IsReady())
+                return "ImDisk ready.";
+            return "ImDisk driver present but the elevated mount helper is not installed — mounts need admin (falls back to the disk cache).";
+        }
+        catch { return "ImDisk status unavailable."; }
     }
 }

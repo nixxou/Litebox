@@ -61,37 +61,36 @@ internal static class WebPanel
         // ── Local web server ──────────────────────────────────────────────────
         var gServer = ModulePanelKit.Group("Local web server", dpiS);
         gServer.Location = new Point(S(4), y);
-        gServer.Size = new Size(S(GroupW), S(196));
+        gServer.Size = new Size(S(GroupW), S(162));
         root.Controls.Add(gServer);
         y += gServer.Height + S(12);
 
-        var chkEnable = ModulePanelKit.Check("Enable the local web server (at startup)", dpiS, readOnly: readOnly);
-        chkEnable.Location = new Point(S(14), S(28));
-        gServer.Controls.Add(chkEnable);
+        // NOTE: the module's enable state is owned solely by the Modules card grid (LbModules.SetOn).
+        // This panel MUST NOT call SetOn(Web) — a second writer here would fight the card and revert it.
 
         var lblPort = ModulePanelKit.Caption("Port:", dpiS);
-        lblPort.Location = new Point(S(14), S(62));
+        lblPort.Location = new Point(S(14), S(28));
         gServer.Controls.Add(lblPort);
         var numPort = new NumericUpDown
         {
-            Minimum = 1, Maximum = 65535, Location = new Point(S(70), S(59)), Width = S(90),
+            Minimum = 1, Maximum = 65535, Location = new Point(S(70), S(25)), Width = S(90),
             BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, BorderStyle = BorderStyle.FixedSingle,
             Font = new Font("Segoe UI", 9f), Enabled = !readOnly,
         };
         gServer.Controls.Add(numPort);
         var lblPortStatus = ModulePanelKit.Caption("", dpiS);
-        lblPortStatus.Location = new Point(S(175), S(62));
+        lblPortStatus.Location = new Point(S(175), S(28));
         gServer.Controls.Add(lblPortStatus);
 
         var lblIps = ModulePanelKit.Caption("Allowed IPs (LAN, comma-separated; empty = loopback only):", dpiS);
-        lblIps.Location = new Point(S(14), S(96));
+        lblIps.Location = new Point(S(14), S(62));
         gServer.Controls.Add(lblIps);
         var txtIps = ModulePanelKit.TextField(dpiS, readOnly, width: 500);
-        txtIps.Location = new Point(S(14), S(118));
+        txtIps.Location = new Point(S(14), S(84));
         gServer.Controls.Add(txtIps);
 
         var chkGzip = ModulePanelKit.Check("Gzip-compress JSON responses", dpiS, readOnly: readOnly);
-        chkGzip.Location = new Point(S(14), S(152));
+        chkGzip.Location = new Point(S(14), S(118));
         gServer.Controls.Add(chkGzip);
 
         void RefreshPortStatus()
@@ -208,7 +207,6 @@ internal static class WebPanel
         try
         {
             var cfg = LiteBoxConfig.LoadForExe();
-            chkEnable.Checked = LbModules.On(LbModule.Web);
             numPort.Value = Clamp(ParseInt(cfg.GetSec(Sec, "Port"), 8080), 1, 65535);
             txtIps.Text = cfg.GetSec(Sec, "AllowedIps", "") ?? "";
             chkGzip.Checked = cfg.GetSecBool(Sec, "GzipJson", true);
@@ -243,8 +241,6 @@ internal static class WebPanel
             if (readOnly) return;
             try
             {
-                LbModules.SetOn(LbModule.Web, chkEnable.Checked);
-
                 var cfg = LiteBoxConfig.LoadForExe();
                 cfg.SetSec(Sec, "Port", ((int)numPort.Value).ToString(System.Globalization.CultureInfo.InvariantCulture));
                 cfg.SetSec(Sec, "AllowedIps", (txtIps.Text ?? "").Trim());

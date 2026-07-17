@@ -22,6 +22,8 @@ internal sealed class ExtDbUpdateWindow : Form
     private readonly TextBox _log;
     private readonly Button _cancel;
     private readonly Button _close;
+    private readonly CheckBox _autoClose;
+    private System.Windows.Forms.Timer? _autoTimer;
     private bool _done;
 
     /// <summary>Opens (or focuses) the update window and starts/joins the shared update operation.
@@ -61,14 +63,20 @@ internal sealed class ExtDbUpdateWindow : Form
         pad.Controls.Add(_log);
 
         var bar = new Panel { Dock = DockStyle.Bottom, Height = S(46), BackColor = ModulePanelKit.Bg };
+        _autoClose = new CheckBox
+        {
+            Text = "Auto-close on completion", Checked = true, AutoSize = true,
+            Location = new Point(S(14), S(14)), ForeColor = ModulePanelKit.Fg, BackColor = ModulePanelKit.Bg,
+            FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9f),
+        };
         _cancel = MakeButton("Cancel", S);
         _cancel.Location = new Point(S(332), S(8));
-        _cancel.Click += (_, _) => { _cancel.Enabled = false; ExtDbDownloader.CancelShared(); Append("Cancelling…"); };
+        _cancel.Click += (_, _) => { _cancel.Enabled = false; CancelAutoClose(); ExtDbDownloader.CancelShared(); Append("Cancelling…"); };
         _close = MakeButton("Close", S);
         _close.Location = new Point(S(444), S(8));
         _close.Enabled = false;
         _close.Click += (_, _) => Close();
-        bar.Controls.Add(_cancel); bar.Controls.Add(_close);
+        bar.Controls.Add(_autoClose); bar.Controls.Add(_cancel); bar.Controls.Add(_close);
 
         Controls.Add(pad); Controls.Add(bar);
         FormClosed += (_, _) => { if (ReferenceEquals(_open, this)) _open = null; };
@@ -100,12 +108,35 @@ internal sealed class ExtDbUpdateWindow : Form
         _ = task.ContinueWith(t => Ui(() =>
         {
             _done = true;
+            bool ok = !t.IsFaulted && t.Result;
             Append(t.IsFaulted ? "Failed: " + (t.Exception?.GetBaseException().Message ?? "error")
                  : t.Result ? "Done." : "Not completed.");
             _cancel.Enabled = false;
             _close.Enabled = true;
+            // ExtendDB parity: success + checkbox → auto-dismiss after a short beat so the user sees the log.
+            if (ok && _autoClose.Checked) ArmAutoClose();
         }));
         return task;
+    }
+
+    /// <summary>Arms the 2.5 s auto-close (only after a successful completion). A single-shot WinForms timer so
+    /// it ticks on the UI thread; disarmed if the user unchecks the box, cancels, or the window is gone.</summary>
+    private void ArmAutoClose()
+    {
+        CancelAutoClose();
+        _autoTimer = new System.Windows.Forms.Timer { Interval = 2500 };
+        _autoTimer.Tick += (_, _) =>
+        {
+            CancelAutoClose();
+            if (!IsDisposed && _autoClose.Checked) { try { Close(); } catch { } }
+        };
+        _autoTimer.Start();
+    }
+
+    private void CancelAutoClose()
+    {
+        try { _autoTimer?.Stop(); _autoTimer?.Dispose(); } catch { }
+        _autoTimer = null;
     }
 
     private void Append(string line)

@@ -340,9 +340,26 @@ internal static class BasePanel
         btnUpdate.Click += async (_, _) =>
         {
             if (readOnly) return;
-            // The ExtendDB-style progress window over the SHARED operation: if the boot auto-update is already
-            // downloading, this joins it (no ".part in use" collision) instead of starting a second download.
-            try { await ExtDbUpdateWindow.ShowOrFocus(gStatus.FindForm()); } catch { }
+            btnUpdate.Enabled = false;
+            try
+            {
+                // ExtendDB/boot parity: pre-check WITHOUT a window and only pop the progress dialog when there
+                // is real work (an update, or no own copy yet → fresh install / legacy adoption). Up to date →
+                // no window at all, just refresh the inline status. The window is still a VIEWER over the shared
+                // operation, so clicking while the boot auto-update runs joins it (no ".part in use" collision).
+                bool needWork;
+                try
+                {
+                    var res = await Task.Run(() => ExtDbDownloader.CheckAsync(CancellationToken.None)).ConfigureAwait(true);
+                    needWork = res.UpdateAvailable || !File.Exists(ExtDbDownloader.TargetPath);
+                }
+                catch { needWork = true; }   // check unreachable → let the window surface the error
+
+                if (needWork) await ExtDbUpdateWindow.ShowOrFocus(gStatus.FindForm());
+                else await Task.Run(() => ExtDbDownloader.RunSharedAsync());   // silent no-op / legacy adoption
+            }
+            catch { }
+            finally { btnUpdate.Enabled = !readOnly; }
             Data.OverviewCache.RunSyncIfNeeded();   // fresh/adopted DB → (re)build the defaultOverview column
             StartRefresh();
         };

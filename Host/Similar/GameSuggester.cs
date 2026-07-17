@@ -27,6 +27,23 @@
 //     resurrecting a zero-score candidate.
 //   • A candidate is INCLUDED iff it clears every hard filter AND score ≥ cfg.MinimumScore.
 //
+// DB-only pool cache — 3 layers, parity with ExtendDB's SimilarGames/CandidatePoolCache.cs:
+//   L1 in-memory : the FULL pool, keyed (ExtendedDbPath + file mtime + shared SQL pre-filter tag).
+//       CORRECTNESS invalidation is the mtime key alone (in LiteBox nothing writes the extended DB in
+//       place — the downloader swaps the file). The plugin's two other triggers are about RAM, and are
+//       kept: a 5-min idle TTL (reaper timer — ~200k normalised candidates are hundreds of MB) and an
+//       immediate drop on game launch (MainWindow.OnGameStarted → ReleaseMemory — the mirror of the
+//       plugin's GameLaunchHook.InvalidateInMemory) so the RAM goes to the game. The local-library dedupe
+//       is applied per call, OUTSIDE the cache key, so the pool survives library changes.
+//   L2 disk snapshot : Core\litebox\cache\suggester-dbpool.zst — zstd-compressed length-prefixed BINARY
+//       (BinaryWriter) of the RAW rows, key embedded; a request after boot or after a TTL/launch drop
+//       skips the SQL scan when the DB hasn't changed. Binary, not JSON, for decode speed — the plugin
+//       used msgpack for the same reason; BinaryWriter matches it without the extra dependency. One file,
+//       overwritten on rebuild (the plugin's per-key msgpack files were never swept — this can't
+//       accumulate). RAW-only + renormalise-on-load, the same size/CPU trade the plugin chose.
+//   L3 SQL rebuild : single SELECT over the Extended DB Games table with the shared ReleaseType pushdown
+//       (a hard filter is pushed to SQL only when every AllowDbGames config carries the identical one).
+//
 // Everything here is assembly-internal (the whole LiteBox host is one internal assembly); "public API" in the
 // task sense = the clean GameSuggester.RunAll / RunCategory entry points any in-assembly caller uses.
 
@@ -39,6 +56,7 @@ using System.IO;
 using System.Text;
 using LbApiHost.Host.Media;
 using Microsoft.Data.Sqlite;
+using ZstdSharp;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -574,11 +592,47 @@ internal static class CandidateProvider
         catch { return null; }
     }
 
-    // ── DB-only pool (cached on Extended-DB path + mtime) ──
+    // ── DB-only pool (3 layers: in-memory ⇄ disk snapshot ⇄ SQL rebuild — see file header) ──
 
     private static readonly object _dbLock = new();
     private static string _dbCacheKey;
     private static List<CandidateGame> _dbCachePool;
+    private static DateTime _dbCacheLastHit;                 // guarded by _dbLock
+    private static System.Threading.Timer _dbCacheReaper;    // idle-TTL sweep (armed while a pool is held)
+    private static readonly TimeSpan InMemTtl = TimeSpan.FromMinutes(5);
+
+    /// <summary>Drop the in-memory pool NOW and hand the RAM back (game launch, or the idle reaper).
+    /// Purely a memory measure — the disk snapshot makes the next request cheap.</summary>
+    public static void ReleaseMemory()
+    {
+        lock (_dbLock)
+        {
+            _dbCachePool = null;
+            _dbCacheKey = null;
+            try { _dbCacheReaper?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite); } catch { }
+        }
+    }
+
+    /// <summary>(Re)arm the idle sweep — runs once a minute while a pool is cached.</summary>
+    private static void ArmReaper()
+    {
+        _dbCacheLastHit = DateTime.UtcNow;
+        if (_dbCacheReaper == null)
+            _dbCacheReaper = new System.Threading.Timer(_ =>
+            {
+                lock (_dbLock)
+                {
+                    if (_dbCachePool != null && DateTime.UtcNow - _dbCacheLastHit > InMemTtl)
+                    {
+                        _dbCachePool = null;
+                        _dbCacheKey = null;
+                        try { _dbCacheReaper.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite); } catch { }
+                    }
+                }
+            }, null, 60_000, 60_000);
+        else
+            try { _dbCacheReaper.Change(60_000, 60_000); } catch { }
+    }
 
     /// <summary>Extended-DB candidate pool (cloud games), deduped against the local library's cloud ids.
     /// The FULL pool is cached (keyed on DB path + mtime + the shared SQL pre-filter); the caller-specific
@@ -590,17 +644,31 @@ internal static class CandidateProvider
         lock (_dbLock)
         {
             string path = MetadataDb.ExtendedDbPath;
-            string key = BuildCacheKey(path, filterTag);
+            // The overview expression is part of the SELECT (HasOverview flag), so it's part of the key.
+            // On the defaultOverview-column path a change rebuilds the DB (→ new mtime) anyway; but on the
+            // dynamic-COALESCE path a [Base] OverviewSources reorder changes the expression WITHOUT touching
+            // the file — without this, the snapshot would serve stale HasOverview under an unchanged key.
+            // (The source DB itself needs no extra discriminant: the FULL path is in the key, and the pool
+            // only ever reads the Extended DB — a future native-DB fallback would differ by path too.)
+            string ovSig = path != null ? Data.OverviewCache.ReadExpression(path) : "";
+            string key = BuildCacheKey(path, filterTag + "|" + ovSig);
             if (key != null && key == _dbCacheKey && _dbCachePool != null)
             {
                 full = _dbCachePool;
             }
             else
             {
-                full = LoadDbOnlyRaw(where);
+                var rows = key != null ? LoadPoolSnapshot(key) : null;   // L2: warm start off disk
+                if (rows == null)
+                {
+                    rows = LoadDbOnlyRows(where);                        // L3: SQL rebuild
+                    if (key != null && rows.Count > 0) SavePoolSnapshot(key, rows);
+                }
+                full = Materialize(rows);
                 _dbCacheKey = key;
                 _dbCachePool = full;
             }
+            ArmReaper();   // stamp the hit + keep the idle sweep alive while the pool is held
         }
 
         if (excludeLbDbIds == null || excludeLbDbIds.Count == 0) return full;
@@ -645,11 +713,157 @@ internal static class CandidateProvider
         return common;
     }
 
-    private static List<CandidateGame> LoadDbOnlyRaw(string releaseTypeEquals, int cap = 200000)
+    // ── Snapshot rows (L2/L3 interchange format) ──
+    // RAW row exactly as read from SQL, before normalisation. Normalise() runs at Materialize time in
+    // both paths, so a snapshot load and an SQL rebuild produce identical pools.
+
+    private sealed class PoolRow
     {
-        var list = new List<CandidateGame>();
+        public int Id;              // DatabaseID
+        public string Ti;           // Name
+        public string Pl;           // Platform
+        public List<string> Ge;     // Genres (split, pre-normalise)
+        public string Es;           // ESRB
+        public int? Mx;             // MaxPlayers
+        public string Rt;           // ReleaseType
+        public string De;           // Developer
+        public string Pu;           // Publisher
+        public double? Cr;          // CommunityRating
+        public int? Yr;             // ReleaseYear
+        public bool Ov;             // has a non-empty resolved overview
+    }
+
+    // Length-prefixed binary under zstd: magic + version + key + count + rows. BinaryWriter strings are
+    // UTF-8 length-prefixed; nullables are a presence byte + value. Version bump = format change; a
+    // mismatched magic/version/key just falls back to the SQL rebuild.
+    private const uint SnapshotMagic = 0x4C425350;   // "PSBL" little-endian — LiteBox suggester pool
+    private const byte SnapshotVersion = 1;
+    private const int SnapshotMaxRows = 1_000_000;   // sanity bound against a corrupt count
+
+    private static string SnapshotPath => Path.Combine(LiteBoxPaths.Dir("cache"), "suggester-dbpool.zst");
+
+    /// <summary>The disk snapshot's rows when its embedded key matches <paramref name="key"/>, else null
+    /// (missing, stale — the DB was swapped or the pre-filter changed — or unreadable/corrupt).</summary>
+    private static List<PoolRow> LoadPoolSnapshot(string key)
+    {
+        try
+        {
+            string path = SnapshotPath;
+            if (!File.Exists(path)) return null;
+            using var fs = File.OpenRead(path);
+            using var z = new DecompressionStream(fs);
+            using var r = new BinaryReader(z, Encoding.UTF8);
+
+            if (r.ReadUInt32() != SnapshotMagic || r.ReadByte() != SnapshotVersion) return null;
+            if (!string.Equals(r.ReadString(), key, StringComparison.Ordinal)) return null;
+
+            int count = r.ReadInt32();
+            if (count < 0 || count > SnapshotMaxRows) return null;
+
+            var rows = new List<PoolRow>(count);
+            for (int i = 0; i < count; i++)
+            {
+                var w = new PoolRow
+                {
+                    Id = r.ReadInt32(),
+                    Ti = r.ReadString(),
+                    Pl = r.ReadString(),
+                    Es = r.ReadString(),
+                    Rt = r.ReadString(),
+                    De = r.ReadString(),
+                    Pu = r.ReadString(),
+                };
+                int ng = r.ReadInt32();
+                if (ng < 0 || ng > 512) return null;
+                w.Ge = new List<string>(ng);
+                for (int j = 0; j < ng; j++) w.Ge.Add(r.ReadString());
+                w.Mx = r.ReadBoolean() ? r.ReadInt32() : (int?)null;
+                w.Cr = r.ReadBoolean() ? r.ReadDouble() : (double?)null;
+                w.Yr = r.ReadBoolean() ? r.ReadInt32() : (int?)null;
+                w.Ov = r.ReadBoolean();
+                rows.Add(w);
+            }
+            return rows;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Persist the raw rows for the next process (temp + move so a crash can't leave a torn file).</summary>
+    private static void SavePoolSnapshot(string key, List<PoolRow> rows)
+    {
+        string tmp = SnapshotPath + ".tmp";
+        try
+        {
+            using (var fs = File.Create(tmp))
+            using (var z = new CompressionStream(fs))
+            using (var w = new BinaryWriter(z, Encoding.UTF8))
+            {
+                w.Write(SnapshotMagic);
+                w.Write(SnapshotVersion);
+                w.Write(key);
+                w.Write(rows.Count);
+                foreach (var row in rows)
+                {
+                    w.Write(row.Id);
+                    w.Write(row.Ti ?? "");
+                    w.Write(row.Pl ?? "");
+                    w.Write(row.Es ?? "");
+                    w.Write(row.Rt ?? "");
+                    w.Write(row.De ?? "");
+                    w.Write(row.Pu ?? "");
+                    var ge = row.Ge;
+                    w.Write(ge?.Count ?? 0);
+                    if (ge != null) foreach (var g in ge) w.Write(g ?? "");
+                    w.Write(row.Mx.HasValue); if (row.Mx.HasValue) w.Write(row.Mx.Value);
+                    w.Write(row.Cr.HasValue); if (row.Cr.HasValue) w.Write(row.Cr.Value);
+                    w.Write(row.Yr.HasValue); if (row.Yr.HasValue) w.Write(row.Yr.Value);
+                    w.Write(row.Ov);
+                }
+            }
+            File.Move(tmp, SnapshotPath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { }
+        }
+    }
+
+    /// <summary>Raw rows → scored-pool candidates (normalise + tokenise), same for both cache paths.</summary>
+    private static List<CandidateGame> Materialize(List<PoolRow> rows)
+    {
+        var list = new List<CandidateGame>(rows.Count);
+        foreach (var w in rows)
+        {
+            var c = new CandidateGame
+            {
+                LbDbId      = w.Id,
+                Id          = "db-" + w.Id,
+                IsLocal     = false,
+                Title       = w.Ti ?? "",
+                Platform    = w.Pl ?? "",
+                Rating      = w.Es ?? "",
+                MaxPlayers  = w.Mx,
+                ReleaseType = w.Rt ?? "",
+                Developer   = w.De ?? "",
+                Publisher   = w.Pu ?? "",
+                CommunityStarRating = w.Cr,
+                Year        = w.Yr,
+                Series = "", PlayMode = "", Storefront = "",
+                AlternateNames = new List<string>(),
+                Genres = new List<string>(w.Ge ?? new List<string>()),   // copy: Normalise consumes it
+            };
+            c.Notes = w.Ov ? c.Title : "";
+            Normalise(c);
+            list.Add(c);
+        }
+        return list;
+    }
+
+    private static List<PoolRow> LoadDbOnlyRows(string releaseTypeEquals, int cap = 200000)
+    {
+        var rows = new List<PoolRow>();
         string dbPath = MetadataDb.ExtendedDbPath;
-        if (string.IsNullOrEmpty(dbPath) || !File.Exists(dbPath)) return list;
+        if (string.IsNullOrEmpty(dbPath) || !File.Exists(dbPath)) return rows;
 
         try { SQLitePCL.Batteries.Init(); } catch { }
 
@@ -675,35 +889,26 @@ internal static class CandidateProvider
             using var r = cmd.ExecuteReader();
             while (r.Read())
             {
-                int dbId = r.IsDBNull(0) ? 0 : r.GetInt32(0);
-                var c = new CandidateGame
+                rows.Add(new PoolRow
                 {
-                    LbDbId      = dbId,
-                    Id          = "db-" + dbId,
-                    IsLocal     = false,
-                    Title       = r.IsDBNull(1) ? "" : r.GetString(1),
-                    Platform    = r.IsDBNull(2) ? "" : r.GetString(2),
-                    Rating      = r.IsDBNull(4) ? "" : r.GetString(4),
-                    MaxPlayers  = r.IsDBNull(5) ? (int?)null : r.GetInt32(5),
-                    ReleaseType = r.IsDBNull(6) ? "" : r.GetString(6),
-                    Developer   = r.IsDBNull(7) ? "" : r.GetString(7),
-                    Publisher   = r.IsDBNull(8) ? "" : r.GetString(8),
-                    CommunityStarRating = r.IsDBNull(9) ? (double?)null : r.GetDouble(9),
-                    Year        = r.IsDBNull(10) ? (int?)null : r.GetInt32(10),
-                    Series = "", PlayMode = "", Storefront = "",
-                    AlternateNames = new List<string>(),
-                };
-                bool hasOverview = !r.IsDBNull(11) && r.GetInt64(11) != 0;
-                c.Notes = hasOverview ? c.Title : "";
-                c.Genres = SplitList(r.IsDBNull(3) ? "" : r.GetString(3));
-
-                Normalise(c);
-                list.Add(c);
-                if (list.Count >= cap) break;
+                    Id = r.IsDBNull(0) ? 0 : r.GetInt32(0),
+                    Ti = r.IsDBNull(1) ? "" : r.GetString(1),
+                    Pl = r.IsDBNull(2) ? "" : r.GetString(2),
+                    Ge = SplitList(r.IsDBNull(3) ? "" : r.GetString(3)),
+                    Es = r.IsDBNull(4) ? "" : r.GetString(4),
+                    Mx = r.IsDBNull(5) ? (int?)null : r.GetInt32(5),
+                    Rt = r.IsDBNull(6) ? "" : r.GetString(6),
+                    De = r.IsDBNull(7) ? "" : r.GetString(7),
+                    Pu = r.IsDBNull(8) ? "" : r.GetString(8),
+                    Cr = r.IsDBNull(9) ? (double?)null : r.GetDouble(9),
+                    Yr = r.IsDBNull(10) ? (int?)null : r.GetInt32(10),
+                    Ov = !r.IsDBNull(11) && r.GetInt64(11) != 0,
+                });
+                if (rows.Count >= cap) break;
             }
         }
         catch { /* Extended DB unreadable / older schema → whatever we managed to read */ }
-        return list;
+        return rows;
     }
 
     // ── Normalise + tokenise ──

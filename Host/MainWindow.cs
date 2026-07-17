@@ -20,6 +20,7 @@ using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Host.Data;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.Ra;
+using LbApiHost.Host.Similar;
 using LbApiHost.Host.Store;
 using LbApiHost.Host.UiKit;
 
@@ -150,6 +151,9 @@ internal sealed class MainWindow : Form, IMessageFilter
     private readonly VndbCard _vndb;             // expandable box of coloured VNDB tags (content/tech/ero)
     private RetroAchievementsCard _raCard;       // expandable RetroAchievements box (LiteBox-native, from the raid)
     private StoreAchievementsCard _storeAchCard; // expandable store-achievements box (GOG today; from galaxy-2.0.db)
+    private DetailTabStrip _detailTabs;          // compact OVERVIEW | RELATED GAMES strip (game mode only)
+    private RelatedGamesPanel _related;          // Related tab content (suggester cards; fills the pane)
+    private static int _detailTabSel;            // 0 = Overview, 1 = Related — remembered across selections (session)
     private readonly TextBox _notes;
     private static bool _metaExpanded;           // remembered expand state of the platform meta card (session + INI)
     private static bool _vndbExpanded;           // remembered expand state of the VNDB tags box (session + INI)
@@ -489,6 +493,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         DarkScroll(_sources);
         DarkScroll(_notes);
         DarkScroll(_detailHost);   // the detail pane's overflow scrollbar
+        DarkScroll(_related.ScrollHost);   // the Related tab's internal card list
         // _strip uses its own slim custom scrollbar (no native scrollbar to theme).
 
         Load += (_, _) =>
@@ -521,7 +526,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         // Final dark-scrollbar pass once everything (data, columns) is in place.
         Shown += (_, _) =>
         {
-            ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); RelayoutDetail();
+            ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); ApplyDarkScroll(_related.ScrollHost); RelayoutDetail();
             // Hands-free UI drivers (diagnostics): --edit-game/--edit-page and --options — see HostBoot.
             if (!string.IsNullOrEmpty(HostBoot.AutoEditGame))
             {
@@ -849,15 +854,17 @@ internal sealed class MainWindow : Form, IMessageFilter
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
         _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
 
-        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 8, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 10, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // OVERVIEW | RELATED GAMES tab strip (0 for tree nodes)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));    // meta card (title + platform + expandable fields, wraps)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // VNDB tags box (0 when none; expandable)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // RetroAchievements box (0 when no raid; expandable)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // store achievements box (0 when not a GOG game; expandable)
-        tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest in Overview mode)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // Related panel (fills instead of rows 4-8 in Related mode)
         _detailGrid = tlp;
 
         hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
@@ -873,15 +880,54 @@ internal sealed class MainWindow : Form, IMessageFilter
         _storeAchCard.LayoutChanged = RelayoutDetail;
         notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
 
+        // Compact OVERVIEW | RELATED GAMES switch (web-theme parity) + the Related content panel.
+        _detailTabs = new DetailTabStrip(primary: true) { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
+        _detailTabs.SetTabs("OVERVIEW", "RELATED GAMES");
+        _detailTabs.Selected = _detailTabSel;
+        _detailTabs.SelectedChanged = OnDetailTabChanged;
+        _related = new RelatedGamesPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0) };
+        _related.CandidateFilter = RelatedCandidateAllowed;
+        _related.LocalArtResolver = RelatedLocalArt;
+        _related.OpenLocalGame = id => { try { SelectGameById(id); } catch { } };
+
         tlp.Controls.Add(hero, 0, 0);
         tlp.Controls.Add(media, 0, 1);
         tlp.Controls.Add(strip, 0, 2);
-        tlp.Controls.Add(meta, 0, 3);
-        tlp.Controls.Add(vndb, 0, 4);
-        tlp.Controls.Add(_raCard, 0, 5);
-        tlp.Controls.Add(_storeAchCard, 0, 6);
-        tlp.Controls.Add(notes, 0, 7);
+        tlp.Controls.Add(_detailTabs, 0, 3);
+        tlp.Controls.Add(meta, 0, 4);
+        tlp.Controls.Add(vndb, 0, 5);
+        tlp.Controls.Add(_raCard, 0, 6);
+        tlp.Controls.Add(_storeAchCard, 0, 7);
+        tlp.Controls.Add(notes, 0, 8);
+        tlp.Controls.Add(_related, 0, 9);
         return tlp;
+    }
+
+    /// <summary>Tab flip: remember, reset the pane scroll, lazily run the suggester on first Related view.</summary>
+    private void OnDetailTabChanged(int idx)
+    {
+        _detailTabSel = idx;
+        if (idx == 1) _related?.EnsureLoaded();
+        if (_detailHost != null) { try { _detailHost.AutoScrollPosition = new Point(0, 0); } catch { } }
+        RelayoutDetail();
+    }
+
+    /// <summary>Parental gate for suggester candidates — the desktop mirror of RelatedProvider's web filter.</summary>
+    private bool RelatedCandidateAllowed(CandidateGame c)
+    {
+        if (!ParentalBridge.Active) return true;
+        if (!ParentalBridge.IsRatingAllowed(c.Rating ?? "")) return false;
+        var plat = c.Platform ?? "";
+        if (plat.Length > 0 && _parentalHiddenPlatforms.Contains(plat)) return false;
+        return true;
+    }
+
+    /// <summary>Box-art path for a LOCAL suggestion card — the same source chain as the detail pane.
+    /// Called off the UI thread by the related panel's background run.</summary>
+    private string RelatedLocalArt(string gameId)
+    {
+        var g = Safe(() => _dm?.GetGameById(gameId));
+        return g == null ? null : DetailImageSources(g).artSrc;
     }
 
     // Minimum height reserved for the notes box before the whole pane starts scrolling.
@@ -904,11 +950,15 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void RelayoutDetail()
     {
         var host = _detailHost; var tlp = _detailGrid;
-        if (host == null || tlp == null || tlp.RowStyles.Count < 8 || _inRelayout) return;
+        if (host == null || tlp == null || tlp.RowStyles.Count < 10 || _inRelayout) return;
         _inRelayout = true;
         try { RelayoutDetailCore(host, tlp); }
         finally { _inRelayout = false; }
     }
+
+    // Tab strip height (game mode) and the minimum Related-panel height before the pane scrolls.
+    private const int DetailTabsH = 30;
+    private const int MinRelatedH = 240;
 
     private void RelayoutDetailCore(Panel host, TableLayoutPanel tlp)
     {
@@ -919,6 +969,12 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (fullW < 80 || viewH < 80) return;
         int padH = tlp.Padding.Horizontal, padV = tlp.Padding.Vertical;
 
+        // Tab strip shows only for a game (nodes keep the classic pane); Related mode swaps the
+        // overview rows (meta/vndb/ra/store/notes) for the related panel, which then absorbs the slack.
+        bool gameMode = _detailsShown is IGame;
+        int tabH = gameMode ? DetailTabsH : 0;
+        bool relatedMode = gameMode && _detailTabSel == 1;
+
         // Minimum content height for a given grid width (media capped to the viewport).
         int MinContent(int gridW, out int mediaH, out int metaH, out int vndbH, out int raH, out int storeH)
         {
@@ -927,11 +983,16 @@ internal sealed class MainWindow : Form, IMessageFilter
             int cap = (int)(viewH * 0.62);
             if (cap > 100 && mediaH > cap) mediaH = cap;
             if (mediaH < 90) mediaH = 90;
+            if (relatedMode)
+            {
+                metaH = vndbH = raH = storeH = 0;
+                return padV + 158 + mediaH + _stripRowH + tabH + MinRelatedH;
+            }
             metaH = _meta.HeightForWidth(colW);
             vndbH = _vndb.HeightForWidth(colW);
             raH = _raCard?.HeightForWidth(colW) ?? 0;
             storeH = _storeAchCard?.HeightForWidth(colW) ?? 0;
-            return padV + 158 + mediaH + _stripRowH + metaH + vndbH + raH + storeH + MinNotesH;
+            return padV + 158 + mediaH + _stripRowH + tabH + metaH + vndbH + raH + storeH + MinNotesH;
         }
 
         bool overflow = MinContent(fullW, out _, out _, out _, out _, out _) > viewH;
@@ -942,14 +1003,32 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (rsMedia.SizeType != SizeType.Absolute || Math.Abs(rsMedia.Height - media) > 0.5) { rsMedia.SizeType = SizeType.Absolute; rsMedia.Height = media; }
         var rsStrip = tlp.RowStyles[2];
         if (rsStrip.SizeType != SizeType.Absolute || Math.Abs(rsStrip.Height - _stripRowH) > 0.5) { rsStrip.SizeType = SizeType.Absolute; rsStrip.Height = _stripRowH; }
-        var rsMeta = tlp.RowStyles[3];
+        var rsTabs = tlp.RowStyles[3];
+        if (rsTabs.SizeType != SizeType.Absolute || Math.Abs(rsTabs.Height - tabH) > 0.5) { rsTabs.SizeType = SizeType.Absolute; rsTabs.Height = tabH; }
+        var rsMeta = tlp.RowStyles[4];
         if (rsMeta.SizeType != SizeType.Absolute || Math.Abs(rsMeta.Height - meta) > 0.5) { rsMeta.SizeType = SizeType.Absolute; rsMeta.Height = meta; }
-        var rsVndb = tlp.RowStyles[4];
+        var rsVndb = tlp.RowStyles[5];
         if (rsVndb.SizeType != SizeType.Absolute || Math.Abs(rsVndb.Height - vndb) > 0.5) { rsVndb.SizeType = SizeType.Absolute; rsVndb.Height = vndb; }
-        var rsRa = tlp.RowStyles[5];
+        var rsRa = tlp.RowStyles[6];
         if (rsRa.SizeType != SizeType.Absolute || Math.Abs(rsRa.Height - ra) > 0.5) { rsRa.SizeType = SizeType.Absolute; rsRa.Height = ra; }
-        var rsStore = tlp.RowStyles[6];
+        var rsStore = tlp.RowStyles[7];
         if (rsStore.SizeType != SizeType.Absolute || Math.Abs(rsStore.Height - store) > 0.5) { rsStore.SizeType = SizeType.Absolute; rsStore.Height = store; }
+
+        // Notes vs Related: exactly one of the two absorbs the leftover space (Percent 100); the
+        // other collapses. In Related overflow, the related panel gets its fixed minimum instead.
+        var rsNotes = tlp.RowStyles[8];
+        var rsRelated = tlp.RowStyles[9];
+        if (relatedMode)
+        {
+            if (rsNotes.SizeType != SizeType.Absolute || rsNotes.Height != 0) { rsNotes.SizeType = SizeType.Absolute; rsNotes.Height = 0; }
+            if (overflow) { if (rsRelated.SizeType != SizeType.Absolute || Math.Abs(rsRelated.Height - MinRelatedH) > 0.5) { rsRelated.SizeType = SizeType.Absolute; rsRelated.Height = MinRelatedH; } }
+            else if (rsRelated.SizeType != SizeType.Percent) { rsRelated.SizeType = SizeType.Percent; rsRelated.Height = 100; }
+        }
+        else
+        {
+            if (rsNotes.SizeType != SizeType.Percent) { rsNotes.SizeType = SizeType.Percent; rsNotes.Height = 100; }
+            if (rsRelated.SizeType != SizeType.Absolute || rsRelated.Height != 0) { rsRelated.SizeType = SizeType.Absolute; rsRelated.Height = 0; }
+        }
 
         // Drive the scroll range, then size the grid to EXACTLY the width the meta/vndb were measured
         // at (wantW). Using host.ClientSize.Width here is unsafe right after changing AutoScrollMinSize:
@@ -2956,7 +3035,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             LoadImagesAsync(null, null);
             ScheduleFanart(null, null);
             ClearStrip();
-            _meta.Clear(); _vndb.Clear(); _raCard?.HidePanel(); _notes.Text = ""; RelayoutDetail();
+            _meta.Clear(); _vndb.Clear(); _raCard?.HidePanel(); _notes.Text = ""; _related?.ClearAll(); RelayoutDetail();
             _launchButtons?.HideGame();
             SetStorePoll(false);
             return;
@@ -3029,6 +3108,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _vndb.Expanded = _vndbExpanded;
         _raCard?.HidePanel();   // clean slate at selection — the debounced ScheduleMedia tick (re)fills it from the raid
         _storeAchCard?.HidePanel();   // same: refilled from the store (GOG) at the debounced tick
+        _related?.ShowFor(g, _detailTabSel == 1);   // Related tab: recompute now if visible, else lazily on flip
         // New game → scroll the detail pane to the top BEFORE relaying out. RelayoutDetailCore positions
         // the grid at an absolute (0,0), so it must start from an unscrolled panel; otherwise a tall
         // previous game (e.g. a big achievements grid) leaves a scroll offset and the grid is mispositioned.
@@ -3134,6 +3214,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _detailsShown = node;
         _heroGame = null;
         _launchButtons?.HideGame();   // launch group is game-only
+        _related?.ClearAll();         // tab strip + related list are game-only
         SetStorePoll(false);
         if (node == null || node is AllNode)
         {
@@ -3810,6 +3891,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _resumeGameId = g != null ? Safe(() => g.Id) : null;
         _gameRunning = true;
         SetStorePoll(false);   // pause the install-state poll while the game runs (client DB may be mid-write)
+        CandidateProvider.ReleaseMemory();   // drop the suggester's candidate pool — that RAM belongs to the game now
 
         if (_cfg.UnloadListDuringGame)
         {

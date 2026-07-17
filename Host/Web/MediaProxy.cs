@@ -134,10 +134,24 @@ internal static class MediaProxy
         if (string.IsNullOrEmpty(idStr) || string.IsNullOrEmpty(ext)) return HttpResponse.NotFound();
         if (!int.TryParse(idStr, out var id) || id <= 0) return HttpResponse.NotFound();
 
-        var cover = PickCover(MetadataDb.ImagesForGame(id));
-        if (cover == null) return HttpResponse.NotFound();
+        // Thumb-context walk (plugin parity): pre-made id-based thumbs first — no DB read on the happy
+        // path — with the cover row materialised lazily only when both pre-made sources fail. The lambda
+        // may run 0 or 1 times; memoise so the last-resort fallback below doesn't re-query.
+        MetadataDb.WebImage? cover = null; bool picked = false;
+        MetadataDb.WebImage? Cover()
+        {
+            if (!picked) { picked = true; cover = PickCover(MetadataDb.ImagesForGame(id)); }
+            return cover;
+        }
 
-        var bytes = MediaFetch.FetchBytes(cover.Value, platform: null!);
+        var bytes = MediaFetch.FetchThumbById(id, Cover);
+
+        // Beyond-plugin last resort: every thumb source is down → serve the full-size cover rather than 404.
+        if (bytes == null || bytes.Length == 0)
+        {
+            var c = Cover();
+            if (c != null) bytes = MediaFetch.FetchBytes(c.Value, platform: null!);
+        }
         if (bytes == null || bytes.Length == 0) return HttpResponse.NotFound();
 
         return BytesWithBrowserCache(bytes, ContentTypeFor(ext!));

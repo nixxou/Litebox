@@ -100,11 +100,44 @@ internal static class ThumbCache
     /// A cache HIT needs no Magick; a MISS needs Magick (else returns null).</summary>
     public static string GetOrCreate(string sourcePath, int maxDim = DefaultMaxDim, bool keepAlpha = false)
     {
+        KickSweep();
         var target = TargetFor(sourcePath, maxDim, keepAlpha);
         if (target == null) return null;
         if (File.Exists(target)) return target;        // shared cache HIT — no Magick needed
         try { return Generate(sourcePath, target, maxDim, keepAlpha); }
         catch { return null; }                          // missing Magick (standalone) → null
+    }
+
+    // ── Size-budget sweep ────────────────────────────────────────────────────
+    // Neither the plugin nor LiteBox ever pruned this cache (the plugin's header documented the
+    // missing sweep as a TODO) — the resized set AND the /thumbs webimg source set grew forever.
+    // One background sweep per process, kicked on first cache use: when the whole tree (root +
+    // video/webimg/docs) exceeds MaxBytes, the oldest files (LastWriteTimeUtc) are deleted down to
+    // TrimToBytes. A deleted entry simply regenerates on next use — the key scheme is untouched.
+    private const long SweepMaxBytes = 500L * 1024 * 1024;
+    private const long SweepTrimToBytes = 400L * 1024 * 1024;
+    private static int _sweepStarted;
+
+    private static void KickSweep()
+    {
+        if (Interlocked.Exchange(ref _sweepStarted, 1) == 1) return;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var files = new DirectoryInfo(Dir).GetFiles("*", SearchOption.AllDirectories);
+                long total = 0;
+                foreach (var f in files) total += f.Length;
+                if (total <= SweepMaxBytes) return;
+                Array.Sort(files, (a, b) => a.LastWriteTimeUtc.CompareTo(b.LastWriteTimeUtc));
+                foreach (var f in files)
+                {
+                    if (total <= SweepTrimToBytes) break;
+                    try { long len = f.Length; f.Delete(); total -= len; } catch { }
+                }
+            }
+            catch { }
+        });
     }
 
     /// <summary>Cached thumbnail path if it ALREADY exists, else null. Never runs
@@ -126,6 +159,7 @@ internal static class ThumbCache
     /// exists or is already queued). Fire-and-forget; never throws.</summary>
     public static void EnqueueGenerate(string sourcePath, int maxDim = DefaultMaxDim, bool keepAlpha = false)
     {
+        KickSweep();
         var target = TargetFor(sourcePath, maxDim, keepAlpha);
         if (target == null || File.Exists(target)) return;
         if (!_pending.TryAdd(target, 0)) return;        // already generating/queued

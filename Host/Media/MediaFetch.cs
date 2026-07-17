@@ -101,6 +101,10 @@ internal static class MediaFetch
 
     private static readonly Dictionary<MediaContext, Dictionary<string, MediaSourceKind[]>> BuiltIn = Build();
 
+    /// <summary>The compiled-in chain tables — MediaPolicyStore's fallback snapshot source. Treat as
+    /// read-only: the live policy is whatever the store currently publishes.</summary>
+    internal static IReadOnlyDictionary<MediaContext, Dictionary<string, MediaSourceKind[]>> BuiltInTables => BuiltIn;
+
     private static Dictionary<MediaContext, Dictionary<string, MediaSourceKind[]>> Build()
     {
         // The non-thumb image/media chains are identical per-origin today; they are kept as separate context
@@ -142,17 +146,9 @@ internal static class MediaFetch
         };
     }
 
-    /// <summary>Ordered chain of kinds to try for a (context, origin). "default" wins for unlisted origins;
-    /// empty or "local" origin → empty chain.</summary>
-    private static IReadOnlyList<MediaSourceKind> ChainFor(MediaContext ctx, string? originRaw)
-    {
-        var origin = (originRaw ?? "").Trim().ToLowerInvariant();
-        if (origin.Length == 0 || origin == "local") return Array.Empty<MediaSourceKind>();
-
-        if (!BuiltIn.TryGetValue(ctx, out var table)) table = BuiltIn[MediaContext.GalleryImage];
-        if (table.TryGetValue(origin, out var chain)) return chain;
-        return table.TryGetValue("default", out var fallback) ? fallback : Array.Empty<MediaSourceKind>();
-    }
+    // Chain resolution lives on MediaPolicyTable (MediaPolicyStore.GetForWeb()/GetForHelper()) — the
+    // compiled-in tables above are only its fallback snapshot. Don't add a local ChainFor back here:
+    // every walk must capture ONE policy snapshot per request.
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Public API
@@ -178,7 +174,12 @@ internal static class MediaFetch
         _gate.Wait();
         try
         {
-            foreach (var kind in ChainFor(ctx, w.Origin))
+            // One policy snapshot per request (the store may swap mid-flight; we keep a consistent view).
+            var policy = MediaPolicyStore.GetForWeb();
+            var chain = policy.ChainFor(ctx, w.Origin);
+            if (BlockedBySsPolicy(policy, chain)) return null;
+
+            foreach (var kind in chain)
             {
                 var (url, referer) = BuildUrl(kind, w, dbId);
                 if (string.IsNullOrEmpty(url)) continue;
@@ -198,6 +199,90 @@ internal static class MediaFetch
         return null;
     }
 
+    /// <summary>BlockIfScreenscraperFail enforcement (plugin parity): when the policy sets the flag and
+    /// the chain contains the SS API, an unusable API (missing credentials or blackout) hard-fails the
+    /// request instead of falling through to other kinds — the operator wants the personal quota used.</summary>
+    private static bool BlockedBySsPolicy(MediaPolicyTable policy, IReadOnlyList<MediaSourceKind> chain)
+    {
+        if (!policy.BlockIfScreenscraperFail) return false;
+        bool hasSs = false;
+        for (int i = 0; i < chain.Count; i++)
+            if (chain[i] == MediaSourceKind.ScreenscraperApi) { hasSs = true; break; }
+        if (!hasSs) return false;
+        return BaseCredentials.UserAccount() == null || BaseCredentials.DevCreds() == null || !ScreenscraperShouldAllow();
+    }
+
+    /// <summary>Kinds buildable from the DB id alone — everything else needs a GameImages row (token).</summary>
+    private static bool NeedsToken(MediaSourceKind kind)
+        => kind != MediaSourceKind.MalkavThumb && kind != MediaSourceKind.ExtenddbThumb;
+
+    /// <summary>
+    /// Thumb-by-id fetch — the engine behind the numeric /api/media/{id}.jpg endpoint and the desktop
+    /// Related cards (parity with the plugin's MediaApi.HandleThumbById). Context is FIXED to
+    /// <see cref="MediaContext.Thumb"/>: the id-only kinds (Malkav CDN → extenddb /thumbs/{id}.jpg) are
+    /// tried WITHOUT any DB read — the fast happy path; <paramref name="lazyCover"/> is invoked at most
+    /// once, the first time a token-requiring kind comes up (i.e. both pre-made thumb sources failed),
+    /// and a materialised cover row switches the walk to its origin's Thumb chain (kinds already fetched
+    /// are not retried). Stays in the Thumb context throughout — this never downloads a full-size cover.
+    /// </summary>
+    public static byte[]? FetchThumbById(int dbId, Func<MetadataDb.WebImage?>? lazyCover)
+    {
+        if (dbId <= 0) return null;
+
+        _gate.Wait();
+        try
+        {
+            var policy = MediaPolicyStore.GetForWeb();
+            var chain = policy.ChainFor(MediaContext.Thumb, "default");
+            if (chain.Count == 0) return null;
+            if (BlockedBySsPolicy(policy, chain)) return null;
+
+            MetadataDb.WebImage? cover = null;
+            string origin = "";
+            bool lazyAttempted = false;
+            // Only kinds actually fetched are recorded — a chain-restart must re-evaluate the kind that
+            // triggered it on the new chain (same rule as the plugin's RunChain).
+            var tried = new HashSet<MediaSourceKind>();
+
+            int i = 0;
+            while (i < chain.Count)
+            {
+                var kind = chain[i++];
+                if (tried.Contains(kind)) continue;
+
+                if (NeedsToken(kind) && cover == null && lazyCover != null && !lazyAttempted)
+                {
+                    lazyAttempted = true;   // once per walk — a null result would stay null
+                    try { cover = lazyCover(); } catch { cover = null; }
+                    if (cover.HasValue)
+                    {
+                        var newOrigin = (cover.Value.Origin ?? "").Trim().ToLowerInvariant();
+                        if (newOrigin.Length > 0 && newOrigin != "local" && newOrigin != origin)
+                        {
+                            origin = newOrigin;
+                            chain = policy.ChainFor(MediaContext.Thumb, origin);
+                            i = 0;
+                            continue;   // restart; current kind not marked tried
+                        }
+                    }
+                }
+                if (NeedsToken(kind) && cover == null) continue;
+
+                tried.Add(kind);
+                var (url, referer) = BuildUrl(kind, cover.GetValueOrDefault(), dbId);
+                if (string.IsNullOrEmpty(url)) continue;
+                if (IsHlsManifestUrl(url)) continue;
+
+                var (bytes, status, transportOk) = TryFetch(url, referer);
+                if (kind == MediaSourceKind.MalkavThumb && status == 403) MarkMalkavBlocked();
+                if (kind == MediaSourceKind.ScreenscraperApi && IsBlackoutTrigger(status)) MarkScreenscraperBlocked();
+                if (transportOk && bytes != null) return bytes;
+            }
+            return null;
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>
     /// The ordered upstream URLs for a row WITHOUT fetching — the streaming counterpart of <see cref="FetchBytes"/>.
     /// Mirrors the plugin's ListDirectUrls: id-only kinds (ExtenddbThumb / MalkavThumb) are skipped, and
@@ -211,7 +296,7 @@ internal static class MediaFetch
         var ctx = ContextFromType(w.Type);
         if (ctx == MediaContext.Thumb) return outList;
 
-        foreach (var kind in ChainFor(ctx, w.Origin))
+        foreach (var kind in MediaPolicyStore.GetForHelper().ChainFor(ctx, w.Origin))
         {
             if (kind == MediaSourceKind.ExtenddbThumb || kind == MediaSourceKind.MalkavThumb) continue;
             if (kind == MediaSourceKind.ExtenddbImage && w.Crc32 == 0) continue;

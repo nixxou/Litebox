@@ -610,6 +610,12 @@ internal static class OwnedDataProvider
         catch { return null; }
     }
 
+    /// <summary>Related-cards helper: the disk-cache-aware thumb proxy URL for an OWNED game's box front
+    /// (`?q=thumb` signed token — the same pipeline the grid cards use), or null when GameCache doesn't
+    /// know the game (platform mismatch / cache not rebuilt yet). RelatedProvider falls back to the
+    /// numeric /api/media/{dbid}.jpg endpoint in that case, exactly like the plugin did.</summary>
+    internal static string RelatedLocalThumb(IGame game) => ThumbProxy(ResolveCacheGame(game), "Front");
+
     private static string ThumbProxy(GameCacheGame cg, params string[] regroupements)
     {
         if (cg == null) return null;

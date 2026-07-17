@@ -65,6 +65,7 @@ internal static class EmbeddedWebServer
             // reflects the current per-site enable flags.
             WebConfig.Reload();
             RegisterRoutes();
+            Media.MediaPolicyStore.Bootstrap();   // warm the remote media-policy slots (no-op when URLs blank)
 
             _cts = new CancellationTokenSource();
 

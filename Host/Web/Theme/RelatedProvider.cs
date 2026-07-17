@@ -132,7 +132,19 @@ internal static class RelatedProvider
     {
         var c = e.Cand;
         string id = c.IsLocal ? (c.Id ?? "") : (c.LbDbId > 0 ? c.LbDbId.ToString() : (c.Id ?? ""));
-        string thumb = c.LbDbId > 0 ? "/api/media/" + c.LbDbId + ".jpg" : "";
+
+        // Owned game → the local disk-cache thumb proxy (same pipeline as the grid cards); the numeric
+        // id endpoint is the fallback for GameCache misses and the only path for DB-only games —
+        // plugin-parity (OwnedDataProvider.BuildRelItem).
+        string thumb = "";
+        if (c.IsLocal && !string.IsNullOrEmpty(c.Id))
+        {
+            IGame ig = null;
+            try { ig = PluginHelper.DataManager.GetGameById(c.Id); } catch { }
+            if (ig != null) thumb = OwnedDataProvider.RelatedLocalThumb(ig) ?? "";
+        }
+        if (thumb.Length == 0 && c.LbDbId > 0) thumb = "/api/media/" + c.LbDbId + ".jpg";
+
         string year = (c.Year.HasValue && c.Year.Value > 0) ? c.Year.Value.ToString() : "";
         return new
         {

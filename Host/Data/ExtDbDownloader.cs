@@ -77,8 +77,17 @@ internal static class ExtDbDownloader
     /// the archives an install would fetch (0 when up to date). Throws on network errors.
     /// </summary>
     public static async Task<(bool UpdateAvailable, string? RemoteVersion, string? LocalVersion, long AssetBytes)>
-        CheckAsync(CancellationToken ct)
+        CheckAsync(CancellationToken ct, bool force = false)
     {
+        // 5-hour cached outcome (plugin parity: LbDbUpdater.GitHubCheckOutcome) — repeated checks
+        // within a session (boot pre-check, options panel opens) don't re-hit GitHub. Invalidated
+        // after every install/adoption; `force` bypasses (explicit user-driven re-check).
+        lock (_checkCacheLock)
+        {
+            if (!force && _checkCached.HasValue && DateTime.UtcNow - _checkCachedAtUtc < CheckCacheTtl)
+                return _checkCached.Value;
+        }
+
         string cacheDir = LiteBoxPaths.Dir("cache");
         using var http = NewHttp();
         var plan = await BuildPlanAsync(http, cacheDir, ct).ConfigureAwait(false);
@@ -88,8 +97,18 @@ internal static class ExtDbDownloader
         string? remote = plan.ReleaseFound
             ? plan.TargetVersion.ToString(CultureInfo.InvariantCulture) : null;
         long bytes = (plan.Major?.ExpectedSize ?? 0) + (plan.Minor?.ExpectedSize ?? 0);
-        return (!plan.UpToDate, remote, local, bytes);
+        var result = (!plan.UpToDate, remote, local, bytes);
+        lock (_checkCacheLock) { _checkCached = result; _checkCachedAtUtc = DateTime.UtcNow; }
+        return result;
     }
+
+    private static readonly object _checkCacheLock = new();
+    private static (bool, string?, string?, long)? _checkCached;
+    private static DateTime _checkCachedAtUtc;
+    private static readonly TimeSpan CheckCacheTtl = TimeSpan.FromHours(5);
+
+    /// <summary>Forget the cached check outcome — the local version just changed (install/adopt/todo).</summary>
+    public static void InvalidateCheckCache() { lock (_checkCacheLock) _checkCached = null; }
 
     /// <summary>
     /// Full update: check → download (with SHA-256 verification, cache reuse) → rebuild a fresh
@@ -165,7 +184,7 @@ internal static class ExtDbDownloader
                 }
             }
             bool swapped = await SwapIntoPlaceAsync(tmp, ct).ConfigureAwait(false);
-            if (swapped) MetadataDb.InvalidateExtendedDbProbe();
+            if (swapped) { MetadataDb.InvalidateExtendedDbProbe(); InvalidateCheckCache(); }
             Report(progress, swapped ? "Database is now managed by LiteBox." : "Adopted — applies on next start (the DB is in use).");
             return true;
         }
@@ -230,7 +249,7 @@ internal static class ExtDbDownloader
             {
                 await RestoreArchivesAsync(majorPath, minorPath, tmpDb, progress, ct).ConfigureAwait(false);
                 bool swapped = await SwapIntoPlaceAsync(tmpDb, ct).ConfigureAwait(false);
-                if (swapped) MetadataDb.InvalidateExtendedDbProbe();   // make the fresh file visible without a restart
+                if (swapped) { MetadataDb.InvalidateExtendedDbProbe(); InvalidateCheckCache(); }   // make the fresh file visible without a restart
                 Report(progress, swapped
                     ? "Extended database installed."
                     : "Database is in use - update staged, it will be applied on next start.");
@@ -287,6 +306,7 @@ internal static class ExtDbDownloader
                 {
                     File.Move(todo, TargetPath, overwrite: true);
                     MetadataDb.InvalidateExtendedDbProbe();
+                    InvalidateCheckCache();
                     LbLog.Info("extdb", "pending update applied.");
                     return;
                 }

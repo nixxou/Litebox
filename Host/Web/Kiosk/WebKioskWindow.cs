@@ -125,6 +125,9 @@ internal sealed class WebKioskWindow : Form
             s.AreBrowserAcceleratorKeysEnabled = false;
             // Keep navigation inside the one window.
             _web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; try { _web.CoreWebView2.Navigate(e.Uri); } catch { } };
+            // The embedded surface (#embedded=1) posts control WebMessages back to its host — the System Menu
+            // "Exit" item and the top-right ×, plus the in-page F-key mirrors. Fires on the UI thread.
+            _web.CoreWebView2.WebMessageReceived += OnWebMessage;
         }
         catch { }
 
@@ -138,8 +141,26 @@ internal sealed class WebKioskWindow : Form
         int port;
         try { port = WebConfig.Port; } catch { port = 8080; }
         string path = string.Equals(surface, "bigbox", StringComparison.OrdinalIgnoreCase) ? "/bigbox/" : "/launchbox/";
-        string url = $"http://127.0.0.1:{port}{path}";
+        // #embedded=1 tells the surface it runs inside the kiosk host: it KEEPS the System Menu "Exit" item and
+        // shows the top-right × (both removed from the DOM in standalone), and routes them to us via WebMessage.
+        string url = $"http://127.0.0.1:{port}{path}#embedded=1";
         if (!_ready) return;   // Shown/InitAsync will call us once CoreWebView2 exists
         try { _web.CoreWebView2?.Navigate(url); } catch { }
+    }
+
+    /// <summary>Handles the control WebMessages the embedded surface posts back (exit / F-key mirrors). Runs on
+    /// the UI thread. Mirrors ExtendDB's BigBoxWebKioskFormsWindow.OnWebMessageReceived.</summary>
+    private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        string msg;
+        try { msg = e.TryGetWebMessageAsString(); } catch { return; }
+        if (string.IsNullOrEmpty(msg)) return;
+        switch (msg)
+        {
+            case "kiosk:exit": try { Close(); } catch { } break;   // System Menu "Exit" / top-right ×
+            case "kiosk:F11":  ToggleBigBox();    break;
+            case "kiosk:F10":  ToggleLaunchBox(); break;
+            case "kiosk:F12":  ShowDevTools();    break;
+        }
     }
 }

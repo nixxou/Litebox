@@ -469,30 +469,63 @@ internal sealed class DbRepository
         public string MatchedAlt { get; set; }
     }
 
-    /// <summary>Substring search over game Name + alternate titles. adult=0 excludes AO-rated content.</summary>
+    /// <summary>Search over game Name + alternate titles. adult=0 excludes AO-rated content.
+    /// Extended mode tries the NORMALIZED path first (plugin parity): the query goes through
+    /// TitleNormalizer (PerformSanitize → NormalizeCompareName) and is matched against the Extended
+    /// DB's pre-normalized AltNameCompareValue/Fallback columns — "pokemon" finds "Pokémon", "ff vii"
+    /// finds "Final Fantasy VII". Falls back to the raw substring LIKE when the key is too short/lossy
+    /// or on the base LaunchBox DB (those columns are extended-only).</summary>
     public List<SearchResult> Search(string q, int limit, int adult)
     {
         if (string.IsNullOrWhiteSpace(q)) return new();
 
-        string sql = """
-            SELECT g.DatabaseID, g.Name, g.Platform, g.ReleaseYear, g.ESRB,
-                   (CASE
-                     WHEN g.Name LIKE $q THEN g.Name
-                     ELSE (SELECT a.AlternateName FROM GameAlternateTitles a
-                           WHERE a.DatabaseID = g.DatabaseID AND a.AlternateName LIKE $q
-                           LIMIT 1)
-                    END) AS Matched
-            FROM   Games g
-            WHERE  (g.Name LIKE $q
-               OR   g.DatabaseID IN (SELECT DatabaseID FROM GameAlternateTitles WHERE AlternateName LIKE $q))
-            """;
-        if (adult == 0) sql += " AND (g.ESRB IS NULL OR g.ESRB NOT LIKE 'AO%')";
-        sql += " ORDER BY g.Name LIMIT $limit";
+        string normKey = null;
+        var sanitized = TitleNormalizer.PerformSanitize(q.Trim());
+        if (!string.IsNullOrEmpty(sanitized))
+        {
+            normKey = TitleNormalizer.NormalizeCompareName(sanitized, out var ok);
+            if (!ok || string.IsNullOrEmpty(normKey)) normKey = null;
+        }
+        if (!_ext) normKey = null;   // AltNameCompareValue* only exist in the Extended DB
+
+        string sql;
+        if (normKey != null)
+        {
+            // A game can match through several alts — GROUP BY dedupes, keeping one matched alt.
+            sql = """
+                SELECT g.DatabaseID, g.Name, g.Platform, g.ReleaseYear, g.ESRB,
+                       MIN(a.AlternateName) AS Matched
+                FROM   Games g
+                JOIN   GameAlternateTitles a ON a.DatabaseID = g.DatabaseID
+                WHERE  ( a.AltNameCompareValueFallback LIKE $nk
+                      OR a.AltNameCompareValue        LIKE $nk )
+                """;
+            if (adult == 0) sql += " AND (g.ESRB IS NULL OR g.ESRB NOT LIKE 'AO%')";
+            sql += " GROUP BY g.DatabaseID ORDER BY g.Name LIMIT $limit";
+        }
+        else
+        {
+            sql = """
+                SELECT g.DatabaseID, g.Name, g.Platform, g.ReleaseYear, g.ESRB,
+                       (CASE
+                         WHEN g.Name LIKE $q THEN g.Name
+                         ELSE (SELECT a.AlternateName FROM GameAlternateTitles a
+                               WHERE a.DatabaseID = g.DatabaseID AND a.AlternateName LIKE $q
+                               LIMIT 1)
+                        END) AS Matched
+                FROM   Games g
+                WHERE  (g.Name LIKE $q
+                   OR   g.DatabaseID IN (SELECT DatabaseID FROM GameAlternateTitles WHERE AlternateName LIKE $q))
+                """;
+            if (adult == 0) sql += " AND (g.ESRB IS NULL OR g.ESRB NOT LIKE 'AO%')";
+            sql += " ORDER BY g.Name LIMIT $limit";
+        }
 
         using var con = Open();
         using var cmd = con.CreateCommand();
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("$q", "%" + q.Trim() + "%");
+        if (normKey != null) cmd.Parameters.AddWithValue("$nk", "%" + normKey + "%");
+        else cmd.Parameters.AddWithValue("$q", "%" + q.Trim() + "%");
         cmd.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
 
         var list = new List<SearchResult>();

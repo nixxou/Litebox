@@ -202,7 +202,7 @@ internal static class RaPanelActions
     {
         int ok = 0;
         foreach (var id in consoleIds.Where(i => i > 0).Distinct())
-            try { if (RaCatalogLite.Refresh(id)) ok++; } catch { }
+            try { if (RaCatalogEngine.RefreshOne(id)) ok++; } catch { }   // engine: guards + store + IGame sync
         return ok;
     }
 

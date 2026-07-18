@@ -603,6 +603,9 @@ internal sealed class MainWindow : Form, IMessageFilter
                     () => { try { BeginInvoke((Action)(() => (_dm as HostDataManagerXml)?.FlushIfSafe())); } catch { } })));
             }
             catch { }
+            // RA catalogue heartbeat (engine P1): 30-min tick, refreshes only DUE consoles, idles
+            // while a game runs or an extraction is in flight; module gate checked per tick.
+            try { RaCatalogEngine.Start(); } catch { }
         };
     }
 

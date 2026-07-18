@@ -196,7 +196,7 @@ internal static class RaPanel
             try { grid.Rows[rowIndex].Cells[ColRefresh].Value = "Refreshing…"; } catch { }
             Task.Run(() =>
             {
-                try { RaCatalogLite.Refresh(consoleId); } catch { }
+                try { RaCatalogEngine.RefreshOne(consoleId); } catch { }   // engine: guards + store + IGame sync
                 try
                 {
                     if (grid.IsHandleCreated)

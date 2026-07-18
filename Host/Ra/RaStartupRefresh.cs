@@ -82,7 +82,7 @@ internal static class RaStartupRefresh
                 {
                     try
                     {
-                        RaCatalogLite.Refresh(cid);   // force-refetch (guarded: keeps the old cache on failure)
+                        RaCatalogEngine.RefreshOne(cid);   // engine refresh (guards + store + IGame sync; keeps data on failure)
                         foreach (var g in games[cid]) if (RaResolveLite.RelinkRaid(g)) updated++;
                     }
                     catch { }

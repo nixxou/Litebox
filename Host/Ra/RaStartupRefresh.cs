@@ -54,7 +54,7 @@ internal static class RaStartupRefresh
 
             // 2) Pick the ≤3 consoles with the OLDEST catalogue cache, only those past the 48h threshold.
             var pick = byConsole.Keys
-                .Select(cid => (cid, age: RaCatalogLite.CacheAgeHours(cid)))
+                .Select(cid => (cid, age: RaStore.CatalogueAgeHours(cid)))
                 .Where(x => x.age > StaleHours)
                 .OrderByDescending(x => x.age)
                 .Take(MaxConsoles)

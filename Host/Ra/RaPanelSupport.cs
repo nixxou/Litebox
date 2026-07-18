@@ -1,7 +1,7 @@
 // Config-surface support for the RetroAchievements module options panel (Host/Options/Modules/RaPanel.cs).
 //
 // The panel needs three things the existing RA backends don't already expose publicly, so they live here in
-// their OWN additive file (the big RA files — RaPlatformMap / RaScanLite / RaCatalogLite — stay untouched):
+// their OWN additive file (the big RA files — RaPlatformMap / RaScanLite / RaCatalogEngine — stay untouched):
 //
 //   • RaPanelConfig  — persists the panel's two LiteBox-own settings (the auto-update trigger + the per-
 //                      platform "Enabled" flags) to Core\litebox\ra-panel.json, mirroring how RaPlatformMap

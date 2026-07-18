@@ -16,9 +16,9 @@
 //   • After an applied refresh: ReResolveScannedIds (re-link stored hashes, no re-hashing) then
 //     the IGame sync — activate new/changed raids, drop dead ones only under the canary gate.
 //
-// Migration bridging: each refreshed console also rewrites the lite-era catalog-<id>.json so the
-// still-wired RaCatalogLite readers stay coherent until P3 repoints them at the store; and
-// RaStore.ImportJsonCatalog folds an existing JSON map in before the first pull.
+// Migration: RaStore.ImportJsonCatalog folds an existing lite-era catalog-<id>.json into the store
+// before a console's first pull; once a REAL pull is applied, the legacy JSON is deleted (the store
+// is the only catalogue since the lite reader was removed).
 
 #nullable enable
 
@@ -137,7 +137,7 @@ internal static class RaCatalogEngine
             bool allowDrop = RaStore.CanaryPresent(consoleId, pull);
             RaStore.ReplaceConsoleCatalog(consoleId, pull, now, NextSuccess(now));
             RaStore.ReResolveScannedIds();
-            WriteLiteJson(consoleId, pull);          // keep the lite readers coherent until P3
+            DeleteLegacyJson(consoleId);             // the store owns the catalogue now
             SyncIGamesAfterRefresh(consoleId, allowDrop);
             Log($"console {consoleId}: applied {pull.Count} games (drop {(allowDrop ? "allowed" : "blocked — no canary")}).");
             return true;
@@ -187,21 +187,16 @@ internal static class RaCatalogEngine
         catch (Exception ex) { Log("SyncIGamesAfterRefresh failed: " + ex.Message); }
     }
 
-    /// <summary>Rewrite the lite-era per-console JSON map so RaCatalogLite readers see the same
-    /// data the store just applied (bridging only — retired with P3).</summary>
-    private static void WriteLiteJson(int consoleId, List<RaGameRow> pull)
+    /// <summary>Delete the lite-era per-console JSON after a real pull was applied — its content was
+    /// folded in by ImportJsonCatalog and the store is now authoritative (no reader left).</summary>
+    private static void DeleteLegacyJson(int consoleId)
     {
         try
         {
-            var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            foreach (var g in pull)
-                foreach (var h in g.Hashes)
-                    if (!string.IsNullOrWhiteSpace(h)) map[h.Trim().ToLowerInvariant()] = g.Id;
-            if (map.Count == 0) return;
             string file = Path.Combine(LiteBoxPaths.Dir("ra-cache"), $"catalog-{consoleId}.json");
-            File.WriteAllText(file, JsonSerializer.Serialize(map));
+            if (File.Exists(file)) File.Delete(file);
         }
-        catch (Exception ex) { Log("WriteLiteJson failed: " + ex.Message); }
+        catch (Exception ex) { Log("DeleteLegacyJson failed: " + ex.Message); }
     }
 
     // ── Fetch (full rows) ───────────────────────────────────────────────────────

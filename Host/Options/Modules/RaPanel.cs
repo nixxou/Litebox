@@ -10,7 +10,7 @@
 //     (click → the console's games page on retroachievements.org) · Enabled · Refresh (+ catalogue age) ·
 //     Scan (that platform's ROMs).
 //
-// Backends reused verbatim: RaPlatformMap (preset + override mapping), RaCatalogLite (catalogue refresh +
+// Backends reused verbatim: RaPlatformMap (preset + override mapping), RaCatalogEngine/RaStore (catalogue refresh +
 // age), RaScanProgress (the modal scan), plus RaPanelSupport (this feature's additive config plumbing +
 // the scan launcher, since MainWindow.RunRaScan is private). Built with ModulePanelKit for the shared look.
 
@@ -94,7 +94,7 @@ internal static class RaPanel
         {
             if (consoleId <= 0) return "";
             double age;
-            try { age = RaCatalogLite.CacheAgeHours(consoleId); } catch { age = double.MaxValue; }
+            try { age = RaStore.CatalogueAgeHours(consoleId); } catch { age = double.MaxValue; }
             if (double.IsInfinity(age) || age == double.MaxValue) return "Refresh · never";
             if (age < 1) return "Refresh · <1h";
             if (age < 48) return $"Refresh · {(int)Math.Round(age)}h";

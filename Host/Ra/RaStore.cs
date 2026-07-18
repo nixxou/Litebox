@@ -344,6 +344,15 @@ internal static class RaStore
         catch (Exception ex) { Log("LookupRaid: " + ex.Message); return 0; }
     }
 
+    /// <summary>Hours since the console's last SUCCESSFUL catalogue pull (games_refreshed_at);
+    /// double.MaxValue when never pulled. Drives the panel's "Refresh · Nh/Nd/never" label and the
+    /// startup rolling refresh's oldest-first pick.</summary>
+    public static double CatalogueAgeHours(int consoleId)
+    {
+        var (refreshed, _) = GetConsoleSchedule(consoleId);
+        return refreshed == null ? double.MaxValue : (DateTime.UtcNow - refreshed.Value).TotalHours;
+    }
+
     /// <summary>ra_game row count for a console (0 = no catalogue yet) — the count-delta guard's baseline.</summary>
     public static int CatalogueCount(int consoleId)
     {

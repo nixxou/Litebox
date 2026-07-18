@@ -6,11 +6,16 @@
 // signature (== ArchiveSig.ComputePathSignature). Lives at
 // <LB>\Core\litebox\rom-archive-cache.db (rebuildable — nuke it and it re-lists).
 //
-// R2 owns ONLY the listing rows (the `archive` head + `archive_entry` rows). The
-// cache-manifest (on-disk extractions) and per-entry RA hash/id halves are R3 /
-// the RetroAchievements module's own DB — this schema deliberately carries NO RA
-// columns so the two never collide: the RA module keeps rom_hash in its dedicated
-// retroachievements DB, cross-referenced by the SAME <SIG> + path_in_archive.
+// R2 owns the listing rows (the `archive` head + `archive_entry` rows); R3 owns the
+// cache-manifest (`cache_entry`). Since the RA-engine migration (docs/ra-engine-migration-plan.md
+// P0) this file ALSO hosts the RetroAchievements engine's storage half — mirroring the plugin's
+// own merge of its RA DB into the archive cache DB, for the same reason: the per-entry RA columns
+// join the listing rows on the SAME (signature, path_in_archive) key, and re-linking ids after a
+// catalogue refresh is one indexed UPDATE. The RA tables/columns are DEFINED here (single schema
+// owner) but ACCESSED through Host/Ra/RaStore — keep RA SQL there, listing/manifest SQL here.
+//   • archive.parse_state           — RA full-parse state (0 unparsed / 1 ok / 2 failed)
+//   • archive_entry.RetroAchievementsHash / RetroAchievementsId
+//   • rom_hash / ra_game / ra_hash / ra_console — see RaStore
 //
 // Connection-per-op (Pooling=false, WAL) so the dropdown, the picker and — later —
 // the launch/web surfaces can read/write concurrently without a shared lock.
@@ -51,9 +56,11 @@ internal static class ArchiveCacheDb
                     cmd.CommandText =
                         "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=4000;" +
                         "CREATE TABLE IF NOT EXISTS archive(" +
-                        "  signature TEXT PRIMARY KEY, path TEXT, size INTEGER, short_sig TEXT, cached_at TEXT);" +
+                        "  signature TEXT PRIMARY KEY, path TEXT, size INTEGER, short_sig TEXT, cached_at TEXT," +
+                        "  parse_state INTEGER DEFAULT 0);" +
                         "CREATE TABLE IF NOT EXISTS archive_entry(" +
                         "  signature TEXT NOT NULL, filename TEXT, path_in_archive TEXT, size INTEGER," +
+                        "  RetroAchievementsHash TEXT, RetroAchievementsId INTEGER," +
                         "  PRIMARY KEY(signature, path_in_archive));" +
                         // R3 cache-manifest half: one row per on-disk <SIG> extraction (the eviction unit).
                         // Rebuildable like the listing rows, so it shares this DB (never mixes with the
@@ -61,8 +68,36 @@ internal static class ArchiveCacheDb
                         "CREATE TABLE IF NOT EXISTS cache_entry(" +
                         "  signature TEXT PRIMARY KEY, game_title TEXT, platform TEXT, emulator TEXT," +
                         "  source_path TEXT, mode TEXT, output_file TEXT, size_bytes INTEGER," +
-                        "  cached_utc TEXT, last_played_utc TEXT);";
+                        "  cached_utc TEXT, last_played_utc TEXT);" +
+                        // RA-engine storage half (schema copied from the plugin's CacheDb; accessed via RaStore).
+                        "CREATE TABLE IF NOT EXISTS rom_hash(" +
+                        "  signature TEXT PRIMARY KEY, path TEXT, size INTEGER," +
+                        "  RetroAchievementsHash TEXT, RetroAchievementsId INTEGER, computed_at TEXT);" +
+                        "CREATE TABLE IF NOT EXISTS ra_game(" +
+                        "  id INTEGER PRIMARY KEY, console_id INTEGER, title TEXT, console_name TEXT," +
+                        "  image_icon TEXT, num_achievements INTEGER, num_leaderboards INTEGER, points INTEGER," +
+                        "  date_modified TEXT, forum_topic_id INTEGER);" +
+                        "CREATE TABLE IF NOT EXISTS ra_hash(hash TEXT PRIMARY KEY, game_id INTEGER);" +
+                        "CREATE TABLE IF NOT EXISTS ra_console(" +
+                        "  id INTEGER PRIMARY KEY, key TEXT, name TEXT, games_refreshed_at TEXT, next_refresh_at TEXT);" +
+                        "CREATE INDEX IF NOT EXISTS ix_rom_hash_raid ON rom_hash(RetroAchievementsId);" +
+                        "CREATE INDEX IF NOT EXISTS ix_archive_entry_raid ON archive_entry(RetroAchievementsId);" +
+                        "CREATE INDEX IF NOT EXISTS ix_ra_game_console ON ra_game(console_id);" +
+                        "CREATE INDEX IF NOT EXISTS ix_ra_hash_game ON ra_hash(game_id);";
                     cmd.ExecuteNonQuery();
+
+                    // Pre-migration DBs lack the RA columns on the two listing tables — additive,
+                    // idempotent ALTERs ("duplicate column" swallowed). Existing rows untouched.
+                    foreach (var alter in new[]
+                    {
+                        "ALTER TABLE archive ADD COLUMN parse_state INTEGER DEFAULT 0;",
+                        "ALTER TABLE archive_entry ADD COLUMN RetroAchievementsHash TEXT;",
+                        "ALTER TABLE archive_entry ADD COLUMN RetroAchievementsId INTEGER;",
+                    })
+                    {
+                        try { using var a = conn.CreateCommand(); a.CommandText = alter; a.ExecuteNonQuery(); }
+                        catch { /* column already exists */ }
+                    }
                     _ready = true;
                 }
             }
@@ -70,6 +105,10 @@ internal static class ArchiveCacheDb
         }
         catch (Exception ex) { Log("Open failed: " + ex.Message); return null; }
     }
+
+    /// <summary>Connection for the RA storage half (Host/Ra/RaStore) — same file, same schema
+    /// bootstrap, so RaStore never has to duplicate the DDL. Null when SQLite is unavailable.</summary>
+    internal static SqliteConnection? OpenForRa() => Open();
 
     public static ArchiveListingRecord? GetListingRecord(string sig)
     {
@@ -132,14 +171,10 @@ internal static class ArchiveCacheDb
                 head.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("O"));
                 head.ExecuteNonQuery();
             }
-            // Replace the entry set for this signature.
-            using (var del = conn.CreateCommand())
-            {
-                del.Transaction = tx;
-                del.CommandText = "DELETE FROM archive_entry WHERE signature=$s;";
-                del.Parameters.AddWithValue("$s", sig);
-                del.ExecuteNonQuery();
-            }
+            // Replace the entry set for this signature, PRESERVING the RA columns on surviving rows
+            // (the RA engine's per-entry hash/id must not be wiped by a mere re-list): upsert every
+            // current entry (RA columns untouched by the update), then drop only rows whose
+            // path_in_archive is no longer present.
             foreach (var e in entries)
             {
                 using var up = conn.CreateCommand();
@@ -153,6 +188,17 @@ internal static class ArchiveCacheDb
                 up.Parameters.AddWithValue("$p", e.PathInArchive ?? "");
                 up.Parameters.AddWithValue("$z", e.Size);
                 up.ExecuteNonQuery();
+            }
+            using (var del = conn.CreateCommand())
+            {
+                var keep = new List<string>(entries.Count);
+                foreach (var e in entries) keep.Add(e.PathInArchive ?? "");
+                del.Transaction = tx;
+                del.CommandText = @"DELETE FROM archive_entry WHERE signature=$s
+                                    AND path_in_archive NOT IN (SELECT value FROM json_each($keep));";
+                del.Parameters.AddWithValue("$s", sig);
+                del.Parameters.AddWithValue("$keep", System.Text.Json.JsonSerializer.Serialize(keep));
+                del.ExecuteNonQuery();
             }
             tx.Commit();
         }

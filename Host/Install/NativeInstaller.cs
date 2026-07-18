@@ -41,11 +41,21 @@ internal static class NativeInstaller
         ("VCRUNTIME140_1.dll.api",        "RetroAchievements", "VCRUNTIME140_1.dll"),
         ("steam_api64.dll.api",           "Steam",             "steam_api64.dll"),
         ("pdfium.dll.api",                "Pdfium",            "pdfium.dll"),        // LiteBox-only: PDF document thumbnails
+        // ROM extractor tools (the plugin bundled these in its own thirdparty): disc-image conversion +
+        // the elevated RAM-disk mount helper. Resolved by RomToolRunner / ArchiveRamDisk from
+        // ThirdParty\RomExtractor[\ramdisk].
+        ("chdman.exe",                    "RomExtractor",             "chdman.exe"),
+        ("DolphinTool.exe",               "RomExtractor",             "DolphinTool.exe"),
+        ("RamDiskHelper.exe",             @"RomExtractor\ramdisk",    "RamDiskHelper.exe"),
+        ("RamDiskHelper.dll",             @"RomExtractor\ramdisk",    "RamDiskHelper.dll"),
+        ("RamDiskHelper.deps.json",       @"RomExtractor\ramdisk",    "RamDiskHelper.deps.json"),
+        ("RamDiskHelper.runtimeconfig.json", @"RomExtractor\ramdisk", "RamDiskHelper.runtimeconfig.json"),
     };
 
     // ThirdParty sub-folders that are LiteBox-only (not shared with ExtendDB) — a refresh overwrites them
     // freely instead of prompting. The rest (ExtendDB / RetroAchievements / Everything) are shared.
-    private static bool IsLiteBoxOnlySub(string sub) => sub is "Steam" or "Pdfium";
+    private static bool IsLiteBoxOnlySub(string sub)
+        => sub is "Steam" or "Pdfium" || sub.StartsWith("RomExtractor", OIC);
 
     /// <summary>
     /// libvlc is NOT part of our payload: LaunchBox already ships a full libvlc 3.0.23 (366 plugins) at

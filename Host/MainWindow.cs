@@ -3436,7 +3436,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             try
             {
                 string raPlat = null; try { raPlat = g.Platform; } catch { }
-                if (RaPlatformState.ShouldAutoResolveOnSelect(raPlat)) RaResolveLite.Resolve(g);   // platform RA-enabled + trigger == On select → LiteBox's per-ROM RAHasher resolution (the "ExtendDB way", now native)
+                if (RaPlatformState.ShouldAutoResolveOnSelect(raPlat)) RaResolveLite.Resolve(g, fillPickerWhenResolved: true);   // platform RA-enabled + trigger == On select → LiteBox's per-ROM RAHasher resolution (the "ExtendDB way", now native); also parses an unparsed archive so the ROM picker's per-entry RA column fills even when the game already has a hash
                 // else: this platform is RA-disabled OR the auto-update trigger is "On launch" → don't re-hash on select; the panel still shows whatever raid is already stored.
             }
             catch { }

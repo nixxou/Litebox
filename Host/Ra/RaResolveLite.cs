@@ -41,24 +41,38 @@ internal static class RaResolveLite
     /// <summary>Fills hash+raid for a game. Returns true when it set at least the hash.
     /// force=false (auto on-select) acts only when the game has no REAL hash yet (the sentinel
     /// counts as none); force=true (full scan) recomputes and overwrites.</summary>
-    public static bool Resolve(IGame game, bool force = false)
+    /// <param name="fillPickerWhenResolved">When the game ALREADY has a valid hash and this is set (the
+    /// on-select path), still parse an unparsed archive so the ROM picker's per-entry RA column is
+    /// populated — WITHOUT overwriting the game's hash, unless that hash isn't among the archive's
+    /// entries (stale import → self-heal). Off (scans) keeps the "already resolved → skip" behaviour.</param>
+    public static bool Resolve(IGame game, bool force = false, bool fillPickerWhenResolved = false)
     {
         if (game is not ILiteBoxFields fields) return false;
         try
         {
             string title = Safe(() => game.Title) ?? "?";
 
-            if (!force && IsRealHash(fields.GetField("RetroAchievementsHash"))) return false;
+            string curHash = fields.GetField("RetroAchievementsHash");
+            bool alreadyResolved = !force && IsRealHash(curHash);
+            if (alreadyResolved && !fillPickerWhenResolved) return false;
 
             string? platform = Safe(() => game.Platform);
             int? cid = RaPlatformMap.ConsoleIdFor(platform);
-            if (cid == null) { Log($"\"{title}\" platform \"{platform}\" not RA-mapped → skip."); return false; }
+            if (cid == null) { if (!alreadyResolved) Log($"\"{title}\" platform \"{platform}\" not RA-mapped → skip."); return false; }
             int consoleId = cid.Value;
 
             string? appPath = Safe(() => game.ApplicationPath);
-            if (string.IsNullOrWhiteSpace(appPath)) { Log($"\"{title}\" no ApplicationPath → skip."); return false; }
+            if (string.IsNullOrWhiteSpace(appPath)) { if (!alreadyResolved) Log($"\"{title}\" no ApplicationPath → skip."); return false; }
             string abs = ResolveAbsolute(appPath!);
-            if (string.IsNullOrEmpty(abs) || !File.Exists(abs)) { Log($"\"{title}\" ROM file missing ({abs}) → skip."); return false; }
+            if (string.IsNullOrEmpty(abs) || !File.Exists(abs)) { if (!alreadyResolved) Log($"\"{title}\" ROM file missing ({abs}) → skip."); return false; }
+
+            // Game already resolved (on-select fill): parse an unparsed archive for the picker's per-entry
+            // column, keep the game's hash unless it isn't in the archive at all (then heal). Never for arcade.
+            if (alreadyResolved)
+            {
+                FillPickerEntries(consoleId, platform ?? "", abs, curHash, fields, title);
+                return false;
+            }
 
             var picked = ResolvePath(consoleId, platform ?? "", abs, force);
             if (picked == null || !IsRealHash(picked.Value.Hash))
@@ -75,6 +89,40 @@ internal static class RaResolveLite
             return true;
         }
         catch (Exception ex) { Log("Resolve failed: " + ex.Message); return false; }
+    }
+
+    /// <summary>For an already-resolved game: parse an UNPARSED archive so the ROM picker's per-entry RA
+    /// column is populated, WITHOUT touching the game's hash — unless the stored hash isn't among the
+    /// archive's entries (a stale/wrong import), in which case we self-heal to the two-pass pick. Arcade
+    /// is skipped (the .zip is the unit — no per-entry table). No-op when the archive is already parsed
+    /// (OK) or previously failed (so a broken archive isn't re-hashed on every select).</summary>
+    private static void FillPickerEntries(int consoleId, string platform, string abs,
+                                          string currentHash, ILiteBoxFields fields, string title)
+    {
+        try
+        {
+            if (consoleId == RaPlatformMap.ArcadeConsoleId) return;   // arcade: .zip is the unit, never parsed into entries
+            if (!IsArchive(abs)) return;                              // plain file: no picker entries to fill
+
+            long size = 0; try { size = new FileInfo(abs).Length; } catch { }
+            string sig = ArchiveSig.ComputePathSignature(abs, size);
+            if (RaStore.GetParseState(sig) != RaStore.ParseUnparsed) return;   // already OK, or Failed → don't re-hash
+
+            var pick = ResolveArchive(consoleId, platform, abs, size, sig, force: false);   // parse + fill archive_entry (+ sets parse_state)
+
+            // The game's stored hash should be one the archive can actually produce; if it isn't, it's a
+            // stale/wrong import → correct it to the pick. Otherwise keep the game's hash untouched.
+            bool stillValid = RaStore.GetEntriesRa(sig).Values
+                .Any(v => string.Equals(v.Hash, currentHash, StringComparison.OrdinalIgnoreCase));
+            if (!stillValid && pick is { } p && IsRealHash(p.Hash))
+            {
+                fields.SetField("RetroAchievementsHash", p.Hash);
+                if (p.Raid > 0) fields.SetField("RetroAchievementsId", p.Raid.ToString());
+                Log($"\"{title}\" [{platform}/{consoleId}] stored hash not in archive → healed to {Short(p.Hash)} raid={p.Raid}.");
+            }
+            else Log($"\"{title}\" [{platform}/{consoleId}] archive parsed for picker (game hash kept).");
+        }
+        catch (Exception ex) { Log("FillPickerEntries: " + ex.Message); }
     }
 
     /// <summary>Resolve one FILE (main ROM or an additional-application version) into the store and

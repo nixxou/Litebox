@@ -720,7 +720,7 @@ internal static class HostLaunch
                 Rom.RomLaunchResult res;
                 try { res = Rom.RomExtractor.ResolveLaunch(game, emulator, ep, romAbs, label); }
                 finally { Web.RecentState.MarkExtractionDone(); }
-                if (res.Success && !string.IsNullOrEmpty(res.OutputFilePath))
+                if (res.Handled && res.Success && !string.IsNullOrEmpty(res.OutputFilePath))
                 {
                     Console.WriteLine($"[launch] {label}: rom-extractor \"{Path.GetFileName(romAbs)}\" → \"{res.OutputFilePath}\"");
                     return res.OutputFilePath;

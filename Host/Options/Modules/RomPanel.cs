@@ -180,13 +180,67 @@ internal static class RomPanel
             var btnClear = Btn("Clear archive data", 0, 80, null);
             btnClear.Location = new Point(btnManage.Left - btnClear.Width - Sc(8), Sc(80));
             btnClear.Click += (s, e) => DoClearArchiveData();
+            var btnExts = Btn("Extensions…", 0, 80, null);
+            btnExts.Location = new Point(btnClear.Left - btnExts.Width - Sc(8), Sc(80));
+            btnExts.Click += (s, e) => DoEditGlobalExtensions();
 
             h.Controls.AddRange(new Control[]
             {
                 title, lblCache, _tbCachePath, btnBrowse, lblSize, _numMaxGb, lblGb, _lblUsage,
-                lblMin, _numMinMb, lblAnd, _numMaxMb, lblUnit, caps, btnReset, btnManage, btnClear,
+                lblMin, _numMinMb, lblAnd, _numMaxMb, lblUnit, caps, btnReset, btnManage, btnClear, btnExts,
             });
             host.Controls.Add(h);
+        }
+
+        /// <summary>Modal editor for the three GLOBAL extension lists (archive triggers / disc images /
+        /// metadata-ignored) — previously ini-only. Saved immediately (globals, not part of the fiche).</summary>
+        private void DoEditGlobalExtensions()
+        {
+            var c = RomConfig.Instance;
+            using var dlg = new Form
+            {
+                Text = "Global extension lists", FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false, MinimizeBox = false, ShowIcon = false, ShowInTaskbar = false,
+                StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(Sc(530), Sc(196)),
+                BackColor = PanelBg,
+            };
+            Label L(string t, int y)
+            {
+                var l = new Label { Text = t, AutoSize = true, ForeColor = Fg, BackColor = Color.Transparent, Font = Font9, Location = new Point(Sc(14), Sc(y)) };
+                dlg.Controls.Add(l); return l;
+            }
+            TextBox T(string v, int y)
+            {
+                var tb = new TextBox
+                {
+                    Text = v, Location = new Point(Sc(160), Sc(y - 3)), Width = Sc(350),
+                    BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, Font = Font9, Enabled = !_ro,
+                };
+                dlg.Controls.Add(tb); return tb;
+            }
+            L("Archives:", 18); var tbArc = T(c.ArchiveExtensions ?? "", 18);
+            L("Disc images:", 52); var tbDisc = T(c.DiscImageExtensions ?? "", 52);
+            L("Metadata (ignored):", 86); var tbMeta = T(c.MetadataExtensions ?? "", 86);
+            var note = new Label
+            {
+                Text = "Comma-separated, no dots. Archives trigger extraction; disc images trigger convert/copy; metadata files are never playable.",
+                AutoSize = false, Size = new Size(Sc(500), Sc(32)), ForeColor = Sub, Font = Font85, BackColor = Color.Transparent,
+                Location = new Point(Sc(14), Sc(114)),
+            };
+            dlg.Controls.Add(note);
+            var ok = new Button { Text = "Save", DialogResult = DialogResult.OK, FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, Font = Font9, Location = new Point(Sc(340), Sc(154)), Width = Sc(80), Enabled = !_ro };
+            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, FlatStyle = FlatStyle.Flat, ForeColor = Fg, BackColor = Field, Font = Font9, Location = new Point(Sc(428), Sc(154)), Width = Sc(80) };
+            dlg.Controls.Add(ok); dlg.Controls.Add(cancel);
+            dlg.AcceptButton = ok; dlg.CancelButton = cancel;
+
+            if (dlg.ShowDialog(Root.FindForm()) == DialogResult.OK && !_ro)
+            {
+                c.ArchiveExtensions = tbArc.Text.Trim();
+                c.DiscImageExtensions = tbDisc.Text.Trim();
+                c.MetadataExtensions = tbMeta.Text.Trim();
+                c.Save();
+                RomConfig.Invalidate();
+            }
         }
 
         private Panel BuildCapsBox()

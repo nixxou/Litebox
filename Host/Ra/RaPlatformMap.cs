@@ -193,6 +193,16 @@ internal static class RaPlatformMap
         return KeyToId.TryGetValue(key, out var id) ? id : (int?)null;
     }
 
+    /// <summary>The EFFECTIVE RAHasher key for a platform (user override first, else the hardlist) —
+    /// the short stable code the ROM cache's PlatformCode sub-dir scheme uses (the plugin's
+    /// PlatformMapper.PlatformCode analogue). "" when unmapped or explicitly overridden to none.</summary>
+    public static string KeyFor(string? platformName)
+    {
+        if (string.IsNullOrWhiteSpace(platformName)) return "";
+        if (Overrides().TryGetValue(platformName.Trim(), out var ovKey)) return ovKey ?? "";
+        return AutoKeyFor(platformName);
+    }
+
     /// <summary>The HARDLIST (auto) RAHasher key for a platform — "" when the hardlist doesn't map it.
     /// Drives the mapping dialog's pre-fill + the "is this an override?" check.</summary>
     public static string AutoKeyFor(string? platformName)

@@ -38,10 +38,11 @@ internal sealed class RomEntryView
     public long Size { get; init; }
     public string Extension { get; init; } = "";
     public int Score { get; init; }
-    public bool IsFavorite { get; init; }     // R3: ArchiveHistory
+    public bool IsFavorite { get; set; }       // R3: ArchiveHistory (mutable: the picker's ★ toggle)
     public bool IsLastPlayed { get; init; }    // R3: ArchiveHistory
     public bool HasRa { get; init; }           // RA module
     public string RaTitle { get; init; } = ""; // RA module
+    public bool IsCached { get; init; }        // picker ✓ column: already extracted in the cache (mode-aware probe)
 }
 
 /// <summary>The archive's scored+decorated entry list together with the archive metadata every
@@ -465,6 +466,28 @@ internal static class RomExtractor
             var sorted = ArchiveAnalyzer.SortForDisplay(infoEntries, row.Priority, favs, lastPlayed,
                 row.TagWeights, row.RetroAchievementsBonus, raMatched.Count > 0 ? raMatched : null);
 
+            // ✓-cached probe for the picker column (plugin parity): the entry's mode-aware placement
+            // exists at the right size, in either the cache band or \tmp.
+            string gameTitle = Safe(() => game.Title) ?? "";
+            bool preserveMode = !(row?.FlattenExtraction ?? false);
+            bool CachedProbe(ArchiveEntryInfo e)
+            {
+                try
+                {
+                    string nameForPlacement = preserveMode
+                        ? (e.PathInArchive ?? "").Replace('/', Path.DirectorySeparatorChar)
+                        : (e.FileName ?? "");
+                    foreach (var ob in new[] { false, true })
+                    {
+                        var pl = ArchiveCachePlacement.Compute(CacheRoot, raSig, row, nameForPlacement, ob,
+                            gameTitle, platform, emuTitle, preserveDirs: preserveMode);
+                        if (File.Exists(pl.OutputFilePath) && (ulong)new FileInfo(pl.OutputFilePath).Length == e.Size) return true;
+                    }
+                }
+                catch { }
+                return false;
+            }
+
             var views = sorted.Select(e => new RomEntryView
             {
                 FileName = e.FileName,
@@ -481,6 +504,7 @@ internal static class RomExtractor
                 IsLastPlayed = lastPlayedSet.Contains(e.PathInArchive) || lastPlayedSet.Contains(e.FileName),
                 RaTitle = raTitles.TryGetValue(e.PathInArchive ?? "", out var rt) ? rt
                         : (raTitles.TryGetValue(e.FileName ?? "", out var rt2) ? rt2 : ""),
+                IsCached = CachedProbe(e),
             }).ToList();
 
             return new RomEntryListing { ArchivePath = absPath, Key = key, ShortSignature = shortSig, Entries = views };
@@ -555,10 +579,10 @@ internal static class RomExtractor
         if (game == null || !Available) return null;
         try
         {
-            var entries = ListEntries(game, appId);
-            if (entries.Count == 0) return null;
+            var listing = ListEntriesDetailed(game, appId);
+            if (listing.Entries.Count == 0) return null;
             var title = Safe(() => game.Title) ?? "?";
-            using var win = new RomPickerWindow(title, entries);
+            using var win = new RomPickerWindow(title, listing);
             return win.ShowDialog() == System.Windows.Forms.DialogResult.OK ? win.ChosenEntry : null;
         }
         catch (Exception ex) { LbLog.Info("rom", "PickRomModal failed: " + ex.Message); return null; }

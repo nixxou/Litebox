@@ -71,8 +71,9 @@ internal static class ArchiveCachePlacement
             CacheSubDirScheme.Title => title ?? "",
             CacheSubDirScheme.Platform => platform ?? "",
             CacheSubDirScheme.Emulator => emulator ?? "",
-            // PlatformMapper isn't ported (R2 kept the analyzer minimal); degrade to the platform name.
-            CacheSubDirScheme.PlatformCode => platform ?? "",
+            // Short stable platform CODE from the frozen RA platform map (override-aware) — the
+            // plugin's PlatformMapper.PlatformCode analogue; unmapped platforms keep their name.
+            CacheSubDirScheme.PlatformCode => Ra.RaPlatformMap.KeyFor(platform) is { Length: > 0 } code ? code : (platform ?? ""),
             _ => "",
         };
 

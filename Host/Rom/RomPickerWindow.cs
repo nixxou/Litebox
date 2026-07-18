@@ -1,19 +1,23 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ROM extractor (ArchiveMGS) — native advanced ROM picker. Slice R2.
+// ROM extractor (ArchiveMGS) — native advanced ROM picker.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Dark-themed modal that lists an archive's playable entries in SCORED order
-// (RomExtractor.ListEntries) with the cumulative ↻ (last-played) ★ (favourite)
-// 🏆 (RetroAchievements) markers, a substring/wildcard filter, and clickable
-// column sort. Returns the chosen entry's in-archive path (the host arms +
-// launches in R3). Ported from ExtendDB's ArchiveListWindow SELECTION mode — the
-// emulator picker / texture / extraction bits are dropped (R2 is read-only).
+// (RomExtractor.ListEntriesDetailed) with the cumulative ↻ (last-played)
+// ★ (favourite) ✓ (already cached) 🏆 (RetroAchievements) markers, a
+// substring/wildcard filter, and clickable column sort. Interactive bits from
+// the plugin's ArchiveListWindow: clicking the ★ cell (or the right-click menu)
+// TOGGLES the entry's favourite (persisted per archive short-signature), and
+// "Extract to…" pulls one entry to a chosen folder via LB's bundled 7-Zip.
+// Returns the chosen entry's in-archive path (the host arms + launches).
 
 #nullable enable
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -23,6 +27,8 @@ internal sealed class RomPickerWindow : Form
 {
     private readonly List<RomEntryView> _entries;   // scored display order
     private List<RomEntryView> _sorted;
+    private readonly string _shortSig;              // favourites key ("" → toggle disabled)
+    private readonly string _archivePath;           // Extract-to… source ("" → disabled)
     private readonly TextBox _txtFilter;
     private readonly ListView _list;
     private readonly Label _lblStatus;
@@ -33,13 +39,15 @@ internal sealed class RomPickerWindow : Form
     /// <summary>The chosen entry's in-archive path (null = cancelled).</summary>
     public string? ChosenEntry { get; private set; }
 
-    public RomPickerWindow(string gameTitle, IReadOnlyList<RomEntryView> entries)
+    public RomPickerWindow(string gameTitle, RomEntryListing listing)
     {
-        _entries = (entries ?? Array.Empty<RomEntryView>()).ToList();
+        _entries = (listing?.Entries ?? new List<RomEntryView>()).ToList();
         _sorted = _entries.ToList();
+        _shortSig = listing?.ShortSignature ?? "";
+        _archivePath = listing?.ArchivePath ?? "";
 
         Text = "Select ROM — " + (gameTitle ?? "?");
-        Size = new Size(1000, 600);
+        Size = new Size(1030, 600);
         MinimumSize = new Size(700, 400);
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Color.FromArgb(25, 25, 35);
@@ -92,7 +100,8 @@ internal sealed class RomPickerWindow : Form
         };
         _list.Columns.Add("★", 30, HorizontalAlignment.Center);
         _list.Columns.Add("↻", 28, HorizontalAlignment.Center);
-        _list.Columns.Add("Title", 500, HorizontalAlignment.Left);
+        _list.Columns.Add("✓", 28, HorizontalAlignment.Center);
+        _list.Columns.Add("Title", 480, HorizontalAlignment.Left);
         _list.Columns.Add("Size", 90, HorizontalAlignment.Right);
         _list.Columns.Add("Type", 56, HorizontalAlignment.Left);
         _list.Columns.Add("Points", 60, HorizontalAlignment.Right);
@@ -100,6 +109,8 @@ internal sealed class RomPickerWindow : Form
         _list.DoubleClick += (s, e) => SelectCurrent();
         _list.SelectedIndexChanged += (s, e) => UpdateStatus();
         _list.ColumnClick += List_ColumnClick;
+        _list.MouseClick += List_MouseClick;
+        _list.ContextMenuStrip = BuildContextMenu();
         Controls.Add(_list);
         _list.BringToFront();
 
@@ -119,8 +130,83 @@ internal sealed class RomPickerWindow : Form
         FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 9f, FontStyle.Bold),
     };
 
+    // ── Favourite toggle (★ cell click / context menu) ──────────────────────
+
+    private void List_MouseClick(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        var hit = _list.HitTest(e.Location);
+        if (hit.Item?.Tag is not RomEntryView entry) return;
+        int sub = hit.Item.SubItems.IndexOf(hit.SubItem!);
+        if (sub == 0) ToggleFavorite(entry);
+    }
+
+    private void ToggleFavorite(RomEntryView entry)
+    {
+        if (string.IsNullOrEmpty(_shortSig)) { _lblStatus.Text = "Favourites unavailable (no archive signature)."; return; }
+        bool newVal = !entry.IsFavorite;
+        try { ArchiveHistory.ToggleFavorite(_shortSig, entry.PathInArchive, newVal); }
+        catch (Exception ex) { _lblStatus.Text = "Favourite toggle failed: " + ex.Message; return; }
+        entry.IsFavorite = newVal;
+        Rebind(keepSelection: entry);
+    }
+
+    private ContextMenuStrip BuildContextMenu()
+    {
+        var menu = new ContextMenuStrip();
+        var fav = new ToolStripMenuItem("Set favorite");
+        fav.Click += (s, e) => { if (Selected() is { } en) ToggleFavorite(en); };
+        var extract = new ToolStripMenuItem("Extract to…");
+        extract.Click += (s, e) => { if (Selected() is { } en) ExtractTo(en); };
+        menu.Items.Add(fav);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(extract);
+        menu.Opening += (s, e) =>
+        {
+            var en = Selected();
+            fav.Enabled = en != null && _shortSig.Length > 0;
+            fav.Text = en?.IsFavorite == true ? "Unset favorite" : "Set favorite";
+            extract.Enabled = en != null && _archivePath.Length > 0 && File.Exists(_archivePath);
+        };
+        return menu;
+    }
+
+    private RomEntryView? Selected()
+        => _list.SelectedItems.Count > 0 && _list.SelectedItems[0].Tag is RomEntryView en ? en : null;
+
+    /// <summary>Pulls ONE entry (flattened) into a user-chosen folder via LB's bundled 7-Zip —
+    /// the plugin picker's "Extract To…". Best-effort; reports in the status line.</summary>
+    private void ExtractTo(RomEntryView entry)
+    {
+        try
+        {
+            using var dlg = new FolderBrowserDialog { Description = "Extract \"" + entry.FileName + "\" to…" };
+            if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrWhiteSpace(dlg.SelectedPath)) return;
+
+            string exe = RomPaths.SevenZipExe;
+            if (!File.Exists(exe)) { _lblStatus.Text = "7z.exe not found."; return; }
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = exe, UseShellExecute = false, CreateNoWindow = true,
+                ArgumentList = { "e", _archivePath, entry.PathInArchive, "-o" + dlg.SelectedPath, "-y" },
+            };
+            _lblStatus.Text = "Extracting \"" + entry.FileName + "\"…";
+            using var p = Process.Start(psi);
+            if (p == null) { _lblStatus.Text = "7z failed to start."; return; }
+            if (!p.WaitForExit(120_000)) { try { p.Kill(); } catch { } _lblStatus.Text = "Extraction timed out."; return; }
+            _lblStatus.Text = p.ExitCode == 0
+                ? "Extracted to " + dlg.SelectedPath
+                : "7z exited with code " + p.ExitCode + ".";
+        }
+        catch (Exception ex) { _lblStatus.Text = "Extract failed: " + ex.Message; }
+    }
+
+    // ── Sort / filter / bind ────────────────────────────────────────────────
+
     private void List_ColumnClick(object? sender, ColumnClickEventArgs e)
     {
+        if (e.Column == 2) return;   // ✓ cached: display-only, not sortable (plugin parity)
         if (e.Column == _sortCol) _sortAsc = !_sortAsc;
         else { _sortCol = e.Column; _sortAsc = true; }
         ApplyColumnSort();
@@ -133,11 +219,11 @@ internal sealed class RomPickerWindow : Form
         {
             0 => (a, b) => (b.IsFavorite ? 1 : 0) - (a.IsFavorite ? 1 : 0),
             1 => (a, b) => (b.IsLastPlayed ? 1 : 0) - (a.IsLastPlayed ? 1 : 0),
-            2 => (a, b) => string.Compare(a.FileName, b.FileName, StringComparison.OrdinalIgnoreCase),
-            3 => (a, b) => a.Size.CompareTo(b.Size),
-            4 => (a, b) => string.Compare(a.Extension, b.Extension, StringComparison.OrdinalIgnoreCase),
-            5 => (a, b) => a.Score.CompareTo(b.Score),
-            6 => (a, b) => string.Compare(a.RaTitle, b.RaTitle, StringComparison.OrdinalIgnoreCase),
+            3 => (a, b) => string.Compare(a.FileName, b.FileName, StringComparison.OrdinalIgnoreCase),
+            4 => (a, b) => a.Size.CompareTo(b.Size),
+            5 => (a, b) => string.Compare(a.Extension, b.Extension, StringComparison.OrdinalIgnoreCase),
+            6 => (a, b) => a.Score.CompareTo(b.Score),
+            7 => (a, b) => string.Compare(a.RaTitle, b.RaTitle, StringComparison.OrdinalIgnoreCase),
             _ => null,
         };
         if (cmp == null) return;
@@ -154,7 +240,7 @@ internal sealed class RomPickerWindow : Form
         return name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    private void Rebind()
+    private void Rebind(RomEntryView? keepSelection = null)
     {
         _list.BeginUpdate();
         try
@@ -169,6 +255,7 @@ internal sealed class RomPickerWindow : Form
                 {
                     f.IsFavorite ? "★" : "",
                     f.IsLastPlayed ? "↻" : "",
+                    f.IsCached ? "✓" : "",
                     f.FileName,
                     FormatSize((ulong)f.Size),
                     f.Extension,
@@ -179,6 +266,8 @@ internal sealed class RomPickerWindow : Form
                 _list.Items.Add(lvi);
                 if (f.IsFavorite) lvi.SubItems[0].ForeColor = Color.Gold;
                 if (f.IsLastPlayed) lvi.SubItems[1].ForeColor = Color.FromArgb(120, 190, 255);
+                if (f.IsCached) lvi.SubItems[2].ForeColor = Color.FromArgb(110, 200, 120);
+                if (ReferenceEquals(f, keepSelection)) lvi.Selected = true;
                 shown++;
             }
             _lblStatus.Text = shown + " entries shown  /  " + _sorted.Count + " total";

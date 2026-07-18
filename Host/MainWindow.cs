@@ -606,6 +606,16 @@ internal sealed class MainWindow : Form, IMessageFilter
             // RA catalogue heartbeat (engine P1): 30-min tick, refreshes only DUE consoles, idles
             // while a game runs or an extraction is in flight.
             try { RaCatalogEngine.Start(); } catch { }
+            // RA session-token auto-renewal: if the user stored their RA password, re-login and rewrite
+            // the expiring token in Settings.xml when it's due. Skipped in read-only; fail-safe on error.
+            // AllowWrite is latched so the catalogue heartbeat can renew periodically too (long sessions).
+            try
+            {
+                bool raCanWrite = !(_dm is HostDataManagerXml roDm) || !roDm.ReadOnly;
+                Ra.RaTokenRenew.AllowWrite = raCanWrite;
+                Ra.RaTokenRenew.MaybeRenewAsync(raCanWrite);
+            }
+            catch { }
         };
     }
 
@@ -1442,50 +1452,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         return (panel, apply);
     }
 
-    // ── RetroAchievements scan — data-side helpers ──────────────────────────────────────────────
-    // The UI (platform picker + Lite/Full buttons) lives in the LB · Integrations → RetroAchievements
-    // tab (LbGlobalOptions); MainWindow only provides the platform list + the scan launcher (they need
-    // the data manager), handed over via Options.RaScanHook. RunRaScan enumerates on the UI thread,
-    // shows the modal progress dialog, then flushes.
-
-    private System.Collections.Generic.IEnumerable<string> RaPlatformNamesSorted()
-    {
-        var names = new System.Collections.Generic.List<string>();
-        try { foreach (var p in _dm.GetAllPlatforms() ?? Array.Empty<IPlatform>()) { try { if (!string.IsNullOrEmpty(p?.Name)) names.Add(p.Name); } catch { } } } catch { }
-        names.Sort(StringComparer.OrdinalIgnoreCase);
-        return names;
-    }
-
-    private System.Collections.Generic.List<IGame> RaGatherGames(string sel)
-    {
-        var list = new System.Collections.Generic.List<IGame>();
-        try
-        {
-            foreach (var p in _dm.GetAllPlatforms() ?? Array.Empty<IPlatform>())
-            {
-                if (p == null) continue;
-                string name = null; try { name = p.Name; } catch { }
-                if (!string.IsNullOrEmpty(sel) && sel != Options.RaScanHook.AllPlatforms && !string.Equals(name, sel, StringComparison.OrdinalIgnoreCase)) continue;
-                IGame[] gs = null; try { gs = p.GetAllGames(true, true); } catch { }
-                if (gs != null) foreach (var g in gs) if (g != null) list.Add(g);
-            }
-        }
-        catch { }
-        return list;
-    }
-
-    private void RunRaScan(string sel, bool full)
-    {
-        try
-        {
-            var games = RaGatherGames(sel);
-            if (games.Count == 0) { MessageBox.Show(this, "No games found for this selection.", "RetroAchievements"); return; }
-            using var f = new Ra.RaScanProgress(games, full, string.IsNullOrEmpty(sel) ? Options.RaScanHook.AllPlatforms : sel);
-            f.ShowDialog(this);
-            (_dm as HostDataManagerXml)?.FlushIfSafe();
-        }
-        catch (Exception ex) { MessageBox.Show(this, "Scan failed: " + ex.Message, "RetroAchievements"); }
-    }
+    // RetroAchievements scanning now lives entirely in the RA options page (RaPanel + RaPanelActions,
+    // which use PluginHelper.DataManager directly), so MainWindow no longer hosts a scan launcher.
 
     private Options.OptionsWindow BuildOptionsWindow()
     {
@@ -1583,13 +1551,9 @@ internal sealed class MainWindow : Form, IMessageFilter
             w.AddSection("Modules", modPanel, modApply);
         }
 
-        // RetroAchievements — a standalone feature with its OWN dedicated page, NOT one of the modules,
-        // and no activation flag: operational out of the box (only the per-platform Enabled flags and the
-        // auto-update trigger are configurable). LiteBox-own state, so editable even in LB read-only mode.
-        {
-            var (raPanel, raApply) = Options.RaPanel.Build(LiteBoxTheme.DpiScale(this), readOnly: false);
-            w.AddSection("RetroAchievements", raPanel, raApply);
-        }
+        // RetroAchievements now lives entirely in the LB · Integrations → RetroAchievements tab (built
+        // below by LbGlobalOptions/RaPanel): credentials + token auto-renewal + per-ROM hashing + grid.
+        // No separate section here.
 
         // Similar Games — a standalone feature, NOT one of the modules; its own section (stub for now, filled by
         // the parallel port). LiteBox-own state, so editable even in LB read-only mode.
@@ -1606,20 +1570,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         // scoped flush after the window closes). Greyed out in read-only mode.
         if (_dm is HostDataManagerXml hdm2)
         {
-            // Hand the RA scan over to the LB · Integrations → RetroAchievements tab. RetroAchievements
-            // is a built-in feature with its own dedicated options page — always available (the plugin-
-            // owns-RA deferral is handled inside the resolve paths themselves).
-            var raScan = new Options.RaScanHook
-            {
-                Available = true,
-                Configured = Ra.RaService.Configured,
-                Platforms = RaPlatformNamesSorted,
-                Run = RunRaScan,
-                RollingRefresh = _cfg.RaStartupRollingRefresh,
-                SetRollingRefresh = v => { _cfg.RaStartupRollingRefresh = v; _cfg.Save(); },
-                OpenMapping = () => { try { using var d = new Ra.RaMappingDialog(RaPlatformNamesSorted()); d.ShowDialog(this); } catch (Exception ex) { Console.WriteLine("[ra-lite] mapping dialog: " + ex.Message); } },
-            };
-            Options.LbGlobalOptions.AddSections(w, hdm2.LbSettings, hdm2.ReadOnly, raScan, _cfg);   // share _cfg so ApplyFinished's Save persists the panel's LiteBox.ini edits
+            Options.LbGlobalOptions.AddSections(w, hdm2.LbSettings, hdm2.ReadOnly, _cfg);   // share _cfg so ApplyFinished's Save persists the panel's LiteBox.ini edits (incl. the RA tab)
         }
 
         // Danger zone — full self-uninstall. Last section.

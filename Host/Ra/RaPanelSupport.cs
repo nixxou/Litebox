@@ -46,6 +46,16 @@ internal static class RaPanelConfig
         public string hasherPath { get; set; } = "";
         // Catalogue refresh base in hours, before the 0-8h jitter (0 = default).
         public int refreshHours { get; set; } = 0;
+
+        // ── RA account (token auto-renewal) ──────────────────────────────────────
+        // The RA password, encrypted at rest with LiteBox's own settings cipher (LbSettingsCrypto,
+        // same Rijndael-256 scheme as the EmuMovies password). RA never stores the password itself —
+        // we keep it only to re-login and refresh the session token, which LaunchBox lets expire.
+        public string passwordBlob { get; set; } = "";
+        // When the current token was last obtained (round-trip ISO-8601, UTC). Empty = never / unknown.
+        public string tokenObtainedUtc { get; set; } = "";
+        // Re-login this many days after tokenObtainedUtc (0 = default). Guards the expiry.
+        public int renewTokenEveryDays { get; set; } = 0;
     }
 
     private static readonly object _lock = new();
@@ -71,6 +81,9 @@ internal static class RaPanelConfig
                                 if (!string.IsNullOrWhiteSpace(kv.Key)) m.enabled[kv.Key.Trim()] = kv.Value;
                         m.hasherPath = j.hasherPath?.Trim() ?? "";
                         m.refreshHours = j.refreshHours;
+                        m.passwordBlob = j.passwordBlob ?? "";
+                        m.tokenObtainedUtc = j.tokenObtainedUtc ?? "";
+                        m.renewTokenEveryDays = j.renewTokenEveryDays;
                     }
                 }
             }
@@ -103,24 +116,107 @@ internal static class RaPanelConfig
         return m.enabled.TryGetValue(platform.Trim(), out var v) ? v : def;
     }
 
-    /// <summary>Replaces the whole panel state and persists it. Pass only the enabled diffs (platforms whose
-    /// checkbox differs from their default). <paramref name="refreshHours"/> equal to the default is
-    /// stored as 0 (= "follow the default").</summary>
+    public const int DefaultRenewDays = 7;
+
+    /// <summary>The clear RA password (decrypted from the stored blob; "" when unset).</summary>
+    public static string PasswordClear => Data.LbSettingsCrypto.DecryptLocal(Get().passwordBlob);
+
+    /// <summary>True when a password is on file (so the token can be auto-renewed).</summary>
+    public static bool HasPassword => !string.IsNullOrEmpty(Get().passwordBlob);
+
+    /// <summary>When the current token was last obtained (UTC), or null if never/unknown.</summary>
+    public static DateTime? TokenObtainedUtc
+    {
+        get
+        {
+            var s = Get().tokenObtainedUtc;
+            return DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.RoundtripKind, out var d)
+                ? d.ToUniversalTime() : (DateTime?)null;
+        }
+    }
+
+    /// <summary>Days between automatic token re-logins (1-365; the default is 7).</summary>
+    public static int RenewEveryDays
+    {
+        get { int v = Get().renewTokenEveryDays; return v is >= 1 and <= 365 ? v : DefaultRenewDays; }
+    }
+
+    /// <summary>Persist the panel's mapping state (mode / enabled diffs / hasher / refresh) WITHOUT touching
+    /// the RA-account fields (password / token date / renew cadence) — those have their own setter.
+    /// <paramref name="refreshHours"/> equal to the default is stored as 0 (= "follow the default").</summary>
     public static void Save(string mode, IDictionary<string, bool> enabledDiffs,
                             string? hasherPath = null, int refreshHours = 0)
     {
         lock (_lock)
         {
-            var m = new Model { mode = string.Equals(mode, ModeOnLaunch, StringComparison.OrdinalIgnoreCase) ? ModeOnLaunch : ModeOnSelect };
+            var m = Clone(Get());
+            m.mode = string.Equals(mode, ModeOnLaunch, StringComparison.OrdinalIgnoreCase) ? ModeOnLaunch : ModeOnSelect;
+            m.enabled = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
             if (enabledDiffs != null)
                 foreach (var kv in enabledDiffs)
                     if (!string.IsNullOrWhiteSpace(kv.Key)) m.enabled[kv.Key.Trim()] = kv.Value;
             m.hasherPath = hasherPath?.Trim() ?? "";
             m.refreshHours = refreshHours == DefaultRefreshHours ? 0 : refreshHours;
-            _model = m;
-            try { File.WriteAllText(FilePath, JsonSerializer.Serialize(m)); } catch { }
+            Persist(m);
         }
     }
+
+    /// <summary>Persist the RA-account fields only, preserving the mapping state. Pass the CLEAR password
+    /// (encrypted here); pass <paramref name="tokenObtainedUtc"/> when a fresh token was just obtained
+    /// (null keeps the stored timestamp). <paramref name="renewDays"/> equal to the default stores 0.</summary>
+    public static void SaveAuth(string? passwordClear, DateTime? tokenObtainedUtc, int renewDays)
+    {
+        lock (_lock)
+        {
+            var m = Clone(Get());
+            if (passwordClear != null)   // null = leave as-is; "" = explicitly clear
+                m.passwordBlob = passwordClear.Length == 0 ? "" : Data.LbSettingsCrypto.EncryptLocal(passwordClear);
+            if (tokenObtainedUtc.HasValue)
+                m.tokenObtainedUtc = tokenObtainedUtc.Value.ToUniversalTime().ToString("o");
+            m.renewTokenEveryDays = renewDays == DefaultRenewDays ? 0 : renewDays;
+            Persist(m);
+        }
+    }
+
+    /// <summary>Stamp only the token-obtained timestamp (after a successful background renewal).</summary>
+    public static void StampTokenObtained(DateTime whenUtc)
+    {
+        lock (_lock)
+        {
+            var m = Clone(Get());
+            m.tokenObtainedUtc = whenUtc.ToUniversalTime().ToString("o");
+            Persist(m);
+        }
+    }
+
+    /// <summary>Clear the token timestamp so the next renewal cycle treats it as due (e.g. after the
+    /// password changed and the current token is likely stale).</summary>
+    public static void MarkTokenStale()
+    {
+        lock (_lock)
+        {
+            var m = Clone(Get());
+            m.tokenObtainedUtc = "";
+            Persist(m);
+        }
+    }
+
+    private static void Persist(Model m)
+    {
+        _model = m;
+        try { File.WriteAllText(FilePath, JsonSerializer.Serialize(m)); } catch { }
+    }
+
+    private static Model Clone(Model s) => new()
+    {
+        mode = s.mode,
+        enabled = new Dictionary<string, bool>(s.enabled, StringComparer.OrdinalIgnoreCase),
+        hasherPath = s.hasherPath,
+        refreshHours = s.refreshHours,
+        passwordBlob = s.passwordBlob,
+        tokenObtainedUtc = s.tokenObtainedUtc,
+        renewTokenEveryDays = s.renewTokenEveryDays,
+    };
 }
 
 /// <summary>Game-gather + scan launcher (mirrors MainWindow.RunRaScan, which is private) and the

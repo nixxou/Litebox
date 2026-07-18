@@ -389,19 +389,34 @@ internal sealed class RelatedGamesPanel : Panel
 
     private void OpenCard(CardData d)
     {
-        if (d.IsLocal && d.GameId.Length > 0) { try { OpenLocalGame?.Invoke(d.GameId); } catch { } }
-        else if (d.DbId > 0)
+        bool owned = d.IsLocal && d.GameId.Length > 0;
+
+        // Not owned AND the active DB can't describe the id (Extended DB not the live main DB and the
+        // id is outside the LaunchBox range — a Steam/VNDB/ScreenScraper synthetic id): a modal would
+        // be an empty shell, so go straight to the site the id range encodes.
+        if (!owned && !Web.ExtendDbLinks.ActiveDbCovers(d.DbId))
         {
-            try
+            var url = Web.ExtendDbLinks.ExternalUrl(d.DbId);
+            if (url != null)
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                try
                 {
-                    FileName = "https://gamesdb.launchbox-app.com/games/dbid/" + d.DbId,
-                    UseShellExecute = true,
-                });
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    { FileName = url, UseShellExecute = true });
+                }
+                catch { }
+                return;
             }
-            catch { }
+            // No route for this id either (IGDB range / no id) → fall through to the seed-data modal.
         }
+
+        // Every other case: the game card modal (fiche + screenshot + library/site/local-web links).
+        try
+        {
+            using var dlg = new RelatedGameModal(d.DbId, d.Title, d.Sub, d.Desc, owned, d.GameId, OpenLocalGame);
+            dlg.ShowDialog(FindForm());
+        }
+        catch { }
     }
 
     private static T Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }

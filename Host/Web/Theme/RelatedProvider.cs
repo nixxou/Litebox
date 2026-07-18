@@ -146,6 +146,16 @@ internal static class RelatedProvider
         if (thumb.Length == 0 && c.LbDbId > 0) thumb = "/api/media/" + c.LbDbId + ".jpg";
 
         string year = (c.Year.HasValue && c.Year.Value > 0) ? c.Year.Value.ToString() : "";
+
+        // Click target for DB-only cards, resolved SERVER-side (single source of truth: ExtendDbLinks):
+        // the LOCAL database-site page (relative — valid for LAN clients too) when the active DB covers
+        // the id, else the source site the id range encodes. Empty when neither applies.
+        string link = "";
+        if (c.LbDbId > 0)
+            link = ExtendDbLinks.LocalWebDbCanServe(c.LbDbId)
+                ? "/games/" + c.LbDbId + ".html"
+                : (ExtendDbLinks.ExternalUrl(c.LbDbId) ?? "");
+
         return new
         {
             id,
@@ -157,6 +167,7 @@ internal static class RelatedProvider
             d     = "",
             pct   = e.Pct,
             thumb,
+            link,
         };
     }
 

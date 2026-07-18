@@ -3895,6 +3895,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         _gameRunning = true;
         SetStorePoll(false);   // pause the install-state poll while the game runs (client DB may be mid-write)
         CandidateProvider.ReleaseMemory();   // drop the suggester's candidate pool — that RAM belongs to the game now
+        // RA launch correction (engine P4): align the IGame hash/raid with the entry that actually
+        // launched (Select-ROM pick / version), store-first, raid-only guard. Fire-and-forget.
+        if (g != null)
+        {
+            var launched = g;
+            Task.Run(() => { try { Ra.RaLaunchCorrect.OnGameLaunched(launched, _dm as HostDataManagerXml); } catch { } });
+        }
 
         if (_cfg.UnloadListDuringGame)
         {

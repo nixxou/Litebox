@@ -115,6 +115,18 @@ internal sealed class RelatedGameModal : Form
             DbGame row = null;
             try { if (dbId > 0) row = new DbRepository().GetGameById(dbId); } catch { }
 
+            // The USER-PRIORITY overview (same SQL resolution as the Related cards: the precomputed
+            // defaultOverview column, else the dynamic COALESCE over [Base] OverviewSources). Extended
+            // DB only — on a native-DB row the PickOverview fallback below serves the plain Overview.
+            string priorityOverview = null;
+            try
+            {
+                if (dbId > 0 && RelatedProvider.Overviews(dbId.ToString(), null)
+                        is { } ov && ov.TryGetValue(dbId.ToString(), out var v))
+                    priorityOverview = v;
+            }
+            catch { }
+
             Image img = null;
             try
             {
@@ -135,14 +147,14 @@ internal sealed class RelatedGameModal : Form
                 BeginInvoke(new Action(() =>
                 {
                     if (_dead) { img?.Dispose(); return; }
-                    Apply(row, img);
+                    Apply(row, priorityOverview, img);
                 }));
             }
             catch { img?.Dispose(); }
         });
     }
 
-    private void Apply(DbGame row, Image img)
+    private void Apply(DbGame row, string priorityOverview, Image img)
     {
         if (img != null) _shot.SetImage(img);
         if (row != null)
@@ -160,8 +172,14 @@ internal sealed class RelatedGameModal : Form
                 Join(" · ", Join(" / ", row.Developer, row.Publisher), row.ESRB, rating),
                 row.Genres);
 
-            var overview = row.PickOverview();
+            // User-priority resolution first (matches the cards); PickOverview is only the fallback
+            // for rows the extended-DB query can't serve (native LaunchBox rows).
+            var overview = !string.IsNullOrWhiteSpace(priorityOverview) ? priorityOverview : row.PickOverview();
             if (!string.IsNullOrWhiteSpace(overview)) _overview.Text = overview.Replace("\n", "\r\n");
+        }
+        else if (!string.IsNullOrWhiteSpace(priorityOverview))
+        {
+            _overview.Text = priorityOverview.Replace("\n", "\r\n");
         }
         BuildLinks(row);
     }

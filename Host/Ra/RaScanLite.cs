@@ -43,19 +43,50 @@ internal static class RaScanLite
             try
             {
                 var f = g as ILiteBoxFields;
-                bool hasHash = f != null && !string.IsNullOrEmpty(f.GetField("RetroAchievementsHash"));
+                bool hasHash = f != null && RaResolveLite.IsRealHash(f.GetField("RetroAchievementsHash"));
                 bool changed;
                 if (full) changed = RaResolveLite.Resolve(g, force: true);
                 else if (hasHash) changed = RaResolveLite.RelinkRaid(g);   // cheap: pick up a newly-available raid
-                else changed = RaResolveLite.Resolve(g, force: false);     // RAHasher: resolve a game with no hash
+                else changed = RaResolveLite.Resolve(g, force: false);     // RAHasher: resolve a game with no hash (or heal the sentinel)
                 if (changed) c.Changed++;
                 if (f != null && !string.IsNullOrEmpty(f.GetField("RetroAchievementsId"))) c.Matched++;
+
+                // Plugin parity: additional-application VERSIONS (run-before/after helpers excluded)
+                // are hashed into the STORE too, so the picker/auto-pick know them. Store-first —
+                // an unchanged version costs one signature lookup, no RAHasher.
+                HashVersionsIntoStore(g, full);
             }
             catch { }
             c.Processed++;
             try { onProgress(c.Processed, c.Matched); } catch { }
         }
         return c;
+    }
+
+    /// <summary>Hash a game's additional-application versions into the store (no IGame writes — the
+    /// game's own fields stay driven by the main path / launch correction). Helpers that auto-run
+    /// before/after the game are not versions and are skipped.</summary>
+    private static void HashVersionsIntoStore(IGame g, bool force)
+    {
+        try
+        {
+            int? cid = RaPlatformMap.ConsoleIdFor(g.Platform);
+            if (cid == null) return;
+            var apps = g.GetAllAdditionalApplications();
+            if (apps == null) return;
+            foreach (var app in apps)
+            {
+                bool helper; string? path;
+                try { helper = app.AutoRunBefore || app.AutoRunAfter; path = app.ApplicationPath; } catch { continue; }
+                if (helper || string.IsNullOrWhiteSpace(path)) continue;
+                string abs;
+                try { abs = System.IO.Path.IsPathRooted(path) ? path : System.IO.Path.GetFullPath(System.IO.Path.Combine(Media.MediaResolver.LbRoot ?? "", path)); }
+                catch { continue; }
+                if (!System.IO.File.Exists(abs)) continue;
+                try { RaResolveLite.ResolvePath(cid.Value, g.Platform ?? "", abs, force); } catch { }
+            }
+        }
+        catch { }
     }
 }
 

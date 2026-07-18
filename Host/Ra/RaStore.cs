@@ -109,7 +109,10 @@ internal static class RaStore
         {
             using var conn = Open(); if (conn == null) return;
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "UPDATE archive SET parse_state=$v WHERE signature=$s;";
+            // Upsert: the RA parse can run before the listing ever cached this archive — the head row
+            // is created bare and the listing upsert fills path/size later (it leaves parse_state alone).
+            cmd.CommandText = @"INSERT INTO archive (signature, parse_state) VALUES ($s, $v)
+                                ON CONFLICT(signature) DO UPDATE SET parse_state=excluded.parse_state;";
             cmd.Parameters.AddWithValue("$v", state);
             cmd.Parameters.AddWithValue("$s", sig);
             cmd.ExecuteNonQuery();

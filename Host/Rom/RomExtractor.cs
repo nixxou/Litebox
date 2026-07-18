@@ -397,9 +397,9 @@ internal static class RomExtractor
     /// durable per-archive history), and floated by <see cref="ArchiveAnalyzer.SortForDisplay"/> — plus
     /// the archive path/key/short-signature the web route echoes back. The one listing+scoring impl every
     /// surface shares (memory: rom-list-surfaces-sync); no caller re-lists or re-scores. RA per-entry
-    /// titles are NOT sourced here (the RA module keeps them in its own per-archive DB, not yet ported to
-    /// the native side) so <see cref="RomEntryView.RaTitle"/> stays empty and the theme simply shows no
-    /// 🏆 marker.</summary>
+    /// titles and the achievement auto-pick bonus are sourced from the RA engine's store
+    /// (RaStore.GetEntryRaTitles / GetRaMatchedPaths, filled at select/scan time) — an archive the
+    /// engine hasn't parsed yet simply shows no 🏆 marker until it is.</summary>
     public static RomEntryListing ListEntriesDetailed(IGame game, string? appId)
     {
         if (game == null || !Available) return RomEntryListing.Empty;
@@ -441,8 +441,13 @@ internal static class RomExtractor
             var favs = ArchiveHistory.GetFavorites(shortSig);
             var lastPlayed = ArchiveHistory.GetLastPlayed(shortSig);
             var lastPlayedSet = new HashSet<string>(lastPlayed, StringComparer.OrdinalIgnoreCase);
+            // RA engine store: per-entry game titles (picker column / 🏆 glyph) + the matched-path set
+            // that makes RetroAchievementsBonus live (the achievement-bearing version wins auto-pick).
+            var raSig = ArchiveCacheDb.Sig(key);
+            var raTitles = Ra.RaStore.GetEntryRaTitles(raSig);
+            var raMatched = Ra.RaStore.GetRaMatchedPaths(raSig);
             var sorted = ArchiveAnalyzer.SortForDisplay(infoEntries, row.Priority, favs, lastPlayed,
-                row.TagWeights, row.RetroAchievementsBonus, null);
+                row.TagWeights, row.RetroAchievementsBonus, raMatched.Count > 0 ? raMatched : null);
 
             var views = sorted.Select(e => new RomEntryView
             {
@@ -455,6 +460,8 @@ internal static class RomExtractor
                 // archives (and rows recorded before the switch) — matches the source's OkSorted.
                 IsFavorite = favs.Contains(e.PathInArchive) || favs.Contains(e.FileName),
                 IsLastPlayed = lastPlayedSet.Contains(e.PathInArchive) || lastPlayedSet.Contains(e.FileName),
+                RaTitle = raTitles.TryGetValue(e.PathInArchive ?? "", out var rt) ? rt
+                        : (raTitles.TryGetValue(e.FileName ?? "", out var rt2) ? rt2 : ""),
             }).ToList();
 
             return new RomEntryListing { ArchivePath = absPath, Key = key, ShortSignature = shortSig, Entries = views };

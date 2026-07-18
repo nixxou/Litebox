@@ -213,9 +213,10 @@ internal static class RaPanel
 
         var head = ModulePanelKit.Header("RetroAchievements", dpiS); head.Location = new Point(S(2), S(2)); top.Controls.Add(head);
         var cap = ModulePanelKit.Caption(
-            "Stops LaunchBox extracting your ROMs just to hash them on select, and computes the correct "
-            + "RetroAchievements hash per ROM / version with our RAHasher. Each platform's console leads with "
-            + "\"default: …\" (the built-in preset) — pick another to force it, or click an ID for its games page.",
+            "Computes the correct RetroAchievements hash per ROM / version with our RAHasher — archives are "
+            + "hashed in memory (no unpacking), every entry is remembered, and the launched entry corrects the "
+            + "game at launch. Each platform's console leads with \"default: …\" (the built-in preset) — pick "
+            + "another to force it, or click an ID for its games page.",
             dpiS, maxWidth: 720);
         cap.Location = new Point(S(2), S(26)); top.Controls.Add(cap);
 

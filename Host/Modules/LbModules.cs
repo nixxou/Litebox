@@ -38,8 +38,9 @@ internal static class LbModules
             "A second metadata database (ScreenScraper, VNDB, IGDB, Steam) with richer overviews, locked fields, and credentialed media downloads.", false, true),
         new(LbModule.Rom,    "rom",    "ROM extractor (ArchiveMGS)",
             "Extract the picked ROM from an archive on launch, with the Archive Multi-Game Selector: per-emulator/platform profiles, extraction modes, an LRU disk cache, RAM disk, disc-image conversion, texture-pack and .m3u handling — all native. Off: archives fall back to a flat extract-everything launch.", true, true),
-        new(LbModule.RetroAchievements, "retroachievements", "RetroAchievements",
-            "Resolve each game's RetroAchievements set by hashing the actual ROM with our own RAHasher (per ROM / per version), and show the achievements panel. Off: LiteBox does no per-ROM hashing and only shows a set already linked to a game.", true, true),
+        // RetroAchievements is NOT a module: it has its own dedicated options page (like Similar Games)
+        // and no activation flag — the feature is always operational. The enum member stays only so
+        // historical "Module.retroachievements" db rows keep a stable key namespace.
         new(LbModule.Parental, "parental", "Parental control",
             "A PIN gate for restricted content, using BigBox's own parental PIN (set or remove it here — BigBox sees the change).", false, true),
         new(LbModule.Web,    "web",    "Web frontends",

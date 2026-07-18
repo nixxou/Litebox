@@ -13,7 +13,7 @@
 // so their scored order can never drift (memory: rom-list-surfaces-sync).
 //
 // Favourites / last-played / RetroAchievements decoration reads from the R3
-// history DB + the RA module — absent in R2, so those flags are false / empty for
+// history DB + the RA feature — absent in R2, so those flags are false / empty for
 // now (the JSON keys stay present; only the write side is deferred).
 
 #nullable enable
@@ -40,8 +40,8 @@ internal sealed class RomEntryView
     public int Score { get; init; }
     public bool IsFavorite { get; set; }       // R3: ArchiveHistory (mutable: the picker's ★ toggle)
     public bool IsLastPlayed { get; init; }    // R3: ArchiveHistory
-    public bool HasRa { get; init; }           // RA module
-    public string RaTitle { get; init; } = ""; // RA module
+    public bool HasRa { get; init; }           // RA feature
+    public string RaTitle { get; init; } = ""; // RA feature
     public bool IsCached { get; init; }        // picker ✓ column: already extracted in the cache (mode-aware probe)
 }
 

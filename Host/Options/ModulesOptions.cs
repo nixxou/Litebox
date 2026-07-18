@@ -206,7 +206,6 @@ internal static class ModulesOptions
     {
         LbModule.Base              => "Base",
         LbModule.Rom               => "ROM extractor",
-        LbModule.RetroAchievements => "RetroAchievements",
         LbModule.Parental          => "Parental",
         LbModule.Web               => "Web",
         _                          => m.ToString(),
@@ -219,7 +218,6 @@ internal static class ModulesOptions
         LbModule.Parental         => ParentalPanel.Build(dpiS, readOnly),
         LbModule.Rom              => RomPanel.Build(dpiS, readOnly),
         LbModule.Web              => WebPanel.Build(dpiS, readOnly),
-        LbModule.RetroAchievements => RaPanel.Build(dpiS, readOnly),
         _                         => (new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg }, (Action?)null),
     };
 }

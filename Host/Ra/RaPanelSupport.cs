@@ -207,18 +207,6 @@ internal static class RaPanelActions
     /// to scan.</summary>
     public static bool RunScan(IWin32Window? owner, string? platform, bool full)
     {
-        // Module gate (plugin parity): the tab is reachable with the module off, but every RA action
-        // honours the flag — a manual scan must not hash while the module is disabled.
-        if (!Modules.LbModules.On(Modules.LbModule.RetroAchievements))
-        {
-            try
-            {
-                MessageBox.Show(owner, "The RetroAchievements module is disabled — enable it in the Modules grid first.",
-                    "RetroAchievements", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch { }
-            return false;
-        }
         var games = GatherGames(platform, honorEnabled: string.IsNullOrEmpty(platform) || platform == AllPlatforms);
         if (games.Count == 0) return false;
         try

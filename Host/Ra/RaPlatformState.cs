@@ -55,7 +55,7 @@ internal static class RaPlatformState
 
     /// <summary>The composed predicate for the auto-resolve-on-select path: the trigger is "On select" AND
     /// this platform is RA-enabled. Callers still invoke RaResolveLite.Resolve themselves — this only gates
-    /// whether they should. (The module-on check stays at the call site.)</summary>
+    /// whether they should.</summary>
     public static bool ShouldAutoResolveOnSelect(string? platform)
         => IsAutoUpdateOnSelect && IsPlatformEnabled(platform);
 }

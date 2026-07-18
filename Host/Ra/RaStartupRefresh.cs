@@ -3,7 +3,7 @@
 // At launch, refresh the catalogue of up to 3 consoles whose cached list is older than 48h and re-link their
 // games (pick up raids that appeared in RA since). Over successive launches this rolls through every console,
 // so already-resolved games keep gaining raids without a manual scan — and WITHOUT any RAHasher work (re-link
-// is a pure catalogue lookup). Gated: the checkbox is on, ExtendDB isn't resolving RA, and RA creds are set.
+// is a pure catalogue lookup). Gated: the checkbox is on and RA creds are set.
 // Per-platform: a platform the user disabled in the RA options panel (RaPlatformState.IsPlatformEnabled) is
 // skipped, so it stays honored here too. The auto-update trigger (select/launch) does NOT gate this rolling
 // relink — it is a catalogue re-link, not the on-select re-hash the trigger governs.
@@ -34,7 +34,6 @@ internal static class RaStartupRefresh
         try
         {
             if (!enabled || dm == null) return;
-            if (!Modules.LbModules.On(Modules.LbModule.RetroAchievements)) return;   // RetroAchievements module off → LiteBox doesn't do per-ROM RA resolution
             if (!RaService.Configured) return;     // no creds → can't resolve raids
 
             // 1) Group RA-mapped platforms by console id (UI thread; no games gathered yet).

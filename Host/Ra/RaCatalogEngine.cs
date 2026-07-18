@@ -3,7 +3,7 @@
 //
 // Behavior kept from the plugin:
 //   • Heartbeat: one background timer, first tick +20s then every 30 min; each tick bails unless
-//     the RA module is on AND the box is idle (no game running, no extraction in flight); then
+//     the box is idle (no game running, no extraction in flight); then
 //     refreshes only the consoles DUE per their stored schedule.
 //   • Schedule: success → now + 20h + random(0..8h, 30-min steps); failure/empty/rejected →
 //     back-off now + 2h + random(0..1h) WITHOUT touching games_refreshed_at (the UI keeps showing
@@ -67,7 +67,6 @@ internal static class RaCatalogEngine
         if (Interlocked.Exchange(ref _ticking, 1) == 1) return;
         try
         {
-            if (!LbModules.On(LbModule.RetroAchievements)) return;
             if (Web.RecentState.IsGameRunning || Web.RecentState.IsExtractionInProgress) return;
             RefreshDue();
         }

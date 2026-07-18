@@ -11,7 +11,7 @@
 //     (additional application) launched comes from the same row — both are written BEFORE the
 //     process starts, so they are readable when OnGameStarted fires.
 //   • Store-first: the archive's per-entry hashes were persisted at select/scan; correcting is a
-//     dictionary lookup. An archive never parsed (RA module just turned on, direct launch) is
+//     dictionary lookup. An archive never parsed (never selected, direct launch) is
 //     parsed now — bytes-authoritative, the plugin's HealLaunchedEntry spirit.
 //   • RAID-ONLY GUARD (plugin parity): the hash is corrected on any mismatch, but a valid stored
 //     raid is never downgraded to none — dropping raids is the canary-gated refresh's job.
@@ -38,7 +38,6 @@ internal static class RaLaunchCorrect
         try
         {
             if (game is not ILiteBoxFields fields) return;
-            if (!LbModules.On(LbModule.RetroAchievements)) return;
 
             string? platform = Safe(() => game.Platform);
             int? cid = RaPlatformMap.ConsoleIdFor(platform);

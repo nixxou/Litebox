@@ -1,4 +1,5 @@
-// RetroAchievements module config panel — LiteBox-native parity with ExtendDB's "RetroAchievements" tab.
+// RetroAchievements DEDICATED options page (registered in MainWindow.BuildOptionsWindow next to
+// "Similar Games" — NOT a module card) — LiteBox-native parity with ExtendDB's "RetroAchievements" tab.
 //
 // Blocks LB's scan-on-select hashing and resolves each game's RA set by hashing the actual ROM with our own
 // RAHasher (per ROM / per version). This page drives that resolver's configuration:

@@ -14,7 +14,7 @@
 // We reproduce EXACTLY the four fields the signature depends on — Path, Size,
 // CRC (hex → uint) and IsDirectory (Attributes contains 'D') — in archive
 // enumeration order, because ArchiveSig.ComputeSignature hashes CRC+Size per
-// entry and any deviation would split the cache <SIG> and desync the RA module.
+// entry and any deviation would split the cache <SIG> and desync the RA feature.
 
 #nullable enable
 

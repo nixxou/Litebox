@@ -595,7 +595,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (_cfg.ProgressSweepOnBoot)
                 try { Data.ProgressAutomation.SweepAsync(); } catch { }
             // RA native-fallback rolling refresh (opt-in) — after the window is up, on idle so it never
-            // delays the first paint. Gated internally (checkbox + ExtendDB-not-handling-RA + creds set).
+            // delays the first paint. Gated internally (checkbox + creds set).
             try
             {
                 BeginInvoke((Action)(() => RaStartupRefresh.RunIfEnabled(
@@ -604,7 +604,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             }
             catch { }
             // RA catalogue heartbeat (engine P1): 30-min tick, refreshes only DUE consoles, idles
-            // while a game runs or an extraction is in flight; module gate checked per tick.
+            // while a game runs or an extraction is in flight.
             try { RaCatalogEngine.Start(); } catch { }
         };
     }
@@ -1583,6 +1583,14 @@ internal sealed class MainWindow : Form, IMessageFilter
             w.AddSection("Modules", modPanel, modApply);
         }
 
+        // RetroAchievements — a standalone feature with its OWN dedicated page, NOT one of the modules,
+        // and no activation flag: operational out of the box (only the per-platform Enabled flags and the
+        // auto-update trigger are configurable). LiteBox-own state, so editable even in LB read-only mode.
+        {
+            var (raPanel, raApply) = Options.RaPanel.Build(LiteBoxTheme.DpiScale(this), readOnly: false);
+            w.AddSection("RetroAchievements", raPanel, raApply);
+        }
+
         // Similar Games — a standalone feature, NOT one of the modules; its own section (stub for now, filled by
         // the parallel port). LiteBox-own state, so editable even in LB read-only mode.
         {
@@ -1598,12 +1606,12 @@ internal sealed class MainWindow : Form, IMessageFilter
         // scoped flush after the window closes). Greyed out in read-only mode.
         if (_dm is HostDataManagerXml hdm2)
         {
-            // Hand the RA scan over to the LB · Integrations → RetroAchievements tab. Greyed out (Available
-            // = false) when the ExtendDB plugin owns RA, OR when the RetroAchievements module is off (the
-            // per-ROM scan IS that module's feature — nothing to scan with it disabled).
+            // Hand the RA scan over to the LB · Integrations → RetroAchievements tab. RetroAchievements
+            // is a built-in feature with its own dedicated options page — always available (the plugin-
+            // owns-RA deferral is handled inside the resolve paths themselves).
             var raScan = new Options.RaScanHook
             {
-                Available = Modules.LbModules.On(Modules.LbModule.RetroAchievements),
+                Available = true,
                 Configured = Ra.RaService.Configured,
                 Platforms = RaPlatformNamesSorted,
                 Run = RunRaScan,
@@ -3429,7 +3437,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             // RA detail panel at the debounced detail-load (not on every selection). LoadRaPanel first runs
             // the plugin's on-select hash/raid heal BLOCKING (so a never-hashed game gets its raid written
             // BEFORE we display from it — fixes the "leave and come back" symptom), then fetches + shows the
-            // achievements. No-op without the plugin / RA module / OnSelect mode. Backgrounded inside.
+            // achievements. No-op without the plugin / OnSelect mode. Backgrounded inside.
             try { LoadRaPanel(g, token); } catch { }
             try { LoadStoreAchPanel(g, token); } catch { }
             var items = BuildMediaList(g);
@@ -3472,17 +3480,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         System.Threading.Tasks.Task.Run(() =>
         {
             // 1) Make sure the plugin's on-select hash/raid heal has actually RUN (BLOCKING) so a never-
-            //    hashed game gets its raid written BEFORE we read it. No-op without the plugin / RA module /
+            //    hashed game gets its raid written BEFORE we read it. No-op without the plugin /
             //    OnSelect mode. (Slow first time — hashes the ROM — hence off the UI thread.)
             try
             {
-                if (Modules.LbModules.On(Modules.LbModule.RetroAchievements))
-                {
-                    string raPlat = null; try { raPlat = g.Platform; } catch { }
-                    if (RaPlatformState.ShouldAutoResolveOnSelect(raPlat)) RaResolveLite.Resolve(g);   // module on + platform RA-enabled + trigger == On select → LiteBox's per-ROM RAHasher resolution (the "ExtendDB way", now native)
-                    // else: module on, but this platform is RA-disabled OR the auto-update trigger is "On launch" → don't re-hash on select; the panel still shows whatever raid is already stored.
-                }
-                // module off → LiteBox does NOT re-hash per ROM; the panel still shows whatever raid is already stored.
+                string raPlat = null; try { raPlat = g.Platform; } catch { }
+                if (RaPlatformState.ShouldAutoResolveOnSelect(raPlat)) RaResolveLite.Resolve(g);   // platform RA-enabled + trigger == On select → LiteBox's per-ROM RAHasher resolution (the "ExtendDB way", now native)
+                // else: this platform is RA-disabled OR the auto-update trigger is "On launch" → don't re-hash on select; the panel still shows whatever raid is already stored.
             }
             catch { }
             if (IsDisposed || token != _detailsLoadToken) return;

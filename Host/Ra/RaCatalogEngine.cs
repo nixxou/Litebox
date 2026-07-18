@@ -147,7 +147,8 @@ internal static class RaCatalogEngine
     }
 
     private static DateTime NextSuccess(DateTime now)
-        => now + TimeSpan.FromHours(20) + TimeSpan.FromMinutes(30 * Rng.Next(0, 17));   // +0..8h, 30-min steps
+        => now + TimeSpan.FromHours(RaPanelConfig.RefreshHours)                          // base (default 20h, panel option)
+             + TimeSpan.FromMinutes(30 * Rng.Next(0, 17));                               // +0..8h jitter, 30-min steps
 
     private static DateTime Backoff(DateTime now)
         => now + TimeSpan.FromHours(2) + TimeSpan.FromMinutes(Rng.Next(0, 61));         // +2h..3h

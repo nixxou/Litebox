@@ -35,13 +35,17 @@ internal static class RaHasherLite
 
     private static string RaDir => Path.Combine(MediaResolver.LbRoot ?? "", "ThirdParty", "RetroAchievements");
 
-    /// <summary>Returns the RahasherExtendDB.exe path in LB\ThirdParty\RetroAchievements\. The payload is
-    /// deployed by NativeInstaller (embedded → ThirdParty); this triggers that deploy if it hasn't run yet
-    /// (e.g. lazy first use before boot completed). Null when it can't be made available.</summary>
+    /// <summary>Returns the RAHasher exe to use: the user's RaPanelConfig.HasherPath override when it
+    /// points at an existing file (plugin RaHasherPath parity), else the deployed copy in
+    /// LB\ThirdParty\RetroAchievements\ (NativeInstaller deploys it on first miss). Null when neither
+    /// can be made available.</summary>
     public static string? EnsureExe()
     {
         try
         {
+            var custom = RaPanelConfig.HasherPath;
+            if (!string.IsNullOrWhiteSpace(custom) && File.Exists(custom)) return custom;
+
             string exe = Path.Combine(RaDir, "RahasherExtendDB.exe");
             if (!File.Exists(exe)) LbApiHost.Host.Install.NativeInstaller.EnsureDeployed(MediaResolver.LbRoot);
             return File.Exists(exe) ? exe : null;

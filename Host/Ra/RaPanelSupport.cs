@@ -42,6 +42,10 @@ internal static class RaPanelConfig
         public string mode { get; set; } = ModeOnSelect;
         // platform name → explicit enabled state (only the platforms whose state differs from the default).
         public Dictionary<string, bool> enabled { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        // Optional RahasherExtendDB.exe override ("" = the deployed ThirdParty copy).
+        public string hasherPath { get; set; } = "";
+        // Catalogue refresh base in hours, before the 0-8h jitter (0 = default).
+        public int refreshHours { get; set; } = 0;
     }
 
     private static readonly object _lock = new();
@@ -65,6 +69,8 @@ internal static class RaPanelConfig
                         if (j.enabled != null)
                             foreach (var kv in j.enabled)
                                 if (!string.IsNullOrWhiteSpace(kv.Key)) m.enabled[kv.Key.Trim()] = kv.Value;
+                        m.hasherPath = j.hasherPath?.Trim() ?? "";
+                        m.refreshHours = j.refreshHours;
                     }
                 }
             }
@@ -77,6 +83,18 @@ internal static class RaPanelConfig
     /// <summary>The stored auto-update trigger ("select" or "launch").</summary>
     public static string Mode => Get().mode;
 
+    public const int DefaultRefreshHours = 20;
+
+    /// <summary>Optional override path to RahasherExtendDB.exe; "" = use the deployed ThirdParty copy.</summary>
+    public static string HasherPath => Get().hasherPath ?? "";
+
+    /// <summary>Catalogue refresh BASE in hours (the 0-8h jitter is added on top). Stored 0 or an
+    /// out-of-range value falls back to the default (20h — the plugin's cadence).</summary>
+    public static int RefreshHours
+    {
+        get { int v = Get().refreshHours; return v is >= 1 and <= 168 ? v : DefaultRefreshHours; }
+    }
+
     /// <summary>Effective enabled state for a platform: the stored diff if present, else the caller's default.</summary>
     public static bool IsEnabled(string platform, bool def)
     {
@@ -86,8 +104,10 @@ internal static class RaPanelConfig
     }
 
     /// <summary>Replaces the whole panel state and persists it. Pass only the enabled diffs (platforms whose
-    /// checkbox differs from their default).</summary>
-    public static void Save(string mode, IDictionary<string, bool> enabledDiffs)
+    /// checkbox differs from their default). <paramref name="refreshHours"/> equal to the default is
+    /// stored as 0 (= "follow the default").</summary>
+    public static void Save(string mode, IDictionary<string, bool> enabledDiffs,
+                            string? hasherPath = null, int refreshHours = 0)
     {
         lock (_lock)
         {
@@ -95,6 +115,8 @@ internal static class RaPanelConfig
             if (enabledDiffs != null)
                 foreach (var kv in enabledDiffs)
                     if (!string.IsNullOrWhiteSpace(kv.Key)) m.enabled[kv.Key.Trim()] = kv.Value;
+            m.hasherPath = hasherPath?.Trim() ?? "";
+            m.refreshHours = refreshHours == DefaultRefreshHours ? 0 : refreshHours;
             _model = m;
             try { File.WriteAllText(FilePath, JsonSerializer.Serialize(m)); } catch { }
         }

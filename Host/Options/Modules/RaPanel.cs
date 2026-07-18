@@ -209,7 +209,7 @@ internal static class RaPanel
         Populate();
 
         // ── Header + action bar (fixed height, docked above the grid) ────────────────────────────
-        var top = new Panel { Dock = DockStyle.Top, Height = S(150), BackColor = Bg };
+        var top = new Panel { Dock = DockStyle.Top, Height = S(186), BackColor = Bg };
 
         var head = ModulePanelKit.Header("RetroAchievements", dpiS); head.Location = new Point(S(2), S(2)); top.Controls.Add(head);
         var cap = ModulePanelKit.Caption(
@@ -247,10 +247,51 @@ internal static class RaPanel
         bar.Controls.Add(mode);
         top.Controls.Add(bar);
 
+        // ── Engine options row: RAHasher override + catalogue refresh cadence ────────────────────
+        var opts = new FlowLayoutPanel
+        {
+            Location = new Point(S(2), S(122)), AutoSize = true, BackColor = Bg,
+            FlowDirection = FlowDirection.LeftToRight, WrapContents = false,
+        };
+        var lblHasher = ModulePanelKit.Caption("RAHasher:", dpiS); lblHasher.Margin = new Padding(0, S(7), S(4), 0);
+        var txtHasher = new TextBox
+        {
+            Width = S(280), BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
+            Font = new Font("Segoe UI", 9f), Text = RaPanelConfig.HasherPath,
+            PlaceholderText = @"(default: ThirdParty\RetroAchievements)", Enabled = !readOnly,
+            Margin = new Padding(0, S(4), 0, 0),
+        };
+        var btnBrowseHasher = ModulePanelKit.Button("…", dpiS, readOnly);
+        btnBrowseHasher.Margin = new Padding(S(2), 0, 0, 0);
+        btnBrowseHasher.Click += (_, _) =>
+        {
+            using var dlg = new OpenFileDialog
+            {
+                Title = "Pick the RAHasher executable",
+                Filter = "Executable (*.exe)|*.exe|All files (*.*)|*.*",
+                CheckFileExists = true,
+            };
+            try { if (txtHasher.Text.Trim() is { Length: > 0 } cur) dlg.InitialDirectory = System.IO.Path.GetDirectoryName(cur); } catch { }
+            if (dlg.ShowDialog(root.FindForm()) == DialogResult.OK) txtHasher.Text = dlg.FileName;
+        };
+        var lblRefresh = ModulePanelKit.Caption("Catalogue refresh (h):", dpiS); lblRefresh.Margin = new Padding(S(18), S(7), S(4), 0);
+        var numRefresh = new NumericUpDown
+        {
+            Minimum = 1, Maximum = 168, Value = RaPanelConfig.RefreshHours, Width = S(56),
+            BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
+            Font = new Font("Segoe UI", 9f), Enabled = !readOnly, Margin = new Padding(0, S(4), 0, 0),
+        };
+        opts.Controls.Add(lblHasher);
+        opts.Controls.Add(txtHasher);
+        opts.Controls.Add(btnBrowseHasher);
+        opts.Controls.Add(lblRefresh);
+        opts.Controls.Add(numRefresh);
+        top.Controls.Add(opts);
+
         // Config note: RA needs a Web API key + username in LaunchBox's Settings.xml.
         var note = new Label
         {
-            AutoSize = true, Location = new Point(S(2), S(126)), BackColor = Bg,
+            AutoSize = true, Location = new Point(S(2), S(160)), BackColor = Bg,
             Font = new Font("Segoe UI", 8.25f, FontStyle.Italic),
             ForeColor = SafeConfigured() ? Sub : Color.FromArgb(210, 140, 90),
             Text = SafeConfigured()
@@ -354,7 +395,7 @@ internal static class RaPanel
                     if (en != defaultEnabled) enabledDiffs[plat] = en;
                 }
                 RaPlatformMap.SaveOverrides(overridesOut);
-                RaPanelConfig.Save(modeVal, enabledDiffs);
+                RaPanelConfig.Save(modeVal, enabledDiffs, txtHasher.Text, (int)numRefresh.Value);
             }
             catch { }
         }

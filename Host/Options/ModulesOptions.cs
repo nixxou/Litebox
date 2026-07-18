@@ -158,7 +158,23 @@ internal static class ModulesOptions
         void Apply()
         {
             if (readOnly) return;
-            foreach (var kv in state) LbModules.SetOn(kv.Key, kv.Value);
+            foreach (var kv in state)
+            {
+                // PIN gate (plugin parity): a LOCKED session cannot switch the Parental module off —
+                // that would be the one-click bypass of the whole protection. Unlock first.
+                if (kv.Key == LbModule.Parental && !kv.Value
+                    && Parental.ParentalFilter.Active && Parental.ParentalFilter.HasPin)
+                {
+                    try
+                    {
+                        MessageBox.Show("Parental control is locked — unlock it (padlock / hotkey) before disabling the module.",
+                            "Parental control", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                    catch { }
+                    continue;
+                }
+                LbModules.SetOn(kv.Key, kv.Value);
+            }
             foreach (var kv in configTabs) { try { kv.Value.apply?.Invoke(); } catch { } }
             ReconcileRuntime();   // apply toggles that own a live service (the web server) without a restart
         }

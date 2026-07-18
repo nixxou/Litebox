@@ -28,8 +28,46 @@ namespace LbApiHost.Host.Options;
 
 internal static class ParentalPanel
 {
+    /// <summary>The panel shown while parental is LOCKED: no settings, just an Unlock path.</summary>
+    private static (Control panel, Action? apply) LockedStub(float dpiS)
+    {
+        int S(int px) => ModulePanelKit.Sc(dpiS, px);
+        var root = ModulePanelKit.Root(dpiS);
+
+        var head = ModulePanelKit.Header("Parental control — locked", dpiS);
+        head.Location = new Point(S(8), S(12));
+        root.Controls.Add(head);
+
+        var cap = ModulePanelKit.Caption(
+            "The parental filter is active and locked. Unlock it with the PIN to view or change these "
+            + "settings (padlock button, hotkey, or the button below).", dpiS, 640);
+        cap.Location = new Point(S(8), S(40));
+        root.Controls.Add(cap);
+
+        var btn = ModulePanelKit.Button("Unlock…", dpiS);
+        btn.Location = new Point(S(8), S(84));
+        var note = ModulePanelKit.Caption("", dpiS, 640);
+        note.Location = new Point(S(8), S(116));
+        root.Controls.Add(note);
+        btn.Click += (_, _) =>
+        {
+            try { Media.ParentalBridge.ShowLockDialog(btn.FindForm()); } catch { }
+            note.Text = ParentalFilter.Active
+                ? "Still locked."
+                : "Unlocked — close and reopen Options to edit the parental settings.";
+        };
+        root.Controls.Add(btn);
+
+        return (root, null);
+    }
+
     public static (Control panel, Action? apply) Build(float dpiS, bool readOnly)
     {
+        // PIN gate (plugin parity): while parental is ACTIVE (configured + locked) the config surface
+        // is protected — otherwise a locked user could read/change the rules, the lists or the PIN.
+        if (ParentalFilter.Active && ParentalFilter.HasPin)
+            return LockedStub(dpiS);
+
         int S(int px) => ModulePanelKit.Sc(dpiS, px);
         var Bg = ModulePanelKit.Bg; var Fg = ModulePanelKit.Fg; var Sub = ModulePanelKit.Sub; var Field = ModulePanelKit.Field;
 
@@ -89,7 +127,9 @@ internal static class ParentalPanel
         // ═════════════════════════════════════════════════════════════════════
         var gAct = Group("Activation", rootY);
         int y1 = 24;
-        Cap(gAct, "Enable the parental filter for LaunchBox (this LiteBox host) and/or for BigBox. A PIN unlocks it; the same PIN is BigBox's own parental code.", 12, y1, 690); y1 += 34;
+        Cap(gAct, "Enable the parental filter for this LiteBox host (desktop + embedded web). The PIN is BigBox's "
+                + "own parental code (BigBox boots locked when it is set) — but filtering INSIDE vanilla "
+                + "LaunchBox/BigBox stays the ExtendDB plugin's job; LiteBox only manages the shared PIN.", 12, y1, 690); y1 += 46;
 
         var chkLaunchBox = Chk(gAct, "Enable Parental Control for LaunchBox", 12, y1, cfg.LaunchBoxEnabled); y1 += 26;
 

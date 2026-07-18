@@ -231,6 +231,9 @@ internal sealed class DbRepository
         public int Adult { get; set; } = 1;  // 0=hide (AO), 1=blur, 2=show
         public bool OwnedOnly { get; set; }
         public int StarThreshold { get; set; }
+        /// <summary>Extra raw WHERE fragment on alias g (parental rating rules — WebParentalState.
+        /// EsrbSqlFilter builds it from escaped config values, never user input). Null = none.</summary>
+        public string ExtraWhere { get; set; }
     }
 
     public sealed class GameListResult
@@ -288,6 +291,7 @@ internal sealed class DbRepository
         int page = Math.Max(1, opt.Page);
         int pageSize = Math.Clamp(opt.PageSize, 1, 500);
         int offset = (page - 1) * pageSize;
+        if (!string.IsNullOrEmpty(opt.ExtraWhere)) where.Add("(" + opt.ExtraWhere + ")");   // parental rules
         var whereClause = "WHERE " + string.Join(" AND ", where);
 
         int total;

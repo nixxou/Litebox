@@ -109,6 +109,8 @@ internal sealed class WebKioskWindow : Form
         FormClosed += (_, _) => { if (ReferenceEquals(_instance, this)) _instance = null; };
 
         Shown += async (_, _) => await InitAsync();
+        // Closing the kiosk re-locks it (the in-memory unlock flag never survives the window).
+        FormClosed += (_, _) => { try { LbApiHost.Host.Web.WebParentalState.KioskReset(); } catch { } };
     }
 
     private async System.Threading.Tasks.Task InitAsync()
@@ -123,6 +125,9 @@ internal sealed class WebKioskWindow : Form
             s.AreDefaultContextMenusEnabled = false;
             s.IsStatusBarEnabled = false;
             s.AreBrowserAcceleratorKeysEnabled = false;
+            // Parental: mark this window's requests as KIOSK — the server keys the unlock on an
+            // in-memory flag (never the persisted cookie), so an unlock dies with this window.
+            try { s.UserAgent += " " + LbApiHost.Host.Web.WebParentalState.KioskUaMarker; } catch { }
             // Keep navigation inside the one window.
             _web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; try { _web.CoreWebView2.Navigate(e.Uri); } catch { } };
             // The embedded surface (#embedded=1) posts control WebMessages back to its host — the System Menu

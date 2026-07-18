@@ -71,6 +71,13 @@ internal static class ParentalBridge
     public static int HotKey { get { EnsureHooked(); return ParentalFilter.HotKey; } }
 
     /// <summary>True when a game with this ESRB/age rating should be VISIBLE. Allow-all when inactive.</summary>
+    /// <summary>"Force web hide-all" configured (module + scope on), independent of the desktop lock —
+    /// the web combines it with its per-client lock state.</summary>
+    public static bool ForceAllConfigured
+    {
+        get { try { return Parental.ParentalFilter.ForceAllConfigured; } catch { return false; } }
+    }
+
     public static bool IsRatingAllowed(string rating)
     {
         EnsureHooked();

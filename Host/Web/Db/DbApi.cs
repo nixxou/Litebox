@@ -177,8 +177,10 @@ internal static class PlatformGamesApi
             Coop = ParseBoolOrNull(req.GetQuery("coop")),
             ReleaseType = req.GetQuery("releaseType"),
             Origin = req.GetQuery("origin"),
-            // When locked, EffectiveAdult forces 0 → the SQL AO gate hides adult content across all pages.
+            // When locked, EffectiveAdult forces 0 → the SQL AO gate hides adult content across all pages;
+            // the rating RULES ride the same query (counts/paging stay correct — plugin parity).
             Adult = parental.EffectiveAdult(userAdult),
+            ExtraWhere = parental.EsrbSqlFilter(),
             OwnedOnly = ResolveOwnedOnly(req),
             StarThreshold = threshold,
         };

@@ -97,6 +97,10 @@ internal static class ParentalFilter
     /// <summary>The "force web" block-all is in effect (hide EVERY game, any rating).</summary>
     public static bool ForceAll => Active && ParentalConfig.Instance.ForceWebHideAll;
 
+    /// <summary>"Force web hide-all" is CONFIGURED (module + scope on) regardless of the DESKTOP lock —
+    /// the web combines this with its own per-client lock state (a web-locked client sees nothing).</summary>
+    public static bool ForceAllConfigured => Enabled && ParentalConfig.Instance.ForceWebHideAll;
+
     /// <summary>Installing a store game must be gated behind the PIN (active + block-install).</summary>
     public static bool InstallNeedsUnlock => Active && ParentalConfig.Instance.BlockInstallWhenLocked;
 
@@ -159,7 +163,11 @@ internal static class ParentalFilter
     {
         var expected = CurrentPin();
         if (string.IsNullOrEmpty(expected)) return false;
-        return string.Equals(pin ?? "", expected, StringComparison.Ordinal);
+        // Constant-time compare (plugin parity: FixedTimeEquals) — the length check leaks only the
+        // digit count, acceptable for a 4-8 digit PIN.
+        var a = System.Text.Encoding.UTF8.GetBytes(pin ?? "");
+        var b = System.Text.Encoding.UTF8.GetBytes(expected);
+        return a.Length == b.Length && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(a, b);
     }
 
     /// <summary>Records one wrong attempt and returns how many remain. 0 means the

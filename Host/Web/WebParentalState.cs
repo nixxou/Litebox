@@ -4,14 +4,20 @@
 // LiteBox is a "LaunchBox" host to ExtendDB (never BigBox), so the web uses the cookie + PIN unlock path, not
 // the BigBox global-lock mirror. The decision matrix:
 //   • parental not configured (ParentalBridge not Enabled) → IsActive=false: no filtering, no lock UI.
-//   • configured but NO PIN set                            → IsActive=true, CanUnlock=false, IsLocked=FALSE.
-//        (Deliberate LiteBox deviation from the plugin's "no PIN ⇒ forced-locked": with no PIN there is
-//         nothing to unlock against, and BigBoxPin is the only credential the web owns — so treat as unlocked
-//         rather than permanently locking the web with no way out.)
-//   • configured AND PIN set                               → IsActive=true, CanUnlock=true, IsLocked from cookie.
+//   • configured but NO PIN set                            → IsActive=true, CanUnlock=false, IsLocked=TRUE.
+//        (FAIL-CLOSED, plugin parity: the state is an edge — the panel forces a PIN on first enable —
+//         so if the PIN vanished externally the web stays safe rather than open.)
+//   • configured AND PIN set                               → IsActive=true, CanUnlock=true, IsLocked from
+//        the client's unlock state.
 //
-// The unlock cookie value is an unforgeable per-install signed marker (MediaTokenSecret HMAC key): a child
-// can't reproduce it without the DPAPI-protected key, so it can't self-unlock by hand-writing the cookie.
+// Per-client unlock state comes in TWO flavours (plugin parity):
+//   • Browser: the signed cookie (12 h) — unforgeable per-install marker (MediaTokenSecret HMAC key).
+//   • KIOSK (the embedded WebKioskWindow, detected by a User-Agent marker the window sets): a process-wide
+//     IN-MEMORY flag, never the cookie — closing the kiosk (or restarting) re-locks, so a child can't
+//     inherit an adult's unlock through the WebView2 profile.
+//
+// ForceWebHideAll: when configured, a LOCKED web client gets the block-all treatment (rating checks all
+// fail, adult forced 0, the rating SQL short-circuits to match nothing).
 
 #nullable enable
 
@@ -46,7 +52,25 @@ internal sealed class WebParentalState
     /// <summary>The configured parental PIN (BigBox's own, read/managed by LiteBox), or "" when none is set.</summary>
     public static string ConfiguredPin() => BigBoxPin.Current();
 
-    /// <summary>Builds the effective state from the parental config + this request's unlock cookie.</summary>
+    // ── Kiosk (embedded WebView2 window) ────────────────────────────────────────
+    // The kiosk window appends this marker to its WebView2 User-Agent; kiosk clients use the in-memory
+    // flag below instead of the cookie (an unlock must NOT outlive the kiosk window).
+
+    public const string KioskUaMarker = "LiteBoxKiosk";
+    private static volatile bool _kioskUnlocked;
+
+    public static bool IsKioskRequest(HttpRequest? req)
+    {
+        try { return (req?.GetHeader("User-Agent") ?? "").Contains(KioskUaMarker, System.StringComparison.Ordinal); }
+        catch { return false; }
+    }
+
+    public static void SetKioskUnlocked(bool value) => _kioskUnlocked = value;
+
+    /// <summary>Re-lock the kiosk (window closed / host event). Idempotent.</summary>
+    public static void KioskReset() => _kioskUnlocked = false;
+
+    /// <summary>Builds the effective state from the parental config + this request's unlock state.</summary>
     public static WebParentalState From(HttpRequest? req)
     {
         // Not configured → nothing to enforce on any surface.
@@ -55,23 +79,51 @@ internal sealed class WebParentalState
 
         bool hasPin = !string.IsNullOrEmpty(ConfiguredPin());
         if (!hasPin)
-            return new WebParentalState(active: true, locked: false, canUnlock: false);
+            return new WebParentalState(active: true, locked: true, canUnlock: false);   // fail-closed
 
-        // PIN configured: the per-client cookie decides. Absent / invalid → locked.
-        var cookie = req?.GetCookie(UnlockCookie);
-        bool unlocked = MediaTokenSecret.VerifyMarker(UnlockPurpose, cookie);
+        bool unlocked = IsKioskRequest(req)
+            ? _kioskUnlocked
+            : MediaTokenSecret.VerifyMarker(UnlockPurpose, req?.GetCookie(UnlockCookie));
         return new WebParentalState(active: true, locked: !unlocked, canUnlock: true);
     }
 
     // ── Filtering helpers (consumed by the page/data slices; media proxy is NOT gated, matching the source) ──
+
+    /// <summary>Force-web block-all applies to this client (locked + configured): hide EVERYTHING.</summary>
+    public bool ForceAllWeb => IsLocked && ParentalBridge.ForceAllConfigured;
 
     /// <summary>Adult-mode value to actually apply: forced 0 (no NSFW / no blur) while locked.</summary>
     public int EffectiveAdult(int userAdult) => IsLocked ? 0 : userAdult;
 
     /// <summary>A game with this ESRB/age rating should be visible. Allow-all when unlocked; delegate to the
     /// shared rule engine when locked so the web matches the rest of LiteBox.</summary>
-    public bool IsRatingAllowed(string rating) => !IsLocked || ParentalBridge.IsRatingAllowed(rating);
+    public bool IsRatingAllowed(string rating)
+        => !IsLocked || (!ForceAllWeb && ParentalBridge.IsRatingAllowed(rating));
 
     /// <summary>A platform / category / playlist with this name must be hidden from the tree (locked only).</summary>
     public bool IsHidden(string name) => IsLocked && ParentalBridge.IsNameHidden(name);
+
+    /// <summary>SQL fragment enforcing the rating RULES on a Games query (column "g".ESRB), so lists,
+    /// counts and paging all match — plugin BuildEsrbSqlFilter parity. Null = allow-all (unlocked);
+    /// "0" = match nothing (force-all, or whitelist with zero rules); else a LIKE chain
+    /// (wildcards * ? → % _, ESCAPE '\'). Safe to inline: rules are escaped, no user input.</summary>
+    public string? EsrbSqlFilter()
+    {
+        if (!IsLocked) return null;
+        if (ForceAllWeb) return "0";
+        var cfg = Parental.ParentalConfig.Instance;
+        var pieces = new System.Collections.Generic.List<string>();
+        foreach (var rule in cfg.Rules)
+        {
+            if (string.IsNullOrWhiteSpace(rule)) continue;
+            var like = rule.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_")
+                           .Replace('*', '%').Replace('?', '_')
+                           .Replace("'", "''");
+            pieces.Add($"COALESCE(g.ESRB,'') LIKE '{like}' ESCAPE '\\'");
+        }
+        bool whitelist = cfg.Mode == Parental.ParentalMode.Whitelist;
+        if (pieces.Count == 0) return whitelist ? "0" : null;   // whitelist+no rules = show nothing
+        string ors = "(" + string.Join(" OR ", pieces) + ")";
+        return whitelist ? ors : "NOT " + ors;
+    }
 }

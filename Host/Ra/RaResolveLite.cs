@@ -33,7 +33,6 @@ namespace LbApiHost.Host.Ra;
 internal static class RaResolveLite
 {
     public const string Sentinel = "COULDNTFILEHASH";
-    private static readonly string[] ArchiveExts = { "zip", "7z", "rar" };
 
     /// <summary>A usable hash: non-empty and not LaunchBox's couldn't-hash sentinel.</summary>
     public static bool IsRealHash(string? h)
@@ -237,11 +236,11 @@ internal static class RaResolveLite
         catch { return ""; }
     }
 
+    // Config-driven (RomConfig.ArchiveExtensions), like the plugin's RA scanner — tar/gz/bz2/xz
+    // archives are hashed too when configured.
     private static bool IsArchive(string path)
     {
-        var ext = (Path.GetExtension(path) ?? "").TrimStart('.').ToLowerInvariant();
-        foreach (var e in ArchiveExts) if (ext == e) return true;
-        return false;
+        try { return RomExtractor.IsArchive(path); } catch { return false; }
     }
 
     private static string ResolveAbsolute(string p)

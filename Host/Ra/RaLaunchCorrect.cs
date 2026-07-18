@@ -66,8 +66,7 @@ internal static class RaLaunchCorrect
 
             string? hash = null; int raid = 0;
 
-            string ext = (Path.GetExtension(abs) ?? "").TrimStart('.').ToLowerInvariant();
-            bool isArchive = ext is "zip" or "7z" or "rar";
+            bool isArchive; try { isArchive = Rom.RomExtractor.IsArchive(abs); } catch { isArchive = false; }
             string launchedEntry = last?.extractedRomPath ?? "";
 
             if (isArchive && cid.Value != RaPlatformMap.ArcadeConsoleId && launchedEntry.Length > 0)

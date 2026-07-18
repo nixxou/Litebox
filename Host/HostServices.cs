@@ -711,10 +711,15 @@ internal static class HostLaunch
             // Route archives (only when auto-extract is on) PLUS disc images / .m3u playlists (regardless
             // of auto-extract — the profile's Convert / Copy / m3u-rewrite ops don't depend on LB's extract
             // flag). ResolveLaunch passthroughs (returns romAbs) when the resolved profile asks for nothing.
+            // Extractions are bracketed with RecentState (plugin parity): the web double-launch refusal and
+            // the RA catalogue heartbeat's idle test see "extraction in progress", and the epoch bumps.
             if (Modules.LbModules.On(Modules.LbModule.Rom)
                 && ((autoExtract && isArchive) || Rom.RomExtractor.IsDiscImage(romAbs) || Rom.RomExtractor.IsM3u(romAbs)))
             {
-                var res = Rom.RomExtractor.ResolveLaunch(game, emulator, ep, romAbs, label);
+                Web.RecentState.MarkExtracting();
+                Rom.RomLaunchResult res;
+                try { res = Rom.RomExtractor.ResolveLaunch(game, emulator, ep, romAbs, label); }
+                finally { Web.RecentState.MarkExtractionDone(); }
                 if (res.Success && !string.IsNullOrEmpty(res.OutputFilePath))
                 {
                     Console.WriteLine($"[launch] {label}: rom-extractor \"{Path.GetFileName(romAbs)}\" → \"{res.OutputFilePath}\"");
@@ -724,7 +729,10 @@ internal static class HostLaunch
             // Archive + module off / native resolve failed → LiteBox's flat extract-everything fallback.
             if (autoExtract && isArchive)
             {
-                var extracted = TryExtractArchive(romAbs, label);
+                Web.RecentState.MarkExtracting();
+                string extracted;
+                try { extracted = TryExtractArchive(romAbs, label); }
+                finally { Web.RecentState.MarkExtractionDone(); }
                 if (!string.IsNullOrEmpty(extracted)) return extracted;
             }
         }
@@ -733,9 +741,20 @@ internal static class HostLaunch
         return romAbs;
     }
 
+    // Archive test for the LAUNCH gate: config-driven when the Rom module owns the launch (the
+    // profile's ArchiveExtensions — tar/gz/bz2/xz route to the extractor too); the flat fallback's
+    // own narrow zip/7z/rar semantics live inside TryExtractArchive's callers via this same test,
+    // so a configured extension always reaches SOME extraction path.
     private static readonly string[] _archiveExts = { ".zip", ".7z", ".rar" };
     private static bool IsArchive(string p)
-    { try { return _archiveExts.Contains(Path.GetExtension(p ?? "").ToLowerInvariant()); } catch { return false; } }
+    {
+        try
+        {
+            if (Modules.LbModules.On(Modules.LbModule.Rom) && Rom.RomExtractor.IsArchive(p)) return true;
+            return _archiveExts.Contains(Path.GetExtension(p ?? "").ToLowerInvariant());
+        }
+        catch { return false; }
+    }
 
     // Primary-file extension priority after extraction: disc descriptors first, then PC exe, then common
     // ROM/disc image extensions; otherwise the first file alphabetically.

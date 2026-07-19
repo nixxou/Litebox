@@ -286,8 +286,18 @@ internal static class RaPanel
         var recheckPwd = WireValidity(pwd, pwdStatus, (u, p) => RaConnect.Login(u, p).Ok);
         var recheckKey = WireValidity(key, keyStatus, (u, k) => RaConnect.ValidateApiKey(u, k));
         user.TextChanged += (_, _) => { recheckPwd(); recheckKey(); };
-        if (!string.IsNullOrWhiteSpace(pwd.Text)) recheckPwd();
-        if (!string.IsNullOrWhiteSpace(key.Text)) recheckKey();
+        // Validate the pre-filled credentials on load — but only once the fields actually have a window handle.
+        // At build time (before the RA tab is realised) they don't, so the debounced check's result would be
+        // dropped (its BeginInvoke needs a handle) and the label would stay stuck on "checking…" until the user
+        // edited the field. HandleCreated fires when the tab is first shown.
+        void InitValidate(TextBox field, Action recheck)
+        {
+            if (string.IsNullOrWhiteSpace(field.Text)) return;
+            if (field.IsHandleCreated) recheck();
+            else field.HandleCreated += (_, _) => recheck();
+        }
+        InitValidate(pwd, recheckPwd);
+        InitValidate(key, recheckKey);
 
         // ── Token status + renewal cadence + Renew now ──────────────────────────────────────────
         var tokenRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, BackColor = Bg };

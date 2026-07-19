@@ -3439,10 +3439,25 @@ internal sealed class MainWindow : Form, IMessageFilter
                 if (RaPlatformState.ShouldAutoResolveOnSelect(raPlat))
                 {
                     // Live progress in the RA card while an unparsed archive is hashed on select (fills the
-                    // ROM picker's per-entry column). Reporter is cleared in finally; UI update is token-guarded.
+                    // ROM picker's per-entry column). Only REVEAL the bar once it's genuinely slow — more than
+                    // 1s elapsed AND still under 30% done — so fast (cartridge) parses never flash it. Once
+                    // shown it keeps updating. Reporter cleared in finally; UI update is token-guarded.
+                    long hashStart = Environment.TickCount64;
+                    bool barShown = false;
                     Ra.RaHasherLite.ArcProgress = (done, total) =>
                     {
-                        try { if (!IsDisposed && IsHandleCreated) BeginInvoke(new Action(() => { if (token == _detailsLoadToken) _raCard?.ShowHashing(done, total); })); } catch { }
+                        try
+                        {
+                            if (!barShown)
+                            {
+                                if (Environment.TickCount64 - hashStart < 1000) return;         // <1s → don't flash
+                                if (total > 0 && (long)done * 100 >= (long)total * 30) return;   // already ≥30% → will finish fast
+                                barShown = true;
+                            }
+                            if (!IsDisposed && IsHandleCreated)
+                                BeginInvoke(new Action(() => { if (token == _detailsLoadToken) _raCard?.ShowHashing(done, total); }));
+                        }
+                        catch { }
                     };
                     try { RaResolveLite.Resolve(g, fillPickerWhenResolved: true); }   // per-ROM RAHasher resolution + parse an unparsed archive for the picker column
                     finally { Ra.RaHasherLite.ArcProgress = null; }

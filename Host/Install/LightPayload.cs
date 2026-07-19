@@ -26,7 +26,8 @@ internal static class LightPayload
     // launcher); the other three describe how it binds LiteBox.dll against Core's shared runtime.
     // LibVLCSharp.dll is the managed wrapper over the libvlc natives (deployed separately into
     // ThirdParty\VLC) — it has NO transitive managed dependencies, so it's just a 5th app file.
-    private static readonly string[] Files = { "LiteBox.exe", "LiteBox.dll", "LiteBox.deps.json", "LiteBox.runtimeconfig.json", "LibVLCSharp.dll", "ZstdSharp.dll", "Magick.NET-Q16-AnyCPU.dll", "Magick.NET.Core.dll" };
+    // Public so the uninstaller removes EXACTLY what we drop into Core (the two lists can't drift).
+    public static readonly string[] Files = { "LiteBox.exe", "LiteBox.dll", "LiteBox.deps.json", "LiteBox.runtimeconfig.json", "LibVLCSharp.dll", "ZstdSharp.dll", "Magick.NET-Q16-AnyCPU.dll", "Magick.NET.Core.dll" };
 
     /// <summary>True when this build actually carries an embedded light payload (i.e. the standalone
     /// installer). A plain light/dev build carries none — it IS the host, nothing to extract.</summary>

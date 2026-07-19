@@ -3,10 +3,12 @@
 // killing LiteBox doesn't kill it), then quit LiteBox. The bat taskkills LiteBox, waits until it's gone
 // (locks released), deletes everything, and finally self-deletes.
 //
-// Always removed (LiteBox-exclusive): Core\LiteBox.exe (+ the light build's .dll/.json), Core\litebox\ (ALL
-// our data — dbs, caches, config, logs, our own thirdparty\ + cache\thumbs), the root re-launcher, the
-// LiteBox-ONLY ThirdParty natives (Steam / Pdfium / RomExtractor — derived from NativeInstaller.Payload), and
-// every obsolete leftover from OLDER LiteBox versions (LegacyCleanup).
+// Always removed (LiteBox-exclusive): the app files in Core (LiteBox.exe + LiteBox.dll + json + the extra
+// managed deps LaunchBox doesn't ship — LibVLCSharp / ZstdSharp / Magick.NET — derived from
+// LightPayload.Files), Core\litebox\ (ALL our data — dbs, caches, config, logs, our own thirdparty\ +
+// cache\thumbs), Core\web-assets\ (installer web-theme staging), Core\LiteBox.exe.WebView2\ (WebView2
+// profile), the root re-launcher, the LiteBox-ONLY ThirdParty natives (Steam / Pdfium / RomExtractor —
+// derived from NativeInstaller.Payload), and every obsolete leftover from OLDER LiteBox versions (LegacyCleanup).
 //
 // Opt-in (off by default): the ThirdParty tools SHARED with ExtendDB (Everything / ImageMagick native /
 // RAHasher) — removed as files, then their dirs are rmdir'd empty-only so a real ExtendDB's content is never
@@ -55,10 +57,14 @@ internal static class Uninstaller
         sb.AppendLine(":wait");
         sb.AppendLine("tasklist /FI \"IMAGENAME eq LiteBox.exe\" 2>nul | find /I \"LiteBox.exe\" >nul && ( ping -n 2 127.0.0.1 >nul & goto wait )");
 
-        // Always: LiteBox-exclusive. (The light "zip" build also drops LiteBox.dll + the two .json next
-        // to LiteBox.exe in Core — the standalone is a single file, so those are just absent then.)
-        sb.AppendLine($"del /q \"{core}\\LiteBox.exe\" \"{core}\\LiteBox.dll\" \"{core}\\LiteBox.deps.json\" \"{core}\\LiteBox.runtimeconfig.json\" 2>nul");
-        sb.AppendLine($"rmdir /s /q \"{core}\\litebox\" 2>nul");   // ALL LiteBox data (incl. our own thirdparty\ + cache\thumbs)
+        // Always: LiteBox-exclusive. The light build drops these app files next to LiteBox.exe in Core (the
+        // standalone is a single file, so the extras are just absent then). Derived from LightPayload.Files so
+        // the deploy + uninstall lists can't drift — the apphost, the managed host dll, its json, and the
+        // extra managed deps LaunchBox's Core doesn't provide (LibVLCSharp / ZstdSharp / Magick.NET).
+        foreach (var f in LightPayload.Files) sb.AppendLine($"del /q \"{core}\\{f}\" 2>nul");
+        sb.AppendLine($"rmdir /s /q \"{core}\\litebox\" 2>nul");                  // ALL LiteBox data (dbs, caches, our thirdparty\, cache\thumbs)
+        sb.AppendLine($"rmdir /s /q \"{core}\\web-assets\" 2>nul");               // installer's web-theme staging (WebPayload → Core\web-assets)
+        sb.AppendLine($"rmdir /s /q \"{core}\\LiteBox.exe.WebView2\" 2>nul");     // WebView2 default user-data profile next to the exe
         sb.AppendLine($"del /q \"{root}\\LiteBox.exe\" 2>nul");
 
         // Always: the LiteBox-ONLY ThirdParty natives (Steam / Pdfium / RomExtractor), derived from the deploy

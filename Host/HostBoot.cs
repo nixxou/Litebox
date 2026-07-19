@@ -74,6 +74,7 @@ internal static class HostBoot
         Mem.Report("startup");
         InstanceGuard.Probe();   // a 2nd LiteBox must not also write the XMLs / op-log (forces read-only below)
         bool refreshNatives = LbApiHost.Host.Install.Migration.MigrateConfigAndNeedNatives();   // config migration + upgrade detection (before config/db are used)
+        Data.DataMaintenance.RunPendingCleanup();   // delete any db flagged for reset in the Caches page — BEFORE any db opens
 
         // ── Real data: LaunchBox Platform XMLs (authoritative, no ExtendDB dep) ──
         IDataManager dm;

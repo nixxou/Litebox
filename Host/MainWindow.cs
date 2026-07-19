@@ -1579,34 +1579,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         return w;
     }
 
-    // ── LiteBox cache maintenance (Options → Caches) ─────────────────────────────────────────
-    // Achievement caches LiteBox keeps under Core\litebox\ : the normalised JSON (ra-cache / store-ach-cache)
-    // and the downloaded badge images (ra-badges / store-ach-badges).
-    private static readonly string[] _achCacheDirs = { "ra-cache", "ra-badges", "store-ach-cache", "store-ach-badges" };
-
-    private static (int files, long bytes) AchCacheSize()
-    {
-        int f = 0; long b = 0;
-        foreach (var d in _achCacheDirs)
-        {
-            try
-            {
-                var dir = Path.Combine(LiteBoxPaths.Data, d);
-                if (!Directory.Exists(dir)) continue;
-                foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-                { f++; try { b += new FileInfo(file).Length; } catch { } }
-            }
-            catch { }
-        }
-        return (f, b);
-    }
-
-    private static void ClearAchCache()
-    {
-        foreach (var d in _achCacheDirs)
-            try { var dir = Path.Combine(LiteBoxPaths.Data, d); if (Directory.Exists(dir)) Directory.Delete(dir, true); }
-            catch { }
-    }
+    // ── LiteBox data & cache maintenance (Options → Caches) — see Host/Data/DataMaintenance for the catalog.
 
     // Options → Colors: swatch + hex + system color picker + per-color reset, for the shared theme.
     // Edits the live LiteBoxTheme immediately (so a newly-opened dialog reflects it); the section's
@@ -1684,58 +1657,168 @@ internal sealed class MainWindow : Form, IMessageFilter
         try { form.ShowDialog((Form?)Form.ActiveForm ?? this); } finally { form.Dispose(); }
     }
 
+    // Options → Caches: a full inventory of everything LiteBox writes under Core\litebox\, driven by the
+    // DataMaintenance catalog. Cache dirs / logs / state clear immediately; a database is scheduled for the
+    // next restart (it is open now); config + essential dirs are info-only.
     private Control BuildCachesSection()
     {
-        // FlowLayoutPanel (TopDown), not fixed Locations — same overlap bug/fix as BuildUninstallSection: `desc`
-        // wraps to however many lines its actual text needs, so a hardcoded Y for `size`/`btn` below it baked in
-        // an assumed height the real wrapped text can exceed (worse at higher DPI / larger fonts).
         float dpiS = LiteBoxTheme.DpiScale(this);
         int S(int px) => (int)Math.Round(px * dpiS);
+        var mono = new Font("Consolas", 8f);
+        var dim = Color.FromArgb(120, 120, 124);
 
         var p = new Panel { BackColor = Bg, AutoScroll = true };
         var flow = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Bg, Padding = new Padding(S(4), S(8), S(4), 0),
+            AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Bg, Padding = new Padding(S(4), S(8), S(4), S(8)),
         };
-        var title = new Label { Text = "Achievements cache", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold), Margin = new Padding(0, 0, 0, S(8)) };
-        var desc = new Label
-        {
-            Text = "RetroAchievements + GOG/Steam achievement data and downloaded badge images "
-                 + "(Core\\ra-cache, ra-badges, store-ach-cache, store-ach-badges). Clearing forces a fresh "
-                 + "fetch the next time you view a game.",
-            AutoSize = true, MaximumSize = new Size(S(560), 0), ForeColor = SubFg, BackColor = Bg,
-            Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(16)),
-        };
-        var size = new Label { AutoSize = true, ForeColor = Fg, BackColor = Bg, Margin = new Padding(0, 0, 0, S(8)) };
-        var btn = new Button
-        {
-            Text = "Clear achievements cache", AutoSize = false, Size = new Size(S(210), S(28)), Margin = new Padding(0),
+
+        static string Human(long b) =>
+            b <= 0 ? "0 B" :
+            b < 1024 ? $"{b} B" :
+            b < 1024 * 1024 ? $"{b / 1024.0:0.0} KB" :
+            b < 1024L * 1024 * 1024 ? $"{b / (1024.0 * 1024):0.0} MB" :
+            $"{b / (1024.0 * 1024 * 1024):0.00} GB";
+
+        Label Header(string t) => new() { Text = t, AutoSize = true, ForeColor = Fg, BackColor = Bg,
+            Font = new Font("Segoe UI", 10f, FontStyle.Bold), Margin = new Padding(0, S(14), 0, S(4)) };
+        Label Sub(string t) => new() { Text = t, AutoSize = true, MaximumSize = new Size(S(660), 0),
+            ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(6)) };
+        Button MkBtn(string text) => new() { Text = text, AutoSize = false, Size = new Size(S(150), S(26)),
             FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 },
-            Font = new Font("Segoe UI", 9f),
-        };
-        void RefreshSize()
+            Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0) };
+
+        flow.Controls.Add(new Label { Text = "Data & caches", AutoSize = true, ForeColor = Fg, BackColor = Bg,
+            Font = new Font("Segoe UI", 12f, FontStyle.Bold), Margin = new Padding(0, 0, 0, S(2)) });
+        flow.Controls.Add(new Label { Text = LiteBoxPaths.Data, AutoSize = true, ForeColor = dim, BackColor = Bg,
+            Font = mono, Margin = new Padding(0, 0, 0, S(2)) });
+
+        var cacheRefreshers = new List<Action>();
+
+        void AddRow(DataMaintenance.Item it)
         {
-            var (f, b) = AchCacheSize();
-            size.Text = f == 0 ? "Cache is empty." : $"Currently cached: {f} file(s), {b / (1024.0 * 1024.0):0.0} MB.";
-            btn.Enabled = f > 0;
+            var row = new Panel { Width = S(690), Height = S(60), BackColor = Panel, Margin = new Padding(0, 0, 0, S(4)) };
+            var name = new Label { AutoSize = true, ForeColor = Fg, BackColor = Panel,
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold), Location = new Point(S(8), S(6)) };
+            var role = new Label { Text = it.Role, AutoSize = true, MaximumSize = new Size(S(520), 0),
+                ForeColor = SubFg, BackColor = Panel, Font = new Font("Segoe UI", 8.25f), Location = new Point(S(8), S(26)) };
+            var path = new Label { Text = it.FullPath, AutoSize = false, Size = new Size(S(672), S(15)), AutoEllipsis = true,
+                ForeColor = dim, BackColor = Panel, Font = mono, Location = new Point(S(8), S(43)) };
+            row.Controls.Add(name); row.Controls.Add(role); row.Controls.Add(path);
+
+            void Refresh()
+            {
+                var (f, b) = DataMaintenance.SizeOf(it);
+                string sz = it.IsDir ? $"{f} file(s), {Human(b)}" : (f == 0 ? "absent" : Human(b));
+                name.Text = $"{it.Name}      —      {sz}";
+            }
+            Refresh();
+
+            switch (it.Action)
+            {
+                case DataMaintenance.ActionType.None:
+                    row.Controls.Add(new Label {
+                        Text = it.Kind == DataMaintenance.Kind.ConfigFile ? "settings — kept" : "essential — kept",
+                        AutoSize = true, ForeColor = dim, BackColor = Panel,
+                        Font = new Font("Segoe UI", 8f, FontStyle.Italic), Location = new Point(S(566), S(9)) });
+                    break;
+
+                case DataMaintenance.ActionType.ClearDirNow:
+                {
+                    var b = MkBtn("Clear"); b.Location = new Point(S(532), S(6));
+                    b.Click += (_, _) =>
+                    {
+                        var (f, by) = DataMaintenance.SizeOf(it);
+                        if (f == 0) return;
+                        if (MessageBox.Show(p.FindForm(), $"Clear {it.Name}  ({f} file(s), {Human(by)})?\n\n{it.Role}",
+                            "Clear cache", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                        DataMaintenance.ClearDir(it); Refresh();
+                        try { var g = _games?.SelectedGame; if (g != null) ScheduleMedia(g); } catch { }
+                    };
+                    row.Controls.Add(b);
+                    cacheRefreshers.Add(Refresh);
+                    break;
+                }
+
+                case DataMaintenance.ActionType.DeleteFileNow:
+                {
+                    bool isLog = it.Kind == DataMaintenance.Kind.Log;
+                    var b = MkBtn(isLog ? "Delete" : "Reset"); b.Location = new Point(S(532), S(6));
+                    b.Click += (_, _) =>
+                    {
+                        var (f, by) = DataMaintenance.SizeOf(it);
+                        if (f == 0) return;
+                        string q = isLog ? $"Delete {it.Name}  ({Human(by)})?" : $"Reset {it.Name}?\n\n{it.Role}";
+                        if (MessageBox.Show(p.FindForm(), q, "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                        DataMaintenance.DeleteFile(it); Refresh();
+                    };
+                    row.Controls.Add(b);
+                    break;
+                }
+
+                case DataMaintenance.ActionType.ResetDbOnRestart:
+                {
+                    var b = MkBtn(""); b.Location = new Point(S(532), S(6));
+                    void Style()
+                    {
+                        bool sched = DataMaintenance.IsScheduled(it);
+                        b.Text = sched ? "Scheduled ✓ (undo)" : "Delete on restart";
+                        b.BackColor = sched ? LiteBoxTheme.Accent : Panel2;
+                        b.ForeColor = sched ? Color.White : Fg;
+                    }
+                    Style();
+                    b.Click += (_, _) =>
+                    {
+                        if (!DataMaintenance.IsScheduled(it))
+                        {
+                            string warn = it.Warning != null ? "\n\n⚠  " + it.Warning : "";
+                            if (MessageBox.Show(p.FindForm(),
+                                $"Delete {it.Name} on the next restart?\n\n{it.Role}{warn}\n\nIt is recreated empty at the next boot.",
+                                "Schedule database reset", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                        }
+                        DataMaintenance.ToggleScheduled(it); Style();
+                    };
+                    row.Controls.Add(b);
+                    break;
+                }
+            }
+            flow.Controls.Add(row);
         }
-        btn.Click += (_, _) =>
+
+        // Cache directories + global clear-all.
+        flow.Controls.Add(Header("Cache directories"));
+        flow.Controls.Add(Sub("Rebuildable caches — safe to clear anytime; they refill on demand."));
+        var clearAll = MkBtn("Clear ALL caches"); clearAll.Width = S(180); clearAll.Margin = new Padding(0, 0, 0, S(6));
+        clearAll.Click += (_, _) =>
         {
-            var (f, b) = AchCacheSize();
-            if (f == 0) return;
+            long tot = DataMaintenance.Of(DataMaintenance.Kind.CacheDir).Sum(i => DataMaintenance.SizeOf(i).bytes);
             if (MessageBox.Show(p.FindForm(),
-                    $"Delete {f} cached achievement file(s) ({b / (1024.0 * 1024.0):0.0} MB)?\n\n"
-                    + "RetroAchievements and GOG/Steam achievements will be re-fetched the next time you view a game.",
-                    "Clear achievements cache", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-                return;
-            ClearAchCache();
-            RefreshSize();
-            // Re-load the detail panels for the current selection so the effect shows immediately.
+                $"Clear ALL cache directories  ({Human(tot)})?\n\nThumbnails, downloads, badges, browser cache… all refill on demand.",
+                "Clear all caches", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            foreach (var i in DataMaintenance.Of(DataMaintenance.Kind.CacheDir)) DataMaintenance.ClearDir(i);
+            foreach (var r in cacheRefreshers) r();
             try { var g = _games?.SelectedGame; if (g != null) ScheduleMedia(g); } catch { }
         };
-        RefreshSize();
-        flow.Controls.Add(title); flow.Controls.Add(desc); flow.Controls.Add(size); flow.Controls.Add(btn);
+        flow.Controls.Add(clearAll);
+        foreach (var it in DataMaintenance.Of(DataMaintenance.Kind.CacheDir)) AddRow(it);
+
+        flow.Controls.Add(Header("Databases"));
+        flow.Controls.Add(Sub("Deleting a database is scheduled for the next restart (it is open now) and recreated empty at boot."));
+        foreach (var it in DataMaintenance.Of(DataMaintenance.Kind.Database)) AddRow(it);
+
+        flow.Controls.Add(Header("Logs"));
+        foreach (var it in DataMaintenance.Of(DataMaintenance.Kind.Log)) AddRow(it);
+
+        flow.Controls.Add(Header("State"));
+        foreach (var it in DataMaintenance.Of(DataMaintenance.Kind.StateFile)) AddRow(it);
+
+        flow.Controls.Add(Header("Configuration  (kept — managed in their own options pages)"));
+        foreach (var it in DataMaintenance.Of(DataMaintenance.Kind.ConfigFile)) AddRow(it);
+
+        flow.Controls.Add(Header("Essential  (kept — not caches)"));
+        foreach (var it in DataMaintenance.Of(DataMaintenance.Kind.EssentialDir)) AddRow(it);
+
         p.Controls.Add(flow);
         return p;
     }
@@ -1760,15 +1843,15 @@ internal sealed class MainWindow : Form, IMessageFilter
         var title = new Label { Text = "Uninstall LiteBox", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.75f, FontStyle.Bold), Margin = new Padding(0, 0, 0, S(8)) };
         var desc = new Label
         {
-            Text = "Removes LiteBox completely: LiteBox.exe (Core + root re-launcher), the Core\\litebox\\ data "
-                 + "folder, and ThirdParty\\Steam. The ExtendDB plugin and the ThirdParty tools it shares are "
-                 + "left untouched unless you tick a box below.",
+            Text = "Removes LiteBox completely: LiteBox.exe (Core + root re-launcher), the whole Core\\litebox\\ data "
+                 + "folder (databases, caches, config, logs), and the LiteBox-only ThirdParty natives "
+                 + "(Steam, Pdfium, RomExtractor). The ExtendDB plugin is never touched; the ThirdParty tools "
+                 + "shared with it are left in place unless you tick the box below.",
             AutoSize = true, MaximumSize = new Size(S(560), 0), ForeColor = SubFg, BackColor = Bg,
             Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(16)),
         };
-        var cbThumbs = new CheckBox { Text = "Also delete the legacy shared thumbnail cache (Plugins\\ExtendDB\\cache\\thumbs)", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(4)) };
         var cbTp = new CheckBox { Text = "Also remove the shared ThirdParty tools (Everything, ImageMagick, RAHasher)", AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Margin = new Padding(0, 0, 0, S(4)) };
-        var shareNote = new Label { Text = "Both are shared with ExtendDB, which re-creates them on its next run.", AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8f), Margin = new Padding(S(18), 0, 0, S(32)) };
+        var shareNote = new Label { Text = "Shared with ExtendDB, which re-creates them on its next run; their folders are only removed if left empty.", AutoSize = true, MaximumSize = new Size(S(540), 0), ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8f), Margin = new Padding(S(18), 0, 0, S(32)) };
         var btn = new Button
         {
             Text = "Uninstall LiteBox", AutoSize = false, Size = new Size(S(210), S(32)), Margin = new Padding(0),
@@ -1777,16 +1860,15 @@ internal sealed class MainWindow : Form, IMessageFilter
         };
         btn.Click += (_, _) =>
         {
-            string extra = (cbThumbs.Checked ? "\n  • the shared thumbnail cache" : "")
-                         + (cbTp.Checked ? "\n  • the shared ThirdParty tools (Everything/ImageMagick/RAHasher)" : "");
+            string extra = cbTp.Checked ? "\n  • the shared ThirdParty tools (Everything/ImageMagick/RAHasher)" : "";
             if (MessageBox.Show(p.FindForm(),
                     "Uninstall LiteBox now?\n\nLiteBox will close and delete itself. This cannot be undone." + extra,
                     "Uninstall LiteBox", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                 return;
-            try { Install.Uninstaller.RunSelfUninstall(cbThumbs.Checked, cbTp.Checked); }   // launches the bat + exits
+            try { Install.Uninstaller.RunSelfUninstall(cbTp.Checked); }   // launches the bat + exits
             catch (Exception ex) { MessageBox.Show(p.FindForm(), "Uninstall failed to start: " + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         };
-        flow.Controls.Add(title); flow.Controls.Add(desc); flow.Controls.Add(cbThumbs); flow.Controls.Add(cbTp); flow.Controls.Add(shareNote); flow.Controls.Add(btn);
+        flow.Controls.Add(title); flow.Controls.Add(desc); flow.Controls.Add(cbTp); flow.Controls.Add(shareNote); flow.Controls.Add(btn);
         p.Controls.Add(flow);
         return p;
     }

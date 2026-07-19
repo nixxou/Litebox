@@ -176,7 +176,7 @@ if (args.Contains("--dump-uninstall-bat"))
 {
     int di = Array.IndexOf(args, "--dump-uninstall-bat");
     string r = (di >= 0 && di + 1 < args.Length) ? args[di + 1].TrimEnd('\\', '/') : AppContext.BaseDirectory;
-    Console.Write(LbApiHost.Host.Install.Uninstaller.BuildScript(Path.Combine(r, "Core"), r, args.Contains("thumbs"), args.Contains("tp")));
+    Console.Write(LbApiHost.Host.Install.Uninstaller.BuildScript(Path.Combine(r, "Core"), r, args.Contains("tp")));
     return 0;
 }
 

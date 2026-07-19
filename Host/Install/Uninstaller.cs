@@ -3,11 +3,15 @@
 // killing LiteBox doesn't kill it), then quit LiteBox. The bat taskkills LiteBox, waits until it's gone
 // (locks released), deletes everything, and finally self-deletes.
 //
-// Always removed (LiteBox-exclusive): Core\LiteBox.exe (+ the light build's .dll/.json), Core\litebox\ (all
-// our data), the root re-launcher, ThirdParty\Steam, ThirdParty\Pdfium, and every obsolete leftover from OLDER
-// LiteBox versions (LegacyCleanup: pre-litebox\ Core-root files, launcher markers, copied Magick DLLs, loose .api payload).
-// Opt-in (shared with ExtendDB — off by default): the thumbnail cache (Plugins\ExtendDB\cache\thumbs) and
-// the shared ThirdParty tools (Everything / ImageMagick native / RAHasher).
+// Always removed (LiteBox-exclusive): Core\LiteBox.exe (+ the light build's .dll/.json), Core\litebox\ (ALL
+// our data — dbs, caches, config, logs, our own thirdparty\ + cache\thumbs), the root re-launcher, the
+// LiteBox-ONLY ThirdParty natives (Steam / Pdfium / RomExtractor — derived from NativeInstaller.Payload), and
+// every obsolete leftover from OLDER LiteBox versions (LegacyCleanup).
+//
+// Opt-in (off by default): the ThirdParty tools SHARED with ExtendDB (Everything / ImageMagick native /
+// RAHasher) — removed as files, then their dirs are rmdir'd empty-only so a real ExtendDB's content is never
+// nuked. LiteBox no longer keeps anything under Plugins\ExtendDB\ (thumbs live in Core\litebox\cache\thumbs),
+// so the plugin's folders are never touched.
 
 #nullable enable
 
@@ -21,26 +25,14 @@ namespace LbApiHost.Host.Install;
 
 internal static class Uninstaller
 {
-    // Shared-with-ExtendDB ThirdParty files (removed only when the user opts in).
-    private static readonly string[] SharedThirdParty =
-    {
-        @"ThirdParty\Everything\Everything64.dll",
-        @"ThirdParty\ExtendDB\Magick.Native-Q16-x64.dll",
-        @"ThirdParty\RetroAchievements\RahasherExtendDB.exe",
-        @"ThirdParty\RetroAchievements\7z.dll",
-        @"ThirdParty\RetroAchievements\MSVCP140.dll",
-        @"ThirdParty\RetroAchievements\VCRUNTIME140.dll",
-        @"ThirdParty\RetroAchievements\VCRUNTIME140_1.dll",
-    };
-
     /// <summary>Writes the uninstall .bat, launches it detached, and exits LiteBox. Does not return.</summary>
-    public static void RunSelfUninstall(bool alsoThumbs, bool alsoSharedThirdParty)
+    public static void RunSelfUninstall(bool alsoSharedThirdParty)
     {
         string core = AppContext.BaseDirectory.TrimEnd('\\', '/');
         string root = (MediaResolver.LbRoot ?? Path.GetDirectoryName(core) ?? core).TrimEnd('\\', '/');
 
         string bat = Path.Combine(Path.GetTempPath(), "litebox-uninstall-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".bat");
-        File.WriteAllText(bat, BuildScript(core, root, alsoThumbs, alsoSharedThirdParty), new UTF8Encoding(false));
+        File.WriteAllText(bat, BuildScript(core, root, alsoSharedThirdParty), new UTF8Encoding(false));
 
         // Detached: ShellExecute launches cmd for the .bat independently of LiteBox's process, so our own
         // taskkill (and exit) can't take it down.
@@ -51,7 +43,7 @@ internal static class Uninstaller
 
     /// <summary>The uninstall .bat body. <paramref name="core"/> = LB\Core, <paramref name="root"/> = LB.
     /// Exposed for the --dump-uninstall-bat dev flag / testing.</summary>
-    public static string BuildScript(string core, string root, bool alsoThumbs, bool alsoSharedThirdParty)
+    public static string BuildScript(string core, string root, bool alsoSharedThirdParty)
     {
         core = core.TrimEnd('\\', '/');
         root = root.TrimEnd('\\', '/');
@@ -66,12 +58,15 @@ internal static class Uninstaller
         // Always: LiteBox-exclusive. (The light "zip" build also drops LiteBox.dll + the two .json next
         // to LiteBox.exe in Core — the standalone is a single file, so those are just absent then.)
         sb.AppendLine($"del /q \"{core}\\LiteBox.exe\" \"{core}\\LiteBox.dll\" \"{core}\\LiteBox.deps.json\" \"{core}\\LiteBox.runtimeconfig.json\" 2>nul");
-        sb.AppendLine($"rmdir /s /q \"{core}\\litebox\" 2>nul");
+        sb.AppendLine($"rmdir /s /q \"{core}\\litebox\" 2>nul");   // ALL LiteBox data (incl. our own thirdparty\ + cache\thumbs)
         sb.AppendLine($"del /q \"{root}\\LiteBox.exe\" 2>nul");
-        sb.AppendLine($"del /q \"{root}\\ThirdParty\\Steam\\steam_api64.dll\" 2>nul");
-        sb.AppendLine($"rmdir \"{root}\\ThirdParty\\Steam\" 2>nul");
-        sb.AppendLine($"del /q \"{root}\\ThirdParty\\Pdfium\\pdfium.dll\" 2>nul");   // LiteBox-only (PDF document thumbnails)
-        sb.AppendLine($"rmdir \"{root}\\ThirdParty\\Pdfium\" 2>nul");
+
+        // Always: the LiteBox-ONLY ThirdParty natives (Steam / Pdfium / RomExtractor), derived from the deploy
+        // payload so the two never drift. Files first, then the (LiteBox-owned) sub-dirs recursively.
+        foreach (var rel in NativeInstaller.LiteBoxOnlyNativeFiles())
+            sb.AppendLine($"del /q \"{root}\\{rel}\" 2>nul");
+        foreach (var dir in NativeInstaller.LiteBoxOnlySubDirs())
+            sb.AppendLine($"rmdir /s /q \"{root}\\{dir}\" 2>nul");
 
         // Obsolete leftovers from OLDER LiteBox versions (pre-litebox\ Core-root config/journal/caches, old
         // launcher markers, copied Magick DLLs, loose .api payload, …) — the SAME list the boot sweep uses.
@@ -81,18 +76,14 @@ internal static class Uninstaller
         foreach (var f in LegacyCleanup.RootFiles) sb.AppendLine($"del /q \"{root}\\{f}\" 2>nul");
         foreach (var g in LegacyCleanup.RootGlobs) sb.AppendLine($"del /q \"{root}\\{g}\" 2>nul");
 
-        // Opt-in: shared thumbnail cache.
-        if (alsoThumbs)
-            sb.AppendLine($"rmdir /s /q \"{root}\\Plugins\\ExtendDB\\cache\\thumbs\" 2>nul");
-
-        // Opt-in: shared ThirdParty tools (files, then empty-only rmdir so ExtendDB content is never nuked).
+        // Opt-in: the ThirdParty tools SHARED with ExtendDB. Delete the files LiteBox deploys, then rmdir the
+        // dirs EMPTY-ONLY (no /s) so a real ExtendDB's own content in them is never nuked.
         if (alsoSharedThirdParty)
         {
-            foreach (var rel in SharedThirdParty)
+            foreach (var rel in NativeInstaller.SharedNativeFiles())
                 sb.AppendLine($"del /q \"{root}\\{rel}\" 2>nul");
-            sb.AppendLine($"rmdir \"{root}\\ThirdParty\\Everything\" 2>nul");
-            sb.AppendLine($"rmdir \"{root}\\ThirdParty\\ExtendDB\" 2>nul");
-            sb.AppendLine($"rmdir \"{root}\\ThirdParty\\RetroAchievements\" 2>nul");
+            foreach (var dir in NativeInstaller.SharedSubDirs())
+                sb.AppendLine($"rmdir \"{root}\\{dir}\" 2>nul");
         }
 
         sb.AppendLine("(goto) 2>nul & del \"%~f0\"");

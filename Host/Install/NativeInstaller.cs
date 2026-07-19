@@ -57,6 +57,27 @@ internal static class NativeInstaller
     private static bool IsLiteBoxOnlySub(string sub)
         => sub is "Steam" or "Pdfium" || sub.StartsWith("RomExtractor", OIC);
 
+    // ── Uninstall support: the deployed ThirdParty targets, split by ownership (single source of truth) ──
+    private static string TopSub(string sub) => sub.Split('\\', '/')[0];
+
+    /// <summary>Relative (to lbRoot) paths of the ThirdParty native files this host deploys that are
+    /// LiteBox-ONLY (Steam / Pdfium / RomExtractor) — safe for the uninstaller to always delete.</summary>
+    public static IEnumerable<string> LiteBoxOnlyNativeFiles()
+        => Payload.Where(e => IsLiteBoxOnlySub(e.sub)).Select(e => Path.Combine("ThirdParty", e.sub, e.dst));
+
+    /// <summary>Relative paths of the ThirdParty native files SHARED with the ExtendDB plugin (Everything /
+    /// ExtendDB\Magick / RetroAchievements) — the uninstaller removes these only when the user opts in.</summary>
+    public static IEnumerable<string> SharedNativeFiles()
+        => Payload.Where(e => !IsLiteBoxOnlySub(e.sub)).Select(e => Path.Combine("ThirdParty", e.sub, e.dst));
+
+    /// <summary>Distinct top-level ThirdParty sub-dirs that are LiteBox-only (safe to remove recursively).</summary>
+    public static IEnumerable<string> LiteBoxOnlySubDirs()
+        => Payload.Where(e => IsLiteBoxOnlySub(e.sub)).Select(e => Path.Combine("ThirdParty", TopSub(e.sub))).Distinct(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Distinct ThirdParty sub-dirs SHARED with ExtendDB (remove empty-only — never nuke plugin content).</summary>
+    public static IEnumerable<string> SharedSubDirs()
+        => Payload.Where(e => !IsLiteBoxOnlySub(e.sub)).Select(e => Path.Combine("ThirdParty", e.sub)).Distinct(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// libvlc is NOT part of our payload: LaunchBox already ships a full libvlc 3.0.23 (366 plugins) at
     /// &lt;LB&gt;\ThirdParty\VLC\x64 — the one it plays videos with. VlcService points straight at it, which is

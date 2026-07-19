@@ -101,6 +101,10 @@ internal static class RaResolveLite
     {
         try
         {
+            // The picker (and its per-entry RA column) only exist when the ROM extractor module is on.
+            // Off → skip this EXTRA parse; it stays Unparsed and gets done on the first select once the
+            // module is (re)enabled — so toggling the module back on always re-fills the picker correctly.
+            if (!LbApiHost.Host.Modules.LbModules.On(LbApiHost.Host.Modules.LbModule.Rom)) return;
             if (consoleId == RaPlatformMap.ArcadeConsoleId) return;   // arcade: .zip is the unit, never parsed into entries
             if (!IsArchive(abs)) return;                              // plain file: no picker entries to fill
 

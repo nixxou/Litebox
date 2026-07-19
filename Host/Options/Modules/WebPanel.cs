@@ -313,14 +313,17 @@ internal static class WebPanel
             BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, BorderStyle = BorderStyle.FixedSingle,
             Font = new Font("Segoe UI", 9f), Enabled = !readOnly,
         };
-        tb.KeyDown += (_, e) =>
+        // Low-level hook (only while focused) grabs the press BEFORE the app-wide HostHotKeys filter, so
+        // reserved keys like F10/F11/F12 can be bound; KeyDown stays as the fallback if the hook fails.
+        void ApplyKey(Keys keyData)
         {
-            e.SuppressKeyPress = true; e.Handled = true;
-            var k = e.KeyCode;
+            var k = keyData & Keys.KeyCode;
             if (k is Keys.ControlKey or Keys.ShiftKey or Keys.Menu or Keys.LWin or Keys.RWin) return; // bare modifier
             if (k is Keys.Delete or Keys.Back) { tb.Text = ""; return; }                               // unbind
             tb.Text = k.ToString();
-        };
+        }
+        tb.KeyDown += (_, e) => { e.SuppressKeyPress = true; e.Handled = true; ApplyKey(e.KeyData); };
+        LbApiHost.Host.Options.KeyCaptureHook.OnFocus(tb, ApplyKey);
         return tb;
     }
 

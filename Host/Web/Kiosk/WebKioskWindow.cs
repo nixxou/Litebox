@@ -35,7 +35,7 @@ internal sealed class WebKioskWindow : Form
     private string _surface;            // "bigbox" or "launchbox" (updated on live surface switch)
     private bool _ready;
     private string _deepLink;           // one-shot extra hash for a restore deep-link ("" normally)
-    private bool _suspendClosing;       // closing to suspend for a game launch → keep the parental unlock
+    private bool _reassertTopMost;      // dropped TopMost for an external launch → restore when re-focused
 
     /// <summary>True when the WebView2 managed assemblies AND the Evergreen runtime are both present. Isolated
     /// + guarded so a Core without WebView2 (13.27) is caught, never fatal.</summary>
@@ -65,6 +65,31 @@ internal sealed class WebKioskWindow : Form
         try { _instance?.Close(); } catch { }
     }
 
+    /// <summary>Let an EXTERNAL window (a store client's install/launch — GOG Galaxy, Steam, Epic…) surface
+    /// above the kiosk. The kiosk is TopMost + fullscreen, so a normally-activated store window would open
+    /// hidden behind it. We drop TopMost and push the kiosk to the back so the store window is usable; the
+    /// next time the kiosk is focused again it re-asserts TopMost. No-op when no kiosk is open. Any store, not
+    /// just GOG. Must run on the kiosk UI thread (marshalled if needed).</summary>
+    public static void YieldForExternalLaunch()
+    {
+        var w = _instance;
+        if (w == null || w.IsDisposed) return;
+        try
+        {
+            if (w.InvokeRequired) { w.BeginInvoke((Action)YieldForExternalLaunch); return; }
+            w.TopMost = false;
+            w._reassertTopMost = true;   // Activated restores TopMost when the user comes back to the kiosk
+            try { SetWindowPos(w.Handle, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); } catch { }
+        }
+        catch { }
+    }
+
+    private const int SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010;
+    private static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
     private static bool _suspended;
     private static string? _suspendedSurface;
     private static string _suspendedDeepLink = "";
@@ -85,7 +110,6 @@ internal sealed class WebKioskWindow : Form
             _suspendedSurface = w._surface;
             _suspendedDeepLink = BuildDeepLink(gameId, platform);
             _suspended = true;
-            w._suspendClosing = true;   // keep the parental unlock across the close/reopen
             w.Close();                  // → WebView2 disposed, child process exits
         }
         catch { _suspended = false; _suspendedSurface = null; _suspendedDeepLink = ""; }
@@ -181,9 +205,13 @@ internal sealed class WebKioskWindow : Form
 
         FormClosed += (_, _) => { if (ReferenceEquals(_instance, this)) _instance = null; };
 
+        // After yielding to a store window (TopMost dropped), reclaim TopMost the moment the kiosk is
+        // focused again — so once the user is done with the installer the kiosk is back on top.
+        Activated += (_, _) => { if (_reassertTopMost) { _reassertTopMost = false; try { TopMost = true; } catch { } } };
+
         Shown += async (_, _) => await InitAsync();
-        // Closing the kiosk re-locks it (the in-memory unlock flag never survives the window).
-        FormClosed += (_, _) => { try { if (!_suspendClosing) LbApiHost.Host.Web.WebParentalState.KioskReset(); } catch { } };
+        // NB: closing the kiosk does NOT re-lock — the kiosk shares the desktop runtime lock (same user),
+        // and a window close is not a lock gesture. Locking happens only via the explicit web "lock" action.
     }
 
     private async System.Threading.Tasks.Task InitAsync()
@@ -198,8 +226,8 @@ internal sealed class WebKioskWindow : Form
             s.AreDefaultContextMenusEnabled = false;
             s.IsStatusBarEnabled = false;
             s.AreBrowserAcceleratorKeysEnabled = false;
-            // Parental: mark this window's requests as KIOSK — the server keys the unlock on an
-            // in-memory flag (never the persisted cookie), so an unlock dies with this window.
+            // Parental: mark this window's requests as KIOSK — the server keys the lock on the shared
+            // desktop runtime lock (Host/Parental/ParentalFilter), so the kiosk and host GUI lock together.
             try { s.UserAgent += " " + LbApiHost.Host.Web.WebParentalState.KioskUaMarker; } catch { }
             // Keep navigation inside the one window.
             _web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; try { _web.CoreWebView2.Navigate(e.Uri); } catch { } };

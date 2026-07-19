@@ -126,11 +126,12 @@ internal static class BigBoxMutationApi
         var kind = StoreSupport.KindOf(game);
         if (kind == StoreKind.None) return Fail("not a store game");
 
-        // Parental: when the install is PIN-blocked (locked kiosk + BlockInstallWhenLocked), require and
-        // verify a ONE-SHOT PIN — same lockout/reason shape as /api/parental/unlock. A correct PIN authorizes
-        // THIS install only (no global unlock; the client stays locked). The frontend opens the PIN pad and
-        // POSTs {pin} here when parental.installNeedsUnlock is set.
-        if (Media.ParentalBridge.InstallNeedsUnlock)
+        // Parental: when the install is PIN-blocked for THIS client (active + locked + BlockInstallWhenLocked),
+        // require and verify a ONE-SHOT PIN — same lockout/reason shape as /api/parental/unlock. A correct PIN
+        // authorizes THIS install only (no global unlock; the client stays locked). Uses the per-client web
+        // lock (cookie for a browser, shared desktop lock for the kiosk) so it matches parental.installNeedsUnlock
+        // the frontend received from /api/parental/state. The frontend opens the PIN pad and POSTs {pin} here.
+        if (WebParentalState.From(ctx?.Request).InstallNeedsUnlock)
         {
             if (ParentalFilter.PinLockedOut)
                 return HttpResponse.Json(JsonSerializer.Serialize(new { ok = false, reason = "locked-out" }));
@@ -154,6 +155,10 @@ internal static class BigBoxMutationApi
             Log($"install id={id} kind={kind}: no URI / shell-open failed (uri={uri ?? "<none>"})");
             return Fail("install failed — is the store client installed?");
         }
+        // From the fullscreen TopMost kiosk, the store client (Galaxy/Steam/Epic…) would open hidden behind
+        // it — let it surface so the user can drive the install. Kiosk requests only; a normal browser is fine.
+        if (WebParentalState.IsKioskRequest(ctx?.Request))
+            Web.Kiosk.WebKioskWindow.YieldForExternalLaunch();
         Log($"install id={id} kind={kind} → {uri}");
         return Ok(new { ok = true });
     }

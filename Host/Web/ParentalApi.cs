@@ -34,6 +34,8 @@ internal static class ParentalApi
             locked = s.IsLocked,
             canUnlock = s.CanUnlock,
             lockedOut = Parental.ParentalFilter.PinLockedOut,
+            installNeedsUnlock = s.InstallNeedsUnlock,   // store install is PIN-gated for this client
+
         }));
     }
 
@@ -65,10 +67,10 @@ internal static class ParentalApi
             }));
         }
 
-        // Kiosk: in-memory flag only — the unlock dies with the kiosk window, never the cookie.
+        // Kiosk: share the desktop runtime lock — unlocking here unlocks the host GUI too (same user).
         if (WebParentalState.IsKioskRequest(ctx.Request))
         {
-            WebParentalState.SetKioskUnlocked(true);
+            Parental.ParentalFilter.SetLocked(false);
             return HttpResponse.Json(JsonSerializer.Serialize(new { success = true }));
         }
 
@@ -81,7 +83,8 @@ internal static class ParentalApi
     public static HttpResponse HandleLock(RouteContext ctx)
     {
         if (!IsPost(ctx)) return HttpResponse.PlainText("POST only", 405);
-        if (WebParentalState.IsKioskRequest(ctx.Request)) WebParentalState.KioskReset();
+        // Kiosk: lock the shared desktop runtime lock (locks the host GUI too). Browser: just clear the cookie.
+        if (WebParentalState.IsKioskRequest(ctx.Request)) Parental.ParentalFilter.SetLocked(true);
         var r = HttpResponse.Json(JsonSerializer.Serialize(new { success = true }));
         r.ClearCookie(WebParentalState.UnlockCookie);
         return r;

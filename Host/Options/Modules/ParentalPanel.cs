@@ -259,15 +259,19 @@ internal static class ParentalPanel
             hotKeyBox.Text = k == Keys.None ? "(none)" : new KeysConverter().ConvertToString(k) ?? "(none)";
         }
         SetHotKey(hotKey);
-        hotKeyBox.KeyDown += (s, e) =>
+        // Capture the combo. A low-level hook (installed only while focused) grabs the press BEFORE the
+        // app-wide HostHotKeys message filter — otherwise F10/F11/F12 (and the current parental key) get
+        // swallowed by that filter and can never be re-bound. KeyDown stays as the fallback if the hook fails.
+        void ApplyKey(Keys keyData)
         {
-            e.SuppressKeyPress = true; e.Handled = true;
             if (readOnly) return;
-            var code = e.KeyCode;
+            var code = keyData & Keys.KeyCode;
             if (code is Keys.ControlKey or Keys.ShiftKey or Keys.Menu or Keys.LWin or Keys.RWin) return;   // wait for a real key
             if (code == Keys.Escape) { SetHotKey(Keys.None); return; }
-            SetHotKey(e.KeyData);   // includes modifier flags
-        };
+            SetHotKey(keyData);   // includes modifier flags
+        }
+        hotKeyBox.KeyDown += (s, e) => { e.SuppressKeyPress = true; e.Handled = true; ApplyKey(e.KeyData); };
+        KeyCaptureHook.OnFocus(hotKeyBox, ApplyKey);
         clearHot.Click += (_, _) => { if (!readOnly) SetHotKey(Keys.None); };
         y4 += 32;
         CloseGroup(gLock, y4);

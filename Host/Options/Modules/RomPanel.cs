@@ -583,15 +583,25 @@ internal static class RomPanel
         {
             _chkTexture = Chk("Enable texture packs for this profile", 14, 22); _chkTexture.BackColor = Color.Transparent;
             var lblExt = Lbl("Extension(s)", 14, 52); lblExt.BackColor = Color.Transparent;
-            _tbTexExt = Tb(130, 49, 120);
+            _tbTexExt = Tb(130, 49, 120); _tbTexExt.PlaceholderText = "htc, hts";
             var lblPath = Lbl("Extraction path", 14, 80); lblPath.BackColor = Color.Transparent;
             _tbTexPath = Tb(130, 77, 190);
             var btnBrowse = Btn("Browse…", 328, 76, null);
             btnBrowse.Click += (s, e) => { try { using var d = new FolderBrowserDialog(); if (d.ShowDialog() == DialogResult.OK) _tbTexPath.Text = d.SelectedPath; } catch { } };
-            var hint = Lbl("Tokens: {EmuDir}, {GameId}, {GameTitle}.", 14, 106, dim: true); hint.Font = Font85; hint.BackColor = Color.Transparent;
+            var hint = Lbl("Tokens: {EmuDir}, {GameId}, {GameTitle}.  Empty = the emulator's default (N64 texture cache).", 14, 106, dim: true); hint.Font = Font85; hint.BackColor = Color.Transparent;
 
             void Toggle() { bool on = _chkTexture.Checked && !_ro; foreach (var c in new Control[] { lblExt, _tbTexExt, lblPath, _tbTexPath, btnBrowse }) c.Enabled = on; }
-            _chkTexture.CheckedChanged += (s, e) => Toggle();
+            // Enabling seeds the emulator's defaults (extensions + N64 texture-cache path) so they're visible +
+            // editable, instead of the user having to know them. Leaving them empty still works (runtime falls back).
+            _chkTexture.CheckedChanged += (s, e) =>
+            {
+                if (!_loading && _chkTexture.Checked)
+                {
+                    if (string.IsNullOrWhiteSpace(_tbTexExt.Text)) _tbTexExt.Text = "htc, hts";
+                    if (string.IsNullOrWhiteSpace(_tbTexPath.Text)) _tbTexPath.Text = DefaultTexturePathToken();
+                }
+                Toggle();
+            };
             Toggle();
 
             g.Controls.AddRange(new Control[] { _chkTexture, lblExt, _tbTexExt, lblPath, _tbTexPath, btnBrowse, hint });
@@ -758,6 +768,16 @@ internal static class RomPanel
 
         private string SelPlatform() => (_cmbPlat.SelectedItem as RomStateItem)?.Text ?? "";
         private string SelEmulator() => (_cmbEmu.SelectedItem as RomStateItem)?.Text ?? "";
+
+        /// <summary>The default texture-cache path token for the selected emulator (matches the runtime
+        /// fallback in RomExtractor.ResolveTexturePath). "" when the emulator has no known N64 texture cache.</summary>
+        private string DefaultTexturePathToken()
+        {
+            var emu = SelEmulator().ToLowerInvariant();
+            if (emu.Contains("retroarch")) return @"{EmuDir}\system\Mupen64plus\cache";
+            if (emu.Contains("project64")) return @"{EmuDir}\Plugin\GFX\cache";
+            return "";
+        }
         private bool PlatformIsGlobal() => _cmbPlat.SelectedIndex <= 0;
         private bool EmulatorIsDefault() => _cmbEmu.SelectedIndex <= 0;
 
@@ -953,6 +973,7 @@ internal static class RomPanel
             _chkRam.Checked = r.RamDiskEnabled; _numRam.Value = Clamp(r.RamDiskMaxMb, 1, 1000000);
             RefreshRamRow();
             _chkTexture.Checked = r.TextureEnabled; _tbTexExt.Text = r.TextureExtensions ?? ""; _tbTexPath.Text = r.TextureExtractPath ?? "";
+            _tbTexPath.PlaceholderText = DefaultTexturePathToken();   // show the emulator's default path as a hint when empty
             _chkM3u.Checked = r.M3uInput;
 
             _loading = false;

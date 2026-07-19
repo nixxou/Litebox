@@ -63,6 +63,45 @@ internal sealed class WebKioskWindow : Form
         try { _instance?.Close(); } catch { }
     }
 
+    private static bool _suspended;
+
+    /// <summary>Hide the open kiosk while a game runs (it's a TopMost maximized frontend, so it would
+    /// otherwise sit over the game). The WebView2 stays alive, so RestoreAfterGameLaunch brings it back to
+    /// the exact page. No-op when no kiosk is open. Mirrors ExtendDB's SuspendForGameLaunch.</summary>
+    public static void SuspendForGameLaunch()
+    {
+        var w = _instance;
+        if (w == null || w.IsDisposed) return;
+        try
+        {
+            if (w.InvokeRequired) { w.BeginInvoke((Action)SuspendForGameLaunch); return; }
+            if (!w.Visible) return;
+            w.TopMost = false;
+            w.Hide();
+            _suspended = true;
+        }
+        catch { }
+    }
+
+    /// <summary>Bring the kiosk back after the game exits (only when SuspendForGameLaunch hid it), to the
+    /// same surface/page it was on, and give it focus.</summary>
+    public static void RestoreAfterGameLaunch()
+    {
+        var w = _instance;
+        if (w == null || w.IsDisposed || !_suspended) return;
+        try
+        {
+            if (w.InvokeRequired) { w.BeginInvoke((Action)RestoreAfterGameLaunch); return; }
+            _suspended = false;
+            w.Show();
+            w.WindowState = FormWindowState.Maximized;
+            w.TopMost = true;
+            w.BringToFront();
+            w.Activate();
+        }
+        catch { }
+    }
+
     private static void Toggle(string surface)
     {
         if (!IsAvailable()) return;

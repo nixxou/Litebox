@@ -3873,6 +3873,8 @@ internal sealed class MainWindow : Form, IMessageFilter
 
         _resumeGameId = g != null ? Safe(() => g.Id) : null;
         _gameRunning = true;
+        // Hide the web kiosk (TopMost frontend) while the game runs; restored on exit. Mirrors ExtendDB.
+        try { Web.Kiosk.WebKioskWindow.SuspendForGameLaunch(); } catch { }
         SetStorePoll(false);   // pause the install-state poll while the game runs (client DB may be mid-write)
         CandidateProvider.ReleaseMemory();   // drop the suggester's candidate pool — that RAM belongs to the game now
         // RA launch correction (engine P4): align the IGame hash/raid with the entry that actually
@@ -3902,6 +3904,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         _gameRunning = false;   // game over → store status refresh may resume
 
         HideRunningOverlay();
+        // Bring the web kiosk back (to the exact page it was on) now the game has exited.
+        try { Web.Kiosk.WebKioskWindow.RestoreAfterGameLaunch(); } catch { }
 
         if (_cfg.UnloadListDuringGame)
         {

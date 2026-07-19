@@ -111,6 +111,9 @@ internal static class ArchiveMetadataApi
         var p1 = dir != null ? Path.Combine(dir, basename + ".json") : null;
         if (p1 != null && File.Exists(p1)) return p1;
         try { var p2 = Path.Combine(MetaRoot, "metadata", safePlatform, basename + ".json"); if (File.Exists(p2)) return p2; } catch { }
+        // Compat: central metadata authored under the ExtendDB plugin (<plugin>\ArchiveMgs\metadata\<Platform>\<name>.json).
+        foreach (var root in ArchiveMgsRoots())
+            try { var pc = Path.Combine(root, "metadata", safePlatform, basename + ".json"); if (File.Exists(pc)) return pc; } catch { }
         return null;
     }
 
@@ -125,7 +128,27 @@ internal static class ArchiveMetadataApi
             var p3 = Path.Combine(MetaRoot, "templates", "default.html"); if (File.Exists(p3)) return p3;
         }
         catch { }
+        // Compat: central templates authored under the ExtendDB plugin.
+        foreach (var root in ArchiveMgsRoots())
+            try
+            {
+                var pc = Path.Combine(root, "templates", safePlatform + ".html"); if (File.Exists(pc)) return pc;
+                var pd = Path.Combine(root, "templates", "default.html"); if (File.Exists(pd)) return pd;
+            }
+            catch { }
         return null;
+    }
+
+    /// <summary>Candidate ExtendDB-plugin ArchiveMgs roots (its central metadata/templates), so LiteBox
+    /// finds sidecars/templates a user authored under the plugin's convention. Checked AFTER LiteBox's own
+    /// rom-metadata root and the next-to-archive files.</summary>
+    private static IEnumerable<string> ArchiveMgsRoots()
+    {
+        var lb = LbApiHost.Host.Media.MediaResolver.LbRoot;
+        if (string.IsNullOrEmpty(lb)) yield break;
+        yield return Path.Combine(lb!, "Plugins", "ExtendDB", "ArchiveMgs");
+        yield return Path.Combine(lb!, "ExtendDB", "ArchiveMgs");
+        yield return Path.Combine(lb!, "ArchiveExtend", "ExtendDB", "ArchiveMgs");
     }
 
     // ── render ────────────────────────────────────────────────────────────────

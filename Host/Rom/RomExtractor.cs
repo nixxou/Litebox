@@ -186,8 +186,8 @@ internal static class RomExtractor
 
             // Fast path: persisted listing + already-extracted file → relaunch WITHOUT opening the archive.
             // Skipped on the "Clear → pure priority" arm (it would reuse the last-extracted entry and defeat
-            // the re-pick), and when a follow-up convert / texture step is armed (both re-run every launch).
-            if (!pick.ForcePriority && !row.ConvertAfterExtract && !row.TextureEnabled)
+            // the re-pick), and when a follow-up convert step is armed (it re-runs every launch).
+            if (!pick.ForcePriority && !row.ConvertAfterExtract)
             {
                 var fast = TryListingFastHit(romAbs, archiveSize, sig, row, pick, gameTitle, platform, emuTitle);
                 if (fast.outputFile != null)
@@ -305,10 +305,8 @@ internal static class RomExtractor
                 else LbLog.Info("rom", $"launch: follow-up convert failed ({conv?.ErrorMessage ?? "null"}) — launching extracted file as-is");
             }
 
-            // Texture pack: extract entries matching the profile's TextureExtensions to the (token-expanded)
-            // install path. Best-effort — a failure never blocks the launch.
-            if (row.TextureEnabled)
-                try { ExtractTextures(analysis, row, romAbs, game, emulator); } catch (Exception ex) { LbLog.Info("rom", "texture: " + ex.Message); }
+            // (Texture packs install MANUALLY from the ROM picker's Hi-Res Texture Pack panel — no auto-install
+            // at launch, matching the plugin.)
 
             // Side effects: persistent-cache manifest + LRU trim (only when we wrote the persistent DISK
             // cache — not RAM, not \tmp), per-archive last-played, op-log launch-history entry.
@@ -854,19 +852,6 @@ internal static class RomExtractor
             return new RomLaunchResult { Success = true, Handled = true, OutputFilePath = br.OutputFilePath };
         }
         catch (Exception ex) { LbLog.Info("rom", "ResolveDiscImage failed: " + ex.Message); return RomLaunchResult.NotHandled; }
-    }
-
-    /// <summary>Texture pack (launch time): install every texture entry the archive carries into the resolved
-    /// path. Best-effort; no-op when off / no path / no matching entries. Shares InstallTexture with the picker.</summary>
-    private static void ExtractTextures(ArchiveAnalysis analysis, ArchivePriorityRow row, string archivePath, IGame game, IEmulator emulator)
-    {
-        var texEntries = analysis.Entries.Where(e => !e.IsDirectory && TextureExtSet(row).Contains(e.Extension ?? "")).ToList();
-        if (texEntries.Count == 0) return;
-        string dest = ResolveTexturePath(row, game, emulator);
-        if (string.IsNullOrWhiteSpace(dest)) { LbLog.Info("rom", "texture: enabled but no install path resolved — skipping"); return; }
-        int ok = 0;
-        foreach (var t in texEntries) if (InstallTexture(archivePath, t, dest)) ok++;
-        LbLog.Info("rom", $"texture: {ok}/{texEntries.Count} installed → \"{dest}\"");
     }
 
     /// <summary>Texture extensions to look for: the profile's TextureExtensions when the rule is on, else the

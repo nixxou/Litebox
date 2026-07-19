@@ -16,7 +16,7 @@
 //     launch pipeline) and extraction deferral — it is the native equivalent of the plugin's PlayGame.
 //   • favorite/hide/broken/rating — the game's setter (routes to the op-log) + DataManager.Save(false).
 //
-// Archive / Select-ROM mutations are OUT of S4 (S6) → 501 "not available". install is likewise deferred.
+// Archive / Select-ROM mutations are served by the dedicated handlers (ArchiveListingApi / ArchiveMetadataApi).
 
 using System;
 using System.Text.Json;
@@ -59,7 +59,7 @@ internal static class BigBoxMutationApi
                 "play"         => Play(id, ctx),
                 "launch"       => Play(id, ctx),   // alias
                 "resethistory" => ResetHistory(id),
-                "install"      => NotAvailable("install is not available yet"),
+                "install"      => Install(id, ctx),
                 _              => Fail("unknown action"),
             };
         }
@@ -110,6 +110,51 @@ internal static class BigBoxMutationApi
         });
 
         Log($"play id={id} emu={emulatorId ?? "default"} app={additionalAppId ?? "default"} entry={archiveEntryFileName ?? "<none>"} forcePriority={forcePriority} → HostLaunch.Launch(\"web\")");
+        return Ok(new { ok = true });
+    }
+
+    // ── install (delegate the download to the store client via its URI) ─────────
+    // Uninstalled GOG/Steam/Epic/Ubisoft/EA game → fire the client's install URI (goggalaxy:// /
+    // steam://install / com.epicgames.launcher://…?action=install / …), the same one the desktop
+    // Install button uses. The store client owns the download; LiteBox re-detects state on next refresh.
+
+    private static HttpResponse Install(string id, RouteContext ctx)
+    {
+        var game = ResolveGame(id);
+        if (game == null) return Fail("not in library");
+
+        var kind = StoreSupport.KindOf(game);
+        if (kind == StoreKind.None) return Fail("not a store game");
+
+        // Parental: when the install is PIN-blocked (locked kiosk + BlockInstallWhenLocked), require and
+        // verify a ONE-SHOT PIN — same lockout/reason shape as /api/parental/unlock. A correct PIN authorizes
+        // THIS install only (no global unlock; the client stays locked). The frontend opens the PIN pad and
+        // POSTs {pin} here when parental.installNeedsUnlock is set.
+        if (Media.ParentalBridge.InstallNeedsUnlock)
+        {
+            if (ParentalFilter.PinLockedOut)
+                return HttpResponse.Json(JsonSerializer.Serialize(new { ok = false, reason = "locked-out" }));
+            var pin = TryGetString(ctx?.Request?.Body, "pin");
+            if (string.IsNullOrEmpty(pin))
+                return HttpResponse.Json(JsonSerializer.Serialize(new { ok = false, reason = "no-pin" }));
+            if (!ParentalFilter.VerifyPin(pin!))
+            {
+                int remaining = ParentalFilter.RegisterFailedPinAttempt();
+                return HttpResponse.Json(JsonSerializer.Serialize(new { ok = false, reason = remaining == 0 ? "locked-out" : "wrong-pin", attemptsRemaining = remaining }));
+            }
+        }
+
+        string appPath = ""; try { appPath = game.ApplicationPath ?? ""; } catch { }
+        string? gogAppId = null; try { gogAppId = (game as ILiteBoxGame)?.GetField("GogAppId"); } catch { }
+
+        var uri = StoreSupport.InstallUri(kind, gogAppId, StoreSupport.SteamAppId(appPath),
+                                          StoreSupport.EpicAppName(appPath), StoreSupport.UplayId(appPath), StoreSupport.EaId(appPath));
+        if (string.IsNullOrEmpty(uri) || !StoreSupport.ShellOpen(uri))
+        {
+            Log($"install id={id} kind={kind}: no URI / shell-open failed (uri={uri ?? "<none>"})");
+            return Fail("install failed — is the store client installed?");
+        }
+        Log($"install id={id} kind={kind} → {uri}");
         return Ok(new { ok = true });
     }
 

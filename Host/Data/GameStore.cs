@@ -534,32 +534,34 @@ internal sealed class GameStore
     /// (op-log db, table launch_history — SAME schema as ExtendDB's, ROM left NULL). Written on EVERY
     /// launch (even when ExtendDB is loaded, so disabling the plugin keeps the history) and regardless
     /// of ReadOnly (this is LiteBox state, not LaunchBox write-back).</summary>
+    // Launch history lives in its OWN durable db (LaunchHistoryDb), split out of the op-log's ephemeral
+    // ops queue. These stay as GameStore methods so callers (HostServices, HostDataManagerXml, …) are unchanged.
     public void RecordLaunch(string gameId, string emulatorId, string additionalAppId)
-    { _oplog?.RecordLaunch(gameId, emulatorId, additionalAppId); }
+    { LaunchHistoryDb.RecordLaunch(gameId, emulatorId, additionalAppId); }
 
     /// <summary>LiteBox's last (emulatorId, additionalAppId) for a game, or null. Used as the fallback
     /// for the launch-button initial selection when ExtendDB isn't loaded.</summary>
     public (string emulatorId, string additionalAppId)? GetLastLaunch(string gameId)
-    { return _oplog?.GetLastLaunch(gameId); }
+    { return LaunchHistoryDb.GetLastLaunch(gameId); }
 
     /// <summary>LiteBox's last (emulatorId, additionalAppId, extractedRomPath) for a game, or null. Used
     /// as the launch-button initial selection fallback (incl. the last archive ROM) when ExtendDB isn't
     /// loaded but the native ROM module is.</summary>
     public (string emulatorId, string additionalAppId, string extractedRomPath)? GetLastLaunchFull(string gameId)
-    { return _oplog?.GetLastLaunchFull(gameId); }
+    { return LaunchHistoryDb.GetLastLaunchFull(gameId); }
 
     /// <summary>Cancels the game's LiteBox launch-history row (reset-to-default button).</summary>
-    public void ClearLaunch(string gameId) { _oplog?.ClearLaunch(gameId); }
+    public void ClearLaunch(string gameId) { LaunchHistoryDb.ClearLaunch(gameId); }
 
     /// <summary>Record the launched ROM entry (in-archive identity) for a game — the ROM extractor's
-    /// "last ROM" hint, written into LiteBox's op-log launch-history.</summary>
-    public void RecordLaunchRomEntry(string gameId, string romEntry) { _oplog?.RecordLaunchRomEntry(gameId, romEntry); }
+    /// "last ROM" hint, written into LiteBox's launch-history db.</summary>
+    public void RecordLaunchRomEntry(string gameId, string romEntry) { LaunchHistoryDb.RecordLaunchRomEntry(gameId, romEntry); }
 
     /// <summary>Record the launch→SmartCapture-detection latency (ms) for a game (LiteBox-only).</summary>
-    public void RecordDetection(string gameId, long detectionMs) { _oplog?.RecordDetection(gameId, detectionMs); }
+    public void RecordDetection(string gameId, long detectionMs) { LaunchHistoryDb.RecordDetection(gameId, detectionMs); }
 
     /// <summary>The last recorded launch→detection latency (ms) for a game, or null.</summary>
-    public long? GetLastDetectionMs(string gameId) { return _oplog?.GetLastDetectionMs(gameId); }
+    public long? GetLastDetectionMs(string gameId) { return LaunchHistoryDb.GetLastDetectionMs(gameId); }
 
     /// <summary>Generic IGame scalar write-back: <paramref name="xmlName"/> is the XML element name
     /// (e.g. "Developer"), <paramref name="value"/> the serialized value ("" = clear). Updates memory

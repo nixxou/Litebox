@@ -370,58 +370,78 @@ internal static class GameplaySettings
         catch { return -1; }
     }
 
-    // ── Pause-menu "Exit Game" force-close fallback (no custom exit AHK script) ────────────
-    // When the emulator/game has NO user-authored ExitAutoHotkeyScript, LiteBox sends the default
-    // exit key ("Send {Escape}") and, if the game is still up after a grace period, force-kills it.
-    // This option makes BOTH the grace period AND what gets killed configurable, resolved
-    // game → emulator → global. Encoded as one string: "none" | "smartcapture:<sec>" | "process:<sec>".
-    //   • none         — never force-kill (leave the game to close itself, like a custom exit script would)
+    // ── Pause-menu "Exit Game" force-close fallback ───────────────────────────────────────
+    // On pause-exit, LiteBox sends the emulator's exit key and, if the game is still up after a grace
+    // period, force-kills it. There are TWO independent rules with the SAME encoding + behaviour, picked
+    // by whether the emulator/game has a user-authored ExitAutoHotkeyScript:
+    //   • PauseExitKill     — NO custom exit script: LiteBox sends "Send {Escape}". Nothing manages the
+    //                         close, so kill fast. Default ("smartcapture", 1).
+    //   • PauseExitKillAhk  — a custom exit script RAN but did not close the game: give the script time,
+    //                         then fall back to a kill. Default ("smartcapture", 30).
+    // Each is resolved game → emulator → global and encoded as one string:
+    //   "none" | "smartcapture:<sec>" | "process:<sec>"
+    //   • none         — never force-kill (leave the game to close itself)
     //   • smartcapture — kill the SmartCapture-detected game process tree (fallback: launched emulator/app)
     //   • process      — kill the launched emulator/app process tree (the historical behaviour)
-    // Default ("smartcapture", 30). A per-emulator / per-game override (litebox-options.db) wins.
+    // A per-emulator / per-game override (litebox-options.db) wins over the global.
 
     public const string PauseExitKillDefaultMode = "smartcapture";
-    public const int PauseExitKillDefaultSeconds = 30;
+    public const int PauseExitKillDefaultSeconds = 1;        // no exit script → kill fast
+    public const int PauseExitKillAhkDefaultSeconds = 30;    // exit script present → give it time first
     private const int PauseExitKillMaxSeconds = 600;
 
-    /// <summary>Parse a "PauseExitKill" value ("none" | "smartcapture:&lt;sec&gt;" | "process:&lt;sec&gt;").
-    /// Empty / unrecognised ⇒ the default ("smartcapture", 30). Seconds clamped to 0..600.</summary>
-    public static (string mode, int seconds) ParsePauseExitKill(string? raw)
+    /// <summary>Parse a pause-exit-kill value ("none" | "smartcapture:&lt;sec&gt;" | "process:&lt;sec&gt;").
+    /// Empty / unrecognised ⇒ (default mode, <paramref name="defSeconds"/>). Seconds clamped to 0..600.</summary>
+    private static (string mode, int seconds) ParseKill(string? raw, int defSeconds)
     {
-        if (string.IsNullOrWhiteSpace(raw)) return (PauseExitKillDefaultMode, PauseExitKillDefaultSeconds);
+        if (string.IsNullOrWhiteSpace(raw)) return (PauseExitKillDefaultMode, defSeconds);
         var s = raw.Trim();
-        if (string.Equals(s, "none", StringComparison.OrdinalIgnoreCase)) return ("none", PauseExitKillDefaultSeconds);
+        if (string.Equals(s, "none", StringComparison.OrdinalIgnoreCase)) return ("none", defSeconds);
         var parts = s.Split(':');
         string mode = parts[0].Trim().ToLowerInvariant();
-        if (mode != "smartcapture" && mode != "process") return (PauseExitKillDefaultMode, PauseExitKillDefaultSeconds);
+        if (mode != "smartcapture" && mode != "process") return (PauseExitKillDefaultMode, defSeconds);
         int sec = parts.Length > 1 && int.TryParse(parts[1].Trim(), out var n)
-            ? Math.Max(0, Math.Min(PauseExitKillMaxSeconds, n)) : PauseExitKillDefaultSeconds;
+            ? Math.Max(0, Math.Min(PauseExitKillMaxSeconds, n)) : defSeconds;
         return (mode, sec);
     }
 
-    /// <summary>Global pause-exit force-kill default (LiteBox.ini PauseExitKill). Default ("smartcapture", 30).</summary>
+    /// <summary>Parse the NO-exit-script rule ("PauseExitKill"). Default ("smartcapture", 1).</summary>
+    public static (string mode, int seconds) ParsePauseExitKill(string? raw) => ParseKill(raw, PauseExitKillDefaultSeconds);
+
+    /// <summary>Parse the exit-script-present fallback rule ("PauseExitKillAhk"). Default ("smartcapture", 30).</summary>
+    public static (string mode, int seconds) ParsePauseExitKillAhk(string? raw) => ParseKill(raw, PauseExitKillAhkDefaultSeconds);
+
+    /// <summary>Global no-script pause-exit force-kill default (LiteBox.ini PauseExitKill).</summary>
     public static (string mode, int seconds) PauseExitKillGlobal()
     {
         try { return ParsePauseExitKill(LiteBoxConfig.LoadForExe().Get("PauseExitKill")); }
         catch { return (PauseExitKillDefaultMode, PauseExitKillDefaultSeconds); }
     }
 
-    /// <summary>Pause-exit force-kill behaviour resolved game → emulator → global (litebox-options.db over
-    /// LiteBox.ini), like <see cref="ResolvePauseScreenFreezeTiming"/>. Consumed by PauseManager's exit path.</summary>
-    public static (string mode, int seconds) ResolvePauseExitKill(string? emuId, string? gameId)
+    /// <summary>Global exit-script-present pause-exit fallback default (LiteBox.ini PauseExitKillAhk).</summary>
+    public static (string mode, int seconds) PauseExitKillAhkGlobal()
     {
+        try { return ParsePauseExitKillAhk(LiteBoxConfig.LoadForExe().Get("PauseExitKillAhk")); }
+        catch { return (PauseExitKillDefaultMode, PauseExitKillAhkDefaultSeconds); }
+    }
+
+    /// <summary>Pause-exit force-kill behaviour resolved game → emulator → global (litebox-options.db over
+    /// LiteBox.ini), like <see cref="ResolvePauseScreenFreezeTiming"/>. Consumed by PauseManager's exit path.
+    /// <paramref name="ahk"/> picks the exit-script-present rule (PauseExitKillAhk) over the no-script one.</summary>
+    public static (string mode, int seconds) ResolvePauseExitKill(string? emuId, string? gameId, bool ahk = false)
+    {
+        int defSec = ahk ? PauseExitKillAhkDefaultSeconds : PauseExitKillDefaultSeconds;
+        string key = ahk ? "PauseExitKillAhk" : "PauseExitKill";
         try
         {
             var ini = LiteBoxConfig.LoadForExe();
-            string? R(string key)
-            {
-                if (!string.IsNullOrEmpty(gameId)) { var g = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeGame, gameId!, key); if (!string.IsNullOrEmpty(g)) return g; }
-                if (!string.IsNullOrEmpty(emuId)) { var e = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId!, key); if (!string.IsNullOrEmpty(e)) return e; }
-                return ini.Get(key);
-            }
-            return ParsePauseExitKill(R("PauseExitKill"));
+            string? raw = null;
+            if (!string.IsNullOrEmpty(gameId)) { var g = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeGame, gameId!, key); if (!string.IsNullOrEmpty(g)) raw = g; }
+            if (raw == null && !string.IsNullOrEmpty(emuId)) { var e = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId!, key); if (!string.IsNullOrEmpty(e)) raw = e; }
+            if (raw == null) raw = ini.Get(key);
+            return ParseKill(raw, defSec);
         }
-        catch { return (PauseExitKillDefaultMode, PauseExitKillDefaultSeconds); }
+        catch { return (PauseExitKillDefaultMode, defSec); }
     }
 
     /// <summary>When the web frontend (ExtendDB kiosk) comes back after a game, relative to the GAME

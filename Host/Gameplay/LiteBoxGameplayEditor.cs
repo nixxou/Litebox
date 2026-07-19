@@ -238,6 +238,27 @@ internal static class LiteBoxGameplayEditor
             var exkSkip = Multied(exkCbo, exkRaw, exkSec, exkSecLbl);
             saves.Add(() => { if (exkSkip()) return; SetAll("PauseExitKill", exkCbo.SelectedIndex switch { 1 => "none", 2 => "smartcapture:" + ((int)exkSec.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), 3 => "process:" + ((int)exkSec.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), _ => null }); });
             y += 32;
+            // 9c. On pause-exit, when a custom exit AHK script RAN but did NOT close the game: same shape as 9b,
+            //     with its own key (PauseExitKillAhk). Grace default 30s; multi-select handled by Multied.
+            p.Controls.Add(Lab("On pause-exit if exit script fails:", y));
+            var exk2Global = GameplaySettings.PauseExitKillAhkGlobal();   // (mode, seconds)
+            var exk2Cbo = Cbo(y - 2, 210);
+            string exk2GlobLbl = exk2Global.mode switch { "none" => "Do nothing", "process" => $"Kill emu/app ({exk2Global.seconds}s)", _ => $"Kill SmartCapture game ({exk2Global.seconds}s)" };
+            exk2Cbo.Items.AddRange(new object[] { $"Use global ({exk2GlobLbl})", "Do nothing", "Kill SmartCapture game", "Kill emulator/app process" });
+            var exk2Raw = GetOv("PauseExitKillAhk"); var exk2Ov = exk2Raw == DiffMark ? null : exk2Raw;
+            var (exk2OvMode, exk2OvSec) = GameplaySettings.ParsePauseExitKillAhk(exk2Ov);
+            exk2Cbo.SelectedIndex = string.IsNullOrEmpty(exk2Ov) ? 0 : (exk2OvMode switch { "none" => 1, "process" => 3, _ => 2 });
+            p.Controls.Add(exk2Cbo);
+            var ex2yy = y;
+            int exk2SecInit = (!string.IsNullOrEmpty(exk2Ov) && exk2OvMode is "smartcapture" or "process") ? exk2OvSec : Math.Max(0, exk2Global.seconds);
+            var exk2Sec = new NumericUpDown { Location = new Point(S(498), S(ex2yy - 2)), Width = S(56), Minimum = 0, Maximum = 600, Increment = 5, BackColor = panel2, ForeColor = fg, BorderStyle = BorderStyle.FixedSingle, Value = Math.Max(0, Math.Min(600, exk2SecInit)), Visible = exk2Cbo.SelectedIndex is 2 or 3, Enabled = !readOnly };
+            p.Controls.Add(exk2Sec);
+            var exk2SecLbl = new Label { Text = "sec", Location = new Point(S(560), S(ex2yy + 1)), AutoSize = true, ForeColor = subFg, BackColor = bg, Visible = exk2Cbo.SelectedIndex is 2 or 3 };
+            p.Controls.Add(exk2SecLbl);
+            exk2Cbo.SelectedIndexChanged += (_, _) => { bool cust = (exk2Cbo.SelectedIndex is 2 or 3) && (exk2Cbo.SelectedItem as string) != MultiItem; exk2Sec.Visible = exk2SecLbl.Visible = cust; };
+            var exk2Skip = Multied(exk2Cbo, exk2Raw, exk2Sec, exk2SecLbl);
+            saves.Add(() => { if (exk2Skip()) return; SetAll("PauseExitKillAhk", exk2Cbo.SelectedIndex switch { 1 => "none", 2 => "smartcapture:" + ((int)exk2Sec.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), 3 => "process:" + ((int)exk2Sec.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), _ => null }); });
+            y += 32;
             // 10. Freeze whole process TREE (bool tri-state).
             p.Controls.Add(Lab("Freeze whole process tree:", y));
             var treeGlobal = GameplaySettings.PauseFreezeTreeGlobal();

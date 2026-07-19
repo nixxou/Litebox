@@ -488,33 +488,35 @@ internal static class PauseManager
             }) { IsBackground = true, Name = "litebox-exitcover" }.Start();
         }
 
+        // Both paths apply the SAME "give a grace period, then force-kill (or not)" rule — they only differ in
+        // WHICH configured rule and WHY. Shared here so the two stay identical.
+        void ApplyExitKill((string mode, int seconds) rule, string ctx)
+        {
+            if (string.Equals(rule.mode, "none", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"[pause] on pause-exit ({ctx}) = do nothing — leaving the game to close itself");
+                return;
+            }
+            try { graceful = _proc!.WaitForExit(Math.Max(0, rule.seconds) * 1000); } catch { }
+            if (graceful) { Console.WriteLine($"[pause] game closed within the grace period ({ctx})"); return; }
+            bool killProc = string.Equals(rule.mode, "process", StringComparison.OrdinalIgnoreCase);
+            int killPid = killProc ? (Safe(() => _proc?.Id) ?? 0) : SmartCaptureGamePid();
+            KillTreeByPid(killPid, rule.mode);
+        }
+
         if (hasCustomExit)
         {
-            // The emulator has a real, user-authored exit script: it OWNS closing the game (it may prompt to
-            // save, animate, or simply take longer than any timeout we'd pick). Respect it — NEVER force-kill.
-            // The process exits on its own terms and HostLaunch's WaitForExit then runs the normal cleanup.
-            Console.WriteLine("[pause] custom exit script ran — not force-killing; leaving the game to close itself");
+            // A user-authored exit script (game or emulator) RAN: give it the configured grace to close the
+            // game gracefully (it may prompt to save, animate, or take longer than a fixed timeout), then fall
+            // back to a kill if it did NOT close it — the PauseExitKillAhk rule (default: kill SmartCapture, 30s).
+            ApplyExitKill(Gameplay.GameplaySettings.ResolvePauseExitKill(emuId, gid, ahk: true), "exit script");
         }
         else
         {
-            // Default path (Send {Escape}, or a non-emulator game with no script): nothing is responsible for
-            // a graceful close, so apply the configurable "on pause-exit" rule (mode + grace seconds), resolved
-            // game → emulator → global. Give the exit key that long, then force-kill the resolved target's whole
-            // tree — or, in "none" mode, leave the game to close itself (never force-kill).
-            var (killMode, killSec) = Gameplay.GameplaySettings.ResolvePauseExitKill(emuId, gid);
-            if (string.Equals(killMode, "none", StringComparison.OrdinalIgnoreCase))
-                Console.WriteLine("[pause] on pause-exit = do nothing — leaving the game to close itself");
-            else
-            {
-                try { graceful = _proc!.WaitForExit(Math.Max(0, killSec) * 1000); } catch { }
-                if (graceful) Console.WriteLine("[pause] emulator closed by the default exit key");
-                else
-                {
-                    bool killProc = string.Equals(killMode, "process", StringComparison.OrdinalIgnoreCase);
-                    int killPid = killProc ? (Safe(() => _proc?.Id) ?? 0) : SmartCaptureGamePid();
-                    KillTreeByPid(killPid, killMode);
-                }
-            }
+            // Default path (Send {Escape}, or a non-emulator game with no script): nothing manages the close,
+            // so apply the PauseExitKill rule (default: kill SmartCapture, 1s) — give the exit key that grace,
+            // then force-kill the resolved target's whole tree (or, in "none" mode, leave it to close itself).
+            ApplyExitKill(Gameplay.GameplaySettings.ResolvePauseExitKill(emuId, gid, ahk: false), "no exit script");
         }
         // HostLaunch's WaitForExit returns → its finally runs Disarm + cleanup.
     }

@@ -196,7 +196,7 @@ internal static class LbGlobalOptions
 
         // ── Game Pause ──
         {
-            var p = Page("Game Pause");
+            var p = Page("Game Pause"); p.AutoScroll = true;   // second pause-exit rule made this tab taller
             var use = Chk("Use Game Pause Screen", s.GetBool("UsePauseScreen", true), new Point(S(4), S(8)));
             p.Controls.Add(use);
             p.Controls.Add(Lbl("Pause Key", new Point(S(4), S(40))));
@@ -424,8 +424,32 @@ internal static class LbGlobalOptions
                 if (v != cur) { ini.Set("PauseExitKill", v); iniDirty = true; }
             });
 
+            // Second, parallel rule: when a custom AHK exit script RAN but did not close the game, give it a
+            // grace period then force-kill (same three modes). Default kill SmartCapture after 30s.
+            int exk2Y = exkY + 84;
+            p.Controls.Add(new Label { Text = "On pause-exit if the AHK script didn't close the game:", Location = new Point(S(12), S(exk2Y)), AutoSize = true, ForeColor = LbxAccent, BackColor = Bg, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) });
+            var exk2Items = new[] { "Do nothing (leave the game to close itself)", "Kill the SmartCapture-detected game (fallback: emulator/app)", "Kill the emulator / app process" };
+            var (exk2ModeCur, exk2SecCur) = Gameplay.GameplaySettings.PauseExitKillAhkGlobal();
+            string exk2Sel = exk2ModeCur == "none" ? exk2Items[0] : exk2ModeCur == "process" ? exk2Items[2] : exk2Items[1];
+            var exk2Cbo = Cbo(exk2Items, exk2Sel, new Point(S(12), S(exk2Y + 24)), 430); p.Controls.Add(exk2Cbo);
+            p.Controls.Add(Lbl("after", new Point(S(452), S(exk2Y + 27))));
+            var exk2Sec = Txt(exk2SecCur.ToString(), new Point(S(492), S(exk2Y + 24)), 48); p.Controls.Add(exk2Sec);
+            p.Controls.Add(Lbl("sec", new Point(S(546), S(exk2Y + 27))));
+            p.Controls.Add(Lbl("Give the exit script that long to close the game, then force-kill (or not). A per-emulator / per-game override still wins.", new Point(S(30), S(exk2Y + 52)), Dim));
+            void Exk2SyncEnable() => exk2Sec.Enabled = !readOnly && exk2Cbo.SelectedIndex != 0;
+            exk2Cbo.SelectedIndexChanged += (_, _) => Exk2SyncEnable();
+            Exk2SyncEnable();
+            applies.Add(() =>
+            {
+                string mode = exk2Cbo.SelectedIndex == 0 ? "none" : exk2Cbo.SelectedIndex == 2 ? "process" : "smartcapture";
+                int sec = int.TryParse(exk2Sec.Text, out var sv) ? Math.Max(0, Math.Min(600, sv)) : Gameplay.GameplaySettings.PauseExitKillAhkDefaultSeconds;
+                string v = mode == "none" ? "none" : mode + ":" + sec.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                string cur = ini.Get("PauseExitKillAhk", Gameplay.GameplaySettings.PauseExitKillDefaultMode + ":" + Gameplay.GameplaySettings.PauseExitKillAhkDefaultSeconds) ?? "";
+                if (v != cur) { ini.Set("PauseExitKillAhk", v); iniDirty = true; }
+            });
+
             // Non-emulator pause defaults (store / direct-exe / DOSBox have no emulator to source them from).
-            int neY = exkY + 84;
+            int neY = exk2Y + 84;
             p.Controls.Add(Head("Non-emulator games (Store / direct .exe / DOSBox)", neY));
             var neUse = Chk("Use the pause screen", ini.GetBool("NonEmuUsePauseScreen", true), new Point(S(12), S(neY + 26)));
             var neSusp = Chk("Suspend (freeze) the process on pause", ini.GetBool("NonEmuSuspendOnPause", true), new Point(S(12), S(neY + 52)));

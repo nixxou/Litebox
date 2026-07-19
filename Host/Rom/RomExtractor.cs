@@ -904,12 +904,19 @@ internal static class RomExtractor
             try { var p = Path.Combine(installDir, fb + ext); if (File.Exists(p)) File.Delete(p); } catch { }
     }
 
-    /// <summary>True when this texture entry is installed (its de-prefixed &lt;base&gt;.htc or .hts exists).</summary>
+    /// <summary>True when THIS exact texture variant is installed. Variants of a pack de-prefix to the SAME
+    /// cache filename (they only differ by the "[Team]" prefix) and are mutually exclusive, so file existence
+    /// alone would mark every variant installed once one is; also match the installed file's SIZE to this
+    /// entry's so only the variant actually on disk shows the ✓.</summary>
     public static bool IsTextureInstalled(ArchiveEntryInfo entry, string installDir)
     {
         if (entry == null || string.IsNullOrWhiteSpace(installDir)) return false;
-        string fb = Path.GetFileNameWithoutExtension(StripTexturePrefix(entry.FileName ?? ""));
-        return File.Exists(Path.Combine(installDir, fb + ".htc")) || File.Exists(Path.Combine(installDir, fb + ".hts"));
+        try
+        {
+            var p = Path.Combine(installDir, StripTexturePrefix(entry.FileName ?? ""));
+            return File.Exists(p) && (ulong)new FileInfo(p).Length == entry.Size;
+        }
+        catch { return false; }
     }
 
     /// <summary>Strips a texture pack's author/team bracket prefix: "[Team]STARFOX64_HIRESTEXTURES.hts" →

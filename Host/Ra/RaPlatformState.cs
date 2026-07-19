@@ -6,8 +6,8 @@
 //   • a per-platform Enabled flag (only diffs-from-default stored; a platform's DEFAULT is "enabled when it
 //     maps to an RA console"), which RaPanelConfig.IsEnabled resolves against a caller-supplied default.
 //
-// Until now the auto-resolve-on-select path (MainWindow.LoadRaPanel → RaResolveLite.Resolve) and the startup
-// rolling refresh (RaStartupRefresh) both ignored these — they only checked "is the module on?". This class
+// Until now the auto-resolve-on-select path (MainWindow.LoadRaPanel → RaResolveLite.Resolve) and the catalogue
+// heartbeat (RaCatalogEngine) both ignored these — they only checked "is the module on?". This class
 // exposes the two answers the gate needs, WITHOUT re-implementing RaResolveLite (callers still call Resolve;
 // they just ask here first whether they're allowed to):
 //

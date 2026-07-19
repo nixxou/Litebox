@@ -594,17 +594,9 @@ internal sealed class MainWindow : Form, IMessageFilter
             // played, RA cache). Off by default: the on-select / on-exit triggers cover normal use.
             if (_cfg.ProgressSweepOnBoot)
                 try { Data.ProgressAutomation.SweepAsync(); } catch { }
-            // RA native-fallback rolling refresh (opt-in) — after the window is up, on idle so it never
-            // delays the first paint. Gated internally (checkbox + creds set).
-            try
-            {
-                BeginInvoke((Action)(() => RaStartupRefresh.RunIfEnabled(
-                    _dm, _cfg.RaStartupRollingRefresh,
-                    () => { try { BeginInvoke((Action)(() => (_dm as HostDataManagerXml)?.FlushIfSafe())); } catch { } })));
-            }
-            catch { }
-            // RA catalogue heartbeat (engine P1): 30-min tick, refreshes only DUE consoles, idles
-            // while a game runs or an extraction is in flight.
+            // RA catalogue heartbeat (engine P1): first tick +20s then every 30 min. On each idle tick it
+            // refreshes EVERY absent (never-pulled) console + up to 3 stale (past-TTL) ones, most-overdue
+            // first — so it also serves the old "startup rolling refresh" role, no opt-in needed.
             try { RaCatalogEngine.Start(); } catch { }
             // RA session-token auto-renewal: if the user stored their RA password, re-login and rewrite
             // the expiring token in Settings.xml when it's due. Skipped in read-only; fail-safe on error.

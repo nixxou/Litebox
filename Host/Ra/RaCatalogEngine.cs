@@ -25,6 +25,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
@@ -75,11 +76,27 @@ internal static class RaCatalogEngine
         finally { Interlocked.Exchange(ref _ticking, 0); }
     }
 
-    /// <summary>Refresh every enabled+mapped console whose schedule says it is due.</summary>
+    /// <summary>Per pass we refresh EVERY absent (never-pulled) console — the feature can't match a game
+    /// without its catalogue — but throttle the merely-STALE (populated, past-TTL) ones so a pile of consoles
+    /// going stale at once doesn't hammer RA in one tick; they roll through over ticks, most-overdue first.</summary>
+    private const int MaxStalePerPass = 3;
+
+    /// <summary>Refresh the due enabled+mapped consoles: all absent, plus up to <see cref="MaxStalePerPass"/>
+    /// stale ones ordered by how overdue they are.</summary>
     public static void RefreshDue()
     {
         var due = RaStore.FilterDueConsoles(EnabledConsoleIds(), DateTime.UtcNow);
-        foreach (var id in due) RefreshOne(id);
+        if (due.Count == 0) return;
+
+        var absent = new List<int>();
+        var stale = new List<(int id, DateTime next)>();
+        foreach (var id in due)
+        {
+            if (RaStore.CatalogueCount(id) == 0) absent.Add(id);                                  // never pulled → data-less
+            else { var (_, next) = RaStore.GetConsoleSchedule(id); stale.Add((id, next ?? DateTime.MinValue)); }
+        }
+        foreach (var id in absent) RefreshOne(id);                                                // ALL absent (no cap)
+        foreach (var (id, _) in stale.OrderBy(x => x.next).Take(MaxStalePerPass)) RefreshOne(id); // ≤N stale, most overdue first
     }
 
     /// <summary>Distinct RA console ids of the RA-enabled, RA-mapped LB platforms.</summary>

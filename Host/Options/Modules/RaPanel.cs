@@ -416,14 +416,8 @@ internal static class RaPanel
         opts.Controls.Add(lblRefresh); opts.Controls.Add(numRefresh);
         AddHeaderRow(opts);
 
-        // Startup rolling refresh (LiteBox-own; LiteBoxConfig).
-        var roll = new CheckBox
-        {
-            Text = "Refresh up to 3 stale platform catalogues at startup (rolling background update)",
-            AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9f),
-            Checked = cfg.RaStartupRollingRefresh, Enabled = !readOnly, Margin = new Padding(S(2), S(6), 0, 0),
-        };
-        AddHeaderRow(roll);
+        // (The old "startup rolling refresh" opt-in is gone: the catalogue heartbeat now always refreshes every
+        //  absent console + up to 3 stale ones per tick — see RaCatalogEngine.RefreshDue.)
 
         // Config note: RA needs a Web API key + username in LaunchBox's Settings.xml.
         var note = new Label
@@ -527,8 +521,6 @@ internal static class RaPanel
                         RaPanelConfig.MarkTokenStale();
                         RaTokenRenew.MaybeRenewAsync(canWrite: true);
                     }
-
-                    cfg.RaStartupRollingRefresh = roll.Checked;   // cfg.Save() runs in OptionsWindow.ApplyFinished
                 }
 
                 string modeVal = mode.SelectedIndex == 1 ? RaPanelConfig.ModeOnLaunch : RaPanelConfig.ModeOnSelect;

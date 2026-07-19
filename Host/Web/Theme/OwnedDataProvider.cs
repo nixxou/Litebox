@@ -457,8 +457,8 @@ internal static class OwnedDataProvider
             fanart = FanartList(cg, 12),
             vndb = VndbTags(game),
             votes,
-            // S6: alt-emulator / multi-disc / Select-ROM launch menu — Play is a flat entry until then.
-            launchOptions = (object)null,
+            // S6: alt-emulator / multi-disc / Select-ROM launch menu — versions/emulators/archive flags.
+            launchOptions = WebLaunchOptions.Build(game),
             lastLaunch = LastLaunchDto(game),
             // S5: RetroAchievements progress + per-achievement badges from Host/Ra (null when RA is
             // unconfigured / the game has no raid / nothing cached — theme then shows no RA panel).
@@ -476,13 +476,14 @@ internal static class OwnedDataProvider
             if (string.IsNullOrEmpty(id)) return null;
             if (PluginHelper.DataManager is HostDataManagerXml hdm)
             {
-                var last = hdm.GetLastLaunch(id);
+                var last = hdm.GetLastLaunchFull(id);
                 if (last == null) return null;
                 return new
                 {
                     appId = last.Value.additionalAppId,
                     emulatorId = last.Value.emulatorId,
-                    archiveEntry = (string)null,   // S6: archive entry not tracked yet
+                    // In-archive entry that was launched → pre-selects the ROM button (null when the last launch wasn't an archive launch).
+                    archiveEntry = string.IsNullOrEmpty(last.Value.extractedRomPath) ? (string)null : last.Value.extractedRomPath,
                     ts = (long?)null,
                 };
             }

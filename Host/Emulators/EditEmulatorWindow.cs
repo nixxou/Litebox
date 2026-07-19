@@ -118,13 +118,42 @@ internal static class EditEmulatorWindow
         var noSpace = Chk(p, new Point(S(300), S(188)), "Remove space before ROM", Safe(() => emu.NoSpace));
         var nameOnly = Chk(p, new Point(S(8), S(212)), "Remove file extension and folder path", Safe(() => emu.FileNameWithoutExtensionAndPath));
         var hideCon = Chk(p, new Point(S(8), S(236)), "Attempt to hide console window on startup/shutdown", Safe(() => emu.HideConsole));
-        var extract = Chk(p, new Point(S(8), S(260)), "Extract ROM archives before running", Safe(() => emu.AutoExtract));
+        // When the ROM extractor module is active the emulator's "extract archives" flag no longer means a
+        // dumb extract — it hands archives to the module (SmartExtract / Copy / Convert / DumbExtract …). The
+        // actual mode is per-PROFILE, resolved per PLATFORM, so it can't be named here: a hint points at the
+        // Associated Platforms tab (where each row shows its resolved mode) and a link opens the module page.
+        bool romMod = Modules.LbModules.On(Modules.LbModule.Rom);
+        int extY = S(260);
+        var extract = Chk(p, new Point(S(8), extY),
+            romMod ? "Process ROM archives with the Rom Extractor module" : "Extract ROM archives before running",
+            Safe(() => emu.AutoExtract));
+        int detailOff = 0;
+        if (romMod)
+        {
+            // Which extraction mode applies. The profile is resolved per (platform, emulator), so summarise
+            // across this emulator's associated platforms: a single mode when they all agree, else "varies".
+            string emuTitle = Safe(() => emu.Title) ?? "";
+            var modes = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            var eps = emu.GetAllEmulatorPlatforms()?.ToList() ?? new List<IEmulatorPlatform>();
+            if (eps.Count == 0) modes.Add(Rom.RomConfig.Instance.Resolve("", emuTitle).Mode.ToString());
+            else foreach (var ep in eps) modes.Add(Rom.RomConfig.Instance.Resolve(Safe(() => ep.Platform) ?? "", emuTitle).Mode.ToString());
+            string modeText = modes.Count == 1
+                ? $"Mode: {modes.First()}  ·  set per platform (see Associated Platforms)"
+                : "Mode: varies per platform — see Associated Platforms";
+            var mhint = new Label
+            {
+                Text = modeText, Location = new Point(S(26), extY + S(22)), AutoSize = true,
+                ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8f),
+            };
+            p.Controls.Add(mhint);
+            detailOff = S(26);   // push the sample command + plugin block down to clear the hint row
+        }
 
         // Live sample command (LB parity).
-        var sampleLbl = new Label { Text = "Sample Command:", Location = new Point(S(8), S(292)), AutoSize = true, ForeColor = SubFg, BackColor = Bg };
+        var sampleLbl = new Label { Text = "Sample Command:", Location = new Point(S(8), S(292) + detailOff), AutoSize = true, ForeColor = SubFg, BackColor = Bg };
         var sample = new TextBox
         {
-            Location = new Point(S(8), S(312)), Width = S(600), ReadOnly = true,
+            Location = new Point(S(8), S(312) + detailOff), Width = S(600), ReadOnly = true,
             BackColor = Panel2, ForeColor = SubFg, BorderStyle = BorderStyle.FixedSingle,
         };
         p.Controls.Add(sampleLbl); p.Controls.Add(sample);
@@ -155,10 +184,10 @@ internal static class EditEmulatorWindow
         var plugin = EmuPlugins.ForEmulator(emu);
         if (plugin != null)
         {
-            var verLbl = new Label { Text = "Current Version: …", Location = new Point(S(8), S(352)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
-            var updLbl = new Label { Text = "", Location = new Point(S(8), S(374)), AutoSize = true, ForeColor = SubFg, BackColor = Bg };
-            var updBtn = MiniBtn("Update", new Point(S(220), S(348)), s); updBtn.Enabled = false;
-            var reBtn = MiniBtn("Reinstall", new Point(S(316), S(348)), s); reBtn.Enabled = false;
+            var verLbl = new Label { Text = "Current Version: …", Location = new Point(S(8), S(352) + detailOff), AutoSize = true, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
+            var updLbl = new Label { Text = "", Location = new Point(S(8), S(374) + detailOff), AutoSize = true, ForeColor = SubFg, BackColor = Bg };
+            var updBtn = MiniBtn("Update", new Point(S(220), S(348) + detailOff), s); updBtn.Enabled = false;
+            var reBtn = MiniBtn("Reinstall", new Point(S(316), S(348) + detailOff), s); reBtn.Enabled = false;
             p.Controls.Add(verLbl); p.Controls.Add(updLbl); p.Controls.Add(updBtn); p.Controls.Add(reBtn);
 
             string? latestId = null;
@@ -281,6 +310,10 @@ internal static class EditEmulatorWindow
     private static (Control, Action) BuildPlatforms(IEmulator emu, bool readOnly, float s)
     {
         int S(int px) => (int)Math.Round(px * s);
+        // Module active → the "Extract ROMs" toggle is really "run through the Rom Extractor module"; each row
+        // then resolves a per-platform profile, so we rename the column and show the resolved mode alongside.
+        bool romMod = Modules.LbModules.On(Modules.LbModule.Rom);
+        string emuTitle = Safe(() => emu.Title) ?? "";
         var p = new Panel { BackColor = Bg };
         var grid = new DataGridView
         {
@@ -317,8 +350,17 @@ internal static class EditEmulatorWindow
         grid.Columns.Add(platCol);
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Default Command-Line Parameters", FillWeight = 280 });
         grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Default", FillWeight = 64 });
-        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Extract ROMs", FillWeight = 90 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = romMod ? "Rom Extractor" : "Extract ROMs", FillWeight = 90 });
+        int ModeCol = -1;
+        if (romMod)
+        {
+            var modeColumn = new DataGridViewTextBoxColumn { HeaderText = "Mode", FillWeight = 120, ReadOnly = true };
+            modeColumn.DefaultCellStyle.ForeColor = SubFg;
+            grid.Columns.Add(modeColumn);
+            ModeCol = grid.Columns.Count - 1;
+        }
         grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Use M3U", FillWeight = 70 });
+        int M3uCol = grid.Columns.Count - 1;   // 4 (legacy) or 5 (with the Mode column inserted)
 
         // Free-text platform entry: switch the editing combo to DropDown and accept
         // values not in Items (register them on validation so commit never DataErrors).
@@ -366,17 +408,46 @@ internal static class EditEmulatorWindow
         // UNTOUCHED unchecked box keeps inheriting instead of forcing "false".
         var loadedExtract = new Dictionary<DataGridViewRow, bool?>();
 
+        // Fill the read-only Mode cell for a row from the resolved profile (module active only). Effective
+        // extraction mirrors the launch cascade: the per-platform value, else the emulator-level flag when the
+        // row is "untouched" (null). "—" when extraction is off for that platform (the module never runs).
+        void RecalcMode(DataGridViewRow r)
+        {
+            if (!romMod || ModeCol < 0 || r == null || r.IsNewRow) return;
+            string platform = (r.Cells[0].Value as string ?? "").Trim();
+            if (platform.Length == 0) { r.Cells[ModeCol].Value = ""; return; }
+            bool checkedNow = r.Cells[3].Value is true or CheckState.Checked;
+            bool? loaded = loadedExtract.TryGetValue(r, out var lv) ? lv : null;
+            bool eff = checkedNow || (loaded == null && Safe(() => emu.AutoExtract));
+            if (!eff) { r.Cells[ModeCol].Value = "—"; return; }
+            var pr = Rom.RomConfig.Instance.Resolve(platform, emuTitle);
+            bool byEmu = !string.IsNullOrEmpty(pr.Emulator) && !string.Equals(pr.Emulator, "All", StringComparison.OrdinalIgnoreCase);
+            bool byPlat = !byEmu && !string.IsNullOrEmpty(pr.Platform) && string.Equals(pr.Platform, platform, StringComparison.OrdinalIgnoreCase);
+            r.Cells[ModeCol].Value = $"{pr.Mode} · {(byEmu ? "emulator" : byPlat ? "platform" : "default")}";
+        }
+
         var rows = emu.GetAllEmulatorPlatforms()?.ToList() ?? new List<IEmulatorPlatform>();
         suppressDefault = true;   // initial fill must not trigger the "replace default?" prompt
         foreach (var ep in rows)
         {
             bool? ax = Safe(() => ep.AutoExtract);
-            int i = grid.Rows.Add(Safe(() => ep.Platform) ?? "", Safe(() => ep.CommandLine) ?? "",
-                                  Safe(() => ep.IsDefault), ax == true, Safe(() => ep.M3uDiscLoadEnabled));
-            grid.Rows[i].Tag = ep;
-            loadedExtract[grid.Rows[i]] = ax;
+            int i = grid.Rows.Add();
+            var gr = grid.Rows[i];
+            gr.Cells[0].Value = Safe(() => ep.Platform) ?? "";
+            gr.Cells[1].Value = Safe(() => ep.CommandLine) ?? "";
+            gr.Cells[2].Value = Safe(() => ep.IsDefault);
+            gr.Cells[3].Value = ax == true;
+            gr.Cells[M3uCol].Value = Safe(() => ep.M3uDiscLoadEnabled);
+            gr.Tag = ep;
+            loadedExtract[gr] = ax;
+            RecalcMode(gr);
         }
         suppressDefault = false;
+
+        // Keep the Mode cell in sync when the platform (col 0) or the Rom-Extractor toggle (col 3) changes.
+        if (romMod)
+            grid.CellValueChanged += (_, e) =>
+            { if (e.RowIndex >= 0 && (e.ColumnIndex == 0 || e.ColumnIndex == 3)) RecalcMode(grid.Rows[e.RowIndex]); };
 
         var hint = new Label
         {
@@ -411,7 +482,7 @@ internal static class EditEmulatorWindow
                 bool? loaded = loadedExtract.TryGetValue(row, out var lv) ? lv : null;
                 bool? ax = isChecked ? true : (loaded == null ? (bool?)null : false);
                 Set(() => ep.AutoExtract = ax);
-                Set(() => ep.M3uDiscLoadEnabled = row.Cells[4].Value is true or CheckState.Checked);
+                Set(() => ep.M3uDiscLoadEnabled = row.Cells[M3uCol].Value is true or CheckState.Checked);
             }
             // Rows removed in the grid → remove from the emulator.
             foreach (var ep in rows.Where(r => !kept.Contains(r)))

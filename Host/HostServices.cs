@@ -473,6 +473,8 @@ internal static class HostLaunch
             // ROM extractor: purge the ephemeral \tmp band now the emulator has released the files
             // (persistent <SIG> cache entries survive; LRU-evicted on the next extraction).
             try { Rom.RomExtractor.OnGameExitCleanup(); } catch { }
+            // Flat fallback (module-OFF) extraction dir — LB deletes its extraction at game close; match it.
+            try { CleanupFlatExtract(); } catch { }
             LaunchedGame.Clear();
             if (!DryRun && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             // Per-version play time — same elapsed seconds as the game's (see JournalPlayStart above).
@@ -746,6 +748,13 @@ internal static class HostLaunch
     // own narrow zip/7z/rar semantics live inside TryExtractArchive's callers via this same test,
     // so a configured extension always reaches SOME extraction path.
     private static readonly string[] _archiveExts = { ".zip", ".7z", ".rar" };
+
+    // The flat fallback's last extraction dir (module-OFF path), remembered so it can be purged at game
+    // exit — LB parity: LaunchBox deletes its Temp\<src>-<GUID> extraction the moment the game closes.
+    // RomExtractor.OnGameExitCleanup is gated on the module being active, so with the module off nothing
+    // else would clean this up until the next launch of the same archive re-extracts over it.
+    private static string _lastFlatExtractDir;
+
     private static bool IsArchive(string p)
     {
         try
@@ -783,6 +792,11 @@ internal static class HostLaunch
         {
             try { outDir = Path.Combine(Path.GetTempPath(), sub); Directory.CreateDirectory(outDir); } catch { return null; }
         }
+        // Remember for the game-exit purge (see CleanupFlatExtract). Set BEFORE extracting so a partial /
+        // failed extraction still gets cleaned up on exit.
+        _lastFlatExtractDir = outDir;
+        // Pre-clean at launch: normally the exit purge already emptied this, but it's the safety net for a
+        // prior run that never got to purge (PC crash, kill, power loss) — start every launch from clean.
         try { foreach (var f in Directory.GetFiles(outDir, "*", SearchOption.AllDirectories)) File.Delete(f); } catch { }
 
         try
@@ -803,6 +817,24 @@ internal static class HostLaunch
         var primary = PickPrimaryFile(outDir);
         Console.WriteLine($"[launch] {label}: auto-extract \"{archiveAbs}\" → \"{primary ?? "<none>"}\"");
         return primary;
+    }
+
+    /// <summary>Purge the flat fallback's extraction dir at game exit — LB parity (LaunchBox deletes its
+    /// extraction when the game closes). No-op unless a flat extract happened this launch (module off).
+    /// RomExtractor.OnGameExitCleanup handles the module-ON path; this handles the module-OFF one, and the
+    /// two are mutually exclusive so both can be called unconditionally.</summary>
+    private static void CleanupFlatExtract()
+    {
+        var dir = _lastFlatExtractDir;
+        _lastFlatExtractDir = null;
+        if (string.IsNullOrEmpty(dir)) return;
+        // The emulator has released the files by now; delete the whole subdir (contents + any empty inner
+        // folders). Fall back to a file-by-file wipe if the dir itself is momentarily locked.
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+        catch
+        {
+            try { foreach (var f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories)) File.Delete(f); } catch { }
+        }
     }
 
     private static string PickPrimaryFile(string dir)

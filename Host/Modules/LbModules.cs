@@ -37,7 +37,7 @@ internal static class LbModules
         new(LbModule.Base,   "base",   "Extended metadata database",
             "A second metadata database (ScreenScraper, VNDB, IGDB, Steam) with richer overviews, locked fields, and credentialed media downloads.", false, true),
         new(LbModule.Rom,    "rom",    "ROM extractor (ArchiveMGS)",
-            "Extract the picked ROM from an archive on launch, with the Archive Multi-Game Selector: per-emulator/platform profiles, extraction modes, an LRU disk cache, RAM disk, disc-image conversion, texture-pack and .m3u handling — all native. Off: archives fall back to a flat extract-everything launch.", true, true),
+            "Extract the picked ROM from an archive on launch, with the Archive Multi-Game Selector: per-emulator/platform profiles, extraction modes, an LRU disk cache, RAM disk, disc-image conversion, texture-pack and .m3u handling — all native. Off: archives fall back to a flat extract-everything launch.", false, true),
         // RetroAchievements is NOT a module: it has its own dedicated options page (like Similar Games)
         // and no activation flag — the feature is always operational. The enum member stays only so
         // historical "Module.retroachievements" db rows keep a stable key namespace.

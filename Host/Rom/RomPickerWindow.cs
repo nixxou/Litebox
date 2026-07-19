@@ -39,7 +39,7 @@ internal sealed class RomPickerWindow : Form
     /// <summary>The chosen entry's in-archive path (null = cancelled).</summary>
     public string? ChosenEntry { get; private set; }
 
-    public RomPickerWindow(string gameTitle, RomEntryListing listing)
+    public RomPickerWindow(string gameTitle, RomEntryListing listing, TexturePackContext? texturePack = null)
     {
         _entries = (listing?.Entries ?? new List<RomEntryView>()).ToList();
         _sorted = _entries.ToList();
@@ -90,6 +90,10 @@ internal sealed class RomPickerWindow : Form
         btnSelect.Click += (s, e) => SelectCurrent();
         footer.Controls.Add(btnSelect);
 
+        // ── Texture pack panel (only when the archive carries hi-res textures; docks above the footer) ──
+        if (texturePack != null && texturePack.Entries.Count > 0)
+            Controls.Add(BuildTexturePanel(texturePack));
+
         // ── List ─────────────────────────────────────────────────────────
         _list = new ListView
         {
@@ -129,6 +133,76 @@ internal sealed class RomPickerWindow : Form
         Text = text, FlatStyle = FlatStyle.Flat, BackColor = back, ForeColor = Color.FromArgb(230, 230, 230),
         FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 9f, FontStyle.Bold),
     };
+
+    // ── Hi-Res Texture Pack panel (plugin parity: install/remove a variant + installed ✓) ───────────
+    private Panel BuildTexturePanel(TexturePackContext ctx)
+    {
+        var panel = new Panel { Dock = DockStyle.Bottom, Height = 138, BackColor = Color.FromArgb(28, 28, 38), Padding = new Padding(10, 6, 10, 8) };
+        var title = new Label
+        {
+            Text = "Hi-Res Texture Pack" + (string.IsNullOrEmpty(ctx.InstallDir) ? "  (no install path for this emulator)" : "  →  " + ctx.InstallDir),
+            Dock = DockStyle.Top, Height = 20, ForeColor = Color.FromArgb(180, 180, 195), Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+        };
+
+        var tl = new ListView
+        {
+            Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = false,
+            HeaderStyle = ColumnHeaderStyle.Nonclickable, GridLines = false, UseCompatibleStateImageBehavior = false,
+            BackColor = Color.FromArgb(35, 35, 45), ForeColor = Color.FromArgb(220, 220, 220), Font = new Font("Segoe UI", 9f), HideSelection = false,
+        };
+        tl.Columns.Add("✓", 28, HorizontalAlignment.Center);
+        tl.Columns.Add("Texture pack file", 760, HorizontalAlignment.Left);
+
+        void Refresh()
+        {
+            int sel = tl.SelectedIndices.Count > 0 ? tl.SelectedIndices[0] : 0;
+            tl.BeginUpdate();
+            tl.Items.Clear();
+            foreach (var e in ctx.Entries)
+            {
+                bool inst = RomExtractor.IsTextureInstalled(e, ctx.InstallDir);
+                var it = new ListViewItem(inst ? "✓" : "") { Tag = e, ForeColor = inst ? Color.FromArgb(120, 200, 120) : Color.FromArgb(220, 220, 220) };
+                it.SubItems.Add(e.FileName);
+                tl.Items.Add(it);
+            }
+            if (tl.Items.Count > 0) tl.Items[Math.Min(sel, tl.Items.Count - 1)].Selected = true;
+            tl.EndUpdate();
+        }
+
+        var right = new Panel { Dock = DockStyle.Right, Width = 128, BackColor = Color.FromArgb(28, 28, 38) };
+        var btnInstall = MakeFlatButton("Install", Color.FromArgb(50, 90, 120)); btnInstall.SetBounds(2, 0, 122, 30);
+        var btnRemove = MakeFlatButton("Remove", Color.FromArgb(90, 55, 55)); btnRemove.SetBounds(2, 38, 122, 30);
+        btnInstall.Click += (s, e) =>
+        {
+            if (tl.SelectedItems.Count == 0 || tl.SelectedItems[0].Tag is not ArchiveEntryInfo t) return;
+            if (string.IsNullOrEmpty(ctx.InstallDir))
+            {
+                MessageBox.Show(this, "No install path was auto-detected for this emulator.\n\nSet a texture path in the ROM-extractor profile, or use RetroArch (Mupen64Plus) / Project64.",
+                    "Install texture", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            Cursor = Cursors.WaitCursor;
+            bool ok = RomExtractor.InstallTexture(ctx.ArchivePath, t, ctx.InstallDir);
+            Cursor = Cursors.Default;
+            if (!ok) MessageBox.Show(this, "Texture install failed (see the log).", "Install texture", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Refresh();
+        };
+        btnRemove.Click += (s, e) =>
+        {
+            if (tl.SelectedItems.Count == 0 || tl.SelectedItems[0].Tag is not ArchiveEntryInfo t) return;
+            RomExtractor.RemoveTexture(t, ctx.InstallDir);
+            Refresh();
+        };
+        right.Controls.Add(btnInstall);
+        right.Controls.Add(btnRemove);
+
+        panel.Controls.Add(title);
+        panel.Controls.Add(right);
+        panel.Controls.Add(tl);
+        tl.BringToFront();
+        Refresh();
+        return panel;
+    }
 
     // ── Favourite toggle (★ cell click / context menu) ──────────────────────
 

@@ -57,6 +57,15 @@ internal sealed class RomEntryListing
     public static readonly RomEntryListing Empty = new();
 }
 
+/// <summary>The hi-res texture files an archive carries + where they install, for the picker's Install/Remove
+/// panel. <see cref="InstallDir"/> is "" when no path could be resolved (Install then explains why).</summary>
+internal sealed class TexturePackContext
+{
+    public string ArchivePath { get; init; } = "";
+    public string InstallDir { get; init; } = "";
+    public IReadOnlyList<ArchiveEntryInfo> Entries { get; init; } = Array.Empty<ArchiveEntryInfo>();
+}
+
 /// <summary>Outcome of a launch-time resolve. <see cref="Handled"/>+<see cref="Success"/> with an
 /// <see cref="OutputFilePath"/> = the host launches against that path; Success=false = the host falls back
 /// to its flat TryExtractArchive.</summary>
@@ -583,10 +592,31 @@ internal static class RomExtractor
             var listing = ListEntriesDetailed(game, appId);
             if (listing.Entries.Count == 0) return null;
             var title = Safe(() => game.Title) ?? "?";
-            using var win = new RomPickerWindow(title, listing);
+            using var win = new RomPickerWindow(title, listing, GetTexturePack(game, appId));
             return win.ShowDialog() == System.Windows.Forms.DialogResult.OK ? win.ChosenEntry : null;
         }
         catch (Exception ex) { LbLog.Info("rom", "PickRomModal failed: " + ex.Message); return null; }
+    }
+
+    /// <summary>The texture pack the picker's Install/Remove panel needs: the archive's texture entries + the
+    /// resolved install dir. Null when the module is off, the archive can't be listed, or it has no textures.</summary>
+    public static TexturePackContext? GetTexturePack(IGame game, string? appId)
+    {
+        try
+        {
+            if (game == null || !Available) return null;
+            var absPath = ResolveArchivePath(game, appId);
+            if (absPath == null) return null;
+            var platform = Safe(() => game.Platform) ?? "";
+            var row = RomConfig.Instance.Resolve(platform, ResolveEmuTitle(game));
+            var analysis = ArchiveAnalyzer.Analyze(absPath, RomConfig.Instance, row.Priority, row.RomExtensions, row.IgnoredExtensions);
+            var texEntries = analysis.Entries.Where(e => !e.IsDirectory && TextureExtSet(row).Contains(e.Extension ?? "")).ToList();
+            if (texEntries.Count == 0) return null;
+            var emulator = Safe(() => PluginHelper.DataManager.GetEmulatorById(Safe(() => game.EmulatorId) ?? ""));
+            string dest = ResolveTexturePath(row, game, emulator);
+            return new TexturePackContext { ArchivePath = absPath, InstallDir = dest ?? "", Entries = texEntries };
+        }
+        catch (Exception ex) { LbLog.Info("rom", "GetTexturePack failed: " + ex.Message); return null; }
     }
 
     // ── helpers ────────────────────────────────────────────────────────
@@ -814,62 +844,75 @@ internal static class RomExtractor
         catch (Exception ex) { LbLog.Info("rom", "ResolveDiscImage failed: " + ex.Message); return RomLaunchResult.NotHandled; }
     }
 
-    /// <summary>Texture pack: 7z-extract (flatten) the archive entries whose extension is in the profile's
-    /// TextureExtensions into the token-expanded install path. Best-effort; no-op when disabled / empty / no
-    /// path / no matching entries / 7z absent.</summary>
+    /// <summary>Texture pack (launch time): install every texture entry the archive carries into the resolved
+    /// path. Best-effort; no-op when off / no path / no matching entries. Shares InstallTexture with the picker.</summary>
     private static void ExtractTextures(ArchiveAnalysis analysis, ArchivePriorityRow row, string archivePath, IGame game, IEmulator emulator)
     {
-        var texExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var e in RomConfig.SplitCsv(row.TextureExtensions ?? "")) { var x = e.TrimStart('.').Trim().ToLowerInvariant(); if (x.Length > 0) texExts.Add(x); }
-        if (texExts.Count == 0) { texExts.Add("htc"); texExts.Add("hts"); }   // plugin parity: default to the N64 hi-res texture exts
-
-        var texEntries = analysis.Entries.Where(e => !e.IsDirectory && texExts.Contains(e.Extension ?? "")).ToList();
+        var texEntries = analysis.Entries.Where(e => !e.IsDirectory && TextureExtSet(row).Contains(e.Extension ?? "")).ToList();
         if (texEntries.Count == 0) return;
-
         string dest = ResolveTexturePath(row, game, emulator);
         if (string.IsNullOrWhiteSpace(dest)) { LbLog.Info("rom", "texture: enabled but no install path resolved — skipping"); return; }
-        try { Directory.CreateDirectory(dest); } catch (Exception ex) { LbLog.Info("rom", "texture: mkdir failed: " + ex.Message); return; }
+        int ok = 0;
+        foreach (var t in texEntries) if (InstallTexture(archivePath, t, dest)) ok++;
+        LbLog.Info("rom", $"texture: {ok}/{texEntries.Count} installed → \"{dest}\"");
+    }
 
-        string exe = RomPaths.SevenZipExe;
-        if (!File.Exists(exe)) { LbLog.Info("rom", "texture: 7z.exe missing — skipping"); return; }
+    /// <summary>Texture extensions to look for: the profile's TextureExtensions when the rule is on, else the
+    /// htc/hts fallback (so packs are still recognised out of the box — plugin parity).</summary>
+    private static HashSet<string> TextureExtSet(ArchivePriorityRow row)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (row?.TextureEnabled == true)
+            foreach (var e in RomConfig.SplitCsv(row.TextureExtensions ?? "")) { var x = e.TrimStart('.').Trim().ToLowerInvariant(); if (x.Length > 0) set.Add(x); }
+        if (set.Count == 0) { set.Add("htc"); set.Add("hts"); }
+        return set;
+    }
 
-        // Pre-clean any stale <base>.htc/.hts we're about to (re)install under its DE-PREFIXED name, so
-        // switching texture variants never leaves an old pair behind (plugin parity).
-        foreach (var t in texEntries)
+    /// <summary>Install ONE texture entry into <paramref name="installDir"/>: pre-clean any stale de-prefixed
+    /// pair, 7z-extract (flatten, OVERWRITE), then rename "[Team]NAME.htc" → "NAME.htc" (the name Mupen64Plus /
+    /// Project64 load). Returns true on success. Shared by the launch batch and the picker's Install button.</summary>
+    public static bool InstallTexture(string archivePath, ArchiveEntryInfo entry, string installDir)
+    {
+        try
         {
-            string fb = Path.GetFileNameWithoutExtension(StripTexturePrefix(t.FileName));
+            if (entry == null || string.IsNullOrEmpty(entry.FileName) || string.IsNullOrWhiteSpace(installDir)) return false;
+            Directory.CreateDirectory(installDir);
+            string exe = RomPaths.SevenZipExe;
+            if (!File.Exists(exe)) { LbLog.Info("rom", "texture: 7z.exe missing"); return false; }
+
+            string finalName = StripTexturePrefix(entry.FileName);
+            string fb = Path.GetFileNameWithoutExtension(finalName);
             foreach (var ext in new[] { ".htc", ".hts" })
-                try { var old = Path.Combine(dest, fb + ext); if (File.Exists(old)) File.Delete(old); } catch { }
-        }
+                try { var old = Path.Combine(installDir, fb + ext); if (File.Exists(old)) File.Delete(old); } catch { }
 
-        var args = new List<string> { "e", archivePath };
-        foreach (var t in texEntries) args.Add(t.PathInArchive);
-        args.Add("-o" + dest);
-        args.Add("-y");
-        args.Add("-aoa");   // OVERWRITE (not -aos): a re-install must replace the previous texture
-        int exit = RomToolRunner.Run(exe, args, default, "texture");
+            var args = new List<string> { "e", archivePath, entry.PathInArchive, "-o" + installDir, "-y", "-aoa" };
+            RomToolRunner.Run(exe, args, default, "texture");
 
-        // The emulator's cache file must NOT carry the pack's "[Team]" author prefix — Mupen64Plus / Project64
-        // load a cache named after the ROM. 7z `e` extracts each entry under its own ("[Team]…") name; rename
-        // it to the de-prefixed name (plugin parity — without this the packs simply aren't loaded).
-        int renamed = 0;
-        foreach (var t in texEntries)
-        {
-            try
+            if (!string.Equals(entry.FileName, finalName, StringComparison.OrdinalIgnoreCase))
             {
-                string finalName = StripTexturePrefix(t.FileName);
-                if (string.Equals(t.FileName, finalName, StringComparison.OrdinalIgnoreCase)) continue;
-                string extracted = Path.Combine(dest, t.FileName), final = Path.Combine(dest, finalName);
-                if (File.Exists(extracted))
-                {
-                    if (File.Exists(final)) File.Delete(final);
-                    File.Move(extracted, final);
-                    renamed++;
-                }
+                string extracted = Path.Combine(installDir, entry.FileName), final = Path.Combine(installDir, finalName);
+                if (File.Exists(extracted)) { if (File.Exists(final)) File.Delete(final); File.Move(extracted, final); }
             }
-            catch (Exception ex) { LbLog.Info("rom", "texture: rename failed: " + ex.Message); }
+            return File.Exists(Path.Combine(installDir, finalName));
         }
-        LbLog.Info("rom", $"texture: {texEntries.Count} file(s) → \"{dest}\" (7z exit={exit}, {renamed} de-prefixed)");
+        catch (Exception ex) { LbLog.Info("rom", "texture install failed: " + ex.Message); return false; }
+    }
+
+    /// <summary>Remove an installed texture (its de-prefixed &lt;base&gt;.htc/.hts) from the install dir.</summary>
+    public static void RemoveTexture(ArchiveEntryInfo entry, string installDir)
+    {
+        if (entry == null || string.IsNullOrWhiteSpace(installDir)) return;
+        string fb = Path.GetFileNameWithoutExtension(StripTexturePrefix(entry.FileName ?? ""));
+        foreach (var ext in new[] { ".htc", ".hts" })
+            try { var p = Path.Combine(installDir, fb + ext); if (File.Exists(p)) File.Delete(p); } catch { }
+    }
+
+    /// <summary>True when this texture entry is installed (its de-prefixed &lt;base&gt;.htc or .hts exists).</summary>
+    public static bool IsTextureInstalled(ArchiveEntryInfo entry, string installDir)
+    {
+        if (entry == null || string.IsNullOrWhiteSpace(installDir)) return false;
+        string fb = Path.GetFileNameWithoutExtension(StripTexturePrefix(entry.FileName ?? ""));
+        return File.Exists(Path.Combine(installDir, fb + ".htc")) || File.Exists(Path.Combine(installDir, fb + ".hts"));
     }
 
     /// <summary>Strips a texture pack's author/team bracket prefix: "[Team]STARFOX64_HIRESTEXTURES.hts" →

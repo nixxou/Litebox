@@ -70,6 +70,26 @@ internal sealed class OptionsWindow : LiteBoxForm
         KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
     }
 
+    /// <summary>The preferred size (1160×800) can exceed a small screen, so clamp it to the target screen's
+    /// WORKING AREA (which excludes the taskbar) and nudge the window fully inside it — otherwise the bottom
+    /// (the footer buttons) hides behind the taskbar. Runs after CenterParent has placed us. The content host
+    /// is AutoScroll, so a clamp just makes it scroll.</summary>
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        try
+        {
+            var wa = Screen.FromControl(Owner ?? (Control)this).WorkingArea;
+            int w = Math.Min(Width, wa.Width);
+            int h = Math.Min(Height, wa.Height);
+            if (w != Width || h != Height) Size = new Size(w, h);   // MinimumSize still floors it
+            int x = Math.Max(wa.Left, Math.Min(Left, wa.Right - Width));
+            int y = Math.Max(wa.Top,  Math.Min(Top,  wa.Bottom - Height));
+            Location = new Point(x, y);
+        }
+        catch { }
+    }
+
     // ── Sections ─────────────────────────────────────────────────────
 
     /// <summary>Adds a CUSTOM section panel with its own apply callback.</summary>

@@ -35,6 +35,13 @@ internal static class RaHasherLite
 
     private static string RaDir => Path.Combine(MediaResolver.LbRoot ?? "", "ThirdParty", "RetroAchievements");
 
+    /// <summary>Optional live progress sink for archive hashing (done, total). Set by the on-select UI
+    /// path only; when non-null, ComputeArchiveEntries passes --arc-flush and streams RAHasher's output,
+    /// reporting after each entry so a progress bar can update. Null (scans, launch-correct) = no streaming
+    /// overhead, plain read-to-end. Global + volatile: set right around one on-select parse and cleared in
+    /// a finally; on-select is debounced/single-flight so overlap isn't a concern.</summary>
+    internal static volatile Action<int, int>? ArcProgress;
+
     /// <summary>Returns the RAHasher exe to use: the user's RaPanelConfig.HasherPath override when it
     /// points at an existing file (plugin RaHasherPath parity), else the deployed copy in
     /// LB\ThirdParty\RetroAchievements\ (NativeInstaller deploys it on first miss). Null when neither
@@ -70,18 +77,81 @@ internal static class RaHasherLite
         var list = new List<ArcEntry>();
         var exe = EnsureExe();
         if (exe == null) return list;
+
+        var prog = ArcProgress;   // snapshot; non-null only on the on-select UI path
+        int total = 0, done = 0;
+        if (prog != null)
+        {
+            total = CountRomEntries(archivePath, arcExt);   // denominator from a quick 7z listing (no hashing)
+            try { prog(0, total); } catch { }
+        }
+
         var args = new List<string> { "--arc-details" };
+        if (prog != null) args.Add("--arc-flush");   // ask RAHasher to flush each line as produced (throttled)
         if (!string.IsNullOrEmpty(arcExt)) { args.Add("--arc-ext"); args.Add(arcExt); }
         args.Add(consoleId.ToString());
         args.Add(archivePath);
-        var stdout = Run(exe, args, 120000);
-        if (stdout == null) return list;
-        foreach (var line in stdout.Replace("\r", "").Split('\n'))
+
+        RunStreaming(exe, args, 120000, line =>
         {
             var m = Regex.Match(line.Trim(), @"^([0-9a-fA-F]{32})\s+([0-9a-fA-F]+)\s+(\d+)\s+(.+)$");
-            if (m.Success) list.Add(new ArcEntry(m.Groups[1].Value.ToLowerInvariant(), m.Groups[4].Value.Trim()));
-        }
+            if (!m.Success) return;
+            list.Add(new ArcEntry(m.Groups[1].Value.ToLowerInvariant(), m.Groups[4].Value.Trim()));
+            if (prog != null) { done++; try { prog(done, total > 0 ? total : done); } catch { } }
+        });
         return list;
+    }
+
+    /// <summary>Count the entries RAHasher will actually process (matching <paramref name="arcExt"/>), via a
+    /// quick 7-Zip listing — no hashing. The determinate progress-bar denominator. 0 on any failure.</summary>
+    private static int CountRomEntries(string archivePath, string arcExt)
+    {
+        try
+        {
+            var entries = LbApiHost.Host.Rom.SevenZipList.List(archivePath);
+            if (entries == null) return 0;
+            if (string.IsNullOrEmpty(arcExt))
+            {
+                int n = 0; foreach (var e in entries) if (!e.IsDirectory) n++; return n;
+            }
+            var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var raw in arcExt.Split(','))
+            {
+                var x = raw.Trim().TrimStart('.');
+                if (x.Length > 0) exts.Add("." + x);
+            }
+            int c = 0;
+            foreach (var e in entries)
+            {
+                if (e.IsDirectory) continue;
+                if (exts.Contains(Path.GetExtension(e.Path ?? ""))) c++;
+            }
+            return c;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>Run RAHasher and hand each stdout line to <paramref name="onLine"/> as it arrives (blocking
+    /// ReadLine — call off the UI thread). With --arc-flush the lines stream live; without it they arrive in
+    /// one burst at process end. stderr is drained concurrently so it can't deadlock the pipe.</summary>
+    private static void RunStreaming(string exe, IEnumerable<string> args, int timeoutMs, Action<string> onLine)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = exe, RedirectStandardOutput = true, RedirectStandardError = true,
+                UseShellExecute = false, CreateNoWindow = true,
+            };
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            using var p = Process.Start(psi);
+            if (p == null) return;
+            var errTask = p.StandardError.ReadToEndAsync();
+            string? line;
+            while ((line = p.StandardOutput.ReadLine()) != null) { try { onLine(line); } catch { } }
+            if (!p.WaitForExit(timeoutMs)) { try { p.Kill(); } catch { } }
+        }
+        catch (Exception ex) { Console.WriteLine($"[ra-lite] RAHasher stream failed: {ex.Message}"); }
     }
 
     /// <summary>RAHasher single-file hash (plain ROM / disc image), or null.</summary>

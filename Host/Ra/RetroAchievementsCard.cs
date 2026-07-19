@@ -40,6 +40,8 @@ internal sealed class RetroAchievementsCard : Panel
     private int _beatMin, _masterMin;
     private bool _expanded;
     private bool _loading;
+    private bool _hashing;            // showing the "hashing the archive" progress state
+    private int _hashDone, _hashTotal;
     private bool _badgeLoadStarted;
 
     private readonly object _imgGate = new();
@@ -69,7 +71,7 @@ internal sealed class RetroAchievementsCard : Panel
     public void Show(RaGameCache? data, int beatMinutes, int masterMinutes)
     {
         _data = data; _beatMin = beatMinutes; _masterMin = masterMinutes;
-        _loading = false; _badgeLoadStarted = false; _hoverId = -1;
+        _loading = false; _hashing = false; _badgeLoadStarted = false; _hoverId = -1;
         DisposeBadges();
         try { _tip.SetToolTip(this, ""); } catch { }
         if (_expanded && HasData) KickBadgeLoads();
@@ -80,18 +82,30 @@ internal sealed class RetroAchievementsCard : Panel
     /// <summary>Show a brief "loading…" box while the background fetch runs (first view of a game).</summary>
     public void ShowLoading()
     {
-        _data = null; _loading = true; _badgeLoadStarted = false;
+        _data = null; _loading = true; _hashing = false; _badgeLoadStarted = false;
         DisposeBadges();
         Invalidate();
         LayoutChanged?.Invoke();
+    }
+
+    /// <summary>Show a determinate "hashing ROMs… n/total" bar while LiteBox hashes an archive on select
+    /// (the picker's per-entry RA column is being filled). Call repeatedly to update; the first call sizes
+    /// the row, later calls just repaint. Superseded by Show/ShowLoading/HidePanel once the raid resolves.</summary>
+    public void ShowHashing(int done, int total)
+    {
+        bool first = !_hashing;
+        _hashing = true; _loading = false; _data = null; _badgeLoadStarted = false;
+        _hashDone = done; _hashTotal = total;
+        if (first) { DisposeBadges(); LayoutChanged?.Invoke(); }
+        Invalidate();
     }
 
     /// <summary>Empties the card so it renders nothing and its row collapses to 0 (named to not shadow
     /// Control.Hide, which only flips Visible).</summary>
     public void HidePanel()
     {
-        if (_data == null && !_loading) return;
-        _data = null; _loading = false; DisposeBadges();
+        if (_data == null && !_loading && !_hashing) return;
+        _data = null; _loading = false; _hashing = false; DisposeBadges();
         Invalidate(); LayoutChanged?.Invoke();
     }
 
@@ -111,7 +125,8 @@ internal sealed class RetroAchievementsCard : Panel
 
     public int HeightForWidth(int cardWidth)
     {
-        if (!HasData && !_loading) return 0;       // hidden — no row
+        if (!HasData && !_loading && !_hashing) return 0;       // hidden — no row
+        if (_hashing && !HasData) return VMargin + Pad + _titleFont.Height + 6 + 8 + Pad + VMargin;   // title + bar
         if (_loading && !HasData) return VMargin + Pad + _titleFont.Height + Pad + VMargin;
         int y = HeaderBottom();
         if (_expanded && _data!.achievements.Count > 0)
@@ -214,7 +229,7 @@ internal sealed class RetroAchievementsCard : Panel
     {
         var g = e.Graphics;
         g.Clear(BackColor);
-        if (!HasData && !_loading) return;
+        if (!HasData && !_loading && !_hashing) return;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         var box = new Rectangle(0, VMargin, Math.Max(1, ClientSize.Width - 1), Math.Max(1, ClientSize.Height - 2 * VMargin - 1));
@@ -226,6 +241,23 @@ internal sealed class RetroAchievementsCard : Panel
 
         int innerW = Math.Max(20, ClientSize.Width - 2 * Pad);
         int x = Pad, y = VMargin + Pad;
+
+        if (_hashing && !HasData)
+        {
+            string label = _hashTotal > 0
+                ? $"RetroAchievements — hashing ROMs…  {_hashDone} / {_hashTotal}"
+                : "RetroAchievements — hashing ROMs…";
+            TextRenderer.DrawText(g, label, _titleFont, new Point(x, y), SubFg);
+            y += _titleFont.Height + 6;
+            var track = new Rectangle(x, y, innerW, 8);
+            using (var tb = new SolidBrush(Placeholder)) g.FillRectangle(tb, track);
+            if (_hashTotal > 0)
+            {
+                int fillW = (int)(innerW * Math.Min(1.0, (double)_hashDone / Math.Max(1, _hashTotal)));
+                if (fillW > 0) { using var fb = new SolidBrush(Accent); g.FillRectangle(fb, new Rectangle(x, y, fillW, 8)); }
+            }
+            return;
+        }
 
         if (_loading && !HasData)
         {

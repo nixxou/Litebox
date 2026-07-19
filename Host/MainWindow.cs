@@ -3436,7 +3436,17 @@ internal sealed class MainWindow : Form, IMessageFilter
             try
             {
                 string raPlat = null; try { raPlat = g.Platform; } catch { }
-                if (RaPlatformState.ShouldAutoResolveOnSelect(raPlat)) RaResolveLite.Resolve(g, fillPickerWhenResolved: true);   // platform RA-enabled + trigger == On select → LiteBox's per-ROM RAHasher resolution (the "ExtendDB way", now native); also parses an unparsed archive so the ROM picker's per-entry RA column fills even when the game already has a hash
+                if (RaPlatformState.ShouldAutoResolveOnSelect(raPlat))
+                {
+                    // Live progress in the RA card while an unparsed archive is hashed on select (fills the
+                    // ROM picker's per-entry column). Reporter is cleared in finally; UI update is token-guarded.
+                    Ra.RaHasherLite.ArcProgress = (done, total) =>
+                    {
+                        try { if (!IsDisposed && IsHandleCreated) BeginInvoke(new Action(() => { if (token == _detailsLoadToken) _raCard?.ShowHashing(done, total); })); } catch { }
+                    };
+                    try { RaResolveLite.Resolve(g, fillPickerWhenResolved: true); }   // per-ROM RAHasher resolution + parse an unparsed archive for the picker column
+                    finally { Ra.RaHasherLite.ArcProgress = null; }
+                }
                 // else: this platform is RA-disabled OR the auto-update trigger is "On launch" → don't re-hash on select; the panel still shows whatever raid is already stored.
             }
             catch { }

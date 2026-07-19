@@ -832,13 +832,53 @@ internal static class RomExtractor
         string exe = RomPaths.SevenZipExe;
         if (!File.Exists(exe)) { LbLog.Info("rom", "texture: 7z.exe missing — skipping"); return; }
 
+        // Pre-clean any stale <base>.htc/.hts we're about to (re)install under its DE-PREFIXED name, so
+        // switching texture variants never leaves an old pair behind (plugin parity).
+        foreach (var t in texEntries)
+        {
+            string fb = Path.GetFileNameWithoutExtension(StripTexturePrefix(t.FileName));
+            foreach (var ext in new[] { ".htc", ".hts" })
+                try { var old = Path.Combine(dest, fb + ext); if (File.Exists(old)) File.Delete(old); } catch { }
+        }
+
         var args = new List<string> { "e", archivePath };
         foreach (var t in texEntries) args.Add(t.PathInArchive);
         args.Add("-o" + dest);
         args.Add("-y");
-        args.Add("-aos");   // skip already-present files
+        args.Add("-aoa");   // OVERWRITE (not -aos): a re-install must replace the previous texture
         int exit = RomToolRunner.Run(exe, args, default, "texture");
-        LbLog.Info("rom", $"texture: {texEntries.Count} file(s) → \"{dest}\" (7z exit={exit})");
+
+        // The emulator's cache file must NOT carry the pack's "[Team]" author prefix — Mupen64Plus / Project64
+        // load a cache named after the ROM. 7z `e` extracts each entry under its own ("[Team]…") name; rename
+        // it to the de-prefixed name (plugin parity — without this the packs simply aren't loaded).
+        int renamed = 0;
+        foreach (var t in texEntries)
+        {
+            try
+            {
+                string finalName = StripTexturePrefix(t.FileName);
+                if (string.Equals(t.FileName, finalName, StringComparison.OrdinalIgnoreCase)) continue;
+                string extracted = Path.Combine(dest, t.FileName), final = Path.Combine(dest, finalName);
+                if (File.Exists(extracted))
+                {
+                    if (File.Exists(final)) File.Delete(final);
+                    File.Move(extracted, final);
+                    renamed++;
+                }
+            }
+            catch (Exception ex) { LbLog.Info("rom", "texture: rename failed: " + ex.Message); }
+        }
+        LbLog.Info("rom", $"texture: {texEntries.Count} file(s) → \"{dest}\" (7z exit={exit}, {renamed} de-prefixed)");
+    }
+
+    /// <summary>Strips a texture pack's author/team bracket prefix: "[Team]STARFOX64_HIRESTEXTURES.hts" →
+    /// "STARFOX64_HIRESTEXTURES.hts". Mupen64Plus / Project64 expect the cache file WITHOUT that prefix (named
+    /// after the ROM). No-bracket names pass through unchanged.</summary>
+    private static string StripTexturePrefix(string fileName)
+    {
+        if (string.IsNullOrEmpty(fileName) || !fileName.StartsWith("[", StringComparison.Ordinal)) return fileName;
+        int close = fileName.IndexOf(']');
+        return (close >= 0 && close < fileName.Length - 1) ? fileName.Substring(close + 1) : fileName;
     }
 
     /// <summary>Where to install the texture pack. The profile's token-expanded path (<c>{EmuDir}</c>

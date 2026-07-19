@@ -1,0 +1,2215 @@
+/* ============================================================================
+   LaunchBox Web — styles.css
+   Self-contained stylesheet for the /launchbox/ frontend skeleton.
+   Sections:
+     A. RESET / BASE
+     B. HEADER
+     C. BODY THREE COLUMNS
+     D. INDEPENDENT COLUMN SCROLLBARS
+     E. TREE
+     F. GRID HEADER
+     G. POSTER CELLS
+     H. CSS CUSTOM PROPERTIES
+     I. PANEL
+     J. SETTINGS MODAL
+     L. PLAY BUTTON + DROPDOWN
+     0. EXIT BUTTON — kiosk embedded mode only
+   ============================================================================ */
+
+
+/* ── 0. Bouton Exit — mode kiosque embarqué uniquement ─────────────────
+   Caché par défaut ; visible quand body.lb-embedded est set (mode WebView2
+   hébergé par ExtendDB, URL /launchbox#embedded=1). Click → post 'kiosk:exit'
+   au host qui ferme la fenêtre. Positionné en haut à droite, au-dessus de tout
+   (z-index élevé) pour rester accessible même quand un modal s'affiche.
+   Miroir du #bbw-exit-btn du thème BigBoxWeb. */
+#lb-exit-btn {
+  display: none;
+}
+body.lb-embedded #lb-exit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: fixed;
+  top: 8px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  font-size: 24px;
+  font-weight: 300;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(20, 20, 20, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 99999;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+body.lb-embedded #lb-exit-btn:hover {
+  background: rgba(220, 60, 60, 0.85);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+body.lb-embedded #lb-exit-btn:focus { outline: none; }
+
+
+/* ── A. RESET / BASE ──────────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: #1f1f24;
+  color: #e8e8ec;
+  font-family: "Segoe UI", system-ui, Arial, sans-serif;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+
+/* ── B. HEADER ────────────────────────────────────────────────────────────── */
+
+#lb-header {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 40px;
+  background: #111115;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 0 12px;
+  gap: 10px;
+}
+
+.lb-hbar-brand {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.lb-hbar-sep {
+  color: rgba(255, 255, 255, 0.25);
+  font-size: 14px;
+}
+
+.lb-hbar-nav {
+  display: flex;
+  gap: 2px;
+}
+
+.lb-hbar-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.75);
+  padding: 6px 10px;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+}
+
+.lb-hbar-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+.lb-hbar-cfg {
+  font-size: 16px;
+  padding: 4px 8px;
+}
+
+.lb-hbar-spacer {
+  flex: 1;
+}
+
+.lb-hbar-status {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+
+/* ── C. BODY THREE COLUMNS ────────────────────────────────────────────────── */
+
+#lb-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#lb-tree,
+#lb-panel {
+  flex: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#lb-tree {
+  width: 270px;
+  background: #17171b;
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+#lb-panel {
+  width: 340px;
+  background: #17171b;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+#lb-grid {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #1f1f24;
+}
+
+
+/* ── C2. FOCUS ZONES — active-column indicator + flash ────────────────────────
+   One column holds the keyboard / gamepad focus (lbZone in app.js). The active
+   zone shows a thin accent border (::after) and a very light one-shot flash
+   (::before) when it takes focus. position:relative anchors both overlays;
+   pointer-events:none keeps them click-through. */
+
+#lb-tree,
+#lb-grid,
+#lb-panel {
+  position: relative;
+}
+
+/* Persistent accent border on the focused column — deliberately very faint:
+   a 1px hairline you only notice if you are looking for it. */
+#lb-tree::after,
+#lb-grid::after,
+#lb-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  border: 1px solid transparent;
+  transition: border-color 0.15s ease;
+}
+#lb-body.lb-zone-left   #lb-tree::after  { border-color: #2d2d31; }
+#lb-body.lb-zone-center #lb-grid::after  { border-color: #2d2d31; }
+#lb-body.lb-zone-right  #lb-panel::after { border-color: #2d2d31; }
+
+/* Very light flash veil when a zone takes focus (flashLbZone toggles the class). */
+#lb-tree::before,
+#lb-grid::before,
+#lb-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  background: #4ca3f0;
+  opacity: 0;
+}
+.lb-zone-flash::before { animation: lbZoneFlash 0.40s ease; }
+@keyframes lbZoneFlash {
+  0%   { opacity: 0.10; }
+  100% { opacity: 0; }
+}
+
+
+/* ── D. INDEPENDENT COLUMN SCROLLBARS ────────────────────────────────────── */
+
+.lb-tree-scroll,
+.lb-grid-scroll,
+.lb-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.lb-tree-scroll::-webkit-scrollbar,
+.lb-grid-scroll::-webkit-scrollbar,
+.lb-panel-scroll::-webkit-scrollbar {
+  width: 8px;
+  background: transparent;
+}
+
+.lb-tree-scroll::-webkit-scrollbar-track,
+.lb-grid-scroll::-webkit-scrollbar-track,
+.lb-panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lb-tree-scroll::-webkit-scrollbar-thumb,
+.lb-grid-scroll::-webkit-scrollbar-thumb,
+.lb-panel-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+
+/* ── E. TREE ──────────────────────────────────────────────────────────────── */
+
+.lb-tree-search {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.lb-search-input {
+  width: 100%;
+  background: #0f0f12;
+  color: #e8e8ec;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 5px 8px;
+  font: inherit;
+}
+
+.lb-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.lb-search-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.lb-tree-empty,
+.lb-panel-empty {
+  padding: 20px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* .lb-grid-empty is a direct flex child of #lb-grid (sibling of .lb-grid-scroll).
+   flex:1 makes it fill the column; display:none when the grid has content (set by JS). */
+.lb-grid-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  text-align: center;
+}
+
+.lb-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: #cfcfd2;
+}
+
+.lb-tree-node:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.lb-tree-node.sel {
+  background: rgba(76, 163, 240, 0.18);
+  color: #fff;
+  border-left: 3px solid #4ca3f0;
+  padding-left: 7px;
+}
+
+.lb-tree-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  object-fit: contain;
+}
+
+.lb-tree-label {
+  flex: 1;
+  font-size: 12px;
+}
+
+.lb-tree-count {
+  color: rgba(255, 255, 255, 0.40);
+  font-size: 11px;
+}
+
+.lb-tree-cat {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 8px 10px 4px 10px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+  text-transform: uppercase;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Toggle handle — the chevron + icon zone on the left of a category header.
+   This whole zone toggles expand / collapse (a wider, easier target than the
+   bare arrow).  The negative left margin cancels the header's left padding so
+   the hit area reaches the very left edge; padding-left restores the chevron's
+   indent, and padding-right widens the zone toward the label text. */
+.lb-tree-cat-handle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  cursor: pointer;
+  padding: 3px 8px 3px 10px;
+  margin: -3px 0 -3px -10px;
+  border-radius: 0 4px 4px 0;
+  transition: background 0.12s ease;
+}
+
+.lb-tree-cat-handle:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.lb-tree-cat .lb-tree-chev {
+  font-size: 20px;            /* larger glyph — was 10px */
+  color: rgba(255, 255, 255, 0.7);
+  width: 20px;
+  text-align: center;
+  flex: none;
+  transition: transform 0.12s ease, color 0.12s ease;
+  /* expanded glyph (▾) points down; collapsed rotation is driven by the
+     .collapsed class below so it is correct from the initial render. */
+}
+
+.lb-tree-cat.collapsed .lb-tree-chev {
+  transform: rotate(-90deg);  /* collapsed: arrow points right */
+}
+
+.lb-tree-cat-handle:hover .lb-tree-chev {
+  color: #fff;
+}
+
+.lb-tree-cat .lb-tree-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  object-fit: contain;
+}
+
+.lb-tree-cat .lb-tree-label {
+  flex: 1;
+  cursor: pointer;
+}
+
+/* Selected category header — mirrors .lb-tree-node.sel so a category that is
+   showing its merged games reads as the active node. */
+.lb-tree-cat.sel {
+  background: rgba(76, 163, 240, 0.18);
+  color: #fff;
+  border-left: 3px solid #4ca3f0;
+  padding-left: 7px;
+}
+
+/* Children container — shown/hidden by .collapsed + adjacent-sibling rule */
+.lb-tree-cat.collapsed + .lb-tree-children {
+  display: none;
+}
+
+.lb-tree-children {
+  /* flat container; no extra style beyond children's own indent */
+}
+
+/* Indented children inside a category group */
+.lb-tree-children .lb-tree-node {
+  padding-left: 34px;
+}
+
+
+/* ── F. GRID HEADER ───────────────────────────────────────────────────────── */
+
+.lb-grid-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 16px 6px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  flex: none;
+}
+
+.lb-grid-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8e8ec;
+}
+
+.lb-grid-count {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+
+/* ── G. POSTER CELLS ──────────────────────────────────────────────────────── */
+/* ============================================================================
+   STYLE PASS #1  (2026-06-01)
+   Goal: match BBW poster-mode visual more faithfully.
+   Changes vs. original:
+     - Default cell/gap sizes bumped to 150 px / 20 px (was 105 / 12).
+     - Grid centered via justify-content:center (was start).
+     - min-width:0 added to .lb-cell and text children so ellipsis fires.
+     - Fluid mode: removed fixed slot-dimensions/center-justify override;
+       .lb-cell is now a plain flex column (content-based height) in all modes.
+       Images cap at --lb-cell-imgh via max-height instead of a locked slot.
+     - Empty cells: explicit grey gradient background on .rc-img in both modes,
+       with an explicit height override in fluid mode so the grey rect is always
+       visible even when no real image is present.
+     - Hover/select scale kept in both modes; scale value bumped to 1.04.
+   ============================================================================ */
+
+/* Grid container — uses auto-fill so columns pack without a fixed count.
+   padding 16px, gap var(--lb-gap), auto-fill columns at var(--lb-cell-w).
+   justify-content:center keeps the column block horizontally centred.
+   (copied from BigBoxWeb/web/styles.css :: .poster-scroll ~line 762) */
+.lb-grid-scroll {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, var(--lb-cell-w, 150px));
+  gap: var(--lb-gap, 20px);
+  padding: 16px;
+  justify-content: center;
+  align-content: start;
+}
+
+/* .lb-cell — card shell.
+   width, flex-column, border-radius 6px, box-sizing border-box, cursor pointer.
+   min-width:0 is required so flex children can shrink below auto and
+   white-space:nowrap + text-overflow:ellipsis fires correctly.
+   (copied from BigBoxWeb/web/styles.css :: .poster-cell ~line 771) */
+.lb-cell {
+  position: relative;
+  width: var(--lb-cell-w, 150px);
+  min-width: 0;
+  cursor: pointer;
+  border-radius: 6px;
+  box-sizing: border-box;
+  /* Flex column — title/dev sit below the image in all modes. */
+  display: flex;
+  flex-direction: column;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+/* .rc-img — poster image (lazy-loaded via vanilla-lazyload data-src).
+   Fixed-height crop mode (default, posterView.fluid:false): object-fit:cover.
+   (copied from BigBoxWeb/web/styles.css :: .poster-cell .pc-img ~line 788) */
+.lb-cell .rc-img {
+  display: block;
+  width: 100%;
+  height: var(--lb-cell-imgh, 210px);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+  object-fit: cover;
+  transform-origin: center;
+  /* Only transition transform — NOT box-shadow.
+     box-shadow carries the white selection border; transitioning it means the
+     border fades in over 250 ms.  During key auto-repeat (~30 ms interval) the
+     class swaps so fast the border never reaches full opacity and appears to
+     vanish.  Keeping transform animated gives the scale-up feel without
+     breaking the border during rapid navigation. */
+  transition: transform var(--lb-cell-hover-ms, 250ms) ease;
+  /* (copied from BigBoxWeb/web/styles.css :: .poster-cell .pc-img ~line 799) */
+}
+
+/* ── Hover: scale ONLY (non-fluid mode) ────────────────────────────────────
+   FIX 3: white border removed from hover state — only transform is applied.
+   The base drop-shadow is preserved.  box-shadow is intentionally NOT set
+   here so hover does not mimic the selected look.
+   (ref: BigBoxWeb/web/styles.css :: .poster-cell:hover .pc-img ~line 804) */
+.lb-cell:hover .rc-img,
+.lb-cell:hover .rc-img-ph {
+  transform: scale(var(--lb-cell-hover-scale, 1.04));
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+}
+
+/* ── Selected: white border + scale (non-fluid mode) ───────────────────────
+   FIX 3: placed AFTER the hover rule so .selected always wins on specificity
+   tie (same selector weight, later declaration wins).  Also covers the
+   :hover + .selected combo so mousing over a selected cell never loses the
+   white border.
+   (ref: BigBoxWeb/web/styles.css :: .recent .thumb:hover .rc-img ~line 1301) */
+.lb-cell.selected .rc-img,
+.lb-cell.selected .rc-img-ph,
+.lb-cell.selected:hover .rc-img,
+.lb-cell.selected:hover .rc-img-ph {
+  transform: scale(var(--lb-cell-hover-scale, 1.04));
+  box-shadow: 0 0 0 2px #ffffff, 0 3px 10px rgba(0, 0, 0, 0.45);
+}
+
+/* ── Fluid mode: .lb-grid-scroll.fluid ────────────────────────────────────
+   When window.LBW.config.gridView.fluid is true, .fluid is added to
+   .lb-grid-scroll at boot (mirrors .poster-grid.fluid in BBW).
+
+   In fluid mode the cell is still a flex column (NOT a centred slot).
+   The card frame (background/box-shadow) is removed; the image's own
+   drop-shadow + white border on hover/select is the sole visual indicator.
+   (copied from BigBoxWeb/web/styles.css :: .recent.fluid .thumb ~line 1319) */
+.lb-grid-scroll.fluid .lb-cell {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* In fluid mode the image sizes to its natural ratio.
+   max-height caps very-tall images so they don't blow the row.
+   box-shadow removed from image slot; replaced by filter:drop-shadow.
+   align-self:center keeps narrow images horizontally centred in the cell.
+   (copied from BigBoxWeb/web/styles.css :: .recent.fluid .thumb .rc-img ~line 1329
+    and .poster-grid.fluid .poster-cell .pc-img ~line 815) */
+.lb-grid-scroll.fluid .lb-cell .rc-img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: var(--lb-cell-imgh, 210px);
+  object-fit: contain;
+  align-self: center;
+  background: transparent;
+  box-shadow: none;
+  /* pixel-aware drop shadow follows visible contour (not slot rectangle).
+     (copied from BigBoxWeb/web/styles.css :: .recent.fluid .thumb .rc-img ~line 1337) */
+  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.45));
+}
+
+/* Fluid hover: scale ONLY — no white border.
+   FIX 3: white border stripped from hover, same reasoning as non-fluid block.
+   Specificity (0,4,0) — beats fluid base box-shadow:none.
+   (ref: BigBoxWeb/web/styles.css :: .recent.fluid .thumb:hover .rc-img ~line 1343) */
+.lb-grid-scroll.fluid .lb-cell:hover .rc-img,
+.lb-grid-scroll.fluid .lb-cell:hover .rc-img-ph {
+  transform: scale(var(--lb-cell-hover-scale, 1.04));
+  box-shadow: none;
+}
+
+/* Fluid selected: white border + scale — placed after hover rule to win.
+   FIX 3: .selected (and :hover + .selected) always gets the white border.
+   Specificity (0,5,0) for the :hover + .selected selectors, (0,4,0) for
+   pure .selected — both beat the hover-only rule above.
+   (ref: BigBoxWeb/web/styles.css :: .recent.fluid .thumb:hover .rc-img ~line 1347) */
+.lb-grid-scroll.fluid .lb-cell.selected .rc-img,
+.lb-grid-scroll.fluid .lb-cell.selected .rc-img-ph,
+.lb-grid-scroll.fluid .lb-cell.selected:hover .rc-img,
+.lb-grid-scroll.fluid .lb-cell.selected:hover .rc-img-ph {
+  transform: scale(var(--lb-cell-hover-scale, 1.04));
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
+/* Empty / phantom cell — explicit grey gradient rectangle visible in ALL modes.
+   height is set explicitly (not auto) so the grey rect always paints even
+   when the <img> has no real src and is otherwise 0-height.
+   (copied from BigBoxWeb/web/styles.css :: .poster-cell.empty .pc-img ~line 837) */
+.lb-cell.empty .rc-img {
+  background: linear-gradient(160deg, #4a4a4a 0%, #2a2a2a 100%);
+  height: var(--lb-cell-imgh, 210px);
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+/* Fluid + empty: keep the grey rectangle at the standard image height.
+   Without this override the fluid rule (height:auto) would collapse it to 0.
+   (copied from BigBoxWeb/web/styles.css :: .poster-grid.fluid .poster-cell.empty .pc-img ~line 842) */
+.lb-grid-scroll.fluid .lb-cell.empty .rc-img {
+  width: 100%;
+  height: var(--lb-cell-imgh, 210px);
+  max-width: 100%;
+  max-height: var(--lb-cell-imgh, 210px);
+  background: linear-gradient(160deg, #4a4a4a 0%, #2a2a2a 100%);
+}
+
+/* .lb-title — game title label, nowrap + ellipsis.
+   min-width:0 is the critical missing piece: without it, a flex child
+   keeps its intrinsic (content) width and ellipsis never triggers because
+   the child never gets narrower than its text.
+   (copied from BigBoxWeb/web/styles.css :: .poster-cell .pc-title ~line 843) */
+.lb-cell .lb-title {
+  margin-top: 5px;
+  font-size: 12px;
+  color: #e6e6e6;
+  max-width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* .lb-dev — developer / publisher label, dimmer + ellipsis.
+   Same min-width:0 fix as .lb-title.
+   (copied from BigBoxWeb/web/styles.css :: .poster-cell .pc-dev ~line 844) */
+.lb-cell .lb-dev {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  max-width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Hover card highlight — subtle background + spread shadow (non-selecting).
+   (copied from BigBoxWeb/web/styles.css :: .poster-cell:hover ~line 847) */
+.lb-cell:hover {
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.04);
+}
+
+/* Selected card state — stronger background + spread shadow.
+   (copied from BigBoxWeb/web/styles.css :: .poster-cell.selected ~line 854) */
+.lb-cell.selected,
+.lb-cell.selected:hover {
+  background: rgba(255, 255, 255, 0.10);
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.10);
+  outline: none;
+}
+
+/* In fluid mode the .lb-cell itself has box-shadow:none; card highlight is
+   suppressed (the image already carries the white border on hover/select).
+   (mirrors BBW: .poster-grid.fluid overrides on cell shell) */
+.lb-grid-scroll.fluid .lb-cell:hover {
+  background: transparent;
+  box-shadow: none;
+}
+.lb-grid-scroll.fluid .lb-cell.selected,
+.lb-grid-scroll.fluid .lb-cell.selected:hover {
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+
+/* ── H. CSS CUSTOM PROPERTIES ─────────────────────────────────────────────── */
+
+:root {
+  --lb-cell-w:           150px;
+  --lb-cell-imgh:        210px;   /* 150 * 1.4 */
+  --lb-gap:              20px;
+  --lb-cell-hover-scale: 1.04;
+  --lb-cell-hover-ms:    250ms;
+
+  /* ── Play button colour palette (section L) ──────────────────────────────
+     Tunable without touching JS.  Orange matches the BBW detail-action accent.
+     (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-action ~line 1022) */
+  --lb-action-color:          #c8732f;
+  --lb-action-color-hover:    #de8438;
+  --lb-action-color-disabled: #5a3d2a;
+}
+
+
+/* ── I. PANEL ─────────────────────────────────────────────────────────────── */
+
+.lb-panel-scroll {
+  display: block;
+  padding: 0;
+}
+
+.lb-panel-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.lb-panel-section h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: rgba(255, 255, 255, 0.55);
+  margin: 0 0 8px 0;
+  text-transform: uppercase;
+}
+
+/* ── Detail-pane tabs : Overview / Related Games ──────────────────────────────
+   Deliberately discreet — same typographic logic as the section headers
+   (.lb-panel-section h2): 11px, uppercase, letter-spacing, dim. NOT big tabs. */
+.lb-detail-tabs {
+  display: flex;
+  gap: 18px;
+  margin: 2px 0 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.lb-detail-tab {
+  background: none;
+  border: 0;
+  padding: 0 0 6px;
+  margin-bottom: -1px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  border-bottom: 2px solid transparent;
+}
+.lb-detail-tab:hover { color: rgba(255, 255, 255, 0.75); }
+.lb-detail-tab.active {
+  color: rgba(255, 255, 255, 0.9);
+  border-bottom-color: var(--lb-action-color, #c8732f);
+}
+
+/* Related sub-tabs : a touch smaller still. */
+.lb-rel-subtabs { display: flex; gap: 14px; margin: 0 0 10px; }
+.lb-rel-subtab {
+  background: none; border: 0; padding: 0 0 4px; cursor: pointer; font: inherit;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.40); border-bottom: 2px solid transparent;
+}
+.lb-rel-subtab:hover { color: rgba(255, 255, 255, 0.7); }
+.lb-rel-subtab.active { color: rgba(255, 255, 255, 0.85); border-bottom-color: var(--lb-action-color, #c8732f); }
+
+/* Related cards (compact rows). */
+.lb-rel-list { display: flex; flex-direction: column; gap: 8px; }
+.lb-rel-card {
+  display: flex; gap: 10px; padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02); cursor: pointer;
+}
+.lb-rel-card:hover { background: rgba(255, 255, 255, 0.05); }
+.lb-rel-thumb { width: 46px; height: 62px; flex: 0 0 auto; object-fit: contain; background: #1b1b1f; border-radius: 3px; }
+.lb-rel-body { flex: 1 1 auto; min-width: 0; }
+.lb-rel-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.lb-rel-title { font-size: 12px; font-weight: 600; color: #e8e8ec; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-rel-score { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: #cfcfd2; }
+.lb-rel-cloud { margin-right: 4px; color: rgba(255, 255, 255, 0.4); font-weight: 400; }
+.lb-rel-meta { font-size: 10px; color: rgba(255, 255, 255, 0.45); margin-top: 1px; }
+.lb-rel-desc {
+  font-size: 11px; color: rgba(255, 255, 255, 0.55); margin-top: 3px; line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.lb-rel-empty { font-size: 11px; color: rgba(255, 255, 255, 0.4); padding: 8px 0; }
+
+.lb-panel-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 12px;
+  color: #cfcfd2;
+}
+
+.lb-panel-row .k {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+
+/* ── K. PANEL HERO + SECTIONS ─────────────────────────────────────────────── */
+/* All selectors are namespaced .lb-panel-* to mirror BBW .poster-side .ps-*
+   without colliding. Origin references are noted inline.                      */
+
+/* CSS custom properties for hero animation timing — mirrors the --bbw-hero-*
+   vars consumed by BBW .ps-hero-bg-layer transitions.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-hero-bg-layer ~line 900) */
+:root {
+  --lb-hero-fanart-opacity:    0.28;
+  --lb-hero-fanart-fade-in:    0.3s;
+  --lb-hero-fanart-fade-out:   0.8s;
+  --lb-hero-logo-pulse:        1s;
+  --lb-hero-logo-delay:        0.5s;
+  --lb-hero-logo-pulse-scale:  1.1;
+}
+
+/* Hero wrapper: flex column, centred, reserved height for logo + bottom bar.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-hero ~line 870) */
+.lb-panel-hero {
+  position: relative;
+  padding: 12px 14px 42px;   /* bottom padding reserves room for .lb-panel-hero-bottom */
+  overflow: hidden;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Store install badge — round store logo framed by a ring (green = installed,
+   orange = not). Anchored top-right of the hero, right-aligned, above the fanart.
+   Mirrors BigBoxWeb .store-badge / .ps-install. */
+.store-badge { display: inline-flex; align-items: center; justify-content: center;
+               width: 26px; height: 26px; border-radius: 50%; overflow: hidden;
+               box-sizing: border-box; background: rgba(0,0,0,0.35); }
+/* Inner logo at 60% opacity; the coloured ring (border on .store-badge) stays full. */
+.store-badge img { width: 100%; height: 100%; object-fit: contain; border-radius: 50%; opacity: 0.6; }
+.store-badge.installed    { border: 1.5px solid #36c85a; box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+.store-badge.notinstalled { border: 1.5px solid #ec8a25; box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+.lb-panel-install { position: absolute; top: 10px; right: 10px; z-index: 5; }
+
+/* Two-layer crossfade container — identical layout to BBW .ps-hero-bg.
+   overflow:hidden clips the bg images; pointer-events:none so the hero
+   bottom bar is still clickable underneath.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-hero-bg ~line 897) */
+.lb-panel-hero-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Asymmetric two-layer crossfade — ported from BBW .ps-hero-bg-layer.
+   Layers default to opacity 0 with the SLOW fade-out duration.
+   When .on is applied the FAST fade-in duration overrides via the .on rule.
+   Layers without .on (fading out) keep the slow transition via :not(.on).
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-hero-bg-layer ~line 900
+         BigBoxWeb/web/engine/app.js :: schedulePosterFanart ~line 848) */
+.lb-panel-hero-bg-layer {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  opacity: 0;
+  transition: opacity var(--lb-hero-fanart-fade-in, 300ms) ease;
+}
+
+/* Active layer: fade in at the fast speed */
+.lb-panel-hero-bg-layer.on {
+  opacity: var(--lb-hero-fanart-opacity, 0.28);
+}
+
+/* Departing layer: fade out at the slow speed */
+.lb-panel-hero-bg-layer:not(.on) {
+  transition: opacity var(--lb-hero-fanart-fade-out, 800ms) ease;
+}
+
+/* Gradient overlay when a fanart is active — improves logo legibility.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-hero.has-fanart .ps-hero-bg::after ~line 919) */
+.lb-panel-hero.has-fanart .lb-panel-hero-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.20) 0%, rgba(0, 0, 0, 0.55) 100%);
+  pointer-events: none;
+}
+
+/* Clear-logo slot — stretches full width, centres the image/text.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-logo ~line 927) */
+.lb-panel-logo {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+}
+
+/* Hide empty logo slot so hero gap is not wasted.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-logo:empty ~line 928) */
+.lb-panel-logo:empty {
+  display: none;
+}
+
+/* Logo image: constrained dimensions, drop-shadow, pulse animation on entry.
+   The <img> is recreated each game change (innerHTML="") so the animation
+   timeline restarts automatically — same pattern as BBW.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-logo img ~line 929) */
+.lb-panel-logo img {
+  display: block;
+  max-height: 80px;
+  max-width: 86%;
+  width: auto;
+  height: auto;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.75));
+  transform-origin: center;
+  animation: lb-panel-logo-pulse var(--lb-hero-logo-pulse, 1s) ease var(--lb-hero-logo-delay, 0.5s);
+}
+
+/* Keyframe: scale-up-and-back pulse. Both fill-modes stay at scale(1).
+   (ref: BigBoxWeb/web/styles.css :: @keyframes ps-logo-pulse ~line 944) */
+@keyframes lb-panel-logo-pulse {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(var(--lb-hero-logo-pulse-scale, 1.1)); }
+  100% { transform: scale(1); }
+}
+
+/* Text fallback when game has no clear-logo image.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-logo .ps-logo-text ~line 953) */
+.lb-panel-logo .lb-panel-logo-text {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: rgba(255, 255, 255, 0.85);
+  text-align: center;
+  padding: 0 8px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.75);
+  transform-origin: center;
+  animation: lb-panel-logo-pulse var(--lb-hero-logo-pulse, 1s) ease var(--lb-hero-logo-delay, 0.5s);
+}
+
+/* Bottom bar: rating left, fav button right.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-hero-bottom ~line 969) */
+.lb-panel-hero-bottom {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: calc(100% - 16px);
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+/* ── Star rating widget — ported from BBW paintRating / .ps-rating block.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-rating ~line 977
+         BigBoxWeb/web/engine/app.js :: paintRating ~line 1032) */
+
+.lb-panel-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  position: relative;   /* anchor for .lb-rtooltip */
+  /* Small grey pill around the number + stars (mirrors BBW .ps-rating). */
+  padding: 3px 7px;
+  background: rgba(45, 45, 50, 0.70);
+  border-radius: 3px;
+}
+
+.lb-panel-rating.readonly {
+  cursor: default;
+}
+
+.lb-rnum {
+  color: #ddd;
+  font-size: 13px;
+  min-width: 28px;
+  text-align: right;
+}
+
+.lb-stars {
+  display: inline-flex;
+  gap: 1px;
+}
+
+.lb-star {
+  color: #555;
+  font-size: 16px;
+  line-height: 1;
+  transition: color 80ms ease;
+  user-select: none;
+  cursor: pointer;
+}
+
+/* Community rating = blue (no .lb-rating-user parent) */
+.lb-star.f {
+  color: #3aa0ff;
+}
+
+/* Personal rating = yellow */
+.lb-rating-user .lb-star.f {
+  color: #ffc940;
+}
+
+/* Hover preview — community */
+.lb-star.preview {
+  color: #3aa0ff;
+}
+
+/* Hover preview — personal */
+.lb-rating-user .lb-star.preview {
+  color: #ffc940;
+}
+
+/* Tooltip */
+.lb-rtooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  background: rgba(20, 20, 24, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.80);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 20;
+  display: none;
+}
+
+.lb-panel-rating:hover .lb-rtooltip {
+  display: block;
+}
+
+/* Action button (22×22 dark square, same spec as BBW .ps-action).
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-action ~line 1022) */
+.lb-panel-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 3px;
+  background: rgba(45, 45, 50, 0.70);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.lb-panel-action:hover {
+  background: rgba(90, 90, 95, 0.85);
+  color: #fff;
+}
+
+/* Fav active state.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-fav.on ~line 1033) */
+.lb-panel-fav.on,
+.lb-panel-fav.on:hover {
+  color: #ff4a4a;
+}
+
+/* Parental-lock equivalent — visible but non-interactive.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-fav.ps-fav-locked ~line 1038) */
+.lb-panel-fav.lb-fav-locked {
+  pointer-events: none;
+  opacity: 0.4;
+  cursor: default;
+  animation: none;
+}
+
+/* Main media area (screenshot or video below the hero).
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-media ~line 1055) */
+.lb-panel-media {
+  position: relative;
+  width: 100%;
+  padding: 0 14px;
+  margin-top: 8px;
+}
+
+.lb-panel-media .lb-panel-media-img {
+  width: 100%;
+  border-radius: 4px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55);
+  object-fit: contain;
+  max-height: 200px;
+  display: block;
+}
+
+.lb-panel-media video {
+  width: 100%;
+  border-radius: 4px;
+  max-height: 200px;
+  object-fit: contain;
+  display: block;
+}
+
+/* Horizontal thumbnail strip.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-thumbs ~line 1060)
+   Reserve space so layout doesn't shift when detail.json arrives 300ms after light render.
+   min-height = thumb height (118px) + top padding (8px) + bottom padding (8px) = 134px.
+   Even when the strip is empty (no children yet), this height is honoured so the
+   description below does not jump when the thumbs are injected by fillLbPanelHeavy(). */
+.lb-panel-thumbs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 14px;
+  min-height: 134px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.lb-panel-thumbs .lb-panel-thumb {
+  width: 84px;
+  height: 118px;
+  flex: none;
+  border-radius: 3px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+}
+
+.lb-panel-thumbs .lb-panel-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.lb-panel-thumbs .lb-panel-thumb.sel {
+  outline: 2px solid #4ca3f0;
+}
+
+/* Platform name + game title header.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-plat / .ps-title ~line 963) */
+.lb-panel-head {
+  padding: 8px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.lb-panel-plat {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Reserve space so layout doesn't shift when detail.json arrives 300ms after light render.
+   min-height = 2 × (font-size × line-height) = 2 × (16px × 1.2) = 38.4px → 39px.
+   A 1-line title occupies 2 lines worth of vertical space (second line is empty).
+   overflow:hidden + -webkit-line-clamp:2 prevents a 3-line title from pushing beyond. */
+.lb-panel-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e8e8ec;
+  margin-top: 2px;
+  line-height: 1.2;
+  min-height: 39px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Description text block.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-info ~line 1068) */
+.lb-panel-desc {
+  font-size: 12px;
+  color: #cfcfd2;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  padding: 4px 0;
+}
+
+
+/* ── L. PLAY BUTTON + DROPDOWN ───────────────────────────────────────────────
+   Compound "Play ▶ | ▾" button that splits into a main launch zone and a narrow
+   caret zone opening a stacked menu.  Visually integrated: both halves share the
+   same --lb-action-color background with a subtle border-left divider so they
+   read as ONE control.
+   (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-action ~line 1022
+         BigBoxWeb/web/styles.css :: .poster-side .ps-fav     ~line 1033) */
+
+/* Wrapper: positions the dropdown relative to itself.
+   FIX 1: display changed from inline-flex to flex so the wrapper stretches
+   to fill the parent column width (minus its own left/right margins).
+   FIX 2: isolation:isolate was removed — it created a stacking context that
+   trapped the dropdown's z-index inside .lb-panel-playgroup, preventing the
+   menu from painting above sibling columns. Without it the menu's z-index:1000
+   competes in the root stacking context and wins over everything. */
+.lb-panel-playgroup {
+  position: relative;
+  display: flex;
+  flex-direction: column;   /* Play (ligne 1) puis Version (2) puis ROM (3), chacun pleine largeur */
+  align-items: stretch;
+  gap: 4px;
+  width: auto;
+  margin: 8px 14px;
+}
+
+/* Ligne 1 : Play (grandit) + caret émulateur (28px à droite). */
+.lb-play-main-row {
+  display: flex;
+  width: 100%;
+}
+
+/* Main play zone: left half of the compound button.
+   FIX 1: flex:1 1 auto lets this half grow to fill all available width
+   inside .lb-panel-playgroup, leaving only the caret's fixed 28 px. */
+.lb-panel-play {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 auto;          /* remplit la ligne 1, le caret garde ses 28px à droite */
+  height: 30px;
+  padding: 0 14px 0 12px;
+  gap: 8px;
+  background: var(--lb-action-color);
+  color: #fff;
+  border: none;
+  border-radius: 4px 0 0 4px;
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease;
+  white-space: nowrap;
+}
+
+.lb-panel-play:hover {
+  background: var(--lb-action-color-hover);
+}
+
+.lb-panel-play.disabled,
+.lb-panel-play:disabled {
+  background: var(--lb-action-color-disabled);
+  cursor: default;
+}
+
+/* Play triangle icon — nudged up 1 px to optically centre with the label. */
+.lb-panel-play-icon {
+  font-size: 10px;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+/* Caret zone: right half, same height and background, narrow width.
+   border-left creates the visual split within the unified button.
+   FIX 1: flex:0 0 28px keeps the caret at exactly 28 px, glued to the
+   play button's right edge. */
+.lb-panel-play-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 30px;
+  background: var(--lb-action-color);
+  color: #fff;
+  border: none;
+  border-left: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 0 4px 4px 0;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  transition: background 120ms ease;
+}
+
+.lb-panel-play-caret:hover {
+  background: var(--lb-action-color-hover);
+}
+
+.lb-panel-play-caret.disabled,
+.lb-panel-play-caret:disabled {
+  background: var(--lb-action-color-disabled);
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* ↺ reset-to-default : carré rouge sombre à droite du caret, visible seulement quand
+   la sélection ou l'historique diffèrent des défauts (miroir de la colonne LiteBox). */
+.lb-panel-play-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 30px;
+  margin-left: 4px;
+  background: #8c3a3a;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: background 120ms ease;
+}
+.lb-panel-play-reset:hover { background: #a64545; }
+/* L'attribut hidden (UA display:none) perd contre la règle display:inline-flex
+   ci-dessus — sans ceci le bouton s'affiche TOUJOURS, même masqué par le JS. */
+.lb-panel-play-reset[hidden] { display: none; }
+
+/* Override cue (mirrors LiteBox's lighter green, in this theme's orange): a lighter
+   tint when the selected emulator is NOT the effective default for the selected
+   version — a user pick or a launch-history restore is in effect. */
+.lb-panel-play.lb-play-override,
+.lb-panel-play-caret.lb-play-override {
+  background: #dc9553;
+}
+.lb-panel-play.lb-play-override:hover,
+.lb-panel-play-caret.lb-play-override:hover {
+  background: #e8a76b;
+}
+
+/* Boutons de sélection « Version » / « ROM » (à droite du groupe Play).
+   Sélections mémorisées : un clic ouvre le menu déroulant partagé seedé sur la
+   liste correspondante ; ça ne lance pas le jeu. Plus discrets que Play,
+   séparés par une marge gauche. Masqués via [hidden] quand non pertinents. */
+.lb-panel-play-sel {
+  display: flex;
+  align-items: center;
+  width: 100%;             /* pleine largeur (ligne 2 et 3) */
+  height: 20px;            /* compact */
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: #34343c;     /* neutre, nettement moins vif que le Play (orange) */
+  color: #d6d6da;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.lb-panel-play-sel:hover { background: #3e3e48; }
+.lb-panel-play-sel[hidden] { display: none; }
+
+/* État « terne » : aucune sélection (version par défaut / pas de ROM choisie). */
+.lb-panel-play-sel.muted {
+  background: #2a2a30;
+  color: #85858c;
+}
+.lb-panel-play-sel.muted:hover { background: #33333a; color: #b0b0b6; }
+
+/* ROM "More" modal. Étroite (liste seule) par défaut ; large (2 colonnes :
+   liste | aperçu métadonnées) quand le jeu a des métadonnées (#lb-rom-modal
+   reçoit .has-meta dès qu'un template est rendu). */
+.lb-rom-modal-card { width: min(400px, 92vw); }
+#lb-rom-modal.has-meta .lb-rom-modal-card { width: min(1320px, 96vw); }
+.lb-rom-modal-split { display: flex; min-height: 0; }
+.lb-rom-modal-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  max-height: 72vh;
+  padding: 0;
+}
+#lb-rom-modal.has-meta .lb-rom-modal-list {
+  flex: 0 0 50%;          /* 50/50 par défaut, ajustable via le séparateur */
+  overflow-x: hidden;
+}
+/* Séparateur draggable entre la liste et l'aperçu. */
+.lb-rom-modal-divider { display: none; }
+#lb-rom-modal.has-meta .lb-rom-modal-divider {
+  display: block;
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: rgba(255, 255, 255, 0.10);
+}
+#lb-rom-modal.has-meta .lb-rom-modal-divider:hover { background: rgba(255, 255, 255, 0.24); }
+.lb-rom-modal-meta { display: none; }
+#lb-rom-modal.has-meta .lb-rom-modal-meta {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 72vh;
+  border: 0;
+  background: #1a1a1d;
+}
+
+/* ROM "More" modal rows (full ROM list). */
+.lb-rom-modal-row {
+  padding: 7px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: #d6d6da;
+}
+.lb-rom-modal-row:hover { background: #2f2f37; }
+.lb-rom-modal-row.active { background: #34343c; color: #fff; }
+.lb-rom-modal-row.active::before { content: "● "; color: #6aa0ff; }
+
+/* Modale More : barre de recherche + table triable. */
+.lb-rom-search-wrap { position: sticky; top: 0; z-index: 3; background: #222227; padding: 8px; }
+.lb-rom-search {
+  width: 100%; box-sizing: border-box; padding: 5px 8px;
+  background: #1a1a1d; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 4px;
+  color: #e0e0e4; font: inherit; font-size: 12px;
+}
+.lb-rom-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.lb-rom-table th {
+  position: sticky; top: 37px; z-index: 2; background: #26262b;
+  color: rgba(255, 255, 255, 0.7); text-align: left; padding: 5px 8px;
+  cursor: pointer; user-select: none; white-space: nowrap;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.lb-rom-table th:hover { color: #fff; }
+.lb-rom-table td {
+  padding: 5px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lb-rom-table th.c-fav,  .lb-rom-table td.c-fav  { width: 24px; text-align: center; }
+.lb-rom-table td.c-fav  { color: #6aa0ff; }
+/* Clickable favourite toggle (set/unset) in the ROM modal. */
+.lb-rom-table td.lb-rom-fav { cursor: pointer; color: #5a5a64; user-select: none; }
+.lb-rom-table td.lb-rom-fav:hover { color: #ffd54a; }
+.lb-rom-table td.lb-rom-fav.on { color: gold; }
+.lb-rom-table th.c-size, .lb-rom-table td.c-size { width: 72px; text-align: right; }
+.lb-rom-table td.c-size { color: #9a9aa2; }
+.lb-rom-table th.c-ra, .lb-rom-table td.c-ra { width: 200px; }
+.lb-rom-table td.c-ra { color: #d8b24a; }   /* RetroAchievements game title */
+.lb-rom-table td.c-name { color: #d6d6da; }
+.lb-rom-trow { cursor: pointer; }
+.lb-rom-trow:hover { background: #2f2f37; }
+.lb-rom-trow.active { background: #34343c; }
+.lb-rom-trow.active td.c-name { color: #fff; }
+
+/* Dropdown panel — hidden by default via [hidden] attribute.
+   position:absolute relative to .lb-panel-playgroup.
+   right:0 aligns its right edge with the caret button right edge.
+   FIX 2: z-index bumped from 20 → 1000 so the menu paints above all three
+   columns and any other in-page layers.  The removal of isolation:isolate
+   from .lb-panel-playgroup (see above) means this z-index now participates
+   in the root stacking context rather than being trapped inside the wrapper.
+   .lb-panel-scroll has overflow-y:auto which would clip a child that paints
+   outside its scroll box — but position:absolute children are not clipped by
+   overflow on non-positioned ancestors, and .lb-panel-scroll is NOT
+   positioned (no position property set), so the menu escapes the scroll clip. */
+.lb-panel-play-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 220px;
+  max-width: 340px;
+  background: #1f1f22;
+  color: #eaeaea;
+  border: 1px solid #2d2d31;
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+  z-index: 1000;
+}
+
+.lb-panel-play-menu[hidden] {
+  display: none;
+}
+
+/* Menu item — block, padded, truncated. */
+.lb-play-menu-item {
+  display: block;
+  padding: 8px 12px 8px 24px;   /* 24px left = room for bullet */
+  border-radius: 3px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+  position: relative;
+}
+
+.lb-play-menu-item:hover {
+  background: #2a2a2f;
+}
+
+/* Active (checked) item: orange bullet via ::before.
+   Non-active items get padding-left:24px so labels line up with active ones. */
+.lb-play-menu-item.active::before {
+  content: "\25CF";   /* ● BLACK CIRCLE */
+  position: absolute;
+  left: 8px;
+  color: var(--lb-action-color);
+  font-size: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Separator line between item groups. */
+.lb-play-menu-sep {
+  height: 1px;
+  background: #2d2d31;
+  margin: 4px 0;
+}
+
+/* Section header above a group of items (e.g. "SELECT VERSION"). */
+.lb-play-menu-header {
+  padding: 6px 12px 4px;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+/* Back item — slightly dimmed, styled like a menu item but with a left arrow. */
+.lb-play-menu-back {
+  display: block;
+  padding: 8px 12px 8px 24px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  position: relative;
+}
+
+.lb-play-menu-back::before {
+  content: "\2039";   /* ‹ single left angle quotation */
+  position: absolute;
+  left: 9px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.lb-play-menu-back:hover {
+  background: #2a2a2f;
+  color: #eaeaea;
+}
+
+
+/* ── K. PARENTAL CONTROL — lock indicator, menu dropdown, PIN pad, info modal ── */
+
+/* ── K.1  Lock indicator (near the cog button in the header) ──────────────
+   Mirrors BigBoxWeb/web/styles.css :: .topbar .lockind ~line 166.
+   18-20 px square SVG injected by JS; color driven by state class.
+   .red  = BigBox global lock (red #e8493b).
+   .green = LaunchBox per-client lock (green #5a5 ~ #36c25a).
+   .open  = unlocked (semitransparent grey — still clickable to re-lock).
+   (ref: BigBoxWeb/web/styles.css :: .topbar .lockind ~line 166) */
+.lb-lockind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  line-height: 0;
+  vertical-align: middle;
+  flex: none;
+}
+
+.lb-lockind svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+/* Hidden when parental is inactive — no element rendered, or class absent */
+.lb-lockind:not(.red):not(.green):not(.open) {
+  display: none;
+}
+
+.lb-lockind.red   { color: #e8493b; }   /* BigBox global lock  */
+.lb-lockind.green { color: #36c25a; }   /* LaunchBox per-client lock */
+.lb-lockind.open  { color: rgba(154, 160, 166, 0.6); }   /* unlocked */
+
+
+/* ── K.2  MENU dropdown ────────────────────────────────────────────────────
+   The MENU button is wrapped in .lb-menu-wrap (position:relative) so the
+   dropdown positions itself relative to the button.
+   .lb-menu-dropdown is hidden by default; .open shows it.
+   (no direct BBW equivalent — LaunchBox uses a system screen; here we add
+    an inline dropdown mimicking native OS menu chrome) */
+.lb-menu-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.lb-menu-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 160px;
+  background: #222227;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  padding: 4px 0;
+  z-index: 200;
+  list-style: none;
+  margin: 0;
+}
+
+.lb-menu-dropdown.open {
+  display: block;
+}
+
+.lb-menu-item {
+  padding: 7px 16px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.lb-menu-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+/* Disabled menu item — parental not unlockable in this mode */
+.lb-menu-item.lb-menu-disabled {
+  opacity: 0.38;
+  pointer-events: none;
+  cursor: default;
+}
+
+/* Hidden item — remove from tab order too */
+.lb-menu-item.lb-menu-hidden {
+  display: none;
+}
+
+.lb-menu-sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  margin: 4px 0;
+}
+
+
+/* ── K.3  PIN pad overlay + panel ──────────────────────────────────────────
+   Mirrors BigBoxWeb/web/styles.css :: .pin-modal / .pin-panel ~line 1376.
+   Full-screen overlay with dark scrim; centred card.
+   (ref: BigBoxWeb/web/styles.css :: .pin-modal ~line 1376) */
+.lb-pinpad-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.58);
+}
+
+/* hidden attribute hides the overlay; JS removes it to show */
+.lb-pinpad-overlay[hidden] {
+  display: none;
+}
+
+/* Card panel — dark, rounded, shadowed.
+   (ref: BigBoxWeb/web/styles.css :: .pin-panel ~line 1387) */
+.lb-pinpad-panel {
+  background: rgba(34, 34, 39, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 12px;
+  padding: 28px 28px 22px;
+  width: 340px;
+  text-align: center;
+  color: #e6e6e6;
+  box-shadow: 0 20px 64px rgba(0, 0, 0, 0.65);
+}
+
+/* Title line — rewritten by JS on each state change.
+   (ref: BigBoxWeb/web/styles.css :: .pin-title ~line 1393) */
+.lb-pinpad-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 14px;
+  letter-spacing: 0.2px;
+}
+
+/* Dot display — asterisk per digit entered.
+   Monospace so dots don't jitter as PIN grows.
+   (ref: BigBoxWeb/web/styles.css :: .pin-display ~line 1394) */
+.lb-pinpad-display {
+  height: 38px;
+  line-height: 38px;
+  font-size: 30px;
+  letter-spacing: 10px;
+  color: #fff;
+  margin-bottom: 4px;
+  font-family: monospace, monospace;
+  min-height: 38px;
+}
+
+/* Error line — shown on wrong-PIN / lockout messages.
+   Empty by default; JS sets textContent + display. */
+.lb-pinpad-error {
+  font-size: 13px;
+  color: #e8493b;
+  min-height: 20px;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+/* 3-column grid of digit + action buttons.
+   (ref: BigBoxWeb/web/styles.css :: .pin-pad ~line 1397) */
+.lb-pinpad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+  margin-bottom: 14px;
+}
+
+/* Individual key button.
+   (ref: BigBoxWeb/web/styles.css :: .pin-key ~line 1398) */
+.lb-pinpad-key {
+  height: 60px;
+  display: grid;
+  place-items: center;
+  background: #2c2c30;
+  border: none;
+  border-radius: 8px;
+  color: #dcdcdc;
+  font-size: 22px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease;
+  position: relative;
+}
+
+.lb-pinpad-key:hover {
+  background: #3a3a40;
+  color: #fff;
+}
+
+.lb-pinpad-key:active {
+  background: #454550;
+}
+
+/* Submit / Unlock button — slightly highlighted.
+   (ref: BigBoxWeb/web/styles.css :: .pin-key[data-k="done"] — styled same, just labelled) */
+.lb-pinpad-submit {
+  background: #1e4a7a;
+  color: #80c8ff;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.lb-pinpad-submit:hover {
+  background: #245990;
+  color: #fff;
+}
+
+/* Backspace / Delete key — smaller font for the symbol */
+.lb-pinpad-wide {
+  font-size: 18px;
+}
+
+/* Cancel link at the bottom */
+.lb-pinpad-cancel {
+  display: inline-block;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 4px 12px;
+  border-radius: 3px;
+  margin-top: 2px;
+}
+
+.lb-pinpad-cancel:hover {
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+
+/* ── K.4  BigBox info modal panel ──────────────────────────────────────────
+   Reuses .lb-pinpad-overlay and .lb-pinpad-panel; this modifier widens it.
+   (ref: BigBoxWeb/web/styles.css :: .msg-modal / .msg-title ~line 1404) */
+.lb-info-panel {
+  max-width: 480px;
+  width: 90vw;
+}
+
+.lb-info-text {
+  font-size: 15px;
+  color: #c7c7c7;
+  line-height: 1.55;
+  margin-bottom: 20px;
+  text-align: left;
+}
+
+
+/* ── K.5  Parental-lock state on fav button ────────────────────────────────
+   Already declared in section I (.lb-panel-fav.lb-fav-locked) — no duplicate.
+   Ref: BigBoxWeb/web/styles.css :: .poster-side .ps-fav.ps-fav-locked ~line 1038 */
+
+
+/* ── J. SETTINGS MODAL ────────────────────────────────────────────────────── */
+
+.lb-modal[hidden] {
+  display: none;
+}
+
+.lb-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lb-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.lb-modal-card {
+  position: relative;
+  width: min(560px, 90vw);
+  max-height: 80vh;
+  background: #222227;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.lb-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: rgba(255, 255, 255, 0.65);
+  flex: none;
+}
+
+.lb-modal-close {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 6px;
+}
+
+.lb-modal-close:hover {
+  color: #fff;
+}
+
+.lb-modal-body {
+  padding: 14px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+
+/* ── M. CFG MODAL ─────────────────────────────────────────────────────────────
+   Full options modal wired in app.js :: openLbCfgModal / populateLbCfgUi.
+   z-index: 500 so it sits above the parental pinpad (z-index: 200).
+   Class names are lb-cfg-* to distinguish from the legacy .lb-modal-* shell.
+   Visual language mirrors BBW engine/styles.css :: .config-modal block
+   (~line 1607) but adapted to LBW's darker palette and simpler structure.
+   Ref (BBW): .config-modal / .config-panel / .cfg-row / .cfg-toggle /
+              .cfg-slider / .cfg-select / .cfg-restore / .config-hint */
+
+/* M.1  Hidden state — mirrors BBW .config-modal display:none approach */
+.lb-cfg-modal[hidden] { display: none; }
+
+/* M.2  Full-screen overlay container */
+.lb-cfg-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* M.3  Dimming scrim — clicks outside the panel close the modal */
+.lb-cfg-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+/* M.4  Centred card (ref: BBW .config-panel) */
+.lb-cfg-panel {
+  position: relative;
+  width: min(640px, 92vw);
+  max-height: 86vh;
+  background: #1c1d1f;
+  color: #eaeaea;
+  border: 1px solid #2d2d31;
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+}
+
+/* M.5  Header row (title + close button) */
+.lb-cfg-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #2d2d31;
+  flex: none;
+}
+
+.lb-cfg-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* M.6  Close (×) button — top-right of header */
+.lb-cfg-close {
+  background: none;
+  border: none;
+  color: #b9b9b9;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.lb-cfg-close:hover { color: #fff; }
+
+/* M.7  Scrollable content area (ref: BBW .config-body) */
+.lb-cfg-body {
+  padding: 12px 18px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* M.8  Per-section fieldset (ref: BBW tab grouping rendered per schema key) */
+.lb-cfg-section {
+  border: none;
+  padding: 8px 0 12px;
+  margin: 0;
+}
+
+/* M.8a  Section title */
+.lb-cfg-section legend {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #888;
+  padding: 0;
+  margin-bottom: 6px;
+  width: 100%;
+}
+
+/* M.9  Option row — label + control (ref: BBW .cfg-row) */
+.lb-cfg-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+
+/* M.10  Label text (ref: BBW .cfg-label) */
+.lb-cfg-label {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: #ccc;
+  cursor: default;
+}
+
+/* M.11  Control wrapper — fixed width, right-aligned (ref: BBW .cfg-ctrl) */
+.lb-cfg-control {
+  flex: 0 0 220px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* M.12  Range slider — fills available space in control wrapper
+         (ref: BBW .cfg-track / .cfg-fill / .cfg-knob — here we use native
+          <input type="range"> rather than a custom div track) */
+.lb-cfg-range {
+  flex: 1 1 auto;
+  accent-color: var(--lb-action-color, #c8732f);
+}
+
+/* M.13  Numeric readout beside a range (ref: BBW .cfg-val) */
+.lb-cfg-value {
+  font-size: 12px;
+  color: #999;
+  min-width: 42px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* M.14  Color input (ref: BBW — no direct analogue; LBW theme.actionColor) */
+.lb-cfg-color {
+  width: 32px;
+  height: 22px;
+  border: 1px solid #444;
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* M.15  Checkbox (ref: BBW .cfg-toggle — here native <input type="checkbox">) */
+.lb-cfg-check {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--lb-action-color, #c8732f);
+  cursor: pointer;
+}
+
+/* M.16  Footer bar — Reset / Done buttons */
+.lb-cfg-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 18px;
+  border-top: 1px solid #2d2d31;
+  flex: none;
+}
+
+/* M.17  Shared button base */
+.lb-cfg-reset,
+.lb-cfg-ok {
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* M.18  Reset button */
+.lb-cfg-reset {
+  background: #333;
+  color: #ccc;
+}
+
+.lb-cfg-reset:hover { background: #404040; }
+
+/* M.19  Done / close button — uses action accent colour
+         (ref: BBW no "OK" button; LBW adds one for mouse users) */
+.lb-cfg-ok {
+  background: var(--lb-action-color, #c8732f);
+  color: #fff;
+}
+
+.lb-cfg-ok:hover { background: var(--lb-action-color-hover, #de8438); }
+
+
+/* ── N. LIST VIEW (View ▸ List) ────────────────────────────────────────────
+   Columnar row-per-game alternative to the poster grid. The centre pane
+   (#lb-grid) holds BOTH .lb-grid-scroll (image) and .lb-list-scroll (list);
+   the active one is chosen by a body class set in setLbViewMode/initLbViewMode.
+   Header + rows are CSS grids whose grid-template-columns is set inline by
+   buildLbList() from the visible columns' widths (title flexes, rest fixed).
+   ========================================================================== */
+
+/* View toggle: show exactly one centre container. */
+.lb-list-scroll { display: none; }
+body.lb-view-list  .lb-grid-scroll { display: none; }
+body.lb-view-list  .lb-list-scroll {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.lb-list-scroll::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+.lb-list-scroll::-webkit-scrollbar-track { background: transparent; }
+.lb-list-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 3px; }
+
+/* Header row — sticky so it stays put while the body scrolls. */
+.lb-list-head {
+  display: grid;
+  grid-template-columns: var(--lb-tmpl, 1fr);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #1b1b1f;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  user-select: none;
+}
+.lb-lh-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.60);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+/* Right/centre-aligned headers push their content accordingly. */
+.lb-lh-cell[style*="right"]  { justify-content: flex-end; }
+.lb-lh-cell[style*="center"] { justify-content: center; }
+.lb-lh-cell:hover { color: rgba(255, 255, 255, 0.92); background: rgba(255, 255, 255, 0.04); }
+.lb-lh-label { overflow: hidden; text-overflow: ellipsis; }
+.lb-lh-sort { color: var(--lb-action-color, #c8732f); font-size: 10px; flex: 0 0 auto; }
+.lb-lh-cell.lb-lh-drag { opacity: 0.4; }
+.lb-lh-cell.lb-lh-over { box-shadow: inset 2px 0 0 var(--lb-action-color, #c8732f); }
+
+/* Resize grip on the right edge of each header cell. */
+.lb-lh-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+}
+.lb-lh-resize:hover { background: var(--lb-action-color, #c8732f); opacity: 0.55; }
+/* While dragging a column edge, force the resize cursor everywhere + kill
+   text selection so the drag stays smooth. */
+body.lb-col-resizing,
+body.lb-col-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* Data rows. */
+.lb-row {
+  display: grid;
+  grid-template-columns: var(--lb-tmpl, 1fr);
+  align-items: center;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.lb-row:nth-child(even) { background: rgba(255, 255, 255, 0.018); }
+.lb-row:hover { background: rgba(255, 255, 255, 0.06); }
+.lb-row.selected {
+  background: rgba(200, 115, 47, 0.22);
+  box-shadow: inset 2px 0 0 var(--lb-action-color, #c8732f);
+}
+.lb-lc {
+  padding: 5px 10px;
+  font-size: 13px;
+  color: #d2d2d4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lb-lc-fav { color: var(--lb-action-color, #c8732f); }
+.lb-lc-rating-user { color: #ffc400; }   /* user rating — amber (LiteBox parity) */
+.lb-lc-rating-comm { color: #969698; }   /* community rating — grey */
+
+/* Column chooser (right-click a header). */
+.lb-colmenu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 172px;
+  max-height: 72vh;
+  overflow: auto;
+  background: #232327;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+}
+.lb-colmenu-item {
+  position: relative;
+  padding: 6px 10px 6px 26px;
+  font-size: 13px;
+  color: #d2d2d4;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.lb-colmenu-item:hover { background: rgba(255, 255, 255, 0.08); }
+.lb-colmenu-item.checked::before {
+  content: "✓";
+  position: absolute;
+  left: 8px;
+  color: var(--lb-action-color, #c8732f);
+}
+
+/* VIEW dropdown — check mark on the active mode (reuses .lb-menu-* styles). */
+.lb-menu-item.checked::after {
+  content: "✓";
+  margin-left: 8px;
+  color: var(--lb-action-color, #c8732f);
+}

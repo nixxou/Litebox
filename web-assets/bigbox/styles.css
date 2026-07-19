@@ -1,0 +1,1785 @@
+/* ============================================================================
+   BigBoxWeb — feuille de style partagée (thème "Default")
+
+   Modèle de scaling : on dessine sur une scène fixe 1280×720 (résolution de la
+   vidéo de référence) mise à l'échelle via transform: scale() — équivalent web
+   du ScaleWithResolutionConverter du XAML (réf. 2560×1440). Toutes les valeurs
+   sont en px "design" sur cette base 1280×720.
+
+   Organisation :
+     1. Base + scène + scaling
+     2. Coquille partagée : fond, barre haut, barre bas, glyphes, liste gauche
+     3. Contenu : .screen-games  (liste de jeux,  réf. f_044)
+     4. Contenu : .screen-categories (catégories/plateformes, réf. f_032/f_026)
+     5. Contenu : .screen-details (détail jeu, réf. f_050)
+     6. Contenu : .screen-system (system menu, réf. f_064)
+   ========================================================================== */
+
+/* ── 0. Bouton Exit — mode kiosque embarqué uniquement ─────────────────
+   Cache par défaut ; visible quand body.bbw-embedded est set (mode WebView2
+   hébergé par ExtendDB). Click → post 'kiosk:exit' au host qui ferme la
+   fenêtre. Positionné en haut à droite, au-dessus de tout (z-index élevé)
+   pour rester accessible même quand un modal s'affiche par-dessus. */
+#bbw-exit-btn {
+  display: none;
+}
+body.bbw-embedded #bbw-exit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: fixed;
+  top: 8px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  font-size: 24px;
+  font-weight: 300;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(20, 20, 20, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 99999;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+body.bbw-embedded #bbw-exit-btn:hover {
+  background: rgba(220, 60, 60, 0.85);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+body.bbw-embedded #bbw-exit-btn:focus { outline: none; }
+
+/* ── 1. Base + scène ──────────────────────────────────────────────────── */
+:root {
+  --bar-bg:        #060606;
+  --content-bg:    #1c1d1f;
+  --text:          #ffffff;
+  --text-dim:      #b9b9b9;   /* items non sélectionnés, métadonnées */
+  --text-desc:     #9a9a9a;   /* description */
+  --text-faint:    #6f6f6f;
+  --pill-bg:       rgba(255,255,255,0.07);
+  --pill-icon-bg:  rgba(255,255,255,0.11);
+  --gold:          #e8c14a;
+  /* Trophée monochrome (Material « emoji_events ») servant de MASQUE recolorable pour les
+     paliers qualité — un emoji 🏆 serait en couleur fixe et non recolorable. */
+  --bbw-trophy: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M19%205h-2V3H7v2H5c-1.1%200-2%20.9-2%202v1c0%202.55%201.92%204.63%204.39%204.94.63%201.5%201.98%202.63%203.61%202.96V19H7v2h10v-2h-4v-3.1c1.63-.33%202.98-1.46%203.61-2.96C19.08%2012.63%2021%2010.55%2021%208V7c0-1.1-.9-2-2-2zM5%208V7h2v3.82C5.84%2010.4%205%209.3%205%208zm14%200c0%201.3-.84%202.4-2%202.82V7h2v1z'/%3E%3C/svg%3E");
+}
+
+html, body {
+  margin: 0; height: 100%; background: #000; overflow: hidden;
+  font-family: "Segoe UI", "Open Sans", system-ui, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Curseur masqué tant que la souris ne bouge pas (posé/retiré par le moteur). */
+body.cursor-hidden, body.cursor-hidden * { cursor: none !important; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Scrollbars natives — appliquées à TOUTE surface qui a overflow:auto ou
+   scroll. Apparaissent automatiquement quand le contenu dépasse la zone
+   visible (= ce que le user attend : "as soon as it overflows"). Thème
+   sombre, fines, semi-transparentes, sans flèches. Le track reste invisible
+   pour ne pas alourdir l'UI ; le thumb apparaît au hover/scroll.
+   - Firefox        : scrollbar-width: thin + scrollbar-color (thumb track)
+   - WebKit/Blink   : ::-webkit-scrollbar* (Chrome, Edge, Safari, WebView2)
+   ────────────────────────────────────────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.30) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  border: 2px solid transparent;   /* fake inset padding pour amincir le thumb */
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover  { background: rgba(255, 255, 255, 0.40); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:active { background: rgba(255, 255, 255, 0.55); background-clip: padding-box; }
+::-webkit-scrollbar-button, ::-webkit-scrollbar-corner { display: none; background: transparent; }
+
+/* Scène centrée par position absolue + translate(-50%,-50%) : robuste quelle que
+   soit la taille de la fenêtre, y compris quand elle est plus PETITE que 1280×720
+   (téléphone en paysage en mode tablette). Le centrage par grille échouait dans ce
+   cas — la piste sur-dimensionnée débordait en bas/à droite (gros bord noir en
+   haut/à gauche). scale.js complète le transform avec le scale. */
+#viewport {
+  position: fixed; inset: 0; overflow: hidden;
+  /* Fond plein écran : remplit aussi les bandes du letterbox (écran non-16:9,
+     ex. téléphone en paysage) → plus de bord noir, on remplit toute la largeur. */
+  background:
+    linear-gradient(180deg, rgba(20,20,22,0.86), rgba(20,20,22,0.92)),
+    radial-gradient(120% 90% at 30% 20%, #3a2d3f 0%, #20181f 45%, #141215 100%);
+}
+
+#stage {
+  position: absolute; top: 50%; left: 50%;
+  width: 1280px; height: 720px;
+  transform-origin: center center;
+  transform: translate(-50%, -50%);    /* scale.js → translate(-50%,-50%) scale(s) */
+  background: var(--content-bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+/* ── 2. Coquille partagée ─────────────────────────────────────────────── */
+
+/* Fond : image de jeu très atténuée (BackgroundFade=65). Placeholder. */
+.bg {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(180deg, rgba(20,20,22,0.86), rgba(20,20,22,0.92)),
+    radial-gradient(120% 90% at 30% 20%, #3a2d3f 0%, #20181f 45%, #141215 100%);
+}
+
+/* FANART en fond de la PARTIE DROITE : depuis le bord droit du menu (≈250 px + marge) jusqu'au
+   bord, entre la topbar (30 px) et la bottombar (28 px). Juste au-dessus de .bg, SOUS le contenu
+   (boxart / détail / média) car placé tôt dans le DOM (z-index auto = ordre du DOM). Image posée
+   par le moteur (background-image inline) ; .has-fanart révèle l'opacité (config) avec un fondu. */
+.screen-games .fanart,
+.screen-details .fanart {
+  position: absolute; left: calc(10px + var(--bbw-list-w, 250px)); right: 0; top: 30px; bottom: 28px;
+  background-position: center; background-size: cover; background-repeat: no-repeat;
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--bbw-fanart-fade, 2000ms) ease;   /* fondu progressif 0 → opacity */
+}
+.screen-games .fanart.has-fanart,
+.screen-details .fanart.has-fanart { opacity: var(--bbw-fanart-op, .07); }
+
+.topbar, .bottombar {
+  position: absolute; left: 0; right: 0; height: 30px;
+  background: var(--bar-bg);
+  display: flex; align-items: center;
+  padding: 0 20px; box-sizing: border-box;
+  font-size: 14px; letter-spacing: 0.5px;
+  z-index: 10;
+}
+.topbar { top: 0; }
+.bottombar { bottom: 0; height: 28px; font-size: 12px; }
+.topbar .title { font-weight: 700; letter-spacing: 1px; }
+.topbar .clock { margin-left: auto; font-weight: 600; }
+/* Cadenas d'état parental, juste à droite de l'horloge. Couleur = autorité du
+   verrou (rouge BigBox / vert LaunchBox), forme = ouvert/fermé. */
+.topbar .lockind { display: inline-flex; align-items: center; margin-left: 10px; line-height: 0; }
+.topbar .lockind.red   { color: #e8493b; }
+.topbar .lockind.green { color: #36c25a; }
+.topbar .lockind.open  { color: #9aa0a6; }
+
+.bottombar .left  { display: flex; align-items: center; gap: 8px; }
+.bottombar .right { margin-left: auto; display: flex; align-items: center; gap: 18px; }
+.bottombar .hint  { display: flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: 0.5px; }
+.bottombar .page  { color: var(--text-dim); font-weight: 600; }
+
+.glyph {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #e9e9e9; color: #111;
+  font-size: 11px; font-weight: 800; line-height: 1; text-align: center;
+}
+/* Variante RECTANGULAIRE (même hauteur que les ronds) : touche/bouton de bascule de vue. */
+.glyph.rect { width: auto; border-radius: 4px; padding: 0 6px; font-size: 10px; letter-spacing: 0.3px; }
+/* bouton contextuel : flèche retour noire (SVG) dans un rond blanc.
+   Épaisseur = stroke-width ; centrage exact via le viewBox (indépendant de la police). */
+.glyph.back {
+  color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='%23111111'%20stroke-width='3.5'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M19%2012H5'/%3E%3Cpath%20d='M11%206l-6%206%206%206'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 12px 12px;
+}
+
+/* Liste verticale gauche (partagée par tous les écrans).
+   Pas de ligne ≈ 55px (highlight 44px + 11px d'écart) ; 1er item centré ≈ y100. */
+.list {
+  position: absolute; top: 78px; left: 10px; width: var(--bbw-list-w, 250px);
+  height: 600px; overflow: hidden;          /* fenêtre clippée : la liste défile dedans */
+}
+.list-scroll {                              /* contenu défilant (translateY par le moteur) */
+  position: relative; display: flex; flex-direction: column;
+  transition: transform var(--bbw-list-scroll, .18s) ease; will-change: transform;  /* config: lists.desktopScrollMs */
+}
+.list-scroll.instant { transition: none; }
+.list-item {
+  position: relative; z-index: 1;
+  height: 44px; margin-bottom: 11px;
+  display: flex; align-items: center;
+  padding: 0 18px; box-sizing: border-box;
+  color: var(--text-dim); font-size: var(--bbw-item-fs, 15px);   /* config: lists.itemFontSizePx */
+  border-radius: 8px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer;                      /* cliquable à la souris */
+  transition: color .12s ease, padding-left .1s ease;
+}
+.list-item.selected { color: #fff; padding-left: 26px; }  /* indent léger */
+/* Hit-test : tout enfant d'un .list-item est transparent au clic. Sans ça, cliquer
+   sur le label texte (lui-même enveloppé par le moteur dans <span class="lbl"> pour
+   le marquee) ou sur la flèche ▶ d'un sous-menu peut, selon le timing du wrap/unwrap,
+   atterrir sur le span enfant et rater le handler de délégation du .list parent dans
+   certains cas tactile/souris. Cette règle force chaque clic à matcher le .list-item
+   lui-même. Pas d'effet sur la sélection (gérée par le mouseover/mousemove qui
+   utilise déjà closest()). */
+.list-item * { pointer-events: none; }
+/* Marquee : le label de l'item sélectionné est enveloppé ici par le moteur et translaté
+   (le bouton clippe via overflow:hidden ci-dessus). Inline-block pour mesurer/translater. */
+.list-item .lbl { display: inline-block; white-space: nowrap; will-change: transform; }
+/* Marqueur gauche d'un item, dans la marge vide (positionné → ne décale pas le texte).
+   FAVORI = ÉTOILE (glyphe, or pulsant, PRIORITAIRE). QUALITÉ = TROPHÉE (SVG recoloré via masque)
+   pour ne pas confondre avec le favori. markGameStars pose .fav / .tier1|2|3. */
+.screen-games .list-item.fav::before,
+.screen-games .list-item.tier1::before,
+.screen-games .list-item.tier2::before,
+.screen-games .list-item.tier3::before {
+  content: ""; position: absolute; left: 5px; top: 50%; transform: translateY(-50%);
+  width: 13px; height: 13px; pointer-events: none; transition: opacity .15s ease;
+}
+/* Qualité (uniquement si PAS favori) : trophée masqué, couleur par palier — couleurs POUSSÉES
+   pour bien les distinguer (bronze tire vers le rouge cuivré, or vers le jaune vif). */
+.screen-games .list-item.tier1:not(.fav)::before,
+.screen-games .list-item.tier2:not(.fav)::before,
+.screen-games .list-item.tier3:not(.fav)::before {
+  -webkit-mask: var(--bbw-trophy) center / contain no-repeat;
+          mask: var(--bbw-trophy) center / contain no-repeat;
+}
+.screen-games .list-item.tier1:not(.fav)::before { background-color: #c8521f; }   /* bronze (rouge cuivré) */
+.screen-games .list-item.tier2:not(.fav)::before { background-color: #d3dde9; }   /* argent */
+.screen-games .list-item.tier3:not(.fav)::before { background-color: #ffce10; filter: drop-shadow(0 0 3px rgba(255,200,0,.55)); }  /* or (jaune vif) */
+/* Favori (prioritaire) : ÉTOILE or vif + pulsation avec onde d'aura → ressort plus que les trophées. */
+.screen-games .list-item.fav::before {
+  content: "\2605"; width: auto; height: auto; font-size: 0.85em; color: #ffd23a;
+  animation: bbwFavPulse 1.6s ease-in-out infinite;
+}
+@keyframes bbwFavPulse {
+  0%, 100% { text-shadow: 0 0 2px rgba(255,205,60,.55); transform: translateY(-50%) scale(1); }
+  50%      { text-shadow: 0 0 9px rgba(255,215,70,1), 0 0 18px rgba(255,200,40,.5); transform: translateY(-50%) scale(1.22); }
+}
+/* Marqueur masqué quand le texte DÉFILE (le label passe par-dessus ; réapparaît quand il revient
+   en place — classe .lbl-scrolling posée par le marquee) et quand le RAIL est ouvert. */
+.screen-games .list-item.lbl-scrolling::before,
+.screen-games.rail-open .list-item::before { opacity: 0; }
+
+/* Mode COMPACT auto : posé sur le .screen courant par le moteur quand le nb
+   d'items dépasse lists.compactThresholdN (et lists.compactEnabled = true).
+   Surcharge les 4 variables wheel/list par leurs équivalents compactes (cf.
+   config.js applyConfigCss / configSchema). En cascade : .screen-details
+   .list-item et la roue mobile (body.tablet) lisent ces mêmes variables et
+   se resserrent automatiquement. */
+.screen.compact-wheel {
+  --bbw-box-h:    var(--bbw-compact-box-h, 28px);
+  --bbw-item-h:   var(--bbw-compact-item-h, 18px);
+  --bbw-item-gap: var(--bbw-compact-gap, 9px);
+  --bbw-item-fs:  var(--bbw-compact-fs, 13px);
+}
+
+/* Espacement configurable des menus catégories / jeux (desktop) : l'élément
+   SÉLECTIONNÉ garde la hauteur de la box (--bbw-box-h) ; les éléments non
+   sélectionnés peuvent être resserrés (--bbw-item-h / --bbw-item-gap). Les
+   défauts reproduisent les valeurs d'origine → aucun changement tant que la
+   config ne les réduit pas. (config: lists.boxHeightPx / itemHeightPx / gapPx)
+   Volontairement hors #stage : la spécificité reste sous celle des règles
+   mobile (roue) et détail / system, qui gardent leur propre espacement. */
+.screen-categories .list-item,
+.screen-games .list-item {
+  height: var(--bbw-item-h, 44px);
+  margin-bottom: var(--bbw-item-gap, 11px);
+}
+.screen-categories .list-item.selected,
+.screen-games .list-item.selected { height: var(--bbw-box-h, 44px); }
+
+/* Surbrillance statique : écrans isolés (sans moteur JS). */
+.list-item.selected {
+  background: linear-gradient(180deg, rgba(125,125,128,0.55) 0%, rgba(70,70,73,0.40) 55%, rgba(55,55,58,0.30) 100%);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset, 0 1px 3px rgba(0,0,0,0.35);
+}
+/* En mode multi (index) : surbrillance = bloc flottant animé (voir .list-highlight). */
+#stage.multi .list-item.selected { background: none; box-shadow: none; }
+.list-highlight {
+  position: absolute; left: 0; top: 0; width: var(--bbw-list-w, 250px); height: 44px;
+  border-radius: 8px; overflow: hidden;
+  background: linear-gradient(180deg, rgba(125,125,128,0.55) 0%, rgba(70,70,73,0.40) 55%, rgba(55,55,58,0.30) 100%);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset, 0 1px 3px rgba(0,0,0,0.35);
+  transform: translate(0, 0); pointer-events: none; z-index: 0;
+  /* glissement rapide ; coupé via .instant pendant un appui maintenu (config: highlight.slideMs) */
+  transition: transform var(--bbw-hl-slide, .1s) ease, height var(--bbw-hl-slide, .1s) ease, width var(--bbw-hl-slide, .1s) ease;
+}
+.list-highlight.instant { transition: none; }
+
+/* flash quasi-intégral bref au changement de sélection (haut/bas) :
+   un voile blanc léger couvre TOUT le bloc puis s'efface. */
+.list-highlight::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: #fff; opacity: 0; pointer-events: none;
+}
+.list-highlight.flash::after { animation: hlFlash var(--bbw-hl-flash-dur, .45s) ease; }  /* config: highlight.flash.durationMs */
+@keyframes hlFlash { 0% { opacity: var(--bbw-hl-flash-peak, .22); } 100% { opacity: 0; } }  /* config: highlight.flash.peak */
+
+/* reflet périodique quand la sélection reste immobile (~toutes les 10 s) */
+.list-highlight::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.22) 50%, transparent 65%);
+  transform: translateX(-130%); opacity: 0; pointer-events: none;
+}
+.list-highlight.shine::before { animation: hlShine var(--bbw-hl-shine-period, 10s) linear infinite; }  /* config: highlight.shine.periodMs */
+@keyframes hlShine {
+  0%   { transform: translateX(-130%); opacity: 0; }
+  2%   { opacity: 1; }
+  9%   { transform: translateX(130%); opacity: 0; }
+  100% { transform: translateX(130%); opacity: 0; }
+}
+
+/* Logo plateforme (haut-droite, atténué). Il vit DANS .detail .rgn-inner (inset:0 de la
+   zone .detail, top:76 right:45 à l'écran) → positionné relativement à elle : top 4 ≈ 80
+   à l'écran, right 0 ≈ 45 à l'écran. Du coup il GLISSE avec le titre / la description lors
+   de la transition de contenu (transitionRegion slide-v), dans le sens du dernier mouvement. */
+.platform-logo {
+  position: absolute; top: 4px; right: 0;
+  color: rgba(200,210,220,0.45); font-size: 15px;
+  display: flex; align-items: center; gap: 6px;
+}
+/* Clear logo (image) à la place du texte : hauteur/opacité posées en inline depuis la
+   config (platformLogoImage). Ancré à droite comme le texte → le bord gauche bouge avec
+   la largeur du logo (fitPlatformLogo le mesure pour décider du masquage). */
+.platform-logo.has-img { top: 0; }
+.platform-logo img.plat-logo-img { display: block; width: auto; height: auto; max-height: 28px; }
+
+/* Clear logo du JEU sélectionné : bande réservée EN HAUT de la roue (option gameLogo).
+   Masquée par défaut ; affichée quand .screen-games porte .has-gamelogo (posée au boot par
+   le moteur si la config l'active). Le logo (img) est dégradé/préchargé comme les vignettes ;
+   sans clear logo on affiche le TITRE en texte. Opacité/hauteurs depuis la config (vars CSS). */
+/* La zone logo s'étend de topPx (marge intérieure réduite) jusqu'au haut de la roue
+   (listTopPx) : la roue ne bouge pas, mais le logo gagne toute la place ainsi libérée. */
+.screen-games .game-logo {
+  position: absolute; top: var(--bbw-gamelogo-top, 38px); left: 10px; width: var(--bbw-list-w, 250px);
+  height: calc(var(--bbw-gamelogo-listtop, 158px) - var(--bbw-gamelogo-top, 38px) - 8px);
+  display: none; align-items: center; justify-content: center;
+  overflow: hidden; box-sizing: border-box; padding: 2px 8px; text-align: center;
+  color: rgba(255,255,255,.85); font-size: 17px; font-weight: 600; line-height: 1.15;
+  pointer-events: none;
+}
+.screen-games.has-gamelogo .game-logo { display: flex; }
+/* Opacité sur le LOGO seul (pas le texte de repli, qui doit rester lisible) ; ombre portée
+   douce pour décoller le logo du fond sombre (option glow → classe .gl-glow). */
+.screen-games .game-logo img.game-logo-img {
+  display: block; width: auto; height: auto;
+  max-width: 100%; max-height: var(--bbw-gamelogo-maxh, 90px); object-fit: contain;
+  opacity: var(--bbw-gamelogo-op, .8);
+}
+.screen-games.gl-glow .game-logo img.game-logo-img { filter: drop-shadow(0 2px 7px rgba(0,0,0,.6)); }
+/* Accent SOUS le logo (uniquement quand un vrai clear logo est affiché, pas le repli texte) :
+   barre TRÈS FINE (1 px) centrée, pleine au milieu et fondue/effilée aux extrémités
+   (option accent → .gl-accent). */
+.screen-games.gl-accent .game-logo.has-img::after {
+  content: ""; position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%);
+  width: 64%; height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.5) 24%, rgba(255,255,255,.5) 76%, transparent 100%);
+}
+/* La roue est ancrée à listTopPx (= sa position actuelle, le menu ne bouge pas) ; le bas reste
+   fixe (78+600=678 px de base) → la hauteur s'ajuste. Agrandir la zone logo = monter topPx
+   (et/ou listTopPx) sans déplacer la roue tant que listTopPx est inchangé. */
+.screen-games.has-gamelogo .list {
+  top: var(--bbw-gamelogo-listtop, 158px);
+  height: calc(678px - var(--bbw-gamelogo-listtop, 158px));
+}
+
+/* ── 3. Contenu : liste de jeux (réf. f_044) ──────────────────────────── */
+
+.boxart-wrap { position: absolute; top: 88px; left: calc(10px + var(--bbw-list-w, 250px) + 23px); width: 278px; }
+.boxart {
+  position: relative; width: 278px; height: 393px; border-radius: 2px;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.55); overflow: hidden;   /* clip pour le glissement horizontal */
+}
+.boxart .rgn-inner {
+  position: absolute; inset: 0;
+  display: grid; place-items: center; text-align: center; color: #f0ead0;
+  background:
+    linear-gradient(180deg, rgba(0,0,0,0) 55%, rgba(0,0,0,0.65) 100%),
+    linear-gradient(160deg, #8a9a5a 0%, #5b6b3a 40%, #2f3a22 100%);
+}
+.boxart .ba-sub   { font-size: 13px; letter-spacing: 3px; opacity: 0.85; }
+.boxart .ba-title { font-size: 40px; font-weight: 800; letter-spacing: 2px; line-height: 0.95; margin-top: 4px; }
+
+.pills { display: flex; gap: 8px; margin-top: 15px; }
+.pill {
+  display: flex; align-items: center; height: 26px;
+  background: var(--pill-bg); border-radius: 4px;
+  color: #cfcfcf; font-size: 13px; overflow: hidden;
+}
+.pill .ico { width: 26px; height: 26px; display: grid; place-items: center;
+             background: var(--pill-icon-bg); margin-right: 8px; font-size: 13px; }
+.pill .txt { padding-right: 12px; }
+
+.detail { position: absolute; top: 76px; left: 595px; right: 45px; height: 270px; overflow: hidden; }  /* clip pour le glissement vertical */
+.detail .rgn-inner { position: absolute; inset: 0; }
+.detail .game-title { font-size: 26px; font-weight: 600; line-height: 1.1; }
+.meta { display: flex; align-items: center; flex-wrap: wrap; gap: 14px;
+        margin-top: 10px; color: var(--text-dim); font-size: 14px; }
+.meta .year { background: rgba(255,255,255,0.13); border-radius: 3px; padding: 1px 7px; color: #e6e6e6; }
+.meta .star { color: #e6e6e6; }
+/* Ligne optionnelle "nom du fichier" (sous la ligne année/genre/note). Posée par le moteur
+   seulement si l'option est active (config gameFilename) ; masquée sinon (display:none). */
+.filename { margin-top: 5px; font-size: 12px; color: var(--text-dim); opacity: .85;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* max-width:none → la description remplit le bloc .detail (qui flexe en largeur).
+   max-height + overflow:hidden → cape la hauteur (reste au-dessus de la vidéo) ;
+   le moteur fait défiler le .desc-inner si le texte dépasse (cf. config.descScroll). */
+.desc { margin-top: 14px; max-width: none; color: var(--text-desc);
+        font-size: 15.5px; line-height: 1.36;
+        max-height: var(--bbw-desc-max-game, 140px); overflow: hidden; }
+.desc-inner { will-change: transform; }
+
+.badges { display: flex; align-items: center; justify-content: flex-end;
+          gap: 10px; margin-top: 16px; }
+.badge-ico { width: 20px; height: 20px; border-radius: 50%;
+             display: grid; place-items: center; font-size: 11px;
+             background: rgba(255,255,255,0.10); }
+.badge-pill { height: 22px; display: flex; align-items: center; gap: 5px;
+              padding: 0 9px; border-radius: 3px; font-size: 12px; color: #e2e2e2; }
+.badge-pill.outline { border: 1px solid rgba(255,255,255,0.4); }
+.badge-pill.status  { background: rgba(255,255,255,0.10); }
+/* Store install state badge: a round store logo framed by a ring — green ring =
+   installed, orange ring = not installed. Ring kept thick so it reads at a glance. */
+.store-badge { display: inline-flex; align-items: center; justify-content: center;
+               width: 26px; height: 26px; border-radius: 50%; overflow: hidden;
+               box-sizing: border-box; background: rgba(0,0,0,0.35); vertical-align: middle; }
+/* Inner logo at 60% opacity; the coloured ring (border on .store-badge) stays full. */
+.store-badge img { width: 100%; height: 100%; object-fit: contain; border-radius: 50%; opacity: 0.6; }
+.store-badge.installed    { border: 1.5px solid #36c85a; box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+.store-badge.notinstalled { border: 1.5px solid #ec8a25; box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+/* Poster-mode placement: top-right corner of the hero zone, right-aligned, above the
+   fanart/logo and clear of the rating/favourite action bar. */
+.ps-hero { position: relative; }
+.ps-install { position: absolute; top: 10px; right: 10px; margin: 0; z-index: 5; }
+.badge-pill .st-star { color: var(--gold); }
+
+.media {
+  position: absolute; top: 350px; right: 155px; width: 403px; height: 300px;  /* ancré à droite (= left:722 à 1280) → suit le bord en paysage */
+  border-radius: 2px; box-shadow: 0 6px 22px rgba(0,0,0,0.5); overflow: hidden;   /* clip pour le glissement horizontal */
+}
+/* Pas de placeholder coloré : le moteur pose l'image/la vidéo, ou masque le bloc
+   (display:none) quand le jeu n'a aucun média. */
+.media .rgn-inner { position: absolute; inset: 0; }
+/* vidéo (lecture auto) dans la zone média : ratio conservé (contenue), letterbox noir */
+.media .rgn-inner video { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+/* ── 4. Contenu : catégories/plateformes (réf. f_002 / f_026 / f_032) ──── */
+
+/* Bloc qui glisse verticalement au changement de catégorie (détail+aperçu+recent).
+   inset:0 → les enfants gardent leurs positions absolues ; clone = même classe.
+   pointer-events:none : ce bloc recouvre toute la page (dont la liste à gauche) ;
+   sans ça il bloquerait le survol/clic de la liste. La rangée Recent est ré-activée. */
+.cat-content { position: absolute; inset: 0; pointer-events: none; }
+/* Zone clippée : .rgn-inner = couche de contenu (remplie/animée par le moteur),
+   .rgn-clone = instantané de l'ancien contenu pendant la transition. */
+.rgn-inner { position: absolute; inset: 0; }
+.rgn-clone { position: absolute; inset: 0; }
+
+/* left+right (right:539 = width 458 à 1280) → le bloc détail/description flexe en
+   largeur pour absorber l'espace en paysage (s'arrête avant l'aperçu à droite). */
+.cat-detail { position: absolute; top: 73px; left: calc(10px + var(--bbw-list-w, 250px) + 23px); right: 539px; height: 300px; overflow: hidden; }
+.cat-detail .cat-title { font-size: 26px; font-weight: 600; }
+/* sous-ligne année + fabricant (variante plateforme, f_032) */
+.cat-detail .cat-sub { margin-top: 8px; display: flex; gap: 12px; align-items: center;
+                       color: var(--text-dim); font-size: 14px; }
+.cat-detail .cat-sub .year { background: rgba(255,255,255,0.13); border-radius: 3px;
+                             padding: 1px 7px; color: #e6e6e6; }
+
+.cat-box {
+  margin-top: 10px; background: rgba(255,255,255,0.05);
+  border-radius: 4px; padding: 15px 18px; box-sizing: border-box;
+  min-height: 175px;
+  /* cape la hauteur ; le moteur fait défiler .desc-text si le texte dépasse */
+  max-height: var(--bbw-desc-max-cat, 175px); overflow: hidden;
+}
+.cat-box .stat      { color: #cfcfcf; font-size: 15px; line-height: 1.62; }
+.cat-box .desc-text { color: var(--text-desc); font-size: 14.5px; line-height: 1.42; will-change: transform; }
+
+.cat-count { margin-top: 12px; text-align: right; }  /* largeur auto = suit .cat-detail (pill « N GAMES » au bord droit du bloc) */
+.cat-count .pill-count {
+  display: inline-block; border: 1px solid rgba(255,255,255,0.28);
+  border-radius: 3px; padding: 3px 12px; font-size: 13px; color: #e6e6e6;
+  background: rgba(0,0,0,0.20);
+}
+
+.cat-media {
+  position: absolute; top: 72px; right: 60px; width: 435px; height: 245px;  /* ancré à droite (= left:785 à 1280) → suit le bord en paysage */
+  border-radius: 2px; overflow: hidden;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.5);
+}
+/* aperçu : couleur posée par le moteur (par catégorie) ; glissement horizontal */
+.cat-media .rgn-inner {
+  background: radial-gradient(120% 100% at 40% 30%, #243042 0%, #11161e 60%, #07090d 100%);
+  overflow: hidden;
+}
+/* Média de fond (vidéo / image plateforme/catégorie/playlist) posé par le moteur,
+   par-dessus le gradient (qui reste en fallback s'il n'y a aucun média). */
+.cat-media .rgn-inner > video,
+.cat-media .rgn-inner > img.cat-bg {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block;
+}
+/* image PEGI-style centrée sur noir (cas média censuré, f_032) */
+.cat-media .pegi {
+  background: #c0202a; color: #fff; font-weight: 800;
+  width: 86px; height: 86px; display: grid; place-items: center;
+  font-size: 46px; line-height: 1; border: 3px solid #fff;
+}
+
+.recent { position: absolute; left: calc(10px + var(--bbw-list-w, 250px) + 28px); top: 500px; right: 0; pointer-events: auto; }
+.recent .recent-label { color: var(--text-faint); font-size: 13px; }
+.recent-clip { position: absolute; left: 0; top: 22px; right: 0; height: 203px; overflow: hidden; }
+/* padding interne : laisse la place au cadre de sélection (sinon rogné par le clip) */
+.recent .row { display: flex; gap: 10px; padding: 8px; flex-wrap: nowrap; align-items: flex-start; }
+/* Chaque vignette = mini poster-cell : colonne flex, sizing fluide */
+.recent .thumb {
+  position: relative;
+  width: var(--bbw-poster-cell, 105px); flex: 0 0 auto;
+  border-radius: 6px; box-sizing: border-box;
+  display: flex; flex-direction: column;
+  cursor: pointer;
+  overflow: visible;
+  transition: background 120ms ease, box-shadow 120ms ease;
+  background: transparent;
+}
+/* Image : même comportement que .poster-cell .pc-img */
+.recent .thumb .rc-img {
+  display: block;
+  width: 100%; height: var(--bbw-poster-imgh, 147px);
+  border-radius: 4px;
+  background: linear-gradient(160deg, #4a4a4a 0%, #2a2a2a 100%);
+  box-shadow: 0 3px 10px rgba(0,0,0,0.45);
+  object-fit: cover;
+  transform-origin: center;
+  transition: transform var(--bbw-poster-cell-hover-ms, 250ms) ease,
+              box-shadow var(--bbw-poster-cell-hover-ms, 250ms) ease;
+}
+/* Placeholder (pas de jaquette) : même fond dégradé, hauteur fixe */
+.recent .thumb .rc-img-ph {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: var(--bbw-poster-imgh, 147px);
+  border-radius: 4px;
+  background: linear-gradient(160deg, #4a4a4a 0%, #2a2a2a 100%);
+  box-shadow: 0 3px 10px rgba(0,0,0,0.45);
+  transform-origin: center;
+  transition: transform var(--bbw-poster-cell-hover-ms, 250ms) ease,
+              box-shadow var(--bbw-poster-cell-hover-ms, 250ms) ease;
+}
+/* Titre sous l'image */
+.recent .thumb .rc-title {
+  font-size: 10px; color: #9a9a9a; line-height: 1.2;
+  text-align: center; margin-top: 4px;
+  overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+.recent .thumb .ph-title { font-size: 10px; color: #9a9a9a; line-height: 1.15; }
+
+/* ── 5. Contenu : détail jeu (réf. f_050) ─────────────────────────────────
+   La droite (.detail/.media) et le centre (.boxart/.pills) sont réutilisés.
+   Spécifique : la liste gauche est un menu d'actions (espacement un peu plus
+   grand), la flèche ▶ sur l'item "Play", et un média plus large. */
+/* La largeur de la liste sur l'écran Details + le décalage des deux régions
+   à droite (.boxart-wrap, .detail) sont pilotés par la variable
+   --bbw-details-list-w (par défaut 250px = la valeur globale historique).
+   adaptDetailListWidth() la met à jour quand on entre dans le sous-menu
+   Select Version (labels longs), et la retire au retour. Transition .2s
+   ease sur les trois pour un mouvement smooth + synchronisé. */
+.screen-details { --bbw-details-list-w: 250px; }
+.screen-details .list { top: 86px; width: var(--bbw-details-list-w); transition: width .2s ease; }
+.screen-details .boxart-wrap { left: calc(33px + var(--bbw-details-list-w)); transition: left .2s ease; }
+.screen-details .detail      { left: calc(345px + var(--bbw-details-list-w)); transition: left .2s ease; }
+
+/* Archive MultiGame Selector — full-page HTML template rendered in an
+   iframe (srcdoc) so user-supplied <head>/<style>/<script> work. Covers
+   the FULL right pane (boxart + .detail + .media). Hidden by default;
+   shown via .has-archive-meta on .screen-details. The iframe body
+   provides its own background / typography — we don't theme it here. */
+.screen-details .archive-meta {
+  /* iframes are "replaced elements" with an intrinsic 300×150 size that
+     overrides position:absolute + right/bottom — the iframe stays at
+     300×150 even though left+right+top+bottom are all set. Workaround:
+     drop right/bottom, use explicit calc()-based width/height that
+     track --bbw-details-list-w as the submenu opens. */
+  position: absolute;
+  top: 76px;
+  left: calc(33px + var(--bbw-details-list-w));
+  width: calc(100% - 45px - 33px - var(--bbw-details-list-w));
+  height: calc(100% - 76px - 60px);
+  display: block;
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 10px;
+  background: rgba(18, 19, 26, .94);   /* visible behind the iframe while srcdoc loads */
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+  transition: opacity .18s ease, left .2s ease, width .2s ease;
+}
+.screen-details.has-archive-meta .archive-meta {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Le menu détail (Play / Star Rating / …) suit les mêmes variables que la roue
+   (config: lists.gapPx / boxHeightPx / itemHeightPx / itemFontSizePx) — pas
+   d'override hardcodé, pour que les réglages utilisateur prennent effet ici aussi. */
+.screen-details .list-item { height: var(--bbw-item-h, 44px); margin-bottom: var(--bbw-item-gap, 11px); }
+.screen-details .list-item.selected { height: var(--bbw-box-h, 44px); font-size: var(--bbw-item-fs, 15px); }
+/* Select-ROM list: full archive can hold very long hack names — truncate so they never overrun
+   the capped column / the rominfo overlay to its right (full name is shown in the overlay). */
+.screen-details.has-rom-menu .list-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.menu-arrow { margin-left: auto; color: #ffffff; font-size: 13px; }
+
+.screen-details .boxart .rgn-inner {
+  background:
+    linear-gradient(180deg, rgba(0,0,0,0) 45%, rgba(0,0,0,0.72) 100%),
+    linear-gradient(160deg, #6a6f7e 0%, #44485e 40%, #241b30 100%);
+  color: #e8e6f0;
+}
+.screen-details .media {
+  right: 110px; left: auto; top: 350px; width: 492px; height: 300px;  /* ancré à droite (= left:678 à 1280) */
+}
+/* (placeholder coloré retiré — cf. .media .rgn-inner) */
+
+/* ── fillScreenshot : vidéo (gauche) + grille de screenshots (droite) ──────
+   Classe .fill posée par le moteur quand media.fillScreenshot est on, qu'une vidéo
+   joue ET que des screenshots sont dispo (desktop / tablette paysage uniquement).
+   La zone média s'élargit dans l'espace libre (sous le détail, à droite du boxart) ;
+   .rgn-inner devient une rangée flex. La grille (auto-remplie par le moteur) est en
+   2 colonnes par défaut ; le moteur ajuste colonnes/nb d'images selon la place. */
+.screen-games .media.fill,
+.screen-details .media.fill {
+  left: 595px; right: 45px; top: 355px; width: auto; height: 325px;
+  box-shadow: none;   /* mode fill : pas de panneau noir → le contenu flotte sur le fond (transparent) */
+}
+.media.fill .rgn-inner { position: absolute; inset: 0; background: transparent; overflow: hidden; }
+/* Élément de GAUCHE : la vidéo, ou (sans vidéo) la capture principale .fill-main.
+   Taille FIXE (largeur cible) ; il GLISSE simplement de droite (position d'origine, là
+   où était le screenshot) vers la gauche via translateX — AUCUN redimensionnement.
+   Le ratio est conservé (contain). */
+.media.fill .rgn-inner > video,
+.media.fill .rgn-inner > .fill-main {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  /* height:100% (PAS auto) : un élément remplacé (video/img) en height:auto prend sa hauteur
+     INTRINSÈQUE et ignore top/bottom → avant le chargement des métadonnées la vidéo retombe à
+     150 px (hauteur <video> par défaut) et laisse un bloc noir en bas. Une hauteur définie
+     remplit toujours la zone ; object-fit:contain garde le ratio (letterbox symétrique). */
+  width: var(--bbw-fill-video-w, 60%); height: 100%;
+  object-fit: contain; object-position: top;   /* contenu ancré EN HAUT du cadre (letterbox en bas)
+                                                   → son haut = haut de la zone = haut des thumbs */
+  background: transparent;   /* letterbox transparent → laisse voir le fond de page */
+  transform: translateX(var(--bbw-fill-video-shift, 0px));
+  transition: transform var(--bbw-fill-trans, 1500ms) ease;
+}
+.media.fill.fill-anim .rgn-inner > video,
+.media.fill.fill-anim .rgn-inner > .fill-main { transform: translateX(0); }
+/* Grille de captures : blocs FIXES (colonnes/lignes posées par le moteur en px),
+   ancrée à droite ; entre depuis le BORD DROIT (translateX) pendant l'apparition. */
+.media.fill .shot-grid {
+  position: absolute; right: 0; top: 0; bottom: 0;
+  display: grid; gap: var(--bbw-fill-gap, 6px);
+  align-content: start; justify-content: end;   /* thumbs alignées EN HAUT (= haut de la vidéo/capture) */
+  transform: translateX(100%); opacity: 0;
+  transition: transform var(--bbw-fill-trans, 1500ms) ease, opacity var(--bbw-fill-trans, 1500ms) ease;
+}
+.media.fill.fill-anim .shot-grid { transform: translateX(0); opacity: 1; }
+/* Chaque cellule 16:9 cliquable (clic = swap avec le main) ; l'image garde son ratio. */
+.media.fill .shot-grid .shot-cell {
+  position: relative; width: 100%; height: 100%;
+  border-radius: 2px; background: transparent; overflow: hidden; cursor: pointer;
+}
+.media.fill .shot-grid .shot-cell img {
+  width: 100%; height: 100%; object-fit: contain; display: block;
+}
+.media.fill .shot-grid .shot-cell:hover { outline: 2px solid rgba(255,255,255,0.55); outline-offset: -2px; }
+/* Badge ▶ sur la cellule qui représente la vidéo. */
+.media.fill .shot-grid .shot-cell .vid-badge {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 26px; height: 26px; border-radius: 50%;
+  background: rgba(0,0,0,0.55); color: #fff; font-size: 12px;
+  display: flex; align-items: center; justify-content: center; pointer-events: none;
+}
+
+/* ── 5b. Vue POSTER (bascule de la roue de jeux) ──────────────────────────
+   Classe .poster sur .screen-games : masque la roue + son panneau, affiche une
+   grille de jaquettes (partie principale) et un panneau détail simplifié à droite.
+   Le rail gauche (caché) reste actif. Masquée par défaut. */
+.poster-grid, .poster-side { display: none; }
+.screen-games.poster .game-logo,
+.screen-games.poster .list,
+.screen-games.poster .bbw-list-sb,
+.screen-games.poster .boxart-wrap,
+.screen-games.poster .detail,
+.screen-games.poster .media,
+.screen-games.poster .fanart { display: none; }
+.screen-games.poster .poster-grid { display: block; }
+.screen-games.poster .poster-side { display: flex; }
+
+/* Voile coloré teinte ambiente derrière la grille — reprend la jaquette
+   du jeu sélectionné avec un fort blur + faible opacité. Posé en SIBLING
+   de .poster-grid (pas dedans) pour ne pas être emporté par le scroll des
+   cellules. Géométrie alignée sur celle de .poster-grid. Caché hors mode
+   poster (la règle .screen-games.poster ne s'active qu'avec la classe). */
+.poster-tint { display: none; }
+.screen-games.poster .poster-tint {
+  display: block;
+  position: absolute; left: 10px; top: 38px; bottom: 32px;
+  right: calc(var(--bbw-poster-side, 345px) + 14px);
+  /* Le blur + saturate vivent sur le parent → s'appliquent aux deux
+     couches enfants. Pas d'opacity ni de transition ici : c'est chaque
+     couche qui gère la sienne, sinon on fade-erait tout le bloc (pas
+     un crossfade). */
+  filter: blur(var(--bbw-poster-tint-blur, 80px)) saturate(1.4);
+  pointer-events: none;
+  z-index: 0;
+  /* overflow:hidden clippe les pixels du blur qui débordent du cadre
+     géométrique (un filter:blur étend la zone rendue d'environ 3× le
+     rayon — sans clip, le voile bave visiblement sous les cellules en
+     bordure de la grille). */
+  overflow: hidden;
+}
+/* z-index explicite sur la grille → garantit que les cellules restent
+   au-dessus du voile même si le moteur navigateur fait des choix
+   stacking-context différents (filter + position:absolute créent tous
+   deux un stacking context, on ne laisse rien au DOM-order par défaut). */
+.screen-games.poster .poster-grid { z-index: 1; }
+/* Couches empilées du crossfade. schedulePosterTint dépose l'image
+   nouvelle sur la couche RÉSERVE puis bascule les classes .on pour
+   déclencher un fade-out + fade-in simultanés → crossfade. */
+.screen-games.poster .poster-tint .poster-tint-layer {
+  position: absolute; inset: 0;
+  background-position: center; background-size: cover; background-repeat: no-repeat;
+  opacity: 0;
+  transition: opacity var(--bbw-poster-tint-fade, 700ms) ease;
+}
+.screen-games.poster .poster-tint .poster-tint-layer.on {
+  opacity: var(--bbw-poster-tint-opacity, 0.30);
+}
+.screen-games.poster.rail-open .poster-tint { left: 58px; }
+
+.poster-grid {
+  position: absolute; left: 10px; top: 38px; bottom: 32px;
+  right: calc(var(--bbw-poster-side, 345px) + 14px);
+  /* défilement NATIF (le swipe tactile défile la grille en tablette ; la nav flèches pose
+     scrollTop). Barre native MASQUÉE — on monte une scrollbar custom .bbw-poster-sb qui
+     cape la hauteur du thumb (la native ne supporte pas de max-height sur le thumb →
+     sur ~1.5 page de contenu le thumb fait ~70% du track, peu utilisable). */
+  overflow-y: auto; overflow-x: hidden; scroll-behavior: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.poster-grid::-webkit-scrollbar { display: none; }
+/* Rail ouvert : on décale la grille vers la droite pour dégager le rail (≈58 px), puis le
+   moteur recalcule les colonnes (computePosterCols) → pas de chevauchement, pas de débord. */
+.screen-games.poster.rail-open .poster-grid { left: 58px; }
+.poster-scroll {
+  position: relative; display: grid;
+  grid-template-columns: repeat(var(--bbw-poster-cols, 7), var(--bbw-poster-cell, 105px));
+  gap: var(--bbw-poster-gap, 12px) var(--bbw-poster-gap, 12px);
+  /* center = l'espace résiduel (pas la place d'une colonne de plus) est réparti des DEUX côtés,
+     globalement (la dernière ligne incomplète reste alignée à gauche du bloc centré). */
+  justify-content: center; align-content: start;
+  /* 1re ligne pas collée au bord du haut (cf. look LaunchBox desktop). */
+  padding-top: 16px; padding-bottom: 12px;
+}
+.poster-cell {
+  position: relative; width: var(--bbw-poster-cell, 105px); cursor: pointer; border-radius: 6px;
+  box-sizing: border-box;
+  /* Pas de padding interne — l'image (ou le phantom) prend la cellule
+     entière, edge-to-edge. La respiration entre cellules vient du `gap`
+     du grid (cf. .poster-scroll). Un padding ajouterait un encart de
+     page-bg autour de chaque image qui se lit comme un cadre — pas le
+     comportement LaunchBox desktop. La marge visuelle pour la selection
+     est apportée par le box-shadow étendu de .poster-cell.selected,
+     pas par un padding fixe. */
+  /* Flex column → empty cells peuvent faire grandir leur .pc-img pour
+     remplir la hauteur de ligne (= plus grande image de la ligne). */
+  display: flex; flex-direction: column;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+/* Mode FIXE (par défaut, posterView.fluid:false) — l'image est forcée à
+   cellWidthPx × cellRatio, object-fit:cover crop ce qui dépasse. */
+.poster-cell .pc-img {
+  display: block;
+  width: 100%; height: var(--bbw-poster-imgh, 147px);
+  border-radius: 4px; background: rgba(255,255,255,0.05);
+  box-shadow: 0 3px 10px rgba(0,0,0,0.45);
+  object-fit: cover;
+  transform-origin: center;
+  /* Scale persistant en hover/selected (cf. règle plus bas) avec transition
+     bidirectionnelle : entrée → grossit, sortie → dégrossit. Toutes les
+     valeurs (facteur + durée) viennent de posterView.cellHoverScale /
+     cellHoverMs via les custom properties posées par applyConfigCss. */
+  transition: transform var(--bbw-poster-cell-hover-ms, 250ms) ease;
+}
+/* Mise à l'échelle PERSISTANTE de l'IMAGE (pas du card highlight) tant
+   que la cellule est :hover ou .selected. La transition CSS gère
+   automatiquement le retour à scale(1) quand l'état est perdu. */
+.poster-cell:hover .pc-img,
+.poster-cell.selected .pc-img {
+  transform: scale(var(--bbw-poster-cell-hover-scale, 1.035));
+}
+/* Mode FLUID (posterView.fluid:true) — la case réserve un carré minimum
+   (cellWidthPx × cellWidthPx) ; height:auto laisse l'image se rendre à son
+   ratio natif. CSS Grid aligne automatiquement chaque ligne sur la hauteur
+   du plus grand élément. object-fit:contain centre + ne crop pas quand
+   l'image est plus petite que la case (case en mode "carré paysage").
+   La classe .fluid est posée sur .poster-grid par applyConfigCss → bascule
+   dynamique au toggle du checkbox sans rebuild du DOM. */
+.poster-grid.fluid .poster-cell .pc-img {
+  height: auto;
+  min-height: var(--bbw-poster-cell, 105px);
+  object-fit: contain;
+}
+/* Cellule "phantom" (jeu sans jaquette front) — look LaunchBox desktop :
+   rectangle gris légèrement visible qui se substitue à l'image manquante.
+   En mode FLUID le .pc-img grandit (flex: 1) jusqu'à la hauteur de la
+   ligne (= plus grande image de cette ligne). En mode FIXE il garde la
+   hauteur --bbw-poster-imgh standard. Dans les deux modes, le hover/select
+   scale (transform-origin:center) s'applique normalement → le phantom
+   grossit comme un vrai poster.  */
+/* Phantom rectangle — panneau gris mid-tone bien arrondi, SANS ombre,
+   pour matcher exactement le look LaunchBox desktop (cf. iterations
+   visuelles dans test-elements/02-empty-cell-variants.html avec
+   judge panel 3 angles : literal-match / border-perception /
+   production-fit ont tous convergé sur cette variante "v01").
+   Ce qui posait problème avant : couleur trop sombre (rgb 40,42,50),
+   radius trop tight (4px) et ombre dure (0 3px 10px 0.45) — combinés,
+   ils créaient une "frame" perçue par l'utilisateur. Ici : couleur
+   plus claire, radius plus généreux, zéro ombre → le panneau lit
+   comme un tile plat et calme, pas comme un cadre. */
+.poster-cell.empty .pc-img {
+  background: rgb(65, 67, 75);
+  border-radius: 12px;
+  box-shadow: none;
+}
+.poster-grid.fluid .poster-cell.empty .pc-img { flex: 1 1 auto; }
+.poster-cell .pc-title { margin-top: 5px; font-size: 12px; color: #e6e6e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.poster-cell .pc-dev   { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Hover souris discret : NE génère plus de sélection (cf. app.js — listener
+   mouseenter retiré). Indice visuel léger pour signaler la cliquabilité. */
+.poster-cell:hover {
+  background: rgba(255,255,255,0.04);
+  box-shadow: 0 0 0 6px rgba(255,255,255,0.04);
+}
+/* Sélection (clic / clavier) : look LaunchBox desktop — un "card" légèrement
+   plus clair qui englobe l'image et les libellés, sans contour cyan. La
+   teinte hover précédente est masquée par une plus forte ici. */
+.poster-cell.selected,
+.poster-cell.selected:hover {
+  background: rgba(255,255,255,0.10);
+  box-shadow: 0 0 0 6px rgba(255,255,255,0.10);
+  outline: none;
+}
+
+/* Panneau détail à droite (rempli en Phase 2/3). */
+.poster-side {
+  position: absolute; right: 0; top: 30px; bottom: 28px; width: var(--bbw-poster-side, 345px);
+  flex-direction: column; box-sizing: border-box; padding: 14px 16px;
+  background: rgba(8,10,14,0.55); overflow: hidden;
+}
+/* Hero du panneau droit : zone enveloppante qui contient clear logo + rating
+   sur un fond fanart en filigrane (cf. LaunchBox desktop). Peint par
+   fillPosterSide() (URL fanart → ps-hero-bg.style.backgroundImage). */
+.poster-side .ps-hero {
+  position: relative; align-self: stretch; min-height: 110px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  /* padding-bottom asymétrique = hauteur réservée à .ps-hero-bottom (~22 px
+     + 8 px du bord) → la zone de flex-centering se termine ~36 px avant
+     le bas, donc le clear logo se retrouve centré entre le haut du hero
+     et le HAUT de la boîte note (au lieu d'être centré sur le hero entier
+     et de chevaucher la boîte). */
+  padding: 6px 12px 38px;
+  /* Marges négatives = "casse-pad" : le hero déborde du padding interne
+     du .poster-side (14 px top, 16 px gauche/droite) pour coller au
+     bord de la zone et n'avoir aucune marge top/côté. margin-bottom
+     positif préserve l'espace avec l'élément suivant (ps-media). */
+  margin: -14px -16px 12px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.03);
+}
+/* Fanart en arrière-plan : couche absolute pour pouvoir baisser l'opacité
+   sans toucher au logo/rating qui sont par-dessus. La cover assure que la
+   région se remplit (recadrée si nécessaire). Gradient sombre par-dessus
+   pour garder la lisibilité du logo en superposition.
+   Opacité 0 par défaut → passe à 0.28 quand .ps-hero porte .has-fanart
+   (posée par schedulePosterFanart après un debounce 500ms). Le transition
+   1s assure un fade-in doux. Le fanart précédent reste visible pendant
+   le debounce (cf. JS : on ne touche au bg qu'à l'expiration du timer). */
+/* .ps-hero-bg n'est plus qu'un wrapper : il contient deux .ps-hero-bg-layer
+   empilées qui crossfade au changement de jeu (cf. schedulePosterFanart). */
+.poster-side .ps-hero-bg {
+  position: absolute; inset: 0;
+}
+.poster-side .ps-hero-bg-layer {
+  position: absolute; inset: 0;
+  background-position: center; background-size: cover; background-repeat: no-repeat;
+  opacity: 0;
+  filter: saturate(1.1);
+  /* Asymétrie clé : la transition par DÉFAUT (état non-.on) est lente —
+     elle s'applique quand on RETIRE .on (l'ancien fond s'efface lentement).
+     La règle .on plus bas surcharge avec une durée plus courte → utilisée
+     quand on AJOUTE .on (le nouveau fond apparaît rapidement). */
+  transition: opacity var(--bbw-hero-fanart-fade-out, 0.8s) ease;
+}
+.poster-side .ps-hero-bg-layer.on {
+  opacity: var(--bbw-hero-fanart-opacity, 0.28);
+  transition: opacity var(--bbw-hero-fanart-fade-in, 0.3s) ease;
+}
+/* Gradient sombre par-dessus le fanart (lisibilité du logo). Ne s'applique
+   QUE quand un fanart est posé (classe .has-fanart sur .ps-hero par
+   fillPosterSide), sinon on aurait un voile sombre sur un fond presque
+   transparent — moche. */
+.poster-side .ps-hero.has-fanart .ps-hero-bg::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.20) 0%, rgba(0,0,0,0.55) 100%);
+  pointer-events: none;
+}
+.poster-side .ps-hero .ps-logo,
+.poster-side .ps-hero .ps-rating { position: relative; z-index: 1; }
+/* Clear logo : pas de séparateur ::after (la hero a sa propre identité visuelle). */
+.poster-side .ps-logo { align-self: stretch; display: flex; flex-direction: column; align-items: center; }
+.poster-side .ps-logo:empty { display: none; }
+.poster-side .ps-logo img {
+  display: block; max-height: 80px; max-width: 86%; width: auto; height: auto;
+  filter: drop-shadow(0 2px 8px rgba(0,0,0,0.75));
+  /* "Pulse" à l'apparition : 1 → (1 × pulseScale) → 1, démarré après
+     pulseDelay. Toutes les valeurs sont pilotées par config.posterView
+     via les custom properties --bbw-hero-logo-* (delay, durée, scale). Le
+     <img> est recréé à chaque changement de jeu (fillPosterSide) → chaque
+     nouveau logo redémarre sa propre timeline. Si l'utilisateur enchaîne
+     les sélections rapides (< delay), aucun pulse ne se joue : le logo en
+     cours est démonté pendant son délai d'attente, le suivant repart à zéro.
+     C'est la même logique que le debounce du fanart, gratuite via la
+     timeline animation. */
+  transform-origin: center;
+  animation: ps-logo-pulse var(--bbw-hero-logo-pulse, 1s) ease var(--bbw-hero-logo-delay, 0.5s);
+}
+@keyframes ps-logo-pulse {
+  0%   { transform: scale(1);                                    }
+  50%  { transform: scale(var(--bbw-hero-logo-pulse-scale, 1.1)); }
+  100% { transform: scale(1);                                    }
+}
+/* Text fallback rendered inside .ps-logo when the game has no clear-logo
+   image. The <span class="ps-logo-text"> node is created by fillPosterSide
+   and carries the same ps-logo-pulse animation so the fade-in / pulse timing
+   is identical to the image-logo path. */
+.poster-side .ps-logo .ps-logo-text {
+  display: block;
+  font-size: 20px; font-weight: 700; line-height: 1.15;
+  color: rgba(255, 255, 255, 0.85);
+  text-align: center;
+  padding: 0 8px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.75);
+  transform-origin: center;
+  animation: ps-logo-pulse var(--bbw-hero-logo-pulse, 1s) ease var(--bbw-hero-logo-delay, 0.5s);
+}
+.poster-side .ps-plat  { font-size: 12px; letter-spacing: 1px; color: var(--text-dim); }
+.poster-side .ps-title { font-size: 22px; font-weight: 700; line-height: 1.1; margin-top: 2px; }
+
+/* Barre bas du hero : boîte note à gauche, bouton(s) d'action à droite.
+   space-between → la boîte note colle au bord gauche (left:8px) et le
+   bouton favori au bord droit (right:8px). */
+.poster-side .ps-hero-bottom {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+
+/* Boîte note : gris transparent calé sur la teinte LB desktop (cyan pour
+   note communauté, jaune pour note du joueur). Réduite ~30% par rapport
+   à la 1re itération + étoiles jointives. */
+.poster-side .ps-rating {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 7px;
+  background: rgba(45, 45, 50, 0.70);
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+}
+/* .readonly : posée par paintRating quand le contrôle parental interdit la
+   modification de la note (verrouillé + option AllowLockedUserToModifyRatings
+   désactivée). Cursor:default et étoiles non-interactives → signale que la
+   boîte sert d'affichage seulement (le tooltip reste actif). */
+.poster-side .ps-rating.readonly,
+.poster-side .ps-rating.readonly .ps-star { cursor: default; }
+.poster-side .ps-rnum   { color: #fff; font-size: 11px; font-weight: 600; min-width: 1.6em; }
+.poster-side .ps-stars  { letter-spacing: 0; display: inline-flex; }
+.poster-side .ps-star   { color: rgba(255,255,255,0.30); font-size: 12px; line-height: 1; cursor: pointer; padding: 0; }
+.poster-side .ps-rating .ps-star.f      { color: #38d6e6; }   /* community → cyan */
+.poster-side .ps-rating.user .ps-star.f { color: #f6c344; }   /* user      → jaune */
+/* Preview au hover : TOUJOURS jaune, peu importe l'état actuel (community
+   ou user) — un clic va valider une note utilisateur, donc on annonce la
+   couleur de destination. Si la souris quitte sans valider, les étoiles
+   reviennent à leur teinte d'origine (cyan pour community, jaune si une
+   note user existait déjà). */
+.poster-side .ps-rating .ps-star.preview { color: rgba(246, 195, 68, 0.85); }
+
+/* Tooltip détail (Your / Community / Votes), positionné au-dessus de la
+   boîte note. Apparaît au hover de la boîte (les étoiles n'interceptent
+   pas — le tooltip reste lisible même quand la souris est sur une étoile). */
+.poster-side .ps-rtooltip {
+  position: absolute; left: 0; bottom: calc(100% + 6px);
+  background: rgba(15, 15, 15, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 8px 12px; border-radius: 4px;
+  font-size: 12px; line-height: 1.5; color: #ddd;
+  white-space: nowrap;
+  opacity: 0; pointer-events: none;
+  transition: opacity 150ms ease;
+}
+.poster-side .ps-rtooltip:empty { display: none; }
+.poster-side .ps-rating:hover .ps-rtooltip { opacity: 1; }
+
+/* Bouton d'action carré (favori). Calé sur la même teinte/taille que la
+   boîte note (sera la base si on rajoute édit / autres plus tard). */
+.poster-side .ps-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; width: 22px; height: 22px;
+  border: none; border-radius: 3px;
+  background: rgba(45, 45, 50, 0.70);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px; line-height: 1; cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+.poster-side .ps-action:hover { background: rgba(90, 90, 95, 0.85); color: #fff; }
+/* Favori actif : cœur rouge (au repos comme au hover). */
+.poster-side .ps-fav.on,
+.poster-side .ps-fav.on:hover { color: #ff4a4a; }
+/* Battement de cœur au hover (léger). */
+.poster-side .ps-fav:hover { animation: ps-heartbeat 0.9s ease-in-out infinite; }
+/* Mode lock-children : icône visible mais non-cliquable. */
+.poster-side .ps-fav.ps-fav-locked {
+  pointer-events: none;
+  opacity: 0.4;
+  cursor: default;
+  animation: none;
+}
+@keyframes ps-heartbeat {
+  0%, 100% { transform: scale(1); }
+  20%      { transform: scale(1.18); }
+  40%      { transform: scale(1.00); }
+  60%      { transform: scale(1.10); }
+  80%      { transform: scale(1.00); }
+}
+.poster-side .ps-stars { letter-spacing: 2px; }
+.poster-side .ps-star  { color: rgba(255,255,255,0.22); font-size: 16px; }
+.poster-side .ps-star.f { color: #38d6e6; }   /* étoiles remplies (cyan, façon LaunchBox) */
+.poster-side .ps-rnum  { color: #e6e6e6; font-size: 14px; }
+.poster-side .ps-media { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000;
+                         border-radius: 4px; overflow: hidden; }
+.poster-side .ps-media .rgn-inner { position: absolute; inset: 0; }
+.poster-side .ps-media video,
+.poster-side .ps-media .ps-mimg { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+.poster-side .ps-thumbs { display: flex; gap: 6px; margin-top: 6px; overflow: hidden; }
+.poster-side .ps-thumb  { position: relative; width: 54px; height: 32px; flex: 0 0 auto;
+                          border-radius: 3px; overflow: hidden; background: #111; cursor: pointer; }
+.poster-side .ps-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.poster-side .ps-thumb.on  { outline: 2px solid #38d6e6; outline-offset: -2px; }
+.poster-side .ps-vbadge { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+                          width: 18px; height: 18px; border-radius: 50%; background: rgba(0,0,0,0.55);
+                          color: #fff; font-size: 9px; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.poster-side .ps-info  { margin-top: 16px; align-self: stretch; }
+.poster-side .ps-row   { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0;
+                         border-top: 1px solid rgba(255,255,255,0.07); font-size: 13px; }
+.poster-side .ps-row:first-child { border-top: 0; }
+.poster-side .ps-k     { color: var(--text-dim); white-space: nowrap; }
+.poster-side .ps-v     { color: #e6e6e6; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 6. Contenu : System Menu (réf. f_064) ────────────────────────────────
+   Fond uni (pas d'image de jeu), liste plus serrée, barre bas inversée
+   (A/B à gauche, licence à droite). */
+.screen-system .bg { background: #191a1c; }
+.screen-system .list { top: 56px; }
+.screen-system .list-item { margin-bottom: 0; font-size: 14px; }
+.screen-system .bottombar .left { gap: 18px; }
+.license-txt { font-weight: 700; color: #d6d6d6; letter-spacing: 0.3px; font-size: 12px; }
+
+/* ── 7. Multi-écrans (index.html) : couches empilées + transitions ────────
+   #stage devient le conteneur ; chaque .screen est une couche plein-cadre.
+   Transitions : Fade (catégories/system) et Slide Vertical (jeux/détail),
+   conformément à BigBoxSettings. Le sens du slide s'inverse au "retour". */
+#stage.multi { background: #000; }
+.screen {
+  position: absolute; inset: 0;
+  background: var(--content-bg); overflow: hidden;
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--bbw-screen-dur, .32s) ease, transform var(--bbw-screen-dur, .32s) ease;  /* config: screenTransition.durationMs */
+  will-change: opacity, transform;
+}
+.screen.active { opacity: 1; pointer-events: auto; z-index: 2; }
+/* coupe l'animation au tout premier affichage */
+#stage.no-anim .screen { transition: none; }
+
+/* ── 8. Responsive / mobile (activé par body.mobile, posé par scale.js) ────
+   En dessous d'un seuil (ou en portrait), on abandonne la scène fixe 1280×720
+   au profit d'une mise en page fluide en colonne. Les écrans "liste"
+   (catégories/jeux) ne montrent que la liste ; le détail devient un écran à
+   part entière (push), idiome mobile. champ libre assumé. */
+body.mobile { overflow-x: hidden; }
+body.mobile #viewport { position: static; display: block; }
+body.mobile #stage {
+  position: relative; top: auto; left: auto; width: 100%; height: auto; min-height: 100vh;
+  transform: none !important; background: var(--content-bg);
+}
+body.mobile .screen {
+  position: relative; inset: auto; min-height: 100vh; max-width: 100%;
+  opacity: 1; transform: none !important; display: none; overflow-x: hidden;
+}
+body.mobile .screen.active { display: block; }
+/* En mobile le contenu est `static` (non-positionné) ; .bg étant `absolute`
+   se peindrait PAR-DESSUS → on le renvoie derrière le contenu. */
+body.mobile .screen .bg { z-index: -1; }
+
+/* Barres fixes : épinglées aux DEUX bords → largeur = viewport, jamais de débordement */
+body.mobile .topbar, body.mobile .bottombar { position: fixed; left: 0; right: 0; width: auto; }
+body.mobile .topbar { height: 46px; font-size: 18px; }
+body.mobile .bottombar { height: 46px; font-size: 14px; }
+
+body.mobile .bottombar .page { display: none; }   /* évite le débordement horizontal de la barre */
+body.mobile .bottombar { font-size: 13px; }
+body.mobile .bottombar .left { gap: 6px; }
+body.mobile .bottombar .right { gap: 12px; }
+
+/* Listes catégories & jeux = ROUE DE SÉLECTION : barres fixes, la liste défile au
+   doigt ENTRE les deux ; l'item au centre (bande) est le sélectionné. */
+body.mobile .screen-categories .list,
+body.mobile .screen-games .list {
+  position: fixed; left: 0; right: 0; top: 46px; bottom: 46px;
+  width: auto; height: auto; padding: 0; overflow: hidden;
+  touch-action: none;            /* on gère le geste nous-mêmes */
+}
+body.mobile .screen-categories .list-scroll,
+body.mobile .screen-games .list-scroll {
+  transform: none; transition: transform var(--bbw-wheel-snap, .26s) cubic-bezier(.22,.61,.36,1);  /* config: lists.wheelSnapMs */
+}
+body.mobile .screen-categories .list-scroll.dragging,
+body.mobile .screen-games .list-scroll.dragging { transition: none; }
+/* bande de sélection au centre */
+body.mobile .screen-categories .list::after,
+body.mobile .screen-games .list::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 56px;
+  transform: translateY(-50%); pointer-events: none; z-index: 2;
+  background: linear-gradient(180deg, rgba(125,125,128,0.42), rgba(70,70,73,0.28));
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset;
+}
+body.mobile .list-highlight { display: none; }   /* la roue utilise la bande centrale */
+body.mobile .screen-categories .list .list-item,
+body.mobile .screen-games .list .list-item {
+  height: 56px; margin-bottom: 0; padding: 0 24px; font-size: 18px;
+  color: #8a8a8a; transition: color .12s ease;
+}
+body.mobile .screen-categories .list .list-item.selected,
+body.mobile .screen-games .list .list-item.selected { color: #fff; padding-left: 24px; }
+
+/* System menu mobile : liste simple en flux sous la barre */
+body.mobile .screen-system .list { position: static; padding: 58px 12px 12px; height: auto; overflow: visible; }
+body.mobile .screen-system .list-scroll { transform: none !important; }
+body.mobile .screen-system .list .list-item { height: 54px; font-size: 17px; padding: 0 16px; }
+
+/* Écrans liste : seule la liste sert. On masque TOUT le bloc contenu — en
+   particulier .cat-content (absolute inset:0) qui sinon recouvre la liste et
+   capte le toucher (la roue ne marcherait pas). */
+body.mobile .screen-categories .cat-content,
+body.mobile .screen-games .boxart-wrap,
+body.mobile .screen-games .detail,
+body.mobile .screen-games .media,
+body.mobile .screen-games .game-logo,   /* zone logo = desktop/tablette ; pas en phone */
+body.mobile .fanart,                    /* fanart = derrière la partie droite (absente en phone) */
+body.mobile .rail, body.mobile .rail-trigger,   /* rail = desktop only ; éviterait le toucher */
+body.mobile .platform-logo { display: none; }
+
+/* Écran détail : tout empilé en colonne, scrollable.
+   .active force display:flex avec assez de spécificité pour que `order` agisse. */
+body.mobile .screen-details { padding: 58px 0 58px; }
+body.mobile .screen-details.active { display: flex; flex-direction: column; }
+body.mobile .screen-details .bg { order: -1; }
+body.mobile .screen-details .boxart-wrap { order: 1; position: static; left: auto; width: auto; margin: 4px auto 0; }
+body.mobile .screen-details .boxart { width: 188px; height: 266px; margin: 0 auto; }
+body.mobile .screen-details .pills { justify-content: center; }
+body.mobile .screen-details .detail { order: 2; position: static; left: auto; right: auto; margin: 16px 16px 0; height: auto; overflow: visible; }
+body.mobile .screen-details .detail .rgn-inner { position: static; }   /* colonne : le contenu reflue */
+body.mobile .screen-details .desc { max-width: none; max-height: none; overflow: visible; }  /* phone : texte complet, le document défile */
+body.mobile .screen-details .badges { justify-content: flex-start; }
+body.mobile .screen-details .media { order: 3; position: static; left: auto; width: auto; height: 200px; margin: 16px 16px 0; }
+body.mobile .screen-details .list { order: 4; position: static; height: auto; overflow: visible; padding: 12px 12px 0; }
+body.mobile .screen-details .list-scroll { transform: none !important; }
+
+/* Le document doit défiler en mobile (la base met overflow:hidden pour la scène
+   fixe desktop). html n'a pas la classe .mobile → on passe par une media query
+   alignée sur le seuil de scale.js. */
+@media (max-width: 819px), (orientation: portrait) {
+  html, body { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: auto; }
+}
+
+/* ── 8b. Tablette : affichage classique + menu en ROUE tactile ────────────
+   Mode "tablet" (config.global.layout). Tout l'écran reste en agencement
+   desktop (détail / aperçu / récents visibles) ; SEUL le menu de gauche
+   (catégories / jeux) devient une roue tactile centrée — comme la roue mobile
+   mais à l'emplacement classique du menu. (Aucune règle .mobile ne s'applique.) */
+
+/* La media query portrait ci-dessus peut activer le scroll document : en
+   tablette on garde la scène fixe. */
+body.tablet { overflow: hidden; height: 100%; }
+
+/* La liste garde sa géométrie desktop (colonne gauche, height 600, clippée)
+   mais se pilote au doigt (le moteur gère le geste). */
+body.tablet .screen-categories .list,
+body.tablet .screen-games .list { touch-action: none; }
+body.tablet .screen-categories .list-scroll,
+body.tablet .screen-games .list-scroll {
+  z-index: 1;                    /* le texte passe AU-DESSUS de la bande de sélection */
+  transition: transform var(--bbw-wheel-snap, .26s) cubic-bezier(.22,.61,.36,1);
+}
+body.tablet .screen-categories .list-scroll.dragging,
+body.tablet .screen-games .list-scroll.dragging { transition: none; }
+
+/* Items uniformes : la sélection est marquée par la bande centrale, pas par un
+   agrandissement. Pas = box-h + gap et marge 0 → pitch == offsetHeight (la roue
+   du moteur s'appuie sur offsetHeight). */
+body.tablet .screen-categories .list-item,
+body.tablet .screen-games .list-item,
+body.tablet .screen-categories .list-item.selected,
+body.tablet .screen-games .list-item.selected {
+  height: calc(var(--bbw-box-h, 44px) + var(--bbw-item-gap, 11px));
+  margin-bottom: 0;
+}
+
+/* Bande de sélection fixe au centre de la colonne (reprend le dégradé de la
+   surbrillance desktop) ; la surbrillance flottante est masquée. */
+body.tablet .screen-categories .list::after,
+body.tablet .screen-games .list::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  height: var(--bbw-box-h, 44px); transform: translateY(-50%);
+  pointer-events: none; z-index: 0; border-radius: 8px;
+  background: linear-gradient(180deg, rgba(125,125,128,0.55) 0%, rgba(70,70,73,0.40) 55%, rgba(55,55,58,0.30) 100%);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset, 0 1px 3px rgba(0,0,0,0.35);
+}
+body.tablet .list-highlight { display: none; }
+
+/* ── 9. Zones de navigation : rail de saut (jeux) + Recent focus (catégories) ──
+   Desktop/manette uniquement (en mobile le rail/recent sont masqués, le tap suffit). */
+
+/* Rail de saut, révélé en allant à gauche depuis la liste de jeux. */
+.rail {
+  position: absolute; top: 60px; left: 6px; width: 44px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  opacity: 0; transform: translateX(-14px); pointer-events: none; z-index: 6;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.screen-games.rail-open .rail { opacity: 1; transform: none; pointer-events: auto; }
+.rail-item {
+  width: 34px; height: 21px; display: grid; place-items: center;
+  color: #7d7d7d; font-size: 13px; border-radius: 7px; cursor: pointer;
+}
+.rail-item.active { background: #2ea3e6; color: #fff; }
+/* rail ouvert : on décale le texte de la liste pour dégager le rail, et on
+   atténue la surbrillance de la liste (le focus est sur le rail). */
+.screen-games.rail-open .list-item { padding-left: 58px; }
+.screen-games.rail-open .list-item.selected { padding-left: 64px; }
+.screen-games.rail-open .list-highlight { opacity: .35; }
+/* Bande invisible au bord gauche : ouvrir le rail à la souris.
+   Largeur 5 px (NON 16) : laisse la zone x=6..9 libre pour la sb du wheel
+   (cf. .bbw-list-sb plus bas). Sans ça, en approchant la sb depuis la
+   droite, le curseur entrait dans rail-trigger AVANT d'atteindre la sb
+   et déclenchait l'ouverture du rail (qui cache la sb). 5 px reste
+   atteignable au bord d'écran pour une edge-gesture mouse. */
+.rail-trigger { position: absolute; top: 30px; left: 0; width: 5px; bottom: 28px; z-index: 5; }
+
+/* ROM rail (sous-menu Select ROM de l'écran détail). Mêmes dimensions et même
+   ouverture que .rail mais ancré à .screen-details. Visible uniquement quand
+   .screen-details a .rom-rail-open (posé par le moteur quand on entre dans le
+   sous-menu Select ROM). Le rom-rail glisse au-dessus du menu détail à gauche ;
+   pour dégager le rail, on indente les .list-item de la liste comme pour la
+   roue jeux. */
+.rom-rail {
+  position: absolute; top: 60px; left: 6px; width: 44px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  opacity: 0; transform: translateX(-14px); pointer-events: none; z-index: 6;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.screen-details.rom-rail-open .rom-rail { opacity: 1; transform: none; pointer-events: auto; }
+/* .rail-item est partagé (mêmes styles que la roue jeux) — rien à redéclarer. */
+.screen-details.rom-rail-open .list-item { padding-left: 58px; }
+.screen-details.rom-rail-open .list-item.selected { padding-left: 64px; }
+.screen-details.rom-rail-open .list-highlight { opacity: .35; }
+.rom-rail-trigger { position: absolute; top: 30px; left: 0; width: 5px; bottom: 28px; z-index: 5; }
+/* Le trigger n'est armé visuellement que dans le sous-menu Select ROM — sinon il
+   reste là mais .has-rom-menu (posée par le moteur) garde le hover effectif. */
+.screen-details:not(.has-rom-menu) .rom-rail-trigger { pointer-events: none; }
+
+/* Recent : hover/selected = white border + scale.
+   The shadow stack composes "white 2px outline + the base soft drop".
+   In fluid mode the box-shadow sits on the naturally-sized element (= visible image)
+   so the border follows the image, not the 105×147 slot. */
+.recent .thumb:hover .rc-img,
+.recent .thumb.sel .rc-img,
+.recent .thumb:hover .rc-img-ph,
+.recent .thumb.sel .rc-img-ph {
+  transform: scale(var(--bbw-poster-cell-hover-scale, 1.035));
+  box-shadow: 0 0 0 2px #ffffff, 0 3px 10px rgba(0,0,0,0.45);
+}
+/* Mode fluid : image entière visible (aspect ratio préservé). Appliqué par applyConfigCss() via .recent.fluid.
+   Overrides supplémentaires :
+   - background + box-shadow retirés du .thumb (déjà transparent) et de .rc-img : en contain, les zones
+     transparentes (haut/bas de pochettes non-poster) laissaient voir le dégradé gris de l'élément <img>
+     lui-même et son ombre rectangulaire → cadre gris visible autour de l'image.
+   - .thumb devient un conteneur flex centré : l'image (width:auto height:auto max 100%/100%) se redimensionne
+     à son ratio natif et son élément box = l'image visible. La border/box-shadow suit ainsi l'image,
+     pas le slot 105×147.
+   - filter: drop-shadow remplace la box-shadow de base : pixel-aware, suit le contour visible.
+     En hover/sel la box-shadow (bordure blanche) est posée directement sur l'élément naturellement
+     dimensionné → le border suit parfaitement l'image. */
+.recent.fluid .thumb {
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--bbw-poster-cell, 105px);
+  height: var(--bbw-poster-imgh, 147px);
+}
+.recent.fluid .thumb .rc-img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  background: transparent;
+  box-shadow: none;
+  filter: drop-shadow(0 3px 10px rgba(0,0,0,0.45));
+}
+/* Hover / sélection en fluid mode : restaure la bordure blanche autour
+   de l'image visible (l'élément box matche le contenu via width/height
+   auto + max:100%, donc le box-shadow épouse l'image, pas le slot).
+   Spécificité (0,5,0) — bat la règle fluid base box-shadow:none. */
+.recent.fluid .thumb:hover .rc-img,
+.recent.fluid .thumb.sel .rc-img,
+.recent.fluid .thumb:hover .rc-img-ph,
+.recent.fluid .thumb.sel .rc-img-ph {
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
+/* ── 10. Popup note (Star Rating) ─────────────────────────────────────────
+   Voile sombre sur la scène + panneau centré ; rangée d'étoiles avec remplissage
+   fractionnaire (½ étoile) via une couche blanche clippée en largeur. */
+.rating-modal {
+  position: absolute; inset: 0; z-index: 50;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55);
+}
+.rating-modal.open { display: flex; }
+.modal-panel {
+  background: rgba(38,38,42,0.97); border-radius: 10px;
+  padding: 36px 80px 30px; text-align: center; color: #e6e6e6;
+  min-width: 520px; box-shadow: 0 18px 60px rgba(0,0,0,0.6);
+}
+/* base grise + remplissage blanc clippé (width posée par le moteur = note/5) */
+.rating-stars { position: relative; display: inline-block; font-size: 64px; line-height: 1; }
+.rating-stars-base { color: #5a5a5e; }
+.rating-stars-fill { position: absolute; left: 0; top: 0; color: #fff; overflow: hidden; white-space: nowrap; width: 0; }
+.rating-line { margin-top: 12px; font-size: 19px; color: #c7c7c7; }
+.rating-line:first-of-type { margin-top: 26px; }
+.r-your { color: #fff; }
+/* phone : voile plein écran (la scène n'est pas mise à l'échelle) */
+body.mobile .rating-modal { position: fixed; }
+body.mobile .modal-panel { min-width: 0; width: 86%; padding: 28px 24px; }
+body.mobile .rating-stars { font-size: 46px; }
+
+/* ── 11. Popup digicode (Unlock) ──────────────────────────────────────────
+   Pavé 3×4 ; touche focalisée = fond plus clair + trait bleu sous le chiffre. */
+.pin-modal {
+  position: absolute; inset: 0; z-index: 50;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55);
+}
+.pin-modal.open { display: flex; }
+.pin-panel {
+  background: rgba(38,38,42,0.97); border-radius: 12px;
+  padding: 26px; width: 360px; text-align: center; color: #e6e6e6;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.6);
+}
+.pin-title { font-size: 22px; color: #fff; }
+.pin-display { height: 40px; margin: 16px 0 20px; font-size: 34px; letter-spacing: 10px; color: #fff; line-height: 40px; }
+.pin-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.pin-key {
+  position: relative; height: 64px; display: grid; place-items: center;
+  background: #2c2c30; border-radius: 8px; color: #dcdcdc; font-size: 22px; cursor: pointer;
+}
+.pin-key.focus { background: #3c3c42; color: #fff; }
+.pin-key.focus::after {
+  content: ""; position: absolute; bottom: 11px; left: 50%; transform: translateX(-50%);
+  width: 26px; height: 3px; border-radius: 2px; background: #2ea3e6;
+}
+body.mobile .pin-modal { position: fixed; }
+body.mobile .pin-panel { width: 80%; max-width: 360px; }
+
+/* ── 11b. Popup message (contrôle parental en mode BigBox) ─────────────────
+   Réutilise .modal-panel ; simple titre + texte + indication de fermeture. */
+.msg-modal {
+  position: absolute; inset: 0; z-index: 50;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55);
+}
+.msg-modal.open { display: flex; }
+.msg-title { font-size: 22px; color: #fff; margin-bottom: 14px; }
+.msg-text { font-size: 17px; color: #c7c7c7; line-height: 1.5; max-width: 520px; margin: 0 auto; }
+.msg-hint { margin-top: 24px; font-size: 13px; color: #8a8a8a; letter-spacing: 0.5px; }
+body.mobile .msg-modal { position: fixed; }
+
+/* ── 12. Popup Related Games ──────────────────────────────────────────────
+   Onglets en haut (actif souligné en bleu) + liste de cartes défilante.
+   Carte sélectionnée = fond plus clair + liseré bleu à gauche. */
+.related-modal {
+  position: absolute; inset: 0; z-index: 50;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55);
+}
+.related-modal.open { display: flex; }
+.related-panel {
+  display: flex; flex-direction: column;
+  background: rgba(28,28,32,0.98); border-radius: 14px;
+  width: 76%; max-width: 1150px; height: 86%;
+  padding: 16px 28px 12px; box-shadow: 0 22px 70px rgba(0,0,0,0.65); color: #e6e6e6;
+}
+.related-title { text-align: center; font-size: 23px; font-weight: 700; color: #fff; }
+.related-tabs { display: flex; justify-content: space-around; margin: 10px 0 4px; }
+.rel-tab { position: relative; padding-bottom: 7px; font-size: 18px; color: #8f8f8f; cursor: pointer; }
+.rel-tab.active { color: #fff; font-weight: 600; }
+.rel-tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: #2ea3e6; }
+.rel-list { flex: 1; overflow-y: auto; padding: 6px 2px; }
+/* compact : ~5 cartes visibles d'un coup (description limitée à 2 lignes) */
+.rel-card {
+  display: flex; gap: 13px; padding: 8px 12px; margin-bottom: 7px;
+  border-radius: 8px; border-left: 4px solid transparent;
+  background: rgba(255,255,255,0.02);
+}
+.rel-card.sel { background: rgba(255,255,255,0.07); border-left-color: #2ea3e6; }
+.rel-thumb { flex: 0 0 auto; width: 54px; height: 74px; border-radius: 3px; box-shadow: 0 3px 10px rgba(0,0,0,0.4); }
+.rel-body { flex: 1; min-width: 0; }
+.rel-head { display: flex; align-items: baseline; }
+.rel-title { font-size: 17px; font-weight: 700; color: #fff; }
+.rel-pct { margin-left: auto; display: flex; align-items: center; gap: 7px; font-size: 16px; color: #dcdcdc; white-space: nowrap; }
+.rel-cloud { opacity: 0.65; }
+.rel-sub { margin-top: 2px; font-size: 12.5px; color: #9a9a9a; }
+.rel-desc {
+  margin-top: 5px; font-size: 13px; line-height: 1.32; color: #adadad;
+  max-height: var(--bbw-rel-desc-h, 36px); overflow: hidden;   /* hauteur réglable : config related.descHeightPct */
+}
+body.mobile .related-modal { position: fixed; }
+
+/* ── 12b. Modal LB-DB iframe ────────────────────────────────────────────────
+   Ouverte quand le user clique sur une carte related dont le jeu n'est PAS
+   dans sa lib (DB-only candidate) — on charge notre page maison de la fiche
+   LB-DB (/games/{dbid}.html) dans une iframe. Stacking au-dessus du related
+   modal (z-index plus élevé) : revenir au related en fermant l'iframe. */
+.lbdb-modal {
+  position: absolute; inset: 0; z-index: 60;
+  display: none;
+  background: rgba(0,0,0,0.85);
+}
+.lbdb-modal.open { display: block; }
+.lbdb-panel {
+  position: absolute; inset: 24px;
+  background: #111; border-radius: 10px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.7);
+  overflow: hidden;
+}
+.lbdb-frame { width: 100%; height: 100%; border: 0; background: #111; }
+.lbdb-close {
+  position: absolute; top: 10px; right: 10px;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(255,255,255,0.14); color: #fff;
+  border: 0; font-size: 22px; line-height: 36px; padding: 0;
+  cursor: pointer; transition: background .15s ease;
+  z-index: 1;   /* au-dessus de l'iframe pour rester cliquable */
+}
+.lbdb-close:hover { background: rgba(255,255,255,0.28); }
+body.mobile .lbdb-modal { position: fixed; }
+body.mobile .lbdb-panel { inset: 8px; }
+
+/* ── Popup Tags VNDB : tiroir ancré à DROITE, tags groupés (content / tech / ero), scrollable.
+   Ouverte depuis l'action « View VNDB Tags » (page détail). ↑/↓ défilent, A/B ferment. */
+.vndb-modal { position: absolute; inset: 0; z-index: 50; display: none; background: rgba(0,0,0,0.45); }
+.vndb-modal.open { display: block; }
+.vndb-panel {
+  position: absolute; right: 0; top: 0; bottom: 0; width: 380px;
+  display: flex; flex-direction: column; box-sizing: border-box; padding: 18px 20px;
+  background: rgba(20,21,25,0.98); box-shadow: -16px 0 50px rgba(0,0,0,0.55); color: #e6e6e6;
+}
+.vndb-title { font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+.vndb-list { flex: 1; overflow-y: auto; }
+.vndb-group { margin: 14px 0 7px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: #8f8f8f; }
+.vndb-group:first-child { margin-top: 0; }
+.vndb-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.vndb-tag { font-size: 13px; padding: 3px 9px; border-radius: 12px; background: rgba(255,255,255,0.07); color: #dcdcdc; }
+.vndb-tag.vndb-cont { background: rgba(46,163,230,0.16); color: #cfe8fb; }   /* contenu : bleu */
+.vndb-tag.vndb-ero  { background: rgba(230,80,120,0.16); color: #f4c9d6; }   /* érotique : rosé */
+body.mobile .vndb-modal { position: fixed; }
+body.mobile .vndb-panel { width: 90%; }
+
+/* ── 13. Recherche (écran jeux) : mini-clavier QWERTY ──────────────────────
+   PAS de fond assombri → la liste de jeux (à gauche, x≈10..260) reste visible et
+   se filtre en direct. Panneau ancré en bas-centre ; seul le panneau capte la souris. */
+.search-modal { position: absolute; inset: 0; z-index: 60; display: none; pointer-events: none; }   /* > .adv-modal (50) : visible au-dessus de la modale avancée pour l'auto-complétion */
+.search-modal.open { display: block; }
+.search-panel {
+  position: absolute; left: 50%; bottom: 56px; transform: translateX(-50%);
+  pointer-events: auto;
+  background: rgba(16,18,22,0.96); border-radius: 12px; padding: 14px 16px;
+  box-shadow: 0 16px 50px rgba(0,0,0,0.6); color: #e6e6e6;
+}
+.search-box {
+  display: flex; align-items: center; min-height: 30px; margin-bottom: 12px;
+  padding: 6px 12px; background: rgba(0,0,0,0.45); border-radius: 7px;
+  font-size: 20px; letter-spacing: 1px; color: #fff;
+}
+.search-q { white-space: pre; }
+.search-q:empty::before { content: var(--bbw-search-ph, "Search…"); color: #6a6a6a; letter-spacing: 0.5px; }   /* texte posé par localize() (i18n) */
+.search-caret { width: 2px; height: 22px; margin-left: 2px; background: #2ea3e6; animation: bbwCaret 1s steps(1) infinite; }
+@keyframes bbwCaret { 50% { opacity: 0; } }
+.search-keys { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.skey-row { display: flex; gap: 8px; }
+.skey {
+  width: 44px; height: 44px; display: grid; place-items: center;
+  background: #2c2c30; border-radius: 8px; color: #dcdcdc; font-size: 18px; cursor: pointer; user-select: none;
+}
+.skey.wide { width: auto; min-width: 64px; padding: 0 14px; font-size: 15px; letter-spacing: 1px; }
+.skey.space { min-width: 200px; }
+.skey.focus { background: #3c3c42; color: #fff; box-shadow: inset 0 0 0 2px #2ea3e6; }
+body.mobile .search-modal { position: fixed; }
+
+/* ── 14. Recherche avancée (écran jeux) : indicateur topbar + modale à onglets ───────────── */
+/* Indicateur "filtre actif" dans la topbar, juste avant l'horloge (cf. updateAdvIndicator). */
+.topbar .advind { display: none; align-items: center; margin-left: auto; color: #2ea3e6; font-size: 16px; }
+.topbar .advind.on { display: inline-flex; }
+.topbar .advind.on ~ .clock { margin-left: 8px; }
+/* Icône ☰ du rail colorée quand un filtre avancé est actif. */
+.rail .rail-item.filtered { color: #2ea3e6; }
+
+.adv-modal { position: absolute; inset: 0; z-index: 50; display: none; }
+.adv-modal.open { display: block; }
+.adv-modal::before { content: ""; position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+/* Ancrée en HAUT (top + max-height 46%) → laisse la moitié basse pour le clavier virtuel. */
+.adv-panel {
+  position: absolute; left: 50%; top: 64px; transform: translateX(-50%);
+  width: 70%; max-width: 820px; max-height: 46%;
+  background: rgba(22,24,28,0.98); border-radius: 12px; box-shadow: 0 18px 60px rgba(0,0,0,0.6);
+  color: #e6e6e6; display: flex; flex-direction: column; overflow: hidden;
+}
+.adv-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
+.adv-tab { padding: 8px 14px; font-size: 15px; color: #9a9a9a; border-radius: 8px 8px 0 0; cursor: pointer; }
+.adv-tab.active { color: #fff; background: rgba(255,255,255,0.06); }
+.adv-body { flex: 1; overflow-y: auto; padding: 20px 18px; }
+.adv-soon { color: #7a7a7a; text-align: center; padding: 34px; }
+.adv-foot { padding: 10px 14px 14px; display: flex; justify-content: center; }
+.adv-apply { padding: 9px 32px; background: #2c2c30; border-radius: 8px; color: #dcdcdc; font-size: 15px; cursor: pointer; }
+.adv-apply.focus { background: #2ea3e6; color: #fff; }
+/* Slider double poignée (année). Gauche/Droite ajuste, Haut/Bas bascule lo↔hi (= focus). */
+.adv-row { margin-bottom: 18px; }
+.adv-row-label { font-size: 14px; color: #c7c7c7; }
+.adv-yv { color: #fff; font-weight: 600; }
+.adv-track { position: relative; height: 4px; margin: 22px 12px 8px; background: rgba(255,255,255,0.15); border-radius: 2px; }
+.adv-range { position: absolute; top: 0; bottom: 0; background: #2ea3e6; border-radius: 2px; }
+.adv-handle { position: absolute; top: 50%; width: 16px; height: 16px; margin-left: -8px; transform: translateY(-50%);
+  background: #cfcfcf; border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
+.adv-handle.focus { background: #2ea3e6; box-shadow: 0 0 0 3px rgba(46,163,230,0.45); }
+.adv-sv { color: #fff; font-weight: 600; }
+/* Lignes "inline" (label à gauche, contrôle à droite) : select (release type / OU-ET), toggle. */
+.adv-inline { display: flex; align-items: center; justify-content: space-between; }
+.adv-select, .adv-toggle { padding: 4px 12px; border-radius: 7px; background: rgba(255,255,255,0.05); color: #dcdcdc; font-size: 14px; min-width: 90px; text-align: center; }
+.adv-select.focus, .adv-toggle.focus { background: #2ea3e6; color: #fff; }
+.adv-toggle.on { color: #8fe0a0; }
+.adv-toggle.on.focus { color: #fff; }
+/* Listes cochables (genre / éditeur-dév / historique). */
+.adv-list { display: flex; flex-direction: column; gap: 2px; }
+.adv-item { padding: 7px 12px; border-radius: 7px; font-size: 14px; color: #c7c7c7; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adv-item.on { color: #fff; }
+.adv-item.focus { background: #2ea3e6; color: #fff; }
+/* Champ texte éditeur/dév (A → clavier). */
+.adv-field { padding: 9px 12px; margin-bottom: 10px; border-radius: 8px; background: rgba(0,0,0,0.35); font-size: 16px; color: #fff; }
+.adv-field.placeholder { color: #6a6a6a; }
+.adv-field.focus { box-shadow: inset 0 0 0 2px #2ea3e6; }
+/* Section header (purely visual, no focus) — utilisé pour grouper Region /
+   Specified Language dans la modale avancée ROM. */
+.adv-section { margin: 14px 0 6px; font-size: 12px; color: #8a8a8a; letter-spacing: 1px; text-transform: uppercase; }
+.adv-section:first-child { margin-top: 0; }
+/* Drill-in target (label sur main view qui ouvre une sous-liste). Visuellement
+   proche d'un select cliquable mais avec un chevron unique « › » pour signaler
+   l'action « entrer dans la liste ». */
+.adv-drillin { padding: 4px 12px; border-radius: 7px; background: rgba(255,255,255,0.05); color: #dcdcdc; font-size: 14px; min-width: 120px; text-align: right; }
+.adv-drillin.focus { background: #2ea3e6; color: #fff; }
+/* Connecteur Region/Lang : barre horizontale + un peu d'espace au-dessus pour
+   séparer visuellement les deux groupes. */
+.adv-connector { margin: 12px 0; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); }
+body.mobile .adv-modal { position: fixed; }
+body.mobile .related-panel { width: 94%; height: 88%; padding: 16px 14px; }
+body.mobile .related-tabs { font-size: 15px; }
+body.mobile .rel-tab { font-size: 15px; }
+
+/* ── Réglages (Settings) : modale à onglets, lignes label + contrôle (toggle/slider/select) ── */
+.config-modal { position: absolute; inset: 0; z-index: 55; display: none; }
+.config-modal.open { display: block; }
+.config-modal::before { content: ""; position: absolute; inset: 0; background: rgba(0,0,0,0.55); }
+.config-panel {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 64%; max-width: 880px; height: 78%;
+  background: rgba(22,24,28,0.99); border-radius: 12px; box-shadow: 0 18px 60px rgba(0,0,0,0.6);
+  color: #e6e6e6; display: flex; flex-direction: column; overflow: hidden;
+}
+.config-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px 14px 0; }
+.config-tab { padding: 8px 14px; font-size: 15px; color: #9a9a9a; border-radius: 8px 8px 0 0; cursor: pointer; }
+.config-tab.active { color: #fff; background: rgba(255,255,255,0.06); }
+.config-body { flex: 1; overflow-y: auto; padding: 8px 6px; }
+.cfg-row {
+  display: flex; align-items: center; gap: 16px; padding: 9px 14px; margin: 2px 6px;
+  border-radius: 8px; border-left: 4px solid transparent;
+}
+.cfg-row.focus { background: rgba(255,255,255,0.06); border-left-color: #2ea3e6; }
+.cfg-label { flex: 1; min-width: 0; font-size: 15px; color: #d7d7d7; }
+.cfg-row.focus .cfg-label { color: #fff; }
+.cfg-ctrl { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; }
+/* toggle */
+.cfg-toggle { min-width: 56px; text-align: center; padding: 4px 12px; border-radius: 7px;
+  background: rgba(255,255,255,0.06); color: #9a9a9a; font-size: 13px; font-weight: 700; letter-spacing: 0.5px; }
+.cfg-toggle.on { background: rgba(54,194,90,0.22); color: #8fe0a0; }
+/* select */
+.cfg-select { min-width: 120px; text-align: center; padding: 4px 10px; border-radius: 7px;
+  background: rgba(255,255,255,0.06); color: #e6e6e6; font-size: 14px; }
+.cfg-select .cfg-arrow { color: #7a7a7a; padding: 0 6px; }
+/* slider */
+.cfg-slider { display: flex; align-items: center; gap: 10px; }
+.cfg-track { position: relative; width: 160px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; }
+.cfg-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #2ea3e6; border-radius: 2px; }
+.cfg-knob { position: absolute; top: 50%; width: 14px; height: 14px; margin-left: -7px; transform: translateY(-50%);
+  background: #cfcfcf; border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
+.cfg-row.focus .cfg-knob { background: #2ea3e6; box-shadow: 0 0 0 3px rgba(46,163,230,0.4); }
+.cfg-val { min-width: 46px; text-align: right; color: #fff; font-size: 13px; font-variant-numeric: tabular-nums; }
+/* restore-defaults row */
+.cfg-restore { justify-content: center; margin-top: 10px; color: #d7a0a0; font-size: 14px; }
+.cfg-restore.focus { border-left-color: #e0604f; color: #fff; background: rgba(224,96,79,0.14); }
+.config-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; justify-content: center;
+  padding: 9px 12px; font-size: 12px; color: #9a9a9a; border-top: 1px solid rgba(255,255,255,0.07); }
+.config-hint .glyph.rect { font-size: 10px; }
+body.mobile .config-modal { position: fixed; }
+body.mobile .config-panel { width: 94%; height: 88%; }
+
+/* ── Splitter (drag de la frontière roue ↔ contenu — desktop, opt-in) ──
+   Activé via body.bbw-list-resize (posé depuis app.js si lists.resizable=true
+   ET mode desktop). Hit-box 10px de large centrée sur la frontière (gap entre
+   la roue à --bbw-list-w et le contenu à --bbw-list-w+23) ; barre visible
+   2px au centre. Hover = plus clair ; pendant le drag = retour au niveau
+   normal (matche le comportement de LB). */
+.bbw-list-splitter { display: none; }
+body.bbw-list-resize .bbw-list-splitter {
+  display: block;
+  position: absolute; top: 78px; height: 600px;
+  /* gap commence à 10+list-w, fait 23px — barre centrée → +11.5 ; hit-box 10 large → left -5 = +6.5 */
+  left: calc(10px + var(--bbw-list-w, 250px) + 7px);
+  width: 10px;
+  cursor: col-resize;
+  z-index: 100;
+  background: transparent;
+}
+body.bbw-list-resize .bbw-list-splitter::before {
+  content: ""; position: absolute; left: 50%; top: 0; bottom: 0;
+  width: 2px; transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.08);
+  transition: background .15s ease;
+  border-radius: 1px;
+}
+body.bbw-list-resize .bbw-list-splitter:hover::before {
+  background: rgba(255, 255, 255, 0.28);
+}
+/* Pendant le drag : on retire l'effet hover (couleur normale) — comme LB.
+   Le curseur col-resize est forcé partout via body.bbw-list-dragging. */
+body.bbw-list-dragging { cursor: col-resize !important; user-select: none; }
+body.bbw-list-dragging .bbw-list-splitter::before {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* ── Scrollbar verticale du wheel (indicateur fin, desktop, opt-in) ──
+   Activée via body.bbw-list-sb-on (posée depuis app.js si
+   lists.scrollbarEnabled=true ET mode desktop). Thumb positionné en JS
+   d'après sel/(n−1) × (listH − thumbH) ; hover éclaircit, drag revient
+   à la couleur normale (matche LB).
+
+   GÉOMÉTRIE : .list est à left:10px, donc la sb se loge juste AVANT
+   le bord gauche de .list (et de la boîte de surbrillance, qui couvre
+   toute la largeur de .list) — bande x=6..9 px (3 px de track), thumb
+   1 px centré, 1 px d'air avant .list à x=10. Track transparent →
+   ligne fine type indicateur, pas une vraie poignée de drag (le drag
+   reste possible mais cosmétique : la nav clavier / molette / gamepad
+   pilote la sélection).
+
+   La sb vit au niveau .screen (PAS .list) car paintList() fait
+   list.innerHTML="" à chaque repaint et effacerait tout enfant de .list.
+   Coords répliquées en CSS pour suivre .list ; si .list { left }
+   change un jour, ajuster ici (ou envisager une var --bbw-list-x
+   partagée). */
+.bbw-list-sb { display: none; }
+body.bbw-list-sb-on .bbw-list-sb {
+  display: block;
+  position: absolute;
+  top: 78px; height: 600px;
+  left: 6px;
+  width: 3px;
+  z-index: 50;
+  background: transparent;
+}
+/* Quand le clear-logo est affiché, .list est repoussée en bas
+   (cf. styles.css ligne 383). La sb doit suivre. */
+body.bbw-list-sb-on .screen-games.has-gamelogo .bbw-list-sb {
+  top: var(--bbw-gamelogo-listtop, 158px);
+  height: calc(678px - var(--bbw-gamelogo-listtop, 158px));
+}
+/* Cache la scrollbar du wheel quand le jump rail (overlay gauche, .rail)
+   s'ouvre — sinon les deux se chevauchent dans la marge gauche de la liste.
+   Si un vrai drawer / panneau gauche apparaît plus tard avec sa propre body
+   class, ajouter ici : body.<that-class> .bbw-list-sb { display: none; } */
+.screen-games.rail-open .bbw-list-sb,
+.screen-details.rom-rail-open .bbw-list-sb { display: none; }
+body.bbw-list-sb-on .bbw-list-sb-thumb {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  width: 1px; min-height: 20px;
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 2px;
+  cursor: grab;
+  transition: background .15s ease;
+}
+body.bbw-list-sb-on .bbw-list-sb-thumb:hover {
+  background: rgba(255, 255, 255, 0.36);
+}
+body.bbw-list-sb-dragging { user-select: none; cursor: grabbing !important; }
+body.bbw-list-sb-dragging .bbw-list-sb-thumb {
+  background: rgba(255, 255, 255, 0.18) !important;
+  cursor: grabbing;
+}
+
+/* Scrollbar custom pour .poster-grid (mode poster). Posée entre la grille
+   et le panneau détail droit. Thumb capé en hauteur côté JS (cf.
+   startPosterScrollbar) pour éviter le ~90% de track quand l'overflow
+   est faible. Réutilise .bbw-list-sb-thumb pour la cohérence visuelle.
+   Gated par body.bbw-list-sb-on (posée par startListScrollbar quand
+   lists.scrollbarEnabled est true) → toggle off de la config cache aussi
+   cette scrollbar-là, sans rebuild du DOM. */
+.bbw-poster-sb { display: none; }
+body.bbw-list-sb-on .screen-games.poster .bbw-poster-sb {
+  display: block;
+  position: absolute;
+  top: 38px; bottom: 32px;
+  right: calc(var(--bbw-poster-side, 345px) + 3px);
+  width: 8px;
+  z-index: 50;
+  background: transparent;
+}
+/* Override : thumb 3 px dans le poster (vs 1 px pour la wheel). La wheel
+   est un simple indicateur dans la marge gauche d'une liste d'items déjà
+   gros ; le poster scrollbar est dans un track plus dégagé et bénéficie
+   d'une largeur lisible. Le className thumb est partagé entre les deux
+   sb (cf. app.js line 5131), donc on scope par parent. */
+body.bbw-list-sb-on .bbw-poster-sb .bbw-list-sb-thumb { width: 3px; }
+

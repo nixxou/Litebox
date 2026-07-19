@@ -1,0 +1,12 @@
+{
+  "name": "BigBoxWeb",
+  "short_name": "BigBoxWeb",
+  "description": "BigBox web — thème 10-foot (clone du thème Default de LaunchBox BigBox).",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#060606"
+}

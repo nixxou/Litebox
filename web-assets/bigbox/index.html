@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<!--
+  BigBoxWeb — coquille unique (SPA) regroupant les 4 écrans en couches.
+  Le moteur (engine/app.js) gère la navigation clavier, les transitions
+  (Fade / Slide Vertical) et remplit les parties dynamiques depuis un dataset
+  inline (données fausses). Un seul DOCUMENT chargé en permanence → pas de
+  rechargement, transitions continues.
+
+  Clavier : ↑/↓ sélection · Entrée/A descendre · Échap/B revenir · S system menu
+  Vérif :  index.html?screen=games&i=1  force l'écran + l'index initial.
+
+  Servir via http (ou ouvrir le fichier) ; aucun appel réseau (données en dur).
+-->
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BigBoxWeb</title>
+<!-- PWA / plein écran : « Sur l'écran d'accueil » lance sans barre d'URL.
+     iOS iPhone ne supporte pas l'API Fullscreen → c'est la voie fiable là-bas. -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#060606">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BigBoxWeb">
+<link rel="stylesheet" href="styles.css">
+<script src="vendor/lazyload.min.js"></script>
+</head>
+<body>
+<!-- Bouton exit visible UNIQUEMENT en mode kiosque embarqué (body.bbw-embedded).
+     Click → post 'kiosk:exit' au host WebView2 via window.chrome.webview, le host
+     ferme la fenêtre. Câblé par engine/app.js au DOMContentLoaded. -->
+<button id="bbw-exit-btn" type="button" aria-label="Exit kiosk" title="Exit (Esc)">×</button>
+<div id="viewport">
+  <div id="stage" class="multi">
+
+    <!-- ── Écran : Catégories ───────────────────────────────────────── -->
+    <div class="screen screen-categories" data-screen="categories">
+      <div class="bg"></div>
+      <div class="topbar"><span class="title">CATEGORIES</span><span class="clock">2:59 PM</span></div>
+      <div class="list"></div>
+      <!-- Contenu catégorie : chaque zone a sa propre transition (cf. engine).
+           detail = glissement vertical · media = glissement horizontal · recent = vertical.
+           Chaque zone clippe son .rgn-inner (rempli + animé par le moteur). -->
+      <div class="cat-content">
+        <div class="cat-detail"><div class="rgn-inner">
+          <div class="cat-title"></div>
+          <div class="cat-sub"></div>
+          <div class="cat-box"></div>
+          <div class="cat-count"><span class="pill-count"></span></div>
+        </div></div>
+        <div class="cat-media"><div class="rgn-inner"></div></div>
+        <div class="recent">
+          <div class="recent-label">Recent</div>
+          <div class="recent-clip"><div class="rgn-inner"><div class="row"></div></div></div>
+        </div>
+      </div>
+      <div class="bottombar">
+        <div class="left"><span class="glyph back"></span><span class="hint">SYSTEM MENU</span></div>
+        <div class="right">
+          <span class="hint"><span class="glyph">A</span> SELECT</span>
+          <span class="hint"><span class="glyph">B</span> BACK</span>
+          <span class="page">1 / 4</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Écran : Liste de jeux ────────────────────────────────────── -->
+    <div class="screen screen-games" data-screen="games">
+      <div class="bg"></div>
+      <!-- Fanart du jeu sélectionné en fond (partie droite, hors menu/barres), très atténué.
+           Image posée par le moteur (applyFanart) ; .has-fanart révèle l'opacité config. -->
+      <div class="fanart"></div>
+      <div class="topbar"><span class="title">WINDOWS</span><span class="advind" title="Filtre actif">☰</span><span class="clock">2:59 PM</span></div>
+      <div class="rail-trigger"></div>
+      <div class="rail"></div>
+      <!-- Clear logo du jeu sélectionné : zone réservée en haut de la roue (option gameLogo).
+           Affichée seulement quand .screen-games a la classe .has-gamelogo ; rempli par le
+           moteur (applyGameLogo) → <img class="game-logo-img"> ou le titre en texte. -->
+      <div class="game-logo"></div>
+      <div class="list"></div>
+      <div class="boxart-wrap">
+        <div class="boxart"><div class="rgn-inner"><div><div class="ba-sub"></div><div class="ba-title"></div></div></div></div>
+        <div class="pills">
+          <div class="pill"><span class="ico">＋</span><span class="txt">Multijoueur</span></div>
+          <div class="pill"><span class="ico">⏱</span><span class="txt">0h 00m 00s</span></div>
+        </div>
+      </div>
+      <div class="detail"><div class="rgn-inner">
+        <div class="platform-logo">▦ Windows</div>
+        <div class="game-title"></div>
+        <div class="meta"></div>
+        <div class="filename"></div>
+        <div class="desc"></div>
+        <div class="badges"></div>
+      </div></div>
+      <div class="media"><div class="rgn-inner"></div></div>
+      <!-- ── Vue POSTER (bascule depuis la roue : touche Tab · bouton View manette · swipe bas tablette) ──
+           Grille de jaquettes (partie principale) + panneau détail simplifié à droite. Le rail
+           gauche reste utilisable. Rempli par le moteur (buildPosterGrid / fillPosterSide). -->
+      <!-- Couche teinte ambiente : SIBLING de .poster-grid pour ne pas être
+           emportée par le scroll vertical des cellules. Géométrie alignée
+           sur la grille via les mêmes valeurs CSS. Deux .poster-tint-layer
+           empilées → crossfade morphing au changement de jeu, géré par
+           schedulePosterTint (toggle l'active/réserve). Le blur+saturate
+           est posé sur le parent → s'applique aux deux couches. -->
+      <div class="poster-tint">
+        <div class="poster-tint-layer"></div>
+        <div class="poster-tint-layer"></div>
+      </div>
+      <div class="poster-grid"><div class="poster-scroll"></div></div>
+      <div class="poster-side">
+        <!-- Hero : clear logo en gros + barre d'actions bas-gauche (note +
+             favori), posés au-dessus d'un fanart en filigrane (opacité
+             faible). Look LaunchBox desktop. -->
+        <div class="ps-hero">
+          <!-- Fond fanart : 2 .ps-hero-bg-layer empilées → crossfade
+               asymétrique au changement de jeu (fade-in rapide du nouveau,
+               fade-out plus lent de l'ancien → recouvrement bref). -->
+          <div class="ps-hero-bg">
+            <div class="ps-hero-bg-layer"></div>
+            <div class="ps-hero-bg-layer"></div>
+          </div>
+          <div class="ps-logo"></div>
+          <div class="ps-hero-bottom">
+            <div class="ps-rating"></div>
+            <button class="ps-action ps-fav" type="button" aria-label="Favorite">♥</button>
+          </div>
+          <!-- Store install badge (store games only): round store logo framed by a ring
+               (green = installed, orange = not). Anchored top-right of the hero, right-
+               aligned, OUTSIDE the rating/favourite bar. Populated by fillPosterSide. -->
+          <span class="ps-install" style="display:none"></span>
+        </div>
+        <div class="ps-media"><div class="rgn-inner"></div></div>
+        <div class="ps-thumbs"></div>
+        <div class="ps-head">
+          <div class="ps-plat"></div>
+          <div class="ps-title"></div>
+        </div>
+        <div class="ps-info"></div>
+      </div>
+      <div class="bottombar">
+        <div class="left"><span class="glyph back"></span><span class="hint">PLATFORMS</span></div>
+        <div class="right">
+          <!-- Bascule roue ↔ poster : touche Tab / bouton View-Select manette (swipe depuis la
+               title bar en tablette). Bloc rectangulaire (≠ ronds A/B) : repère « changer de vue ». -->
+          <span class="hint mode-hint"><span class="glyph rect">SELECT/TAB</span> CHANGE MODE</span>
+          <span class="hint"><span class="glyph">A</span> SELECT</span>
+          <span class="hint"><span class="glyph">B</span> BACK</span>
+          <span class="page"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Écran : Détail jeu ───────────────────────────────────────── -->
+    <div class="screen screen-details" data-screen="details">
+      <div class="bg"></div>
+      <div class="fanart"></div>
+      <div class="topbar"><span class="title">GAME DETAILS</span><span class="clock">2:59 PM</span></div>
+      <!-- ROM rail : visible uniquement quand on est dans le sous-menu Select ROM
+           (.rom-rail-open posé par le moteur quand menuStack.top.isRomMenu). Mêmes
+           règles d'ouverture que le rail de la roue jeux : gauche depuis la liste
+           ou hover sur la bande invisible à gauche. Items remplis par setupRomRail.
+           Indicateur ☰ dans la topbar quand un filtre est actif (cf. screen-games). -->
+      <div class="rom-rail-trigger"></div>
+      <div class="rom-rail"></div>
+      <!-- Menu d'actions récursif rempli par le moteur (DATA.detailMenu + menuStack). -->
+      <div class="list"></div>
+      <div class="boxart-wrap">
+        <div class="boxart"><div class="rgn-inner"><div><div class="ba-sub"></div><div class="ba-title"></div></div></div></div>
+        <div class="pills">
+          <div class="pill"><span class="ico">＋</span><span class="txt">Multijoueur</span></div>
+          <div class="pill"><span class="ico">⏱</span><span class="txt">0h 00m 00s</span></div>
+        </div>
+      </div>
+      <div class="detail"><div class="rgn-inner">
+        <div class="platform-logo">▦ Windows</div>
+        <div class="game-title"></div>
+        <div class="meta"></div>
+        <div class="filename"></div>
+        <div class="desc"></div>
+        <div class="badges"></div>
+      </div></div>
+      <!-- Archive MultiGame Selector — metadata overlay rendered on top of
+           the right pane when the user navigates into the Select ROM
+           submenu and a template.html / JSON sidecar exists for the
+           archive. Implemented as an iframe so the template can be a full
+           HTML page (with its own <head>, <style>, <script>) running in
+           a sandboxed document — the typical ACM / BBP template ships
+           json2html + dynamic table generators that wouldn't survive an
+           innerHTML insertion into a <div>. See CSS
+           .screen-details.has-archive-meta + updateArchiveMetaOverlay()
+           in engine/app.js. -->
+      <iframe class="archive-meta" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" aria-hidden="true"></iframe>
+      <div class="media"><div class="rgn-inner"></div></div>
+      <div class="bottombar">
+        <div class="left"><span class="glyph back"></span><span class="hint">GAMES LIST</span></div>
+        <div class="right">
+          <span class="hint"><span class="glyph">A</span> SELECT</span>
+          <span class="hint"><span class="glyph">B</span> BACK</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Écran : System Menu ──────────────────────────────────────── -->
+    <div class="screen screen-system" data-screen="system">
+      <div class="bg"></div>
+      <div class="topbar"><span class="title">SYSTEM MENU</span><span class="clock">2:59 PM</span></div>
+      <div class="list">
+        <div class="list-item selected">Back</div>
+        <div class="list-item" data-sys="settings">Settings</div>
+        <div class="list-item">About</div>
+        <div class="list-item" data-sys="lock">Unlock</div>
+        <!-- "Exit" : visible UNIQUEMENT en mode kiosque embarqué (body.bbw-embedded).
+             Retirée du DOM au boot quand !isEmbedded (cf. app.js) — sinon le wrap
+             modulo de la sélection laisserait naviguer dessus alors qu'elle serait
+             un no-op (rien à fermer en standalone). -->
+        <div class="list-item" data-sys="exit">Exit</div>
+      </div>
+      <div class="bottombar">
+        <div class="left">
+          <span class="hint"><span class="glyph">A</span> SELECT</span>
+          <span class="hint"><span class="glyph">B</span> BACK</span>
+        </div>
+        <div class="right"></div>
+      </div>
+    </div>
+
+    <!-- ── Popup : note perso (Star Rating) ─────────────────────────────
+         gauche/droite = ±½ étoile, A valide, B annule ; rempli par le moteur. -->
+    <div class="rating-modal" data-modal="rating">
+      <div class="modal-panel">
+        <div class="rating-stars">
+          <div class="rating-stars-base">★★★★★</div>
+          <div class="rating-stars-fill">★★★★★</div>
+        </div>
+        <div class="rating-line">Your Star Rating: <span class="r-your">None</span></div>
+        <div class="rating-line">Community Star Rating: <span class="r-comm">—</span></div>
+        <div class="rating-line">Total Community Star Rating Votes: <span class="r-votes">—</span></div>
+      </div>
+    </div>
+
+    <!-- ── Popup : digicode (Unlock) ────────────────────────────────────
+         flèches déplacent · A presse · B ferme ; géré par le moteur. -->
+    <div class="pin-modal" data-modal="pin">
+      <div class="modal-panel pin-panel">
+        <div class="pin-title">Enter your pin.</div>
+        <div class="pin-display"></div>
+        <div class="pin-pad">
+          <div class="pin-key" data-k="7">7</div>
+          <div class="pin-key" data-k="8">8</div>
+          <div class="pin-key" data-k="9">9</div>
+          <div class="pin-key" data-k="4">4</div>
+          <div class="pin-key" data-k="5">5</div>
+          <div class="pin-key" data-k="6">6</div>
+          <div class="pin-key" data-k="1">1</div>
+          <div class="pin-key" data-k="2">2</div>
+          <div class="pin-key" data-k="3">3</div>
+          <div class="pin-key" data-k="0">0</div>
+          <div class="pin-key" data-k="del">Delete</div>
+          <div class="pin-key" data-k="done">Done</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Popup : message contrôle parental (mode BigBox) ──────────────
+         Affiché quand on clique Lock/Unlock alors que l'appli tourne via
+         BigBox : le contrôle parental y est global (géré par BigBox). A/B ferme. -->
+    <div class="msg-modal" data-modal="msg">
+      <div class="modal-panel">
+        <div class="msg-title" data-i18n="parental.title">Parental Controls</div>
+        <div class="msg-text" data-i18n="parental.msg">This web app is running through BigBox. In this mode parental control is managed globally by BigBox: locking and unlocking are done directly in the BigBox application.</div>
+        <div class="msg-hint" data-i18n="parental.hint">A / B: close</div>
+      </div>
+    </div>
+
+    <!-- ── Popup : erreur de lancement (fichier introuvable, …) ─────────
+         Ouvert par openLaunchErrorModal(reason) quand /api/games/{id}/launch
+         renvoie { ok:false, reason:… }. A/B ferme. -->
+    <div class="msg-modal" data-modal="error">
+      <div class="modal-panel">
+        <div class="msg-title" data-i18n="error.fileMissing.title">Game file not found</div>
+        <div class="msg-text" data-i18n="error.fileMissing.msg">The file for this game cannot be found on disk. Check that the drive is connected and the file is in the expected location.</div>
+        <div class="msg-hint" data-i18n="error.fileMissing.hint">A / B: close</div>
+      </div>
+    </div>
+
+    <!-- ── Popup : Related Games ────────────────────────────────────────
+         ←/→ onglets · ↑/↓ liste · A sélectionne · B ferme ; rempli par le moteur. -->
+    <div class="related-modal" data-modal="related">
+      <div class="related-panel">
+        <div class="related-title">Related Games</div>
+        <div class="related-tabs">
+          <div class="rel-tab" data-tab="0">Recommended Games</div>
+          <div class="rel-tab" data-tab="1">Similar Games</div>
+          <div class="rel-tab" data-tab="2">Possible Ports</div>
+        </div>
+        <div class="rel-list"></div>
+      </div>
+    </div>
+
+    <!-- ── Modal LB-DB iframe ────────────────────────────────────────────
+         Ouverte quand le user clique une carte related dont le jeu n'est PAS
+         dans sa lib (DB-only candidate) — l'iframe charge notre page maison
+         /games/{dbid}.html. Stacking au-dessus du related (z-index plus
+         élevé) ; refermer rend la main au popup related encore visible
+         dessous. Le ✕ est en absolute top-right, l'iframe occupe la
+         totalité du panel. -->
+    <div class="lbdb-modal" data-modal="lbdb">
+      <div class="lbdb-panel">
+        <button class="lbdb-close" type="button" aria-label="Close" title="Close (B)">×</button>
+        <iframe class="lbdb-frame" src="about:blank"></iframe>
+      </div>
+    </div>
+
+    <!-- ── Popup : Tags VNDB ────────────────────────────────────────────
+         Ouverte depuis l'action « View VNDB Tags » (page détail, si le jeu a des tags
+         VNDB). Panneau scrollable à droite, tags groupés (content / tech / ero).
+         ↑/↓ défilent · B ferme ; rempli par le moteur (renderVndb). -->
+    <div class="vndb-modal" data-modal="vndb">
+      <div class="vndb-panel">
+        <div class="vndb-title"></div>
+        <div class="vndb-list"></div>
+      </div>
+    </div>
+
+    <!-- ── Réglages (Settings) : menus à onglets + options (toggle / slider / select) ──
+         Ouverte depuis « Settings » du system menu. L/R (gâchettes/Tab) = onglets ·
+         Haut/Bas = focus · Gauche/Droite = ajuste · A = remet l'option par défaut · B = ferme.
+         Sauvegarde en cookie ; un « Restore defaults » par page. Rempli par le moteur (renderConfig). -->
+    <div class="config-modal" data-modal="config">
+      <div class="config-panel">
+        <div class="config-tabs"></div>
+        <div class="config-body"></div>
+        <div class="config-hint"><span class="glyph rect">A</span> Reset option &nbsp; <span class="glyph rect">←→</span> Adjust &nbsp; <span class="glyph rect">L/R</span> Tab &nbsp; <span class="glyph rect">B</span> Close</div>
+      </div>
+    </div>
+
+    <!-- ── Recherche (écran jeux) : mini-clavier QWERTY ──────────────────
+         Ouverte depuis la loupe du rail. Flèches = déplacer · A = presser ·
+         B = fermer. La liste de jeux se filtre EN DIRECT (compareName) ;
+         le panneau reste à droite/bas pour laisser la liste visible.
+         Touches générées par le moteur (setupSearch). -->
+    <div class="search-modal" data-modal="search">
+      <div class="search-panel">
+        <div class="search-box"><span class="search-q"></span><span class="search-caret"></span></div>
+        <div class="search-keys"></div>
+      </div>
+    </div>
+
+    <!-- ── Recherche AVANCÉE (écran jeux) : modale à onglets ─────────────
+         Ouverte depuis le ☰ du rail. L/R (gâchettes/Tab) = onglets (bouclage) ·
+         Haut/Bas = focus · Gauche/Droite = ajuste · A = active · B = ferme.
+         Ancrée en HAUT pour laisser la place au clavier (saisie dev/éditeur, Phase 2).
+         Onglets + corps remplis par le moteur (setupAdvanced / renderAdv). -->
+    <div class="adv-modal" data-modal="adv">
+      <div class="adv-panel">
+        <div class="adv-tabs"></div>
+        <div class="adv-body"></div>
+        <div class="adv-foot"><div class="adv-apply">Appliquer</div></div>
+      </div>
+    </div>
+
+    <!-- ── Recherche AVANCÉE ROM (sous-menu Select ROM, écran détail) ─────
+         Mêmes contrôles que la modale jeux mais facettes spécifiques aux ROMs :
+         Region (multi), Language (multi), Size (slider), Sort, History. Ouverte
+         depuis le ☰ du rom-rail. Réutilise les styles .adv-* (cf. styles.css). -->
+    <div class="adv-modal rom-adv-modal" data-modal="rom-adv">
+      <div class="adv-panel">
+        <div class="adv-tabs"></div>
+        <div class="adv-body"></div>
+        <div class="adv-foot"><div class="adv-apply">Apply</div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script src="engine/data.js"></script>
+<script src="data/dummy.js"></script>
+<script src="data/ms-dos.js"></script>
+<script src="engine/config.js"></script>
+<script src="engine/i18n.js"></script>
+<script src="engine/scale.js"></script>
+<script src="engine/app.js"></script>
+<script src="engine/gamepad.js"></script>
+</body>
+</html>

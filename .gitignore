@@ -13,7 +13,3 @@ release/
 # OS
 Thumbs.db
 desktop.ini
-
-# Web frontend theme assets (private-origin: bundled locally, NOT distributed in this public repo).
-# Populated on this machine into web-assets/ (copied to build output, then deployed to Core\litebox\web\).
-web-assets/

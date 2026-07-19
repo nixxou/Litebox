@@ -1,0 +1,211 @@
+// BigBoxWeb — internationalisation (i18n).
+// L'ANGLAIS est la langue par défaut ET le repli. La langue active = window.BBW.lang
+// (langue de LaunchBox, lue dans Settings.xml et fournie au boot par /api/parental/state).
+// Pour ajouter une langue : ajouter une table ci-dessous (mêmes clés que `en`). Toute clé
+// absente retombe sur l'anglais, puis sur la clé elle-même.
+//
+// Usage :
+//   window.BBW.t("key.space")                → libellé traduit
+//   <div data-i18n="parental.title">…</div>  → traduit par localize() au boot (cf. app.js)
+//
+// Script classique (file://-safe). Doit être chargé AVANT engine/app.js.
+(function () {
+  "use strict";
+  window.BBW = window.BBW || {};
+
+  var T = {
+    en: {
+      "key.space":          "space",
+      "search.placeholder": "Search…",
+      "badge.players":      "Players",
+      "badge.region":       "Region",
+      "lock.bigbox":        "BigBox locked",
+      "lock.locked":        "Locked",
+      "lock.unlocked":      "Unlocked",
+      "parental.title":     "Parental Controls",
+      "parental.msg":       "This web app is running through BigBox. In this mode parental control is managed globally by BigBox: locking and unlocking are done directly in the BigBox application.",
+      "parental.hint":      "A / B: close",
+      "adv.general":        "General",
+      "adv.genre":          "Genre",
+      "adv.publisher":      "Publisher",
+      "adv.developer":      "Developer",
+      "adv.orderby":        "Order by",
+      "adv.sort.alpha":     "Alphabetical",
+      "adv.sort.year":      "Release date",
+      "adv.sort.rating":    "Rating",
+      "adv.sort.lastplayed":"Recently played",
+      "adv.history":        "History",
+      "adv.year":           "Release year",
+      "adv.rating":         "Rating",
+      "adv.releaseType":    "Release type",
+      "adv.fav":            "Favorite",
+      "adv.installed":      "Installed",
+      "adv.any":            "Any",
+      "adv.on":             "Yes",
+      "adv.match":          "Match",
+      "adv.or":             "ANY",
+      "adv.and":            "ALL",
+      "adv.devpubField":    "Type to filter…",
+      "adv.apply":          "Apply",
+      "adv.soon":           "Coming soon",
+      "adv.noHistory":      "No recent searches",
+      "info.released":      "Release date",
+      "info.developer":     "Developer",
+      "info.publisher":     "Publisher",
+      "info.genre":         "Genre",
+      "info.esrb":          "Rating",
+      "vndb.title":         "VNDB Tags",
+      "vndb.cont":          "Content",
+      "vndb.tech":          "Technical",
+      "vndb.ero":           "Erotic",
+      "error.fileMissing.title": "Game file not found",
+      "error.fileMissing.msg":   "The file for this game cannot be found on disk. Check that the drive is connected and the file is in the expected location.",
+      "error.fileMissing.hint":  "A / B: close",
+      "rating.your":      "Your Star Rating",
+      "rating.community": "Community Star Rating",
+      "rating.votes":     "Total Community Star Rating Votes",
+      "rating.none":      "None"
+    },
+    fr: {
+      "adv.general":        "Général",
+      "adv.genre":          "Genre",
+      "adv.publisher":      "Éditeur",
+      "adv.developer":      "Développeur",
+      "adv.orderby":        "Trier par",
+      "adv.sort.alpha":     "Alphabétique",
+      "adv.sort.year":      "Date de sortie",
+      "adv.sort.rating":    "Note",
+      "adv.sort.lastplayed":"Récemment joué",
+      "adv.history":        "Historique",
+      "adv.year":           "Année de sortie",
+      "adv.rating":         "Note",
+      "adv.releaseType":    "Type de sortie",
+      "adv.fav":            "Favori",
+      "adv.installed":      "Installé",
+      "adv.any":            "Tous",
+      "adv.on":             "Oui",
+      "adv.match":          "Critère",
+      "adv.or":             "AU MOINS UN",
+      "adv.and":            "TOUS",
+      "adv.devpubField":    "Saisir pour filtrer…",
+      "adv.apply":          "Appliquer",
+      "adv.soon":           "À venir",
+      "adv.noHistory":      "Aucune recherche récente",
+      "info.released":      "Date de sortie",
+      "info.developer":     "Développeur",
+      "info.publisher":     "Éditeur",
+      "info.genre":         "Genre",
+      "info.esrb":          "Évaluation",
+      "vndb.title":         "Tags VNDB",
+      "vndb.cont":          "Contenu",
+      "vndb.tech":          "Technique",
+      "vndb.ero":           "Érotique",
+      "key.space":          "espace",
+      "search.placeholder": "Rechercher…",
+      "badge.players":      "Joueurs",
+      "badge.region":       "Région",
+      "lock.bigbox":        "BigBox verrouillé",
+      "lock.locked":        "Verrouillé",
+      "lock.unlocked":      "Déverrouillé",
+      "parental.title":     "Contrôle parental",
+      "parental.msg":       "Cette application web est lancée via BigBox. Dans ce mode, le contrôle parental est géré globalement par BigBox : le verrouillage et le déverrouillage se font directement dans l'application BigBox.",
+      "parental.hint":      "A / B : fermer",
+      "error.fileMissing.title": "Fichier du jeu introuvable",
+      "error.fileMissing.msg":   "Le fichier de ce jeu est introuvable sur le disque. Vérifiez que le lecteur est connecté et que le fichier est à l'emplacement attendu.",
+      "error.fileMissing.hint":  "A / B : fermer",
+      "rating.your":      "Votre note",
+      "rating.community": "Note de la communauté",
+      "rating.votes":     "Total des votes de la communauté",
+      "rating.none":      "Aucune"
+    },
+    // Langues supportées par ExtendDB (sources métadonnées : En/Fr/De/Es/It/Pt).
+    de: {
+      "key.space":          "Leertaste",
+      "search.placeholder": "Suchen…",
+      "badge.players":      "Spieler",
+      "badge.region":       "Region",
+      "lock.bigbox":        "BigBox gesperrt",
+      "lock.locked":        "Gesperrt",
+      "lock.unlocked":      "Entsperrt",
+      "parental.title":     "Kindersicherung",
+      "parental.msg":       "Diese Web-App läuft über BigBox. In diesem Modus wird die Kindersicherung global von BigBox verwaltet: Das Sperren und Entsperren erfolgt direkt in der BigBox-Anwendung.",
+      "parental.hint":      "A / B: schließen",
+      "error.fileMissing.title": "Spieldatei nicht gefunden",
+      "error.fileMissing.msg":   "Die Datei für dieses Spiel wurde auf dem Datenträger nicht gefunden. Prüfen Sie, ob das Laufwerk verbunden ist und die Datei am erwarteten Ort liegt.",
+      "error.fileMissing.hint":  "A / B: schließen",
+      "rating.your":      "Deine Bewertung",
+      "rating.community": "Community-Bewertung",
+      "rating.votes":     "Anzahl Community-Bewertungen",
+      "rating.none":      "Keine"
+    },
+    es: {
+      "key.space":          "espacio",
+      "search.placeholder": "Buscar…",
+      "badge.players":      "Jugadores",
+      "badge.region":       "Región",
+      "lock.bigbox":        "BigBox bloqueado",
+      "lock.locked":        "Bloqueado",
+      "lock.unlocked":      "Desbloqueado",
+      "parental.title":     "Control parental",
+      "parental.msg":       "Esta aplicación web se ejecuta a través de BigBox. En este modo, el control parental se gestiona globalmente desde BigBox: el bloqueo y el desbloqueo se realizan directamente en la aplicación BigBox.",
+      "parental.hint":      "A / B: cerrar",
+      "error.fileMissing.title": "Archivo del juego no encontrado",
+      "error.fileMissing.msg":   "No se puede encontrar el archivo de este juego en el disco. Comprueba que la unidad esté conectada y que el archivo esté en la ubicación esperada.",
+      "error.fileMissing.hint":  "A / B: cerrar",
+      "rating.your":      "Tu valoración",
+      "rating.community": "Valoración de la comunidad",
+      "rating.votes":     "Total de votos de la comunidad",
+      "rating.none":      "Ninguna"
+    },
+    it: {
+      "key.space":          "spazio",
+      "search.placeholder": "Cerca…",
+      "badge.players":      "Giocatori",
+      "badge.region":       "Regione",
+      "lock.bigbox":        "BigBox bloccato",
+      "lock.locked":        "Bloccato",
+      "lock.unlocked":      "Sbloccato",
+      "parental.title":     "Controllo parentale",
+      "parental.msg":       "Questa app web è in esecuzione tramite BigBox. In questa modalità il controllo parentale è gestito globalmente da BigBox: il blocco e lo sblocco si effettuano direttamente nell'applicazione BigBox.",
+      "parental.hint":      "A / B: chiudi",
+      "error.fileMissing.title": "File del gioco non trovato",
+      "error.fileMissing.msg":   "Impossibile trovare il file di questo gioco sul disco. Verifica che l'unità sia collegata e che il file si trovi nel percorso previsto.",
+      "error.fileMissing.hint":  "A / B: chiudi",
+      "rating.your":      "Il tuo voto",
+      "rating.community": "Voto della comunità",
+      "rating.votes":     "Totale voti comunità",
+      "rating.none":      "Nessuna"
+    },
+    pt: {
+      "key.space":          "espaço",
+      "search.placeholder": "Pesquisar…",
+      "badge.players":      "Jogadores",
+      "badge.region":       "Região",
+      "lock.bigbox":        "BigBox bloqueado",
+      "lock.locked":        "Bloqueado",
+      "lock.unlocked":      "Desbloqueado",
+      "parental.title":     "Controlo parental",
+      "parental.msg":       "Esta aplicação web está a ser executada através do BigBox. Neste modo, o controlo parental é gerido globalmente pelo BigBox: o bloqueio e o desbloqueio são feitos diretamente na aplicação BigBox.",
+      "parental.hint":      "A / B: fechar",
+      "error.fileMissing.title": "Ficheiro do jogo não encontrado",
+      "error.fileMissing.msg":   "Não foi possível encontrar o ficheiro deste jogo no disco. Verifique se a unidade está ligada e se o ficheiro se encontra no local esperado.",
+      "error.fileMissing.hint":  "A / B: fechar",
+      "rating.your":      "Sua avaliação",
+      "rating.community": "Avaliação da comunidade",
+      "rating.votes":     "Total de votos da comunidade",
+      "rating.none":      "Nenhuma"
+    }
+  };
+
+  window.BBW.i18n = T;
+
+  // Langue active (2 lettres) : window.BBW.lang (LB) sinon anglais. Pas de repli sur
+  // navigator.language → l'UI est en ANGLAIS par défaut tant que LB ne dit pas le contraire.
+  window.BBW.t = function (key) {
+    var lang = (("" + (window.BBW.lang || "")).toLowerCase().slice(0, 2));
+    var tbl = T[lang] || T.en;
+    if (tbl && Object.prototype.hasOwnProperty.call(tbl, key)) return tbl[key];
+    if (Object.prototype.hasOwnProperty.call(T.en, key)) return T.en[key];
+    return key;
+  };
+})();

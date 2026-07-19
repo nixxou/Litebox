@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LaunchBox</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="../vendor/lazyload.min.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js" defer></script>
+  <!-- Gamepad polling — loaded after app.js so window.LBW.nav exists. -->
+  <script src="gamepad.js" defer></script>
+</head>
+<body>
+
+  <!-- Bouton exit visible UNIQUEMENT en mode kiosque embarqué (body.lb-embedded).
+       Click → post 'kiosk:exit' au host WebView2 via window.chrome.webview, le host
+       ferme la fenêtre. Câblé par app.js au DOMContentLoaded. Miroir du
+       #bbw-exit-btn du thème BigBoxWeb. -->
+  <button id="lb-exit-btn" type="button" aria-label="Exit kiosk" title="Exit">&times;</button>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       HEADER
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <header id="lb-header">
+    <span class="lb-hbar-brand">LAUNCHBOX</span>
+    <span class="lb-hbar-sep">|</span>
+    <nav class="lb-hbar-nav">
+      <!-- MENU button is a dropdown wrapper (parental Unlock/Lock + Settings).
+           The .lb-menu-dropdown <ul> is shown/hidden via .open class by JS.
+           (ref: BigBoxWeb/web/engine/app.js :: System Menu lock dispatch ~line 4630) -->
+      <div class="lb-menu-wrap" id="lb-menu-wrap">
+        <button class="lb-hbar-btn" id="lb-menu-btn" type="button" aria-haspopup="true" aria-expanded="false">MENU</button>
+        <ul class="lb-menu-dropdown" id="lb-menu-dropdown" role="menu">
+          <!-- Unlock item: only shown when locked && canUnlock (or bigBox).
+               applyParentalDom() controls visibility.
+               (ref: BigBoxWeb/web/engine/app.js :: applyParentalDom ~line 3336) -->
+          <li id="lb-menu-unlock" class="lb-menu-item" role="menuitem">Unlock&hellip;</li>
+          <!-- Lock item: only shown when !locked.
+               applyParentalDom() controls visibility. -->
+          <li id="lb-menu-lock" class="lb-menu-item" role="menuitem">Lock</li>
+          <li class="lb-menu-sep" role="separator"></li>
+          <!-- Settings item: always present. -->
+          <li id="lb-menu-settings" class="lb-menu-item" role="menuitem">Settings&hellip;</li>
+        </ul>
+      </div>
+      <button class="lb-hbar-btn" type="button">TOOLS</button>
+      <!-- VIEW dropdown: switches the centre pane between the poster grid
+           (Image) and the columns list (List). Wired by setupLbViewMenu()
+           in app.js; the active item gets the .checked class. -->
+      <div class="lb-menu-wrap" id="lb-view-wrap">
+        <button class="lb-hbar-btn" id="lb-view-btn" type="button" aria-haspopup="true" aria-expanded="false">VIEW</button>
+        <ul class="lb-menu-dropdown" id="lb-view-dropdown" role="menu">
+          <li id="lb-view-image" class="lb-menu-item" role="menuitemradio">Image</li>
+          <li id="lb-view-list"  class="lb-menu-item" role="menuitemradio">List</li>
+        </ul>
+      </div>
+      <button class="lb-hbar-btn" type="button">ARRANGE-BY</button>
+      <button class="lb-hbar-btn" type="button">IMAGE</button>
+      <button class="lb-hbar-btn" type="button">GROUP</button>
+      <button class="lb-hbar-btn" type="button">BADGES</button>
+    </nav>
+    <!-- Lock indicator: injected/updated by applyParentalDom() via renderLbLockIndicator().
+         Class variants: .red (BigBox locked) · .green (LaunchBox locked) · .open (unlocked).
+         SVG content set by JS.  aria-hidden because it is purely decorative.
+         (ref: BigBoxWeb/web/engine/app.js :: renderLockIndicators ~line 3355) -->
+    <span class="lb-lockind" id="lb-lockind" aria-hidden="true"></span>
+    <button class="lb-hbar-btn lb-hbar-cfg" type="button" title="Settings">&#9881;</button>
+    <span class="lb-hbar-spacer"></span>
+    <span class="lb-hbar-status">FREE VERSION</span>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       BODY — three-column layout
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <main id="lb-body">
+
+    <!-- Left sidebar: platform tree -->
+    <aside id="lb-tree">
+      <div class="lb-tree-search">
+        <input class="lb-search-input" type="search" placeholder="Search platforms…" aria-label="Search platforms">
+      </div>
+      <div class="lb-tree-scroll">
+        <div class="lb-tree-empty">Loading&hellip;</div>
+      </div>
+    </aside>
+
+    <!-- Centre: game grid -->
+    <section id="lb-grid">
+      <div class="lb-grid-header">
+        <span class="lb-grid-title">All Games</span>
+        <span class="lb-grid-count"></span>
+      </div>
+      <!-- .lb-grid-empty is a sibling of .lb-grid-scroll so buildLbGrid()
+           can show/hide it independently (scroll.innerHTML = "" only clears
+           the grid cells, not this placeholder). -->
+      <div class="lb-grid-empty">Pick a platform on the left</div>
+      <div class="lb-grid-scroll"></div>
+      <!-- List view container (View ▸ List). Populated by buildLbList();
+           shown instead of .lb-grid-scroll when <body> has class lb-view-list. -->
+      <div class="lb-list-scroll"></div>
+    </section>
+
+    <!-- Right sidebar: game detail panel -->
+    <aside id="lb-panel">
+      <div class="lb-panel-scroll">
+        <div class="lb-panel-empty">No game selected</div>
+        <div class="lb-panel-content" hidden>
+          <!-- Hero (fanart bg + clear logo + rating/fav bar)
+               Structure mirrors BBW .ps-hero / .ps-hero-bg / .ps-logo
+               (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-hero ~line 870) -->
+          <div class="lb-panel-hero">
+            <div class="lb-panel-hero-bg">
+              <div class="lb-panel-hero-bg-layer"></div>
+              <div class="lb-panel-hero-bg-layer"></div>
+            </div>
+            <!-- Clear logo: filled with <img> or <span class="lb-panel-logo-text">
+                 by fillLbPanel() — innerHTML="" first so animation restarts.
+                 (ref: BigBoxWeb/web/engine/app.js :: fillPosterSide ~line 971) -->
+            <div class="lb-panel-logo"></div>
+            <!-- Bottom bar: rating widget left, fav button right.
+                 (ref: BBW styles.css :: .poster-side .ps-hero-bottom ~line 969) -->
+            <div class="lb-panel-hero-bottom">
+              <div class="lb-panel-rating"></div>
+              <button class="lb-panel-action lb-panel-fav" type="button" aria-label="Favorite">&#9829;</button>
+            </div>
+            <!-- Store install badge: round store logo + ring (green=installed,
+                 orange=not). Top-right of the hero, right-aligned. Populated by
+                 paintLbInstallBadge(). -->
+            <span class="lb-panel-install" style="display:none"></span>
+          </div>
+          <!-- Main media display: video or first screenshot
+               (ref: BBW styles.css :: .poster-side .ps-media ~line 1055) -->
+          <div class="lb-panel-media"></div>
+          <!-- Horizontal thumbnail strip
+               (ref: BBW styles.css :: .poster-side .ps-thumbs ~line 1060) -->
+          <div class="lb-panel-thumbs"></div>
+          <!-- Platform + title header
+               (ref: BBW styles.css :: .poster-side .ps-plat / .ps-title ~line 963) -->
+          <div class="lb-panel-head">
+            <div class="lb-panel-plat"></div>
+            <div class="lb-panel-title"></div>
+          </div>
+
+          <!-- Overview / Related Games tabs — discreet (font = section h2 size).
+               JS: setupLbDetailTabs / lbSwitchDetailPane / resetLbDetailTabs. -->
+          <div class="lb-detail-tabs" id="lb-detail-tabs">
+            <button type="button" class="lb-detail-tab active" data-pane="overview">Overview</button>
+            <button type="button" class="lb-detail-tab" data-pane="related">Related Games</button>
+          </div>
+
+          <!-- ── Overview pane: the normal detail content ── -->
+          <div class="lb-detail-pane" data-pane="overview">
+          <!-- Information rows
+               (ref: BBW styles.css :: .poster-side .ps-info / .ps-row ~line 1068) -->
+          <div class="lb-panel-info">
+            <div class="lb-panel-section">
+              <h2>Information</h2>
+              <div class="lb-panel-row"><span class="k">Release date</span><span class="v lbp-year"></span></div>
+              <div class="lb-panel-row"><span class="k">Developer</span><span class="v lbp-dev"></span></div>
+              <div class="lb-panel-row"><span class="k">Publisher</span><span class="v lbp-pub"></span></div>
+              <div class="lb-panel-row"><span class="k">Genre</span><span class="v lbp-genre"></span></div>
+              <div class="lb-panel-row"><span class="k">Rating</span><span class="v lbp-esrb"></span></div>
+              <div class="lb-panel-row"><span class="k">Last played</span><span class="v lbp-lp"></span></div>
+              <div class="lb-panel-row"><span class="k">Play time</span><span class="v lbp-pt"></span></div>
+            </div>
+          </div>
+          <!-- Play button + integrated caret dropdown
+               Inserted before Description section.
+               (ref: BigBoxWeb/web/styles.css :: .poster-side .ps-action ~line 1022) -->
+          <!-- 3 boutons distincts (décision UX) : Play (+ caret émulateurs),
+               Version (si versions alternatives) et ROM (si la source courante
+               est une archive). Version/ROM sont des SÉLECTIONS mémorisées, elles
+               ne lancent pas. Le caret de Play ne sert plus qu'au choix
+               d'émulateur. -->
+          <div class="lb-panel-playgroup" id="lb-play-group">
+            <!-- Ligne 1 : Play + caret émulateur (pleine largeur). -->
+            <div class="lb-play-main-row">
+              <button type="button" class="lb-panel-play" id="lb-panel-play">
+                <span class="lb-panel-play-icon" aria-hidden="true">&#x25B6;</span>
+                <span class="lb-panel-play-label">Play</span>
+              </button>
+              <button type="button" class="lb-panel-play-caret" id="lb-panel-play-caret" aria-label="Launch options">&#x25BE;</button>
+              <!-- ↺ reset-to-default : ne s'affiche que quand la sélection (version /
+                   émulateur / ROM) ou l'historique de lancement diffère des défauts.
+                   Miroir de la colonne rouge LiteBox. -->
+              <button type="button" class="lb-panel-play-reset" id="lb-panel-play-reset" hidden
+                      aria-label="Reset to defaults"
+                      title="Reset to defaults — restores the default version and emulator and cancels this game's launch history">&#x21BA;</button>
+            </div>
+            <!-- Lignes 2 & 3 : sélections Version / ROM (pleine largeur, plus discrètes). -->
+            <button type="button" class="lb-panel-play-sel" id="lb-panel-version" hidden>Version</button>
+            <button type="button" class="lb-panel-play-sel" id="lb-panel-rom" hidden>Select ROM</button>
+            <div class="lb-panel-play-menu" id="lb-panel-play-menu" hidden></div>
+          </div>
+          <!-- Description -->
+          <div class="lb-panel-section">
+            <h2>Description</h2>
+            <div class="lb-panel-desc lbp-desc"></div>
+          </div>
+          </div><!-- /.lb-detail-pane[overview] -->
+
+          <!-- ── Related Games pane: Recommended / Similar / Possible Ports ── -->
+          <div class="lb-detail-pane" data-pane="related" hidden>
+            <div class="lb-rel-subtabs">
+              <button type="button" class="lb-rel-subtab active" data-rel="recommended">Recommended</button>
+              <button type="button" class="lb-rel-subtab" data-rel="similar">Similar</button>
+              <button type="button" class="lb-rel-subtab" data-rel="ports">Possible Ports</button>
+            </div>
+            <div class="lb-rel-list" id="lb-rel-list"></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       PIN PAD MODAL — parental unlock (LaunchBox mode)
+       Mirrors BigBoxWeb index.html :: .pin-modal (line 240-261).
+       Digit layout: 3-column grid, rows [7,8,9] [4,5,6] [1,2,3] [0,Backspace,Done].
+       JS: openPinPad / closePinPad / submitPin in app.js parental section.
+       (ref: BigBoxWeb/web/index.html :: .pin-modal ~line 240)
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <div id="lb-pinpad-modal" class="lb-pinpad-overlay" hidden>
+    <div class="lb-pinpad-panel">
+      <div class="lb-pinpad-title" id="lb-pinpad-title">Enter your PIN</div>
+      <div class="lb-pinpad-display" id="lb-pinpad-display"></div>
+      <div class="lb-pinpad-error" id="lb-pinpad-error"></div>
+      <div class="lb-pinpad-grid">
+        <button class="lb-pinpad-key" data-k="7" type="button">7</button>
+        <button class="lb-pinpad-key" data-k="8" type="button">8</button>
+        <button class="lb-pinpad-key" data-k="9" type="button">9</button>
+        <button class="lb-pinpad-key" data-k="4" type="button">4</button>
+        <button class="lb-pinpad-key" data-k="5" type="button">5</button>
+        <button class="lb-pinpad-key" data-k="6" type="button">6</button>
+        <button class="lb-pinpad-key" data-k="1" type="button">1</button>
+        <button class="lb-pinpad-key" data-k="2" type="button">2</button>
+        <button class="lb-pinpad-key" data-k="3" type="button">3</button>
+        <button class="lb-pinpad-key" data-k="0" type="button">0</button>
+        <button class="lb-pinpad-key lb-pinpad-wide" data-k="del" type="button">&#9003;</button>
+        <button class="lb-pinpad-key lb-pinpad-submit" data-k="done" type="button">Unlock</button>
+      </div>
+      <button class="lb-pinpad-cancel" id="lb-pinpad-cancel" type="button">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       BIGBOX INFO MODAL — parental lock (BigBox mode)
+       Shown when the user triggers Unlock/Lock while in BigBox mode:
+       parental control is global in that context, so we display an
+       explanatory message instead of the PIN pad.
+       Mirrors BigBoxWeb index.html :: .msg-modal (line 263-272).
+       (ref: BigBoxWeb/web/index.html :: .msg-modal ~line 263)
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <div id="lb-info-modal" class="lb-pinpad-overlay" hidden>
+    <div class="lb-pinpad-panel lb-info-panel">
+      <div class="lb-pinpad-title">Parental Controls</div>
+      <div class="lb-info-text">
+        This web app is running through BigBox. In this mode parental control
+        is managed globally by BigBox: locking and unlocking are done directly
+        in the BigBox application.
+      </div>
+      <button class="lb-pinpad-cancel" id="lb-info-close" type="button">Close</button>
+    </div>
+  </div>
+
+  <!-- ROM "More" modal (LaunchBox Web) : full ROM list when an archive has more
+       than the 7 shown in the dropdown. Reuses the generic .lb-modal shell. -->
+  <div id="lb-rom-modal" class="lb-modal" hidden>
+    <div class="lb-modal-backdrop" id="lb-rom-modal-backdrop"></div>
+    <div class="lb-modal-card lb-rom-modal-card">
+      <div class="lb-modal-head">
+        <span>SELECT ROM</span>
+        <button type="button" class="lb-modal-close" id="lb-rom-modal-close">&times;</button>
+      </div>
+      <div class="lb-rom-modal-split">
+        <!-- liste des ROMs (gauche) -->
+        <div class="lb-rom-modal-list" id="lb-rom-modal-list"></div>
+        <!-- séparateur draggable (50/50 par défaut, ajustable) -->
+        <div class="lb-rom-modal-divider" id="lb-rom-modal-divider"></div>
+        <!-- aperçu métadonnées (droite) : rendu du template hackset au survol -->
+        <iframe class="lb-rom-modal-meta" id="lb-rom-modal-meta"
+                sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" aria-hidden="true"></iframe>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       SETTINGS MODAL
+       Open: cog button (.lb-hbar-cfg) or MENU "Settings…" item.
+       Close: X button (#lb-cfg-close), Done button (#lb-cfg-ok),
+              overlay click (.lb-cfg-overlay), or Escape key.
+       Body populated dynamically by populateLbCfgUi() in app.js.
+       Changes committed live (no buffering) via commitLbCfgValue().
+       Reset: #lb-cfg-reset calls lbCfgReset() to restore all defaults.
+       (ref: BBW engine/index.html :: .config-modal ~line 328) -->
+  <div class="lb-cfg-modal" id="lb-cfg-modal" hidden>
+    <div class="lb-cfg-overlay" id="lb-cfg-overlay"></div>
+    <div class="lb-cfg-panel" role="dialog" aria-modal="true" aria-labelledby="lb-cfg-title">
+      <header class="lb-cfg-header">
+        <h2 id="lb-cfg-title">Settings</h2>
+        <button class="lb-cfg-close" id="lb-cfg-close" type="button" aria-label="Close settings">&times;</button>
+      </header>
+      <div class="lb-cfg-body" id="lb-cfg-body">
+        <!-- sections built dynamically by populateLbCfgUi() from configSchema -->
+      </div>
+      <footer class="lb-cfg-footer">
+        <button class="lb-cfg-reset" id="lb-cfg-reset" type="button">Reset to defaults</button>
+        <button class="lb-cfg-ok"    id="lb-cfg-ok"    type="button">Done</button>
+      </footer>
+    </div>
+  </div>
+
+</body>
+</html>

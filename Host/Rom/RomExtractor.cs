@@ -236,7 +236,7 @@ internal static class RomExtractor
                 // RA bonus (plugin parity): the achievement-bearing entry wins the auto-pick — matched
                 // paths come from the RA engine's per-entry store, keyed on the same signature.
                 var (raBonus, raPaths) = RaPickBonus(row, sig);
-                target = ArchiveAnalyzer.PickAutoLaunch(analysis.StandaloneFiles, RomConfig.EffectiveWeights(row), row.Priority, lastPlayed, raBonus, raPaths);
+                target = ArchiveAnalyzer.PickAutoLaunch(analysis.StandaloneFiles, row.TagWeights, row.Priority, lastPlayed, raBonus, raPaths);
                 pickRule = pick.ForcePriority ? "auto(priority)" : "auto";
             }
             if (target == null) { LbLog.Info("rom", "launch: no playable entry"); return RomLaunchResult.NotHandled; }
@@ -367,7 +367,7 @@ internal static class RomExtractor
             {
                 var lastPlayed = ArchiveHistory.GetLastPlayed(rec.ShortSignature ?? "");
                 var (raBonus, raPaths) = RaPickBonus(row, sig);
-                t = ArchiveAnalyzer.PickAutoLaunch(standalone, RomConfig.EffectiveWeights(row), row.Priority, lastPlayed, raBonus, raPaths);
+                t = ArchiveAnalyzer.PickAutoLaunch(standalone, row.TagWeights, row.Priority, lastPlayed, raBonus, raPaths);
             }
             if (t == null) return (null, null, "");
 
@@ -470,9 +470,8 @@ internal static class RomExtractor
             var raSig = ArchiveCacheDb.Sig(key);
             var raTitles = Ra.RaStore.GetEntryRaTitles(raSig);
             var raMatched = Ra.RaStore.GetRaMatchedPaths(raSig);
-            var effWeights = RomConfig.EffectiveWeights(row);   // profile weights + region from LB priorities
             var sorted = ArchiveAnalyzer.SortForDisplay(infoEntries, row.Priority, favs, lastPlayed,
-                effWeights, row.RetroAchievementsBonus, raMatched.Count > 0 ? raMatched : null);
+                row.TagWeights, row.RetroAchievementsBonus, raMatched.Count > 0 ? raMatched : null);
 
             // ✓-cached probe for the picker column (plugin parity): the entry's mode-aware placement
             // exists at the right size, in either the cache band or \tmp.
@@ -504,7 +503,7 @@ internal static class RomExtractor
                 Extension = e.Extension,
                 // Points shown = tag score + the RA bonus when the entry is achievement-matched — what
                 // the launch pick actually uses (plugin displayed the same combined value).
-                Score = ArchiveAnalyzer.ScoreEntry(e.FileName, effWeights)
+                Score = ArchiveAnalyzer.ScoreEntry(e.FileName, row.TagWeights)
                       + (row.RetroAchievementsBonus != 0 && raMatched.Contains(e.PathInArchive ?? "") ? row.RetroAchievementsBonus : 0),
                 // Favourites / last-played are keyed by PathInArchive; fall back to basename for flat
                 // archives (and rows recorded before the switch) — matches the source's OkSorted.
@@ -747,7 +746,7 @@ internal static class RomExtractor
                 if (a.StandaloneFiles.Count == 0) return (filePath, false);
                 var lastPlayed = ArchiveHistory.GetLastPlayed(a.Signature?.ShortSignature ?? "");
                 var (raBonus, raPaths) = RaPickBonus(row, sig);
-                var t = ArchiveAnalyzer.PickAutoLaunch(a.StandaloneFiles, RomConfig.EffectiveWeights(row), row.Priority, lastPlayed, raBonus, raPaths);
+                var t = ArchiveAnalyzer.PickAutoLaunch(a.StandaloneFiles, row.TagWeights, row.Priority, lastPlayed, raBonus, raPaths);
                 if (t == null) return (filePath, false);
                 bool ob = !ArchiveCacheEvictor.QualifiesForCache(a.UnpackedSize, mgs.CacheMinMb, mgs.CacheMaxMb);
                 var r = ArchiveExtractor.ExtractOrReuse(a, t, row, cacheRoot, sig, ob, gameTitle, platform, emulator);

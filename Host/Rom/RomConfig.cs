@@ -273,9 +273,8 @@ internal sealed class RomConfig
     public const string DefaultIgnoredExtensions =
         "nfo, txt, dat, xml, json, htc, hts";
 
-    // Quality / revision / translation baseline. Region weights are NOT seeded here — they follow LaunchBox's
-    // Region Priorities dynamically at pick time (see EffectiveWeights), so the auto-pick respects the user's
-    // region order out of the box.
+    // Quality / revision / translation baseline + the static region seeds ([USA]/[Europe]), visible + editable
+    // in the Tag-priority grid. (These are the pick weights; the grid shows exactly what scoring uses.)
     private static List<TagWeight> DefaultTagWeights() => new()
     {
         new TagWeight { Tag = "[!]",      Weight = 1000 },
@@ -290,19 +289,16 @@ internal sealed class RomConfig
         new TagWeight { Tag = "T+En",     Weight = 100 },
         new TagWeight { Tag = "T-En",     Weight = 50 },
         new TagWeight { Tag = "T.Eng",    Weight = 101 },
+        new TagWeight { Tag = "[USA]",    Weight = 200 },
+        new TagWeight { Tag = "(USA)",    Weight = 200 },
+        new TagWeight { Tag = "[Europe]", Weight = 150 },
+        new TagWeight { Tag = "(Europe)", Weight = 150 },
     };
 
-    // The pre-region-migration default (WITH the old static USA/Europe seeds). An unmodified GlobalDefault
-    // carrying EXACTLY this is upgraded to the region-dynamic default on load (EnsureDefaults).
-    private static List<TagWeight> LegacyDefaultTagWeights()
-    {
-        var l = DefaultTagWeights();
-        l.Add(new TagWeight { Tag = "[USA]",    Weight = 200 });
-        l.Add(new TagWeight { Tag = "(USA)",    Weight = 200 });
-        l.Add(new TagWeight { Tag = "[Europe]", Weight = 150 });
-        l.Add(new TagWeight { Tag = "(Europe)", Weight = 150 });
-        return l;
-    }
+    // The region-STRIPPED default a short-lived build seeded (region was briefly made dynamic). A default that
+    // exactly matches it gets the static region rows back on load (EnsureDefaults) — the user wants them visible.
+    private static List<TagWeight> RegionlessDefaultTagWeights()
+        => DefaultTagWeights().Where(w => w.Tag is not ("[USA]" or "(USA)" or "[Europe]" or "(Europe)")).ToList();
 
     private static bool SameWeights(List<TagWeight>? a, List<TagWeight> b)
     {
@@ -310,57 +306,6 @@ internal sealed class RomConfig
         for (int i = 0; i < a.Count; i++)
             if (!string.Equals(a[i].Tag, b[i].Tag, StringComparison.Ordinal) || a[i].Weight != b[i].Weight) return false;
         return true;
-    }
-
-    /// <summary>The tag weights to score an auto-pick / display sort with: the profile's OWN weights, PLUS
-    /// region weights synthesised from LaunchBox's Region Priorities for any region tag the profile doesn't
-    /// already set — so the pick follows the user's region order out of the box (plugin parity), while their
-    /// explicit weights always win.</summary>
-    public static List<TagWeight> EffectiveWeights(ArchivePriorityRow? row)
-    {
-        var baseW = row?.TagWeights ?? new List<TagWeight>();
-        var present = new HashSet<string>(baseW.Where(w => w?.Tag != null).Select(w => w.Tag!), StringComparer.OrdinalIgnoreCase);
-        var combined = new List<TagWeight>(baseW);
-        foreach (var w in BuildRegionWeights())
-            if (w.Tag != null && !present.Contains(w.Tag)) combined.Add(w);
-        return combined;
-    }
-
-    private static List<TagWeight> BuildRegionWeights()
-    {
-        var list = new List<TagWeight>();
-        try
-        {
-            var regions = LbApiHost.Host.Gc.SettingsWatcher.GetRegionPriorities();
-            int w = 100;
-            foreach (var r in regions ?? new List<string>())
-            {
-                foreach (var tag in RegionTags(r)) list.Add(new TagWeight { Tag = tag, Weight = w });
-                w = w > 20 ? w - 10 : 10;   // descending, floored at 10
-            }
-        }
-        catch { }
-        // Quality baseline regardless of region (deduped against the profile's own weights by EffectiveWeights).
-        list.Add(new TagWeight { Tag = "[!]",     Weight = 5 });
-        list.Add(new TagWeight { Tag = "(Beta)",  Weight = -30 });
-        list.Add(new TagWeight { Tag = "(Proto)", Weight = -30 });
-        list.Add(new TagWeight { Tag = "(Demo)",  Weight = -20 });
-        list.Add(new TagWeight { Tag = "[b]",     Weight = -100 });
-        return list;
-    }
-
-    private static string[] RegionTags(string region)
-    {
-        var r = (region ?? "").ToLowerInvariant();
-        if (r.Contains("euro")) return new[] { "(Europe)", "(E)" };
-        if (r.Contains("united states") || r.Contains("usa") || r == "us") return new[] { "(USA)", "(U)" };
-        if (r.Contains("japan")) return new[] { "(Japan)", "(J)" };
-        if (r.Contains("world")) return new[] { "(World)", "(W)" };
-        if (r.Contains("france") || r.Contains("french")) return new[] { "(France)", "(Fr)", "(F)" };
-        if (r.Contains("germ")) return new[] { "(Germany)", "(De)", "(G)" };
-        if (r.Contains("spain") || r.Contains("span")) return new[] { "(Spain)", "(Es)", "(S)" };
-        if (r.Contains("ital")) return new[] { "(Italy)", "(It)", "(I)" };
-        return new[] { "(" + region + ")" };
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -433,9 +378,9 @@ internal sealed class RomConfig
             GlobalDefault.IgnoredExtensions = DefaultIgnoredExtensions;
         if (GlobalDefault.TagWeights == null || GlobalDefault.TagWeights.Count == 0)
             GlobalDefault.TagWeights = DefaultTagWeights();
-        // Region migration: an UNMODIFIED default still carrying the old static USA/Europe seeds → drop them to
-        // the region-dynamic default (region now follows LB Region Priorities via EffectiveWeights).
-        else if (SameWeights(GlobalDefault.TagWeights, LegacyDefaultTagWeights()))
+        // Re-add the static region rows ([USA]/[Europe]) to a default that a short-lived region-dynamic build
+        // had stripped — only when it EXACTLY matches that stripped default (a customised default is untouched).
+        else if (SameWeights(GlobalDefault.TagWeights, RegionlessDefaultTagWeights()))
             GlobalDefault.TagWeights = DefaultTagWeights();
         // Simple mode removed — the engine is always Advanced (the cascade falls back to GlobalDefault
         // when no platform profile matches).

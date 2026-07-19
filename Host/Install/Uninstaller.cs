@@ -62,9 +62,9 @@ internal static class Uninstaller
         // the deploy + uninstall lists can't drift — the apphost, the managed host dll, its json, and the
         // extra managed deps LaunchBox's Core doesn't provide (LibVLCSharp / ZstdSharp / Magick.NET).
         foreach (var f in LightPayload.Files) sb.AppendLine($"del /q \"{core}\\{f}\" 2>nul");
-        sb.AppendLine($"rmdir /s /q \"{core}\\litebox\" 2>nul");                  // ALL LiteBox data (dbs, caches, our thirdparty\, cache\thumbs)
-        sb.AppendLine($"rmdir /s /q \"{core}\\web-assets\" 2>nul");               // installer's web-theme staging (WebPayload → Core\web-assets)
-        sb.AppendLine($"rmdir /s /q \"{core}\\LiteBox.exe.WebView2\" 2>nul");     // WebView2 default user-data profile next to the exe
+        sb.AppendLine($"rmdir /s /q \"{core}\\litebox\" 2>nul");                  // ALL LiteBox data (dbs, caches, our thirdparty\, cache\thumbs, web-assets\, webview2-kiosk\)
+        sb.AppendLine($"rmdir /s /q \"{core}\\web-assets\" 2>nul");               // LEGACY (pre-relocation): staging now lives in Core\litebox\web-assets
+        sb.AppendLine($"rmdir /s /q \"{core}\\LiteBox.exe.WebView2\" 2>nul");     // LEGACY (pre-relocation): kiosk profile now Core\litebox\webview2-kiosk
         sb.AppendLine($"del /q \"{root}\\LiteBox.exe\" 2>nul");
 
         // Always: the LiteBox-ONLY ThirdParty natives (Steam / Pdfium / RomExtractor), derived from the deploy

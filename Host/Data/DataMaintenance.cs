@@ -70,6 +70,8 @@ internal static class DataMaintenance
                 Role = "YouTube player browser profile (cookies / cache)." },
         new() { Name = "webview2-yt-page",  Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
                 Role = "Generated YouTube player page (regenerated each play)." },
+        new() { Name = "webview2-kiosk",    Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+                Role = "Kiosk web-view browser profile (cookies / cache)." },
         new() { Name = "ra-cache",          Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
                 Role = "RetroAchievements catalogue JSON." },
         new() { Name = "ra-badges",         Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,

@@ -2,10 +2,10 @@
 //
 // The single-file installer embeds every file under web-assets\ as a manifest resource named
 // "webassets/<relative-path>" (see the csproj EmbeddedResource glob; standalone build only). At install we
-// rebuild that tree into <Core>\web-assets\ — the SAME place the manual "extract into Core" zip drops it, and
-// the SAME place WebAssets.EnsureDeployed reads from at boot (AppContext.BaseDirectory == Core) before copying
-// each site into Core\litebox\web\. So write to Core\web-assets\, NOT the served Core\litebox\web\ (that stays
-// EnsureDeployed's job, keyed on its version stamp).
+// rebuild that tree into Core\litebox\web-assets\ — the SAME place the manual "extract into Core" zip drops it,
+// and the SAME place WebAssets.EnsureDeployed reads from at boot before copying each site into Core\litebox\web\.
+// So write to the staging dir, NOT the served Core\litebox\web\ (that stays EnsureDeployed's job, keyed on its
+// version stamp). Under litebox\ so the uninstaller's `rmdir Core\litebox` sweeps it with the rest of our data.
 //
 // The light build embeds nothing here (its zip ships the assets loose), so this is a no-op there. Every failure
 // is non-fatal: a missing web payload just means the Web module falls back to its placeholder theme.
@@ -39,7 +39,7 @@ internal static class WebPayload
                            .Where(n => n.StartsWith(Prefix, StringComparison.Ordinal)).ToArray();
             if (names.Length == 0) return null;   // light build (or no assets) → placeholder theme
 
-            string root = Path.Combine(coreDir, "web-assets");
+            string root = Path.Combine(coreDir, "litebox", "web-assets");
             int written = 0;
             foreach (var n in names)
             {

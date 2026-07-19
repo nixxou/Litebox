@@ -216,7 +216,11 @@ internal sealed class WebKioskWindow : Form
 
     private async System.Threading.Tasks.Task InitAsync()
     {
-        try { await _web.EnsureCoreWebView2Async(null); }
+        // Explicit user-data folder UNDER Core\litebox\ (else WebView2 spawns Core\LiteBox.exe.WebView2 next
+        // to the exe, which our uninstall then has to special-case). Falls back to the default env on failure.
+        CoreWebView2Environment? env = null;
+        try { env = await CoreWebView2Environment.CreateAsync(null, LiteBoxPaths.Dir("webview2-kiosk"), null); } catch { }
+        try { await _web.EnsureCoreWebView2Async(env); }
         catch { Close(); return; }
         if (_web.CoreWebView2 == null) { Close(); return; }
 

@@ -141,11 +141,11 @@ foreach ($t in $targets) {
     if (-not (Test-Path $src)) { throw "payload file missing: $src" }
     Copy-Item $src (Join-Path $tpDir $p)
   }
-  # c) Web frontend theme assets (optional; gitignored web-assets\ on the build machine). Shipped at the zip
-  #    root as web-assets\ (extracts to Core\web-assets\); WebAssets.EnsureDeployed installs them to
-  #    Core\litebox\web\ at boot. Absent -> the Web module serves its placeholder until assets are dropped in.
+  # c) Web frontend theme assets (optional; gitignored web-assets\ on the build machine). Shipped under the
+  #    zip's litebox\web-assets\ (extracts to Core\litebox\web-assets\); WebAssets.EnsureDeployed installs them
+  #    to Core\litebox\web\ at boot. Under litebox\ so uninstall's rmdir sweeps it. Absent -> placeholder theme.
   $waSrc = Join-Path $PSScriptRoot 'web-assets'
-  if (Test-Path $waSrc) { Copy-Item $waSrc (Join-Path $stageZip 'web-assets') -Recurse -Force; Write-Host "  + web-assets bundled ($label)" }
+  if (Test-Path $waSrc) { Copy-Item $waSrc (Join-Path $stageZip 'litebox\web-assets') -Recurse -Force; Write-Host "  + web-assets bundled ($label)" }
   else { Write-Host "  (note: no web-assets\ - Web module ships without its theme this build)" }
 
   # d) ROM-extractor tools (optional): chdman.exe / DolphinTool.exe / RamDiskHelper.exe are NOT bundled here

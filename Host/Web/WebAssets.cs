@@ -35,11 +35,14 @@ internal static class WebAssets
             // The database site is server-rendered — just make sure the folder exists (empty is fine).
             LiteBoxPaths.Web("database");
 
-            string baseDir = Path.Combine(AppContext.BaseDirectory, "web-assets");
+            // Source staging lives under Core\litebox\ (LiteBox-own, removed with the data dir on uninstall).
+            // Fall back to the pre-relocation Core\web-assets so an existing install still deploys.
+            string baseDir = Path.Combine(LiteBoxPaths.Data, "web-assets");
             if (!Directory.Exists(baseDir))
             {
-                LbLog.Info("web", "no bundled web assets to deploy");
-                return;
+                string legacy = Path.Combine(AppContext.BaseDirectory, "web-assets");
+                if (Directory.Exists(legacy)) baseDir = legacy;
+                else { LbLog.Info("web", "no bundled web assets to deploy"); return; }
             }
 
             string version = LiteBoxVersion.Current.ToString();

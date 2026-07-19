@@ -612,8 +612,7 @@ internal static class RomExtractor
             var analysis = ArchiveAnalyzer.Analyze(absPath, RomConfig.Instance, row.Priority, row.RomExtensions, row.IgnoredExtensions);
             var texEntries = analysis.Entries.Where(e => !e.IsDirectory && TextureExtSet(row).Contains(e.Extension ?? "")).ToList();
             if (texEntries.Count == 0) return null;
-            var emulator = Safe(() => PluginHelper.DataManager.GetEmulatorById(Safe(() => game.EmulatorId) ?? ""));
-            string dest = ResolveTexturePath(row, game, emulator);
+            string dest = ResolveTexturePath(row, game, ResolveEffectiveEmulator(game));
             return new TexturePackContext { ArchivePath = absPath, InstallDir = dest ?? "", Entries = texEntries };
         }
         catch (Exception ex) { LbLog.Info("rom", "GetTexturePack failed: " + ex.Message); return null; }
@@ -652,13 +651,26 @@ internal static class RomExtractor
         return null;
     }
 
-    private static string? ResolveEmuTitle(IGame game)
+    private static string? ResolveEmuTitle(IGame game) => Safe(() => ResolveEffectiveEmulator(game)?.Title);
+
+    /// <summary>The emulator a game ACTUALLY launches with: its own EmulatorId, else the DEFAULT emulator of
+    /// its platform. EmulatorId is empty for games that use the platform default (the common case), so this is
+    /// what texture-path / profile resolution must use — not the raw (often empty) EmulatorId. Null when none.</summary>
+    private static IEmulator? ResolveEffectiveEmulator(IGame game)
     {
         try
         {
             var id = Safe(() => game.EmulatorId);
-            if (string.IsNullOrEmpty(id)) return null;
-            return Safe(() => PluginHelper.DataManager?.GetEmulatorById(id)?.Title);
+            if (!string.IsNullOrEmpty(id)) { var e = PluginHelper.DataManager?.GetEmulatorById(id); if (e != null) return e; }
+            var platform = Safe(() => game.Platform) ?? "";
+            if (string.IsNullOrEmpty(platform)) return null;
+            foreach (var emu in PluginHelper.DataManager?.GetAllEmulators() ?? Array.Empty<IEmulator>())
+            {
+                var eps = Safe(() => emu.GetAllEmulatorPlatforms()) ?? Array.Empty<IEmulatorPlatform>();
+                if (eps.Any(p => { try { return string.Equals(p?.Platform, platform, StringComparison.OrdinalIgnoreCase) && p.IsDefault; } catch { return false; } }))
+                    return emu;
+            }
+            return null;
         }
         catch { return null; }
     }

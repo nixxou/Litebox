@@ -3873,8 +3873,9 @@ internal sealed class MainWindow : Form, IMessageFilter
 
         _resumeGameId = g != null ? Safe(() => g.Id) : null;
         _gameRunning = true;
-        // Hide the web kiosk (TopMost frontend) while the game runs; restored on exit. Mirrors ExtendDB.
-        try { Web.Kiosk.WebKioskWindow.SuspendForGameLaunch(); } catch { }
+        // Tear down the web kiosk (frees the WebView2 process) while the game runs; recreated + deep-linked
+        // back to this game on exit. Mirrors ExtendDB's full teardown.
+        try { Web.Kiosk.WebKioskWindow.SuspendForGameLaunch(g != null ? Safe(() => g.Id) : null, g != null ? Safe(() => g.Platform) : null); } catch { }
         SetStorePoll(false);   // pause the install-state poll while the game runs (client DB may be mid-write)
         CandidateProvider.ReleaseMemory();   // drop the suggester's candidate pool — that RAM belongs to the game now
         // RA launch correction (engine P4): align the IGame hash/raid with the entry that actually

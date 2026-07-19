@@ -34,6 +34,8 @@ internal sealed class WebKioskWindow : Form
     private readonly WebView2 _web;
     private string _surface;            // "bigbox" or "launchbox" (updated on live surface switch)
     private bool _ready;
+    private string _deepLink;           // one-shot extra hash for a restore deep-link ("" normally)
+    private bool _suspendClosing;       // closing to suspend for a game launch → keep the parental unlock
 
     /// <summary>True when the WebView2 managed assemblies AND the Evergreen runtime are both present. Isolated
     /// + guarded so a Core without WebView2 (13.27) is caught, never fatal.</summary>
@@ -64,42 +66,73 @@ internal sealed class WebKioskWindow : Form
     }
 
     private static bool _suspended;
+    private static string? _suspendedSurface;
+    private static string _suspendedDeepLink = "";
 
-    /// <summary>Hide the open kiosk while a game runs (it's a TopMost maximized frontend, so it would
-    /// otherwise sit over the game). The WebView2 stays alive, so RestoreAfterGameLaunch brings it back to
-    /// the exact page. No-op when no kiosk is open. Mirrors ExtendDB's SuspendForGameLaunch.</summary>
-    public static void SuspendForGameLaunch()
+    /// <summary>FULLY TEAR DOWN the open kiosk while a game runs — closing the window disposes the WebView2,
+    /// so its Chromium child process exits and frees RAM/CPU/GPU for the game (mirrors ExtendDB, which does a
+    /// full teardown, not a hide). The pre-launch surface + a deep-link to the launched game are snapshotted;
+    /// RestoreAfterGameLaunch recreates the kiosk on that surface, back on the played game. The in-memory
+    /// parental unlock is PRESERVED across the close (the reset is skipped for a suspend-close). No-op when no
+    /// kiosk is open. Must run on the kiosk's UI thread.</summary>
+    public static void SuspendForGameLaunch(string? gameId, string? platform)
     {
         var w = _instance;
         if (w == null || w.IsDisposed) return;
         try
         {
-            if (w.InvokeRequired) { w.BeginInvoke((Action)SuspendForGameLaunch); return; }
-            if (!w.Visible) return;
-            w.TopMost = false;
-            w.Hide();
+            if (w.InvokeRequired) { string? gid = gameId, plat = platform; w.BeginInvoke((Action)(() => SuspendForGameLaunch(gid, plat))); return; }
+            _suspendedSurface = w._surface;
+            _suspendedDeepLink = BuildDeepLink(gameId, platform);
             _suspended = true;
+            w._suspendClosing = true;   // keep the parental unlock across the close/reopen
+            w.Close();                  // → WebView2 disposed, child process exits
+        }
+        catch { _suspended = false; _suspendedSurface = null; _suspendedDeepLink = ""; }
+    }
+
+    /// <summary>Recreate the kiosk that SuspendForGameLaunch tore down, on the same surface and deep-linked
+    /// to the played game, once the game has exited. No-op when nothing was suspended. Call on the UI thread.</summary>
+    public static void RestoreAfterGameLaunch()
+    {
+        if (!_suspended) return;
+        var surface = _suspendedSurface;
+        var deep = _suspendedDeepLink;
+        _suspended = false; _suspendedSurface = null; _suspendedDeepLink = "";
+        if (string.IsNullOrEmpty(surface) || !IsAvailable()) return;
+        try
+        {
+            var w = new WebKioskWindow(surface!, deep);
+            _instance = w;
+            w.Show();
         }
         catch { }
     }
 
-    /// <summary>Bring the kiosk back after the game exits (only when SuspendForGameLaunch hid it), to the
-    /// same surface/page it was on, and give it focus.</summary>
-    public static void RestoreAfterGameLaunch()
+    /// <summary>Extra hash params (&amp;platform=&amp;gameId=) so the restored kiosk lands back on the played
+    /// game. The BigBox theme honours them; the LaunchBox theme ignores them (harmless — the base path wins).</summary>
+    private static string BuildDeepLink(string? gameId, string? platform)
     {
-        var w = _instance;
-        if (w == null || w.IsDisposed || !_suspended) return;
-        try
+        var sb = new System.Text.StringBuilder();
+        var slug = Slugify(platform ?? "");
+        if (slug.Length > 0) sb.Append("&platform=").Append(Uri.EscapeDataString(slug));
+        if (!string.IsNullOrEmpty(gameId)) sb.Append("&gameId=").Append(Uri.EscapeDataString(gameId!));
+        return sb.ToString();
+    }
+
+    /// <summary>Same slug rule as the themes' engine/app.js slugify(): lowercase, non-alphanumeric runs → "-",
+    /// trimmed — so the platform matches the theme's data/platforms/&lt;slug&gt;/games.json path.</summary>
+    private static string Slugify(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var sb = new System.Text.StringBuilder();
+        bool dash = false;
+        foreach (var ch in s.ToLowerInvariant())
         {
-            if (w.InvokeRequired) { w.BeginInvoke((Action)RestoreAfterGameLaunch); return; }
-            _suspended = false;
-            w.Show();
-            w.WindowState = FormWindowState.Maximized;
-            w.TopMost = true;
-            w.BringToFront();
-            w.Activate();
+            if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) { sb.Append(ch); dash = false; }
+            else if (!dash) { sb.Append('-'); dash = true; }
         }
-        catch { }
+        return sb.ToString().Trim('-');
     }
 
     private static void Toggle(string surface)
@@ -126,9 +159,10 @@ internal sealed class WebKioskWindow : Form
         catch { }
     }
 
-    private WebKioskWindow(string surface)
+    private WebKioskWindow(string surface, string deepLink = "")
     {
         _surface = surface;
+        _deepLink = deepLink ?? "";
 
         FormBorderStyle = FormBorderStyle.None;
         WindowState = FormWindowState.Maximized;
@@ -149,7 +183,7 @@ internal sealed class WebKioskWindow : Form
 
         Shown += async (_, _) => await InitAsync();
         // Closing the kiosk re-locks it (the in-memory unlock flag never survives the window).
-        FormClosed += (_, _) => { try { LbApiHost.Host.Web.WebParentalState.KioskReset(); } catch { } };
+        FormClosed += (_, _) => { try { if (!_suspendClosing) LbApiHost.Host.Web.WebParentalState.KioskReset(); } catch { } };
     }
 
     private async System.Threading.Tasks.Task InitAsync()
@@ -187,8 +221,9 @@ internal sealed class WebKioskWindow : Form
         string path = string.Equals(surface, "bigbox", StringComparison.OrdinalIgnoreCase) ? "/bigbox/" : "/launchbox/";
         // #embedded=1 tells the surface it runs inside the kiosk host: it KEEPS the System Menu "Exit" item and
         // shows the top-right × (both removed from the DOM in standalone), and routes them to us via WebMessage.
-        string url = $"http://127.0.0.1:{port}{path}#embedded=1";
-        if (!_ready) return;   // Shown/InitAsync will call us once CoreWebView2 exists
+        string extra = _deepLink; _deepLink = "";   // deep-link only the first (restore) navigation
+        string url = $"http://127.0.0.1:{port}{path}#embedded=1{extra}";
+        if (!_ready) { _deepLink = extra; return; }   // Shown/InitAsync will call us once CoreWebView2 exists
         try { _web.CoreWebView2?.Navigate(url); } catch { }
     }
 

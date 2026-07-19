@@ -121,6 +121,11 @@ internal static class Installer
             // I (the installer) DO have it embedded, so deploy it into <root>\ThirdParty now — the light then
             // finds it already present at boot (EnsureDeployed is only-if-absent).
             NativeInstaller.EnsureDeployed(root);
+            // Same idea for the web themes: the light host has none embedded, so unpack the installer's copy
+            // into Core\web-assets\ (WebAssets.EnsureDeployed serves them from there at boot). Non-fatal — a
+            // failure just leaves the Web module on its placeholder theme.
+            string? webErr = WebPayload.ExtractToCore(core);
+            if (webErr != null) Console.WriteLine("[installer] " + webErr);
         }
         else
         {

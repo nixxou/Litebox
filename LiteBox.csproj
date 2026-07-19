@@ -181,6 +181,17 @@
     <EmbeddedResource Include="thirdparty\RamDiskHelper.runtimeconfig.json"><LogicalName>natives/RamDiskHelper.runtimeconfig.json</LogicalName></EmbeddedResource>
   </ItemGroup>
 
+  <!-- Web frontend theme assets: embedded in the STANDALONE installer ONLY (the light zip ships them loose
+       instead). WebPayload.ExtractToCore unpacks them into Core\web-assets\ at install; WebAssets.EnsureDeployed
+       then installs them to Core\litebox\web\ at boot. LogicalName keeps each file's sub-path (webassets/<rel>)
+       so the tree is rebuilt verbatim. Absent (a machine without the private-origin assets) → nothing embedded
+       → WebPayload is a no-op and the Web module serves its placeholder. -->
+  <ItemGroup Condition="'$(LiteBoxDist)' == 'standalone' and Exists('web-assets')">
+    <EmbeddedResource Include="web-assets\**\*">
+      <LogicalName>webassets/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <!-- A2 universal installer: the standalone single-file embeds the LIGHT multi-file host for BOTH runtime
        targets (net9 for LB 13.27, net10 for LB 13.28+). At install, Installer/LightPayload detects Core's
        .NET and extracts the matching set into Core — the light host does NOT hit the single-file obfuscator

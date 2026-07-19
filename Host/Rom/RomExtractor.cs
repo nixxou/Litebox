@@ -820,7 +820,7 @@ internal static class RomExtractor
     {
         var texExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in RomConfig.SplitCsv(row.TextureExtensions ?? "")) { var x = e.TrimStart('.').Trim().ToLowerInvariant(); if (x.Length > 0) texExts.Add(x); }
-        if (texExts.Count == 0) return;
+        if (texExts.Count == 0) { texExts.Add("htc"); texExts.Add("hts"); }   // plugin parity: default to the N64 hi-res texture exts
 
         var texEntries = analysis.Entries.Where(e => !e.IsDirectory && texExts.Contains(e.Extension ?? "")).ToList();
         if (texEntries.Count == 0) return;
@@ -841,19 +841,30 @@ internal static class RomExtractor
         LbLog.Info("rom", $"texture: {texEntries.Count} file(s) → \"{dest}\" (7z exit={exit})");
     }
 
-    /// <summary>Token-expanded texture install path (<c>{EmuDir}</c> <c>{GameId}</c> <c>{GameTitle}</c>), or
-    /// "" when the profile has no path.</summary>
+    /// <summary>Where to install the texture pack. The profile's token-expanded path (<c>{EmuDir}</c>
+    /// <c>{GameId}</c> <c>{GameTitle}</c>) wins; when it's empty, fall back to the launched emulator's
+    /// well-known N64 hi-res texture cache (plugin parity), so packs install out of the box. "" when unknown.</summary>
     private static string ResolveTexturePath(ArchivePriorityRow row, IGame game, IEmulator emulator)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(row.TextureExtractPath)) return "";
             string emuExe = RomPaths.ResolveAbsolute(Safe(() => emulator?.ApplicationPath) ?? "");
             string emuDir = string.IsNullOrEmpty(emuExe) ? "" : (Path.GetDirectoryName(emuExe) ?? "");
-            return row.TextureExtractPath
-                .Replace("{EmuDir}", emuDir, StringComparison.OrdinalIgnoreCase)
-                .Replace("{GameId}", Safe(() => game.Id) ?? "", StringComparison.OrdinalIgnoreCase)
-                .Replace("{GameTitle}", Safe(() => game.Title) ?? "", StringComparison.OrdinalIgnoreCase);
+
+            if (!string.IsNullOrWhiteSpace(row.TextureExtractPath))
+                return row.TextureExtractPath
+                    .Replace("{EmuDir}", emuDir, StringComparison.OrdinalIgnoreCase)
+                    .Replace("{GameId}", Safe(() => game.Id) ?? "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("{GameTitle}", Safe(() => game.Title) ?? "", StringComparison.OrdinalIgnoreCase);
+
+            // Fallback: the launched emulator's N64 hi-res texture cache. RetroArch = Mupen64Plus-Next.
+            if (string.IsNullOrEmpty(emuDir)) return "";
+            string title = Safe(() => emulator?.Title) ?? "";
+            if (title.IndexOf("Retroarch", StringComparison.OrdinalIgnoreCase) >= 0)
+                return Path.Combine(emuDir, "system", "Mupen64plus", "cache");
+            if (title.IndexOf("Project64", StringComparison.OrdinalIgnoreCase) >= 0)
+                return Path.Combine(emuDir, "Plugin", "GFX", "cache");
+            return "";
         }
         catch { return ""; }
     }

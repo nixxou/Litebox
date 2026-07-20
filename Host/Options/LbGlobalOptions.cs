@@ -902,6 +902,78 @@ internal static class LbGlobalOptions
         var tabs = NewDarkTabControl(dpiS);
         TabPage Page(string t) { var p = new TabPage(t) { BackColor = Bg, Padding = new Padding(12) }; tabs.TabPages.Add(p); return p; }
 
+        // ── LaunchBox (Games Database account / Connect) ──
+        // Sign in to gamesdb.launchbox-app.com to get the CloudAuthenticationToken (needed for MAME community
+        // leaderboards). Connect performs a REAL sign-in with the user's own credentials, writes the fresh token
+        // into Settings.xml (surgically, so real LaunchBox reads it back), and — so it can be re-verified/renewed
+        // without retyping — stores the email in clear + the password ENCRYPTED (LiteBox-own cipher) on this PC.
+        {
+            var p = Page("LaunchBox");
+            var Good = Color.FromArgb(120, 200, 120);
+            var Bad = Color.FromArgb(215, 130, 120);
+            var Sub = Color.FromArgb(150, 156, 172);
+
+            p.Controls.Add(Lbl("LaunchBox account email", new Point(S(4), S(8))));
+            var email = Txt(liteCfg.GetSec("LaunchBoxAccount", "Email", ""), new Point(S(4), S(28)), 280); p.Controls.Add(email);
+            p.Controls.Add(Lbl("Password", new Point(S(4), S(60))));
+            var pwd = Txt(Data.LbSettingsCrypto.DecryptLocal(liteCfg.GetSec("LaunchBoxAccount", "PasswordBlob", "")), new Point(S(4), S(80)), 280, pwd: true); p.Controls.Add(pwd);
+
+            string TokenLine() { var t = Data.LbKeys.GamesDbToken; return t.Length >= 8 ? $"Current token: {t.Substring(0, 8)}…" : "Current token: (none)"; }
+
+            var connect = new Button { Text = "Connect / Verify", Location = new Point(S(4), S(116)), Size = new Size(S(130), S(26)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 8.5f), Enabled = !readOnly };
+            var status = new Label { Location = new Point(S(142), S(120)), AutoSize = true, ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Text = Data.LbKeys.HasGamesDbToken ? "A token is stored." : "Not connected." };
+            var tokenLbl = new Label { Location = new Point(S(4), S(152)), AutoSize = true, ForeColor = Sub, BackColor = Bg, Font = new Font("Segoe UI", 8.25f), Text = TokenLine() };
+
+            connect.Click += async (_, _) =>
+            {
+                connect.Enabled = false; status.ForeColor = Sub; status.Text = "Connecting…";
+                var r = await Integrations.GamesDbAuth.SignInAsync(email.Text, pwd.Text);
+                if (r.Ok)
+                {
+                    Data.LbKeys.WriteGamesDbToken(r.Token);
+                    liteCfg.SetSec("LaunchBoxAccount", "Email", email.Text.Trim());
+                    liteCfg.SetSec("LaunchBoxAccount", "PasswordBlob", string.IsNullOrEmpty(pwd.Text) ? "" : Data.LbSettingsCrypto.EncryptLocal(pwd.Text));
+                    try { liteCfg.Save(); } catch { }
+                    status.ForeColor = Good;
+                }
+                else status.ForeColor = Bad;
+                status.Text = r.Message;
+                tokenLbl.Text = TokenLine();
+                connect.Enabled = !readOnly;
+            };
+            p.Controls.Add(connect); p.Controls.Add(status); p.Controls.Add(tokenLbl);
+
+            p.Controls.Add(new Label
+            {
+                Location = new Point(S(4), S(184)), AutoSize = false, Size = new Size(S(540), S(46)), ForeColor = Sub, BackColor = Bg,
+                Font = new Font("Segoe UI", 8.25f),
+                Text = "Sign in to your LaunchBox Games Database account to enable the MAME community leaderboards (download and upload). "
+                     + "Connect verifies your credentials and stores a fresh token; your password is kept encrypted on this PC only.",
+            });
+
+            // On first reveal, if a token is already stored, check it's still valid (drives the core's
+            // GamesDatabase.ValidateToken — read-only, no password) and reflect it in the status line.
+            bool tokenChecked = false;
+            tabs.SelectedIndexChanged += (_, _) =>
+            {
+                if (tabs.SelectedTab != p || tokenChecked) return;
+                tokenChecked = true;
+                var tok = Data.LbKeys.GamesDbToken;
+                if (tok.Length == 0) return;
+                status.ForeColor = Sub; status.Text = "Checking saved token…";
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    bool ok = Integrations.GamesDbAuth.ValidateToken(tok);
+                    if (!p.IsHandleCreated) return;
+                    try { p.BeginInvoke((Action)(() =>
+                    {
+                        status.ForeColor = ok ? Good : Bad;
+                        status.Text = ok ? "Saved token is valid ✓" : "Saved token is invalid or expired — click Connect / Verify.";
+                    })); } catch { }
+                });
+            };
+        }
+
         // ── DOSBox ──
         {
             var p = Page("DOSBox");
@@ -1058,12 +1130,25 @@ internal static class LbGlobalOptions
         }
 
         // ── MAME ──
+        // Download / Upload are LaunchBox-native (Settings.xml). The FBNeo option is LiteBox-own (LiteBox.ini):
+        // FBNeo under RetroArch writes MAME-format .hi files, so we can submit them to the same leaderboards, but
+        // only in RetroAchievements HARDCORE mode (legitimacy gate). Submission happens automatically at game exit.
         {
             var p = Page("MAME");
+            var Sub = Color.FromArgb(150, 156, 172);
             var dl = Chk("Download MAME Community Leaderboards from the LaunchBox Games Database", s.GetBool("DownloadMameCommunityHighScores"), new Point(S(4), S(8)));
             var ul = Chk("Upload Your MAME High Scores to the LaunchBox Games Database Community Leaderboards", s.GetBool("UploadMameCommunityHighScores"), new Point(S(4), S(34)));
-            p.Controls.AddRange(new Control[] { dl, ul });
+            var fb = Chk("Also upload FBNeo (RetroArch) high scores — only when RetroAchievements hardcore mode is enabled", liteCfg.GetSecBool("Mame", "UploadFbneoHighScores", false), new Point(S(4), S(60)));
+            var note = new Label
+            {
+                Location = new Point(S(4), S(90)), AutoSize = false, Size = new Size(S(560), S(34)), ForeColor = Sub, BackColor = Bg,
+                Font = new Font("Segoe UI", 8.25f),
+                Text = "Uploading submits your own scores to LaunchBox's community leaderboards automatically at the end of each game. "
+                     + "Requires a signed-in LaunchBox account (see the LaunchBox tab).",
+            };
+            p.Controls.AddRange(new Control[] { dl, ul, fb, note });
             BindChk(dl, "DownloadMameCommunityHighScores"); BindChk(ul, "UploadMameCommunityHighScores");
+            applies.Add(() => liteCfg.SetSec("Mame", "UploadFbneoHighScores", fb.Checked ? "true" : "false"));
         }
 
         // ── RetroAchievements ── LiteBox's FULL RA feature lives here (its single home): credentials +

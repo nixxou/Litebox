@@ -150,6 +150,11 @@
          Like LibVLCSharp above, it becomes an extra loose app DLL: keep build-release.ps1 $appFiles +
          LightPayload.Files + the light/<tfm>/* EmbeddedResource block in sync when shipping it. -->
     <PackageReference Include="ZstdSharp.Port" Version="0.8.1" />
+    <!-- Harmony: runtime method patching, used by the MAME leaderboard key ORACLE (Host/Diag/MameKeyHook.cs):
+         hook the core's BouncyCastle cipher in-process to read the current upload key, and block the outbound
+         POST so nothing is sent. Diagnostic path only (the mame-keyhook flag); the shipping upload just calls
+         GamesDatabase.UploadMameHighScore directly. Loose app DLL (0Harmony.dll): keep deploy lists in sync. -->
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
   </ItemGroup>
 
   <ItemGroup>

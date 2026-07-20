@@ -153,6 +153,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     private StoreAchievementsCard _storeAchCard; // expandable store-achievements box (GOG today; from galaxy-2.0.db)
     private DetailTabStrip _detailTabs;          // compact OVERVIEW | RELATED GAMES strip (game mode only)
     private RelatedGamesPanel _related;          // Related tab content (suggester cards; fills the pane)
+    private Mame.HighScoresPanel _highScores;    // HIGH SCORES tab content (MAME leaderboards; game mode, MAME only)
+    private bool _hsTabShown;                     // whether the HIGH SCORES tab is currently in the strip (MAME game)
     private static int _detailTabSel;            // 0 = Overview, 1 = Related — remembered across selections (session)
     private readonly TextBox _notes;
     private static bool _metaExpanded;           // remembered expand state of the platform meta card (session + INI)
@@ -215,6 +217,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         _reg = reg; _dm = dm;
         // LEDBlinky reads its enable flag + exe path live from LB Settings.xml.
         if (_dm is HostDataManagerXml hdmLed) LedBlinky.Bind(hdmLed.LbSettings);
+        // MAME leaderboard toggles (download gates the HIGH SCORES tab; upload gates the auto-submit) read live too.
+        if (_dm is HostDataManagerXml hdmMame) Mame.MameOptions.Bind(hdmMame.LbSettings);
         _cfg = LiteBoxConfig.LoadForExe();
         _secondInstance = InstanceGuard.AnotherInstanceRunning;
         _useImageCache = _cfg.UseImageCache;
@@ -859,7 +863,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
         _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
 
-        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 10, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 11, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
@@ -870,6 +874,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // store achievements box (0 when not a GOG game; expandable)
         tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // notes (fills the rest in Overview mode)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // Related panel (fills instead of rows 4-8 in Related mode)
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // HIGH SCORES panel (MAME leaderboards; fills instead of rows 4-8 in that mode)
         _detailGrid = tlp;
 
         hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
@@ -905,6 +910,14 @@ internal sealed class MainWindow : Form, IMessageFilter
         tlp.Controls.Add(_storeAchCard, 0, 7);
         tlp.Controls.Add(notes, 0, 8);
         tlp.Controls.Add(_related, 0, 9);
+        _highScores = new Mame.HighScoresPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0) };
+        tlp.Controls.Add(_highScores, 0, 10);
+        // After an auto-submit, drop the stale board and reload if the HIGH SCORES tab is showing this rom.
+        Mame.MameHighScoreSubmit.Submitted += rom =>
+        {
+            try { if (IsHandleCreated) BeginInvoke((Action)(() => _highScores?.InvalidateRom(rom, _detailTabSel == 2))); }
+            catch { }
+        };
         return tlp;
     }
 
@@ -913,6 +926,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         _detailTabSel = idx;
         if (idx == 1) _related?.EnsureLoaded();
+        if (idx == 2) _highScores?.EnsureLoaded();   // MAME leaderboards fetched only on first flip to the tab
         if (_detailHost != null) { try { _detailHost.AutoScrollPosition = new Point(0, 0); } catch { } }
         RelayoutDetail();
     }
@@ -955,7 +969,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void RelayoutDetail()
     {
         var host = _detailHost; var tlp = _detailGrid;
-        if (host == null || tlp == null || tlp.RowStyles.Count < 10 || _inRelayout) return;
+        if (host == null || tlp == null || tlp.RowStyles.Count < 11 || _inRelayout) return;
         _inRelayout = true;
         try { RelayoutDetailCore(host, tlp); }
         finally { _inRelayout = false; }
@@ -979,6 +993,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         bool gameMode = _detailsShown is IGame;
         int tabH = gameMode ? DetailTabsH : 0;
         bool relatedMode = gameMode && _detailTabSel == 1;
+        bool highScoresMode = gameMode && _detailTabSel == 2;   // HIGH SCORES tab: swaps overview rows for the leaderboards panel
 
         // Minimum content height for a given grid width (media capped to the viewport).
         int MinContent(int gridW, out int mediaH, out int metaH, out int vndbH, out int raH, out int storeH)
@@ -988,7 +1003,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             int cap = (int)(viewH * 0.62);
             if (cap > 100 && mediaH > cap) mediaH = cap;
             if (mediaH < 90) mediaH = 90;
-            if (relatedMode)
+            if (relatedMode || highScoresMode)
             {
                 metaH = vndbH = raH = storeH = 0;
                 return padV + 158 + mediaH + _stripRowH + tabH + MinRelatedH;
@@ -1023,16 +1038,19 @@ internal sealed class MainWindow : Form, IMessageFilter
         // other collapses. In Related overflow, the related panel gets its fixed minimum instead.
         var rsNotes = tlp.RowStyles[8];
         var rsRelated = tlp.RowStyles[9];
-        if (relatedMode)
+        var rsHs = tlp.RowStyles[10];
+        void Collapse(RowStyle rs) { if (rs.SizeType != SizeType.Absolute || rs.Height != 0) { rs.SizeType = SizeType.Absolute; rs.Height = 0; } }
+        void FillPane(RowStyle rs)   // like Related: fixed minimum on overflow, else absorbs the slack
         {
-            if (rsNotes.SizeType != SizeType.Absolute || rsNotes.Height != 0) { rsNotes.SizeType = SizeType.Absolute; rsNotes.Height = 0; }
-            if (overflow) { if (rsRelated.SizeType != SizeType.Absolute || Math.Abs(rsRelated.Height - MinRelatedH) > 0.5) { rsRelated.SizeType = SizeType.Absolute; rsRelated.Height = MinRelatedH; } }
-            else if (rsRelated.SizeType != SizeType.Percent) { rsRelated.SizeType = SizeType.Percent; rsRelated.Height = 100; }
+            if (overflow) { if (rs.SizeType != SizeType.Absolute || Math.Abs(rs.Height - MinRelatedH) > 0.5) { rs.SizeType = SizeType.Absolute; rs.Height = MinRelatedH; } }
+            else if (rs.SizeType != SizeType.Percent) { rs.SizeType = SizeType.Percent; rs.Height = 100; }
         }
+        if (relatedMode) { Collapse(rsNotes); FillPane(rsRelated); Collapse(rsHs); }
+        else if (highScoresMode) { Collapse(rsNotes); Collapse(rsRelated); FillPane(rsHs); }
         else
         {
             if (rsNotes.SizeType != SizeType.Percent) { rsNotes.SizeType = SizeType.Percent; rsNotes.Height = 100; }
-            if (rsRelated.SizeType != SizeType.Absolute || rsRelated.Height != 0) { rsRelated.SizeType = SizeType.Absolute; rsRelated.Height = 0; }
+            Collapse(rsRelated); Collapse(rsHs);
         }
 
         // Drive the scroll range, then size the grid to EXACTLY the width the meta/vndb were measured
@@ -3071,7 +3089,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             LoadImagesAsync(null, null);
             ScheduleFanart(null, null);
             ClearStrip();
-            _meta.Clear(); _vndb.Clear(); _raCard?.HidePanel(); _notes.Text = ""; _related?.ClearAll(); RelayoutDetail();
+            _meta.Clear(); _vndb.Clear(); _raCard?.HidePanel(); _notes.Text = ""; _related?.ClearAll(); _highScores?.ClearAll(); RelayoutDetail();
             _launchButtons?.HideGame();
             SetStorePoll(false);
             return;
@@ -3145,6 +3163,18 @@ internal sealed class MainWindow : Form, IMessageFilter
         _raCard?.HidePanel();   // clean slate at selection — the debounced ScheduleMedia tick (re)fills it from the raid
         _storeAchCard?.HidePanel();   // same: refilled from the store (GOG) at the debounced tick
         _related?.ShowFor(g, _detailTabSel == 1);   // Related tab: recompute now if visible, else lazily on flip
+        // HIGH SCORES tab: present only for MAME games. Rebuild the strip when its presence flips, clamping the
+        // active tab if it vanished. ShowFor recomputes now only when HIGH SCORES is the visible tab, else lazily.
+        // HIGH SCORES tab shows only for MAME games AND only when the download option is enabled (LB parity:
+        // leaderboards are fetched only when the user opted in on the MAME Integrations tab).
+        bool mame = Mame.MameLeaderboards.IsMameGame(g) && Mame.MameOptions.DownloadEnabled;
+        if (mame != _hsTabShown)
+        {
+            _hsTabShown = mame;
+            _detailTabs.SetTabs(mame ? new[] { "OVERVIEW", "RELATED GAMES", "HIGH SCORES" } : new[] { "OVERVIEW", "RELATED GAMES" });
+            if (_detailTabSel >= (mame ? 3 : 2)) { _detailTabSel = 0; _detailTabs.Selected = 0; }
+        }
+        _highScores?.ShowFor(g, _detailTabSel == 2);
         // New game → scroll the detail pane to the top BEFORE relaying out. RelayoutDetailCore positions
         // the grid at an absolute (0,0), so it must start from an unscrolled panel; otherwise a tall
         // previous game (e.g. a big achievements grid) leaves a scroll offset and the grid is mispositioned.
@@ -3251,6 +3281,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         _heroGame = null;
         _launchButtons?.HideGame();   // launch group is game-only
         _related?.ClearAll();         // tab strip + related list are game-only
+        _highScores?.ClearAll();      // MAME leaderboards are game-only too
+        if (_hsTabShown) { _hsTabShown = false; _detailTabs.SetTabs("OVERVIEW", "RELATED GAMES"); if (_detailTabSel >= 2) { _detailTabSel = 0; _detailTabs.Selected = 0; } }
         SetStorePoll(false);
         if (node == null || node is AllNode)
         {

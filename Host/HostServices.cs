@@ -160,6 +160,10 @@ internal static class HostLaunch
 
         // 1. notify launching plugins
         Fire(p => p.OnBeforeGameLaunching(game, app, emulator));
+        // Snapshot the pre-game MAME/FBNeo top score (so the exit path only uploads a genuine improvement).
+        if (!DryRun) { try { Mame.MameHighScoreSubmit.OnGameLaunch(game, emulator, app); } catch { } }
+        // Free the leaderboard cache during play — keep only the game being launched (RAM-at-launch policy).
+        if (!DryRun) { try { Mame.MameLeaderboards.ClearAllExcept(Mame.MameLeaderboards.RomName(game)); } catch { } }
 
         // 2. free the optional tier + trim the working set — the headline
         //    "free RAM at launch" (GameStarted already unloaded the GUI list above,
@@ -475,6 +479,9 @@ internal static class HostLaunch
             try { Rom.RomExtractor.OnGameExitCleanup(); } catch { }
             // Flat fallback (module-OFF) extraction dir — LB deletes its extraction at game close; match it.
             try { CleanupFlatExtract(); } catch { }
+            // MAME / FBNeo community-leaderboard auto-submit (opt-in; own scores only). Reads the local high
+            // score via hi2txt and uploads through the core — gated inside on the toggles + hardcore. Background.
+            if (!DryRun) { try { Mame.MameHighScoreSubmit.OnGameExit(game, emulator, app); } catch { } }
             LaunchedGame.Clear();
             if (!DryRun && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             // Per-version play time — same elapsed seconds as the game's (see JournalPlayStart above).

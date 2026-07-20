@@ -10,9 +10,10 @@
 //     key = iv = the 32 ASCII bytes of a per-setting GUID in "N" form
 //
 // LaunchBox's own primitive is `Unbroken.LaunchBox.Rijndael.Encrypt/Decrypt(value, key, seed)` where key and
-// seed are GUID strings; each setting picks its own pair. For the EmuMovies password that pair is the constant
-// below (verified: it round-trips this install's stored blob byte-for-byte). It is a fixed LaunchBox constant,
-// not machine-derived, so hardcoding it is safe and keeps updates simple.
+// seed are GUID strings; each setting picks its own pair. For the EmuMovies password that pair is PER-INSTALL:
+// key == seed == LaunchBox/Settings/ID from Data\Settings.xml (dashes stripped). We read it at runtime (see the
+// SettingsId property) — a hardcoded value only decrypts the install it was captured on. The BigBox LockPin pair
+// below, by contrast, IS a fixed LaunchBox constant.
 //
 // Implemented on BouncyCastle (LaunchBox ships it in Core; .NET's own RijndaelManaged can't do a 256-bit
 // block). Every call clones the IV — the cipher must not see the key and IV as one shared array.
@@ -20,7 +21,10 @@
 #nullable enable
 
 using System;
+using System.IO;
+using System.Linq;
 using System.Text;
+using System.Xml.Linq;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Modes;
 using Org.BouncyCastle.Crypto.Paddings;
@@ -30,8 +34,50 @@ namespace LbApiHost.Host.Data;
 
 internal static class LbSettingsCrypto
 {
-    /// <summary>The key/seed GUID (format "N") LaunchBox uses for the EmuMovies password. Fixed LB constant.</summary>
-    private const string EmuMoviesKeySeed = "57b00a8c743b4ea49738f9d3c05e7797";
+    /// <summary>The EmuMovies key/seed is NOT a fixed constant — it is this install's own GUID, stored as
+    /// LaunchBox/Settings/ID in Data\Settings.xml (GUID in "N" form: dashes stripped, key == seed). Proven across
+    /// installs: 13.27/13.28 → 57b00a8c…, 12.9 → abd77fbb…, each matching its own &lt;ID&gt;. We read it at runtime
+    /// — never hardcoded (that would leak a real install's ID into public source, and would only ever match the one
+    /// machine it was lifted from). LaunchBox writes this &lt;ID&gt; on its very first run, and LiteBox installs onto
+    /// an existing LaunchBox, so it is always present in practice; a boot guard (<see cref="HasSettingsId"/>) tells
+    /// the user to run LaunchBox once if it is somehow missing.</summary>
+    private static string? _emuKeySeed;
+    private static bool _emuKeyResolved;
+
+    private static string SettingsPath
+        => Path.Combine(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..")), "Data", "Settings.xml");
+
+    /// <summary>LaunchBox/Settings/ID in "N" form (no dashes), read from Data\Settings.xml and cached. Null when the
+    /// file or the &lt;ID&gt; element is absent — the boot guard turns that into a user-facing message.</summary>
+    internal static string? SettingsId
+    {
+        get
+        {
+            if (_emuKeyResolved) return _emuKeySeed;
+            _emuKeyResolved = true;
+            try
+            {
+                var path = SettingsPath;
+                if (File.Exists(path))
+                {
+                    var doc = XDocument.Load(path);
+                    var settings = doc.Root?.Elements().FirstOrDefault(e => e.Name.LocalName == "Settings");
+                    var raw = settings?.Elements().FirstOrDefault(e => e.Name.LocalName == "ID")?.Value?.Replace("-", "").Trim();
+                    if (!string.IsNullOrEmpty(raw) && raw!.Length == 32) _emuKeySeed = raw;
+                }
+            }
+            catch { /* leave null → boot guard handles it */ }
+            return _emuKeySeed;
+        }
+    }
+
+    /// <summary>True when this install has a usable LaunchBox settings ID. The boot path checks this and, when the
+    /// data folder is a real LaunchBox install yet has no &lt;ID&gt;, tells the user to run LaunchBox once.</summary>
+    internal static bool HasSettingsId => SettingsId != null;
+
+    /// <summary>This install's EmuMovies key/seed. Only reached once <see cref="HasSettingsId"/> is true (the boot
+    /// guard blocks the no-ID case), so the null-forgiving read is safe here.</summary>
+    private static string EmuMoviesKeySeed => SettingsId!;
 
     /// <summary>Decrypt an EmuMovies password blob to clear text. Returns the input unchanged when it isn't a
     /// valid blob (already clear, or empty) so a hand-typed password still works.</summary>
@@ -43,8 +89,13 @@ internal static class LbSettingsCrypto
         => string.IsNullOrEmpty(clear) ? "" : Encrypt(clear!, EmuMoviesKeySeed);
 
     /// <summary>The key / seed GUIDs (format "N") LaunchBox uses for BigBox's parental LockPin
-    /// (BigBoxSettings.xml). Unlike EmuMovies, key and seed DIFFER here. Fixed LB constants, verified by
-    /// round-tripping a real install's blob (see docs: lb-settings-crypto — blob qZt4x1Vb… → "0000").</summary>
+    /// (BigBoxSettings.xml). Unlike EmuMovies, key and seed DIFFER here, and — crucially — this pair is a genuine
+    /// app-wide CONSTANT, NOT the per-install &lt;ID&gt; scheme EmuMovies uses. Proven 2026-07-21: encrypting PIN
+    /// "0000" yields the byte-identical blob `qZt4x1Vb02Nk0eEYqFrAmPWWp7RRCHeW64PmOxoAvRg=` on 13.25, 13.27 AND
+    /// 13.28 (deterministic CBC/PKCS7 → identical ciphertext ⟹ identical key+IV across installs), and the key is
+    /// neither the ID nor an MD5(ID). So it is safe to hardcode and leaks no user's data (same category as the
+    /// MAME key). SCOPE: the LaunchBox 13.x line — BigBox 12.9 uses a DIFFERENT key (its "0000" blob won't decrypt
+    /// with this pair), but LiteBox targets 13.x. A blob it can't decrypt just fails gracefully (returns "").</summary>
     private const string LockPinKey = "7b7fdf9d179643e0be4bea45c827b693";
     private const string LockPinSeed = "cf2976b6f11c459bab7a3f2acc1795f3";
 
@@ -69,6 +120,12 @@ internal static class LbSettingsCrypto
     /// <summary>Decrypt a LiteBox-own blob; returns the input unchanged when it isn't one (already clear/empty).</summary>
     public static string DecryptLocal(string? stored)
         => TryDecrypt(stored, LiteBoxLocalKeySeed, out var clear) ? clear : (stored ?? "");
+
+    /// <summary>Diagnostic only: try to decrypt a base64 blob with an EXPLICIT key/seed (each a 32-char GUID-"N"
+    /// hex string). Returns the clear text, or null if it isn't a valid blob under that pair. Used by the LockPin
+    /// key-universality probe to test whether the captured key decrypts a blob made on a different install.</summary>
+    internal static string? TryDecryptExplicit(string? b64, string keyHex, string seedHex)
+        => TryDecrypt(b64, keyHex, seedHex, out var clear) ? clear : null;
 
     // ── Core ──────────────────────────────────────────────────────────────────
     private static bool TryDecrypt(string? b64, string keySeed, out string clear)

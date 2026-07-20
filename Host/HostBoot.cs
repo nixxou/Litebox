@@ -76,6 +76,87 @@ internal static class HostBoot
         bool refreshNatives = LbApiHost.Host.Install.Migration.MigrateConfigAndNeedNatives();   // config migration + upgrade detection (before config/db are used)
         Data.DataMaintenance.RunPendingCleanup();   // delete any db flagged for reset in the Caches page — BEFORE any db opens
 
+        // --mame-probe [rom|scores.xml]: passive feasibility probe for driving LB's obfuscated MAME
+        // high-score code directly (no UI boot, no network). Sets the LB-root static the core reads, runs
+        // the probe, and exits. See Host/Diag/MameProbe.cs.
+        if (args.Contains("--mame-probe"))
+        {
+            string lbRootProbe = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRootProbe); } catch { }
+            Diag.MameProbe.Run(lbRootProbe, GetArg(args, "--mame-probe"));
+            return 0;
+        }
+        // --mame-keyscan [knownKeyHex]: scan the obfuscated core's static fields for the leaderboard blob key
+        // (no Harmony). Pass the 13.27 key to flag a match across versions. See Host/Diag/MameProbe.cs.
+        if (args.Contains("--mame-keyscan"))
+        {
+            string lbRootScan = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRootScan); } catch { }
+            Diag.MameProbe.KeyScan(lbRootScan, GetArg(args, "--mame-keyscan"));
+            return 0;
+        }
+        // --mame-drivetest [rom]: drive the core's GamesDatabase.DownloadMameGameLeaderboard directly (read-only).
+        if (args.Contains("--mame-drivetest"))
+        {
+            string lbRootD = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRootD); } catch { }
+            Diag.MameProbe.DriveTest(lbRootD, GetArg(args, "--mame-drivetest"));
+            return 0;
+        }
+        // --mame-uploadtest: no-network self-test of the captured-key fallback crypto (byte-identity check).
+        if (args.Contains("--mame-uploadtest"))
+        {
+            var (match, mine, expected) = Mame.MameUpload.SelfTest();
+            Console.WriteLine("[mame-uploadtest] fallback Rijndael-256 blob reproduction: " + (match ? "MATCH ✓" : "MISMATCH ✗"));
+            Console.WriteLine("  mine     = " + mine);
+            Console.WriteLine("  expected = " + expected);
+            return match ? 0 : 1;
+        }
+        // --lockpin-decrypt <blob> [keyHex] [seedHex]: pure-crypto probe (no core, no network). Decrypt a BigBox
+        // LockPin blob with an explicit key/seed pair; defaults to the captured LockPin pair. Used to test whether
+        // that key still decrypts a blob produced on a DIFFERENT install (independent <ID>) → fixed vs derived.
+        if (args.Contains("--lockpin-decrypt"))
+        {
+            int i = Array.IndexOf(args, "--lockpin-decrypt");
+            string blob = i + 1 < args.Length ? args[i + 1] : "";
+            string key = i + 2 < args.Length && !args[i + 2].StartsWith("--") ? args[i + 2] : "7b7fdf9d179643e0be4bea45c827b693";
+            string seed = i + 3 < args.Length && !args[i + 3].StartsWith("--") ? args[i + 3] : "cf2976b6f11c459bab7a3f2acc1795f3";
+            var clear = Data.LbSettingsCrypto.TryDecryptExplicit(blob, key, seed);
+            Console.WriteLine($"[lockpin] blob = {blob}");
+            Console.WriteLine($"[lockpin] key={key} seed={seed}");
+            Console.WriteLine(clear == null
+                ? "[lockpin] DECRYPT FAILED — wrong key/seed for this blob (or not a valid blob)."
+                : $"[lockpin] CLEAR PIN = \"{clear}\"  → this key DOES decrypt the blob.");
+            return clear == null ? 1 : 0;
+        }
+        // --mame-members: dump all methods of the core's MAME high-score + GamesDatabase types (no network),
+        // to find the post-game "process/extract/upload high score" pipeline we can drive at game exit.
+        if (args.Contains("--mame-members"))
+        {
+            string lbRootM = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRootM); } catch { }
+            Diag.MameProbe.Members(lbRootM);
+            return 0;
+        }
+        // --mame-keyhook: the ORACLE — hook the core's cipher in-process, block the POST, trigger the encrypt,
+        // and print the current leaderboard key. Nothing is uploaded. See Host/Diag/MameKeyHook.cs.
+        if (args.Contains("--mame-keyhook"))
+        {
+            string lbRootK = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRootK); } catch { }
+            Diag.MameKeyHook.Run(lbRootK);
+            return 0;
+        }
+        // --key-harvest: read ALL needed keys out of the core (MAME + settings/EmuMovies) → litebox\keys.report.txt
+        // + keys.json. Nothing uploaded. See Host/Diag/KeyHarvest.cs.
+        if (args.Contains("--key-harvest"))
+        {
+            string lbRootH = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRootH); } catch { }
+            Diag.KeyHarvest.Run(lbRootH);
+            return 0;
+        }
+
         // ── Real data: LaunchBox Platform XMLs (authoritative, no ExtendDB dep) ──
         IDataManager dm;
         GameStore store = null;
@@ -114,6 +195,17 @@ internal static class HostBoot
             Data.ProblemKeys.Build();
             Data.LiteBoxOptionsDb.Open();
             Data.ProblemKeys.SeedRenamedFromXml(Path.Combine(dataDir, "Settings.xml"));
+            // The LaunchBox settings <ID> is the key for encrypted values (EmuMovies password, …). LaunchBox
+            // writes it on its very first run; a real install always has it. If it's missing, LaunchBox was never
+            // launched here — tell the user and stop rather than guessing or minting a bogus id.
+            if (!Data.LbSettingsCrypto.HasSettingsId)
+            {
+                System.Windows.Forms.MessageBox.Show(
+                    "This LaunchBox install has no settings ID yet.\n\nPlease run LaunchBox at least once (then close it) before starting LiteBox.",
+                    "LiteBox", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Warning);
+                Environment.Exit(1);
+            }
+            Data.LbKeys.LogSummary();   // one-line inventory of resolved keys/token (presence only, no secrets)
             dm = store.Count > 0 ? new HostDataManagerXml(store, dataDir, imagesRoot) : new HostDataManager(HostCatalog.BuildDummy());
         }
         else

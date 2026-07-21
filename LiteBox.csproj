@@ -162,6 +162,11 @@
     <EmbeddedResource Include="defaultFanart.jpg" />
     <!-- App/window icon (also embedded so the WinForms window + taskbar use the multi-size icon). -->
     <EmbeddedResource Include="litebox.ico" />
+    <!-- FBNeo hiscore.dat (328 KB): the score-support DB the RetroArch FBNeo core needs to WRITE .hi files.
+         Embedded in BOTH dists (unlike the multi-MB natives below) since it's small and the FBNeo-upload
+         feature is useless without it. Deployed into <RetroArch>\system\fbneo\ when that option is enabled
+         (Host/Mame/FbneoHiscore.cs). -->
+    <EmbeddedResource Include="thirdparty\hiscore.dat"><LogicalName>natives/fbneo-hiscore.dat</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- Native payload. Embedded as resources ONLY for the STANDALONE build ($(LiteBoxDist)=standalone); the

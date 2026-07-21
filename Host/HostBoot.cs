@@ -129,6 +129,15 @@ internal static class HostBoot
                 : $"[lockpin] CLEAR PIN = \"{clear}\"  → this key DOES decrypt the blob.");
             return clear == null ? 1 : 0;
         }
+        // --fbneo-hiscore <destFile>: extract the embedded FBNeo hiscore.dat to a path (test the embed/extract).
+        if (args.Contains("--fbneo-hiscore"))
+        {
+            int i = Array.IndexOf(args, "--fbneo-hiscore");
+            string dest = i + 1 < args.Length ? args[i + 1] : Path.Combine(AppContext.BaseDirectory, "fbneo-hiscore-test.dat");
+            bool ok = Mame.FbneoHiscore.WriteTo(dest);
+            Console.WriteLine($"[fbneo-hiscore] {(ok ? "OK" : "FAILED")} → {dest}");
+            return ok ? 0 : 1;
+        }
         // --mame-members: dump all methods of the core's MAME high-score + GamesDatabase types (no network),
         // to find the post-game "process/extract/upload high score" pipeline we can drive at game exit.
         if (args.Contains("--mame-members"))

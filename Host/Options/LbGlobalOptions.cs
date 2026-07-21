@@ -1148,7 +1148,12 @@ internal static class LbGlobalOptions
             };
             p.Controls.AddRange(new Control[] { dl, ul, fb, note });
             BindChk(dl, "DownloadMameCommunityHighScores"); BindChk(ul, "UploadMameCommunityHighScores");
-            applies.Add(() => liteCfg.SetSec("Mame", "UploadFbneoHighScores", fb.Checked ? "true" : "false"));
+            applies.Add(() =>
+            {
+                liteCfg.SetSec("Mame", "UploadFbneoHighScores", fb.Checked ? "true" : "false");
+                // Enabling FBNeo upload needs hiscore.dat so the core writes .hi files — deploy it if missing.
+                if (fb.Checked) { try { Mame.FbneoHiscore.EnsureDeployedForAllFbneo(); } catch { } }
+            });
         }
 
         // ── RetroAchievements ── LiteBox's FULL RA feature lives here (its single home): credentials +

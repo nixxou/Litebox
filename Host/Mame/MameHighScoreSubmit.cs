@@ -75,6 +75,8 @@ internal static class MameHighScoreSubmit
         string kind = RawKind(game, emulator, out var rom);
         // Only snapshot when this kind's upload is enabled (else the baseline is irrelevant and we skip hi2txt).
         if (kind.Length == 0 || !UploadEnabledFor(kind)) { lock (_gate) { _baselineRom = ""; _baselineScore = -1; } return; }
+        // FBNeo needs hiscore.dat present to write .hi files — ensure it before the game runs.
+        if (kind == "fbneo") { try { FbneoHiscore.EnsureDeployed(emulator); } catch { } }
         long pre = 0;
         var hi = LocateHiFile(emulator, rom, kind);
         if (hi != null) { var (s, _) = RunHi2txt(hi); if (s > 0) pre = s; }

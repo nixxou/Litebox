@@ -347,10 +347,11 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
     private Control BuildModelSettingsPage()
     {
         var g = _editGames[0];
-        string plat = "", id = "";
+        string plat = "", id = "", scrapeAs = "";
         try { plat = g.Platform ?? ""; } catch { }
         try { id = g.Id ?? ""; } catch { }
-        var (panel, apply) = Platforms.EditPlatformModel.BuildForGame(plat, id, _readOnly, _s);
+        try { scrapeAs = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetPlatformByName(plat)?.ScrapeAs ?? ""; } catch { }
+        var (panel, apply) = Platforms.EditPlatformModel.BuildForGame(plat, id, _readOnly, _s, scrapeAs);
         _applyModelSettings = apply;
         return panel;
     }

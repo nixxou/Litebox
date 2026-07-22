@@ -64,15 +64,20 @@ internal static class EditPlatformModel
     public static (Control panel, Action apply) Build(IPlatform plat, bool readOnly, float s)
     {
         string name = Safe(() => plat.Name) ?? "";
-        return BuildCore(PlatformModelStore.Read(name), null, f => PlatformModelStore.Write(name, f), readOnly, s);
+        string scrapeAs = Safe(() => plat.ScrapeAs) ?? "";
+        // Fallback = LB's hardcoded per-platform defaults (resolved live through the core, scrapeAs-aware:
+        // a custom-named platform with Scrape As "Sony Playstation" pre-fills the PS1 jewel preset).
+        return BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs),
+                         f => PlatformModelStore.Write(name, f), readOnly, s);
     }
 
     /// <summary>Per-GAME override (Edit Game window) — the SAME panel: the game's own block drives the Override
     /// checkbox; when the game has none, the fields PRE-FILL from the platform's override (LB behaviour,
-    /// observed on the real dialog). Writes the game-keyed block in Data\Platforms\&lt;Platform&gt;.xml.</summary>
-    public static (Control panel, Action apply) BuildForGame(string platformName, string gameId, bool readOnly, float s)
+    /// observed on the real dialog), else from LB's hardcoded defaults. Writes the game-keyed block in
+    /// Data\Platforms\&lt;Platform&gt;.xml.</summary>
+    public static (Control panel, Action apply) BuildForGame(string platformName, string gameId, bool readOnly, float s, string? scrapeAs = null)
         => BuildCore(PlatformModelStore.ReadGame(platformName, gameId),
-                     PlatformModelStore.Read(platformName),
+                     PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? ""),
                      f => PlatformModelStore.WriteGame(platformName, gameId, f), readOnly, s);
 
     private static (Control panel, Action apply) BuildCore(Dictionary<string, string>? own,
@@ -85,7 +90,7 @@ internal static class EditPlatformModel
         bool hasOwn = own != null;
 
         int X0 = S(6);
-        int W = S(608);                  // left-column content width
+        int W = S(560);                  // left-column content width
         int RE = X0 + W;                 // its right edge
         int HW = (W - S(8)) / 2;         // half-column width
         int XR = X0 + HW + S(8);         // right half-column x
@@ -132,16 +137,16 @@ internal static class EditPlatformModel
         bool hasStoredSize = HasSize(cur);
         var sizeChk = Chk("Force Model Size:", X0, y, hasStoredSize);
         Row(BoxDvd, sizeChk); y += S(28);
-        var w = Num(S(56), y, S(146), szParts.ElementAtOrDefault(0), 1m);
-        var h = Num(S(268), y, S(146), szParts.ElementAtOrDefault(1), 1m);
-        var d = Num(S(472), y, RE - S(472), szParts.ElementAtOrDefault(2), 0.001m);
-        Row(BoxDvd, Lbl("Width:", X0, y), w, Lbl("Height:", S(216), y), h, Lbl("Depth:", S(424), y), d); y += S(40);
+        var w = Num(S(56), y, S(126), szParts.ElementAtOrDefault(0), 1m);
+        var h = Num(S(246), y, S(126), szParts.ElementAtOrDefault(1), 1m);
+        var d = Num(S(432), y, RE - S(432), szParts.ElementAtOrDefault(2), 0.001m);
+        Row(BoxDvd, Lbl("Width:", X0, y), w, Lbl("Height:", S(192), y), h, Lbl("Depth:", S(382), y), d); y += S(40);
 
         // ── box: Full Scan + Landscape + Force Box Background Color (=CoverColor), then Spine Width + swatch ──
         var caseColor = PlatformModelStore.ParseArgb(Get(cur, "CaseColor"));
         var coverColor = PlatformModelStore.ParseArgb(Get(cur, "CoverColor"));
         var fullScanB = Chk("Enable Full Scan Images", X0, y, GetBool(cur, "UseFullScanImages"));
-        var landscapeB = Chk("Landscape", S(216), y, GetBool(cur, "FullScanIsLandscape"));
+        var landscapeB = Chk("Landscape", S(200), y, GetBool(cur, "FullScanIsLandscape"));
         var boxColorChk = Chk("Force Box Background Color:", XR, y, coverColor.HasValue);
         Row(IsBox, fullScanB, landscapeB, boxColorChk); y += S(28);
         var spineWidthB = Num(S(200), y, S(116), Get(cur, "FullImageSpineWidth"), 0.088m);
@@ -156,8 +161,8 @@ internal static class EditPlatformModel
         var coverSwatchD = Swatch(XR, y, RE - XR, S(36), coverColor ?? Color.White, coverChkD);
         Row(IsDvd, caseSwatch, coverSwatchD); y += S(48);
         var fullScanD = Chk("Enable Full Scan Images", X0, y, GetBool(cur, "UseFullScanImages"));
-        var spineWidthD = Num(S(408), y, RE - S(408), Get(cur, "FullImageSpineWidth"), 0.065m);
-        Row(IsDvd, fullScanD, Lbl("Spine Width (%) of Full Scan:", S(216), y), spineWidthD); y += S(40);
+        var spineWidthD = Num(S(380), y, RE - S(380), Get(cur, "FullImageSpineWidth"), 0.065m);
+        Row(IsDvd, fullScanD, Lbl("Spine Width (%) of Full Scan:", S(200), y), spineWidthD); y += S(40);
 
         // ── double jewel: Side Spine Image Mode ──
         var spineMode = Combo(S(186), y, RE - S(186));
@@ -247,11 +252,11 @@ internal static class EditPlatformModel
             var grp = new Panel { Size = new Size(HW, grpH), BackColor = GroupBody };
             var hdr = new Label { Dock = DockStyle.Top, Height = S(24), Text = "  " + SideNames[i], BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
             var ds = new CheckBox { Text = "Draw Spine Image", Location = new Point(S(8), S(31)), AutoSize = true, ForeColor = Fg, BackColor = GroupBody, Checked = spineSides[i].draw };
-            var dsRotL = new Label { Text = "Rotation:", Location = new Point(S(158), S(34)), AutoSize = true, ForeColor = SubFg, BackColor = GroupBody };
-            var dsRot = RotCombo(S, S(222), S(31), spineSides[i].rot);
+            var dsRotL = new Label { Text = "Rotation:", Location = new Point(S(152), S(34)), AutoSize = true, ForeColor = SubFg, BackColor = GroupBody };
+            var dsRot = RotCombo(S, S(208), S(31), spineSides[i].rot);
             var dl = new CheckBox { Text = "Draw Clear Logo Image", Location = new Point(S(8), S(59)), AutoSize = true, ForeColor = Fg, BackColor = GroupBody, Checked = logoSides[i].draw };
-            var dlRotL = new Label { Text = "Rotation:", Location = new Point(S(158), S(62)), AutoSize = true, ForeColor = SubFg, BackColor = GroupBody };
-            var dlRot = RotCombo(S, S(222), S(59), logoSides[i].rot);
+            var dlRotL = new Label { Text = "Rotation:", Location = new Point(S(152), S(62)), AutoSize = true, ForeColor = SubFg, BackColor = GroupBody };
+            var dlRot = RotCombo(S, S(208), S(59), logoSides[i].rot);
             grp.Controls.AddRange(new Control[] { hdr, ds, dsRotL, dsRot, dl, dlRotL, dlRot });
             sideHeaders[i] = hdr; sideGroups[i] = grp; sideCtrls[i] = (ds, dsRot, dl, dlRot);
             left.Controls.Add(grp);
@@ -387,7 +392,7 @@ internal static class EditPlatformModel
     // ── right-hand "3D Model Preview" panel — placeholder reserving LB's preview spot ──
     private static Panel BuildPreview(Func<int, int> S)
     {
-        var p = new Panel { Dock = DockStyle.Right, Width = S(368), BackColor = Bg, Padding = new Padding(S(10)) };
+        var p = new Panel { Dock = DockStyle.Right, Width = S(348), BackColor = Bg, Padding = new Padding(S(10)) };
         var header = new Label { Dock = DockStyle.Top, Height = S(30), Text = "  3D Model Preview", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
         var headGap = new Panel { Dock = DockStyle.Top, Height = S(10), BackColor = Bg };
         var btn = new Button { Dock = DockStyle.Bottom, Height = S(32), Text = "Switch Sample Game", FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = SubFg, Enabled = false, FlatAppearance = { BorderSize = 0 } };
@@ -407,7 +412,7 @@ internal static class EditPlatformModel
     private static string NumV(NumericUpDown n) => n.Value.ToString(CultureInfo.InvariantCulture);
     private static ComboBox RotCombo(Func<int, int> S, int x, int y, int rot)
     {
-        var c = new ComboBox { Location = new Point(x, y), Width = S(64), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg };
+        var c = new ComboBox { Location = new Point(x, y), Width = S(62), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg };
         foreach (var r in Rotations) c.Items.Add(r + "°");
         c.SelectedIndex = Math.Max(0, Array.IndexOf(Rotations, rot));
         return c;

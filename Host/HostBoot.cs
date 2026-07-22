@@ -167,6 +167,20 @@ internal static class HostBoot
             Platforms.EditPlatformRenderProbe.Render(lbR, plat, outDir);
             return 0;
         }
+        // --model-default-resolve <platform> [scrapeAs]: print ModelDefaults.TryGet (the runtime reflection
+        // resolver of LB's hardcoded per-platform 3D defaults) — verifies the scrapeAs-driven preset matching.
+        if (args.Contains("--model-default-resolve"))
+        {
+            int i = Array.IndexOf(args, "--model-default-resolve");
+            string plat = i + 1 < args.Length ? args[i + 1] : "";
+            string scr = i + 2 < args.Length ? args[i + 2] : "";
+            string lbR = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbR); } catch { }
+            var map = Platforms.ModelDefaults.TryGet(plat, scr);
+            Console.WriteLine($"[model-def-resolve] ('{plat}', '{scr}') => " + (map == null ? "null (no default)" : ""));
+            if (map != null) foreach (var kv in map) Console.WriteLine($"  {kv.Key} = {kv.Value}");
+            return 0;
+        }
         // --edit-category-render <category> <outDir>: same offscreen render for the Edit Category window.
         if (args.Contains("--edit-category-render"))
         {

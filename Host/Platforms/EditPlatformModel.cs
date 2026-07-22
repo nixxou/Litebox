@@ -156,7 +156,8 @@ internal static class EditPlatformModel
 
         var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
         var left = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(12)) };
-        var preview = BuildPreview(S, previewPlatform, out var live, out var sampleBtn);
+        var preview = BuildPreview(S, previewPlatform, out var liveOut, out var homeOut, out var sampleBtn);
+        var live = liveOut; var home = homeOut;   // stable locals (out vars can't be captured in closures)
         root.Controls.Add(left);
         root.Controls.Add(preview);      // preview docks right first, left fills the rest
         // Sample-game rotation state: platform preview cycles through titles-with-box-art; game preview is fixed.
@@ -447,6 +448,10 @@ internal static class EditPlatformModel
             if (live == null) return;
             var map = BuildFieldMap() ?? fallback;   // fallback = platform override / hardcoded defaults
             try { live.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
+            // Mirror LB's freshly-built scene into the home-made zone (capture stage). Defer one tick so LB's
+            // async model build has settled before we clone it.
+            if (home != null && live.Control.IsHandleCreated)
+                try { live.Control.BeginInvoke((Action)(() => home.CaptureFrom(live))); } catch { }
         }
         // Redraw after every option change (Refresh calls RedrawPreview) + once the host handle exists.
         redrawPreview = RedrawPreview;
@@ -456,7 +461,7 @@ internal static class EditPlatformModel
             sampleBtn.Enabled = true; sampleBtn.ForeColor = Fg;
             sampleBtn.Click += (_, _) => { sampleIdx = (sampleIdx + 1) % sampleTitles.Count; RedrawPreview(); };
         }
-        root.Disposed += (_, _) => { try { live?.Dispose(); } catch { } };
+        root.Disposed += (_, _) => { try { live?.Dispose(); } catch { } try { home?.Dispose(); } catch { } };
 
         return (root, Apply);
 
@@ -480,41 +485,69 @@ internal static class EditPlatformModel
     // ── right-hand "3D Model Preview" panel — hosts LB's own FlowModel control when the core is available,
     // else a graceful placeholder. `live` is the hosted preview (null when unavailable); `sampleBtn` is the
     // "Switch Sample Game" button (enabled only for a platform preview with >1 sample title). ──
-    private static Panel BuildPreview(Func<int, int> S, string previewPlatform, out CoreModelHost.Preview? live, out Button sampleBtn)
+    private static Panel BuildPreview(Func<int, int> S, string previewPlatform, out CoreModelHost.Preview? live, out HomeModel3d? home, out Button sampleBtn)
     {
         var p = new Panel { Dock = DockStyle.Right, Width = S(348), BackColor = Bg, Padding = new Padding(S(10)) };
-        var header = new Label { Dock = DockStyle.Top, Height = S(30), Text = "  3D Model Preview", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
-        var headGap = new Panel { Dock = DockStyle.Top, Height = S(10), BackColor = Bg };
         sampleBtn = new Button { Dock = DockStyle.Bottom, Height = S(32), Text = "Switch Sample Game", FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = SubFg, Enabled = false, FlatAppearance = { BorderSize = 0 } };
         var btnGap = new Panel { Dock = DockStyle.Bottom, Height = S(10), BackColor = Bg };
+
+        // Stack: LB preview (top 50%) + home-made preview (bottom 50%), each with its own header.
+        var stack = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
+
+        // ── home-made zone (bottom half) ──
+        var homeWrap = new Panel { Dock = DockStyle.Bottom, Height = 0, BackColor = Bg };  // height set on resize (50%)
+        var homeHeader = new Label { Dock = DockStyle.Top, Height = S(26), Text = "  Home-made (WIP)", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
+        var homeBox = new Panel { Dock = DockStyle.Fill, BackColor = GroupBody, BorderStyle = BorderStyle.FixedSingle };
+        homeWrap.Controls.Add(homeBox); homeWrap.Controls.Add(homeHeader);
+
+        var gap = new Panel { Dock = DockStyle.Bottom, Height = S(8), BackColor = Bg };
+
+        // ── LB zone (top half) ──
+        var lbHeader = new Label { Dock = DockStyle.Top, Height = S(26), Text = "  3D Model Preview (LaunchBox)", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
+        var lbGap = new Panel { Dock = DockStyle.Top, Height = S(6), BackColor = Bg };
         var box = new Panel { Dock = DockStyle.Fill, BackColor = GroupBody, BorderStyle = BorderStyle.FixedSingle };
 
-        live = null;
-        try { live = CoreModelHost.Preview.Create(); } catch { }
-        if (live != null)
+        stack.Controls.Add(box);
+        stack.Controls.Add(lbGap);
+        stack.Controls.Add(lbHeader);
+        stack.Controls.Add(homeWrap);
+        stack.Controls.Add(gap);
+        // Keep the bottom (home) zone at ~50% of the stack height.
+        void ReLayout() { homeWrap.Height = Math.Max(120, (stack.ClientSize.Height - S(6) - S(26) - S(8)) / 2); }
+        stack.SizeChanged += (_, _) => ReLayout();
+        stack.HandleCreated += (_, _) => ReLayout();
+
+        live = null; home = null;
+        CoreModelHost.Preview? lp = null;
+        try { lp = CoreModelHost.Preview.Create(); } catch { }
+        if (lp != null)
         {
-            live.Control.Dock = DockStyle.Fill;
-            box.Controls.Add(live.Control);
-            // Mouse-drag to rotate the case (LB parity).
-            var host = live.Control; var lp = live; bool dragging = false; int lx = 0, ly = 0;
-            host.MouseDown += (_, e) => { dragging = true; lx = e.X; ly = e.Y; };
-            host.MouseUp += (_, _) => dragging = false;
-            host.MouseMove += (_, e) =>
-            {
-                if (!dragging) return;
-                int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y;
-                lp.Rotate(dx < 0 ? -dx : 0, dx > 0 ? dx : 0, dy < 0 ? -dy : 0, dy > 0 ? dy : 0);
-            };
+            live = lp;
+            lp.Control.Dock = DockStyle.Fill;
+            box.Controls.Add(lp.Control);
+            WireDrag(lp.Control, (dx, dy) => lp.Rotate(dx < 0 ? -dx : 0, dx > 0 ? dx : 0, dy < 0 ? -dy : 0, dy > 0 ? dy : 0));
+
+            var hm = new HomeModel3d();
+            home = hm;
+            hm.Control.Dock = DockStyle.Fill;
+            homeBox.Controls.Add(hm.Control);
+            WireDrag(hm.Control, (dx, dy) => hm.Rotate(dx, dy));
         }
         else
             box.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "3D preview\n(core renderer unavailable)", ForeColor = SubFg, BackColor = GroupBody, TextAlign = ContentAlignment.MiddleCenter });
 
-        p.Controls.Add(box);
+        p.Controls.Add(stack);
         p.Controls.Add(btnGap);
         p.Controls.Add(sampleBtn);
-        p.Controls.Add(headGap);
-        p.Controls.Add(header);
         return p;
+    }
+
+    private static void WireDrag(Control host, Action<int, int> onDrag)
+    {
+        bool dragging = false; int lx = 0, ly = 0;
+        host.MouseDown += (_, e) => { dragging = true; lx = e.X; ly = e.Y; };
+        host.MouseUp += (_, _) => dragging = false;
+        host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; onDrag(dx, dy); };
     }
 
     // ── control helpers ──

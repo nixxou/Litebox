@@ -93,6 +93,7 @@ internal static class EditPlatformRenderProbe
         if (plat == null) { Console.WriteLine("[live] no platform"); return; }
         Directory.CreateDirectory(outDir);
 
+        HomeModel3d.DumpStructure = true;   // capture LB's built geometry structure once for reproduction
         var (panel, _) = EditPlatformModel.Build(plat, false, 1f);
         var form = new Form { FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.Manual, Location = new System.Drawing.Point(80, 80), Size = new System.Drawing.Size(1000, 700), BackColor = LiteBoxTheme.Bg, ShowInTaskbar = false, TopMost = true };
         panel.Dock = DockStyle.Fill; form.Controls.Add(panel);

@@ -201,6 +201,49 @@ internal static class CoreModelHost
             try { _rotate?.Invoke(_flow, new object[] { left, right, up, down }); } catch { }
         }
 
+        /// <summary>The Model3DGroup LB built (FlowModel.Model.Content), for the home-made renderer to capture.
+        /// These are STANDARD WPF Media3D objects (not obfuscated) — usable directly. Null when nothing built.</summary>
+        public System.Windows.Media.Media3D.Model3DGroup? BuiltGeometry()
+        {
+            try
+            {
+                var mv = _flowType!.GetProperty("Model", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(_flow)
+                         as System.Windows.Media.Media3D.ModelVisual3D;
+                return WalkForGroup(mv);
+            }
+            catch { return null; }
+        }
+
+        private static System.Windows.Media.Media3D.Model3DGroup? WalkForGroup(System.Windows.Media.Media3D.ModelVisual3D? mv)
+        {
+            if (mv == null) return null;
+            if (mv.Content is System.Windows.Media.Media3D.Model3DGroup g) return g;
+            foreach (var c in mv.Children)
+                if (c is System.Windows.Media.Media3D.ModelVisual3D cv) { var r = WalkForGroup(cv); if (r != null) return r; }
+            return null;
+        }
+
+        /// <summary>LB's live camera (FlowModel.Camera) + the lights it placed in the Viewport, for matching the
+        /// home-made scene. Returns (camera, lights) — either may be null/empty.</summary>
+        public (System.Windows.Media.Media3D.ProjectionCamera? cam, List<System.Windows.Media.Media3D.Model3D> lights) Scene()
+        {
+            var lights = new List<System.Windows.Media.Media3D.Model3D>();
+            System.Windows.Media.Media3D.ProjectionCamera? cam = null;
+            try
+            {
+                cam = _flowType!.GetField("Camera", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(_flow)
+                      as System.Windows.Media.Media3D.ProjectionCamera;
+                var vp = _flowType.GetField("Viewport", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(_flow)
+                         as System.Windows.Controls.Viewport3D;
+                if (vp != null)
+                    foreach (var v in vp.Children)
+                        if (v is System.Windows.Media.Media3D.ModelVisual3D mv && mv.Content is System.Windows.Media.Media3D.Light)
+                            lights.Add(mv.Content);
+            }
+            catch { }
+            return (cam, lights);
+        }
+
         public void Dispose() { try { _host.Dispose(); } catch { } }
     }
 }

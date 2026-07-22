@@ -90,6 +90,18 @@ internal sealed class OptionsWindow : LiteBoxForm
         catch { }
     }
 
+    /// <summary>Dock a persistent panel to the RIGHT of the window, always visible across sections (e.g. the
+    /// Edit Platform / Edit Game images panel). Added before the content host is re-fronted so the host keeps
+    /// filling the middle; the footer (docked bottom earlier) stays under it.</summary>
+    public void SetSidePanel(Control panel, int width)
+    {
+        int S(int px) => (int)Math.Round(px * LiteBoxTheme.DpiScale(this));
+        panel.Dock = DockStyle.Right;
+        panel.Width = S(width);
+        Controls.Add(panel);
+        _host.BringToFront();   // Fill host docks last → fills the space between _nav (left) and the side panel
+    }
+
     // ── Sections ─────────────────────────────────────────────────────
 
     /// <summary>Adds a CUSTOM section panel with its own apply callback.</summary>

@@ -438,6 +438,77 @@ internal static class MediaResolver
         return "";
     }
 
+    // Media-pack category per platform image type: Images\Media Packs\<category>\<pack>\<scrapeAs|name>.<ext>.
+    // Platform media-pack files are keyed by the platform's canonical (Scrape As) name, e.g. "Arcade.png".
+    private static readonly Dictionary<string, string> _platformMediaPackCat = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Clear Logo"] = "Platform Clear Logos",
+        ["Banner"] = "Platform Banners",
+        ["Fanart"] = "Platform Fanart",
+        ["Device"] = "Platform Devices",
+        ["Steam Banner"] = "Platform Steam Banners",
+    };
+
+    /// <summary>Every image for a platform image TYPE: the platform's OWN files (Images\Platforms\&lt;name&gt;\
+    /// &lt;type&gt;\*) first, then media-pack files (Images\Media Packs\&lt;category&gt;\&lt;pack&gt;\
+    /// &lt;scrapeAs|name&gt;.&lt;ext&gt;). Each entry is (path, source): the type name for own images, the pack
+    /// folder name for media-pack ones (so the UI can label "Clear Logo (Nostalgic Platform Clear Logos)").</summary>
+    public static List<(string path, string source)> PlatformTypeImages(string imagesRoot, string platformName, string scrapeAs, string imageType)
+    {
+        var outList = new List<(string path, string source)>();
+        if (string.IsNullOrEmpty(imagesRoot) || string.IsNullOrEmpty(platformName) || string.IsNullOrEmpty(imageType)) return outList;
+        string san = Sanitize(platformName);
+        try
+        {
+            var ownDir = Path.Combine(imagesRoot, "Platforms", san, imageType);
+            if (Directory.Exists(ownDir))
+                foreach (var f in Directory.EnumerateFiles(ownDir).Where(f => ImageExts.Contains(Path.GetExtension(f))).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                    outList.Add((f, imageType));
+        }
+        catch { }
+        // Media-pack fallback (FALLBACK: appended after the platform's own images). Packs organise files in
+        // sub-folders by entity type — Images\Media Packs\<category>\<pack>\{Platforms|Platform Categories}\
+        // <key>.png (and occasionally at the pack root). key = Scrape As first (LB's canonical name, which can be
+        // a CATEGORY like "Arcade"), else the platform Name. First hit per pack; the pack folder is the source.
+        if (_platformMediaPackCat.TryGetValue(imageType, out var cat))
+        {
+            try
+            {
+                var catDir = Path.Combine(imagesRoot, "Media Packs", cat);
+                if (Directory.Exists(catDir))
+                {
+                    var keys = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(scrapeAs)) keys.Add(Sanitize(scrapeAs));
+                    if (!keys.Contains(san)) keys.Add(san);
+                    var subs = new[] { "Platforms", "Platform Categories", "" };   // "" = pack root
+                    foreach (var packDir in Directory.EnumerateDirectories(catDir).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                    {
+                        string? hit = FindInPackSubs(packDir, subs, keys);
+                        if (hit != null) outList.Add((hit, Path.GetFileName(packDir)));
+                    }
+                }
+            }
+            catch { }
+        }
+        return outList;
+    }
+
+    private static string? FindInPackSubs(string packDir, string[] subs, List<string> keys)
+    {
+        foreach (var sub in subs)
+        {
+            string baseDir = sub.Length == 0 ? packDir : Path.Combine(packDir, sub);
+            if (!Directory.Exists(baseDir)) continue;
+            foreach (var key in keys)
+                foreach (var ext in ImageExts)
+                {
+                    var f = Path.Combine(baseDir, key + ext);
+                    if (File.Exists(f)) return f;
+                }
+        }
+        return null;
+    }
+
     // ── Core: best matching file in a single directory ───────────────────────
     private static string BestInDir(string dir, Guid id, string sani, HashSet<string> exts)
     {

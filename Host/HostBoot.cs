@@ -129,6 +129,36 @@ internal static class HostBoot
                 : $"[lockpin] CLEAR PIN = \"{clear}\"  → this key DOES decrypt the blob.");
             return clear == null ? 1 : 0;
         }
+        // --model-dump: passive RE probe for LB's 3D box-model system (embedded .obj/.mtl cases, CaseType enum,
+        // ModelSettings members, platform→model methods) → <Core>\model-dump.log. Metadata only. See ModelProbe.
+        if (args.Contains("--model-dump"))
+        {
+            string lbRootMd = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRootMd); } catch { }
+            Diag.ModelProbe.Dump(lbRootMd);
+            return 0;
+        }
+        // --model-defaults [platform]: drive ModelSettings.GetDefaultSettings to dump the hardcoded per-platform
+        // box-model defaults → <Core>\model-defaults.log. See ModelProbe.Defaults.
+        if (args.Contains("--model-defaults"))
+        {
+            string lbRootMdf = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRootMdf); } catch { }
+            Diag.ModelProbe.Defaults(lbRootMdf, GetArg(args, "--model-defaults"));
+            return 0;
+        }
+        // --edit-platform-render <platform> <outDir>: offscreen-render the Edit Platform sections to PNGs (visual
+        // iteration; no UI shown). See Host/Platforms/EditPlatformRenderProbe.cs.
+        if (args.Contains("--edit-platform-render"))
+        {
+            int i = Array.IndexOf(args, "--edit-platform-render");
+            string plat = i + 1 < args.Length ? args[i + 1] : "";
+            string outDir = i + 2 < args.Length ? args[i + 2] : Path.Combine(AppContext.BaseDirectory, "editplat-render");
+            string lbR = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbR); } catch { }
+            Platforms.EditPlatformRenderProbe.Render(lbR, plat, outDir);
+            return 0;
+        }
         // --fbneo-hiscore <destFile>: extract the embedded FBNeo hiscore.dat to a path (test the embed/extract).
         if (args.Contains("--fbneo-hiscore"))
         {

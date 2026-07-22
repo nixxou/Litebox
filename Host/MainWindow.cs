@@ -1149,6 +1149,20 @@ internal sealed class MainWindow : Form, IMessageFilter
             ImageList = _treeIcons,
         };
         tv.AfterSelect += (_, e) => { if (e.Node?.Tag != null) LoadNode(e.Node.Tag); };
+        tv.NodeMouseClick += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right || e.Node?.Tag is not IPlatform plat) return;
+            tv.SelectedNode = e.Node;
+            var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
+            var edit = new ToolStripMenuItem("Edit Platform…");
+            edit.Click += (_, _) =>
+            {
+                bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;
+                try { Platforms.EditPlatformWindow.Open(plat, ro, this, MediaResolver.LbRoot ?? ""); } catch (Exception ex) { Console.WriteLine("[editplat] " + ex.Message); }
+            };
+            menu.Items.Add(edit);
+            menu.Show(tv, e.Location);
+        };
         return tv;
     }
 

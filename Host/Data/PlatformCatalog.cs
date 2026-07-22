@@ -163,7 +163,16 @@ internal sealed class HostPlatform : DummyPlatform, ILiteBoxFields
     public override string Default3DBoxImagePath => Img("Default 3D Box");
     public override string DefaultCartImagePath => Img("Default Cart");
     public override string Default3DCartImagePath => Img("Default 3D Cart");
-    private string Img(string type) => MediaResolver.NamedImage(_imagesRoot, "Platforms", _name, type);
+
+    /// <summary>All images for a platform image TYPE (folder name, e.g. "Clear Logo") — the platform's own files
+    /// first, then media-pack fallbacks — each with its source label. Reusable (editor, tree, web); see
+    /// MediaResolver.PlatformTypeImages.</summary>
+    public List<(string path, string source)> GetImagesForType(string imageType)
+        => MediaResolver.PlatformTypeImages(_imagesRoot, _name, ScrapeAsValue ?? "", imageType);
+
+    // Single best path (own-first, then media-pack). Routing through GetImagesForType makes the SDK image
+    // properties (ClearLogoImagePath, …) media-pack aware app-wide, not just in the editor.
+    private string Img(string type) { var l = GetImagesForType(type); return l.Count > 0 ? l[0].path : ""; }
 
     // Minimal LB-style filename sanitize (matches the common case).
     private static string Sanitize(string s)

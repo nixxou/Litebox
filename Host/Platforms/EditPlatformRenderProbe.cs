@@ -103,6 +103,10 @@ internal static class EditPlatformRenderProbe
             // Turn Override on so a case renders (find the checkbox by text).
             var chk = FindOverride(panel); if (chk != null) chk.Checked = true;
             for (int i = 0; i < 40; i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(60); }
+            // Optionally drive the shared orbit (env LB_ORBIT_TEST=1) to verify both zones move in sync.
+            if (Environment.GetEnvironmentVariable("LB_ORBIT_TEST") == "1")
+            { try { EditPlatformModel.LastOrbit?.Orbit(55, 18); EditPlatformModel.LastOrbit?.Zoom(120); } catch { } }
+            for (int i = 0; i < 10; i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(60); }
             Application.DoEvents();
             try
             {

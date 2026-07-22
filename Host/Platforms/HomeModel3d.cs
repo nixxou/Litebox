@@ -30,6 +30,7 @@ internal sealed class HomeModel3d : IDisposable
     private readonly ModelVisual3D _lightHost = new();
 
     public System.Windows.Forms.Control Control => _host;
+    public Viewport3D Viewport => _viewport;
 
     public HomeModel3d()
     {
@@ -51,11 +52,9 @@ internal sealed class HomeModel3d : IDisposable
             if (lb == null) return;
 
             var geom = lb.BuiltGeometry();
-            var (cam, lights) = lb.Scene();
+            var (_, lights) = lb.Scene();
 
-            // Camera: clone LB's exact camera so the framing matches.
-            if (cam != null) _viewport.Camera = (Camera)cam.Clone();
-
+            // Camera is owned by the shared OrbitController (not set here) so both zones stay in sync.
             // Lights: clone each; if LB had none yet, add a sane default so our capture isn't black.
             if (lights.Count > 0)
                 foreach (var l in lights) _lightHost.Children.Add(new ModelVisual3D { Content = (Model3D)l.Clone() });
@@ -71,18 +70,6 @@ internal sealed class HomeModel3d : IDisposable
         catch (Exception ex) { Console.WriteLine("[homemodel] capture: " + ex.Message); }
     }
 
-    /// <summary>Mouse-drag rotate — same feel as the LB preview (rotate the model host's transform).</summary>
-    public void Rotate(double dx, double dy)
-    {
-        try
-        {
-            var group = _modelHost.Transform as Transform3DGroup ?? new Transform3DGroup();
-            group.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), dx * 0.5)));
-            group.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(1, 0, 0), dy * 0.5)));
-            _modelHost.Transform = group;
-        }
-        catch { }
-    }
 
     // ── structure capture (for reproducing LB's geometry procedurally) ──
     public static bool DumpStructure = false;

@@ -201,6 +201,17 @@ internal static class CoreModelHost
             try { _rotate?.Invoke(_flow, new object[] { left, right, up, down }); } catch { }
         }
 
+        /// <summary>LB's Viewport3D (FlowModel.Viewport) so a shared orbit camera can drive it directly.</summary>
+        public System.Windows.Controls.Viewport3D? Viewport
+            => _flowType!.GetField("Viewport", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(_flow) as System.Windows.Controls.Viewport3D;
+
+        /// <summary>World-space bounds of the built model (for the orbit target/framing). Empty when none.</summary>
+        public System.Windows.Media.Media3D.Rect3D ModelBounds()
+        {
+            try { var g = BuiltGeometry(); return g?.Bounds ?? System.Windows.Media.Media3D.Rect3D.Empty; }
+            catch { return System.Windows.Media.Media3D.Rect3D.Empty; }
+        }
+
         /// <summary>The Model3DGroup LB built (FlowModel.Model.Content), for the home-made renderer to capture.
         /// These are STANDARD WPF Media3D objects (not obfuscated) — usable directly. Null when nothing built.</summary>
         public System.Windows.Media.Media3D.Model3DGroup? BuiltGeometry()

@@ -31,6 +31,8 @@ internal static class EditPlatformModel
     private static readonly Color SubFg = LiteBoxTheme.SubFg;
     private static Color GroupBody => Blend(Bg, Panel2);
 
+    internal static OrbitController? LastOrbit;   // exposed for the --model3d-live probe to drive rotate/zoom
+
     // Model Type dropdown label → stored ModelType string.
     private static readonly (string label, string val)[] ModelTypes =
     {
@@ -156,8 +158,8 @@ internal static class EditPlatformModel
 
         var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
         var left = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(12)) };
-        var preview = BuildPreview(S, previewPlatform, out var liveOut, out var homeOut, out var sampleBtn);
-        var live = liveOut; var home = homeOut;   // stable locals (out vars can't be captured in closures)
+        var preview = BuildPreview(S, previewPlatform, out var liveOut, out var homeOut, out var orbitOut, out var sampleBtn);
+        var live = liveOut; var home = homeOut; var orbit = orbitOut;   // stable locals (out vars can't be captured)
         root.Controls.Add(left);
         root.Controls.Add(preview);      // preview docks right first, left fills the rest
         // Sample-game rotation state: platform preview cycles through titles-with-box-art; game preview is fixed.
@@ -448,10 +450,17 @@ internal static class EditPlatformModel
             if (live == null) return;
             var map = BuildFieldMap() ?? fallback;   // fallback = platform override / hardcoded defaults
             try { live.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
-            // Mirror LB's freshly-built scene into the home-made zone (capture stage). Defer one tick so LB's
-            // async model build has settled before we clone it.
-            if (home != null && live.Control.IsHandleCreated)
-                try { live.Control.BeginInvoke((Action)(() => home.CaptureFrom(live))); } catch { }
+            // Mirror LB's freshly-built scene into the home-made zone + (re)apply the shared orbit camera. LB's
+            // RedrawModel resets its own camera, so we seed once from it then reassert our orbit each redraw.
+            // Deferred one tick so LB's async model build has settled before we clone/measure it.
+            if (live.Control.IsHandleCreated)
+                try { live.Control.BeginInvoke((Action)(() =>
+                {
+                    home?.CaptureFrom(live);
+                    var vp = live.Viewport; if (vp != null) orbit.Add(vp);       // register LB's viewport (idempotent)
+                    orbit.SeedFrom(live.Viewport?.Camera as System.Windows.Media.Media3D.ProjectionCamera, live.ModelBounds());
+                    orbit.Apply();                                               // reassert camera post-redraw
+                })); } catch { }
         }
         // Redraw after every option change (Refresh calls RedrawPreview) + once the host handle exists.
         redrawPreview = RedrawPreview;
@@ -485,8 +494,10 @@ internal static class EditPlatformModel
     // ── right-hand "3D Model Preview" panel — hosts LB's own FlowModel control when the core is available,
     // else a graceful placeholder. `live` is the hosted preview (null when unavailable); `sampleBtn` is the
     // "Switch Sample Game" button (enabled only for a platform preview with >1 sample title). ──
-    private static Panel BuildPreview(Func<int, int> S, string previewPlatform, out CoreModelHost.Preview? live, out HomeModel3d? home, out Button sampleBtn)
+    private static Panel BuildPreview(Func<int, int> S, string previewPlatform, out CoreModelHost.Preview? live, out HomeModel3d? home, out OrbitController orbit, out Button sampleBtn)
     {
+        orbit = new OrbitController();
+        LastOrbit = orbit;   // exposed for the --model3d-live probe to drive rotate/zoom
         var p = new Panel { Dock = DockStyle.Right, Width = S(348), BackColor = Bg, Padding = new Padding(S(10)) };
         sampleBtn = new Button { Dock = DockStyle.Bottom, Height = S(32), Text = "Switch Sample Game", FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = SubFg, Enabled = false, FlatAppearance = { BorderSize = 0 } };
         var btnGap = new Panel { Dock = DockStyle.Bottom, Height = S(10), BackColor = Bg };
@@ -523,15 +534,17 @@ internal static class EditPlatformModel
         if (lp != null)
         {
             live = lp;
+            var orb = orbit;
             lp.Control.Dock = DockStyle.Fill;
             box.Controls.Add(lp.Control);
-            WireDrag(lp.Control, (dx, dy) => lp.Rotate(dx < 0 ? -dx : 0, dx > 0 ? dx : 0, dy < 0 ? -dy : 0, dy > 0 ? dy : 0));
+            WireOrbit(lp.Control, orb);
 
             var hm = new HomeModel3d();
             home = hm;
             hm.Control.Dock = DockStyle.Fill;
             homeBox.Controls.Add(hm.Control);
-            WireDrag(hm.Control, (dx, dy) => hm.Rotate(dx, dy));
+            WireOrbit(hm.Control, orb);
+            orb.Add(hm.Viewport);
         }
         else
             box.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "3D preview\n(core renderer unavailable)", ForeColor = SubFg, BackColor = GroupBody, TextAlign = ContentAlignment.MiddleCenter });
@@ -542,12 +555,18 @@ internal static class EditPlatformModel
         return p;
     }
 
-    private static void WireDrag(Control host, Action<int, int> onDrag)
+    // Mouse-drag on a preview host orbits the SHARED camera (both zones move together); the wheel zooms.
+    // The ElementHost forwards mouse to its WPF child, so we hook the child too via the WinForms host events.
+    private static void WireOrbit(Control host, OrbitController orbit)
     {
         bool dragging = false; int lx = 0, ly = 0;
         host.MouseDown += (_, e) => { dragging = true; lx = e.X; ly = e.Y; };
         host.MouseUp += (_, _) => dragging = false;
-        host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; onDrag(dx, dy); };
+        host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; orbit.Orbit(-dx * 0.4, dy * 0.4); };
+        host.MouseWheel += (_, e) => orbit.Zoom(e.Delta);
+        // ElementHost doesn't always forward the wheel to the WinForms host → also hook the WPF child.
+        if (host is System.Windows.Forms.Integration.ElementHost eh && eh.Child is System.Windows.UIElement ui)
+            ui.PreviewMouseWheel += (_, e) => orbit.Zoom(e.Delta);
     }
 
     // ── control helpers ──

@@ -167,6 +167,38 @@ internal static class HostBoot
             Platforms.EditPlatformRenderProbe.Render(lbR, plat, outDir);
             return 0;
         }
+        // --model3d-probe <platform> <scrapeAs> <out.png>: PLAN A test — host LB's FlowModel + RedrawModel by
+        // reflection and render its Viewport to a PNG. See Model3dProbe.
+        if (args.Contains("--model3d-probe"))
+        {
+            int i = Array.IndexOf(args, "--model3d-probe");
+            string plat = i + 1 < args.Length ? args[i + 1] : "Sony Playstation";
+            string scr = i + 2 < args.Length ? args[i + 2] : "";
+            string outP = i + 3 < args.Length ? args[i + 3] : Path.Combine(AppContext.BaseDirectory, "model3d-probe.png");
+            if (i + 4 < args.Length) Diag.Model3dProbe.GameTitle = args[i + 4];
+            string lbR4 = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbR4); } catch { }
+            Diag.Model3dProbe.Run(lbR4, plat, scr, outP);
+            return 0;
+        }
+        // --type-dump <FullOrSimpleTypeName>: ctors + props (get/SET) + methods of one core type.
+        if (args.Contains("--type-dump"))
+        {
+            int i = Array.IndexOf(args, "--type-dump");
+            string tn = i + 1 < args.Length ? args[i + 1] : "";
+            string lbR3 = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbR3); } catch { }
+            Diag.ModelProbe.TypeDump(lbR3, tn);
+            return 0;
+        }
+        // --model-map: full CoverFlow member dump + assembly-wide ModelSettings/image→3D method hunt.
+        if (args.Contains("--model-map"))
+        {
+            string lbRs2 = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRs2); } catch { }
+            Diag.ModelProbe.MapCoverFlow(lbRs2);
+            return 0;
+        }
         // --model-default-resolve <platform> [scrapeAs]: print ModelDefaults.TryGet (the runtime reflection
         // resolver of LB's hardcoded per-platform 3D defaults) — verifies the scrapeAs-driven preset matching.
         if (args.Contains("--model-default-resolve"))
@@ -179,6 +211,17 @@ internal static class HostBoot
             var map = Platforms.ModelDefaults.TryGet(plat, scr);
             Console.WriteLine($"[model-def-resolve] ('{plat}', '{scr}') => " + (map == null ? "null (no default)" : ""));
             if (map != null) foreach (var kv in map) Console.WriteLine($"  {kv.Key} = {kv.Value}");
+            return 0;
+        }
+        // --model3d-live <platform> <outDir>: host the live 3D preview panel in a visible form + screenshot.
+        if (args.Contains("--model3d-live"))
+        {
+            int i = Array.IndexOf(args, "--model3d-live");
+            string plat = i + 1 < args.Length ? args[i + 1] : "Sony Playstation";
+            string outDir = i + 2 < args.Length ? args[i + 2] : Path.Combine(AppContext.BaseDirectory, "model3d-live");
+            string lbRl = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRl); } catch { }
+            Platforms.EditPlatformRenderProbe.RenderLive(lbRl, plat, outDir);
             return 0;
         }
         // --edit-category-render <category> <outDir>: same offscreen render for the Edit Category window.

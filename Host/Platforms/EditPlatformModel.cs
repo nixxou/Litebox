@@ -67,23 +67,82 @@ internal static class EditPlatformModel
         string scrapeAs = Safe(() => plat.ScrapeAs) ?? "";
         // Fallback = LB's hardcoded per-platform defaults (resolved live through the core, scrapeAs-aware:
         // a custom-named platform with Scrape As "Sony Playstation" pre-fills the PS1 jewel preset).
+        // Preview = a sample game of this platform (title filled lazily by SwitchSampleGame; bare case otherwise).
         return BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs),
-                         f => PlatformModelStore.Write(name, f), readOnly, s);
+                         f => PlatformModelStore.Write(name, f), readOnly, s, name, PreviewSampleTitle(name), null);
     }
 
     /// <summary>Per-GAME override (Edit Game window) — the SAME panel: the game's own block drives the Override
     /// checkbox; when the game has none, the fields PRE-FILL from the platform's override (LB behaviour,
     /// observed on the real dialog), else from LB's hardcoded defaults. Writes the game-keyed block in
-    /// Data\Platforms\&lt;Platform&gt;.xml.</summary>
-    public static (Control panel, Action apply) BuildForGame(string platformName, string gameId, bool readOnly, float s, string? scrapeAs = null)
+    /// Data\Platforms\&lt;Platform&gt;.xml. Preview textures with THIS game's box art.</summary>
+    public static (Control panel, Action apply) BuildForGame(string platformName, string gameId, bool readOnly, float s, string? scrapeAs = null, string? gameTitle = null)
         => BuildCore(PlatformModelStore.ReadGame(platformName, gameId),
                      PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? ""),
-                     f => PlatformModelStore.WriteGame(platformName, gameId, f), readOnly, s);
+                     f => PlatformModelStore.WriteGame(platformName, gameId, f), readOnly, s, platformName, gameTitle ?? "", platformName);
+
+    // A representative game of a platform to texture the platform-level preview: the first title with a Box -
+    // Front image on disk (any region). Empty when none → the preview shows a bare (untextured) case.
+    private static string PreviewSampleTitle(string platform)
+    {
+        try
+        {
+            string root = Media.MediaResolver.LbRoot ?? "";
+            string dir = System.IO.Path.Combine(root, "Images", Sanitize(platform), "Box - Front");
+            if (!System.IO.Directory.Exists(dir)) return "";
+            foreach (var f in System.IO.Directory.EnumerateFiles(dir, "*.*", System.IO.SearchOption.AllDirectories))
+            {
+                var ext = System.IO.Path.GetExtension(f).ToLowerInvariant();
+                if (ext is ".jpg" or ".jpeg" or ".png" or ".bmp")
+                {
+                    // "<Title>-NN.ext" → strip the trailing "-NN" index LB appends.
+                    string n = System.IO.Path.GetFileNameWithoutExtension(f);
+                    int dash = n.LastIndexOf('-');
+                    return dash > 0 && int.TryParse(n.Substring(dash + 1), out _) ? n.Substring(0, dash) : n;
+                }
+            }
+        }
+        catch { }
+        return "";
+    }
+
+    private static string Sanitize(string sn)
+    {
+        if (string.IsNullOrEmpty(sn)) return sn;
+        foreach (var c in System.IO.Path.GetInvalidFileNameChars()) sn = sn.Replace(c, '_');
+        return sn.Replace('\'', '_').Trim();
+    }
+
+    // Up to N distinct game titles of a platform that HAVE a Box - Front image on disk — for the platform
+    // preview's "Switch Sample Game" cycle. Empty when the platform has no box art.
+    private static List<string> SampleTitles(string platform)
+    {
+        var list = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            string dir = System.IO.Path.Combine(Media.MediaResolver.LbRoot ?? "", "Images", Sanitize(platform), "Box - Front");
+            if (!System.IO.Directory.Exists(dir)) return list;
+            foreach (var f in System.IO.Directory.EnumerateFiles(dir, "*.*", System.IO.SearchOption.AllDirectories))
+            {
+                var ext = System.IO.Path.GetExtension(f).ToLowerInvariant();
+                if (ext is not (".jpg" or ".jpeg" or ".png" or ".bmp")) continue;
+                string n = System.IO.Path.GetFileNameWithoutExtension(f);
+                int dash = n.LastIndexOf('-');
+                if (dash > 0 && int.TryParse(n.Substring(dash + 1), out _)) n = n.Substring(0, dash);
+                if (seen.Add(n)) list.Add(n);
+                if (list.Count >= 24) break;
+            }
+        }
+        catch { }
+        return list;
+    }
 
     private static (Control panel, Action apply) BuildCore(Dictionary<string, string>? own,
                                                            Dictionary<string, string>? fallback,
                                                            Action<Dictionary<string, string>?> write,
-                                                           bool readOnly, float s)
+                                                           bool readOnly, float s,
+                                                           string previewPlatform, string previewGameTitle, string? _unused)
     {
         int S(int px) => (int)Math.Round(px * s);
         var cur = own ?? fallback;   // displayed values: own override, else the parent level's (game←platform)
@@ -97,9 +156,14 @@ internal static class EditPlatformModel
 
         var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
         var left = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(12)) };
-        var preview = BuildPreview(S);
+        var preview = BuildPreview(S, previewPlatform, out var live, out var sampleBtn);
         root.Controls.Add(left);
         root.Controls.Add(preview);      // preview docks right first, left fills the rest
+        // Sample-game rotation state: platform preview cycles through titles-with-box-art; game preview is fixed.
+        var sampleTitles = string.IsNullOrEmpty(_unused) ? SampleTitles(previewPlatform) : new List<string> { previewGameTitle };
+        int sampleIdx = Math.Max(0, sampleTitles.IndexOf(previewGameTitle));
+        string CurrentSampleTitle() => sampleTitles.Count > 0 ? sampleTitles[sampleIdx % sampleTitles.Count] : previewGameTitle;
+        Action? redrawPreview = null;   // set later; Refresh() invokes it on every option change
 
         int y = S(6);
         var overrideChk = new CheckBox { Text = "Override Default Settings", Location = new Point(X0, y), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = hasOwn };
@@ -302,6 +366,8 @@ internal static class EditPlatformModel
             coverSwatchJ.Enabled = coverSwatchJ.Enabled && coverChkJ.Checked;
             fontBtn.Enabled = fontBtn.Enabled && textTitle.Checked;
             textSwatch.Enabled = textSwatch.Enabled && textTitle.Checked;
+
+            redrawPreview?.Invoke();   // live 3D preview follows every option change
         }
         overrideChk.CheckedChanged += (_, _) => Refresh();
         foreach (var master in new[] { sizeChk, fullScanB, fullScanD, boxColorChk, caseChk, coverChkD, coverChkJ, textTitle })
@@ -323,10 +389,11 @@ internal static class EditPlatformModel
         };
         Refresh();
 
-        void Apply()
+        // Build the field→string map from the live controls (null when Override is off). Shared by Apply
+        // (persist) and the live preview (redraw).
+        Dictionary<string, string>? BuildFieldMap()
         {
-            if (readOnly) return;
-            if (!overrideChk.Checked) { write(null); return; }   // override off → remove block
+            if (!overrideChk.Checked) return null;
             string t = ModelTypes[Math.Max(0, modelType.SelectedIndex)].val;
             var f = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["ModelType"] = t };
             if (BoxDvd(t) && sizeChk.Checked) f["ModelSizeString"] = $"{NumV(w)};{NumV(h)};{NumV(d)}";
@@ -368,8 +435,29 @@ internal static class EditPlatformModel
             }
             f["SpineRotation"] = PlatformModelStore.BuildSides(spineArr);
             f["LogoRotation"] = PlatformModelStore.BuildSides(logoArr);
-            write(f);
+            return f;
         }
+
+        void Apply() { if (!readOnly) write(BuildFieldMap()); }
+
+        // Live preview redraw: rebuild LB's model from the current options + the sample game. When Override is
+        // off, feed LB's hardcoded defaults for this platform (what the preview should show at rest).
+        void RedrawPreview()
+        {
+            if (live == null) return;
+            var map = BuildFieldMap() ?? fallback;   // fallback = platform override / hardcoded defaults
+            try { live.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
+        }
+        // Redraw after every option change (Refresh calls RedrawPreview) + once the host handle exists.
+        redrawPreview = RedrawPreview;
+        root.HandleCreated += (_, _) => { try { root.BeginInvoke((Action)RedrawPreview); } catch { } };
+        if (sampleTitles.Count > 1)
+        {
+            sampleBtn.Enabled = true; sampleBtn.ForeColor = Fg;
+            sampleBtn.Click += (_, _) => { sampleIdx = (sampleIdx + 1) % sampleTitles.Count; RedrawPreview(); };
+        }
+        root.Disposed += (_, _) => { try { live?.Dispose(); } catch { } };
+
         return (root, Apply);
 
         // local scaled-control factories (capture S)
@@ -389,19 +477,41 @@ internal static class EditPlatformModel
         }
     }
 
-    // ── right-hand "3D Model Preview" panel — placeholder reserving LB's preview spot ──
-    private static Panel BuildPreview(Func<int, int> S)
+    // ── right-hand "3D Model Preview" panel — hosts LB's own FlowModel control when the core is available,
+    // else a graceful placeholder. `live` is the hosted preview (null when unavailable); `sampleBtn` is the
+    // "Switch Sample Game" button (enabled only for a platform preview with >1 sample title). ──
+    private static Panel BuildPreview(Func<int, int> S, string previewPlatform, out CoreModelHost.Preview? live, out Button sampleBtn)
     {
         var p = new Panel { Dock = DockStyle.Right, Width = S(348), BackColor = Bg, Padding = new Padding(S(10)) };
         var header = new Label { Dock = DockStyle.Top, Height = S(30), Text = "  3D Model Preview", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
         var headGap = new Panel { Dock = DockStyle.Top, Height = S(10), BackColor = Bg };
-        var btn = new Button { Dock = DockStyle.Bottom, Height = S(32), Text = "Switch Sample Game", FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = SubFg, Enabled = false, FlatAppearance = { BorderSize = 0 } };
+        sampleBtn = new Button { Dock = DockStyle.Bottom, Height = S(32), Text = "Switch Sample Game", FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = SubFg, Enabled = false, FlatAppearance = { BorderSize = 0 } };
         var btnGap = new Panel { Dock = DockStyle.Bottom, Height = S(10), BackColor = Bg };
         var box = new Panel { Dock = DockStyle.Fill, BackColor = GroupBody, BorderStyle = BorderStyle.FixedSingle };
-        box.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "3D preview\n(not yet implemented)", ForeColor = SubFg, BackColor = GroupBody, TextAlign = ContentAlignment.MiddleCenter });
+
+        live = null;
+        try { live = CoreModelHost.Preview.Create(); } catch { }
+        if (live != null)
+        {
+            live.Control.Dock = DockStyle.Fill;
+            box.Controls.Add(live.Control);
+            // Mouse-drag to rotate the case (LB parity).
+            var host = live.Control; var lp = live; bool dragging = false; int lx = 0, ly = 0;
+            host.MouseDown += (_, e) => { dragging = true; lx = e.X; ly = e.Y; };
+            host.MouseUp += (_, _) => dragging = false;
+            host.MouseMove += (_, e) =>
+            {
+                if (!dragging) return;
+                int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y;
+                lp.Rotate(dx < 0 ? -dx : 0, dx > 0 ? dx : 0, dy < 0 ? -dy : 0, dy > 0 ? dy : 0);
+            };
+        }
+        else
+            box.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "3D preview\n(core renderer unavailable)", ForeColor = SubFg, BackColor = GroupBody, TextAlign = ContentAlignment.MiddleCenter });
+
         p.Controls.Add(box);
         p.Controls.Add(btnGap);
-        p.Controls.Add(btn);
+        p.Controls.Add(sampleBtn);
         p.Controls.Add(headGap);
         p.Controls.Add(header);
         return p;

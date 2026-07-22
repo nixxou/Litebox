@@ -72,6 +72,70 @@ internal static class EditPlatformRenderProbe
         Console.WriteLine("[render] done");
     }
 
+    /// <summary>--model3d-live &lt;platform&gt; &lt;out.png&gt;: host the REAL 3D Model Settings panel (with the live
+    /// FlowModel preview) in a visible offscreen form, pump the message loop, screenshot via CopyFromScreen
+    /// (DrawToBitmap can't capture WPF/ElementHost). Toggles Override on so the preview shows the case.</summary>
+    public static void RenderLive(string lbRoot, string platformName, string outDir)
+    {
+        // WPF (the hosted FlowModel) requires STA; the diag-flag handler thread is MTA → run on an STA thread.
+        var t = new System.Threading.Thread(() => RenderLiveSta(lbRoot, platformName, outDir));
+        t.SetApartmentState(System.Threading.ApartmentState.STA);
+        t.Start(); t.Join(System.TimeSpan.FromSeconds(30));
+    }
+
+    private static void RenderLiveSta(string lbRoot, string platformName, string outDir)
+    {
+        try { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); } catch { }
+        try { if (System.Windows.Application.Current == null) _ = new System.Windows.Application(); } catch { }
+        try { MediaResolver.Init(lbRoot); } catch { }
+        var (plats, _) = PlatformCatalog.Load(Path.Combine(lbRoot, "Data"), Path.Combine(lbRoot, "Images"));
+        var plat = plats.FirstOrDefault(p => string.Equals(p.Name, platformName, StringComparison.OrdinalIgnoreCase)) ?? plats.FirstOrDefault();
+        if (plat == null) { Console.WriteLine("[live] no platform"); return; }
+        Directory.CreateDirectory(outDir);
+
+        var (panel, _) = EditPlatformModel.Build(plat, false, 1f);
+        var form = new Form { FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.Manual, Location = new System.Drawing.Point(80, 80), Size = new System.Drawing.Size(1000, 700), BackColor = LiteBoxTheme.Bg, ShowInTaskbar = false, TopMost = true };
+        panel.Dock = DockStyle.Fill; form.Controls.Add(panel);
+        form.Shown += async (_, _) =>
+        {
+            form.Activate(); form.BringToFront();
+            // Turn Override on so a case renders (find the checkbox by text).
+            var chk = FindOverride(panel); if (chk != null) chk.Checked = true;
+            for (int i = 0; i < 40; i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(60); }
+            Application.DoEvents();
+            try
+            {
+                using var bmp = new System.Drawing.Bitmap(form.Width, form.Height);
+                using (var g = System.Drawing.Graphics.FromImage(bmp))
+                {
+                    IntPtr hdc = g.GetHdc();
+                    // PW_RENDERFULLCONTENT (0x2) captures WPF/DirectX airspace of the HWND without foreground.
+                    bool ok = PrintWindow(form.Handle, hdc, 0x2);
+                    g.ReleaseHdc(hdc);
+                    if (!ok) Console.WriteLine("[live] PrintWindow returned false");
+                }
+                bmp.Save(Path.Combine(outDir, "3D-live-" + San(plat.Name) + ".png"), System.Drawing.Imaging.ImageFormat.Png);
+                Console.WriteLine("[live] wrote screenshot");
+            }
+            catch (Exception ex) { Console.WriteLine("[live] shot: " + ex.Message); }
+            form.Close();
+        };
+        Application.Run(form);
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+
+    private static CheckBox? FindOverride(Control root)
+    {
+        foreach (Control c in root.Controls)
+        {
+            if (c is CheckBox cb && cb.Text.StartsWith("Override", StringComparison.OrdinalIgnoreCase)) return cb;
+            var f = FindOverride(c); if (f != null) return f;
+        }
+        return null;
+    }
+
     private static ComboBox? FindModelTypeCombo(Control root)
         => root.Controls.OfType<ComboBox>().FirstOrDefault(c => c.Items.Count == 5 && c.Items.Contains("Box"))
            ?? root.Controls.Cast<Control>().Select(FindModelTypeCombo).FirstOrDefault(c => c != null);

@@ -203,6 +203,105 @@ internal static class ModelProbe
         SaveAs(sb, "jewel-spines.log");
     }
 
+    // --model-map: full member dump of the CoverFlow namespace types + every method ANYWHERE whose signature
+    // touches ModelSettings / Bitmap→Model3D — hunting the procedural case builder (jewel/dvd/box) that the
+    // name-filtered --model-dump misses (obfuscated names). → <Core>\model-map.log
+    public static void MapCoverFlow(string lbRoot)
+    {
+        var sb = new StringBuilder();
+        void L(string s) { Console.WriteLine("[model-map] " + s); sb.AppendLine(s); }
+        L("=== CoverFlow / model-builder map ===");
+        try
+        {
+            var win = Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "Unbroken.LaunchBox.Windows.dll"));
+            Type[] types;
+            try { types = win.GetTypes(); }
+            catch (ReflectionTypeLoadException ex) { types = ex.Types.Where(t => t != null).ToArray()!; }
+
+            // 1) FULL member dump of every CoverFlow-namespace type (fields incl. — texture/mesh caches live there).
+            foreach (var t in types.Where(t => t?.FullName != null && t.FullName.Contains(".CoverFlow", StringComparison.Ordinal)).OrderBy(t => t!.FullName))
+            {
+                L("");
+                L($"--- {t!.FullName} : {t.BaseType?.Name} ---");
+                const BindingFlags BF = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+                foreach (var f in t.GetFields(BF).OrderBy(f => f.Name))
+                    L($"    fld  {f.FieldType.Name} {f.Name}");
+                foreach (var p in t.GetProperties(BF).OrderBy(p => p.Name))
+                    L($"    prop {p.PropertyType.Name} {p.Name}");
+                foreach (var m in t.GetMethods(BF).Where(m => !m.IsSpecialName).OrderBy(m => m.Name))
+                    L($"    {(m.IsStatic ? "static " : "")}{m.ReturnType.Name} {m.Name}({string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name + " " + p.Name))})");
+                foreach (var c in t.GetConstructors(BF))
+                    L($"    ctor ({string.Join(", ", c.GetParameters().Select(p => p.ParameterType.Name + " " + p.Name))})");
+            }
+
+            // 2) ANY method in the assembly whose signature involves ModelSettings, or mixes Bitmap/ImageSource
+            //    with a 3D return/parameter type — the builder must show up here whatever its name.
+            L("");
+            L("--- methods touching ModelSettings / images→3D (whole assembly) ---");
+            static bool Is3D(Type t2) => t2.Name.Contains("Model3D") || t2.Name.Contains("Visual3D") || t2.Name.Contains("MeshGeometry3D") || t2.Name.Contains("Geometry3D");
+            static bool IsImg(Type t2) => t2.Name is "Bitmap" or "BitmapSource" or "ImageSource" or "BitmapImage" or "Image";
+            foreach (var t in types.Where(t => t?.FullName != null && !t.FullName.StartsWith("HelixToolkit", StringComparison.Ordinal)))
+            {
+                MethodInfo[] ms;
+                try { ms = t!.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly); }
+                catch { continue; }
+                foreach (var m in ms.Where(m => !m.IsSpecialName))
+                {
+                    var ps = m.GetParameters();
+                    bool touchesSettings = m.ReturnType.Name == "ModelSettings" || ps.Any(p => p.ParameterType.Name == "ModelSettings");
+                    bool imgTo3D = (Is3D(m.ReturnType) && ps.Any(p => IsImg(p.ParameterType)))
+                                || (Is3D(m.ReturnType) && ps.Any(p => p.ParameterType.Name == "String") && ps.Length <= 3);
+                    if (!touchesSettings && !imgTo3D) continue;
+                    L($"  {(m.IsStatic ? "static " : "")}{m.ReturnType.Name} {t!.FullName}.{m.Name}({string.Join(", ", ps.Select(p => p.ParameterType.Name + " " + p.Name))})");
+                }
+            }
+        }
+        catch (Exception ex) { L("failed: " + ex.Message); }
+        SaveAs(sb, "model-map.log");
+    }
+
+    // --type-dump <FullTypeName>: ctors + every property (with get/SET markers) + non-accessor methods of one
+    // core type. For planning the FlowModel/Game/ModelSettings reflection calls. → <Core>\type-dump.log
+    public static void TypeDump(string lbRoot, string typeName)
+    {
+        var sb = new StringBuilder();
+        void L(string s) { Console.WriteLine("[type-dump] " + s); sb.AppendLine(s); }
+        try
+        {
+            // Search BOTH core assemblies (Windows + base Unbroken.LaunchBox) + everything already loaded.
+            var asms = new List<Assembly>();
+            foreach (var dll in new[] { "Unbroken.LaunchBox.Windows.dll", "Unbroken.LaunchBox.dll", "Unbroken.LaunchBox.LocalDb.dll" })
+                try { asms.Add(Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, dll))); } catch { }
+            asms.AddRange(AppDomain.CurrentDomain.GetAssemblies());
+
+            Type? t = null;
+            foreach (var a in asms) { t = a.GetType(typeName); if (t != null) break; }
+            if (t == null)
+                foreach (var a in asms)
+                {
+                    Type[] all; try { all = a.GetTypes(); } catch (ReflectionTypeLoadException ex) { all = ex.Types.Where(x => x != null).ToArray()!; } catch { continue; }
+                    t = all.FirstOrDefault(x => x?.Name?.Equals(typeName, StringComparison.OrdinalIgnoreCase) == true
+                                             || x?.FullName?.EndsWith("." + typeName, StringComparison.OrdinalIgnoreCase) == true);
+                    if (t != null) break;
+                }
+            if (t == null) { L("type not found: " + typeName); SaveAs(sb, "type-dump.log"); return; }
+            L("(assembly: " + t.Assembly.GetName().Name + ")");
+            L($"=== {t.FullName} : {t.BaseType?.FullName} ===");
+            const BindingFlags BF = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+            L("-- constructors --");
+            foreach (var c in t.GetConstructors(BF))
+                L($"  {(c.IsPublic ? "pub " : "priv")} ctor ({string.Join(", ", c.GetParameters().Select(p => p.ParameterType.Name + " " + p.Name))})");
+            L("-- properties --");
+            foreach (var p in t.GetProperties(BF).OrderBy(p => p.Name))
+                L($"  {p.PropertyType.Name} {p.Name}  {{ {(p.CanRead ? "get; " : "")}{(p.CanWrite ? "SET; " : "")}}}");
+            L("-- methods --");
+            foreach (var m in t.GetMethods(BF).Where(m => !m.IsSpecialName).OrderBy(m => m.Name))
+                L($"  {(m.IsStatic ? "static " : "")}{(m.IsPublic ? "pub " : "")}{m.ReturnType.Name} {m.Name}({string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name + " " + p.Name))})");
+        }
+        catch (Exception ex) { L("failed: " + ex.Message); }
+        SaveAs(sb, "type-dump.log");
+    }
+
     private static void DumpTypeMembers(Type t, Action<string> L)
     {
         L($"--- {t.FullName} members ---");

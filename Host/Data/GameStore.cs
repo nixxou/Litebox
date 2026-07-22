@@ -1101,6 +1101,23 @@ internal sealed class GameStore
         return true;
     }
 
+    /// <summary>In-memory removal of EVERY game row of a platform WITHOUT journaling per-game deletes —
+    /// used by platform DELETION, which removes the platform's whole XML file itself (journaling the
+    /// deletes would make the flush recreate a skeleton file for the deleted platform).</summary>
+    public void DropPlatformRows(string platform)
+    {
+        if (string.IsNullOrEmpty(platform)) return;
+        if (_byPlatform.TryGetValue(platform, out var list))
+        {
+            var idxSet = new HashSet<int>(list);
+            foreach (var kv in _byId.Where(kv => idxSet.Contains(kv.Value)).ToList())
+            { _byId.Remove(kv.Key); _addedIds.Remove(kv.Key); }
+            _byPlatform.Remove(platform);
+        }
+        _platformFile.Remove(platform);
+        LbApiHost.Host.MetadataChoicesCache.MarkAllDirty();
+    }
+
     /// <summary>The XML file for a platform; for a brand-new platform, creates an empty skeleton
     /// &lt;LaunchBox/&gt; file under the Platforms dir and remembers it. Null only on failure.</summary>
     private string PlatformFile(string platform)

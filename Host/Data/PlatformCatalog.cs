@@ -154,6 +154,15 @@ internal sealed class HostPlatform : DummyPlatform, ILiteBoxFields
         => _folders.Select(kv => (IPlatformFolder)new DummyPlatformFolder
         { MediaType = kv.Key, Platform = _name, FolderPath = kv.Value }).ToArray();
 
+    // ── Tree children (Parents.xml): LB allows categories AND playlists to nest UNDER a platform ──
+    private readonly List<object> _treeChildren = new();
+    public void AddTreeChild(object c) { if (c != null) _treeChildren.Add(c); }
+    public void ClearTreeChildren() => _treeChildren.Clear();
+    public IReadOnlyList<object> TreeChildren => _treeChildren;
+    public void SortTreeChildren() => _treeChildren.Sort((a, b) => string.Compare(HostPlatformCategory.NodeName(a), HostPlatformCategory.NodeName(b), StringComparison.OrdinalIgnoreCase));
+    // SDK tree: expose the nested nodes (playlists/categories under this platform) like real LB does.
+    public override IList<IPlatform> GetChildren() => SdkTree.WrapChildren(_treeChildren);
+
     // ── Platform-level images (Images\Platforms\<name>\<type>\<name>.ext) ─────
     public override string ClearLogoImagePath => Img("Clear Logo");
     public override string BannerImagePath => Img("Banner");
@@ -187,7 +196,7 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFiel
 {
     internal static readonly HashSet<string> Modeled = new(StringComparer.Ordinal)
     { "Name", "NestedName", "Notes", "VideoPath", "SortTitle", "HideInBigBox" };
-    private readonly string _name;
+    private string _name;
     private readonly string _imagesRoot;
     private GameStore _store;
     private Dictionary<string, string> _extra;
@@ -196,6 +205,10 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFiel
     private void Rec(string field, string value) => _store?.RecordEntityModify("PlatformCategory", _name, field, value);
     public HostPlatformCategory(string name, string imagesRoot) { _name = name; _imagesRoot = imagesRoot; }
     public override string Name { get => _name; set { } }
+    // Rename (Edit Category "Unique Name"): the XML rename is done SURGICALLY by the editor (Platforms.xml +
+    // Parents.xml refs + images folder); this just re-points the live object so the tree/op-log follow. Call it
+    // BEFORE recording other field edits (Rec keys records by the current name).
+    internal void SetNameInternal(string n) { if (!string.IsNullOrWhiteSpace(n)) _name = n.Trim(); }
     public string NotesValue, NestedNameValue, VideoPathValue, SortTitleValue;
     public bool HideInBigBoxValue;
 
@@ -227,6 +240,7 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFiel
     // from IPlatform in this SDK (so a single typed list can't hold all three).
     private readonly List<object> _children = new();
     public void AddChild(object c) { if (c != null) _children.Add(c); }
+    public void ClearChildren() => _children.Clear();   // for ReloadHierarchy (re-read of Parents.xml)
     public IReadOnlyList<object> Children => _children;
     public void SortChildren() => _children.Sort((a, b) => string.Compare(NodeName(a), NodeName(b), StringComparison.OrdinalIgnoreCase));
     // SDK GetChildren can only carry the platform children (typed IList<IPlatform>).

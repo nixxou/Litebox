@@ -170,6 +170,39 @@ internal static class ModelProbe
         try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, file), sb.ToString()); } catch { }
     }
 
+    // Dump the entry names inside the embedded JewelCaseSpines.resources bundle — these are the Spine Style
+    // dropdown presets (+ regional variants) LaunchBox offers for jewel cases. → <Core>\jewel-spines.log
+    public static void JewelSpines(string lbRoot)
+    {
+        var sb = new StringBuilder();
+        void L(string s) { Console.WriteLine("[spines] " + s); sb.AppendLine(s); }
+        L("=== JewelCaseSpines.resources entries ===");
+        try
+        {
+            var win = Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "Unbroken.LaunchBox.Windows.dll"));
+            var resName = win.GetManifestResourceNames().FirstOrDefault(n => n.IndexOf("JewelCaseSpines", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (resName == null) { L("resource not found"); SaveAs(sb, "jewel-spines.log"); return; }
+            L("resource = " + resName);
+            using var s0 = win.GetManifestResourceStream(resName);
+            try { using var fs = File.Create(Path.Combine(AppContext.BaseDirectory, "jewel-spines.bin")); s0!.CopyTo(fs); L("raw bytes → jewel-spines.bin (parse the name table)"); } catch { }
+            using var s = win.GetManifestResourceStream(resName);
+            // The bundle uses System.Resources.Extensions.DeserializingResourceReader (newer format). Its
+            // enumerator advances the NAME table without deserializing the image values, so reading only .Key is safe.
+            var ext = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "System.Resources.Extensions")
+                      ?? Assembly.Load("System.Resources.Extensions");
+            var rt = ext.GetType("System.Resources.Extensions.DeserializingResourceReader");
+            var reader = Activator.CreateInstance(rt!, s);
+            var en = (System.Collections.IDictionaryEnumerator)rt!.GetMethod("GetEnumerator", Type.EmptyTypes)!.Invoke(reader, null)!;
+            var names = new List<string>();
+            while (en.MoveNext()) { try { names.Add(en.Key?.ToString() ?? ""); } catch { } }
+            names.Sort(StringComparer.OrdinalIgnoreCase);
+            L($"({names.Count} entries)");
+            foreach (var n in names) L("  " + n);
+        }
+        catch (Exception ex) { L("failed: " + ex.Message); }
+        SaveAs(sb, "jewel-spines.log");
+    }
+
     private static void DumpTypeMembers(Type t, Action<string> L)
     {
         L($"--- {t.FullName} members ---");

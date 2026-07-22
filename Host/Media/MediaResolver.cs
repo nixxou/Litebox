@@ -454,13 +454,18 @@ internal static class MediaResolver
     /// &lt;scrapeAs|name&gt;.&lt;ext&gt;). Each entry is (path, source): the type name for own images, the pack
     /// folder name for media-pack ones (so the UI can label "Clear Logo (Nostalgic Platform Clear Logos)").</summary>
     public static List<(string path, string source)> PlatformTypeImages(string imagesRoot, string platformName, string scrapeAs, string imageType)
+        => EntityTypeImages(imagesRoot, "Platforms", platformName, scrapeAs, imageType);
+
+    /// <summary>Same as <see cref="PlatformTypeImages"/> but with the entity folder parameterized —
+    /// "Platforms" or "Platform Categories" (category images: Images\Platform Categories\&lt;name&gt;\&lt;type&gt;\*).</summary>
+    public static List<(string path, string source)> EntityTypeImages(string imagesRoot, string entityFolder, string platformName, string scrapeAs, string imageType)
     {
         var outList = new List<(string path, string source)>();
         if (string.IsNullOrEmpty(imagesRoot) || string.IsNullOrEmpty(platformName) || string.IsNullOrEmpty(imageType)) return outList;
         string san = Sanitize(platformName);
         try
         {
-            var ownDir = Path.Combine(imagesRoot, "Platforms", san, imageType);
+            var ownDir = Path.Combine(imagesRoot, entityFolder, san, imageType);
             if (Directory.Exists(ownDir))
                 foreach (var f in Directory.EnumerateFiles(ownDir).Where(f => ImageExts.Contains(Path.GetExtension(f))).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                     outList.Add((f, imageType));

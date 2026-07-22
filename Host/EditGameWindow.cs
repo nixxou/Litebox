@@ -185,7 +185,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         var cancel = FooterBtn("Cancel", Color.FromArgb(70, 70, 82));
         ok.Location = new Point(S(12), S(9));
         cancel.Location = new Point(S(112), S(9));
-        ok.Click += (_, _) => { SaveCurrent(); SaveLocks(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching(); DialogResult = DialogResult.OK; Close(); };
+        ok.Click += (_, _) => { SaveCurrent(); SaveLocks(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching(); try { _applyModelSettings?.Invoke(); } catch { } DialogResult = DialogResult.OK; Close(); };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
 
         var hint = new Label
@@ -320,6 +320,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "Images" => IsMulti ? BuildImagesMatrixPage() : BuildImagesPage(),   // multi → media-coverage matrix
                 "Videos" => IsMulti ? BuildVideosMatrixPage() : BuildVideosPage(),   // multi → video-coverage matrix
                 "Documents" => IsMulti ? Placeholder("Documents") : BuildDocumentsPage(),   // manual + additional documents
+                "ModelSettings" => IsMulti ? Placeholder("3D Model Settings") : BuildModelSettingsPage(),
                 "ImageQuery" => BuildImageQueryPage(),   // works for 1..N games (single or multi selection)
                 "Launching" => BuildLaunchingPage(),   // main page supports multi (merged fields); sub-pages below stay solo
                 "DOSBox" => BuildDosBoxPage(),   // main DOSBox page supports multi (3-state Use-DOSBox + merged paths)
@@ -337,6 +338,21 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         page.Dock = DockStyle.Fill;
         _host.Controls.Add(page);
         _host.ResumeLayout();
+    }
+
+    // ── 3D Model Settings page — the Edit Platform panel reused verbatim, keyed per-GAME (same field schema,
+    // block lives in Data\Platforms\<Platform>.xml keyed by <GameId>; pre-fills from the platform override when
+    // the game has none — full LB parity, see PlatformModelStore). Applied on OK like the other pages.
+    private Action _applyModelSettings;
+    private Control BuildModelSettingsPage()
+    {
+        var g = _editGames[0];
+        string plat = "", id = "";
+        try { plat = g.Platform ?? ""; } catch { }
+        try { id = g.Id ?? ""; } catch { }
+        var (panel, apply) = Platforms.EditPlatformModel.BuildForGame(plat, id, _readOnly, _s);
+        _applyModelSettings = apply;
+        return panel;
     }
 
     private Control Placeholder(string title)

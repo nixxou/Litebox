@@ -35,17 +35,50 @@ internal static class EditPlatformRenderProbe
             // For the 3D tab, render one PNG per Model Type (verify the morph); otherwise a single render.
             var typeCombo = title.StartsWith("3D") ? FindModelTypeCombo(ctrl) : null;
             if (typeCombo != null && typeCombo.Items.Count > 0)
+            {
                 for (int ti = 0; ti < typeCombo.Items.Count; ti++)
                     Shot(ctrl, outDir, $"{title} - {typeCombo.Items[ti]}", () => typeCombo.SelectedIndex = ti);
+                // Extra: Jewel Case + preset spine (reveals Spine Version) and + custom spine (reveals path row).
+                Shot(ctrl, outDir, $"{title} - JewelCase Preset Spine", () =>
+                {
+                    int jc = typeCombo.Items.IndexOf("Jewel Case"); if (jc >= 0) typeCombo.SelectedIndex = jc;
+                    var style = FindSpineStyleCombo(ctrl);
+                    if (style != null) { int pi = style.Items.IndexOf("Sony Playstation Spine"); if (pi >= 0) style.SelectedIndex = pi; }
+                });
+                Shot(ctrl, outDir, $"{title} - JewelCase Custom Spine", () =>
+                {
+                    var style = FindSpineStyleCombo(ctrl);
+                    if (style != null) { int ci = style.Items.IndexOf("Custom Solid Spine"); if (ci >= 0) style.SelectedIndex = ci; }
+                });
+            }
             else
                 Shot(ctrl, outDir, title, null);
         }
         Console.WriteLine("[render] done");
     }
 
+    /// <summary>Offscreen render of the Edit Platform Category sections (flag --edit-category-render).</summary>
+    public static void RenderCategory(string lbRoot, string categoryName, string outDir)
+    {
+        try { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); } catch { }
+        try { MediaResolver.Init(lbRoot); } catch { }
+        var (_, cats) = PlatformCatalog.Load(Path.Combine(lbRoot, "Data"), Path.Combine(lbRoot, "Images"));
+        var cat = cats.FirstOrDefault(c => string.Equals(c.Name, categoryName, StringComparison.OrdinalIgnoreCase)) ?? cats.FirstOrDefault();
+        if (cat == null) { Console.WriteLine("[render] no category found (" + categoryName + ")"); return; }
+        Console.WriteLine("[render] category = " + cat.Name);
+        Directory.CreateDirectory(outDir);
+        foreach (var (title, ctrl) in EditCategoryWindow.BuildSectionsForRender(cat, 1f))
+            Shot(ctrl, outDir, "Cat " + title, null);
+        Console.WriteLine("[render] done");
+    }
+
     private static ComboBox? FindModelTypeCombo(Control root)
         => root.Controls.OfType<ComboBox>().FirstOrDefault(c => c.Items.Count == 5 && c.Items.Contains("Box"))
            ?? root.Controls.Cast<Control>().Select(FindModelTypeCombo).FirstOrDefault(c => c != null);
+
+    private static ComboBox? FindSpineStyleCombo(Control root)
+        => root.Controls.OfType<ComboBox>().FirstOrDefault(c => c.Items.Contains("Sony Playstation Spine"))
+           ?? root.Controls.Cast<Control>().Select(FindSpineStyleCombo).FirstOrDefault(c => c != null);
 
     private static Form? _host;
     private static void Shot(Control ctrl, string outDir, string name, Action? mutate)

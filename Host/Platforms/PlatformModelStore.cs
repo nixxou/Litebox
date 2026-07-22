@@ -69,6 +69,68 @@ internal static class PlatformModelStore
         catch { return false; }
     }
 
+    // ── per-GAME override (decoded empirically 2026-07-22, '88 Games test): same root-level <ModelSettings>
+    // block and field schema, but in the game's platform file Data\Platforms\<Platform>.xml, keyed by <GameId>
+    // (filled) with <PlatformName> empty — the exact mirror of the platform block. LB removes the block when
+    // "Override Default Settings" is unchecked. Coexists with <GameSave> rows; the GameStore flush edits
+    // <Game> nodes surgically and preserves unknown root elements (proven by the save-management feature).
+
+    private static string GamePlatformFile(string platformName)
+    {
+        string name = platformName ?? "Unknown";
+        foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+        return Path.Combine(MediaResolver.LbRoot ?? "", "Data", "Platforms", name + ".xml");
+    }
+
+    /// <summary>The game's persisted ModelSettings (its own override), or null when the game has none.</summary>
+    public static Dictionary<string, string>? ReadGame(string platformName, string gameId)
+    {
+        try
+        {
+            string file = GamePlatformFile(platformName);
+            if (!File.Exists(file) || string.IsNullOrEmpty(gameId)) return null;
+            var el = XDocument.Load(file).Root?.Elements("ModelSettings")
+                .FirstOrDefault(e => string.Equals((string?)e.Element("GameId"), gameId, StringComparison.OrdinalIgnoreCase));
+            if (el == null) return null;
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in el.Elements()) map[c.Name.LocalName] = c.Value;
+            return map;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Write (override ON) or remove (fields == null) the game's ModelSettings block.</summary>
+    public static bool WriteGame(string platformName, string gameId, Dictionary<string, string>? fields)
+    {
+        try
+        {
+            string file = GamePlatformFile(platformName);
+            if (!File.Exists(file) || string.IsNullOrEmpty(gameId)) return false;
+            var doc = XDocument.Load(file);
+            var root = doc.Root;
+            if (root == null) return false;
+
+            foreach (var old in root.Elements("ModelSettings")
+                     .Where(e => string.Equals((string?)e.Element("GameId"), gameId, StringComparison.OrdinalIgnoreCase)).ToList())
+                old.Remove();
+
+            if (fields != null)
+            {
+                var el = new XElement("ModelSettings");
+                foreach (var kv in fields.Where(kv =>
+                             !string.Equals(kv.Key, "PlatformName", StringComparison.OrdinalIgnoreCase)
+                             && !string.Equals(kv.Key, "GameId", StringComparison.OrdinalIgnoreCase)))
+                    el.Add(new XElement(kv.Key, kv.Value ?? ""));
+                el.Add(new XElement("GameId", gameId));
+                el.Add(new XElement("PlatformName", ""));   // game-level → empty PlatformName (LB parity)
+                root.Add(el);
+            }
+            doc.Save(file);
+            return true;
+        }
+        catch { return false; }
+    }
+
     // ── ARGB int32 (signed) ↔ Color helpers, matching Color.ToArgb() (e.g. red = -65536) ──
     public static System.Drawing.Color? ParseArgb(string? s)
         => int.TryParse(s, out var v) ? System.Drawing.Color.FromArgb(v) : (System.Drawing.Color?)null;

@@ -146,7 +146,11 @@ internal sealed class HostDataManagerXml : DummyDataManager
              : !string.IsNullOrEmpty(catName) ? (catByName.TryGetValue(catName, out var c) ? (object)c : null)
              : null;
 
+        // LB parent rules: platform parents = Root/categories; category & playlist parents = Root/categories/
+        // PLATFORMS (playlists are never parents). A row whose parent fields are ALL EMPTY is an EXPLICIT
+        // "Root" membership — a node can be at Root AND under categories simultaneously (multi-parent).
         var hasParent = new HashSet<object>();
+        var explicitRoot = new HashSet<object>();
         string parentsFile = Path.Combine(dataDir, "Parents.xml");
         if (File.Exists(parentsFile))
         {
@@ -158,23 +162,112 @@ internal sealed class HostDataManagerXml : DummyDataManager
                     if (node == null) continue;
                     var parent = ResolveNode((string)pe.Element("ParentPlatformName"), (string)pe.Element("ParentPlaylistId"), (string)pe.Element("ParentPlatformCategoryName"));
                     if (parent is HostPlatformCategory parentCat) { parentCat.AddChild(node); hasParent.Add(node); }
+                    else if (parent is HostPlatform parentPlat) { parentPlat.AddTreeChild(node); hasParent.Add(node); }
+                    else explicitRoot.Add(node);   // empty (or unresolvable) parent = Root membership
                 }
             }
             catch (Exception ex) { Console.WriteLine("[HostDataManagerXml] Parents.xml: " + ex.Message); }
         }
         foreach (var c in categories) c.SortChildren();
+        foreach (var p in byName.Values) p.SortTreeChildren();
 
-        // Roots = every category/platform/playlist that is not a child of a category.
+        // Roots = explicit Root memberships + every node with no parent row at all.
         var roots = new List<object>();
-        foreach (var c in categories) if (!hasParent.Contains(c)) roots.Add(c);
-        foreach (var p in byName.Values) if (!hasParent.Contains(p)) roots.Add(p);
-        foreach (var pl in playlists) if (!hasParent.Contains(pl)) roots.Add(pl);
+        foreach (var c in categories) if (explicitRoot.Contains(c) || !hasParent.Contains(c)) roots.Add(c);
+        foreach (var p in byName.Values) if (explicitRoot.Contains(p) || !hasParent.Contains(p)) roots.Add(p);
+        foreach (var pl in playlists) if (explicitRoot.Contains(pl) || !hasParent.Contains(pl)) roots.Add(pl);
         _roots = roots.OrderBy(HostPlatformCategory.NodeName, StringComparer.OrdinalIgnoreCase).ToList();
 
         Console.WriteLine($"[HostDataManagerXml] playlists={_playlists.Count} roots={_roots.Count}");
     }
 
-    public override IGame[] GetAllGames() => _allGames.ToArray();
+    /// <summary>Re-read Parents.xml and rebuild the category tree + roots IN PLACE — called after the Edit
+    /// Platform window closes (rename / category membership changes) so the source tree refreshes without a
+    /// restart. Platform renames are re-keyed from the live objects (their Name setters already updated them).</summary>
+    public void ReloadHierarchy()
+    {
+        _platformByName.Clear();
+        foreach (var p in _platforms)
+        { string n; try { n = p?.Name; } catch { n = null; } if (!string.IsNullOrEmpty(n)) _platformByName[n] = p; }
+        _categoryByName.Clear();
+        foreach (var c0 in _categories)
+        { string n; try { n = c0?.Name; } catch { n = null; } if (!string.IsNullOrEmpty(n)) _categoryByName[n] = c0; }
+
+        var catByName = new Dictionary<string, HostPlatformCategory>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in _categories.OfType<HostPlatformCategory>())
+        { c.ClearChildren(); if (!string.IsNullOrEmpty(c.Name)) catByName[c.Name] = c; }
+        foreach (var p in _platforms.OfType<HostPlatform>()) p.ClearTreeChildren();
+        var plById = new Dictionary<string, HostPlaylist>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pl in _playlists.OfType<HostPlaylist>())
+            if (!string.IsNullOrEmpty(pl.PlaylistIdValue)) plById[pl.PlaylistIdValue] = pl;
+
+        object ResolveNode(string platName, string playId, string catName)
+            => !string.IsNullOrEmpty(platName) ? (_platformByName.TryGetValue(platName, out var p) ? (object)p : null)
+             : !string.IsNullOrEmpty(playId) ? (plById.TryGetValue(playId, out var pl) ? (object)pl : null)
+             : !string.IsNullOrEmpty(catName) ? (catByName.TryGetValue(catName, out var c) ? (object)c : null)
+             : null;
+
+        var hasParent = new HashSet<object>();
+        var explicitRoot = new HashSet<object>();
+        string parentsFile = Path.Combine(_dataDir, "Parents.xml");
+        if (File.Exists(parentsFile))
+        {
+            try
+            {
+                foreach (var pe in XDocument.Load(parentsFile).Root.Elements("Parent"))
+                {
+                    var node = ResolveNode((string)pe.Element("PlatformName"), (string)pe.Element("PlaylistId"), (string)pe.Element("PlatformCategoryName"));
+                    if (node == null) continue;
+                    var parent = ResolveNode((string)pe.Element("ParentPlatformName"), (string)pe.Element("ParentPlaylistId"), (string)pe.Element("ParentPlatformCategoryName"));
+                    if (parent is HostPlatformCategory parentCat) { parentCat.AddChild(node); hasParent.Add(node); }
+                    else if (parent is HostPlatform parentPlat) { parentPlat.AddTreeChild(node); hasParent.Add(node); }
+                    else explicitRoot.Add(node);   // empty (or unresolvable) parent = Root membership
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[HostDataManagerXml] Parents.xml reload: " + ex.Message); }
+        }
+        foreach (var c in _categories.OfType<HostPlatformCategory>()) c.SortChildren();
+        foreach (var p in _platforms.OfType<HostPlatform>()) p.SortTreeChildren();
+
+        var roots = new List<object>();
+        foreach (var c in _categories) if (explicitRoot.Contains(c) || !hasParent.Contains(c)) roots.Add(c);
+        foreach (var p in _platforms) if (explicitRoot.Contains(p) || !hasParent.Contains(p)) roots.Add(p);
+        foreach (var pl in _playlists) if (explicitRoot.Contains(pl) || !hasParent.Contains(pl)) roots.Add(pl);
+        _roots.Clear();
+        _roots.AddRange(roots.OrderBy(HostPlatformCategory.NodeName, StringComparer.OrdinalIgnoreCase));
+    }
+
+    // Filter out wrappers whose store row was deleted (game deletion keeps the wrapper in _allGames for
+    // index alignment; platform deletion drops whole platforms' rows) — no ghosts in "All Games".
+    public override IGame[] GetAllGames()
+        => _allGames.Where(g => { try { return Guid.TryParse(g.Id, out var gid) && _store.ById.ContainsKey(gid); } catch { return false; } }).ToArray();
+
+    /// <summary>In-memory removal of a platform (its game rows, list + lookup entries). The XML surgery
+    /// (Platforms.xml node, Parents.xml refs, the games file…) is the caller's job; follow with
+    /// ReloadHierarchy so the tree drops the node.</summary>
+    public void DeletePlatformInternal(IPlatform p)
+    {
+        if (p == null) return;
+        string name; try { name = p.Name; } catch { name = null; }
+        if (!string.IsNullOrEmpty(name)) { _store.DropPlatformRows(name); _platformByName.Remove(name); }
+        _platforms.Remove(p);
+    }
+
+    public void DeleteCategoryInternal(IPlatformCategory c)
+    {
+        if (c == null) return;
+        string name; try { name = c.Name; } catch { name = null; }
+        if (!string.IsNullOrEmpty(name)) _categoryByName.Remove(name);
+        _categories.Remove(c);
+    }
+
+    public void DeletePlaylistInternal(IPlaylist pl)
+    {
+        if (pl == null) return;
+        string id = (pl as HostPlaylist)?.PlaylistIdValue;
+        if (!string.IsNullOrEmpty(id)) _playlistById.Remove(id);
+        _playlists.Remove(pl);
+    }
     public override IGame GetGameById(string id)
         => (Guid.TryParse(id, out var g) && _store.ById.TryGetValue(g, out var i)) ? _allGames[i] : null;
 

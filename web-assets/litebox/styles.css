@@ -436,6 +436,34 @@ body {
   padding-left: 34px;
 }
 
+/* Platform row that NESTS playlists/categories (Parents.xml): its own expand
+   chevron + a collapsible sub-container (mirrors the category pattern, one
+   level deeper). The chevron only toggles; clicking the row loads the
+   platform's full games. */
+.lb-tree-node--parent .lb-tree-chev {
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.7);
+  width: 16px;
+  text-align: center;
+  flex: none;
+  transition: transform 0.12s ease, color 0.12s ease;
+}
+.lb-tree-node--parent.collapsed .lb-tree-chev {
+  transform: rotate(-90deg);
+}
+.lb-tree-node--parent .lb-tree-chev:hover {
+  color: #fff;
+}
+.lb-tree-node--parent.collapsed + .lb-tree-subchildren {
+  display: none;
+}
+.lb-tree-node--sub {
+  padding-left: 34px;
+}
+.lb-tree-children .lb-tree-node--sub {
+  padding-left: 58px;
+}
+
 
 /* ── F. GRID HEADER ───────────────────────────────────────────────────────── */
 

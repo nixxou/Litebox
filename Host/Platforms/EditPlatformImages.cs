@@ -28,7 +28,7 @@ internal static class EditPlatformImages
     private static readonly Color SubFg = LiteBoxTheme.SubFg;
 
     // Display label → on-disk type folder. Order matches LaunchBox's dropdown.
-    private static readonly (string label, string folder)[] Types =
+    private static readonly (string label, string folder)[] PlatformTypes =
     {
         ("Banner", "Banner"),
         ("Clear Logo (Override)", "Clear Logo"),
@@ -40,12 +40,42 @@ internal static class EditPlatformImages
         ("Fanart", "Fanart"),
         ("Steam Banner", "Steam Banner"),
     };
+    // Category image types — LB's Edit Platform Category dropdown shows exactly these four.
+    private static readonly (string label, string folder)[] CategoryTypes =
+    {
+        ("Banner", "Banner"),
+        ("Clear Logo (Override)", "Clear Logo"),
+        ("Device", "Device"),
+        ("Fanart", "Fanart"),
+    };
 
     public static Control Build(IPlatform plat, bool readOnly, float s)
     {
-        int S(int px) => (int)Math.Round(px * s);
         var hp = plat as Data.HostPlatform;   // fully-qualified: a different HostPlatform lives in LbApiHost.Host
         string name = Safe(() => plat.Name) ?? "";
+        return BuildCore(name, PlatformTypes, tf => hp?.GetImagesForType(tf) ?? new List<(string, string)>(), "Platforms", readOnly, s);
+    }
+
+    /// <summary>Images panel for a Platform Category — own images under Images\Platform Categories\&lt;name&gt;
+    /// plus media-pack fallbacks, restricted to LB's four category image types.</summary>
+    public static Control BuildForCategory(string name, bool readOnly, float s)
+        => BuildForEntity("Platform Categories", name, readOnly, s);
+
+    /// <summary>Images panel for a Playlist — own images under Images\Playlists\&lt;name&gt;; same four types
+    /// as categories (LB's Edit Playlist dropdown is identical).</summary>
+    public static Control BuildForPlaylist(string name, bool readOnly, float s)
+        => BuildForEntity("Playlists", name, readOnly, s);
+
+    private static Control BuildForEntity(string entityFolder, string name, bool readOnly, float s)
+        => BuildCore(name, CategoryTypes,
+            tf => Media.MediaResolver.EntityTypeImages(Media.MediaResolver.ImagesRoot, entityFolder, name, name, tf),
+            entityFolder, readOnly, s);
+
+    private static Control BuildCore(string name, (string label, string folder)[] Types,
+                                     Func<string, List<(string path, string source)>> getImages,
+                                     string entityFolder, bool readOnly, float s)
+    {
+        int S(int px) => (int)Math.Round(px * s);
 
         var root = new Panel { BackColor = Bg, Padding = new Padding(S(8)) };
 
@@ -89,12 +119,12 @@ internal static class EditPlatformImages
         int idx = 0;
 
         string TypeFolder() => Types[Math.Max(0, typeCombo.SelectedIndex)].folder;
-        string OwnDir() => Path.Combine(Media.MediaResolver.LbRoot ?? "", "Images", "Platforms", Sanitize(name), TypeFolder());
+        string OwnDir() => Path.Combine(Media.MediaResolver.LbRoot ?? "", "Images", entityFolder, Sanitize(name), TypeFolder());
         bool IsOwn(int i) => i >= 0 && i < entries.Count && string.Equals(entries[i].source, TypeFolder(), StringComparison.OrdinalIgnoreCase);
 
         void LoadList()
         {
-            entries = hp?.GetImagesForType(TypeFolder()) ?? new List<(string, string)>();
+            entries = getImages(TypeFolder()) ?? new List<(string, string)>();
             if (idx >= entries.Count) idx = Math.Max(0, entries.Count - 1);
             Show();
         }
@@ -153,7 +183,7 @@ internal static class EditPlatformImages
         {
             if (readOnly || entries.Count == 0 || !IsOwn(idx)) return;
             string src = entries[idx].path;
-            string destDir = Path.Combine(Media.MediaResolver.LbRoot ?? "", "Images", "Platforms", Sanitize(name), Types[targetType].folder);
+            string destDir = Path.Combine(Media.MediaResolver.LbRoot ?? "", "Images", entityFolder, Sanitize(name), Types[targetType].folder);
             if (string.Equals(Path.GetDirectoryName(src), destDir, StringComparison.OrdinalIgnoreCase)) return;   // already that type
             try
             {

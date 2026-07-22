@@ -49,7 +49,8 @@ internal static class EditPlatformWindow
         var (notes, applyNotes) = BuildNotes(plat, s);
         w.AddSection("Notes", notes, applyNotes);
 
-        w.AddSection("Documents", EditPlatformDocuments.Build(plat, readOnly, s));
+        var (docs, applyDocs) = EditPlatformDocuments.Build(plat, readOnly, s);
+        w.AddSection("Documents", docs, applyDocs);
 
         var (parents, applyParents) = EditPlatformParents.Build(plat, readOnly, s);
         w.AddSection("Parents", parents, applyParents);
@@ -72,7 +73,7 @@ internal static class EditPlatformWindow
         try { var (d, _) = BuildDetails(plat, false, lbRoot, s); list.Add(("Details", d)); } catch (Exception ex) { Console.WriteLine("[render] Details: " + ex.Message); }
         try { var (fo, _) = EditPlatformFolders.Build(plat, false, s); list.Add(("Folders", fo)); } catch (Exception ex) { Console.WriteLine("[render] Folders: " + ex.Message); }
         try { var (n, _) = BuildNotes(plat, s); list.Add(("Notes", n)); } catch (Exception ex) { Console.WriteLine("[render] Notes: " + ex.Message); }
-        try { list.Add(("Documents", EditPlatformDocuments.Build(plat, false, s))); } catch (Exception ex) { Console.WriteLine("[render] Documents: " + ex.Message); }
+        try { var (doc, _) = EditPlatformDocuments.Build(plat, false, s); list.Add(("Documents", doc)); } catch (Exception ex) { Console.WriteLine("[render] Documents: " + ex.Message); }
         try { var (pa, _) = EditPlatformParents.Build(plat, false, s); list.Add(("Parents", pa)); } catch (Exception ex) { Console.WriteLine("[render] Parents: " + ex.Message); }
         try { var (m, _) = EditPlatformModel.Build(plat, false, s); list.Add(("3D Model Settings", m)); } catch (Exception ex) { Console.WriteLine("[render] 3D: " + ex.Message); }
         return list;
@@ -219,7 +220,7 @@ internal static class EditPlatformWindow
     // The combo is EDITABLE, so a hand-typed value not in the list is still accepted and persists as plain text
     // (important when the Extended DB is later disabled/de-primaried). Not cached across opens: the active DB can
     // change (Extended toggled), so we rebuild each open — cheap (one Name query).
-    private static string[] ScrapeAsChoices()
+    internal static string[] ScrapeAsChoices()
     {
         var set = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         try
@@ -255,7 +256,7 @@ internal static class EditPlatformWindow
         }
     }
 
-    private static string DateStr(DateTime? d) => d.HasValue ? d.Value.ToString("MM/dd/yyyy", CultureInfo.InvariantCulture) : "";
-    private static DateTime? ParseDate(string s) => DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? d : (DateTime?)null;
+    internal static string DateStr(DateTime? d) => d.HasValue ? d.Value.ToString("MM/dd/yyyy", CultureInfo.InvariantCulture) : "";
+    internal static DateTime? ParseDate(string s) => DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? d : (DateTime?)null;
     private static T? Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }
 }

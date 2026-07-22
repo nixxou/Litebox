@@ -1136,6 +1136,68 @@ internal sealed class MainWindow : Form, IMessageFilter
     // ── Sources (LaunchBox-native tree: categories ▸ platforms / playlists) ───
     // Native TreeView. The modern rotating chevrons + dark selection/scrollbars come from the
     // "DarkMode_Explorer" visual style (applied by ApplyDarkScroll), so no custom renderer is needed.
+    // Multi-select is hand-rolled (native TreeView is single-select): Ctrl+click toggles, Shift+click selects
+    // a visible range; extra nodes are painted with the selection colour. The list shows the UNION of the
+    // selected nodes' games (deduped); right-click on a HOMOGENEOUS selection offers multi-edit.
+    private readonly List<TreeNode> _multiSel = new();
+    private TreeNode _multiAnchor;
+    private static readonly object MultiUnionSentinel = new();
+
+    private void PaintMultiSel(TreeView tv)
+    {
+        void Walk(TreeNodeCollection nodes)
+        {
+            foreach (TreeNode n in nodes)
+            {
+                bool sel = _multiSel.Count > 1 && _multiSel.Contains(n);
+                n.BackColor = sel ? Color.FromArgb(60, 90, 130) : Color.Empty;
+                n.ForeColor = sel ? Color.White : Color.Empty;
+                Walk(n.Nodes);
+            }
+        }
+        try { tv.BeginUpdate(); Walk(tv.Nodes); } finally { tv.EndUpdate(); }
+    }
+
+    private static List<TreeNode> VisibleRange(TreeView tv, TreeNode a, TreeNode b)
+    {
+        var visible = new List<TreeNode>();
+        for (var n = tv.Nodes.Count > 0 ? tv.Nodes[0] : null; n != null; n = n.NextVisibleNode) visible.Add(n);
+        int ia = visible.IndexOf(a), ib = visible.IndexOf(b);
+        if (ia < 0 || ib < 0) return new List<TreeNode> { b };
+        return visible.GetRange(Math.Min(ia, ib), Math.Abs(ib - ia) + 1);
+    }
+
+    private void LoadUnion()
+    {
+        var tags = _multiSel.Select(n => n.Tag).Where(t => t != null).Distinct().ToList();
+        if (tags.Count <= 1) { if (tags.Count == 1) LoadNode(tags[0]); return; }
+        _currentNode = MultiUnionSentinel;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var union = new List<IGame>();
+        foreach (var t in tags)
+        {
+            IEnumerable<IGame> src;
+            try
+            {
+                src = t is AllNode ? _dm.GetAllGames()
+                    : t is GroupNode gn ? gn.Games
+                    : t is IPlatformCategory cat ? cat.GetAllGames(true, true)
+                    : t is IPlaylist pl ? pl.GetAllGames(true)
+                    : t is IPlatform p ? p.GetAllGames(true, true)
+                    : Array.Empty<IGame>();
+            }
+            catch { src = Array.Empty<IGame>(); }
+            foreach (var g in src ?? Array.Empty<IGame>())
+            {
+                string id = S(Safe(() => g.Id));
+                if (id.Length == 0 || seen.Add(id)) union.Add(g);
+            }
+        }
+        _current = union.ToArray();
+        ApplySort();
+        try { ShowNodeDetails(_multiSel[_multiSel.Count - 1].Tag); } catch { }
+    }
+
     private TreeView BuildSourceTree()
     {
         // Row height/indent scaled for DPI, and bumped up from the classic-Windows-Explorer-tree
@@ -1148,19 +1210,193 @@ internal sealed class MainWindow : Form, IMessageFilter
             HideSelection = false, ItemHeight = (int)Math.Round(32 * s), Indent = (int)Math.Round(20 * s),
             ImageList = _treeIcons,
         };
-        tv.AfterSelect += (_, e) => { if (e.Node?.Tag != null) LoadNode(e.Node.Tag); };
+        tv.AfterSelect += (_, e) =>
+        {
+            // Plain selection (keyboard / simple click) resets the multi-selection; with Ctrl/Shift held the
+            // NodeMouseClick handler below owns the set and the union load.
+            if ((ModifierKeys & (Keys.Control | Keys.Shift)) == 0)
+            {
+                _multiSel.Clear();
+                if (e.Node != null) { _multiSel.Add(e.Node); _multiAnchor = e.Node; }
+                PaintMultiSel(tv);
+                if (e.Node?.Tag != null) LoadNode(e.Node.Tag);
+            }
+        };
         tv.NodeMouseClick += (_, e) =>
         {
-            if (e.Button != MouseButtons.Right || e.Node?.Tag is not IPlatform plat) return;
-            tv.SelectedNode = e.Node;
-            var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
-            var edit = new ToolStripMenuItem("Edit Platform…");
-            edit.Click += (_, _) =>
+            if (e.Button != MouseButtons.Left || e.Node == null) return;
+            bool ctrl = (ModifierKeys & Keys.Control) != 0, shift = (ModifierKeys & Keys.Shift) != 0;
+            if (!ctrl && !shift)
             {
-                bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;
-                try { Platforms.EditPlatformWindow.Open(plat, ro, this, MediaResolver.LbRoot ?? ""); } catch (Exception ex) { Console.WriteLine("[editplat] " + ex.Message); }
-            };
-            menu.Items.Add(edit);
+                // Plain click is handled by AfterSelect — EXCEPT when re-clicking the natively-selected node
+                // while a multi-selection is active (AfterSelect won't fire): collapse the set here.
+                if (_multiSel.Count > 1)
+                {
+                    _multiSel.Clear(); _multiSel.Add(e.Node); _multiAnchor = e.Node;
+                    PaintMultiSel(tv);
+                    if (e.Node.Tag != null) LoadNode(e.Node.Tag);
+                }
+                return;
+            }
+            if (ctrl)
+            {
+                if (!_multiSel.Remove(e.Node)) _multiSel.Add(e.Node);
+                if (_multiSel.Count == 0) _multiSel.Add(e.Node);
+                _multiAnchor = e.Node;
+            }
+            else if (_multiAnchor != null)
+            {
+                _multiSel.Clear();
+                _multiSel.AddRange(VisibleRange(tv, _multiAnchor, e.Node));
+            }
+            else { _multiSel.Add(e.Node); _multiAnchor = e.Node; }
+            PaintMultiSel(tv);
+            if (_multiSel.Count > 1) LoadUnion();
+            else if (_multiSel.Count == 1 && _multiSel[0].Tag != null) LoadNode(_multiSel[0].Tag);
+        };
+        // After an editor closes: re-read Parents.xml into the in-memory hierarchy and rebuild the source
+        // tree (renames / parent-membership changes show immediately), keeping the edited node selected.
+        void RefreshAfterEdit(object keep)
+        {
+            try
+            {
+                (_dm as HostDataManagerXml)?.ReloadHierarchy();
+                PopulateSources();
+                if (_treeNodeMap.TryGetValue(keep, out var tn2)) { _sources.SelectedNode = tn2; try { tn2.EnsureVisible(); } catch { } }
+            }
+            catch (Exception ex) { Console.WriteLine("[editnode] refresh: " + ex.Message); }
+        }
+        tv.NodeMouseClick += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right || e.Node?.Tag == null) return;
+            var tag = e.Node.Tag;
+            bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;
+            var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
+
+            // Right-click INSIDE a multi-selection → homogeneous multi-edit; mixed types get no edit entry.
+            if (_multiSel.Count > 1 && _multiSel.Contains(e.Node))
+            {
+                var tags = _multiSel.Select(n2 => n2.Tag).Where(t => t != null).Distinct().ToList();
+                void AfterDelete(bool did) { if (!did) return; _currentNode = null; RefreshAfterEdit(AllNode.Instance); }
+                if (tags.Count > 1 && tags.All(t => t is IPlatform))
+                {
+                    var list = tags.Cast<IPlatform>().ToList();
+                    var it = new ToolStripMenuItem($"Edit {list.Count} Platforms…");
+                    it.Click += (_, _) => { try { Platforms.MultiEditWindow.OpenPlatforms(list, ro, this); } catch (Exception ex) { Console.WriteLine("[multiedit] " + ex.Message); } RefreshAfterEdit(tags[0]); };
+                    menu.Items.Add(it);
+                    if (!ro)
+                    {
+                        var del = new ToolStripMenuItem($"Delete {list.Count} Platforms…");
+                        del.Click += (_, _) => { try { AfterDelete(Platforms.NodeDeleter.DeletePlatforms(list, _dm as HostDataManagerXml, this)); } catch (Exception ex) { Console.WriteLine("[delete] " + ex.Message); } };
+                        menu.Items.Add(del);
+                    }
+                }
+                else if (tags.Count > 1 && tags.All(t => t is HostPlatformCategory))
+                {
+                    var list = tags.Cast<HostPlatformCategory>().ToList();
+                    var it = new ToolStripMenuItem($"Edit {list.Count} Categories…");
+                    it.Click += (_, _) => { try { Platforms.MultiEditWindow.OpenCategories(list, ro, this); } catch (Exception ex) { Console.WriteLine("[multiedit] " + ex.Message); } RefreshAfterEdit(tags[0]); };
+                    menu.Items.Add(it);
+                    if (!ro)
+                    {
+                        var del = new ToolStripMenuItem($"Delete {list.Count} Categories…");
+                        del.Click += (_, _) => { try { AfterDelete(Platforms.NodeDeleter.DeleteCategories(list, _dm as HostDataManagerXml, this)); } catch (Exception ex) { Console.WriteLine("[delete] " + ex.Message); } };
+                        menu.Items.Add(del);
+                    }
+                }
+                else if (tags.Count > 1 && tags.All(t => t is Data.HostPlaylist))
+                {
+                    var list = tags.Cast<Data.HostPlaylist>().ToList();
+                    var it = new ToolStripMenuItem($"Edit {list.Count} Playlists…");
+                    it.Click += (_, _) => { try { Platforms.MultiEditWindow.OpenPlaylists(list, ro, this); } catch (Exception ex) { Console.WriteLine("[multiedit] " + ex.Message); } RefreshAfterEdit(tags[0]); };
+                    menu.Items.Add(it);
+                    if (!ro)
+                    {
+                        var del = new ToolStripMenuItem($"Delete {list.Count} Playlists…");
+                        del.Click += (_, _) => { try { AfterDelete(Platforms.NodeDeleter.DeletePlaylists(list, _dm as HostDataManagerXml, this)); } catch (Exception ex) { Console.WriteLine("[delete] " + ex.Message); } };
+                        menu.Items.Add(del);
+                    }
+                }
+                if (menu.Items.Count > 0) menu.Show(tv, e.Location);
+                return;
+            }
+
+            if (tag is IPlatform plat)
+            {
+                tv.SelectedNode = e.Node;
+                var edit = new ToolStripMenuItem("Edit Platform…");
+                edit.Click += (_, _) =>
+                {
+                    try { Platforms.EditPlatformWindow.Open(plat, ro, this, MediaResolver.LbRoot ?? ""); } catch (Exception ex) { Console.WriteLine("[editplat] " + ex.Message); }
+                    RefreshAfterEdit(plat);
+                };
+                menu.Items.Add(edit);
+                // "Documents" submenu (below Edit, LB-style) — only when the platform has at least one document.
+                try
+                {
+                    var docs = Platforms.EditPlatformDocuments.GetDocuments(plat.Name);
+                    if (docs.Count > 0)
+                    {
+                        var docMenu = new ToolStripMenuItem("Documents");
+                        docMenu.DropDown.Renderer = new DarkRenderer();
+                        docMenu.DropDown.BackColor = Panel2; docMenu.DropDown.ForeColor = Fg;
+                        foreach (var (dn, abs) in docs)
+                        {
+                            var it = new ToolStripMenuItem(dn) { ToolTipText = abs };
+                            it.Click += (_, _) =>
+                            {
+                                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(abs) { UseShellExecute = true }); }
+                                catch (Exception ex) { Console.WriteLine("[platdoc] " + ex.Message); }
+                            };
+                            docMenu.DropDownItems.Add(it);
+                        }
+                        menu.Items.Add(docMenu);
+                    }
+                }
+                catch { }
+                if (!ro)
+                {
+                    var del = new ToolStripMenuItem("Delete Platform…");
+                    del.Click += (_, _) => { try { if (Platforms.NodeDeleter.DeletePlatforms(new List<IPlatform> { plat }, _dm as HostDataManagerXml, this)) { _currentNode = null; RefreshAfterEdit(AllNode.Instance); } } catch (Exception ex) { Console.WriteLine("[delete] " + ex.Message); } };
+                    menu.Items.Add(del);
+                }
+            }
+            else if (tag is HostPlatformCategory cat)
+            {
+                tv.SelectedNode = e.Node;
+                var edit = new ToolStripMenuItem("Edit Category…");
+                edit.Click += (_, _) =>
+                {
+                    try { Platforms.EditCategoryWindow.Open(cat, ro, this); } catch (Exception ex) { Console.WriteLine("[editcat] " + ex.Message); }
+                    RefreshAfterEdit(cat);
+                };
+                menu.Items.Add(edit);
+                if (!ro)
+                {
+                    var del = new ToolStripMenuItem("Delete Category…");
+                    del.Click += (_, _) => { try { if (Platforms.NodeDeleter.DeleteCategories(new List<HostPlatformCategory> { cat }, _dm as HostDataManagerXml, this)) { _currentNode = null; RefreshAfterEdit(AllNode.Instance); } } catch (Exception ex) { Console.WriteLine("[delete] " + ex.Message); } };
+                    menu.Items.Add(del);
+                }
+            }
+            else if (tag is Data.HostPlaylist pl)
+            {
+                tv.SelectedNode = e.Node;
+                var edit = new ToolStripMenuItem("Edit Playlist…");
+                edit.Click += (_, _) =>
+                {
+                    try { Platforms.EditPlaylistWindow.Open(pl, ro, this); } catch (Exception ex) { Console.WriteLine("[editpl] " + ex.Message); }
+                    RefreshAfterEdit(pl);
+                };
+                menu.Items.Add(edit);
+                if (!ro)
+                {
+                    var del = new ToolStripMenuItem("Delete Playlist…");
+                    del.Click += (_, _) => { try { if (Platforms.NodeDeleter.DeletePlaylists(new List<Data.HostPlaylist> { pl }, _dm as HostDataManagerXml, this)) { _currentNode = null; RefreshAfterEdit(AllNode.Instance); } } catch (Exception ex) { Console.WriteLine("[delete] " + ex.Message); } };
+                    menu.Items.Add(del);
+                }
+            }
+            else return;
+
             menu.Show(tv, e.Location);
         };
         return tv;
@@ -1219,6 +1455,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         RecomputeParentalHiddenPlatforms();   // expand the hide-list before building the tree / filtering
         BuildTreeIcons(roots);
         _treeNodeMap.Clear();
+        _multiSel.Clear(); _multiAnchor = null;   // tree nodes are recreated — drop the multi-selection
         _sources.BeginUpdate();
         try
         {
@@ -1236,21 +1473,29 @@ internal sealed class MainWindow : Form, IMessageFilter
         // Selection (saved category/game) is restored by RestoreSelection().
     }
 
-    // Build a TreeNode for a source object (Tag = the object), recursing into category children.
-    private TreeNode BuildTreeNode(object obj)
+    // Build a TreeNode for a source object (Tag = the object), recursing into category AND platform children
+    // (LB allows playlists/categories nested under a platform). Multi-parent means the same object can appear
+    // at several places; `path` guards against Parents.xml cycles on the current branch.
+    private TreeNode BuildTreeNode(object obj) => BuildTreeNode(obj, new HashSet<object>());
+    private TreeNode BuildTreeNode(object obj, HashSet<object> path)
     {
         string text = obj is AllNode ? "All Games" : obj is GroupNode gn ? gn.Label : (HostPlatformCategory.NodeName(obj) ?? "");
         string imgKey = _nodeIconKey.TryGetValue(obj, out var k) ? k : "fb_plat";
         var tn = new TreeNode(text) { Tag = obj, ImageKey = imgKey, SelectedImageKey = imgKey };
         _treeNodeMap[obj] = tn;
-        if (obj is HostPlatformCategory c)
-            foreach (var child in c.Children)
-            {
-                if (ParentalHidesNode(child)) continue;   // parental: drop hidden child categories/platforms
-                tn.Nodes.Add(BuildTreeNode(child));
-            }
-        else if (obj is GroupNode gc && gc.Children != null)   // 2-level dynamic view (Progress: bucket ▸ leaf)
-            foreach (var child in gc.Children) tn.Nodes.Add(BuildTreeNode(child));
+        path.Add(obj);
+        System.Collections.Generic.IEnumerable<object> kids =
+            obj is HostPlatformCategory c ? (System.Collections.Generic.IEnumerable<object>)c.Children
+            : obj is Data.HostPlatform hp ? hp.TreeChildren
+            : obj is GroupNode gc && gc.Children != null ? gc.Children
+            : Array.Empty<object>();
+        foreach (var child in kids)
+        {
+            if (path.Contains(child)) continue;                              // cycle guard
+            if (obj is not GroupNode && ParentalHidesNode(child)) continue;  // parental: drop hidden children
+            tn.Nodes.Add(BuildTreeNode(child, path));
+        }
+        path.Remove(obj);
         return tn;
     }
 

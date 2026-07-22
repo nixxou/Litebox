@@ -107,6 +107,36 @@ internal static class OwnedDataProvider
             };
         }
 
+        // BigBox rule (faithful): when at least ONE PLAYLIST is nested under a platform, the platform
+        // renders AS A CATEGORY in bb-web — its children (playlists + nested categories), NOT its games.
+        // lb-web keeps "click the platform = its FULL games" (path stays platforms/<slug>; its front
+        // renders the children as indented sub-rows with an expand chevron).
+        IList<IPlatform> platKids = null;
+        try { platKids = node.GetChildren(); } catch (Exception ex) { Log("Platform.GetChildren: " + ex.Message); }
+        bool hasPlaylistChild = false;
+        if (platKids != null)
+            foreach (var c in platKids) { if (c is IPlaylist) { hasPlaylistChild = true; break; } }
+        if (hasPlaylistChild)
+        {
+            var kids = new List<object>();
+            foreach (var c in platKids) { var co = BuildNode(c, seenPlaylists, st); if (co != null) kids.Add(co); }
+            if (kids.Count == 0) return null;
+            var pSlug = PlatformSlug.For(node.Name);
+            return new
+            {
+                name = node.Name,
+                kind = "platform",
+                count = SafeCount(node),
+                sub = new[] { "", "" },
+                desc = ThemeFormat.OverviewHtml(SafeNotes(node)),
+                media = ThemeFormat.Gradient(node.Name),
+                recent = Array.Empty<string>(),
+                slug = pSlug,
+                path = "platforms/" + pSlug,
+                children = kids.ToArray(),
+            };
+        }
+
         int count = (st != null && st.IsLocked) ? CountAllowed(SafeGames(node), st) : SafeCount(node);
         if (count <= 0) return null;
         var slug = PlatformSlug.For(node.Name);

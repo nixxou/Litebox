@@ -1281,6 +1281,50 @@
     return row;
   }
 
+  /* ── appendLeafWithKids ─────────────────────────────────────────────────── */
+  /* Appends a platform/playlist leaf row. When the node NESTS children
+     (Parents.xml: playlists — or categories — under a platform), the row gets
+     its own expand CHEVRON (toggle only) and a collapsed-by-default
+     sub-container of deeper-indented child rows — mirroring the desktop tree.
+     Clicking the PLATFORM row itself still loads the platform's FULL games
+     list (only BigBox turns such a platform into a category screen);
+     clicking a nested playlist loads its subset. */
+  function appendLeafWithKids(container, node, indented) {
+    var kids = Array.isArray(node.children) ? node.children : [];
+    var subKids = [];
+    for (var i = 0; i < kids.length; i++) {
+      var p = kids[i].path || "";
+      if (p.indexOf("platforms/") === 0 || p.indexOf("playlists/") === 0) {
+        subKids.push(kids[i]);
+      }
+    }
+    var row = buildLeafRow(node, indented);
+    if (subKids.length === 0) { container.appendChild(row); return; }
+
+    row.classList.add("lb-tree-node--parent", "collapsed");
+    var chev = document.createElement("span");
+    chev.className = "lb-tree-chev";
+    chev.textContent = "▾"; /* ▾ */
+    chev.setAttribute("aria-hidden", "true");
+    chev.title = "Expand / collapse";
+    chev.addEventListener("click", function (e) {
+      /* The chevron only toggles the sub-tree — it must not select/load. */
+      e.stopPropagation();
+      row.classList.toggle("collapsed");
+    });
+    row.insertBefore(chev, row.firstChild);
+    container.appendChild(row);
+
+    var wrap = document.createElement("div");
+    wrap.className = "lb-tree-subchildren";
+    for (var j = 0; j < subKids.length; j++) {
+      var sub = buildLeafRow(subKids[j], true);
+      sub.classList.add("lb-tree-node--sub");
+      wrap.appendChild(sub);
+    }
+    container.appendChild(wrap);
+  }
+
   /* ── buildCategoryGroup ─────────────────────────────────────────────────── */
   /* Builds a collapsible .lb-tree-cat + .lb-tree-children block. */
   function buildCategoryGroup(node, isFirst) {
@@ -1345,7 +1389,7 @@
       var childPath = child.path || "";
       if (childPath.indexOf("platforms/") === 0 ||
           childPath.indexOf("playlists/") === 0) {
-        children.appendChild(buildLeafRow(child, true));
+        appendLeafWithKids(children, child, true);
       }
       /* Nested categories inside a category are treated as leaf rows
          (the spec only shows one level of categories). */
@@ -1451,8 +1495,8 @@
 
       } else if (path.indexOf("platforms/") === 0 ||
                  path.indexOf("playlists/") === 0) {
-        /* Top-level leaf */
-        treeScroll.appendChild(buildLeafRow(node, false));
+        /* Top-level leaf (+ its nested playlist sub-rows when the platform has any) */
+        appendLeafWithKids(treeScroll, node, false);
       }
     }
 

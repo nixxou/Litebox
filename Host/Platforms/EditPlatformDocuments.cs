@@ -1,17 +1,20 @@
-// The "Documents" tab of the Edit Platform window. LaunchBox does not persist a platform document LIST in
-// Platforms.xml (no <PlatformDocument> element exists); platform documents are simply files under the platform's
-// manuals folder (Manuals\<Platform>\, or the platform's custom ManualsFolder). So this tab is a file manager for
-// that folder — Add copies a file in, Remove deletes it, Open launches it — which is data-compatible with LB
-// (both just read the folder). No invented XML is written.
+// The "Documents" tab of the Edit Platform window — LB parity. LaunchBox persists platform documents as
+// root-level <PlatformDocument> rows in Platforms.xml (<Name>/<FilePath>/<Platform>), with FilePath stored
+// RELATIVE to the LB root (..\ segments allowed — e.g. "..\..\Documents\notes.txt"); the row order in the file
+// is the display order (Up/Down buttons reorder). Verified empirically on 13.28 (an earlier assumption that
+// platform documents were plain files under the Manuals folder was WRONG — that grid never showed LB's docs).
+// Apply rewrites this platform's <PlatformDocument> rows surgically, preserving grid order.
 
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
+using System.Xml.Linq;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins.Data;
@@ -21,81 +24,213 @@ namespace LbApiHost.Host.Platforms;
 internal static class EditPlatformDocuments
 {
     private static readonly Color Bg = LiteBoxTheme.Bg, Panel2 = LiteBoxTheme.Panel2, Fg = LiteBoxTheme.Fg, SubFg = LiteBoxTheme.SubFg;
+    private static string PlatformsFile => Path.Combine(MediaResolver.LbRoot ?? "", "Data", "Platforms.xml");
 
-    public static Control Build(IPlatform plat, bool readOnly, float s)
+    /// <summary>This platform's documents as (display name, absolute path) — for the source-tree context menu.</summary>
+    public static List<(string name, string absPath)> GetDocuments(string platformName)
+    {
+        var list = new List<(string, string)>();
+        try
+        {
+            if (!File.Exists(PlatformsFile)) return list;
+            var doc = XDocument.Load(PlatformsFile);
+            foreach (var e in doc.Root?.Elements("PlatformDocument")
+                         .Where(e => string.Equals((string?)e.Element("Platform"), platformName, StringComparison.OrdinalIgnoreCase))
+                     ?? Enumerable.Empty<XElement>())
+            {
+                string nm = (string?)e.Element("Name") ?? "";
+                string abs = ResolveAbs(((string?)e.Element("FilePath") ?? "").Trim());
+                if (abs.Length == 0) continue;
+                list.Add((nm.Length > 0 ? nm : Path.GetFileName(abs), abs));
+            }
+        }
+        catch { }
+        return list;
+    }
+
+    public static (Control panel, Action apply) Build(IPlatform plat, bool readOnly, float s)
     {
         int S(int px) => (int)Math.Round(px * s);
         string name = Safe(() => plat.Name) ?? "";
-        string manuals = Safe(() => plat.ManualsFolder) ?? "";
-        string dir = !string.IsNullOrWhiteSpace(manuals)
-            ? (Path.IsPathRooted(manuals) ? manuals : Path.Combine(MediaResolver.LbRoot ?? "", manuals))
-            : Path.Combine(MediaResolver.LbRoot ?? "", "Manuals", Sanitize(name));
-
         var p = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(S(10)) };
 
-        var bar = new Panel { Dock = DockStyle.Top, Height = S(32), BackColor = Bg };
-        Button Btn(string t, int x, int w) => new() { Text = t, Location = new Point(S(x), S(3)), Size = new Size(S(w), S(24)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 } };
-        var add = Btn("✚ Add…", 0, 80); add.ForeColor = Color.FromArgb(150, 210, 150);
-        var open = Btn("Open", 88, 70);
-        var remove = Btn("✕ Remove", 164, 90); remove.ForeColor = Color.FromArgb(220, 130, 120);
-        bar.Controls.AddRange(new Control[] { add, open, remove });
+        // Right-hand Up/Down column (LB layout).
+        var side = new Panel { Dock = DockStyle.Right, Width = S(70), BackColor = Bg, Padding = new Padding(S(8), 0, 0, 0) };
+        Button SideBtn(string t, int top) => new() { Text = t, Location = new Point(S(8), S(top)), Size = new Size(S(58), S(26)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 } };
+        var up = SideBtn("Up", 0);
+        var down = SideBtn("Down", 32);
+        side.Controls.AddRange(new Control[] { up, down });
 
-        var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, HideSelection = false, OwnerDraw = true };
-        list.Columns.Add("Name", S(320));
-        list.Columns.Add("File Path", S(560));
-        // Dark headers (WinForms ListView headers otherwise render white / system-themed).
-        list.DrawColumnHeader += (_, e) => { e.Graphics.FillRectangle(new SolidBrush(Panel2), e.Bounds); TextRenderer.DrawText(e.Graphics, e.Header!.Text, list.Font, e.Bounds, Fg, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding); };
-        list.DrawItem += (_, e) => e.DrawDefault = true;
-        list.DrawSubItem += (_, e) => e.DrawDefault = true;
-        // Fill the remaining width with the File Path column (no white residual header area to the right).
-        void FillCols() { if (list.Columns.Count >= 2) list.Columns[1].Width = Math.Max(S(200), list.ClientSize.Width - list.Columns[0].Width - S(4)); }
-        list.SizeChanged += (_, _) => FillCols();
-        list.HandleCreated += (_, _) => FillCols();
-
-        void Reload()
+        var grid = new DataGridView
         {
-            list.Items.Clear();
+            Dock = DockStyle.Fill, BackgroundColor = Panel2, ForeColor = Fg, GridColor = Color.FromArgb(70, 70, 74),
+            BorderStyle = BorderStyle.None, AllowUserToResizeRows = false, RowHeadersVisible = false,
+            EnableHeadersVisualStyles = false, AllowUserToAddRows = !readOnly, AllowUserToDeleteRows = !readOnly,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, SelectionMode = DataGridViewSelectionMode.CellSelect,
+        };
+        grid.ColumnHeadersDefaultCellStyle.BackColor = Panel2;
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = Fg;
+        grid.DefaultCellStyle.BackColor = Panel2; grid.DefaultCellStyle.ForeColor = Fg;
+        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(60, 90, 130); grid.DefaultCellStyle.SelectionForeColor = Color.White;
+        var colName = new DataGridViewTextBoxColumn { HeaderText = "Name", FillWeight = 28 };
+        var colPath = new DataGridViewTextBoxColumn { HeaderText = "File Path", FillWeight = 57 };
+        var colBrowse = new DataGridViewButtonColumn { HeaderText = "Browse", Text = "Browse…", UseColumnTextForButtonValue = true, FillWeight = 15 };
+        grid.Columns.AddRange(colName, colPath, colBrowse);
+        grid.ReadOnly = readOnly;
+
+        // Load this platform's <PlatformDocument> rows in file order (= LB's display order).
+        try
+        {
+            if (File.Exists(PlatformsFile))
+            {
+                var doc = XDocument.Load(PlatformsFile);
+                foreach (var e in doc.Root?.Elements("PlatformDocument")
+                             .Where(e => string.Equals((string?)e.Element("Platform"), name, StringComparison.OrdinalIgnoreCase))
+                         ?? Enumerable.Empty<XElement>())
+                    grid.Rows.Add((string?)e.Element("Name") ?? "", (string?)e.Element("FilePath") ?? "", "Browse…");
+            }
+        }
+        catch { }
+
+        grid.CellClick += (_, e) =>
+        {
+            if (readOnly || e.RowIndex < 0 || e.ColumnIndex != 2) return;
+            using var d = new OpenFileDialog { Filter = "Documents|*.pdf;*.txt;*.doc;*.docx;*.rtf;*.htm;*.html|All files|*.*" };
+            // Existing document → start the picker in its folder, current file preselected.
+            if (!grid.Rows[e.RowIndex].IsNewRow)
+            {
+                string curAbs = ResolveAbs((grid.Rows[e.RowIndex].Cells[1].Value as string)?.Trim() ?? "");
+                if (curAbs.Length > 0 && File.Exists(curAbs))
+                { d.InitialDirectory = Path.GetDirectoryName(curAbs) ?? ""; d.FileName = Path.GetFileName(curAbs); }
+            }
+            if (d.ShowDialog() != DialogResult.OK) return;
+            if (grid.Rows[e.RowIndex].IsNewRow)
+            {
+                // Browse on the empty bottom row = add: materialize a real row from the picked file.
+                grid.Rows.Add(Path.GetFileNameWithoutExtension(d.FileName), RelPath(d.FileName), "Browse…");
+                return;
+            }
+            var row = grid.Rows[e.RowIndex];
+            row.Cells[1].Value = RelPath(d.FileName);
+            if (string.IsNullOrWhiteSpace(row.Cells[0].Value as string))
+                row.Cells[0].Value = Path.GetFileNameWithoutExtension(d.FileName);   // convenience: prefill the name
+        };
+        // Delete: Suppr key (outside cell edit) or the context menu — CellSelect mode never yields the
+        // full-row selection DataGridView's built-in row deletion requires, so both paths are explicit.
+        void RemoveCurrent()
+        {
+            if (readOnly || grid.CurrentCell == null) return;
+            var row = grid.Rows[grid.CurrentCell.RowIndex];
+            if (!row.IsNewRow) grid.Rows.Remove(row);
+        }
+        grid.KeyDown += (_, e) => { if (e.KeyCode == Keys.Delete && !grid.IsCurrentCellInEditMode) { RemoveCurrent(); e.Handled = true; } };
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Remove Document", null, (_, _) => RemoveCurrent());
+        string CurrentAbs()
+        {
+            if (grid.CurrentCell == null || grid.Rows[grid.CurrentCell.RowIndex].IsNewRow) return "";
+            return ResolveAbs((grid.Rows[grid.CurrentCell.RowIndex].Cells[1].Value as string)?.Trim() ?? "");
+        }
+        menu.Items.Add("Open", null, (_, _) =>
+        {
+            string abs = CurrentAbs();
+            if (abs.Length > 0 && File.Exists(abs)) try { Process.Start(new ProcessStartInfo(abs) { UseShellExecute = true }); } catch { }
+        });
+        menu.Items.Add("Open Containing Folder", null, (_, _) =>
+        {
+            string abs = CurrentAbs();
+            if (abs.Length == 0) return;
             try
             {
-                if (Directory.Exists(dir))
-                    foreach (var f in Directory.EnumerateFiles(dir).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
-                    {
-                        var it = new ListViewItem(Path.GetFileName(f)); it.SubItems.Add(f); it.Tag = f; list.Items.Add(it);
-                    }
+                if (File.Exists(abs)) Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + abs + "\"") { UseShellExecute = true });
+                else { string dir = Path.GetDirectoryName(abs) ?? ""; if (Directory.Exists(dir)) Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true }); }
             }
             catch { }
+        });
+        grid.CellMouseDown += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right || e.RowIndex < 0 || grid.Rows[e.RowIndex].IsNewRow) return;
+            grid.CurrentCell = grid.Rows[e.RowIndex].Cells[e.ColumnIndex == 2 ? 0 : e.ColumnIndex];
+            menu.Show(Cursor.Position);
+        };
+        // Double-click a non-button cell → open the document.
+        grid.CellDoubleClick += (_, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex == 2 || grid.Rows[e.RowIndex].IsNewRow) return;
+            string abs = ResolveAbs((grid.Rows[e.RowIndex].Cells[1].Value as string)?.Trim() ?? "");
+            if (abs.Length > 0 && File.Exists(abs))
+                try { Process.Start(new ProcessStartInfo(abs) { UseShellExecute = true }); } catch { }
+        };
+
+        void Move(int delta)
+        {
+            if (readOnly || grid.CurrentCell == null) return;
+            int i = grid.CurrentCell.RowIndex, j = i + delta, col = grid.CurrentCell.ColumnIndex;
+            int last = grid.AllowUserToAddRows ? grid.Rows.Count - 2 : grid.Rows.Count - 1;   // exclude the new-row template
+            if (i < 0 || i > last || j < 0 || j > last) return;
+            var r = grid.Rows[i];
+            grid.Rows.RemoveAt(i);
+            grid.Rows.Insert(j, r);
+            grid.CurrentCell = grid.Rows[j].Cells[col == 2 ? 0 : col];
         }
-        string? Sel() => list.SelectedItems.Count > 0 ? list.SelectedItems[0].Tag as string : null;
-        add.Enabled = !readOnly; remove.Enabled = !readOnly;
-        add.Click += (_, _) =>
-        {
-            using var d = new OpenFileDialog { Filter = "Documents|*.pdf;*.txt;*.doc;*.docx;*.rtf;*.htm;*.html|All files|*.*", Multiselect = true };
-            if (d.ShowDialog() != DialogResult.OK) return;
-            try { Directory.CreateDirectory(dir); } catch { }
-            foreach (var src in d.FileNames) { try { File.Copy(src, Path.Combine(dir, Path.GetFileName(src)), false); } catch { } }
-            Reload();
-        };
-        open.Click += (_, _) => { var f = Sel(); if (f != null) try { Process.Start(new ProcessStartInfo(f) { UseShellExecute = true }); } catch { } };
-        remove.Click += (_, _) =>
-        {
-            var f = Sel(); if (f == null || readOnly) return;
-            if (MessageBox.Show($"Delete document?\n{Path.GetFileName(f)}", "Remove Document", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            try { File.Delete(f); } catch { }
-            Reload();
-        };
-        list.DoubleClick += (_, _) => { var f = Sel(); if (f != null) try { Process.Start(new ProcessStartInfo(f) { UseShellExecute = true }); } catch { } };
+        up.Click += (_, _) => Move(-1);
+        down.Click += (_, _) => Move(+1);
+        up.Enabled = !readOnly; down.Enabled = !readOnly;
 
-        p.Controls.Add(list);
-        p.Controls.Add(bar);
-        Reload();
-        return p;
+        p.Controls.Add(grid);
+        p.Controls.Add(side);
+
+        void Apply()
+        {
+            if (readOnly) return;
+            var docs = new List<(string nm, string fp)>();
+            foreach (DataGridViewRow r in grid.Rows)
+            {
+                if (r.IsNewRow) continue;
+                string nm = (r.Cells[0].Value as string)?.Trim() ?? "";
+                string fp = (r.Cells[1].Value as string)?.Trim() ?? "";
+                if (nm.Length > 0 || fp.Length > 0) docs.Add((nm, fp));
+            }
+            WritePlatformDocuments(name, docs);
+        }
+        return (p, Apply);
     }
 
-    private static string Sanitize(string sn)
+    // LB stores document paths relative to the LB root wherever possible, INCLUDING ..\ segments for files
+    // outside it (same volume). A different volume stays absolute (Path.GetRelativePath returns it unchanged).
+    private static string RelPath(string path)
     {
-        if (string.IsNullOrEmpty(sn)) return sn;
-        foreach (var c in Path.GetInvalidFileNameChars()) sn = sn.Replace(c, '_');
-        return sn.Trim();
+        string root = MediaResolver.LbRoot ?? "";
+        if (root.Length == 0 || path.Length == 0 || !Path.IsPathRooted(path)) return path;
+        try { return Path.GetRelativePath(root, Path.GetFullPath(path)); } catch { return path; }
     }
+
+    private static string ResolveAbs(string path)
+    {
+        if (path.Length == 0) return "";
+        try { return Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(MediaResolver.LbRoot ?? "", path)); }
+        catch { return path; }
+    }
+
+    // Rewrite this platform's <PlatformDocument> rows (root-level, grid order); other platforms untouched.
+    private static void WritePlatformDocuments(string platform, List<(string nm, string fp)> docs)
+    {
+        try
+        {
+            if (!File.Exists(PlatformsFile)) return;
+            var doc = XDocument.Load(PlatformsFile);
+            var root = doc.Root; if (root == null) return;
+            foreach (var e in root.Elements("PlatformDocument").Where(e => string.Equals((string?)e.Element("Platform"), platform, StringComparison.OrdinalIgnoreCase)).ToList())
+                e.Remove();
+            foreach (var (nm, fp) in docs)
+                root.Add(new XElement("PlatformDocument",
+                    new XElement("Name", nm),
+                    new XElement("FilePath", fp),
+                    new XElement("Platform", platform)));
+            doc.Save(PlatformsFile);
+        }
+        catch { }
+    }
+
     private static T? Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }
 }

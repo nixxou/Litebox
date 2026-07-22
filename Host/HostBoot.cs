@@ -147,6 +147,14 @@ internal static class HostBoot
             Diag.ModelProbe.Defaults(lbRootMdf, GetArg(args, "--model-defaults"));
             return 0;
         }
+        // --model-spines: dump the JewelCaseSpines.resources entry names (Spine Style presets) → jewel-spines.log.
+        if (args.Contains("--model-spines"))
+        {
+            string lbRs = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRs); } catch { }
+            Diag.ModelProbe.JewelSpines(lbRs);
+            return 0;
+        }
         // --edit-platform-render <platform> <outDir>: offscreen-render the Edit Platform sections to PNGs (visual
         // iteration; no UI shown). See Host/Platforms/EditPlatformRenderProbe.cs.
         if (args.Contains("--edit-platform-render"))
@@ -157,6 +165,17 @@ internal static class HostBoot
             string lbR = Path.GetFullPath(Path.Combine(coreDir, ".."));
             try { SetLaunchBoxCoreRootFolder(lbR); } catch { }
             Platforms.EditPlatformRenderProbe.Render(lbR, plat, outDir);
+            return 0;
+        }
+        // --edit-category-render <category> <outDir>: same offscreen render for the Edit Category window.
+        if (args.Contains("--edit-category-render"))
+        {
+            int i = Array.IndexOf(args, "--edit-category-render");
+            string cat = i + 1 < args.Length ? args[i + 1] : "";
+            string outDir = i + 2 < args.Length ? args[i + 2] : Path.Combine(AppContext.BaseDirectory, "editcat-render");
+            string lbR = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbR); } catch { }
+            Platforms.EditPlatformRenderProbe.RenderCategory(lbR, cat, outDir);
             return 0;
         }
         // --fbneo-hiscore <destFile>: extract the embedded FBNeo hiscore.dat to a path (test the embed/extract).

@@ -40,10 +40,10 @@ internal sealed class HomeModel3d : IDisposable
         _host = new ElementHost { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.FromArgb(28, 28, 30), Child = _viewport };
     }
 
-    /// <summary>ITERATION 1 — capture LB's scene and mirror it in our viewport (clone geometry + camera +
-    /// lights). Later iterations will build the geometry ourselves and only borrow the camera/lights until
-    /// those are reproduced too.</summary>
-    public void CaptureFrom(CoreModelHost.Preview? lb)
+    /// <summary>Reproduce LB's model in our viewport. Lights are always cloned from LB (until reproduced).
+    /// Geometry: for types we've reproduced (box) we BUILD IT OURSELVES (borrowing LB's face materials for now);
+    /// for the rest we clone LB's group so the zone still shows something to compare against.</summary>
+    public void CaptureFrom(CoreModelHost.Preview? lb, System.Collections.Generic.Dictionary<string, string>? map)
     {
         try
         {
@@ -55,7 +55,6 @@ internal sealed class HomeModel3d : IDisposable
             var (_, lights) = lb.Scene();
 
             // Camera is owned by the shared OrbitController (not set here) so both zones stay in sync.
-            // Lights: clone each; if LB had none yet, add a sane default so our capture isn't black.
             if (lights.Count > 0)
                 foreach (var l in lights) _lightHost.Children.Add(new ModelVisual3D { Content = (Model3D)l.Clone() });
             else
@@ -64,10 +63,74 @@ internal sealed class HomeModel3d : IDisposable
                 _lightHost.Children.Add(new ModelVisual3D { Content = new DirectionalLight(System.Windows.Media.Color.FromRgb(220, 220, 220), new Vector3D(-1, -1, -3)) });
             }
 
-            // Geometry: clone LB's built Model3DGroup (freezable → deep clone).
-            if (geom != null) { _modelHost.Content = geom.Clone(); if (DumpStructure) DumpGroup(geom); }
+            if (geom == null) return;
+            if (DumpStructure) DumpGroup(geom);
+
+            string type = map != null && map.TryGetValue("ModelType", out var t) ? t : "";
+            Model3D? own = type == "box" ? BuildBox(geom) : null;   // reproduced types build their own geometry
+            _modelHost.Content = own ?? geom.Clone();               // else clone LB's (comparison fallback)
         }
         catch (Exception ex) { Console.WriteLine("[homemodel] capture: " + ex.Message); }
+    }
+
+    // ── ITERATION 2: procedural BOX (own geometry). LB's box = a 6-face rectangular box centred at origin,
+    // dims from ModelSize (W×H×D). Faces: front(+Z)/left(-X)/right(+X)/top(+Y) carry the wrapped cover art
+    // (VisualBrush); back(-Z)/bottom(-Y) are a solid dark. We rebuild the 6 quads ourselves at LB's exact dims
+    // (read from LB's bounds) and, for now, reuse LB's per-face materials (compositing our own art comes later).
+    private static Model3D? BuildBox(Model3DGroup lb)
+    {
+        // LB's box dims from its overall bounds (symmetric about origin).
+        var b = lb.Bounds;
+        if (b.IsEmpty) return null;
+        double hw = b.SizeX / 2, hh = b.SizeY / 2, hd = b.SizeZ / 2;
+
+        // Grab LB's material per face orientation (by each quad's constant axis + sign).
+        var mats = new System.Collections.Generic.Dictionary<string, Material>(StringComparer.Ordinal);
+        CollectFaceMaterials(lb, mats);
+
+        var grp = new Model3DGroup();
+        // face key → (centre offset dir, u dir, v dir) with outward normal.
+        void Face(string key, Point3D o, Vector3D u, Vector3D v)
+        {
+            var mesh = new MeshGeometry3D();
+            // o = bottom-left, u = to bottom-right, v = to top-left. LB's UV convention is V-DOWN (top row = 0),
+            // so bottom-left = (0,1), bottom-right = (1,1), top-right = (1,0), top-left = (0,0).
+            mesh.Positions.Add(o);           // bottom-left
+            mesh.Positions.Add(o + u);       // bottom-right
+            mesh.Positions.Add(o + u + v);   // top-right
+            mesh.Positions.Add(o + v);       // top-left
+            mesh.TextureCoordinates.Add(new System.Windows.Point(0, 1));
+            mesh.TextureCoordinates.Add(new System.Windows.Point(1, 1));
+            mesh.TextureCoordinates.Add(new System.Windows.Point(1, 0));
+            mesh.TextureCoordinates.Add(new System.Windows.Point(0, 0));
+            mesh.TriangleIndices.Add(0); mesh.TriangleIndices.Add(1); mesh.TriangleIndices.Add(2);
+            mesh.TriangleIndices.Add(0); mesh.TriangleIndices.Add(2); mesh.TriangleIndices.Add(3);
+            var mat = mats.TryGetValue(key, out var mm) ? mm : new DiffuseMaterial(new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x20, 0x18, 0x1E)));
+            grp.Children.Add(new GeometryModel3D { Geometry = mesh, Material = mat, BackMaterial = mat });
+        }
+        // Corners: outward-facing winding (CCW seen from outside).
+        Face("Z+", new Point3D(-hw, -hh, hd), new Vector3D(2 * hw, 0, 0), new Vector3D(0, 2 * hh, 0));   // front
+        Face("Z-", new Point3D(hw, -hh, -hd), new Vector3D(-2 * hw, 0, 0), new Vector3D(0, 2 * hh, 0));  // back
+        Face("X-", new Point3D(-hw, -hh, -hd), new Vector3D(0, 0, 2 * hd), new Vector3D(0, 2 * hh, 0));  // left
+        Face("X+", new Point3D(hw, -hh, hd), new Vector3D(0, 0, -2 * hd), new Vector3D(0, 2 * hh, 0));   // right
+        Face("Y+", new Point3D(-hw, hh, hd), new Vector3D(2 * hw, 0, 0), new Vector3D(0, 0, -2 * hd));   // top
+        Face("Y-", new Point3D(-hw, -hh, -hd), new Vector3D(2 * hw, 0, 0), new Vector3D(0, 0, 2 * hd));  // bottom
+        return grp;
+    }
+
+    // Walk LB's group, classify each GeometryModel3D by its constant-axis face and store its Material.
+    private static void CollectFaceMaterials(Model3DGroup g, System.Collections.Generic.Dictionary<string, Material> outMats)
+    {
+        foreach (var m in g.Children)
+        {
+            if (m is Model3DGroup sub) { CollectFaceMaterials(sub, outMats); continue; }
+            if (m is not GeometryModel3D gm || gm.Geometry is not MeshGeometry3D mesh || mesh.Positions.Count == 0 || gm.Material == null) continue;
+            var b = mesh.Bounds;
+            string? key = b.SizeX < 1e-3 ? (b.X > 0 ? "X+" : "X-")
+                        : b.SizeY < 1e-3 ? (b.Y > 0 ? "Y+" : "Y-")
+                        : b.SizeZ < 1e-3 ? (b.Z > 0 ? "Z+" : "Z-") : null;
+            if (key != null && !outMats.ContainsKey(key)) outMats[key] = gm.Material;
+        }
     }
 
 
@@ -83,7 +146,7 @@ internal sealed class HomeModel3d : IDisposable
         L("group.Children = " + g.Children.Count);
         DumpChildren(g.Children, L, 0);
         try { System.IO.File.WriteAllText(System.IO.Path.Combine(AppContext.BaseDirectory, "model3d-structure.log"), sb.ToString()); } catch { }
-        DumpStructure = false;
+        // NOT auto-reset: the last capture (after the probe forces a Model Type) overwrites the log = final state.
     }
 
     private static void DumpChildren(Model3DCollection children, Action<string> L, int depth)
@@ -103,6 +166,16 @@ internal sealed class HomeModel3d : IDisposable
                 {
                     var b = mesh.Bounds;
                     L($"{ind}  Bounds     = X[{b.X:0.###}..{b.X + b.SizeX:0.###}] Y[{b.Y:0.###}..{b.Y + b.SizeY:0.###}] Z[{b.Z:0.###}..{b.Z + b.SizeZ:0.###}]");
+                    if (mesh.Positions.Count <= 24)   // small mesh (quad/box) → dump exact vertex data to reproduce
+                    {
+                        for (int vi = 0; vi < mesh.Positions.Count; vi++)
+                        {
+                            var pos = mesh.Positions[vi];
+                            var uv = vi < mesh.TextureCoordinates.Count ? mesh.TextureCoordinates[vi] : default;
+                            L($"{ind}    v{vi} pos=({pos.X:0.####},{pos.Y:0.####},{pos.Z:0.####}) uv=({uv.X:0.###},{uv.Y:0.###})");
+                        }
+                        L($"{ind}    tris=[{string.Join(",", mesh.TriangleIndices)}]");
+                    }
                 }
             }
             else if (m is Light lt) L($"{ind}Light {lt.GetType().Name} color={(lt as dynamic)?.Color}");

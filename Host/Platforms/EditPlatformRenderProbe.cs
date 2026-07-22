@@ -102,6 +102,13 @@ internal static class EditPlatformRenderProbe
             form.Activate(); form.BringToFront();
             // Turn Override on so a case renders (find the checkbox by text).
             var chk = FindOverride(panel); if (chk != null) chk.Checked = true;
+            // Optional: force a Model Type (env LB_MODELTYPE = Box/DVD Case/Jewel Case/...) to dump/compare it.
+            var forceType = Environment.GetEnvironmentVariable("LB_MODELTYPE");
+            if (!string.IsNullOrEmpty(forceType))
+            {
+                var mt = FindModelTypeCombo(panel);
+                if (mt != null) { int ix = mt.Items.IndexOf(forceType); if (ix >= 0) mt.SelectedIndex = ix; }
+            }
             for (int i = 0; i < 40; i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(60); }
             // Optionally drive the shared orbit (env LB_ORBIT_TEST=1) to verify both zones move in sync.
             if (Environment.GetEnvironmentVariable("LB_ORBIT_TEST") == "1")

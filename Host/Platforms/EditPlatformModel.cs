@@ -456,7 +456,7 @@ internal static class EditPlatformModel
             if (live.Control.IsHandleCreated)
                 try { live.Control.BeginInvoke((Action)(() =>
                 {
-                    home?.CaptureFrom(live);
+                    home?.CaptureFrom(live, map);
                     var vp = live.Viewport; if (vp != null) orbit.Add(vp);       // register LB's viewport (idempotent)
                     orbit.SeedFrom(live.Viewport?.Camera as System.Windows.Media.Media3D.ProjectionCamera, live.ModelBounds());
                     orbit.Apply();                                               // reassert camera post-redraw

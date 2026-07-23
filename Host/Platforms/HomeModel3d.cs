@@ -681,9 +681,11 @@ internal sealed class HomeModel3d : IDisposable
         }
 
         // Compose the wrap sheet exactly like LB: 3 auto columns [back|spine|front], images normalized to
-        // height 600 (LB's decode convention). A missing image adds NO element — its column collapses to zero
-        // width, exactly like LB's grid. Spine column: the scan when present (and enabled), else the CLEAR LOGO
-        // rotated 90° with margins (0.015×frontW, 0.05×600) — all three constants probe-derived (AC Wii /
+        // height 600 (LB's decode convention). A MISSING image still occupies its column WIDTH (empty Border,
+        // the cover colour shows through) — collapsing it shifts the whole composite under the wrap's FIXED
+        // authored UVs (user-reported: with no Box - Back, the front rendered left-cut on the front panel).
+        // Missing back mirrors the front's width. Spine column: the scan when present (and enabled), else the
+        // CLEAR LOGO rotated 90° with margins (0.015×frontW, 0.05×600) — constants probe-derived (AC Wii /
         // SoM / Super Mario Kart give 6.42/12.3/12.3 for front widths 428/820/820).
         var logo = LoadBitmap(ResolveArt(platform, gameTitle, Media.MediaResolver.ClearLogo));
         var sides = ParseSides(map, "SpineRotation");
@@ -694,23 +696,30 @@ internal sealed class HomeModel3d : IDisposable
         for (int i = 0; i < 3; i++)
             wrapGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
         void Put(System.Windows.FrameworkElement el, int col) { System.Windows.Controls.Grid.SetColumn(el, col); wrapGrid.Children.Add(el); }
-        void Panel(System.Windows.Media.Imaging.BitmapSource? img, int col)
+        void Panel(System.Windows.Media.Imaging.BitmapSource? img, int col, double fallbackW)
         {
-            if (img == null) return;
+            if (img == null) { Put(new System.Windows.Controls.Border { Width = fallbackW, Height = 600 }, col); return; }
             double w = Math.Round(img.PixelWidth * 600.0 / img.PixelHeight);
             Put(new System.Windows.Controls.Image { Source = img, Stretch = System.Windows.Media.Stretch.Fill, Width = w, Height = 600 }, col);
         }
-        Panel(backImg, 0);
-        if (sides[0] && spineImg != null) Panel(spineImg, 1);
+        Panel(backImg, 0, frontW);
+        if (sides[0] && spineImg != null) Panel(spineImg, 1, 86);
         else if (logoSides[0] && logo != null)
+            // LB decodes clear logos at WIDTH 206 (aspect preserved) — the explicit size matters here: the
+            // rotated image's LAYOUT width (= its height) sets the auto column width. Using the file's natural
+            // size blew the spine column up to the full logo height (user-reported: a 2400×1265 logo spilled
+            // the spine over the front on Mega Man X GC).
             Put(new System.Windows.Controls.Image
             {
                 Source = logo,
+                Width = 206,
+                Height = Math.Round(206.0 * logo.PixelHeight / Math.Max(1, logo.PixelWidth)),
                 Stretch = System.Windows.Media.Stretch.Uniform,
                 LayoutTransform = new System.Windows.Media.RotateTransform(90),
                 Margin = new System.Windows.Thickness(Math.Round(frontW * 0.015, 2), 30, Math.Round(frontW * 0.015, 2), 30),
             }, 1);
-        Panel(front, 2);
+        else Put(new System.Windows.Controls.Border { Width = 86, Height = 600 }, 1);
+        Panel(front, 2, frontW);
         var wrapMat = new DiffuseMaterial(new VisualBrush(wrapGrid) { Stretch = System.Windows.Media.Stretch.Fill });
 
         var grp = new Model3DGroup();

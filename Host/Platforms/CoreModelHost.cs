@@ -259,6 +259,27 @@ internal static class CoreModelHost
             catch { return System.Windows.Media.Media3D.Rect3D.Empty; }
         }
 
+        /// <summary>The transform LB's RotateModel animates — it lives on the CHILD ModelVisual3D under
+        /// FlowModel.Model (a Transform3DGroup; Model's own transform stays identity). The home zone shares
+        /// this INSTANCE so both zones rotate identically by construction — model-rotation under fixed
+        /// camera/lights, the way the real LaunchBox behaves (orbiting the camera left rotated views under-lit).</summary>
+        public System.Windows.Media.Media3D.Transform3D? ModelVisualTransform
+        {
+            get
+            {
+                try
+                {
+                    var mv = _flowType!.GetProperty("Model", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(_flow)
+                             as System.Windows.Media.Media3D.ModelVisual3D;
+                    if (mv == null) return null;
+                    foreach (var c in mv.Children)
+                        if (c is System.Windows.Media.Media3D.ModelVisual3D cv) return cv.Transform;
+                    return mv.Transform;
+                }
+                catch { return null; }
+            }
+        }
+
         /// <summary>The Model3DGroup LB built (FlowModel.Model.Content), for the home-made renderer to capture.
         /// These are STANDARD WPF Media3D objects (not obfuscated) — usable directly. Null when nothing built.</summary>
         public System.Windows.Media.Media3D.Model3DGroup? BuiltGeometry()

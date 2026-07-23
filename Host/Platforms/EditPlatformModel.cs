@@ -476,9 +476,11 @@ internal static class EditPlatformModel
             if (live == null) return;
             var map = ApplyMapExtra(BuildFieldMap() ?? fallback);
             home?.CaptureFrom(live, map, CurrentSampleTitle(), previewPlatform);
+            orbit.Attach(live, home);
             var vp = live.Viewport; if (vp != null) orbit.Add(vp);           // register LB's viewport (idempotent)
             orbit.SeedFrom(live.Viewport?.Camera as System.Windows.Media.Media3D.ProjectionCamera, live.ModelBounds());
-            orbit.Apply();                                                   // reassert camera post-redraw
+            orbit.Apply();                                                   // reassert the fixed camera post-redraw
+            orbit.ReapplyRotation();                                         // re-pose the fresh model + mirror home
             lastGeom = live.BuiltGeometry();
         }
         var watch = new System.Windows.Forms.Timer { Interval = 400 };

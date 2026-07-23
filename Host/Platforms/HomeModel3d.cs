@@ -32,6 +32,15 @@ internal sealed class HomeModel3d : IDisposable
     public System.Windows.Forms.Control Control => _host;
     public Viewport3D Viewport => _viewport;
 
+    /// <summary>Mirror LB's model rotation — the SAME Transform3D INSTANCE LB animates is assigned to the home
+    /// model (RotateModel animates the rotation; a clone would snapshot identity at t=0). Both zones therefore
+    /// share the model-space rotation under fixed cameras/lights, like the real LaunchBox — including the
+    /// animation, in perfect sync.</summary>
+    public void SetModelTransform(Transform3D? t)
+    {
+        try { _modelHost.Transform = t; } catch { }
+    }
+
     private readonly System.Windows.Controls.Grid _root;
 
     public HomeModel3d()

@@ -25,9 +25,16 @@ internal static class ModelProbe
     public static void Export(string outDir)
     {
         Directory.CreateDirectory(outDir);
-        Assembly win;
-        try { win = Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "Unbroken.LaunchBox.Windows.dll")); }
-        catch (Exception ex) { Console.WriteLine("[export] load Windows.dll failed: " + ex.Message); return; }
+        foreach (var asmFile in new[] { "Unbroken.LaunchBox.Windows.dll", "BigBox.dll", "LaunchBox.dll", "Unbroken.LaunchBox.dll" })
+        {
+            Console.WriteLine("[export] ==== assembly " + asmFile);
+            try { ExportFrom(Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, asmFile)), outDir); }
+            catch (Exception ex) { Console.WriteLine("[export] load failed: " + ex.Message); }
+        }
+    }
+
+    private static void ExportFrom(Assembly win, string outDir)
+    {
         var wanted = new Regex(@"\.(obj|mtl|dds|tga)$", RegexOptions.IgnoreCase);
         int n = 0;
         foreach (var r in win.GetManifestResourceNames())

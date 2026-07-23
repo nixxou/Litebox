@@ -80,6 +80,8 @@ internal sealed class HomeModel3d : IDisposable
                 "box" => BuildBox(geom, map, gameTitle, platform),
                 "jewelCase" => BuildJewel(map, gameTitle, platform),
                 "dvd" => BuildDvd(geom, map, gameTitle, platform),
+                "longJewelCase" => BuildLongJewel(map, gameTitle, platform),
+                "doubleJewelCase" => BuildDoubleJewel(geom, map, gameTitle, platform),
                 _ => null,
             };
             _modelHost.Content = own ?? geom.Clone();               // else clone LB's (comparison fallback)
@@ -289,6 +291,144 @@ internal sealed class HomeModel3d : IDisposable
         var tg = new Transform3DGroup();
         tg.Children.Add(new TranslateTransform3D(-0.031, -0.629, 0.004));
         tg.Children.Add(new ScaleTransform3D(0.707, 0.707, 0.707));
+        grp.Children.Add(new Model3DGroup { Children = { plastic.Clone() }, Transform = tg });
+        return grp;
+    }
+
+    // ── ITERATION 4c: DOUBLE JEWEL CASE — dump-exact structure:
+    //   • front/back art quads Z=±0.0573 (Grid 1000×1000, bg = corner-avg of the front art — NOTE: LB's actual
+    //     bg on SoM was #1C3219 vs corner-avg #104E30, formula not fully pinned, but the bg is INVISIBLE in
+    //     practice: the art Fill covers the whole grid) + a TINT overlay quad Z=±0.0466 per side
+    //     (Diffuse #DE24262C + Specular #34969BA0 pow=18 — the insert seen through the closed lid).
+    //   • FOUR spine strips (two per side, split at z=±0.008..0.058): LB splits the spine image into left/right
+    //     HALVES — right side gets [left-half (back), right-half (front)], left side gets the SAME halves
+    //     ROTATED 180° (probe-verified against LB's .bbflow-double-jewel-spine cache files, diff 0.04).
+    //     Strip brush = Grid[220×1000] transparent + half Image Fill.
+    //   • plastic: NOT an embedded obj (LB builds it procedurally — 7 segments, scale 69.78); cloned from the
+    //     live model's child group (game-independent). TODO: reproduce procedurally.
+    //   TODO: DoubleSpineImageMode variants (Single / DualSplitCenter / DualMiddleSeparator) — Automatic split
+    //   is what's implemented (observed behaviour with a spine scan).
+    private static Model3D? BuildDoubleJewel(Model3DGroup lbGroup, System.Collections.Generic.Dictionary<string, string>? map,
+                                             string? gameTitle, string? platform)
+    {
+        var front = LoadBitmap(ResolveArt(platform, gameTitle, Media.MediaResolver.Front));
+        var backImg = LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Back" }));
+
+        // Spine source: preset resource / custom path / the game's Box - Spine scan (same rules as jewel).
+        string spineSpec = map != null && map.TryGetValue("FrontSpineImage", out var ss) ? ss : "";
+        System.Windows.Media.Imaging.BitmapSource? spine =
+            spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12))
+            : spineSpec.Length > 0 ? LoadBitmap(spineSpec)
+            : LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Spine" }));
+
+        var bg = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
+        if (front != null) bg = CornerAverage(front);
+        var grey = new DiffuseMaterial(new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69)));
+        Material frontMat = front != null ? FaceMaterial(front, System.Windows.Media.Stretch.Fill, 1000, 1000, bg) : grey;
+        Material backMat = backImg != null ? FaceMaterial(backImg, System.Windows.Media.Stretch.Fill, 1000, 1000, bg)
+                          : front != null ? frontMat : grey;
+        var tintG = new MaterialGroup();
+        tintG.Children.Add(new DiffuseMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xDE, 0x24, 0x26, 0x2C))));
+        tintG.Children.Add(new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x34, 0x96, 0x9B, 0xA0)), 18));
+
+        // Spine halves: left/right split; the left side of the case shows them rotated 180°.
+        Material Strip(System.Windows.Media.Imaging.BitmapSource? img)
+        {
+            var grid = new System.Windows.Controls.Grid { Width = 220, Height = 1000, Background = System.Windows.Media.Brushes.Transparent };
+            if (img != null)
+                grid.Children.Add(new System.Windows.Controls.Image { Source = img, Stretch = System.Windows.Media.Stretch.Fill,
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
+            return new DiffuseMaterial(new VisualBrush(grid) { Stretch = System.Windows.Media.Stretch.Fill });
+        }
+        System.Windows.Media.Imaging.BitmapSource? halfL = null, halfR = null, halfLr = null, halfRr = null;
+        if (spine != null)
+        {
+            int w = spine.PixelWidth, hw2 = w / 2;
+            halfL = new System.Windows.Media.Imaging.CroppedBitmap(spine, new System.Windows.Int32Rect(0, 0, hw2, spine.PixelHeight));
+            halfR = new System.Windows.Media.Imaging.CroppedBitmap(spine, new System.Windows.Int32Rect(w - hw2, 0, hw2, spine.PixelHeight));
+            halfLr = new System.Windows.Media.Imaging.TransformedBitmap(halfL, new System.Windows.Media.RotateTransform(180));
+            halfRr = new System.Windows.Media.Imaging.TransformedBitmap(halfR, new System.Windows.Media.RotateTransform(180));
+        }
+
+        var grp = new Model3DGroup();
+        void Quad(Material mat, (double x, double y, double z)[] p)
+        {
+            var mesh = new MeshGeometry3D();
+            var uv = new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) };
+            for (int i = 0; i < 4; i++)
+            {
+                mesh.Positions.Add(new Point3D(p[i].x, p[i].y, p[i].z));
+                mesh.TextureCoordinates.Add(new System.Windows.Point(uv[i].Item1, uv[i].Item2));
+            }
+            foreach (var ix in new[] { 3, 0, 2, 3, 1, 0 }) mesh.TriangleIndices.Add(ix);
+            grp.Children.Add(new GeometryModel3D { Geometry = mesh, Material = mat });
+        }
+        Quad(frontMat, new[] { (-0.493, 0.4265, 0.0573), (0.492, 0.4265, 0.0573), (-0.493, -0.4265, 0.0573), (0.492, -0.4265, 0.0573) });
+        Quad(tintG, new[] { (-0.489, 0.4195, 0.0466), (0.488, 0.4195, 0.0466), (-0.489, -0.4195, 0.0466), (0.488, -0.4195, 0.0466) });
+        Quad(backMat, new[] { (0.492, 0.4265, -0.0573), (-0.482, 0.4265, -0.0573), (0.492, -0.4265, -0.0573), (-0.482, -0.4265, -0.0573) });
+        Quad(tintG, new[] { (0.488, 0.4195, -0.0466), (-0.478, 0.4195, -0.0466), (0.488, -0.4195, -0.0466), (-0.478, -0.4195, -0.0466) });
+        // strips: v0 at -Y (bottom) — the dump's exact tables (u along z, v bottom→top)
+        Quad(Strip(halfLr), new[] { (-0.491, -0.4221, -0.0076), (-0.491, -0.4221, -0.0579), (-0.491, 0.4221, -0.0076), (-0.491, 0.4221, -0.0579) });
+        Quad(Strip(halfRr), new[] { (-0.491, -0.4221, 0.0579), (-0.491, -0.4221, 0.0076), (-0.491, 0.4221, 0.0579), (-0.491, 0.4221, 0.0076) });
+        Quad(Strip(halfL), new[] { (0.494, -0.4221, -0.0579), (0.494, -0.4221, -0.0076), (0.494, 0.4221, -0.0579), (0.494, 0.4221, -0.0076) });
+        Quad(Strip(halfR), new[] { (0.494, -0.4221, 0.0076), (0.494, -0.4221, 0.0579), (0.494, 0.4221, 0.0076), (0.494, 0.4221, 0.0579) });
+
+        // Plastic: clone the live model's plastic child group (the only Model3DGroup child).
+        foreach (var c in lbGroup.Children)
+            if (c is Model3DGroup sub) { grp.Children.Add(sub.Clone()); break; }
+        return grp;
+    }
+
+    // ── ITERATION 4b: LONG JEWEL CASE (Sega long box) — dump-exact structure:
+    //   4 insert quads: front art X[-0.2954..0.3376] Z=+0.055 (Grid 703.267×1000 transparent, BackMat grey),
+    //   back scan X±0.346 Z=-0.055 (Grid grey bg), left/right = Box - Spine scan bare-Image UNIFORM CENTERED
+    //   (natural size, not stretched) — no clear-logo strips on this type. Plastic = embedded LongJewelCaseObj
+    //   with Translate(0.056,-0.146,-0.04) → Scale(0.488) → Scale(1,1,1.459) (dump-verbatim).
+    private static Model3D? BuildLongJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform)
+    {
+        var plastic = LbCaseObj.Load("LongJewelCase");
+        if (plastic == null) return null;
+
+        var front = LoadBitmap(ResolveArt(platform, gameTitle, Media.MediaResolver.Front));
+        var backImg = LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Back" }));
+        var spineImg = LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Spine" }));
+
+        var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
+        var clear = System.Windows.Media.Colors.Transparent;
+        Material frontMat = front != null ? FaceMaterial(front, System.Windows.Media.Stretch.Fill, 703.2674123689327, 1000, clear)
+                                          : new DiffuseMaterial(new SolidColorBrush(grey));
+        Material backMat = backImg != null ? FaceMaterial(backImg, System.Windows.Media.Stretch.Fill, 703.2674123689327, 1000, grey)
+                                           : FaceMaterialNoImage(703.2674123689327, 1000, grey);
+        Material sideMat = spineImg != null
+            ? new DiffuseMaterial(new VisualBrush(new System.Windows.Controls.Image
+              { Source = spineImg, Stretch = System.Windows.Media.Stretch.Uniform,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center })
+              { Stretch = System.Windows.Media.Stretch.Fill })
+            : new DiffuseMaterial(new SolidColorBrush(grey));
+        var greySolid = new DiffuseMaterial(new SolidColorBrush(grey));
+
+        var grp = new Model3DGroup();
+        void Quad(Material mat, Material? back, (double x, double y, double z)[] p)
+        {
+            var mesh = new MeshGeometry3D();
+            var uv = new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) };
+            for (int i = 0; i < 4; i++)
+            {
+                mesh.Positions.Add(new Point3D(p[i].x, p[i].y, p[i].z));
+                mesh.TextureCoordinates.Add(new System.Windows.Point(uv[i].Item1, uv[i].Item2));
+            }
+            foreach (var ix in new[] { 3, 0, 2, 3, 1, 0 }) mesh.TriangleIndices.Add(ix);
+            grp.Children.Add(new GeometryModel3D { Geometry = mesh, Material = mat, BackMaterial = back });
+        }
+        Quad(frontMat, greySolid, new[] { (-0.2954, 0.491, 0.055), (0.3376, 0.491, 0.055), (-0.2954, -0.491, 0.055), (0.3376, -0.491, 0.055) });
+        Quad(backMat, greySolid, new[] { (0.346, 0.491, -0.055), (-0.346, 0.491, -0.055), (0.346, -0.491, -0.055), (-0.346, -0.491, -0.055) });
+        Quad(sideMat, null, new[] { (-0.346, 0.491, -0.055), (-0.346, 0.491, 0.055), (-0.346, -0.491, -0.055), (-0.346, -0.491, 0.055) });
+        Quad(sideMat, null, new[] { (0.3474, 0.491, 0.055), (0.3474, 0.491, -0.055), (0.3474, -0.491, 0.055), (0.3474, -0.491, -0.055) });
+
+        var tg = new Transform3DGroup();
+        tg.Children.Add(new TranslateTransform3D(0.056, -0.146, -0.04));
+        tg.Children.Add(new ScaleTransform3D(0.488, 0.488, 0.488));
+        tg.Children.Add(new ScaleTransform3D(1, 1, 1.459));
         grp.Children.Add(new Model3DGroup { Children = { plastic.Clone() }, Transform = tg });
         return grp;
     }

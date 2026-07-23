@@ -138,6 +138,12 @@ internal static class HostBoot
             Diag.ModelProbe.Dump(lbRootMd);
             return 0;
         }
+        // --model-defaults-extract [out.json]: freeze LB's per-platform 3D defaults to a JSON table.
+        if (args.Contains("--model-defaults-extract"))
+        {
+            Diag.ModelProbe.DefaultsExtract(Path.GetFullPath(Path.Combine(coreDir, "..")), GetArg(args, "--model-defaults-extract"));
+            return 0;
+        }
         // --hunt-regions: locate the core's hard-coded prioritized-region static (see ModelProbe.HuntRegions).
         if (args.Contains("--hunt-regions"))
         {

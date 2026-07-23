@@ -32,20 +32,36 @@ internal sealed class HomeModel3d : IDisposable
     public System.Windows.Forms.Control Control => _host;
     public Viewport3D Viewport => _viewport;
 
-    /// <summary>Mirror LB's model rotation — the SAME Transform3D INSTANCE LB animates is assigned to the home
-    /// model (RotateModel animates the rotation; a clone would snapshot identity at t=0). Both zones therefore
-    /// share the model-space rotation under fixed cameras/lights, like the real LaunchBox — including the
-    /// animation, in perfect sync.</summary>
-    public void SetModelTransform(Transform3D? t)
-    {
-        try { _modelHost.Transform = t; } catch { }
-    }
 
     private readonly System.Windows.Controls.Grid _root;
+
+    // ── AUTONOMOUS SCENE (no LaunchBox-core dependency) — constants dumped from the live FlowModel once:
+    //   camera  : PerspectiveCamera pos (0,0,2) look (0,0,-1) up (0,1,0) FOV 50, near 0.001, far 20
+    //   lights  : DirectionalLight #FFFFFFFF dir (0,-0.5,-1) + AmbientLight #FF333333
+    //   rotation: Transform3DGroup [ RotateY(AxisAngle 0,1,0), RotateX(AxisAngle 1,0,0) ] about the origin —
+    //             the exact structure LB's RotateModel maintains (whose parameters are 7.5°-units).
+    private readonly AxisAngleRotation3D _yawRot = new(new Vector3D(0, 1, 0), 0);
+    private readonly AxisAngleRotation3D _pitchRot = new(new Vector3D(1, 0, 0), 0);
+    private double _yawTarget, _pitchTarget;
 
     public HomeModel3d()
     {
         _viewport = new Viewport3D { ClipToBounds = true };
+        _viewport.Camera = new PerspectiveCamera
+        {
+            Position = new Point3D(0, 0, 2),
+            LookDirection = new Vector3D(0, 0, -1),
+            UpDirection = new Vector3D(0, 1, 0),
+            FieldOfView = 50,
+            NearPlaneDistance = 0.001,
+            FarPlaneDistance = 20,
+        };
+        _lightHost.Children.Add(new ModelVisual3D { Content = new DirectionalLight(System.Windows.Media.Color.FromRgb(0xFF, 0xFF, 0xFF), new Vector3D(0, -0.5, -1)) });
+        _lightHost.Children.Add(new ModelVisual3D { Content = new AmbientLight(System.Windows.Media.Color.FromRgb(0x33, 0x33, 0x33)) });
+        var tg = new Transform3DGroup();
+        tg.Children.Add(new RotateTransform3D(_yawRot));
+        tg.Children.Add(new RotateTransform3D(_pitchRot));
+        _modelHost.Transform = tg;
         _viewport.Children.Add(_lightHost);
         _viewport.Children.Add(_modelHost);
         // Wrap in a Grid WITH a Background so the WPF content is HIT-TESTABLE (a bare Viewport3D is transparent
@@ -54,6 +70,33 @@ internal sealed class HomeModel3d : IDisposable
         _root = new System.Windows.Controls.Grid { Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(28, 28, 30)) };
         _root.Children.Add(_viewport);
         _host = new ElementHost { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.FromArgb(28, 28, 30), Child = _root };
+    }
+
+    /// <summary>Animate the model rotation by the given degree deltas (own scene — no core involved).</summary>
+    public void OrbitBy(double dYawDeg, double dPitchDeg)
+    {
+        _yawTarget += dYawDeg;
+        _pitchTarget += dPitchDeg;
+        var ease = new System.Windows.Media.Animation.DoubleAnimation(_yawTarget, TimeSpan.FromMilliseconds(400)) { DecelerationRatio = 1 };
+        _yawRot.BeginAnimation(AxisAngleRotation3D.AngleProperty, ease);
+        var ease2 = new System.Windows.Media.Animation.DoubleAnimation(_pitchTarget, TimeSpan.FromMilliseconds(400)) { DecelerationRatio = 1 };
+        _pitchRot.BeginAnimation(AxisAngleRotation3D.AngleProperty, ease2);
+    }
+
+    /// <summary>Snap the pose to absolute angles (no animation) — used to re-sync with the oracle after LB
+    /// rebuilds its model (its pose resets). Harness-only; irrelevant without a live zone.</summary>
+    public void SetPose(double yawDeg, double pitchDeg)
+    {
+        _yawTarget = yawDeg; _pitchTarget = pitchDeg;
+        _yawRot.BeginAnimation(AxisAngleRotation3D.AngleProperty, null);
+        _pitchRot.BeginAnimation(AxisAngleRotation3D.AngleProperty, null);
+        _yawRot.Angle = yawDeg; _pitchRot.Angle = pitchDeg;
+    }
+
+    /// <summary>Zoom = camera distance multiplier on the own fixed camera.</summary>
+    public void SetZoom(double zoom)
+    {
+        if (_viewport.Camera is PerspectiveCamera pc) pc.Position = new Point3D(0, 0, 2 * zoom);
     }
 
     /// <summary>Reproduce LB's model in our viewport. Lights are always cloned from LB (until reproduced).
@@ -65,21 +108,10 @@ internal sealed class HomeModel3d : IDisposable
         try
         {
             _modelHost.Content = null;
-            _lightHost.Children.Clear();
             if (lb == null) return;
 
+            // Camera and lights are the zone's OWN (autonomous constants set in the ctor) — nothing cloned.
             var geom = lb.BuiltGeometry();
-            var (_, lights) = lb.Scene();
-
-            // Camera is owned by the shared OrbitController (not set here) so both zones stay in sync.
-            if (lights.Count > 0)
-                foreach (var l in lights) _lightHost.Children.Add(new ModelVisual3D { Content = (Model3D)l.Clone() });
-            else
-            {
-                _lightHost.Children.Add(new ModelVisual3D { Content = new AmbientLight(System.Windows.Media.Color.FromRgb(80, 80, 80)) });
-                _lightHost.Children.Add(new ModelVisual3D { Content = new DirectionalLight(System.Windows.Media.Color.FromRgb(220, 220, 220), new Vector3D(-1, -1, -3)) });
-            }
-
             if (geom == null) return;
             if (DumpStructure) DumpGroup(geom);
 

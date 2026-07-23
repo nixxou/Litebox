@@ -44,6 +44,49 @@ internal static class ModelDefaults
 
     private static Dictionary<string, string>? Resolve(string name, string scrape)
     {
+        // FROZEN TABLE first (embedded model-defaults.json, extracted from the core once per LB version via
+        // --model-defaults-extract over every Metadata-db platform name) — the core-independent path. The
+        // scrapeAs drives the preset match, the platform's own name is the fallback key (same semantics as
+        // GetDefaultSettings). Live reflection only when the table has no entry AND the core is present.
+        var table = FrozenTable();
+        if (table != null)
+        {
+            if (scrape.Length > 0 && table.TryGetValue(scrape, out var byScrape)) return new(byScrape, StringComparer.OrdinalIgnoreCase);
+            if (name.Length > 0 && table.TryGetValue(name, out var byName)) return new(byName, StringComparer.OrdinalIgnoreCase);
+            return null;   // authoritative when loaded — LB simply has no default for this platform
+        }
+        return ResolveViaCore(name, scrape);
+    }
+
+    private static Dictionary<string, Dictionary<string, string>>? _frozen;
+    private static bool _frozenTried;
+    private static Dictionary<string, Dictionary<string, string>>? FrozenTable()
+    {
+        if (_frozenTried) return _frozen;
+        _frozenTried = true;
+        try
+        {
+            using var s = typeof(ModelDefaults).Assembly.GetManifestResourceStream("LbApiHost.model-defaults.json");
+            if (s == null) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(s);
+            var t = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var plat in doc.RootElement.EnumerateObject())
+            {
+                var m = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var f in plat.Value.EnumerateObject()) m[f.Name] = f.Value.GetString() ?? "";
+                if (m.Count > 0) t[plat.Name] = m;
+            }
+            _frozen = t.Count > 0 ? t : null;
+            Console.WriteLine($"[modeldefaults] frozen table loaded ({t.Count} platforms)");
+        }
+        catch (Exception ex) { Console.WriteLine("[modeldefaults] frozen table: " + ex.Message); _frozen = null; }
+        return _frozen;
+    }
+
+    /// <summary>Live resolution through the core (reflection) — used by the extractor probe and as the
+    /// fallback when no frozen table is embedded.</summary>
+    internal static Dictionary<string, string>? ResolveViaCore(string name, string scrape)
+    {
         try
         {
             Init();

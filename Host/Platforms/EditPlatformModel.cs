@@ -480,7 +480,7 @@ internal static class EditPlatformModel
             var vp = live.Viewport; if (vp != null) orbit.Add(vp);           // register LB's viewport (idempotent)
             orbit.SeedFrom(live.Viewport?.Camera as System.Windows.Media.Media3D.ProjectionCamera, live.ModelBounds());
             orbit.Apply();                                                   // reassert the fixed camera post-redraw
-            orbit.ReapplyRotation();                                         // re-pose the fresh model + mirror home
+            orbit.SyncPose();                                                // snap home to the fresh live pose
             lastGeom = live.BuiltGeometry();
         }
         var watch = new System.Windows.Forms.Timer { Interval = 400 };
@@ -603,7 +603,7 @@ internal static class EditPlatformModel
             hm.Control.Dock = DockStyle.Fill;
             homeBox.Controls.Add(hm.Control);
             WireOrbit(hm.Control, orb);
-            orb.Add(hm.Viewport);
+            
         }
         else
             box.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "3D preview\n(core renderer unavailable)", ForeColor = SubFg, BackColor = GroupBody, TextAlign = ContentAlignment.MiddleCenter });
@@ -629,7 +629,7 @@ internal static class EditPlatformModel
             {
                 if (!wd) return;
                 var p = e.GetPosition(ui); double dx = p.X - wl.X, dy = p.Y - wl.Y; wl = p;
-                orbit.Orbit(-dx * 0.4, dy * 0.4);
+                orbit.Orbit(-dx / 15.0, dy / 15.0);
                 e.Handled = true;   // stop LB's FlowModel from also rotating on the same drag
             };
             ui.PreviewMouseWheel += (_, e) => { orbit.Zoom(e.Delta); e.Handled = true; };
@@ -637,7 +637,7 @@ internal static class EditPlatformModel
         bool dragging = false; int lx = 0, ly = 0;
         host.MouseDown += (_, e) => { dragging = true; lx = e.X; ly = e.Y; };
         host.MouseUp += (_, _) => dragging = false;
-        host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; orbit.Orbit(-dx * 0.4, dy * 0.4); };
+        host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; orbit.Orbit(-dx / 15.0, dy / 15.0); };
         host.MouseWheel += (_, e) => orbit.Zoom(e.Delta);
     }
 

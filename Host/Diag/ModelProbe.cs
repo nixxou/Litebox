@@ -260,6 +260,68 @@ internal static class ModelProbe
         try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, file), sb.ToString()); } catch { }
     }
 
+    /// <summary>--model-defaults-extract [out.json]: enumerate EVERY platform name (+ alternate names) from
+    /// LB's Metadata db and drive ModelSettings.GetDefaultSettings for each, serializing the non-null results
+    /// to a JSON table — the frozen, core-independent source ModelDefaults consults at runtime (the goal is a
+    /// LiteBox with NO LaunchBox-core dependency for the 3D preset chain).</summary>
+    public static void DefaultsExtract(string lbRoot, string? outPath)
+    {
+        outPath ??= Path.Combine(AppContext.BaseDirectory, "model-defaults.json");
+        var names = new List<string>();
+        try
+        {
+            var dbPath = Path.Combine(lbRoot, "Metadata", "LaunchBox.Metadata.db");
+            using var con = new Microsoft.Data.Sqlite.SqliteConnection(
+                new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly }.ToString());
+            con.Open();
+            foreach (var sql in new[] { "SELECT Name FROM Platforms", "SELECT Alternate FROM PlatformAlternateNames" })
+                try
+                {
+                    using var cmd = con.CreateCommand();
+                    cmd.CommandText = sql;
+                    using var r = cmd.ExecuteReader();
+                    while (r.Read()) if (!r.IsDBNull(0)) names.Add(r.GetString(0));
+                }
+                catch (Exception ex) { Console.WriteLine("[model-extract] " + sql + " → " + ex.Message); }
+        }
+        catch (Exception ex) { Console.WriteLine("[model-extract] metadata db: " + ex.Message); return; }
+        Console.WriteLine($"[model-extract] {names.Count} platform names");
+
+        var table = new SortedDictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        int hits = 0;
+        foreach (var n in names.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var map = ModelProbeDefaultsBridge(n);
+            if (map == null) continue;
+            table[n] = map;
+            hits++;
+        }
+        Console.WriteLine($"[model-extract] {hits} platforms with hardcoded defaults");
+
+        var sb = new StringBuilder();
+        sb.AppendLine("{");
+        bool firstP = true;
+        foreach (var kv in table)
+        {
+            if (!firstP) sb.AppendLine(",");
+            firstP = false;
+            sb.Append("  \"").Append(J(kv.Key)).Append("\": { ");
+            sb.Append(string.Join(", ", kv.Value.OrderBy(f => f.Key, StringComparer.Ordinal)
+                .Select(f => "\"" + J(f.Key) + "\": \"" + J(f.Value) + "\"")));
+            sb.Append(" }");
+        }
+        sb.AppendLine();
+        sb.AppendLine("}");
+        File.WriteAllText(outPath, sb.ToString());
+        Console.WriteLine("[model-extract] wrote " + outPath);
+    }
+
+    private static string J(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    // Resolve through the SAME conversion ModelDefaults uses (reflection call, colors → signed ARGB).
+    private static Dictionary<string, string>? ModelProbeDefaultsBridge(string name)
+        => Platforms.ModelDefaults.ResolveViaCore(name, name);
+
     /// <summary>--hunt-regions: scan every static field of the core assemblies for the hard-coded prioritized-
     /// region list ("World, North America, …") — locates the (obfuscated) static the 3D preview's art resolution
     /// actually uses, so CoreModelHost can overwrite it with the user's RegionPriorities.</summary>

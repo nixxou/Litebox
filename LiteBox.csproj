@@ -167,6 +167,11 @@
          feature is useless without it. Deployed into <RetroArch>\system\fbneo\ when that option is enabled
          (Host/Mame/FbneoHiscore.cs). -->
     <EmbeddedResource Include="thirdparty\hiscore.dat"><LogicalName>natives/fbneo-hiscore.dat</LogicalName></EmbeddedResource>
+    <!-- LaunchBox's hardcoded per-platform 3D model defaults, FROZEN to a table (41 platforms) so the preset
+         chain needs NO LaunchBox core at runtime. Regenerate per LB version: LiteBox.exe
+         [dash][dash]model-defaults-extract <thisfile>  (enumerates every Metadata-db platform name + alternates
+         and drives ModelSettings.GetDefaultSettings once per name). ModelDefaults.cs reads it. -->
+    <EmbeddedResource Include="model-defaults.json"><LogicalName>LbApiHost.model-defaults.json</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- Native payload. Embedded as resources ONLY for the STANDALONE build ($(LiteBoxDist)=standalone); the

@@ -99,17 +99,42 @@ internal static class LbCaseObj
 
     private static string? ReadResourceString(string key)
     {
+        // LiteBox's OWN shipped copy first (case-assets/<key>.txt — no LaunchBox needed at runtime).
+        try
+        {
+            using var s = typeof(LbCaseObj).Assembly.GetManifestResourceStream("case-assets/" + key + ".txt");
+            if (s != null) { using var r = new System.IO.StreamReader(s); return r.ReadToEnd(); }
+        }
+        catch { }
         lock (_cache) { EnsureResources(); return _resEntries!.TryGetValue(key, out var v) ? v : null; }
     }
 
-    /// <summary>Embedded spine-preset image by entry name (e.g. "Sony Playstation - NA"); exact key first, then
-    /// " - NA" / " - EU" variants (Auto-Detect approximation — LB detects from the game's region). Null if none.</summary>
+    /// <summary>Spine-preset image by entry name (e.g. "Sony Playstation - NA"); exact key first, then the
+    /// regional variants (Auto-Detect approximation — LB detects from the game's region). Sources: LiteBox's
+    /// OWN shipped copies (case-assets/<name>.png) first, then LB's dll bundle as fallback. Null if none.</summary>
     public static System.Windows.Media.Imaging.BitmapSource? SpineImage(string name)
     {
+        var candidates = new[] { name, name + " - NA", name + " - EU", name + " - NA Black", name + " - NA White" };
+        foreach (var k in candidates)
+            try
+            {
+                using var s = typeof(LbCaseObj).Assembly.GetManifestResourceStream("case-assets/" + k + ".png");
+                if (s != null)
+                {
+                    var bi = new System.Windows.Media.Imaging.BitmapImage();
+                    bi.BeginInit();
+                    bi.StreamSource = s;
+                    bi.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    bi.EndInit();
+                    bi.Freeze();
+                    return bi;
+                }
+            }
+            catch { }
         lock (_cache)
         {
             EnsureResources();
-            foreach (var k in new[] { name, name + " - NA", name + " - EU" })
+            foreach (var k in candidates)
                 if (_resImages!.TryGetValue(k, out var raw) && raw != null)
                     return DecodeImage(raw);
             return null;

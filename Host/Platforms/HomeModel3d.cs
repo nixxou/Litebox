@@ -145,13 +145,31 @@ internal sealed class HomeModel3d : IDisposable
     // Dims still read from LB's built bounds (the oracle); own sizing rules come with the full re-implementation.
     // TODO: non-zero per-side rotations; UseFullScanImages wrap mode; LB's decode sizing (h=600 / logo w=206 —
     // only affects texture sharpness).
+    // ── AUTONOMOUS DIMS (probe-derived rules — nothing read from the live model) ──
+    //   forced ModelSizeString "w;h;d" → used directly. Else the art aspect a = W/H of the decoded front:
+    //   W = min(1, a), H = min(1, 1/a); no art → LB's placeholder aspect 0.766 (W .766, H 1).
+    //   Depth: box = 0.143 (constant, all observations); dvd = W×(spineW/frontW) when a spine scan exists,
+    //   else defaultD(0.065)×H. Full-scan box: spinePx = FullImageSpineWidth×sheetW, D = spinePx/sheetH,
+    //   panel = (sheetW−spinePx)/2, W/H from panel aspect (landscape flag rotates the panel).
+    private static (double w, double h, double d) BoxDims(System.Collections.Generic.Dictionary<string, string>? map,
+                                                          System.Windows.Media.Imaging.BitmapSource? front, double defaultD)
+    {
+        if (map != null && map.TryGetValue("ModelSizeString", out var mss) && !string.IsNullOrWhiteSpace(mss))
+        {
+            var p = mss.Split(';', ',');
+            if (p.Length == 3
+                && double.TryParse(p[0], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var fw)
+                && double.TryParse(p[1], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var fh)
+                && double.TryParse(p[2], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var fd))
+                return (fw, fh, fd);
+        }
+        double a = front != null && front.PixelHeight > 0 ? (double)front.PixelWidth / front.PixelHeight : 0.766;
+        return (Math.Min(1, a), Math.Min(1, 1 / a), defaultD);
+    }
+
     private static Model3D? BuildBox(Model3DGroup lb, System.Collections.Generic.Dictionary<string, string>? map,
                                      string? gameTitle, string? platform)
     {
-        var b = lb.Bounds;
-        if (b.IsEmpty) return null;
-        double hw = b.SizeX / 2, hh = b.SizeY / 2, hd = b.SizeZ / 2;
-
         string? frontPath = ResolveArt(platform, gameTitle, Media.MediaResolver.Front);
         string? logoPath = ResolveArt(platform, gameTitle, Media.MediaResolver.ClearLogo);
         string? spinePath = ResolveArt(platform, gameTitle, new[] { "Box - Spine" });
@@ -169,6 +187,27 @@ internal sealed class HomeModel3d : IDisposable
         // the full scan's corner-average. (Flag off → Box - Full is ignored entirely.)
         bool fullScanFlag = map != null && map.TryGetValue("UseFullScanImages", out var ufs) && ufs.Equals("true", StringComparison.OrdinalIgnoreCase);
         var fullImg = fullScanFlag && spine == null ? LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Full" })) : null;
+
+        // Dims (autonomous — nothing read from the live model): full-scan mode derives them from the sheet
+        // (spinePx = FullImageSpineWidth×sheetW; D = spinePx/sheetH; panel aspect rotated by the landscape
+        // flag), else BoxDims (forced size / art aspect / placeholder), box depth constant 0.143.
+        double W, H, D;
+        if (fullImg != null && (map == null || !map.ContainsKey("ModelSizeString")))
+        {
+            double spineFrac = 0.143;
+            if (map != null && map.TryGetValue("FullImageSpineWidth", out var fsw))
+                double.TryParse(fsw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out spineFrac);
+            bool landscape = map != null && map.TryGetValue("FullScanIsLandscape", out var fsl) && fsl.Equals("true", StringComparison.OrdinalIgnoreCase);
+            double sheetW = fullImg.PixelWidth, sheetH = Math.Max(1, fullImg.PixelHeight);
+            double spinePx = spineFrac * sheetW;
+            double panel = Math.Max(1, (sheetW - spinePx) / 2);
+            double a = landscape ? sheetH / panel : panel / sheetH;
+            W = Math.Min(1, a); H = Math.Min(1, 1 / a);
+            D = spinePx / sheetH;
+        }
+        else
+            (W, H, D) = BoxDims(map, front, 0.143);
+        double hw = W / 2, hh = H / 2, hd = D / 2;
 
         // Case colour: CoverColor option (signed-ARGB string), else corner average of the art (full scan in
         // full-scan mode, front otherwise).
@@ -189,7 +228,7 @@ internal sealed class HomeModel3d : IDisposable
                   HorizontalAlignment = align, VerticalAlignment = System.Windows.VerticalAlignment.Stretch });
                 return new DiffuseMaterial(new VisualBrush(g) { Stretch = System.Windows.Media.Stretch.Fill });
             }
-            double gW = b.SizeX * 1000, gH = b.SizeY * 1000, gD = b.SizeZ * 1000;
+            double gW = W * 1000, gH = H * 1000, gD = D * 1000;
             var fFront = Slice(System.Windows.HorizontalAlignment.Right, gW, gH);
             var fBack = Slice(System.Windows.HorizontalAlignment.Left, gW, gH);
             var fSide = Slice(System.Windows.HorizontalAlignment.Center, gD, gH);
@@ -217,8 +256,8 @@ internal sealed class HomeModel3d : IDisposable
             return grpF;
         }
 
-        var frontMat = front != null ? FaceMaterial(front, System.Windows.Media.Stretch.Fill, b.SizeX * 1000, b.SizeY * 1000, caseColor) : solid;
-        var logoMat = logo != null ? FaceMaterial(logo, System.Windows.Media.Stretch.Uniform, b.SizeX * 1000, b.SizeZ * 1000, caseColor) : solid;
+        var frontMat = front != null ? FaceMaterial(front, System.Windows.Media.Stretch.Fill, W * 1000, H * 1000, caseColor) : solid;
+        var logoMat = logo != null ? FaceMaterial(logo, System.Windows.Media.Stretch.Uniform, W * 1000, D * 1000, caseColor) : solid;
         Material spineMat = spine != null ? SpineFaceMaterial(spine) : solid;
         Material backFace = back != null ? new DiffuseMaterial(new ImageBrush(back) { Stretch = System.Windows.Media.Stretch.Fill }) : solid;
 
@@ -253,8 +292,8 @@ internal sealed class HomeModel3d : IDisposable
             bool isSide = slot == 0 || slot == 2;   // left/right (vs top/bottom)
             if (spineRots[slot] is int sr && spine != null) return (RotSpine(sr), true);
             if (logoRots[slot] is int lr && logo != null)
-                return isSide ? (RotLogo(SideLogoRot(lr), b.SizeX * 1000, b.SizeZ * 1000), false)
-                              : (lr == 0 ? (logoMat, true) : (RotLogo(lr, b.SizeX * 1000, b.SizeZ * 1000), true));
+                return isSide ? (RotLogo(SideLogoRot(lr), W * 1000, D * 1000), false)
+                              : (lr == 0 ? (logoMat, true) : (RotLogo(lr, W * 1000, D * 1000), true));
             return (solid, true);
         }
 
@@ -548,9 +587,20 @@ internal sealed class HomeModel3d : IDisposable
         Quad(Strip(halfL), new[] { (0.494, -0.4221, -0.0579), (0.494, -0.4221, -0.0076), (0.494, 0.4221, -0.0579), (0.494, 0.4221, -0.0076) });
         Quad(Strip(halfR), new[] { (0.494, -0.4221, 0.0076), (0.494, -0.4221, 0.0579), (0.494, 0.4221, 0.0076), (0.494, 0.4221, 0.0579) });
 
-        // Plastic: clone the live model's plastic child group (the only Model3DGroup child).
-        foreach (var c in lbGroup.Children)
-            if (c is Model3DGroup sub) { grp.Children.Add(sub.Clone()); break; }
+        // Plastic: LiteBox's SHIPPED DoubleJewelCase model (exported once from the live scene — LB builds this
+        // one procedurally, no embedded resource exists). Fallback: clone the live model's plastic child group.
+        var shipped = LbCaseObj.Load("DoubleJewelCase");
+        if (shipped != null) grp.Children.Add(shipped.Clone());
+        else
+            foreach (var c in lbGroup.Children)
+                if (c is Model3DGroup sub) { grp.Children.Add(sub.Clone()); break; }
+
+        // One-shot exporter (env LB_EXPORT_DJ=<dir>): serialize the LIVE plastic to obj/mtl in LB's dialect
+        // (4-component Kd = alpha; transforms baked into the vertices) → files to ship in case-assets/.
+        var exportDir = Environment.GetEnvironmentVariable("LB_EXPORT_DJ");
+        if (!string.IsNullOrEmpty(exportDir))
+            foreach (var c in lbGroup.Children)
+                if (c is Model3DGroup sub) { ExportPlasticObj(sub, exportDir!, "DoubleJewelCase"); break; }
         return grp;
     }
 
@@ -639,6 +689,36 @@ internal sealed class HomeModel3d : IDisposable
         { ["CaseColor"] = $"{caseColor.R / 255.0:0.###} {caseColor.G / 255.0:0.###} {caseColor.B / 255.0:0.###}" });
         if (obj == null) return null;
 
+        // FULL-SCAN MODE (same arbiter as the box: spine scan wins; no spine + Box - Full + flag → sheet mode):
+        // the WHOLE sheet becomes a plain ImageBrush on the wrap mesh (its authored UVs already lay out
+        // back|spine|front), plastic keeps the case colour. Dims: W=min(1,panel/sheetH), H=min(1,sheetH/panel),
+        // D=spinePx/sheetH with spinePx=FullImageSpineWidth×sheetW (the dvd ignores the landscape flag).
+        bool fullFlag = map != null && map.TryGetValue("UseFullScanImages", out var ufs2) && ufs2.Equals("true", StringComparison.OrdinalIgnoreCase);
+        var sheet = fullFlag && spineImg == null ? LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Full" })) : null;
+        if (sheet != null)
+        {
+            var wrapSheet = new DiffuseMaterial(new ImageBrush(sheet) { Stretch = System.Windows.Media.Stretch.Fill });
+            var grpS = new Model3DGroup();
+            var cloneS = (Model3DGroup)obj.Clone();
+            for (int i = 0; i < cloneS.Children.Count && i < names.Count; i++)
+                if (names[i].Length == 0 && cloneS.Children[i] is GeometryModel3D gms)
+                { gms.Material = wrapSheet; gms.BackMaterial = wrapSheet; }
+            foreach (var c in cloneS.Children) grpS.Children.Add(c.Clone());
+
+            double spineFrac2 = 0.143;
+            if (map != null && map.TryGetValue("FullImageSpineWidth", out var fsw2))
+                double.TryParse(fsw2, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out spineFrac2);
+            double shW = sheet.PixelWidth, shH = Math.Max(1, sheet.PixelHeight);
+            double spx = spineFrac2 * shW;
+            double pan = Math.Max(1, (shW - spx) / 2);
+            double a2 = pan / shH;
+            double W2 = Math.Min(1, a2), H2 = Math.Min(1, 1 / a2), D2 = spx / shH;
+            var bs = cloneS.Bounds;
+            if (bs.SizeX > 0 && bs.SizeY > 0 && bs.SizeZ > 0)
+                grpS.Transform = new ScaleTransform3D(W2 / bs.SizeX, H2 / bs.SizeY, D2 / bs.SizeZ);
+            return grpS;
+        }
+
         // Compose the wrap sheet exactly like LB: 3 auto columns [back|spine|front], images normalized to
         // height 600 (LB's decode convention). A missing image adds NO element — its column collapses to zero
         // width, exactly like LB's grid. Spine column: the scan when present (and enabled), else the CLEAR LOGO
@@ -679,9 +759,103 @@ internal sealed class HomeModel3d : IDisposable
             { gm.Material = wrapMat; gm.BackMaterial = wrapMat; }
         foreach (var c in clone.Children) grp.Children.Add(c.Clone());
 
-        // LB's art-aspect-derived Scale, borrowed from the live group (the oracle).
-        grp.Transform = lbGroup.Transform?.Clone() as Transform3D;
+        // AUTONOMOUS scale (probe-derived; nothing read from the live model): the obj is normalized so that
+        // final W = min(1, art aspect), H = min(1, 1/aspect); depth D = W × (spineW/frontW of the DECODED
+        // scans) when a spine scan exists, else defaultD(0.065) × H. Forced ModelSizeString wins outright.
+        var (W, H, D) = BoxDims(map, front, 0.065);
+        bool forced = map != null && map.ContainsKey("ModelSizeString");
+        if (!forced)
+        {
+            if (spineImg != null && front != null && spineImg.PixelHeight > 0 && front.PixelHeight > 0)
+            {
+                // spineW/frontW at LB's common decode height (aspect ratios — size-invariant).
+                double spineAspect = (double)spineImg.PixelWidth / spineImg.PixelHeight;
+                double frontAspect = (double)front.PixelWidth / front.PixelHeight;
+                D = W * (spineAspect / frontAspect);
+            }
+            else
+                D = 0.065 * H;
+        }
+        var bounds = clone.Bounds;
+        if (bounds.SizeX > 0 && bounds.SizeY > 0 && bounds.SizeZ > 0)
+            grp.Transform = new ScaleTransform3D(W / bounds.SizeX, H / bounds.SizeY, D / bounds.SizeZ);
         return grp;
+    }
+
+    // Serialize a Model3DGroup of GeometryModel3D segments to Wavefront OBJ+MTL text in LB's dialect
+    // (4-component Kd = alpha r g b for translucents; Ks + Ns from the specular). Transforms (group × segment)
+    // are BAKED into the vertices so the shipped model needs no external transform. Written as
+    // <baseName>Obj.txt / <baseName>Mtl.txt — drop them into case-assets/ to ship.
+    private static void ExportPlasticObj(Model3DGroup group, string outDir, string baseName)
+    {
+        try
+        {
+            var obj = new System.Text.StringBuilder();
+            var mtl = new System.Text.StringBuilder();
+            obj.AppendLine("# exported from the live LaunchBox scene by LiteBox (bake: group+segment transforms)");
+            obj.AppendLine("mtllib " + baseName + ".mtl");
+            int vBase = 1, tBase = 1, nBase = 1, seg = 0;
+            var groupM = group.Transform?.Value ?? Matrix3D.Identity;
+            foreach (var c in group.Children)
+            {
+                if (c is not GeometryModel3D gm || gm.Geometry is not MeshGeometry3D mesh) continue;
+                var m = (gm.Transform?.Value ?? Matrix3D.Identity) * groupM;
+                string matName = "seg" + seg;
+                // material: MaterialGroup [Diffuse + Specular] (or bare Diffuse)
+                System.Windows.Media.Color kd = System.Windows.Media.Color.FromRgb(0x80, 0x80, 0x80), ks = System.Windows.Media.Color.FromRgb(0, 0, 0);
+                double ns = 250, kdOpacity = 1;
+                void Scan(Material? mat)
+                {
+                    switch (mat)
+                    {
+                        case MaterialGroup mg: foreach (var mm in mg.Children) Scan(mm); break;
+                        // Brush.Opacity is how LB makes the double-jewel shell translucent (the COLOUR alpha
+                        // stays FF) — fold it into the exported Kd alpha or the shipped shell renders opaque.
+                        case DiffuseMaterial dm when dm.Brush is SolidColorBrush sb: kd = sb.Color; kdOpacity = sb.Opacity; break;
+                        case SpecularMaterial sm when sm.Brush is SolidColorBrush sb2: ks = sb2.Color; ns = sm.SpecularPower; break;
+                    }
+                }
+                Scan(gm.Material);
+                double alpha = kd.A / 255.0 * kdOpacity;
+                mtl.AppendLine("newmtl " + matName);
+                mtl.AppendLine("Ns " + ns.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                mtl.AppendLine(alpha >= 0.999
+                    ? $"Kd {kd.R / 255.0:0.######} {kd.G / 255.0:0.######} {kd.B / 255.0:0.######}"
+                    : $"Kd {alpha:0.######} {kd.R / 255.0:0.######} {kd.G / 255.0:0.######} {kd.B / 255.0:0.######}")
+                   .AppendLine($"Ks {ks.R / 255.0:0.######} {ks.G / 255.0:0.######} {ks.B / 255.0:0.######}")
+                   .AppendLine("d 1.0").AppendLine();
+                obj.AppendLine("o " + matName);
+                obj.AppendLine("usemtl " + matName);
+                foreach (var p0 in mesh.Positions)
+                {
+                    var p = m.Transform(p0);
+                    obj.AppendLine($"v {p.X:0.######} {p.Y:0.######} {p.Z:0.######}");
+                }
+                foreach (var uv in mesh.TextureCoordinates)
+                    obj.AppendLine($"vt {uv.X:0.######} {1 - uv.Y:0.######}");   // parser flips back
+                foreach (var n0 in mesh.Normals)
+                {
+                    var n = m.Transform(n0); n.Normalize();
+                    obj.AppendLine($"vn {n.X:0.######} {n.Y:0.######} {n.Z:0.######}");
+                }
+                bool hasT = mesh.TextureCoordinates.Count == mesh.Positions.Count;
+                bool hasN = mesh.Normals.Count == mesh.Positions.Count;
+                for (int i = 0; i + 2 < mesh.TriangleIndices.Count; i += 3)
+                {
+                    string F(int ix) => (vBase + ix) + "/" + (hasT ? (tBase + ix).ToString() : "") + "/" + (hasN ? (nBase + ix).ToString() : "");
+                    obj.AppendLine($"f {F(mesh.TriangleIndices[i])} {F(mesh.TriangleIndices[i + 1])} {F(mesh.TriangleIndices[i + 2])}");
+                }
+                vBase += mesh.Positions.Count;
+                tBase += hasT ? mesh.TextureCoordinates.Count : 0;
+                nBase += hasN ? mesh.Normals.Count : 0;
+                seg++;
+            }
+            System.IO.Directory.CreateDirectory(outDir);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(outDir, baseName + "Obj.txt"), obj.ToString());
+            System.IO.File.WriteAllText(System.IO.Path.Combine(outDir, baseName + "Mtl.txt"), mtl.ToString());
+            Console.WriteLine($"[homemodel] exported {baseName} plastic ({seg} segments) -> {outDir}");
+        }
+        catch (Exception ex) { Console.WriteLine("[homemodel] export dj: " + ex.Message); }
     }
 
     // Grey-grid face (the insert back when no back image): brush = empty Grid with a solid background — kept as

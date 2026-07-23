@@ -145,6 +145,24 @@ internal static class CoreModelHost
             if (p?.SetMethod == null) continue;
             try { p.SetValue(s, Convert(kv.Value, p.PropertyType)); } catch { }
         }
+        // The RENDERER reads ModelSize (Nullable<Vector3D-ish>), not ModelSizeString — without this, "Force
+        // Model Size" silently never reached the core (probe-verified).
+        if (map.TryGetValue("ModelSizeString", out var mss) && !string.IsNullOrWhiteSpace(mss))
+            try
+            {
+                var parts = mss.Split(';', ',');
+                if (parts.Length == 3
+                    && double.TryParse(parts[0], NumberStyles.Any, CultureInfo.InvariantCulture, out var w)
+                    && double.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var h)
+                    && double.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out var d))
+                {
+                    var mp = _msType.GetProperty("ModelSize", BindingFlags.Public | BindingFlags.Instance);
+                    var inner = mp != null ? Nullable.GetUnderlyingType(mp.PropertyType) ?? mp.PropertyType : null;
+                    if (mp?.SetMethod != null && inner != null)
+                        mp.SetValue(s, Activator.CreateInstance(inner, w, h, d));
+                }
+            }
+            catch { }
         return s;
     }
 

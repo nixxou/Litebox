@@ -172,6 +172,10 @@
          [dash][dash]model-defaults-extract <thisfile>  (enumerates every Metadata-db platform name + alternates
          and drives ModelSettings.GetDefaultSettings once per name). ModelDefaults.cs reads it. -->
     <EmbeddedResource Include="model-defaults.json"><LogicalName>LbApiHost.model-defaults.json</LogicalName></EmbeddedResource>
+    <!-- The 3D case models (.obj/.mtl as .txt) + jewel spine preset images, extracted ONCE from LaunchBox's
+         JewelCaseSpines.resources (LiteBox.exe [dash][dash]model-export) and SHIPPED (user-approved) so the 3D
+         renderer needs no LaunchBox dll at runtime. LbCaseObj reads these first, LB dll = fallback. -->
+    <EmbeddedResource Include="case-assets\**"><LogicalName>case-assets/%(Filename)%(Extension)</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- Native payload. Embedded as resources ONLY for the STANDALONE build ($(LiteBoxDist)=standalone); the

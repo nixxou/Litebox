@@ -63,10 +63,12 @@ internal static class ModelProbe
                     var rt = ext.GetType("System.Resources.Extensions.DeserializingResourceReader")!;
                     var reader = Activator.CreateInstance(rt, s);
                     var en = (System.Collections.IDictionaryEnumerator)rt.GetMethod("GetEnumerator", Type.EmptyTypes)!.Invoke(reader, null)!;
+                    bool spineBundle = r.IndexOf("JewelCaseSpines", StringComparison.OrdinalIgnoreCase) >= 0;
                     while (en.MoveNext())
                     {
                         string key = en.Key?.ToString() ?? "";
-                        bool want = wanted.IsMatch(key)
+                        bool want = spineBundle
+                                    || wanted.IsMatch(key)
                                     || key.IndexOf("case", StringComparison.OrdinalIgnoreCase) >= 0
                                     || key.IndexOf("cart", StringComparison.OrdinalIgnoreCase) >= 0;
                         if (!want) { Console.WriteLine($"[export]   entry: {key}"); continue; }
@@ -79,7 +81,8 @@ internal static class ModelProbe
                         if (v is byte[] bytes) File.WriteAllBytes(dst, bytes);
                         else if (v is string str) File.WriteAllText(dst, str);
                         else if (v is Stream stream) { using var f = File.Create(dst); stream.CopyTo(f); }
-                        else continue;
+                        else if (v is System.Drawing.Bitmap bmp) { dst += ".png"; bmp.Save(dst, System.Drawing.Imaging.ImageFormat.Png); }
+                        else { Console.WriteLine($"[export]   (unhandled value type {vt})"); continue; }
                         Console.WriteLine($"[export]   -> {dst}");
                         n++;
                     }

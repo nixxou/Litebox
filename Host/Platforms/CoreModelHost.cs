@@ -233,6 +233,19 @@ internal static class CoreModelHost
                 var settings = BuildSettings(settingsMap);
                 var game = MakeGame(gameTitle, platform);
                 if (settings == null || game == null) return;
+                if (Environment.GetEnvironmentVariable("LB_TRACE_METHODS") == "1")
+                    foreach (var mi in game.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                        if (mi.Name.IndexOf("Image", StringComparison.OrdinalIgnoreCase) >= 0 || mi.Name.IndexOf("Full", StringComparison.OrdinalIgnoreCase) >= 0 || mi.Name.IndexOf("Scan", StringComparison.OrdinalIgnoreCase) >= 0)
+                            Console.WriteLine($"[model3d] game::{mi.Name}({string.Join(",", mi.GetParameters().Select(p => p.ParameterType.Name))}) : {mi.ReturnType.Name}");
+                if (Environment.GetEnvironmentVariable("LB_TRACE_FULL") == "1")
+                    foreach (var ty in new[] { "Box - Full", "Box - Full - Reconstructed" })
+                        try
+                        {
+                            var m1 = game.GetType().GetMethod("GetImageFilePathsForAllRegions", new[] { typeof(string) });
+                            var r1 = m1?.Invoke(game, new object?[] { ty }) as string[];
+                            Console.WriteLine($"[model3d] GetImageFilePathsForAllRegions(\"{ty}\") = [{string.Join(" | ", r1 ?? Array.Empty<string>())}]");
+                        }
+                        catch (Exception ex) { Console.WriteLine($"[model3d] full-scan probe {ty}: {ex.InnerException?.Message ?? ex.Message}"); }
                 if (Environment.GetEnvironmentVariable("LB_TRACE_ART") == "1")
                     foreach (var pp in game.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
                         if (pp.Name.IndexOf("Path", StringComparison.OrdinalIgnoreCase) >= 0 && pp.PropertyType == typeof(string) && pp.GetIndexParameters().Length == 0)

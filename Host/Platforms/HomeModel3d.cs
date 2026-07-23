@@ -162,12 +162,60 @@ internal sealed class HomeModel3d : IDisposable
         var spine = LoadBitmap(spinePath);
         var back = LoadBitmap(backPath);
 
-        // Case colour: CoverColor option (signed-ARGB string), else corner average of the front art.
+        // FULL-SCAN MODE (probe-decoded priority): when UseFullScanImages is on, the game's SPINE SCAN is the
+        // arbiter — a spine scan forces the composed per-face mode; with NO spine scan and a Box - Full image
+        // present, LB slices the SINGLE full sheet by ALIGNMENT CROPPING: every textured face gets the whole
+        // image UniformToFill — front hAlign=Right, back hAlign=Left, sides hAlign=Center — and top/bottom are
+        // the full scan's corner-average. (Flag off → Box - Full is ignored entirely.)
+        bool fullScanFlag = map != null && map.TryGetValue("UseFullScanImages", out var ufs) && ufs.Equals("true", StringComparison.OrdinalIgnoreCase);
+        var fullImg = fullScanFlag && spine == null ? LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Full" })) : null;
+
+        // Case colour: CoverColor option (signed-ARGB string), else corner average of the art (full scan in
+        // full-scan mode, front otherwise).
         var caseColor = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
         if (map != null && map.TryGetValue("CoverColor", out var cc) && int.TryParse(cc, out var argb))
             caseColor = System.Windows.Media.Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
+        else if (fullImg != null) caseColor = CornerAverage(fullImg);
         else if (front != null) caseColor = CornerAverage(front);
         var solid = new DiffuseMaterial(new SolidColorBrush(caseColor));
+
+        if (fullImg != null)
+        {
+            Material Slice(System.Windows.HorizontalAlignment align, double gw, double gh)
+            {
+                var g = new System.Windows.Controls.Grid { Width = gw, Height = gh, Background = new SolidColorBrush(caseColor), ClipToBounds = true };
+                g.Children.Add(new System.Windows.Controls.Image
+                { Source = fullImg, Stretch = System.Windows.Media.Stretch.UniformToFill,
+                  HorizontalAlignment = align, VerticalAlignment = System.Windows.VerticalAlignment.Stretch });
+                return new DiffuseMaterial(new VisualBrush(g) { Stretch = System.Windows.Media.Stretch.Fill });
+            }
+            double gW = b.SizeX * 1000, gH = b.SizeY * 1000, gD = b.SizeZ * 1000;
+            var fFront = Slice(System.Windows.HorizontalAlignment.Right, gW, gH);
+            var fBack = Slice(System.Windows.HorizontalAlignment.Left, gW, gH);
+            var fSide = Slice(System.Windows.HorizontalAlignment.Center, gD, gH);
+            var grpF = new Model3DGroup();
+            void QuadF(Material mat, (double x, double y, double z)[] p, (double u, double v)[] uv, int[] tris)
+            {
+                var mesh = new MeshGeometry3D();
+                for (int i = 0; i < 4; i++)
+                {
+                    mesh.Positions.Add(new Point3D(p[i].x, p[i].y, p[i].z));
+                    mesh.TextureCoordinates.Add(new System.Windows.Point(uv[i].u, uv[i].v));
+                }
+                foreach (var ix in tris) mesh.TriangleIndices.Add(ix);
+                grpF.Children.Add(new GeometryModel3D { Geometry = mesh, Material = mat });
+            }
+            var up4 = new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) };
+            int[] TF = { 3, 0, 2, 3, 1, 0 };
+            QuadF(solid, new[] { (-hw, hh, -hd), (hw, hh, -hd), (-hw, hh, hd), (hw, hh, hd) }, up4, TF);
+            QuadF(solid, new[] { (-hw, -hh, -hd), (hw, -hh, -hd), (-hw, -hh, hd), (hw, -hh, hd) },
+                  new[] { (0d, 1d), (1d, 1d), (0d, 0d), (1d, 0d) }, new[] { 3, 2, 0, 3, 0, 1 });
+            QuadF(fFront, new[] { (-hw, hh, hd), (hw, hh, hd), (-hw, -hh, hd), (hw, -hh, hd) }, up4, TF);
+            QuadF(fBack, new[] { (hw, hh, -hd), (-hw, hh, -hd), (hw, -hh, -hd), (-hw, -hh, -hd) }, up4, TF);
+            QuadF(fSide, new[] { (-hw, hh, -hd), (-hw, hh, hd), (-hw, -hh, -hd), (-hw, -hh, hd) }, up4, TF);
+            QuadF(fSide, new[] { (hw, hh, hd), (hw, hh, -hd), (hw, -hh, hd), (hw, -hh, -hd) }, up4, TF);
+            return grpF;
+        }
 
         var frontMat = front != null ? FaceMaterial(front, System.Windows.Media.Stretch.Fill, b.SizeX * 1000, b.SizeY * 1000, caseColor) : solid;
         var logoMat = logo != null ? FaceMaterial(logo, System.Windows.Media.Stretch.Uniform, b.SizeX * 1000, b.SizeZ * 1000, caseColor) : solid;

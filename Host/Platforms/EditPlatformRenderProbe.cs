@@ -94,14 +94,21 @@ internal static class EditPlatformRenderProbe
         Directory.CreateDirectory(outDir);
 
         HomeModel3d.DumpStructure = true;   // capture LB's built geometry structure once for reproduction
-        var (panel, _) = EditPlatformModel.Build(plat, false, 1f);
+        // LB_GAME_MODE=1 → build the EDIT GAME variant of the panel (BuildForGame) instead of the platform one,
+        // with LB_SAMPLE_TITLE as the game (reproduces game-window-specific layout/preview differences).
+        var (panel, _) = Environment.GetEnvironmentVariable("LB_GAME_MODE") == "1"
+            ? EditPlatformModel.BuildForGame(plat.Name ?? platformName, Guid.NewGuid().ToString(), false, 1f, null,
+                                             Environment.GetEnvironmentVariable("LB_SAMPLE_TITLE") ?? "")
+            : EditPlatformModel.Build(plat, false, 1f);
         var form = new Form { FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.Manual, Location = new System.Drawing.Point(80, 80), Size = new System.Drawing.Size(1000, 700), BackColor = LiteBoxTheme.Bg, ShowInTaskbar = false, TopMost = true };
         panel.Dock = DockStyle.Fill; form.Controls.Add(panel);
         form.Shown += async (_, _) =>
         {
             form.Activate(); form.BringToFront();
-            // Turn Override on so a case renders (find the checkbox by text).
-            var chk = FindOverride(panel); if (chk != null) chk.Checked = true;
+            // Turn Override on so a case renders (find the checkbox by text). LB_NO_OVERRIDE=1 keeps it off —
+            // for comparing the no-override (LB native default) state against the override-on state.
+            var chk = FindOverride(panel);
+            if (chk != null && Environment.GetEnvironmentVariable("LB_NO_OVERRIDE") != "1") chk.Checked = true;
             // Optional: force a Model Type (env LB_MODELTYPE = Box/DVD Case/Jewel Case/...) to dump/compare it.
             var forceType = Environment.GetEnvironmentVariable("LB_MODELTYPE");
             if (!string.IsNullOrEmpty(forceType))
@@ -111,8 +118,13 @@ internal static class EditPlatformRenderProbe
             }
             for (int i = 0; i < 40; i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(60); }
             // Optionally drive the shared orbit (env LB_ORBIT_TEST=1) to verify both zones move in sync.
+            // LB_ORBIT_YAW / LB_ORBIT_PITCH override the angles (degrees) to aim at a specific face.
             if (Environment.GetEnvironmentVariable("LB_ORBIT_TEST") == "1")
-            { try { EditPlatformModel.LastOrbit?.Orbit(55, 18); EditPlatformModel.LastOrbit?.Zoom(120); } catch { } }
+            {
+                double yaw = double.TryParse(Environment.GetEnvironmentVariable("LB_ORBIT_YAW"), out var oy) ? oy : 55;
+                double pitch = double.TryParse(Environment.GetEnvironmentVariable("LB_ORBIT_PITCH"), out var op) ? op : 18;
+                try { EditPlatformModel.LastOrbit?.Orbit(yaw, pitch); EditPlatformModel.LastOrbit?.Zoom(120); } catch { }
+            }
             for (int i = 0; i < 10; i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(60); }
             Application.DoEvents();
             try

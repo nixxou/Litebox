@@ -83,6 +83,41 @@ internal static class CoreModelHost
                 var dmCtor = _win.GetType("Unbroken.LaunchBox.Windows.Data.DataManager")?.GetConstructor(new[] { typeof(bool), typeof(bool) });
                 if (rootDm?.SetMethod != null && dmCtor != null && rootDm.GetValue(null) == null)
                     rootDm.SetValue(null, dmCtor.Invoke(new object[] { true, false }));
+
+                // 5) Feed the USER's RegionPriorities into the shim — ctor(bare:true, settingsOnly:false) leaves
+                // DataManager.Settings unloaded, so LB's art resolution silently falls back to its hard-coded
+                // region list (World first) and the preview can pick a different regional scan than the real
+                // LaunchBox would (user reported France vs World on Secret of Mana).
+                try
+                {
+                    var dm = rootDm?.GetValue(null);
+                    var settingsProp = dm?.GetType().GetProperty("Settings", BindingFlags.Public | BindingFlags.Instance);
+                    var settings = settingsProp?.GetValue(dm);
+                    if (settingsProp != null && settings == null)
+                    {
+                        // Settings type has a bare ctor (DataItem); create one so we have something to fill.
+                        var st = _win.GetType("Unbroken.LaunchBox.Windows.Data.Settings");
+                        try { settings = st != null ? Activator.CreateInstance(st) : null; } catch { }
+                        if (settings != null) settingsProp.SetValue(dm, settings);
+                    }
+                    var rp = settings?.GetType().GetProperty("RegionPriorities", BindingFlags.Public | BindingFlags.Instance);
+                    string? cur = rp?.GetValue(settings) as string;
+                    if (rp?.SetMethod != null)
+                    {
+                        // The bare ctor leaves the Settings class DEFAULTS ("North America,United States") — NOT
+                        // the user's Settings.xml. Always overwrite with the file value when present.
+                        var raw = System.Xml.Linq.XDocument.Load(Path.Combine(lbRoot, "Data", "Settings.xml"))
+                                      .Root?.Element("Settings")?.Element("RegionPriorities")?.Value;
+                        if (!string.IsNullOrWhiteSpace(raw) && raw != cur) { rp.SetValue(settings, raw); cur = raw; }
+                    }
+                    Console.WriteLine("[model3d] shim RegionPriorities = " + (cur ?? "(none)"));
+                    // NOTE: the hosted core's art resolution does NOT honour this setting — the throwaway Game's
+                    // image getters rank regions by LB's hard-coded list (World first; obfuscated constant —
+                    // patching the reflectable static twins like GamesDb.prioritizedRegions changed nothing).
+                    // The home-made zone mirrors that order on purpose (see HomeModel3d.ResolveArt); real
+                    // LaunchBox with user RegionPriorities may pick another regional scan for the preview.
+                }
+                catch (Exception ex) { Console.WriteLine("[model3d] region priorities: " + ex.Message); }
             }
             catch { }
 
@@ -176,6 +211,9 @@ internal static class CoreModelHost
                 var c = _flowType.GetConstructor(new[] { typeof(bool) });
                 flow = c != null ? c.Invoke(new object[] { true }) : Activator.CreateInstance(_flowType);
                 if (flow is not System.Windows.UIElement ui) return null;
+                // Disable LB's built-in mouse rotation so ONLY our shared orbit drives it (else dragging the LB
+                // zone rotates twice — camera orbit + LB's own model rotation — making it spin faster than home).
+                try { _flowType.GetProperty("CanManuallyRotate", BindingFlags.Public | BindingFlags.Instance)?.SetValue(flow, false); } catch { }
                 var host = new ElementHost { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.FromArgb(28, 28, 30), Child = ui };
                 return new Preview(host, flow);
             }
@@ -191,6 +229,9 @@ internal static class CoreModelHost
                 var settings = BuildSettings(settingsMap);
                 var game = MakeGame(gameTitle, platform);
                 if (settings == null || game == null) return;
+                if (Environment.GetEnvironmentVariable("LB_TRACE_ART") == "1")
+                    foreach (var pn in new[] { "FrontImagePath", "BackImagePath", "Box3DImagePath", "ClearLogoImagePath", "SideImagePath" })
+                        try { Console.WriteLine($"[model3d] game.{pn} = {game.GetType().GetProperty(pn)?.GetValue(game) ?? "(no prop)"}"); } catch (Exception ex) { Console.WriteLine($"[model3d] game.{pn} threw: {ex.InnerException?.Message}"); }
                 _redraw!.Invoke(_flow, new[] { game, settings });
             }
             catch (Exception ex) { Console.WriteLine("[model3d] redraw: " + (ex.InnerException?.Message ?? ex.Message)); }

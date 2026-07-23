@@ -19,14 +19,16 @@ internal sealed class OrbitController
     private Point3D _target = new(0, 0, 0);
     private double _distance = 3, _yaw = 0, _pitch = 0, _fov = 45;
     private readonly List<Viewport3D> _views = new();
-    private bool _seeded;
+    private bool _seeded, _touched;
 
     public void Add(Viewport3D v) { if (v != null && !_views.Contains(v)) { _views.Add(v); Apply(); } }
 
-    /// <summary>Seed the orbit from LB's camera + model bounds (once) so the initial view matches LB.</summary>
+    /// <summary>Seed the orbit from LB's camera + model bounds so the initial view matches LB. Re-seeds on later
+    /// calls as long as the user hasn't orbited/zoomed yet — LB's async art-load rebuilds the model (new size,
+    /// new own-camera framing) and the first seed may have captured the provisional bare-box state.</summary>
     public void SeedFrom(ProjectionCamera? cam, Rect3D bounds)
     {
-        if (_seeded || cam == null) return;
+        if ((_seeded && _touched) || cam == null) return;
         if (!bounds.IsEmpty) _target = new Point3D(bounds.X + bounds.SizeX / 2, bounds.Y + bounds.SizeY / 2, bounds.Z + bounds.SizeZ / 2);
         var toCam = cam.Position - _target;
         _distance = toCam.Length > 0.001 ? toCam.Length : 3;
@@ -41,6 +43,7 @@ internal sealed class OrbitController
 
     public void Orbit(double dYawDeg, double dPitchDeg)
     {
+        _touched = true;
         _yaw += dYawDeg;
         _pitch = Math.Max(-89, Math.Min(89, _pitch + dPitchDeg));
         Apply();
@@ -48,6 +51,7 @@ internal sealed class OrbitController
 
     public void Zoom(double wheelDelta)
     {
+        _touched = true;
         // Exponential zoom: each notch scales distance by ~0.9 / 1.1.
         double factor = wheelDelta > 0 ? 0.9 : 1.0 / 0.9;
         _distance = Math.Max(0.2, Math.Min(50, _distance * factor));

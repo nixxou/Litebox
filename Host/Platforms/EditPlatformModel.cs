@@ -63,14 +63,30 @@ internal static class EditPlatformModel
         ("Sony Playstation", new[] { ("Auto-Detect", ""), ("North American Version", "NA"), ("European Version", "EU") }),
     };
 
+    // What `new ModelSettings()` yields (dumped via --model-defaults) — the settings LB actually renders with
+    // when a platform has NO hardcoded defaults (GetDefaultSettings → null, e.g. SNES) and no override. Used as
+    // the last-resort fallback so checking Override with untouched controls reproduces the no-override look
+    // (the ctor draws spine on left/right and logo on left/top/right; our panel used to start all-unchecked).
+    private static Dictionary<string, string> CtorDefaults() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ModelType"] = "box",                 // ctor ModelType is null; LB renders a box for null
+        ["FullImageSpineWidth"] = "0.143",
+        ["SpineRotation"] = "0,,0,",           // left + right
+        ["LogoRotation"] = "0,0,0,",           // left + top + right
+        ["UseFullScanImages"] = "false",
+        ["FullScanIsLandscape"] = "false",
+        ["FrontSpineIsClear"] = "false",
+    };
+
     public static (Control panel, Action apply) Build(IPlatform plat, bool readOnly, float s)
     {
         string name = Safe(() => plat.Name) ?? "";
         string scrapeAs = Safe(() => plat.ScrapeAs) ?? "";
         // Fallback = LB's hardcoded per-platform defaults (resolved live through the core, scrapeAs-aware:
-        // a custom-named platform with Scrape As "Sony Playstation" pre-fills the PS1 jewel preset).
+        // a custom-named platform with Scrape As "Sony Playstation" pre-fills the PS1 jewel preset), else the
+        // ModelSettings ctor defaults (platforms LB has no entry for, e.g. SNES).
         // Preview = a sample game of this platform (title filled lazily by SwitchSampleGame; bare case otherwise).
-        return BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs),
+        return BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs) ?? CtorDefaults(),
                          f => PlatformModelStore.Write(name, f), readOnly, s, name, PreviewSampleTitle(name), null);
     }
 
@@ -80,13 +96,16 @@ internal static class EditPlatformModel
     /// Data\Platforms\&lt;Platform&gt;.xml. Preview textures with THIS game's box art.</summary>
     public static (Control panel, Action apply) BuildForGame(string platformName, string gameId, bool readOnly, float s, string? scrapeAs = null, string? gameTitle = null)
         => BuildCore(PlatformModelStore.ReadGame(platformName, gameId),
-                     PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? ""),
+                     PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? "") ?? CtorDefaults(),
                      f => PlatformModelStore.WriteGame(platformName, gameId, f), readOnly, s, platformName, gameTitle ?? "", platformName);
 
     // A representative game of a platform to texture the platform-level preview: the first title with a Box -
     // Front image on disk (any region). Empty when none → the preview shows a bare (untextured) case.
     private static string PreviewSampleTitle(string platform)
     {
+        // Probe hook: force a specific sample game (env LB_SAMPLE_TITLE) to reproduce user-reported cases.
+        var forced = Environment.GetEnvironmentVariable("LB_SAMPLE_TITLE");
+        if (!string.IsNullOrEmpty(forced)) return forced;
         try
         {
             string root = Media.MediaResolver.LbRoot ?? "";
@@ -445,22 +464,45 @@ internal static class EditPlatformModel
 
         // Live preview redraw: rebuild LB's model from the current options + the sample game. When Override is
         // off, feed LB's hardcoded defaults for this platform (what the preview should show at rest).
+        // LB's FlowModel loads the art ASYNCHRONOUSLY and REBUILDS its model (new Model3DGroup, box W/D from the
+        // art's aspect) — and resets its own camera — whenever an image lands. A one-shot capture right after
+        // Redraw clones stale-PROPORTIONED geometry (user-visible as a stretched/bigger home box in Edit Game),
+        // and "wait until bounds are stable" fails too (the pre-art state is already stable). So: a PERSISTENT
+        // watcher — every tick, if LB's built group is a different object than last time, re-capture the home
+        // zone and reassert the shared orbit camera on both viewports.
+        object? lastGeom = null;
+        void CaptureHome()
+        {
+            if (live == null) return;
+            var map = BuildFieldMap() ?? fallback;
+            home?.CaptureFrom(live, map, CurrentSampleTitle(), previewPlatform);
+            var vp = live.Viewport; if (vp != null) orbit.Add(vp);           // register LB's viewport (idempotent)
+            orbit.SeedFrom(live.Viewport?.Camera as System.Windows.Media.Media3D.ProjectionCamera, live.ModelBounds());
+            orbit.Apply();                                                   // reassert camera post-redraw
+            lastGeom = live.BuiltGeometry();
+        }
+        var watch = new System.Windows.Forms.Timer { Interval = 400 };
+        watch.Tick += (_, _) =>
+        {
+            try
+            {
+                if (live == null) { watch.Stop(); return; }
+                var g = live.BuiltGeometry();
+                if (g != null && !ReferenceEquals(g, lastGeom)) CaptureHome();
+            }
+            catch { }
+        };
+        watch.Start();
+        root.Disposed += (_, _) => { try { watch.Dispose(); } catch { } };
         void RedrawPreview()
         {
             if (live == null) return;
             var map = BuildFieldMap() ?? fallback;   // fallback = platform override / hardcoded defaults
             try { live.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
-            // Mirror LB's freshly-built scene into the home-made zone + (re)apply the shared orbit camera. LB's
-            // RedrawModel resets its own camera, so we seed once from it then reassert our orbit each redraw.
-            // Deferred one tick so LB's async model build has settled before we clone/measure it.
+            // Mirror LB's freshly-built scene into the home-made zone + (re)apply the shared orbit camera —
+            // deferred one tick; later async rebuilds are caught by the persistent watcher above.
             if (live.Control.IsHandleCreated)
-                try { live.Control.BeginInvoke((Action)(() =>
-                {
-                    home?.CaptureFrom(live, map);
-                    var vp = live.Viewport; if (vp != null) orbit.Add(vp);       // register LB's viewport (idempotent)
-                    orbit.SeedFrom(live.Viewport?.Camera as System.Windows.Media.Media3D.ProjectionCamera, live.ModelBounds());
-                    orbit.Apply();                                               // reassert camera post-redraw
-                })); } catch { }
+                try { live.Control.BeginInvoke((Action)CaptureHome); } catch { }
         }
         // Redraw after every option change (Refresh calls RedrawPreview) + once the host handle exists.
         redrawPreview = RedrawPreview;
@@ -556,17 +598,30 @@ internal static class EditPlatformModel
     }
 
     // Mouse-drag on a preview host orbits the SHARED camera (both zones move together); the wheel zooms.
-    // The ElementHost forwards mouse to its WPF child, so we hook the child too via the WinForms host events.
+    // Hook at the WPF level (Preview events on the ElementHost child) — reliable for both LB's opaque control
+    // AND our (now hit-testable) home viewport, unlike WinForms host events which a transparent WPF child
+    // swallows. WinForms host events are kept as a belt-and-suspenders fallback.
     private static void WireOrbit(Control host, OrbitController orbit)
     {
+        if (host is System.Windows.Forms.Integration.ElementHost eh && eh.Child is System.Windows.UIElement ui)
+        {
+            bool wd = false; System.Windows.Point wl = default;
+            ui.PreviewMouseDown += (_, e) => { wd = true; wl = e.GetPosition(ui); ui.CaptureMouse(); e.Handled = true; };
+            ui.PreviewMouseUp += (_, e) => { wd = false; ui.ReleaseMouseCapture(); e.Handled = true; };
+            ui.PreviewMouseMove += (_, e) =>
+            {
+                if (!wd) return;
+                var p = e.GetPosition(ui); double dx = p.X - wl.X, dy = p.Y - wl.Y; wl = p;
+                orbit.Orbit(-dx * 0.4, dy * 0.4);
+                e.Handled = true;   // stop LB's FlowModel from also rotating on the same drag
+            };
+            ui.PreviewMouseWheel += (_, e) => { orbit.Zoom(e.Delta); e.Handled = true; };
+        }
         bool dragging = false; int lx = 0, ly = 0;
         host.MouseDown += (_, e) => { dragging = true; lx = e.X; ly = e.Y; };
         host.MouseUp += (_, _) => dragging = false;
         host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; orbit.Orbit(-dx * 0.4, dy * 0.4); };
         host.MouseWheel += (_, e) => orbit.Zoom(e.Delta);
-        // ElementHost doesn't always forward the wheel to the WinForms host → also hook the WPF child.
-        if (host is System.Windows.Forms.Integration.ElementHost eh && eh.Child is System.Windows.UIElement ui)
-            ui.PreviewMouseWheel += (_, e) => orbit.Zoom(e.Delta);
     }
 
     // ── control helpers ──

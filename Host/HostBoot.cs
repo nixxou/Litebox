@@ -138,6 +138,18 @@ internal static class HostBoot
             Diag.ModelProbe.Dump(lbRootMd);
             return 0;
         }
+        // --hunt-regions: locate the core's hard-coded prioritized-region static (see ModelProbe.HuntRegions).
+        if (args.Contains("--hunt-regions"))
+        {
+            Diag.ModelProbe.HuntRegions();
+            return 0;
+        }
+        // --model-export <outDir>: extract the embedded .obj/.mtl case models to disk (home-made reproduction).
+        if (args.Contains("--model-export"))
+        {
+            Diag.ModelProbe.Export(GetArg(args, "--model-export") ?? Path.Combine(coreDir, "model-export"));
+            return 0;
+        }
         // --model-defaults [platform]: drive ModelSettings.GetDefaultSettings to dump the hardcoded per-platform
         // box-model defaults → <Core>\model-defaults.log. See ModelProbe.Defaults.
         if (args.Contains("--model-defaults"))

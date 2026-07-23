@@ -19,6 +19,70 @@ namespace LbApiHost.Host.Diag;
 
 internal static class ModelProbe
 {
+    /// <summary>--model-export &lt;outDir&gt;: extract every embedded .obj/.mtl case model (and model textures)
+    /// from Unbroken.LaunchBox.Windows.dll to disk — inputs for the home-made case reproduction. Resources
+    /// only, no type reflection (Dump's GetTypes crashes on missing deps in 13.27).</summary>
+    public static void Export(string outDir)
+    {
+        Directory.CreateDirectory(outDir);
+        Assembly win;
+        try { win = Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "Unbroken.LaunchBox.Windows.dll")); }
+        catch (Exception ex) { Console.WriteLine("[export] load Windows.dll failed: " + ex.Message); return; }
+        var wanted = new Regex(@"\.(obj|mtl|dds|tga)$", RegexOptions.IgnoreCase);
+        int n = 0;
+        foreach (var r in win.GetManifestResourceNames())
+        {
+            Console.WriteLine("[export] manifest: " + r);
+            try
+            {
+                if (wanted.IsMatch(r))
+                {
+                    using var s = win.GetManifestResourceStream(r);
+                    if (s == null) continue;
+                    string dst = Path.Combine(outDir, r);
+                    using var f = File.Create(dst);
+                    s.CopyTo(f);
+                    Console.WriteLine($"[export]   -> {r}  ({f.Length:N0} bytes)");
+                    n++;
+                }
+                else if (r.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
+                {
+                    // .resources bundle → walk entries via DeserializingResourceReader (LB's bundles use the
+                    // newer System.Resources.Extensions format — the classic ResourceReader refuses them).
+                    using var s = win.GetManifestResourceStream(r);
+                    if (s == null) continue;
+                    var ext = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "System.Resources.Extensions")
+                              ?? Assembly.Load("System.Resources.Extensions");
+                    var rt = ext.GetType("System.Resources.Extensions.DeserializingResourceReader")!;
+                    var reader = Activator.CreateInstance(rt, s);
+                    var en = (System.Collections.IDictionaryEnumerator)rt.GetMethod("GetEnumerator", Type.EmptyTypes)!.Invoke(reader, null)!;
+                    while (en.MoveNext())
+                    {
+                        string key = en.Key?.ToString() ?? "";
+                        bool want = wanted.IsMatch(key)
+                                    || key.IndexOf("case", StringComparison.OrdinalIgnoreCase) >= 0
+                                    || key.IndexOf("cart", StringComparison.OrdinalIgnoreCase) >= 0;
+                        if (!want) { Console.WriteLine($"[export]   entry: {key}"); continue; }
+                        object? v;
+                        try { v = en.Value; }   // deserializes — only for wanted keys
+                        catch (Exception ex) { Console.WriteLine($"[export]   entry: {key}  VALUE FAILED: {ex.Message}"); continue; }
+                        string vt = v?.GetType().FullName ?? "null";
+                        Console.WriteLine($"[export]   entry: {key}  ({vt})");
+                        string dst = Path.Combine(outDir, key.Replace('/', '_').Replace('\\', '_'));
+                        if (v is byte[] bytes) File.WriteAllBytes(dst, bytes);
+                        else if (v is string str) File.WriteAllText(dst, str);
+                        else if (v is Stream stream) { using var f = File.Create(dst); stream.CopyTo(f); }
+                        else continue;
+                        Console.WriteLine($"[export]   -> {dst}");
+                        n++;
+                    }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine($"[export] {r} FAILED: {ex.Message}"); }
+        }
+        Console.WriteLine($"[export] {n} files -> {outDir}");
+    }
+
     public static void Dump(string lbRoot)
     {
         var sb = new StringBuilder();
@@ -143,6 +207,25 @@ internal static class ModelProbe
             : new[] { platformArg! };
 
         var props = t!.GetProperties(BindingFlags.Public | BindingFlags.Instance).OrderBy(p => p.Name).ToArray();
+
+        // Bare-constructor defaults — what LB renders when a platform has NO hardcoded defaults and no override.
+        try
+        {
+            var ctor = Activator.CreateInstance(t);
+            L("");
+            L("[new ModelSettings() — ctor defaults]");
+            foreach (var p in props)
+            {
+                object? v; try { v = p.GetValue(ctor); } catch { continue; }
+                string sv = v == null ? "null"
+                    : v is System.Collections.IEnumerable && v is not string
+                        ? string.Join(",", ((System.Collections.IEnumerable)v).Cast<object>().Select(x => x?.ToString()))
+                        : v.ToString() ?? "";
+                L($"    {p.Name} = {sv}");
+            }
+        }
+        catch (Exception ex) { L("ctor dump failed: " + ex.Message); }
+
         foreach (var plat in platforms)
         {
             object? res;
@@ -168,6 +251,37 @@ internal static class ModelProbe
     private static void SaveAs(StringBuilder sb, string file)
     {
         try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, file), sb.ToString()); } catch { }
+    }
+
+    /// <summary>--hunt-regions: scan every static field of the core assemblies for the hard-coded prioritized-
+    /// region list ("World, North America, …") — locates the (obfuscated) static the 3D preview's art resolution
+    /// actually uses, so CoreModelHost can overwrite it with the user's RegionPriorities.</summary>
+    public static void HuntRegions()
+    {
+        foreach (var asmName in new[] { "Unbroken.LaunchBox.Windows.dll", "Unbroken.LaunchBox.dll", "Unbroken.LaunchBox.LocalDb.dll" })
+        {
+            Assembly asm;
+            try { asm = Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, asmName)); } catch { continue; }
+            Type[] types;
+            try { types = asm.GetTypes(); } catch (ReflectionTypeLoadException ex) { types = ex.Types.Where(t => t != null).ToArray()!; }
+            foreach (var t in types)
+            {
+                FieldInfo[] fields;
+                try { fields = t.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic); } catch { continue; }
+                foreach (var f in fields)
+                {
+                    if (!typeof(System.Collections.IEnumerable).IsAssignableFrom(f.FieldType) || f.FieldType == typeof(string)) continue;
+                    object? v;
+                    try { v = f.GetValue(null); } catch { continue; }
+                    if (v is not System.Collections.IEnumerable en) continue;
+                    List<string> items = new();
+                    try { foreach (var o in en) { if (o is string s) items.Add(s); if (items.Count > 4) break; } } catch { continue; }
+                    if (items.Count >= 3 && items[0] == "World" && items[1] == "North America" && items[2] == "United States")
+                        Console.WriteLine($"[hunt] {asmName} :: {t.FullName}.{f.Name} ({f.FieldType.Name}) = [{string.Join(", ", items)}...]");
+                }
+            }
+        }
+        Console.WriteLine("[hunt] done");
     }
 
     // Dump the entry names inside the embedded JewelCaseSpines.resources bundle — these are the Spine Style

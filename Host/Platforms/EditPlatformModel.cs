@@ -177,8 +177,8 @@ internal static class EditPlatformModel
 
         var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
         var left = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(12)) };
-        var preview = BuildPreview(S, previewPlatform, out var liveOut, out var homeOut, out var orbitOut, out var sampleBtn);
-        var live = liveOut; var home = homeOut; var orbit = orbitOut;   // stable locals (out vars can't be captured)
+        var preview = BuildPreview(S, previewPlatform, out var homeOut, out var orbitOut, out var sampleBtn);
+        var home = homeOut; var orbit = orbitOut;   // stable locals (out vars can't be captured)
         root.Controls.Add(left);
         root.Controls.Add(preview);      // preview docks right first, left fills the rest
         // Sample-game rotation state: platform preview cycles through titles-with-box-art; game preview is fixed.
@@ -462,42 +462,8 @@ internal static class EditPlatformModel
 
         void Apply() { if (!readOnly) write(BuildFieldMap()); }
 
-        // Live preview redraw: rebuild LB's model from the current options + the sample game. When Override is
-        // off, feed LB's hardcoded defaults for this platform (what the preview should show at rest).
-        // LB's FlowModel loads the art ASYNCHRONOUSLY and REBUILDS its model (new Model3DGroup, box W/D from the
-        // art's aspect) — and resets its own camera — whenever an image lands. A one-shot capture right after
-        // Redraw clones stale-PROPORTIONED geometry (user-visible as a stretched/bigger home box in Edit Game),
-        // and "wait until bounds are stable" fails too (the pre-art state is already stable). So: a PERSISTENT
-        // watcher — every tick, if LB's built group is a different object than last time, re-capture the home
-        // zone and reassert the shared orbit camera on both viewports.
-        object? lastGeom = null;
-        void CaptureHome()
-        {
-            if (live == null) return;
-            var map = ApplyMapExtra(BuildFieldMap() ?? fallback);
-            home?.CaptureFrom(live, map, CurrentSampleTitle(), previewPlatform);
-            orbit.Attach(live, home);
-            var vp = live.Viewport; if (vp != null) orbit.Add(vp);           // register LB's viewport (idempotent)
-            orbit.SeedFrom(live.Viewport?.Camera as System.Windows.Media.Media3D.ProjectionCamera, live.ModelBounds());
-            orbit.Apply();                                                   // reassert the fixed camera post-redraw
-            orbit.SyncPose();                                                // snap home to the fresh live pose
-            lastGeom = live.BuiltGeometry();
-        }
-        var watch = new System.Windows.Forms.Timer { Interval = 400 };
-        watch.Tick += (_, _) =>
-        {
-            try
-            {
-                if (live == null) { watch.Stop(); return; }
-                var g = live.BuiltGeometry();
-                if (g != null && !ReferenceEquals(g, lastGeom)) CaptureHome();
-            }
-            catch { }
-        };
-        watch.Start();
-        root.Disposed += (_, _) => { try { watch.Dispose(); } catch { } };
-        // Probe hook (env LB_MAP_EXTRA="Key=Value;Key=Value"): overrides entries of the settings map fed to BOTH
-        // zones — lets the render probe exercise individual option variables (rotations, colours, full scan…)
+        // Probe hook (env LB_MAP_EXTRA="Key=Value;Key=Value"): overrides entries of the settings map fed to the
+        // preview — lets the render probe exercise individual option variables (rotations, colours, full scan…)
         // without driving the panel controls.
         static Dictionary<string, string>? ApplyMapExtra(Dictionary<string, string>? m)
         {
@@ -511,15 +477,12 @@ internal static class EditPlatformModel
             }
             return m;
         }
+        // Preview redraw: LiteBox's own renderer builds the model synchronously from the current options + the
+        // sample game. Override off → the fallback map (platform override / hardcoded defaults / ctor defaults).
         void RedrawPreview()
         {
-            if (live == null) return;
-            var map = ApplyMapExtra(BuildFieldMap() ?? fallback);   // fallback = platform override / hardcoded defaults
-            try { live.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
-            // Mirror LB's freshly-built scene into the home-made zone + (re)apply the shared orbit camera —
-            // deferred one tick; later async rebuilds are caught by the persistent watcher above.
-            if (live.Control.IsHandleCreated)
-                try { live.Control.BeginInvoke((Action)CaptureHome); } catch { }
+            var map = ApplyMapExtra(BuildFieldMap() ?? fallback);
+            try { home.Build(map, CurrentSampleTitle(), previewPlatform); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
         }
         // Redraw after every option change (Refresh calls RedrawPreview) + once the host handle exists.
         redrawPreview = RedrawPreview;
@@ -529,7 +492,7 @@ internal static class EditPlatformModel
             sampleBtn.Enabled = true; sampleBtn.ForeColor = Fg;
             sampleBtn.Click += (_, _) => { sampleIdx = (sampleIdx + 1) % sampleTitles.Count; RedrawPreview(); };
         }
-        root.Disposed += (_, _) => { try { live?.Dispose(); } catch { } try { home?.Dispose(); } catch { } };
+        root.Disposed += (_, _) => { try { home?.Dispose(); } catch { } };
 
         return (root, Apply);
 
@@ -550,10 +513,10 @@ internal static class EditPlatformModel
         }
     }
 
-    // ── right-hand "3D Model Preview" panel — hosts LB's own FlowModel control when the core is available,
-    // else a graceful placeholder. `live` is the hosted preview (null when unavailable); `sampleBtn` is the
-    // "Switch Sample Game" button (enabled only for a platform preview with >1 sample title). ──
-    private static Panel BuildPreview(Func<int, int> S, string previewPlatform, out CoreModelHost.Preview? live, out HomeModel3d? home, out OrbitController orbit, out Button sampleBtn)
+    // ── right-hand "3D Model Preview" panel — LiteBox's OWN renderer (HomeModel3d), full height. No LaunchBox
+    // involvement. `sampleBtn` is the "Switch Sample Game" button (enabled only for a platform preview with
+    // >1 sample title). ──
+    private static Panel BuildPreview(Func<int, int> S, string previewPlatform, out HomeModel3d home, out OrbitController orbit, out Button sampleBtn)
     {
         orbit = new OrbitController();
         LastOrbit = orbit;   // exposed for the --model3d-live probe to drive rotate/zoom
@@ -561,54 +524,19 @@ internal static class EditPlatformModel
         sampleBtn = new Button { Dock = DockStyle.Bottom, Height = S(32), Text = "Switch Sample Game", FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = SubFg, Enabled = false, FlatAppearance = { BorderSize = 0 } };
         var btnGap = new Panel { Dock = DockStyle.Bottom, Height = S(10), BackColor = Bg };
 
-        // Stack: LB preview (top 50%) + home-made preview (bottom 50%), each with its own header.
-        var stack = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
-
-        // ── home-made zone (bottom half) ──
-        var homeWrap = new Panel { Dock = DockStyle.Bottom, Height = 0, BackColor = Bg };  // height set on resize (50%)
-        var homeHeader = new Label { Dock = DockStyle.Top, Height = S(26), Text = "  Home-made (WIP)", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
-        var homeBox = new Panel { Dock = DockStyle.Fill, BackColor = GroupBody, BorderStyle = BorderStyle.FixedSingle };
-        homeWrap.Controls.Add(homeBox); homeWrap.Controls.Add(homeHeader);
-
-        var gap = new Panel { Dock = DockStyle.Bottom, Height = S(8), BackColor = Bg };
-
-        // ── LB zone (top half) ──
-        var lbHeader = new Label { Dock = DockStyle.Top, Height = S(26), Text = "  3D Model Preview (LaunchBox)", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
-        var lbGap = new Panel { Dock = DockStyle.Top, Height = S(6), BackColor = Bg };
+        var header = new Label { Dock = DockStyle.Top, Height = S(26), Text = "  3D Model Preview", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
+        var headerGap = new Panel { Dock = DockStyle.Top, Height = S(6), BackColor = Bg };
         var box = new Panel { Dock = DockStyle.Fill, BackColor = GroupBody, BorderStyle = BorderStyle.FixedSingle };
 
-        stack.Controls.Add(box);
-        stack.Controls.Add(lbGap);
-        stack.Controls.Add(lbHeader);
-        stack.Controls.Add(homeWrap);
-        stack.Controls.Add(gap);
-        // Keep the bottom (home) zone at ~50% of the stack height.
-        void ReLayout() { homeWrap.Height = Math.Max(120, (stack.ClientSize.Height - S(6) - S(26) - S(8)) / 2); }
-        stack.SizeChanged += (_, _) => ReLayout();
-        stack.HandleCreated += (_, _) => ReLayout();
+        home = new HomeModel3d();
+        home.Control.Dock = DockStyle.Fill;
+        box.Controls.Add(home.Control);
+        orbit.Attach(home);
+        WireOrbit(home.Control, orbit);
 
-        live = null; home = null;
-        CoreModelHost.Preview? lp = null;
-        try { lp = CoreModelHost.Preview.Create(); } catch { }
-        if (lp != null)
-        {
-            live = lp;
-            var orb = orbit;
-            lp.Control.Dock = DockStyle.Fill;
-            box.Controls.Add(lp.Control);
-            WireOrbit(lp.Control, orb);
-
-            var hm = new HomeModel3d();
-            home = hm;
-            hm.Control.Dock = DockStyle.Fill;
-            homeBox.Controls.Add(hm.Control);
-            WireOrbit(hm.Control, orb);
-            
-        }
-        else
-            box.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "3D preview\n(core renderer unavailable)", ForeColor = SubFg, BackColor = GroupBody, TextAlign = ContentAlignment.MiddleCenter });
-
-        p.Controls.Add(stack);
+        p.Controls.Add(box);
+        p.Controls.Add(headerGap);
+        p.Controls.Add(header);
         p.Controls.Add(btnGap);
         p.Controls.Add(sampleBtn);
         return p;

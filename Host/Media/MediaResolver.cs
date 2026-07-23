@@ -165,7 +165,7 @@ internal static class MediaResolver
     /// <summary>Title-only best image via the classic disk walk (region-ordered), NEVER the game cache — for
     /// callers with no game Guid (e.g. the 3D-model preview's sample game, matched by filename): when the cache
     /// is Ready, Image() answers through the id-keyed bridge and Guid.Empty finds nothing.</summary>
-    public static string ImageByTitle(string platformName, string title, string[] typeChain, IReadOnlyList<string> regionOrder = null)
+    public static string ImageByTitle(string platformName, string title, string[] typeChain)
     {
         if (string.IsNullOrEmpty(platformName) || string.IsNullOrEmpty(title) || typeChain == null) return null;
         var plat = SafePlatform(platformName);   // null outside a plugin host (e.g. render probes)
@@ -176,7 +176,7 @@ internal static class MediaResolver
             string folder = (plat != null ? SafeFolder(plat, type) : null)
                             ?? (ImagesRoot != null ? Path.Combine(ImagesRoot, Sanitize(platformName), type) : null);
             if (folder == null || !Directory.Exists(folder)) continue;
-            foreach (var region in (IEnumerable<string>)(regionOrder ?? RegionOrder()))
+            foreach (var region in RegionOrder())
             {
                 var dir = region == LbRegions.None ? folder : Path.Combine(folder, region);
                 var hit = BestInDir(dir, Guid.Empty, sani, ImageExts);
@@ -186,9 +186,6 @@ internal static class MediaResolver
         return null;
     }
 
-    /// <summary>LaunchBox's hard-coded region order (no user priorities), root last — the order the obfuscated
-    /// core's Game image getters use for a game with no Region (e.g. the 3D preview's throwaway sample game).</summary>
-    public static IReadOnlyList<string> LbFallbackRegionOrder { get; } = LbRegions.Order(Array.Empty<string>());
 
     /// <summary>Best video path; <paramref name="prioritizeTheme"/> puts the Theme sub-dir first.</summary>
     public static string Video(string platformName, Guid id, string title, bool prioritizeTheme)

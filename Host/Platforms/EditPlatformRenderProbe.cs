@@ -93,7 +93,6 @@ internal static class EditPlatformRenderProbe
         if (plat == null) { Console.WriteLine("[live] no platform"); return; }
         Directory.CreateDirectory(outDir);
 
-        HomeModel3d.DumpStructure = true;   // capture LB's built geometry structure once for reproduction
         // LB_GAME_MODE=1 → build the EDIT GAME variant of the panel (BuildForGame) instead of the platform one,
         // with LB_SAMPLE_TITLE as the game (reproduces game-window-specific layout/preview differences).
         var (panel, _) = Environment.GetEnvironmentVariable("LB_GAME_MODE") == "1"

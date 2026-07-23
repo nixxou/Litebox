@@ -1,14 +1,10 @@
-// Home-made 3D box renderer — the second preview zone. Goal: reproduce LaunchBox's 3D case EXACTLY with our
-// OWN code (plan B), using the live LB preview above it as the pixel-perfect oracle. This is all pure WPF
-// Media3D (UseWPF=true) — no reflection, no obfuscated core: the objects LB builds are standard framework types
-// we can read/clone directly.
-//
-// ITERATIVE STRATEGY (per the user): start by CAPTURING LB's built scene (geometry + camera + lights) and
-// rendering it in our own Viewport3D — this validates our camera/light/viewport pipeline matches LB. Then
-// progressively replace the captured MeshGeometry3D + materials with OUR OWN procedural generation (box / dvd /
-// jewel case scaled by ModelSize, spine image, cover texture…), comparing side-by-side until identical.
-//
-// Current stage: CAPTURE (iteration 1) — clone LB's Model3DGroup + camera + lights into our viewport.
+// LiteBox's OWN 3D case renderer — pure WPF Media3D, ZERO LaunchBox involvement at runtime. Every rule in
+// here was reverse-engineered against LB's FlowModel with a side-by-side harness (validated per type, per
+// option) before the oracle was removed: geometry tables, texture composition, colour derivation
+// (corner-average of the front art), per-side spine/logo rules with rotations, full-scan sheet slicing,
+// autonomous dims (art aspect capped at 1; box D=0.143; dvd D=W×spineAspect/frontAspect), scene constants
+// (camera (0,0,2) FOV 50; white directional (0,-0.5,-1) + ambient #333), model-rotation under fixed lights.
+// Case models + spine presets are LiteBox-shipped resources (case-assets/, LB dll only as fallback).
 
 #nullable enable
 
@@ -83,51 +79,29 @@ internal sealed class HomeModel3d : IDisposable
         _pitchRot.BeginAnimation(AxisAngleRotation3D.AngleProperty, ease2);
     }
 
-    /// <summary>Snap the pose to absolute angles (no animation) — used to re-sync with the oracle after LB
-    /// rebuilds its model (its pose resets). Harness-only; irrelevant without a live zone.</summary>
-    public void SetPose(double yawDeg, double pitchDeg)
-    {
-        _yawTarget = yawDeg; _pitchTarget = pitchDeg;
-        _yawRot.BeginAnimation(AxisAngleRotation3D.AngleProperty, null);
-        _pitchRot.BeginAnimation(AxisAngleRotation3D.AngleProperty, null);
-        _yawRot.Angle = yawDeg; _pitchRot.Angle = pitchDeg;
-    }
-
     /// <summary>Zoom = camera distance multiplier on the own fixed camera.</summary>
     public void SetZoom(double zoom)
     {
         if (_viewport.Camera is PerspectiveCamera pc) pc.Position = new Point3D(0, 0, 2 * zoom);
     }
 
-    /// <summary>Reproduce LB's model in our viewport. Lights are always cloned from LB (until reproduced).
-    /// Geometry: for types we've reproduced (box) we BUILD IT OURSELVES (geometry + composed materials);
-    /// for the rest we clone LB's group so the zone still shows something to compare against.</summary>
-    public void CaptureFrom(CoreModelHost.Preview? lb, System.Collections.Generic.Dictionary<string, string>? map,
-                            string? gameTitle = null, string? platform = null)
+    /// <summary>Build the model for the given settings map + sample game. Unknown/absent ModelType renders as
+    /// a box (what LB does for null settings).</summary>
+    public void Build(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform)
     {
         try
         {
-            _modelHost.Content = null;
-            if (lb == null) return;
-
-            // Camera and lights are the zone's OWN (autonomous constants set in the ctor) — nothing cloned.
-            var geom = lb.BuiltGeometry();
-            if (geom == null) return;
-            if (DumpStructure) DumpGroup(geom);
-
-            string type = map != null && map.TryGetValue("ModelType", out var t) ? t : "";
-            Model3D? own = type switch                              // reproduced types build their own model
+            string type = map != null && map.TryGetValue("ModelType", out var t) ? t : "box";
+            _modelHost.Content = type switch
             {
-                "box" => BuildBox(geom, map, gameTitle, platform),
                 "jewelCase" => BuildJewel(map, gameTitle, platform),
-                "dvd" => BuildDvd(geom, map, gameTitle, platform),
+                "dvd" => BuildDvd(map, gameTitle, platform),
                 "longJewelCase" => BuildLongJewel(map, gameTitle, platform),
-                "doubleJewelCase" => BuildDoubleJewel(geom, map, gameTitle, platform),
-                _ => null,
+                "doubleJewelCase" => BuildDoubleJewel(map, gameTitle, platform),
+                _ => BuildBox(map, gameTitle, platform),
             };
-            _modelHost.Content = own ?? geom.Clone();               // else clone LB's (comparison fallback)
         }
-        catch (Exception ex) { Console.WriteLine("[homemodel] capture: " + ex.Message); }
+        catch (Exception ex) { Console.WriteLine("[homemodel] build: " + ex.Message); _modelHost.Content = null; }
     }
 
     // ── ITERATION 2b/2c: procedural BOX, geometry AND materials home-made. Decoded from LB's structure dumps
@@ -167,14 +141,12 @@ internal sealed class HomeModel3d : IDisposable
         return (Math.Min(1, a), Math.Min(1, 1 / a), defaultD);
     }
 
-    private static Model3D? BuildBox(Model3DGroup lb, System.Collections.Generic.Dictionary<string, string>? map,
-                                     string? gameTitle, string? platform)
+    private static Model3D? BuildBox(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform)
     {
         string? frontPath = ResolveArt(platform, gameTitle, Media.MediaResolver.Front);
         string? logoPath = ResolveArt(platform, gameTitle, Media.MediaResolver.ClearLogo);
         string? spinePath = ResolveArt(platform, gameTitle, new[] { "Box - Spine" });
         string? backPath = ResolveArt(platform, gameTitle, new[] { "Box - Back" });
-        if (DumpStructure) Console.WriteLine($"[homemodel] box art: title='{gameTitle}' front={frontPath ?? "NULL"} logo={logoPath ?? "NULL"} spine={spinePath ?? "NULL"} back={backPath ?? "NULL"}");
         var front = LoadBitmap(frontPath);
         var logo = LoadBitmap(logoPath);
         var spine = LoadBitmap(spinePath);
@@ -514,8 +486,7 @@ internal sealed class HomeModel3d : IDisposable
     //     live model's child group (game-independent). TODO: reproduce procedurally.
     //   TODO: DoubleSpineImageMode variants (Single / DualSplitCenter / DualMiddleSeparator) — Automatic split
     //   is what's implemented (observed behaviour with a spine scan).
-    private static Model3D? BuildDoubleJewel(Model3DGroup lbGroup, System.Collections.Generic.Dictionary<string, string>? map,
-                                             string? gameTitle, string? platform)
+    private static Model3D? BuildDoubleJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform)
     {
         var front = LoadBitmap(ResolveArt(platform, gameTitle, Media.MediaResolver.Front));
         var backImg = LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Back" }));
@@ -587,20 +558,11 @@ internal sealed class HomeModel3d : IDisposable
         Quad(Strip(halfL), new[] { (0.494, -0.4221, -0.0579), (0.494, -0.4221, -0.0076), (0.494, 0.4221, -0.0579), (0.494, 0.4221, -0.0076) });
         Quad(Strip(halfR), new[] { (0.494, -0.4221, 0.0076), (0.494, -0.4221, 0.0579), (0.494, 0.4221, 0.0076), (0.494, 0.4221, 0.0579) });
 
-        // Plastic: LiteBox's SHIPPED DoubleJewelCase model (exported once from the live scene — LB builds this
-        // one procedurally, no embedded resource exists). Fallback: clone the live model's plastic child group.
+        // Plastic: LiteBox's SHIPPED DoubleJewelCase model (exported once from LB's live scene — LB builds this
+        // one procedurally, no embedded resource exists; the one-shot exporter lived in git history, commit
+        // ee76135, should it ever need regenerating against a future LB).
         var shipped = LbCaseObj.Load("DoubleJewelCase");
         if (shipped != null) grp.Children.Add(shipped.Clone());
-        else
-            foreach (var c in lbGroup.Children)
-                if (c is Model3DGroup sub) { grp.Children.Add(sub.Clone()); break; }
-
-        // One-shot exporter (env LB_EXPORT_DJ=<dir>): serialize the LIVE plastic to obj/mtl in LB's dialect
-        // (4-component Kd = alpha; transforms baked into the vertices) → files to ship in case-assets/.
-        var exportDir = Environment.GetEnvironmentVariable("LB_EXPORT_DJ");
-        if (!string.IsNullOrEmpty(exportDir))
-            foreach (var c in lbGroup.Children)
-                if (c is Model3DGroup sub) { ExportPlasticObj(sub, exportDir!, "DoubleJewelCase"); break; }
         return grp;
     }
 
@@ -669,8 +631,7 @@ internal sealed class HomeModel3d : IDisposable
     //   • group transform = LB's Scale (art-aspect-derived) — borrowed from the live model (the oracle), the
     //     full sizing-rule re-implementation comes later like box/jewel dims.
     // TODO: spine fallback when no Box - Spine scan; Full Scan mode; spine/logo rotation options for dvd.
-    private static Model3D? BuildDvd(Model3DGroup lbGroup, System.Collections.Generic.Dictionary<string, string>? map,
-                                     string? gameTitle, string? platform)
+    private static Model3D? BuildDvd(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform)
     {
         // Colours: forced options else derived.
         var front = LoadBitmap(ResolveArt(platform, gameTitle, Media.MediaResolver.Front));
@@ -782,82 +743,6 @@ internal sealed class HomeModel3d : IDisposable
         return grp;
     }
 
-    // Serialize a Model3DGroup of GeometryModel3D segments to Wavefront OBJ+MTL text in LB's dialect
-    // (4-component Kd = alpha r g b for translucents; Ks + Ns from the specular). Transforms (group × segment)
-    // are BAKED into the vertices so the shipped model needs no external transform. Written as
-    // <baseName>Obj.txt / <baseName>Mtl.txt — drop them into case-assets/ to ship.
-    private static void ExportPlasticObj(Model3DGroup group, string outDir, string baseName)
-    {
-        try
-        {
-            var obj = new System.Text.StringBuilder();
-            var mtl = new System.Text.StringBuilder();
-            obj.AppendLine("# exported from the live LaunchBox scene by LiteBox (bake: group+segment transforms)");
-            obj.AppendLine("mtllib " + baseName + ".mtl");
-            int vBase = 1, tBase = 1, nBase = 1, seg = 0;
-            var groupM = group.Transform?.Value ?? Matrix3D.Identity;
-            foreach (var c in group.Children)
-            {
-                if (c is not GeometryModel3D gm || gm.Geometry is not MeshGeometry3D mesh) continue;
-                var m = (gm.Transform?.Value ?? Matrix3D.Identity) * groupM;
-                string matName = "seg" + seg;
-                // material: MaterialGroup [Diffuse + Specular] (or bare Diffuse)
-                System.Windows.Media.Color kd = System.Windows.Media.Color.FromRgb(0x80, 0x80, 0x80), ks = System.Windows.Media.Color.FromRgb(0, 0, 0);
-                double ns = 250, kdOpacity = 1;
-                void Scan(Material? mat)
-                {
-                    switch (mat)
-                    {
-                        case MaterialGroup mg: foreach (var mm in mg.Children) Scan(mm); break;
-                        // Brush.Opacity is how LB makes the double-jewel shell translucent (the COLOUR alpha
-                        // stays FF) — fold it into the exported Kd alpha or the shipped shell renders opaque.
-                        case DiffuseMaterial dm when dm.Brush is SolidColorBrush sb: kd = sb.Color; kdOpacity = sb.Opacity; break;
-                        case SpecularMaterial sm when sm.Brush is SolidColorBrush sb2: ks = sb2.Color; ns = sm.SpecularPower; break;
-                    }
-                }
-                Scan(gm.Material);
-                double alpha = kd.A / 255.0 * kdOpacity;
-                mtl.AppendLine("newmtl " + matName);
-                mtl.AppendLine("Ns " + ns.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                mtl.AppendLine(alpha >= 0.999
-                    ? $"Kd {kd.R / 255.0:0.######} {kd.G / 255.0:0.######} {kd.B / 255.0:0.######}"
-                    : $"Kd {alpha:0.######} {kd.R / 255.0:0.######} {kd.G / 255.0:0.######} {kd.B / 255.0:0.######}")
-                   .AppendLine($"Ks {ks.R / 255.0:0.######} {ks.G / 255.0:0.######} {ks.B / 255.0:0.######}")
-                   .AppendLine("d 1.0").AppendLine();
-                obj.AppendLine("o " + matName);
-                obj.AppendLine("usemtl " + matName);
-                foreach (var p0 in mesh.Positions)
-                {
-                    var p = m.Transform(p0);
-                    obj.AppendLine($"v {p.X:0.######} {p.Y:0.######} {p.Z:0.######}");
-                }
-                foreach (var uv in mesh.TextureCoordinates)
-                    obj.AppendLine($"vt {uv.X:0.######} {1 - uv.Y:0.######}");   // parser flips back
-                foreach (var n0 in mesh.Normals)
-                {
-                    var n = m.Transform(n0); n.Normalize();
-                    obj.AppendLine($"vn {n.X:0.######} {n.Y:0.######} {n.Z:0.######}");
-                }
-                bool hasT = mesh.TextureCoordinates.Count == mesh.Positions.Count;
-                bool hasN = mesh.Normals.Count == mesh.Positions.Count;
-                for (int i = 0; i + 2 < mesh.TriangleIndices.Count; i += 3)
-                {
-                    string F(int ix) => (vBase + ix) + "/" + (hasT ? (tBase + ix).ToString() : "") + "/" + (hasN ? (nBase + ix).ToString() : "");
-                    obj.AppendLine($"f {F(mesh.TriangleIndices[i])} {F(mesh.TriangleIndices[i + 1])} {F(mesh.TriangleIndices[i + 2])}");
-                }
-                vBase += mesh.Positions.Count;
-                tBase += hasT ? mesh.TextureCoordinates.Count : 0;
-                nBase += hasN ? mesh.Normals.Count : 0;
-                seg++;
-            }
-            System.IO.Directory.CreateDirectory(outDir);
-            System.IO.File.WriteAllText(System.IO.Path.Combine(outDir, baseName + "Obj.txt"), obj.ToString());
-            System.IO.File.WriteAllText(System.IO.Path.Combine(outDir, baseName + "Mtl.txt"), mtl.ToString());
-            Console.WriteLine($"[homemodel] exported {baseName} plastic ({seg} segments) -> {outDir}");
-        }
-        catch (Exception ex) { Console.WriteLine("[homemodel] export dj: " + ex.Message); }
-    }
-
     // Grey-grid face (the insert back when no back image): brush = empty Grid with a solid background — kept as
     // a VisualBrush (not a plain SolidColorBrush) to mirror LB's structure exactly.
     private static Material FaceMaterialNoImage(double gridW, double gridH, System.Windows.Media.Color bg)
@@ -867,14 +752,13 @@ internal sealed class HomeModel3d : IDisposable
     }
 
     // Art resolution for the preview: the preview only has a TITLE (no game Guid), so use MediaResolver's
-    // title-only classic disk walk. Region order = LB's HARD-CODED list (World first) — the same order the
-    // hosted FlowModel's throwaway Game resolves with (its obfuscated getters ignore user RegionPriorities for
-    // a game with no Region), so both zones pick the SAME regional scan. The id-keyed cache bridge is skipped
-    // on purpose: with Guid.Empty it would answer null when the cache is Ready.
+    // title-only classic disk walk with the STANDARD region order (user RegionPriorities first — real-LaunchBox
+    // parity, now that no oracle needs matching). The id-keyed cache bridge is skipped on purpose: with
+    // Guid.Empty it would answer null when the cache is Ready.
     private static string? ResolveArt(string? platform, string? title, string[] typeChain)
     {
         if (string.IsNullOrEmpty(platform) || string.IsNullOrEmpty(title)) return null;
-        try { return Media.MediaResolver.ImageByTitle(platform, title, typeChain, Media.MediaResolver.LbFallbackRegionOrder); } catch { return null; }
+        try { return Media.MediaResolver.ImageByTitle(platform, title, typeChain); } catch { return null; }
     }
 
     // VisualBrush face material exactly as LB composes it: Grid sized dim×1000 px, case-colour background,
@@ -903,167 +787,6 @@ internal sealed class HomeModel3d : IDisposable
         catch { return null; }
     }
 
-
-    // ── structure capture (for reproducing LB's geometry procedurally) ──
-    public static bool DumpStructure = false;
-
-    private static int _dumpN;
-    private static void DumpGroup(Model3DGroup g)
-    {
-        var sb = new System.Text.StringBuilder();
-        void L(string s) => sb.AppendLine(s);
-        L($"=== LB Model3DGroup structure (dump #{_dumpN}) ===");
-        L("group.Transform = " + Describe(g.Transform));
-        L("group.Children = " + g.Children.Count);
-        DumpChildren(g.Children, L, 0);
-        string p = System.IO.Path.Combine(AppContext.BaseDirectory, "model3d-structure.log");
-        try { if (_dumpN++ == 0) System.IO.File.WriteAllText(p, sb.ToString()); else System.IO.File.AppendAllText(p, sb.ToString()); } catch { }
-    }
-
-    private static void DumpChildren(Model3DCollection children, Action<string> L, int depth)
-    {
-        string ind = new string(' ', depth * 2);
-        foreach (var m in children)
-        {
-            if (m is Model3DGroup sub) { L($"{ind}Group (Transform={Describe(sub.Transform)}, children={sub.Children.Count})"); DumpChildren(sub.Children, L, depth + 1); }
-            else if (m is GeometryModel3D gm)
-            {
-                var mesh = gm.Geometry as MeshGeometry3D;
-                L($"{ind}GeometryModel3D  positions={mesh?.Positions.Count} tris={(mesh?.TriangleIndices.Count ?? 0) / 3} tex={mesh?.TextureCoordinates.Count} normals={mesh?.Normals.Count}");
-                L($"{ind}  Material   = {DescribeMaterial(gm.Material)}");
-                L($"{ind}  BackMat    = {DescribeMaterial(gm.BackMaterial)}");
-                L($"{ind}  Transform  = {Describe(gm.Transform)}");
-                if (mesh != null && mesh.Positions.Count > 0)
-                {
-                    var b = mesh.Bounds;
-                    L($"{ind}  Bounds     = X[{b.X:0.###}..{b.X + b.SizeX:0.###}] Y[{b.Y:0.###}..{b.Y + b.SizeY:0.###}] Z[{b.Z:0.###}..{b.Z + b.SizeZ:0.###}]");
-                    if (mesh.Positions.Count <= 120)   // small mesh (quad/box/wrap) → dump exact vertex data to reproduce
-                    {
-                        for (int vi = 0; vi < mesh.Positions.Count; vi++)
-                        {
-                            var pos = mesh.Positions[vi];
-                            var uv = vi < mesh.TextureCoordinates.Count ? mesh.TextureCoordinates[vi] : default;
-                            L($"{ind}    v{vi} pos=({pos.X:0.####},{pos.Y:0.####},{pos.Z:0.####}) uv=({uv.X:0.###},{uv.Y:0.###})");
-                        }
-                        L($"{ind}    tris=[{string.Join(",", mesh.TriangleIndices)}]");
-                    }
-                }
-            }
-            else if (m is Light lt) L($"{ind}Light {lt.GetType().Name} color={(lt as dynamic)?.Color}");
-            else L($"{ind}{m.GetType().Name}");
-        }
-    }
-
-    private static string DescribeMaterial(Material? m)
-    {
-        switch (m)
-        {
-            case null: return "null";
-            case MaterialGroup mg: return "Group[" + string.Join("+", System.Linq.Enumerable.Select(mg.Children, DescribeMaterial)) + "]";
-            case DiffuseMaterial dm: return "Diffuse(" + DescribeBrush(dm.Brush) + ")";
-            case SpecularMaterial sm: return "Specular(" + DescribeBrush(sm.Brush) + ", pow=" + sm.SpecularPower + ")";
-            case EmissiveMaterial em: return "Emissive(" + DescribeBrush(em.Brush) + ")";
-            default: return m.GetType().Name;
-        }
-    }
-
-    private static string DescribeBrush(System.Windows.Media.Brush? b) => b switch
-    {
-        null => "null",
-        SolidColorBrush s => "Solid " + s.Color,
-        ImageBrush img => "Image " + (img.ImageSource as System.Windows.Media.Imaging.BitmapSource)?.PixelWidth + "x" + (img.ImageSource as System.Windows.Media.Imaging.BitmapSource)?.PixelHeight + " tile=" + img.TileMode + " stretch=" + img.Stretch,
-        VisualBrush vb => "Visual{" + DescribeVisual(vb.Visual, 0) + "} viewbox=" + vb.Viewbox + " stretch=" + vb.Stretch,
-        _ => b.GetType().Name,
-    };
-
-    // Decode a VisualBrush's visual tree — this is where LB composes the box faces (art + borders + text).
-    private static string DescribeVisual(Visual? v, int depth)
-    {
-        if (v == null || depth > 6) return "null";
-        var sb = new System.Text.StringBuilder();
-        switch (v)
-        {
-            case System.Windows.Controls.Image im:
-                sb.Append($"Image[{(im.Source as System.Windows.Media.Imaging.BitmapSource)?.PixelWidth}x{(im.Source as System.Windows.Media.Imaging.BitmapSource)?.PixelHeight} stretch={im.Stretch} W={im.Width} H={im.Height} margin={im.Margin} hAlign={im.HorizontalAlignment} vAlign={im.VerticalAlignment} col={System.Windows.Controls.Grid.GetColumn(im)} layoutT={DescribeT2(im.LayoutTransform)} renderT={DescribeT2(im.RenderTransform)} src={ImgSrc(im.Source)} saved={SaveTex(im.Source)}]");
-                break;
-            case System.Windows.Controls.StackPanel sp:
-                sb.Append($"StackPanel[{sp.Orientation} {sp.Width}x{sp.Height}]");
-                break;
-            case System.Windows.Controls.Border bd:
-                sb.Append($"Border[bg={DescribeBrush(bd.Background)} pad={bd.Padding} bthick={bd.BorderThickness}]");
-                break;
-            case System.Windows.Controls.TextBlock tb:
-                sb.Append($"Text['{tb.Text}' size={tb.FontSize} fg={DescribeBrush(tb.Foreground)}]");
-                break;
-            case System.Windows.Shapes.Rectangle rc:
-                sb.Append($"Rect[fill={DescribeBrush(rc.Fill)} {rc.Width}x{rc.Height}]");
-                break;
-            case System.Windows.FrameworkElement fe:
-                string feBg = (fe as System.Windows.Controls.Panel)?.Background is { } pb ? DescribeBrush(pb) : "-";
-                sb.Append($"{fe.GetType().Name}[{fe.Width}x{fe.Height} actual={fe.ActualWidth:0.#}x{fe.ActualHeight:0.#} bg={feBg}]");
-                break;
-            default:
-                sb.Append(v.GetType().Name);
-                break;
-        }
-        int n = VisualTreeHelper.GetChildrenCount(v);
-        if (n > 0)
-        {
-            sb.Append("(");
-            for (int i = 0; i < n; i++) { if (i > 0) sb.Append(", "); sb.Append(DescribeVisual(VisualTreeHelper.GetChild(v, i) as Visual, depth + 1)); }
-            sb.Append(")");
-        }
-        return sb.ToString();
-    }
-
-    // Save a face texture bitmap to PNG next to the log (identify WHAT image LB puts on each face).
-    private static int _texN;
-    private static string SaveTex(ImageSource? s)
-    {
-        try
-        {
-            if (s is not System.Windows.Media.Imaging.BitmapSource bs) return "-";
-            string p = System.IO.Path.Combine(AppContext.BaseDirectory, $"model3d-tex{_texN++}.png");
-            var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
-            enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bs));
-            using var fs = System.IO.File.Create(p);
-            enc.Save(fs);
-            return System.IO.Path.GetFileName(p);
-        }
-        catch (Exception ex) { return "err:" + ex.Message; }
-    }
-
-    private static string DescribeT2(System.Windows.Media.Transform? t) => t switch
-    {
-        null => "null",
-        System.Windows.Media.RotateTransform r => $"Rotate({r.Angle})",
-        System.Windows.Media.ScaleTransform s => $"Scale({s.ScaleX},{s.ScaleY})",
-        System.Windows.Media.TransformGroup g => "Group[" + string.Join(",", System.Linq.Enumerable.Select(g.Children, c => DescribeT2(c))) + "]",
-        System.Windows.Media.MatrixTransform m => m.Matrix.IsIdentity ? "Identity" : "Matrix(" + m.Matrix + ")",
-        _ => t.GetType().Name,
-    };
-
-    private static string ImgSrc(ImageSource? s)
-    {
-        try
-        {
-            if (s is System.Windows.Media.Imaging.BitmapImage bi && bi.UriSource != null) return bi.UriSource.ToString();
-            if (s is System.Windows.Media.Imaging.BitmapFrame bf && bf.BaseUri != null) return bf.BaseUri.ToString();
-            return s?.GetType().Name ?? "null";
-        }
-        catch { return "?"; }
-    }
-
-    private static string Describe(Transform3D? t) => t switch
-    {
-        null => "null",
-        Transform3DGroup g => "Group[" + string.Join(",", System.Linq.Enumerable.Select(g.Children, Describe)) + "]",
-        TranslateTransform3D tr => $"Translate({tr.OffsetX:0.###},{tr.OffsetY:0.###},{tr.OffsetZ:0.###})",
-        ScaleTransform3D sc => $"Scale({sc.ScaleX:0.###},{sc.ScaleY:0.###},{sc.ScaleZ:0.###})",
-        RotateTransform3D => "Rotate",
-        MatrixTransform3D => "Matrix",
-        _ => t.GetType().Name,
-    };
 
     public void Dispose() { try { _host.Dispose(); } catch { } }
 }

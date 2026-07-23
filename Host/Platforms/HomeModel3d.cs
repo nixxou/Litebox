@@ -147,7 +147,8 @@ internal sealed class HomeModel3d : IDisposable
         string? logoPath = ResolveArt(platform, gameTitle, Media.MediaResolver.ClearLogo);
         string? spinePath = ResolveArt(platform, gameTitle, new[] { "Box - Spine" });
         string? backPath = ResolveArt(platform, gameTitle, new[] { "Box - Back" });
-        var front = LoadBitmap(frontPath);
+        // Missing front → LB's NoImage placeholder (shipped): texture, dims and corner colour all follow.
+        var front = LoadBitmap(frontPath) ?? LbCaseObj.SpineImage("NoImage");
         var logo = LoadBitmap(logoPath);
         var spine = LoadBitmap(spinePath);
         var back = LoadBitmap(backPath);
@@ -178,7 +179,14 @@ internal sealed class HomeModel3d : IDisposable
             D = spinePx / sheetH;
         }
         else
+        {
             (W, H, D) = BoxDims(map, front, 0.143);
+            // Box depth = the SPINE SCAN's decoded aspect when one exists (probe-decoded on the exotic-aspect
+            // matrix: a 300×600 spine → D=0.5, SoM's 86×600 → 0.143 — the old "constant 0.143" was that
+            // coincidence). No spine → 0.143 stays the default.
+            if (spine != null && spine.PixelHeight > 0 && (map == null || !map.ContainsKey("ModelSizeString")))
+                D = (double)spine.PixelWidth / spine.PixelHeight;
+        }
         double hw = W / 2, hh = H / 2, hd = D / 2;
 
         // Case colour: CoverColor option (signed-ARGB string), else corner average of the art (full scan in
@@ -633,8 +641,10 @@ internal sealed class HomeModel3d : IDisposable
     // TODO: spine fallback when no Box - Spine scan; Full Scan mode; spine/logo rotation options for dvd.
     private static Model3D? BuildDvd(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform)
     {
-        // Colours: forced options else derived.
-        var front = LoadBitmap(ResolveArt(platform, gameTitle, Media.MediaResolver.Front));
+        // Colours: forced options else derived. A missing front falls back to LB's NoImage placeholder
+        // (shipped, 245×319 ≈ aspect 0.766) — LB uses it as the front TEXTURE and every derived value
+        // (dims, corner colour) follows from it naturally (probe case F).
+        var front = LoadBitmap(ResolveArt(platform, gameTitle, Media.MediaResolver.Front)) ?? LbCaseObj.SpineImage("NoImage");
         var backImg = LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Back" }));
         var spineImg = LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Spine" }));
 
@@ -680,35 +690,32 @@ internal sealed class HomeModel3d : IDisposable
             return grpS;
         }
 
-        // Compose the wrap sheet exactly like LB: 3 auto columns [back|spine|front], images normalized to
-        // height 600 (LB's decode convention). A MISSING image still occupies its column WIDTH (empty Border,
-        // the cover colour shows through) — collapsing it shifts the whole composite under the wrap's FIXED
-        // authored UVs (user-reported: with no Box - Back, the front rendered left-cut on the front panel).
-        // Missing back mirrors the front's width. Spine column: the scan when present (and enabled), else the
-        // CLEAR LOGO rotated 90° with margins (0.015×frontW, 0.05×600) — constants probe-derived (AC Wii /
-        // SoM / Super Mario Kart give 6.42/12.3/12.3 for front widths 428/820/820).
+        // Compose the wrap sheet exactly like LB (probe-decoded on the exotic-aspect matrix): the grid has
+        // THREE FIXED-PIXEL columns — 434.892 | 59.860 | 434.892 at height 600 — which are the obj wrap's
+        // UNWRAPPED PANEL WIDTHS at h=600 (they line up with the mesh's authored UV fold zones). Every image
+        // is Fill-STRETCHED into its fixed column regardless of its own aspect (LB renders a 1200-wide back
+        // and a 600-wide front into equal 434.9 columns). Missing back/spine → the cover colour shows;
+        // missing front → the NoImage placeholder (already substituted above). The no-spine fallback = the
+        // clear logo decoded at width 206, rotated 90°, margins (0.015×frontW, 30), centred — it overflows
+        // the narrow spine column symmetrically, exactly like LB.
+        const double ColPanel = 434.89202807270095, ColSpine = 59.8601763541479;
         var logo = LoadBitmap(ResolveArt(platform, gameTitle, Media.MediaResolver.ClearLogo));
         var sides = ParseSides(map, "SpineRotation");
         var logoSides = ParseSides(map, "LogoRotation");
-        double frontW = front != null ? Math.Round(front.PixelWidth * 600.0 / front.PixelHeight) : 820;
+        double frontW = front != null ? Math.Round(front.PixelWidth * 600.0 / front.PixelHeight) : 460;
 
         var wrapGrid = new System.Windows.Controls.Grid { Height = 600, Background = new SolidColorBrush(coverColor) };
-        for (int i = 0; i < 3; i++)
-            wrapGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
+        foreach (var cw in new[] { ColPanel, ColSpine, ColPanel })
+            wrapGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(cw) });
         void Put(System.Windows.FrameworkElement el, int col) { System.Windows.Controls.Grid.SetColumn(el, col); wrapGrid.Children.Add(el); }
-        void Panel(System.Windows.Media.Imaging.BitmapSource? img, int col, double fallbackW)
+        void Panel(System.Windows.Media.Imaging.BitmapSource? img, int col)
         {
-            if (img == null) { Put(new System.Windows.Controls.Border { Width = fallbackW, Height = 600 }, col); return; }
-            double w = Math.Round(img.PixelWidth * 600.0 / img.PixelHeight);
-            Put(new System.Windows.Controls.Image { Source = img, Stretch = System.Windows.Media.Stretch.Fill, Width = w, Height = 600 }, col);
+            if (img == null) return;   // fixed column keeps its width; the cover colour shows
+            Put(new System.Windows.Controls.Image { Source = img, Stretch = System.Windows.Media.Stretch.Fill }, col);
         }
-        Panel(backImg, 0, frontW);
-        if (sides[0] && spineImg != null) Panel(spineImg, 1, 86);
+        Panel(backImg, 0);
+        if (sides[0] && spineImg != null) Panel(spineImg, 1);
         else if (logoSides[0] && logo != null)
-            // LB decodes clear logos at WIDTH 206 (aspect preserved) — the explicit size matters here: the
-            // rotated image's LAYOUT width (= its height) sets the auto column width. Using the file's natural
-            // size blew the spine column up to the full logo height (user-reported: a 2400×1265 logo spilled
-            // the spine over the front on Mega Man X GC).
             Put(new System.Windows.Controls.Image
             {
                 Source = logo,
@@ -716,10 +723,11 @@ internal sealed class HomeModel3d : IDisposable
                 Height = Math.Round(206.0 * logo.PixelHeight / Math.Max(1, logo.PixelWidth)),
                 Stretch = System.Windows.Media.Stretch.Uniform,
                 LayoutTransform = new System.Windows.Media.RotateTransform(90),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center,
                 Margin = new System.Windows.Thickness(Math.Round(frontW * 0.015, 2), 30, Math.Round(frontW * 0.015, 2), 30),
             }, 1);
-        else Put(new System.Windows.Controls.Border { Width = 86, Height = 600 }, 1);
-        Panel(front, 2, frontW);
+        Panel(front, 2);
         var wrapMat = new DiffuseMaterial(new VisualBrush(wrapGrid) { Stretch = System.Windows.Media.Stretch.Fill });
 
         var grp = new Model3DGroup();

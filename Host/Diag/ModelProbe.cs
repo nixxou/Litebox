@@ -69,6 +69,7 @@ internal static class ModelProbe
                         string key = en.Key?.ToString() ?? "";
                         bool want = spineBundle
                                     || wanted.IsMatch(key)
+                                    || key.Equals("NoImage", StringComparison.OrdinalIgnoreCase)
                                     || key.IndexOf("case", StringComparison.OrdinalIgnoreCase) >= 0
                                     || key.IndexOf("cart", StringComparison.OrdinalIgnoreCase) >= 0;
                         if (!want) { Console.WriteLine($"[export]   entry: {key}"); continue; }

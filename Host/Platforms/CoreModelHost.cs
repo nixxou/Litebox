@@ -165,6 +165,10 @@ internal static class CoreModelHost
             }
             return null;
         }
+        // ModelSettings.CaseColor/CoverColor are Nullable<System.Drawing.Color> (GetDefaultSettings prints
+        // "Color [WhiteSmoke]") — without this branch the forced colours silently never reached the core.
+        if (t.FullName == "System.Drawing.Color")
+            return int.TryParse(raw, out var dargb) ? System.Drawing.Color.FromArgb(dargb) : null;
         return raw;   // Vector3D (ModelSize) is skipped — ModelSizeString covers it
     }
 
@@ -230,8 +234,10 @@ internal static class CoreModelHost
                 var game = MakeGame(gameTitle, platform);
                 if (settings == null || game == null) return;
                 if (Environment.GetEnvironmentVariable("LB_TRACE_ART") == "1")
-                    foreach (var pn in new[] { "FrontImagePath", "BackImagePath", "Box3DImagePath", "ClearLogoImagePath", "SideImagePath" })
-                        try { Console.WriteLine($"[model3d] game.{pn} = {game.GetType().GetProperty(pn)?.GetValue(game) ?? "(no prop)"}"); } catch (Exception ex) { Console.WriteLine($"[model3d] game.{pn} threw: {ex.InnerException?.Message}"); }
+                    foreach (var pp in game.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                        if (pp.Name.IndexOf("Path", StringComparison.OrdinalIgnoreCase) >= 0 && pp.PropertyType == typeof(string) && pp.GetIndexParameters().Length == 0)
+                            try { Console.WriteLine($"[model3d] game.{pp.Name} = {pp.GetValue(game) ?? "(null)"}"); }
+                            catch (Exception ex) { Console.WriteLine($"[model3d] game.{pp.Name} threw: {ex.InnerException?.Message}"); }
                 _redraw!.Invoke(_flow, new[] { game, settings });
             }
             catch (Exception ex) { Console.WriteLine("[model3d] redraw: " + (ex.InnerException?.Message ?? ex.Message)); }

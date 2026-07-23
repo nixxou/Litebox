@@ -136,12 +136,38 @@ internal sealed class HomeModel3d : IDisposable
         // Per-side spine/logo toggles: CSV slots left,top,right,bottom — empty slot = off (value = rotation°).
         // The UV orientation DIFFERS per texture kind (decoded from LB dumps): a SPINE scan (portrait) maps
         // UPRIGHT onto the side face, while the CLEAR LOGO (landscape) maps ROTATED 90° (opposite ways on
-        // left vs right, like a real box). So each side face picks its material AND its UV table together.
-        var spineOn = ParseSides(map, "SpineRotation");
-        var logoOn = ParseSides(map, "LogoRotation");
-        (Material mat, bool upright) Side(int slot) => spineOn[slot] && spine != null ? (spineMat, true)
-                                                     : logoOn[slot] && logo != null ? (logoMat, false)
-                                                     : (solid, true);
+        // left vs right, like a real box). Non-zero rotations become a LayoutTransform on the face's Image
+        // (probe-derived): spine → Rotate(r) everywhere; logo → Rotate(r) on top/bottom but on the SIDE faces
+        // 90→270, 180→0, 270→90 (the side's inherent mesh-UV rotation folds in).
+        var spineRots = ParseSideRots(map, "SpineRotation");
+        var logoRots = ParseSideRots(map, "LogoRotation");
+        Material RotSpine(int r) => r == 0 ? spineMat : spine == null ? solid
+            : new DiffuseMaterial(new VisualBrush(new System.Windows.Controls.Image
+              { Source = spine, Stretch = System.Windows.Media.Stretch.Uniform,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                LayoutTransform = new System.Windows.Media.RotateTransform(r) })
+              { Stretch = System.Windows.Media.Stretch.Fill });
+        Material RotLogo(int layoutRot, double gw, double gh)
+        {
+            if (logo == null) return solid;
+            var g = new System.Windows.Controls.Grid { Width = gw, Height = gh, Background = new SolidColorBrush(caseColor) };
+            var im = new System.Windows.Controls.Image
+            { Source = logo, Stretch = System.Windows.Media.Stretch.Uniform,
+              HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center };
+            if (layoutRot != 0) im.LayoutTransform = new System.Windows.Media.RotateTransform(layoutRot);
+            g.Children.Add(im);
+            return new DiffuseMaterial(new VisualBrush(g) { Stretch = System.Windows.Media.Stretch.Fill });
+        }
+        int SideLogoRot(int r) => r == 90 ? 270 : r == 270 ? 90 : 0;
+        (Material mat, bool upright) Side(int slot)
+        {
+            bool isSide = slot == 0 || slot == 2;   // left/right (vs top/bottom)
+            if (spineRots[slot] is int sr && spine != null) return (RotSpine(sr), true);
+            if (logoRots[slot] is int lr && logo != null)
+                return isSide ? (RotLogo(SideLogoRot(lr), b.SizeX * 1000, b.SizeZ * 1000), false)
+                              : (lr == 0 ? (logoMat, true) : (RotLogo(lr, b.SizeX * 1000, b.SizeZ * 1000), true));
+            return (solid, true);
+        }
 
         var grp = new Model3DGroup();
         // One quad from LB's exact vertex/UV/tris table. p = 4 positions, uv = 4 texture coords.
@@ -189,6 +215,17 @@ internal sealed class HomeModel3d : IDisposable
         if (map == null || !map.TryGetValue(key, out var csv) || string.IsNullOrEmpty(csv)) return res;
         var parts = csv.Split(',');
         for (int i = 0; i < 4 && i < parts.Length; i++) res[i] = parts[i].Trim().Length > 0;
+        return res;
+    }
+
+    // CSV "90,,270," → [90, null, 270, null] (slots: left, top, right, bottom; empty = not drawn).
+    private static int?[] ParseSideRots(System.Collections.Generic.Dictionary<string, string>? map, string key)
+    {
+        var res = new int?[4];
+        if (map == null || !map.TryGetValue(key, out var csv) || string.IsNullOrEmpty(csv)) return res;
+        var parts = csv.Split(',');
+        for (int i = 0; i < 4 && i < parts.Length; i++)
+            if (parts[i].Trim().Length > 0) res[i] = int.TryParse(parts[i].Trim(), out var v) ? v : 0;
         return res;
     }
 
@@ -240,16 +277,57 @@ internal sealed class HomeModel3d : IDisposable
             : LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Spine" }));
 
         var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
-        var stripBg = System.Windows.Media.Color.FromRgb(0x1C, 0x11, 0x16);
         var clear = System.Windows.Media.Colors.Transparent;
+        var backScan = LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Back" }));
+        var scan = LoadBitmap(ResolveArt(platform, gameTitle, new[] { "Box - Spine" }));
+
+        // Strip background = CoverColor option else corner-average of the front art (probe-decoded; the old
+        // #1C1116 constant was just A-Train's corner average). Text mode: CaseColor = text colour.
+        var stripBg = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
+        if (map != null && map.TryGetValue("CoverColor", out var cs) && int.TryParse(cs, out var cargb2))
+            stripBg = System.Windows.Media.Color.FromArgb((byte)(cargb2 >> 24), (byte)(cargb2 >> 16), (byte)(cargb2 >> 8), (byte)cargb2);
+        else if (front != null) stripBg = CornerAverage(front);
+        string logoFont = map != null && map.TryGetValue("LogoFont", out var lf) ? lf : "";
+        var textColor = System.Windows.Media.Colors.White;
+        if (map != null && map.TryGetValue("CaseColor", out var tc) && int.TryParse(tc, out var targb))
+            textColor = System.Windows.Media.Color.FromArgb((byte)(targb >> 24), (byte)(targb >> 16), (byte)(targb >> 8), (byte)targb);
 
         Material frontMat = front != null ? FaceMaterial(front, System.Windows.Media.Stretch.Fill, 1000, 889.628809154057, clear)
                                           : new DiffuseMaterial(new SolidColorBrush(grey));
-        Material backMat = FaceMaterialNoImage(1000, 889.628809154057, grey);
+        Material backMat = backScan != null ? FaceMaterial(backScan, System.Windows.Media.Stretch.Fill, 1000, 889.628809154057, grey)
+                                            : FaceMaterialNoImage(1000, 889.628809154057, grey);
+        // Wrapped spine quad: FrontSpineImage (preset/custom) else the game's scan; without any image, LB emits
+        // NO spine quad at all — a fully transparent material is visually identical.
         Material spineMat = spineImg != null ? FaceMaterial(spineImg, System.Windows.Media.Stretch.Fill, 120, 1000, spineClear ? clear : stripBg)
-                                             : new DiffuseMaterial(new SolidColorBrush(stripBg));
-        Material stripMat = logo != null ? FaceMaterial(logo, System.Windows.Media.Stretch.Uniform, 1000, 54.274459132109115, stripBg)
-                                         : new DiffuseMaterial(new SolidColorBrush(stripBg));
+                                             : new DiffuseMaterial(System.Windows.Media.Brushes.Transparent);
+        // Edge strips: the spine SCAN when present (bare centered image), else clear logo ROTATED 180 on the
+        // strip background, else the plain-text title (Viewbox'd TextBlock, LogoFont/CaseColor), else solid.
+        Material stripMat;
+        if (scan != null)
+            stripMat = new DiffuseMaterial(new VisualBrush(new System.Windows.Controls.Image
+            { Source = scan, Stretch = System.Windows.Media.Stretch.Uniform,
+              HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center })
+            { Stretch = System.Windows.Media.Stretch.Fill });
+        else if (logo != null && logoFont.Length == 0)
+        {
+            var g = new System.Windows.Controls.Grid { Width = 1000, Height = 54.274459132109115, Background = new SolidColorBrush(stripBg) };
+            g.Children.Add(new System.Windows.Controls.Image
+            { Source = logo, Stretch = System.Windows.Media.Stretch.Uniform,
+              HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center,
+              LayoutTransform = new System.Windows.Media.RotateTransform(180) });
+            stripMat = new DiffuseMaterial(new VisualBrush(g) { Stretch = System.Windows.Media.Stretch.Fill });
+        }
+        else if (logoFont.Length > 0)
+        {
+            var g = new System.Windows.Controls.Grid { Width = 1000, Height = 54.06310944167632, Background = new SolidColorBrush(stripBg) };
+            var tb = new System.Windows.Controls.TextBlock
+            { Text = gameTitle ?? "", FontSize = 12, Foreground = new SolidColorBrush(textColor) };
+            try { tb.FontFamily = new System.Windows.Media.FontFamily(logoFont); } catch { }
+            g.Children.Add(new System.Windows.Controls.Viewbox { Child = tb });
+            stripMat = new DiffuseMaterial(new VisualBrush(g) { Stretch = System.Windows.Media.Stretch.Fill });
+        }
+        else
+            stripMat = new DiffuseMaterial(new SolidColorBrush(stripBg));
 
         var grp = new Model3DGroup();
         void Quad(Material mat, Material? back, (double x, double y, double z)[] p, (double u, double v)[] uv, int[] tris)
@@ -340,12 +418,20 @@ internal sealed class HomeModel3d : IDisposable
                     HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
             return new DiffuseMaterial(new VisualBrush(grid) { Stretch = System.Windows.Media.Stretch.Fill });
         }
+        // Mode table (probe-verified): Single/MiddleSeparator → the FULL spine on both strips;
+        // Automatic/DualSplitCenter → left/right halves. The opposite side is always rotated 180°.
+        string mode = map != null && map.TryGetValue("DoubleSpineImageMode", out var dm) ? dm : "AutomaticDetection";
+        bool single = mode is "SingleSpineImage" or "DualSpineImageMiddleSeparator";
         System.Windows.Media.Imaging.BitmapSource? halfL = null, halfR = null, halfLr = null, halfRr = null;
         if (spine != null)
         {
-            int w = spine.PixelWidth, hw2 = w / 2;
-            halfL = new System.Windows.Media.Imaging.CroppedBitmap(spine, new System.Windows.Int32Rect(0, 0, hw2, spine.PixelHeight));
-            halfR = new System.Windows.Media.Imaging.CroppedBitmap(spine, new System.Windows.Int32Rect(w - hw2, 0, hw2, spine.PixelHeight));
+            if (single) { halfL = spine; halfR = spine; }
+            else
+            {
+                int w = spine.PixelWidth, hw2 = w / 2;
+                halfL = new System.Windows.Media.Imaging.CroppedBitmap(spine, new System.Windows.Int32Rect(0, 0, hw2, spine.PixelHeight));
+                halfR = new System.Windows.Media.Imaging.CroppedBitmap(spine, new System.Windows.Int32Rect(w - hw2, 0, hw2, spine.PixelHeight));
+            }
             halfLr = new System.Windows.Media.Imaging.TransformedBitmap(halfL, new System.Windows.Media.RotateTransform(180));
             halfRr = new System.Windows.Media.Imaging.TransformedBitmap(halfR, new System.Windows.Media.RotateTransform(180));
         }

@@ -474,7 +474,7 @@ internal static class EditPlatformModel
         void CaptureHome()
         {
             if (live == null) return;
-            var map = BuildFieldMap() ?? fallback;
+            var map = ApplyMapExtra(BuildFieldMap() ?? fallback);
             home?.CaptureFrom(live, map, CurrentSampleTitle(), previewPlatform);
             var vp = live.Viewport; if (vp != null) orbit.Add(vp);           // register LB's viewport (idempotent)
             orbit.SeedFrom(live.Viewport?.Camera as System.Windows.Media.Media3D.ProjectionCamera, live.ModelBounds());
@@ -494,10 +494,25 @@ internal static class EditPlatformModel
         };
         watch.Start();
         root.Disposed += (_, _) => { try { watch.Dispose(); } catch { } };
+        // Probe hook (env LB_MAP_EXTRA="Key=Value;Key=Value"): overrides entries of the settings map fed to BOTH
+        // zones — lets the render probe exercise individual option variables (rotations, colours, full scan…)
+        // without driving the panel controls.
+        static Dictionary<string, string>? ApplyMapExtra(Dictionary<string, string>? m)
+        {
+            var extra = Environment.GetEnvironmentVariable("LB_MAP_EXTRA");
+            if (string.IsNullOrEmpty(extra)) return m;
+            m = m != null ? new Dictionary<string, string>(m, StringComparer.OrdinalIgnoreCase) : new(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in extra.Split(';', StringSplitOptions.RemoveEmptyEntries))
+            {
+                int eq = kv.IndexOf('=');
+                if (eq > 0) m[kv.Substring(0, eq)] = kv.Substring(eq + 1);
+            }
+            return m;
+        }
         void RedrawPreview()
         {
             if (live == null) return;
-            var map = BuildFieldMap() ?? fallback;   // fallback = platform override / hardcoded defaults
+            var map = ApplyMapExtra(BuildFieldMap() ?? fallback);   // fallback = platform override / hardcoded defaults
             try { live.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
             // Mirror LB's freshly-built scene into the home-made zone + (re)apply the shared orbit camera —
             // deferred one tick; later async rebuilds are caught by the persistent watcher above.

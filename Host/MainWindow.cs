@@ -1834,6 +1834,13 @@ internal sealed class MainWindow : Form, IMessageFilter
                 + "more games fit on screen. Wrapping is all-or-nothing (a Windows list limitation): the row "
                 + "height applies to every column, there is no per-column setting.",
                 applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
+            Options.OptionItem.Text("Display", "Detail load delay (ms)",
+                () => _cfg.DetailLoadDelayMs.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                v => { if (int.TryParse(v?.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var ms)) _cfg.DetailLoadDelayMs = ms; },
+                "How long after selecting a game the deferred right-pane parts load — the thumbnail strip, the "
+                + "full-resolution box, the RetroAchievements/store panels, and the fanart fade-in. This debounce "
+                + "keeps a fast scroll smooth by not loading media for games you skip past. Default 500 ms; "
+                + "0 = load immediately (heavier while scrolling), max 5000. Applies to the next selection."),
             Options.OptionItem.Action("Display", "Edit colours…", ShowColorEditor,
                 "Customise the shared LiteBox palette. Takes full effect after restarting LiteBox."),
         });
@@ -3723,7 +3730,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         // in ~0.5s later once resolved/loaded). Matches launchbox-web's fade-out.
         _hero.FadeOutFanart();
         int token = _detailsLoadToken;
-        var t = new System.Windows.Forms.Timer { Interval = 500 };
+        var t = new System.Windows.Forms.Timer { Interval = DetailLoadInterval };
         _fanartTimer = t;
         t.Tick += (_, _) =>
         {
@@ -3835,17 +3842,22 @@ internal sealed class MainWindow : Form, IMessageFilter
         Safe(() => _games.RefreshGame(g));
     }
 
+    // Settle delay for BOTH deferred-detail timers (media strip + fanart). One user-set value
+    // (DetailLoadDelayMs, Display options); a WinForms Timer needs Interval ≥ 1, so 0 ms clamps to 1
+    // (fires on the next message cycle — effectively "immediately" but still off the selection call).
+    private int DetailLoadInterval => Math.Max(1, _cfg.DetailLoadDelayMs);
+
     // ── Main media (16:9) + mini-thumbnail strip ─────────────────────────────
     // Like launchbox-web's media carousel, but the main starts on the BOX (Front),
     // not a screenshot — in the default list view we don't already see the box. The
-    // strip + the degraded→full upgrade of the main happen ~0.5s after selection.
+    // strip + the degraded→full upgrade of the main happen after DetailLoadDelayMs (default 0.5s).
     private void ScheduleMedia(IGame g)
     {
         if (_mediaTimer != null) { _mediaTimer.Stop(); _mediaTimer.Dispose(); _mediaTimer = null; }
         if (_stripRowH != 72) { _stripRowH = 72; RelayoutDetail(); }   // back from a node's taller recent strip
         ClearStrip();   // reserve the strip space, empty, until the deferred load
         int token = _detailsLoadToken;
-        var t = new System.Windows.Forms.Timer { Interval = 500 };
+        var t = new System.Windows.Forms.Timer { Interval = DetailLoadInterval };
         _mediaTimer = t;
         t.Tick += (_, _) =>
         {

@@ -37,6 +37,11 @@ namespace LbApiHost.Host.Gc
         public static string BestImageTypeFirst(string plat, Guid id, string regroupement)
         { try { return Game(plat, id)?.GetBestImageTypeFirst(regroupement)?.FullPath; } catch { return null; } }
 
+        /// <summary>The ★★ pick as a REF (path + lazily-memoised FileSize) — lets the thumb GC build its
+        /// valid-set without disk stats when the cache was Everything-built (sizes come from the index).</summary>
+        public static GameCacheImageRef BestImageRefTypeFirst(string plat, Guid id, string regroupement)
+        { try { return Game(plat, id)?.GetBestImageTypeFirst(regroupement); } catch { return null; } }
+
         public static List<string> AllImagesTypeFirst(string plat, Guid id, string regroupement, int max)
         {
             var res = new List<string>();
@@ -103,6 +108,9 @@ namespace LbApiHost.Host.Gc
                 Console.WriteLine($"[gamecache] host cache ready: {plats} platforms, {games} games, {images} images, {videos} videos");
             }
             catch { }
+            // The cache is settled — the degraded-thumbs mark-and-sweep can now build its valid-set
+            // (zero/low-IO: sizes ride the cache). Once per process; later re-readies are no-ops.
+            try { Media.ThumbGc.Kick(); } catch { }
         }
 
         /// <summary>Drop the whole cache to free memory (e.g. while a game runs).</summary>

@@ -204,6 +204,11 @@ internal static class ThumbCache
         return File.Exists(target) ? target : null;
     }
 
+    /// <summary>The exact cache FILENAME (key + extension) a source would map to — used by the
+    /// mark-and-sweep GC (ThumbGc) to build its valid-set without touching the disk.</summary>
+    internal static string FileNameFor(string sourcePath, long size, int maxDim, bool keepAlpha)
+        => KeyFor(sourcePath, size, maxDim, keepAlpha) + (keepAlpha ? ".webp" : ".jpg");
+
     // Byte-identical to ExtendDB.Web.Theme.ThumbCache.KeyFor — do NOT change.
     private static string KeyFor(string sourcePath, long size, int maxDim, bool keepAlpha)
     {

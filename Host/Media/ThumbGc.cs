@@ -13,7 +13,8 @@
 //   sweep: delete every degraded\ file whose name is not in the valid-set. In-flight .tmp files and
 //          files younger than the grace window are spared (a thumb generated for a source the cache
 //          does not know YET — fresh image, stale cache — must not churn). Then the video-thumb sweep
-//          runs (see SweepVideos). The budget sweep stays as the global backstop for webimg\/docs\.
+//          (SweepVideos) and the document-thumb sweep (SweepDocs) run in turn. The budget sweep stays
+//          as the global backstop for webimg\. All mark structures are scoped to the run and cleared.
 //
 // Runs ONCE per process, in the background, kicked when the host GameCache flips global-ready
 // (HostGameCache.OnReady) — the mark needs the cache settled. Cache disabled → never runs (the
@@ -88,10 +89,85 @@ internal static class ThumbGc
             Console.WriteLine($"[thumbgc] degraded: {valid.Count} valid keys over {games.Length} games "
                 + $"({stats} disk stats) — kept {kept}, deleted {deleted}, spared {spared} recent");
 
+            valid.Clear();          // release the mark structures before the next sweeps run
             SweepVideos(games);
+            SweepDocs(games);
         }
         catch (Exception ex) { Console.WriteLine("[thumbgc] failed: " + ex.Message); }
     }
+
+    // Document-thumb sweep (thumbs\docs), after the video one. Documents are AdditionalApplication
+    // Section=Document rows in the platform XMLs (already in RAM — zero IO to enumerate), NOT indexed by
+    // the game cache; sizes/mtimes come from a one-query Everything prefetch of <LB>\Manuals\ (where LB
+    // keeps documents) and one FileInfo stat only for documents living elsewhere. Keys are exact since
+    // DocRenderDim froze the dimension (DPI-independent). Stored paths can be relative-to-LB-root or
+    // absolute — resolved with the editor's own DocResolve so both key identically.
+    private static void SweepDocs(IGame[] games)
+    {
+        try
+        {
+            // Everything prefetch: path(lower) → (size, mtime ticks). Scoped to this sweep, cleared below.
+            var pre = new Dictionary<string, (long Size, long Ticks)>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                string root = MediaResolver.LbRoot ?? "";
+                string manuals = root.Length > 0 ? Path.Combine(root, "Manuals") : "";
+                if (manuals.Length > 0 && Directory.Exists(manuals) && Gc.EverythingBridge.IsEverythingAvailable())
+                    foreach (var f in Gc.EverythingBridge.GetFilesWithInfoExtended(manuals))
+                        pre[f.FullPath] = (f.FileSize, f.DateModified.Ticks);
+            }
+            catch { }
+
+            var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int stats = 0, docs = 0;
+            foreach (var g in games)
+            {
+                var apps = SafeApps(g);
+                if (apps == null) continue;
+                foreach (var a in apps)
+                {
+                    if (a is not Data.HostAdditionalApplication { IsDocument: true } h) continue;
+                    string abs = EditGameWindow.DocResolve(h.ApplicationPath);
+                    if (string.IsNullOrEmpty(abs)) continue;
+                    docs++;
+                    long size, ticks;
+                    if (pre.TryGetValue(abs, out var m)) { size = m.Size; ticks = m.Ticks; }
+                    else
+                    {
+                        stats++;
+                        try { var fi = new FileInfo(abs); if (!fi.Exists) continue; size = fi.Length; ticks = fi.LastWriteTimeUtc.Ticks; }
+                        catch { continue; }
+                    }
+                    valid.Add(EditGameWindow.DocThumbFileName(abs, size, ticks));
+                }
+            }
+            pre.Clear();   // prefetch no longer needed once the mark is built
+
+            int kept = 0, deleted = 0, spared = 0;
+            var cutoff = DateTime.UtcNow - Grace;
+            foreach (var f in Directory.GetFiles(ThumbCache.DocFolder))
+            {
+                string name = Path.GetFileName(f);
+                if (name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;   // in-flight render
+                bool del;
+                if (System.Text.RegularExpressions.Regex.IsMatch(name, @"^doc-[0-9a-f]{32}\.png$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    if (valid.Contains(name)) { kept++; continue; }
+                    try { del = File.GetLastWriteTimeUtc(f) <= cutoff; } catch { del = false; }
+                    if (!del) { spared++; continue; }
+                }
+                else del = true;   // never a legitimate doc thumb — swept regardless of age
+                try { File.Delete(f); deleted++; } catch { }
+            }
+            Console.WriteLine($"[thumbgc] docs: {valid.Count} valid keys over {docs} documents "
+                + $"({stats} disk stats) — kept {kept}, deleted {deleted}, spared {spared} recent");
+            valid.Clear();
+        }
+        catch (Exception ex) { Console.WriteLine("[thumbgc] docs failed: " + ex.Message); }
+    }
+
+    private static Unbroken.LaunchBox.Plugins.Data.IAdditionalApplication[]? SafeApps(IGame g)
+    { try { return g.GetAllAdditionalApplications(); } catch { return null; } }
 
     // Video-thumb sweep (thumbs\video), right after the degraded one:
     //   vid-    (local-video frames)  : mark-and-sweep — valid-set = the vid- key of EVERY video the game
@@ -141,6 +217,7 @@ internal static class ThumbGc
             }
             Console.WriteLine($"[thumbgc] video: {valid.Count} valid vid- keys ({stats} disk stats) "
                 + $"— kept {kept}, deleted {deleted}, spared {spared} recent");
+            valid.Clear();
         }
         catch (Exception ex) { Console.WriteLine("[thumbgc] video failed: " + ex.Message); }
     }

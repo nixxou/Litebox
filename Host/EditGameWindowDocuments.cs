@@ -306,8 +306,9 @@ internal sealed partial class EditGameWindow
         return (root.Length > 0 && plat.Length > 0) ? Path.Combine(root, "Manuals", plat) : "";
     }
 
-    /// <summary>A stored path (LB writes it relative to the LB root, or absolute) → absolute.</summary>
-    private static string DocResolve(string? stored)
+    /// <summary>A stored path (LB writes it relative to the LB root, or absolute) → absolute.
+    /// Internal: the thumb GC resolves document paths with the SAME rule before keying.</summary>
+    internal static string DocResolve(string? stored)
     {
         if (string.IsNullOrWhiteSpace(stored)) return "";
         try { return Path.IsPathRooted(stored) ? stored : (DocLbRoot().Length > 0 ? Path.GetFullPath(Path.Combine(DocLbRoot(), stored)) : stored); }
@@ -668,7 +669,7 @@ internal sealed partial class EditGameWindow
         System.Threading.Tasks.Task.Run(() =>
         {
             Bitmap? bmp = null;
-            try { bmp = DocThumb(absPath, Math.Max(maxW, maxH)); } catch { }
+            try { bmp = DocThumb(absPath, DocRenderDim); } catch { }   // fixed dim: DPI-independent cache key; the Zoom PictureBox scales down
             bmp ??= DocBadge(Path.GetExtension(absPath), maxW, maxH);
             try
             {
@@ -708,16 +709,29 @@ internal sealed partial class EditGameWindow
         return bmp;
     }
 
+    /// <summary>Render dimension of the cached document previews. FIXED (not DPI-derived) so the cache
+    /// key is stable across monitors/zoom levels and the thumb GC can compute it — the Zoom PictureBox
+    /// scales the 512px render down to whatever the cell needs.</summary>
+    internal const int DocRenderDim = 512;
+
     private static string? DocThumbCachePath(string absPath, int maxDim)
     {
         try
         {
             var fi = new FileInfo(absPath); if (!fi.Exists) return null;
-            string key = absPath.ToLowerInvariant() + "|" + fi.Length + "|" + fi.LastWriteTimeUtc.Ticks + "|" + maxDim;
-            using var md5 = MD5.Create();
-            return Path.Combine(ThumbCache.DocFolder, "doc-" + Convert.ToHexString(md5.ComputeHash(Encoding.UTF8.GetBytes(key))).ToLowerInvariant() + ".png");
+            return Path.Combine(ThumbCache.DocFolder, DocThumbFileName(absPath, fi.Length, fi.LastWriteTimeUtc.Ticks, maxDim));
         }
         catch { return null; }
+    }
+
+    /// <summary>The exact cache FILENAME of a document preview given (path, size, mtime) — single source
+    /// of truth for the doc- key, shared with the thumb GC's valid-set (which feeds sizes/dates from an
+    /// Everything prefetch or one stat, never re-hashing here).</summary>
+    internal static string DocThumbFileName(string absPath, long size, long modifiedTicks, int maxDim = DocRenderDim)
+    {
+        string key = absPath.ToLowerInvariant() + "|" + size + "|" + modifiedTicks + "|" + maxDim;
+        using var md5 = MD5.Create();
+        return "doc-" + Convert.ToHexString(md5.ComputeHash(Encoding.UTF8.GetBytes(key))).ToLowerInvariant() + ".png";
     }
 
     private static string[]? SafeReadLines(string path, int max)

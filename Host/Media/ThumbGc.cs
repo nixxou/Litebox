@@ -78,7 +78,11 @@ internal static class ThumbGc
                 string name = Path.GetFileName(f);
                 if (name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;   // in-flight generation
                 if (valid.Contains(name)) { kept++; continue; }
-                try { if (File.GetLastWriteTimeUtc(f) > cutoff) { spared++; continue; } } catch { }
+                // Grace only protects files that COULD be legitimate thumbs (a fresh source the cache does
+                // not know yet). A name outside the key format (<16hex>_<size>_<dim>[a].jpg/.webp) never is
+                // — stray copies, hand-dropped files — and is swept regardless of age.
+                if (LooksLikeThumbKey(name))
+                    try { if (File.GetLastWriteTimeUtc(f) > cutoff) { spared++; continue; } } catch { }
                 try { File.Delete(f); deleted++; } catch { }
             }
             Console.WriteLine($"[thumbgc] degraded: {valid.Count} valid keys over {games.Length} games "
@@ -86,6 +90,11 @@ internal static class ThumbGc
         }
         catch (Exception ex) { Console.WriteLine("[thumbgc] failed: " + ex.Message); }
     }
+
+    // <16 hex>_<digits>_<digits>[a] + .jpg/.webp — ThumbCache.KeyFor's exact shape.
+    private static bool LooksLikeThumbKey(string name)
+        => System.Text.RegularExpressions.Regex.IsMatch(
+               name, @"^[0-9a-f]{16}_\d+_\d+a?\.(jpg|webp)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     // Size of a resolved source, cache-first: when the source IS the game cache's ★★ pick for the slot's
     // regroupement, its FileSize rides along (free when Everything-built, one memoised stat otherwise).

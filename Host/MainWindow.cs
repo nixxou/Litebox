@@ -4178,11 +4178,22 @@ internal sealed class MainWindow : Form, IMessageFilter
         var games = Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>();
         if (games.Length == 0) return;
 
-        using var opts = new GenerateCacheOptionsForm();
+        // The previous run's selection is re-proposed (GenCacheSelection csv in LiteBox.ini).
+        var saved = new HashSet<string>(
+            (_cfg.Get("GenCacheSelection", null) ?? "Front,Screenshots")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.OrdinalIgnoreCase);
+        using var opts = new GenerateCacheOptionsForm(saved);
         if (opts.ShowDialog(this) != DialogResult.OK) return;
 
+        var chosen = opts.SelectedRegroupements;
+        var csvParts = new List<string>(chosen);
+        if (opts.Videos) csvParts.Add("videos");
+        if (opts.Docs) csvParts.Add("docs");
+        try { _cfg.Set("GenCacheSelection", string.Join(",", csvParts)); _cfg.Save(); } catch { }
+
         // Open-ended phase list — the coming 3D-model (GLB) bake slots in as just another CachePhase.
-        var phases = BuildCachePhases(opts.SelectedRegroupements, opts.Videos, opts.Docs);
+        var phases = BuildCachePhases(chosen, opts.Videos, opts.Docs);
         if (phases.Count == 0) return;
 
         var dlg = new GenerateCacheProgressForm(phases, games);
@@ -5658,7 +5669,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         private readonly float _s;
         private int S(int px) => (int)Math.Round(px * _s);
 
-        public GenerateCacheOptionsForm()
+        /// <param name="initial">Pre-checked entries: regroupement keys + "videos"/"docs" — the saved
+        /// selection of the previous run.</param>
+        public GenerateCacheOptionsForm(ISet<string> initial)
         {
             _s = DeviceDpi / 96f;
             Text = "Generate Media Cache";
@@ -5674,20 +5687,19 @@ internal sealed class MainWindow : Form, IMessageFilter
                                      ForeColor = Fg, Font = new Font("Segoe UI Semibold", 9f) };
             Controls.Add(header);
 
-            // Every regroupement, two columns; Box fronts + Screenshots pre-checked (the detail-pane pair).
+            // Every regroupement, two columns; checked = the previous run's saved selection.
             int i = 0, rows = (CacheRegroupements.Length + 1) / 2;
             foreach (var (key, title) in CacheRegroupements)
             {
-                bool def = key is "Front" or "Screenshots";
-                var cb = Cb(title, 32 + (i / rows) * 170, 34 + (i % rows) * 24, def);
+                var cb = Cb(title, 32 + (i / rows) * 170, 34 + (i % rows) * 24, initial.Contains(key));
                 _regs[key] = cb;
                 Controls.Add(cb);
                 i++;
             }
             int yAfter = 34 + rows * 24 + 12;
 
-            _video = Cb("Video thumbnails", 16, yAfter, false, 320);
-            _doc = Cb("Document thumbnails", 16, yAfter + 24, false, 320);
+            _video = Cb("Video thumbnails", 16, yAfter, initial.Contains("videos"), 320);
+            _doc = Cb("Document thumbnails", 16, yAfter + 24, initial.Contains("docs"), 320);
             Controls.Add(_video); Controls.Add(_doc);
 
             int yBtn = yAfter + 24 * 2 + 16;

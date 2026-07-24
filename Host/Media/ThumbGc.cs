@@ -52,21 +52,41 @@ internal static class ThumbGc
             var games = PluginHelper.DataManager?.GetAllGames();
             if (games == null || games.Length == 0) return;
 
-            // ── mark ──
+            // Per-cleaner opt-outs (Options → Caches). Read once; the GC runs once per launch anyway.
+            var cfg = LiteBoxConfig.LoadForExe();
+            bool doImages = cfg.GetBool("CleanThumbsImages", true);
+            bool doVideos = cfg.GetBool("CleanThumbsVideo", true);
+            bool doDocs = cfg.GetBool("CleanThumbsDocs", true);
+            bool doWebImg = cfg.GetBool("CleanThumbsWebImg", true);
+            bool doRelated = cfg.GetBool("CleanThumbsRelated", true);
+
+            if (doImages) SweepDegraded(games);
+            else Console.WriteLine("[thumbgc] degraded sweep disabled (option)");
+            if (doVideos) SweepVideos(games); else Console.WriteLine("[thumbgc] video sweep disabled (option)");
+            if (doDocs) SweepDocs(games); else Console.WriteLine("[thumbgc] docs sweep disabled (option)");
+            if (doWebImg) SweepWebImg(); else Console.WriteLine("[thumbgc] webimg sweep disabled (option)");
+            if (doRelated) SweepRelated(); else Console.WriteLine("[thumbgc] related sweep disabled (option)");
+        }
+        catch (Exception ex) { Console.WriteLine("[thumbgc] failed: " + ex.Message); }
+    }
+
+    private static void SweepDegraded(IGame[] games)
+    {
+        try
+        {
+            // ── mark: the ★★ pick of EVERY regroupement the bulk generator can produce (same list, same
+            // resolution) — a generatable thumb must be a marked thumb, or the sweep would eat it. ──
             var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int stats = 0;
             foreach (var g in games)
             {
-                var srcs = MainWindow.ResolveCacheSources(g);
-                if (srcs == null) continue;
-                for (int slot = 0; slot < 3; slot++)
+                foreach (var (reg, _) in MainWindow.CacheRegroupements)
                 {
-                    string? src = srcs[slot];
+                    string? src = MainWindow.CacheSourceFor(g, reg);
                     if (string.IsNullOrEmpty(src)) continue;
-                    long size = SourceSize(g, slot, src, ref stats);
+                    long size = SourceSize(g, reg, src, ref stats);
                     if (size < 0) continue;
-                    // slot 0 = clear logo → alpha/webp; the others → opaque/jpg (the consumers' rule).
-                    valid.Add(ThumbCache.FileNameFor(src, size, ThumbCache.DefaultMaxDim, keepAlpha: slot == 0));
+                    valid.Add(ThumbCache.FileNameFor(src, size, ThumbCache.DefaultMaxDim, keepAlpha: reg == "ClearLogo"));
                 }
             }
             if (valid.Count == 0) return;   // degenerate mark — never wipe the folder on an empty set
@@ -88,14 +108,9 @@ internal static class ThumbGc
             }
             Console.WriteLine($"[thumbgc] degraded: {valid.Count} valid keys over {games.Length} games "
                 + $"({stats} disk stats) — kept {kept}, deleted {deleted}, spared {spared} recent");
-
             valid.Clear();          // release the mark structures before the next sweeps run
-            SweepVideos(games);
-            SweepDocs(games);
-            SweepWebImg();
-            SweepRelated();
         }
-        catch (Exception ex) { Console.WriteLine("[thumbgc] failed: " + ex.Message); }
+        catch (Exception ex) { Console.WriteLine("[thumbgc] degraded failed: " + ex.Message); }
     }
 
     // Document-thumb sweep (thumbs\docs), after the video one. Documents are AdditionalApplication
@@ -285,14 +300,13 @@ internal static class ThumbGc
     // Size of a resolved source, cache-first: when the source IS the game cache's ★★ pick for the slot's
     // regroupement, its FileSize rides along (free when Everything-built, one memoised stat otherwise).
     // Fallback-resolved sources (cache had no pick — e.g. Box3D standing in for a missing Front) pay a stat.
-    private static long SourceSize(IGame g, int slot, string src, ref int stats)
+    private static long SourceSize(IGame g, string regroupement, string src, ref int stats)
     {
         try
         {
             string plat = g.Platform;
             if (!string.IsNullOrEmpty(plat) && Gc.HostGameCache.Ready(plat) && Guid.TryParse(g.Id, out var id))
             {
-                string regroupement = slot == 0 ? "ClearLogo" : slot == 1 ? "Front" : "Screenshots";
                 var r = Gc.HostGameCache.BestImageRefTypeFirst(plat, id, regroupement);
                 if (r != null && string.Equals(r.FullPath, src, StringComparison.OrdinalIgnoreCase))
                 {

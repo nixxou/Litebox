@@ -1967,6 +1967,24 @@ internal sealed class MainWindow : Form, IMessageFilter
         flow.Controls.Add(new Label { Text = LiteBoxPaths.Data, AutoSize = true, ForeColor = dim, BackColor = Bg,
             Font = mono, Margin = new Padding(0, 0, 0, S(2)) });
 
+        // ── Automatic cache cleaning opt-outs (read by ThumbGc / ThumbCache at the NEXT launch) ──
+        flow.Controls.Add(Header("Automatic cache cleaning"));
+        flow.Controls.Add(Sub("Background cleaners that run once per launch, after the game cache is ready. "
+            + "Unchecking disables that cleaner (takes effect at the next LiteBox start)."));
+        void AddClean(string label, string key)
+        {
+            var cb = new CheckBox { Text = label, AutoSize = true, Checked = _cfg.GetBool(key, true),
+                                    ForeColor = Fg, BackColor = Bg, Margin = new Padding(S(6), 0, 0, S(2)) };
+            cb.CheckedChanged += (_, _) => { try { _cfg.SetBool(key, cb.Checked); _cfg.Save(); } catch { } };
+            flow.Controls.Add(cb);
+        }
+        AddClean("Image thumbnails (unused / stale entries)", "CleanThumbsImages");
+        AddClean("Video thumbnails", "CleanThumbsVideo");
+        AddClean("Document thumbnails", "CleanThumbsDocs");
+        AddClean("Web-image previews (unused for 30 days)", "CleanThumbsWebImg");
+        AddClean("Related-games thumbnails (junk files)", "CleanThumbsRelated");
+        AddClean("Size-budget sweep (500 MB cap on the thumbs tree)", "CleanThumbsBudget");
+
         var cacheRefreshers = new List<Action>();
 
         void AddRow(DataMaintenance.Item it)
@@ -4107,16 +4125,50 @@ internal sealed class MainWindow : Form, IMessageFilter
     internal static string[] ResolveCacheSources(IGame g)   // internal: --thumbtest replays this headless
     {
         if (g == null) return null;
-        string logo = DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath));
-        string box = DetailSource(g, "Front", () =>
+        return new[] { CacheSourceFor(g, "ClearLogo"), CacheSourceFor(g, "Front"), CacheSourceFor(g, "Screenshots") };
+    }
+
+    /// <summary>Every image regroupement offerable in the bulk cache generator, in display order — the
+    /// SAME list drives the selection modal, the generation phases and the thumb GC's valid-set (a thumb
+    /// the generator can produce must be a thumb the GC marks, or it would sweep it after 48 h).</summary>
+    internal static readonly (string Key, string Title)[] CacheRegroupements =
+    {
+        ("ClearLogo", "Clear logos"),
+        ("Front", "Box fronts"),
+        ("Back", "Box backs"),
+        ("Box3d", "3D boxes"),
+        ("BoxSpine", "Box spines"),
+        ("BoxFull", "Box full scans"),
+        ("CartFront", "Cart fronts"),
+        ("CartBack", "Cart backs"),
+        ("Cart3d", "3D carts"),
+        ("Screenshots", "Screenshots"),
+        ("Background", "Backgrounds"),
+        ("Marquee", "Marquees"),
+    };
+
+    /// <summary>The source image the UI would thumb-cache for (game, regroupement): the game cache's ★★
+    /// pick first, then the IGame path fallback of that regroupement (the classic three keep their longer
+    /// chains — detail-pane parity). Null when the game simply has no such image.</summary>
+    internal static string CacheSourceFor(IGame g, string regroupement) => regroupement switch
+    {
+        "ClearLogo" => DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath)),
+        "Front" => DetailSource(g, "Front", () =>
               Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
             : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
-            : Safe(() => g.ScreenshotImagePath));
-        string shot = DetailSource(g, "Screenshots", () =>
+            : Safe(() => g.ScreenshotImagePath)),
+        "Screenshots" => DetailSource(g, "Screenshots", () =>
               Safe(() => g.ScreenshotImagePath) is { Length: > 0 } s ? s
-            : Safe(() => g.BackgroundImagePath));
-        return new[] { logo, box, shot };
-    }
+            : Safe(() => g.BackgroundImagePath)),
+        "Back" => DetailSource(g, "Back", () => Safe(() => g.BackImagePath)),
+        "Box3d" => DetailSource(g, "Box3d", () => Safe(() => g.Box3DImagePath)),
+        "CartFront" => DetailSource(g, "CartFront", () => Safe(() => g.CartFrontImagePath)),
+        "CartBack" => DetailSource(g, "CartBack", () => Safe(() => g.CartBackImagePath)),
+        "Cart3d" => DetailSource(g, "Cart3d", () => Safe(() => g.Cart3DImagePath)),
+        "Background" => DetailSource(g, "Background", () => Safe(() => g.BackgroundImagePath)),
+        "Marquee" => DetailSource(g, "Marquee", () => Safe(() => g.MarqueeImagePath)),
+        _ => DetailSource(g, regroupement, () => null),   // BoxSpine / BoxFull: cache-only (no IGame property)
+    };
 
     private GenerateCacheProgressForm? _genCacheLive;   // restore the running generation instead of double-launching
 
@@ -4130,7 +4182,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (opts.ShowDialog(this) != DialogResult.OK) return;
 
         // Open-ended phase list — the coming 3D-model (GLB) bake slots in as just another CachePhase.
-        var phases = BuildCachePhases(opts.Logos, opts.Fronts, opts.Shots, opts.Videos, opts.Docs);
+        var phases = BuildCachePhases(opts.SelectedRegroupements, opts.Videos, opts.Docs);
         if (phases.Count == 0) return;
 
         var dlg = new GenerateCacheProgressForm(phases, games);
@@ -4139,14 +4191,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         dlg.ShowPseudoModal(this);
     }
 
-    // One image REGROUPEMENT per phase (slot: 0=clear logo→webp/alpha, 1=box front, 2=screenshot).
+    // One image REGROUPEMENT per phase (ClearLogo → webp/alpha, everything else → jpg).
     // Failures are counted only when a source EXISTS and still would not generate (Magick trouble).
-    private static CachePhase ImagePhase(string title, int slot) => new(title, Math.Min(4, Math.Max(1, Environment.ProcessorCount)), g =>
+    private static CachePhase ImagePhase(string title, string regroupement) => new(title, Math.Min(4, Math.Max(1, Environment.ProcessorCount)), g =>
     {
-        var s = ResolveCacheSources(g);
-        string? src = s?[slot];
+        string src = CacheSourceFor(g, regroupement);
         if (string.IsNullOrEmpty(src)) return 0;
-        return ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: slot == 0) == null && File.Exists(src) ? 1 : 0;
+        return ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: regroupement == "ClearLogo") == null && File.Exists(src) ? 1 : 0;
     });
 
     // Every video of the game (cache-first, IGame fallback) — frame-extracted unless already cached.
@@ -4207,12 +4258,11 @@ internal sealed class MainWindow : Form, IMessageFilter
     /// (returns the number of FAILURES for that game). The progress dialog runs the phases in order.</summary>
     internal sealed record CachePhase(string Title, int Dop, Func<IGame, int> Work);
 
-    private List<CachePhase> BuildCachePhases(bool logos, bool fronts, bool shots, bool videos, bool docs)
+    private List<CachePhase> BuildCachePhases(ISet<string> regroupements, bool videos, bool docs)
     {
         var phases = new List<CachePhase>();
-        if (logos) phases.Add(ImagePhase("Clear logos", 0));
-        if (fronts) phases.Add(ImagePhase("Box fronts", 1));
-        if (shots) phases.Add(ImagePhase("Screenshots", 2));
+        foreach (var (key, title) in CacheRegroupements)
+            if (regroupements.Contains(key)) phases.Add(ImagePhase(title, key));
         if (videos) phases.Add(new CachePhase("Video thumbnails", 1, VideoWork));
         if (docs) phases.Add(new CachePhase("Document thumbnails", 1, DocWork));
         return phases;
@@ -4225,9 +4275,14 @@ internal sealed class MainWindow : Form, IMessageFilter
         try
         {
             var sel = csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            bool Has(string k) => sel.Contains(k, StringComparer.OrdinalIgnoreCase);
+            bool Has(string k) => sel.Contains(k, StringComparer.OrdinalIgnoreCase) || sel.Contains("all", StringComparer.OrdinalIgnoreCase);
             var games = Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>();
-            var phases = BuildCachePhases(Has("logos"), Has("fronts"), Has("shots"), Has("videos"), Has("docs"));
+            var regs = new HashSet<string>(CacheRegroupements.Select(r => r.Key).Where(Has), StringComparer.OrdinalIgnoreCase);
+            // legacy aliases from the pre-regroupement driver csv
+            if (Has("logos")) regs.Add("ClearLogo");
+            if (Has("fronts")) regs.Add("Front");
+            if (Has("shots")) regs.Add("Screenshots");
+            var phases = BuildCachePhases(regs, Has("videos"), Has("docs"));
             Console.WriteLine($"[gencache] phases=[{string.Join(", ", phases.Select(p => p.Title))}] games={games.Length}");
             if (phases.Count == 0 || games.Length == 0) { Application.Exit(); return; }
 
@@ -5593,13 +5648,13 @@ internal sealed class MainWindow : Form, IMessageFilter
 
     private sealed class GenerateCacheOptionsForm : Form
     {
-        public bool Logos => _logo.Checked;
-        public bool Fronts => _front.Checked;
-        public bool Shots => _shot.Checked;
+        public ISet<string> SelectedRegroupements =>
+            _regs.Where(kv => kv.Value.Checked).Select(kv => kv.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         public bool Videos => _video.Checked;
         public bool Docs => _doc.Checked;
 
-        private readonly CheckBox _logo, _front, _shot, _video, _doc;
+        private readonly Dictionary<string, CheckBox> _regs = new(StringComparer.OrdinalIgnoreCase);
+        private readonly CheckBox _video, _doc;
         private readonly float _s;
         private int S(int px) => (int)Math.Round(px * _s);
 
@@ -5610,28 +5665,41 @@ internal sealed class MainWindow : Form, IMessageFilter
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            ClientSize = new Size(S(340), S(238));
             BackColor = Bg; ForeColor = Fg; Font = new Font("Segoe UI", 9f);
 
-            CheckBox Cb(string text, int x, int y, bool check) =>
-                new() { Text = text, Location = new Point(S(x), S(y)), Size = new Size(S(300), S(22)), Checked = check, ForeColor = Fg };
+            CheckBox Cb(string text, int x, int y, bool check, int w = 158) =>
+                new() { Text = text, Location = new Point(S(x), S(y)), Size = new Size(S(w), S(22)), Checked = check, ForeColor = Fg };
 
             var header = new Label { Text = "Image thumbnails", Location = new Point(S(16), S(12)), Size = new Size(S(300), S(20)),
                                      ForeColor = Fg, Font = new Font("Segoe UI Semibold", 9f) };
-            _logo = Cb("Clear logos", 32, 34, false);
-            _front = Cb("Box fronts", 32, 58, true);
-            _shot = Cb("Screenshots", 32, 82, true);
-            _video = Cb("Video thumbnails", 16, 116, false);
-            _doc = Cb("Document thumbnails", 16, 140, false);
+            Controls.Add(header);
 
-            var ok = new Button { Text = "Generate", Location = new Point(S(134), S(188)), Size = new Size(S(90), S(28)),
+            // Every regroupement, two columns; Box fronts + Screenshots pre-checked (the detail-pane pair).
+            int i = 0, rows = (CacheRegroupements.Length + 1) / 2;
+            foreach (var (key, title) in CacheRegroupements)
+            {
+                bool def = key is "Front" or "Screenshots";
+                var cb = Cb(title, 32 + (i / rows) * 170, 34 + (i % rows) * 24, def);
+                _regs[key] = cb;
+                Controls.Add(cb);
+                i++;
+            }
+            int yAfter = 34 + rows * 24 + 12;
+
+            _video = Cb("Video thumbnails", 16, yAfter, false, 320);
+            _doc = Cb("Document thumbnails", 16, yAfter + 24, false, 320);
+            Controls.Add(_video); Controls.Add(_doc);
+
+            int yBtn = yAfter + 24 * 2 + 16;
+            var ok = new Button { Text = "Generate", Location = new Point(S(174), S(yBtn)), Size = new Size(S(90), S(28)),
                                   FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, DialogResult = DialogResult.OK };
-            var cancel = new Button { Text = "Cancel", Location = new Point(S(232), S(188)), Size = new Size(S(90), S(28)),
+            var cancel = new Button { Text = "Cancel", Location = new Point(S(272), S(yBtn)), Size = new Size(S(90), S(28)),
                                       FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, DialogResult = DialogResult.Cancel };
             ok.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
             cancel.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
             AcceptButton = ok; CancelButton = cancel;
-            Controls.AddRange(new Control[] { header, _logo, _front, _shot, _video, _doc, ok, cancel });
+            Controls.Add(ok); Controls.Add(cancel);
+            ClientSize = new Size(S(380), S(yBtn + 42));
         }
     }
 

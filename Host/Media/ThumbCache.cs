@@ -128,6 +128,7 @@ internal static class ThumbCache
         {
             try
             {
+                if (!LiteBoxConfig.LoadForExe().GetBool("CleanThumbsBudget", true)) return;   // Options → Caches opt-out
                 var files = new DirectoryInfo(Dir).GetFiles("*", SearchOption.AllDirectories);
                 long total = 0;
                 foreach (var f in files) total += f.Length;

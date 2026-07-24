@@ -76,7 +76,11 @@ internal static class ThumbGc
         {
             // ── mark: the ★★ pick of EVERY regroupement the bulk generator can produce (same list, same
             // resolution) — a generatable thumb must be a marked thumb, or the sweep would eat it. ──
+            // valid  = the CURRENT-format filenames (kept verbatim).
+            // bases  = the ext-less keys of known sources → lets us tell an OBSOLETE file (known key, wrong
+            //          container after a PNG↔WebP switch → delete now) from an UNKNOWN key (grace).
             var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var bases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int stats = 0;
             foreach (var g in games)
             {
@@ -86,30 +90,37 @@ internal static class ThumbGc
                     if (string.IsNullOrEmpty(src)) continue;
                     long size = SourceSize(g, reg, src, ref stats);
                     if (size < 0) continue;
-                    foreach (var name in ThumbCache.FileNamesFor(src, size, ThumbCache.DefaultMaxDim, ThumbCache.FormatFor(reg)))
+                    var fmt = ThumbCache.FormatFor(reg);
+                    foreach (var name in ThumbCache.FileNamesFor(src, size, ThumbCache.DefaultMaxDim, fmt))
                         valid.Add(name);
+                    bases.Add(ThumbCache.KeyBaseFor(src, size, ThumbCache.DefaultMaxDim, fmt));
                 }
             }
             if (valid.Count == 0) return;   // degenerate mark — never wipe the folder on an empty set
 
             // ── sweep ──
-            int kept = 0, deleted = 0, spared = 0;
+            int kept = 0, deleted = 0, obsolete = 0, spared = 0;
             var cutoff = DateTime.UtcNow - Grace;
             foreach (var f in Directory.GetFiles(ThumbCache.DegradedFolder))
             {
                 string name = Path.GetFileName(f);
                 if (name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;   // in-flight generation
                 if (valid.Contains(name)) { kept++; continue; }
-                // Grace only protects files that COULD be legitimate thumbs (a fresh source the cache does
-                // not know yet). A name outside the key format (<16hex>_<size>_<dim>[a].jpg/.webp) never is
-                // — stray copies, hand-dropped files — and is swept regardless of age.
                 if (LooksLikeThumbKey(name))
+                {
+                    // Known key, but this file is not the current-format one → obsolete container left by a
+                    // format switch: delete immediately (the correct format regenerates on next view).
+                    if (bases.Contains(Path.GetFileNameWithoutExtension(name)))
+                    { try { File.Delete(f); obsolete++; } catch { } continue; }
+                    // Unknown key that still LOOKS like a thumb → a fresh source the cache may not know yet:
+                    // grace-protect the recent ones.
                     try { if (File.GetLastWriteTimeUtc(f) > cutoff) { spared++; continue; } } catch { }
-                try { File.Delete(f); deleted++; } catch { }
+                }
+                try { File.Delete(f); deleted++; } catch { }   // junk name, or grace-expired unknown key
             }
             Console.WriteLine($"[thumbgc] degraded: {valid.Count} valid keys over {games.Length} games "
-                + $"({stats} disk stats) — kept {kept}, deleted {deleted}, spared {spared} recent");
-            valid.Clear();          // release the mark structures before the next sweeps run
+                + $"({stats} disk stats) — kept {kept}, deleted {deleted}, obsolete-format {obsolete}, spared {spared} recent");
+            valid.Clear(); bases.Clear();   // release the mark structures before the next sweeps run
         }
         catch (Exception ex) { Console.WriteLine("[thumbgc] degraded failed: " + ex.Message); }
     }
@@ -296,7 +307,7 @@ internal static class ThumbGc
     // <16 hex>_<digits>_<digits>[a] + .jpg/.webp — ThumbCache.KeyFor's exact shape.
     private static bool LooksLikeThumbKey(string name)
         => System.Text.RegularExpressions.Regex.IsMatch(
-               name, @"^[0-9a-f]{16}_\d+_\d+a?\.(jpg|webp)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+               name, @"^[0-9a-f]{16}_\d+_\d+a?\.(jpg|png|webp)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     // Size of a resolved source, cache-first: when the source IS the game cache's ★★ pick for the slot's
     // regroupement, its FileSize rides along (free when Everything-built, one memoised stat otherwise).

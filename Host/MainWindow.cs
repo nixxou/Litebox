@@ -2010,19 +2010,36 @@ internal sealed class MainWindow : Form, IMessageFilter
         AddClean("Related-games thumbnails (junk files)", "CleanThumbsRelated");
         AddClean("Size-budget sweep (500 MB cap on the thumbs tree)", "CleanThumbsBudget");
 
-        // ── Per-regroupement thumbnail format (Webp / Jpg / Auto) ──
+        // ── Thumbnail format: global transparent container + per-regroupement policy ──
         flow.Controls.Add(Header("Thumbnail image format"));
-        flow.Controls.Add(Sub("WebP keeps transparency but decodes slower (and needs Magick to read); JPEG is "
-            + "the fastest, opaque only. Auto = JPEG for a JPEG source, and for a PNG: WebP if it really has "
-            + "transparency, else JPEG. Changing a format re-generates that type's thumbnails on next use."));
+        flow.Controls.Add(Sub("Transparent thumbnails are stored as PNG (decodes natively — fast to scroll) "
+            + "or WebP (smaller on disk, but only decodes through Magick, which stutters on scroll). "
+            + "Switching re-generates transparent thumbnails and the automatic cleaner removes the old ones."));
+        var alphaRow = new Panel { Width = S(360), Height = S(26), BackColor = Bg, Margin = new Padding(S(6), 0, 0, S(4)) };
+        alphaRow.Controls.Add(new Label { Text = "Transparent format", AutoSize = false, Size = new Size(S(180), S(22)),
+            Location = new Point(0, S(3)), ForeColor = Fg, BackColor = Bg });
+        var alphaCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(184), 0),
+            Size = new Size(S(140), S(22)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+        alphaCombo.Items.AddRange(new object[] { "PNG (fast)", "WebP (small)" });
+        alphaCombo.SelectedIndex = ThumbCache.AlphaExt() == ".webp" ? 1 : 0;
+        alphaCombo.SelectedIndexChanged += (_, _) =>
+        {
+            try { _cfg.Set("ThumbAlphaFormat", alphaCombo.SelectedIndex == 1 ? "webp" : "png"); _cfg.Save();
+                  ThumbCache.InvalidateAlphaFormat(); } catch { }
+        };
+        alphaRow.Controls.Add(alphaCombo);
+        flow.Controls.Add(alphaRow);
+
+        flow.Controls.Add(Sub("Per image type: Auto (JPEG for photos, transparent format only when the image "
+            + "really has transparency), JPEG (always, opaque), or Transparent (always keep alpha)."));
         var fmtCombos = new Dictionary<string, ComboBox>(StringComparer.OrdinalIgnoreCase);
         void SaveFormats()
         {
-            var webp = new List<string>(); var jpg = new List<string>();
+            var alpha = new List<string>(); var jpg = new List<string>();
             foreach (var (key, _) in CacheRegroupements)
                 if (fmtCombos.TryGetValue(key, out var cb))
-                    switch (cb.SelectedIndex) { case 1: jpg.Add(key); break; case 2: webp.Add(key); break; }
-            try { _cfg.Set("ThumbWebpRegroupements", string.Join(",", webp));
+                    switch (cb.SelectedIndex) { case 1: jpg.Add(key); break; case 2: alpha.Add(key); break; }
+            try { _cfg.Set("ThumbAlphaRegroupements", string.Join(",", alpha));
                   _cfg.Set("ThumbJpgRegroupements", string.Join(",", jpg)); _cfg.Save();
                   ThumbCache.InvalidateFormatCache(); } catch { }
         }
@@ -2032,10 +2049,10 @@ internal sealed class MainWindow : Form, IMessageFilter
             row.Controls.Add(new Label { Text = title, AutoSize = false, Size = new Size(S(180), S(22)),
                 Location = new Point(0, S(3)), ForeColor = Fg, BackColor = Bg });
             var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(184), 0),
-                Size = new Size(S(120), S(22)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
-            combo.Items.AddRange(new object[] { "Auto", "JPEG", "WebP" });
+                Size = new Size(S(140), S(22)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+            combo.Items.AddRange(new object[] { "Auto", "JPEG", "Transparent" });
             combo.SelectedIndex = ThumbCache.FormatFor(key) switch
-            { ThumbCache.ThumbFormat.Jpg => 1, ThumbCache.ThumbFormat.Webp => 2, _ => 0 };
+            { ThumbCache.ThumbFormat.Jpg => 1, ThumbCache.ThumbFormat.Png => 2, _ => 0 };
             combo.SelectedIndexChanged += (_, _) => SaveFormats();
             fmtCombos[key] = combo;
             row.Controls.Add(combo);

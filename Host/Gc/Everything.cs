@@ -130,6 +130,9 @@ namespace LbApiHost.Host.Gc
         /// <summary>File size in bytes.</summary>
         public long FileSize { get; set; }
 
+        /// <summary>LastWriteTimeUtc.Ticks, or -1 when the enumeration did not request dates.</summary>
+        public long ModifiedTicks { get; set; } = -1;
+
         /// <summary>Parent directory path (Path.GetDirectoryName(FullPath)).</summary>
         public string DirectoryPath { get; set; }
     }

@@ -295,6 +295,11 @@ namespace LbApiHost.Host.Gc
         /// <summary>File size in bytes; -1 means "not yet resolved" (lazy via Ref).</summary>
         public long FileSize;
 
+        /// <summary>LastWriteTimeUtc.Ticks; -1 means "not yet resolved" (lazy via Ref). Filled at build
+        /// time for free in BOTH modes (Everything's index / the fallback walk's find-data) — part of the
+        /// video thumb-cache key, so the thumb GC can mark without disk stats.</summary>
+        public long ModifiedTicks;
+
         /// <summary>True if the filename embeds the game's GUID.</summary>
         public bool HasGuid;
 
@@ -430,6 +435,23 @@ namespace LbApiHost.Host.Gc
             }
             catch { }
             return vid.FileSize;
+        }
+
+        /// <summary>
+        /// Returns LastWriteTimeUtc.Ticks. If unknown (&lt;= 0), reads it
+        /// from disk once and writes it back into the source struct.
+        /// </summary>
+        public long GetModifiedTicks()
+        {
+            ref var vid = ref _array[_index];
+            if (vid.ModifiedTicks > 0) return vid.ModifiedTicks;
+            try
+            {
+                var fi = new FileInfo(FullPath);
+                if (fi.Exists) vid.ModifiedTicks = fi.LastWriteTimeUtc.Ticks;
+            }
+            catch { }
+            return vid.ModifiedTicks;
         }
     }
 
@@ -1220,7 +1242,7 @@ namespace LbApiHost.Host.Gc
 
         private void ScanVideoDir(string dirPath, string subDir, bool useEverything)
         {
-            foreach (var fi in EnumerateFiles(dirPath, VideoExtensions, useEverything, topOnly: true))
+            foreach (var fi in EnumerateFiles(dirPath, VideoExtensions, useEverything, topOnly: true, withDates: true))
             {
                 string ext = Path.GetExtension(fi.FullPath);
                 if (!VideoExtensions.Contains(ext)) continue;
@@ -1245,6 +1267,7 @@ namespace LbApiHost.Host.Gc
                         SubDir = subDir,
                         Ext = ParseVideoExt(ext),
                         FileSize = fi.FileSize,
+                        ModifiedTicks = fi.ModifiedTicks,
                         HasGuid = true,
                         GuidMiddle = string.IsNullOrEmpty(middle) ? null : middle,
                     });
@@ -1266,6 +1289,7 @@ namespace LbApiHost.Host.Gc
                     SubDir = subDir,
                     Ext = ParseVideoExt(ext),
                     FileSize = fi.FileSize,
+                    ModifiedTicks = fi.ModifiedTicks,
                     HasGuid = false,
                 };
 
@@ -1339,16 +1363,52 @@ namespace LbApiHost.Host.Gc
         /// </summary>
         private static FileInfoResult[] EnumerateFiles(
             string absolutePath, HashSet<string> extensions,
-            bool useEverything, bool topOnly = false)
+            bool useEverything, bool topOnly = false, bool withDates = false)
         {
             if (useEverything)
             {
+                if (withDates)
+                {
+                    // Same single query with the DATE_MODIFIED flag added — the date comes from
+                    // Everything's in-RAM index, so this is still zero disk IO.
+                    return EverythingBridge.GetFilesWithInfoExtended(absolutePath, "*.*")
+                        .Where(f => extensions.Contains(Path.GetExtension(f.FullPath)))
+                        .Select(f => new FileInfoResult
+                        {
+                            FullPath = f.FullPath,
+                            FileSize = f.FileSize,
+                            ModifiedTicks = f.DateModified.Ticks,
+                            DirectoryPath = f.DirectoryPath,
+                        })
+                        .ToArray();
+                }
                 return EverythingBridge.GetFilesWithInfo(absolutePath, "*.*")
                     .Where(f => extensions.Contains(Path.GetExtension(f.FullPath)))
                     .ToArray();
             }
 
             var option = topOnly ? SearchOption.TopDirectoryOnly : SearchOption.AllDirectories;
+            if (withDates)
+            {
+                // DirectoryInfo enumeration: each FileInfo arrives pre-populated from the directory's
+                // find-data, so size + date cost NO extra stat over the plain string walk.
+                return new DirectoryInfo(absolutePath)
+                    .EnumerateFiles("*.*", option)
+                    .Where(f => extensions.Contains(f.Extension))
+                    .Select(f =>
+                    {
+                        long size = -1, ticks = -1;
+                        try { size = f.Length; ticks = f.LastWriteTimeUtc.Ticks; } catch { }
+                        return new FileInfoResult
+                        {
+                            FullPath = f.FullName,
+                            FileSize = size,
+                            ModifiedTicks = ticks,
+                            DirectoryPath = f.DirectoryName,
+                        };
+                    })
+                    .ToArray();
+            }
             return Directory
                 .EnumerateFiles(absolutePath, "*.*", option)
                 .Where(f => extensions.Contains(Path.GetExtension(f)))

@@ -12,8 +12,8 @@
 //          (zero disk stats); a stat is paid only for fallback-resolved sources / unknown sizes.
 //   sweep: delete every degraded\ file whose name is not in the valid-set. In-flight .tmp files and
 //          files younger than the grace window are spared (a thumb generated for a source the cache
-//          does not know YET — fresh image, stale cache — must not churn). The budget sweep stays as
-//          the global backstop for video\/webimg\/docs\ (no valid-set of their own yet).
+//          does not know YET — fresh image, stale cache — must not churn). Then the video-thumb sweep
+//          runs (see SweepVideos). The budget sweep stays as the global backstop for webimg\/docs\.
 //
 // Runs ONCE per process, in the background, kicked when the host GameCache flips global-ready
 // (HostGameCache.OnReady) — the mark needs the cache settled. Cache disabled → never runs (the
@@ -87,8 +87,62 @@ internal static class ThumbGc
             }
             Console.WriteLine($"[thumbgc] degraded: {valid.Count} valid keys over {games.Length} games "
                 + $"({stats} disk stats) — kept {kept}, deleted {deleted}, spared {spared} recent");
+
+            SweepVideos(games);
         }
         catch (Exception ex) { Console.WriteLine("[thumbgc] failed: " + ex.Message); }
+    }
+
+    // Video-thumb sweep (thumbs\video), right after the degraded one:
+    //   vid-    (local-video frames)  : mark-and-sweep — valid-set = the vid- key of EVERY video the game
+    //           cache knows (path + size + mtime ride the cache build in both modes, so marking is
+    //           IO-free); unknown keys older than the grace window are deleted (a replaced/renamed video
+    //           re-keys, orphaning its old frame).
+    //   vidweb- (web-video frames)    : short-lived editor previews keyed by DB row CRC — no local file to
+    //           mark against; anything older than the grace window is deleted (re-decoded on demand).
+    //   other names                   : never legitimate here (except in-flight .tmp) — deleted on sight.
+    private static void SweepVideos(IGame[] games)
+    {
+        try
+        {
+            var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int stats = 0;
+            foreach (var g in games)
+            {
+                string plat = g.Platform;
+                if (string.IsNullOrEmpty(plat) || !Gc.HostGameCache.Ready(plat) || !Guid.TryParse(g.Id, out var id)) continue;
+                foreach (var v in Gc.HostGameCache.AllVideoRefs(plat, id))
+                {
+                    if (v?.FullPath is not { Length: > 0 }) continue;
+                    long size = v.Value.FileSize, ticks = v.Value.ModifiedTicks;
+                    if (size < 0) { stats++; size = v.GetFileSize(); }
+                    if (ticks <= 0) { stats++; ticks = v.GetModifiedTicks(); }
+                    if (size < 0 || ticks <= 0) continue;
+                    valid.Add(Video.VideoThumbnailer.CacheFileName(v.FullPath, size, ticks));
+                }
+            }
+
+            int kept = 0, deleted = 0, spared = 0;
+            var cutoff = DateTime.UtcNow - Grace;
+            bool Old(string f) { try { return File.GetLastWriteTimeUtc(f) <= cutoff; } catch { return false; } }
+            foreach (var f in Directory.GetFiles(ThumbCache.VideoFolder))
+            {
+                string name = Path.GetFileName(f);
+                if (name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;   // in-flight extraction
+                bool del;
+                if (System.Text.RegularExpressions.Regex.IsMatch(name, @"^vid-[0-9a-f]{32}\.jpg$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    del = !valid.Contains(name) && Old(f);
+                else if (System.Text.RegularExpressions.Regex.IsMatch(name, @"^vidweb-[0-9a-f]{32}\.jpg$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    del = Old(f);
+                else
+                    del = true;   // never a legitimate video thumb — swept regardless of age
+                if (!del) { if (valid.Contains(name)) kept++; else spared++; continue; }
+                try { File.Delete(f); deleted++; } catch { }
+            }
+            Console.WriteLine($"[thumbgc] video: {valid.Count} valid vid- keys ({stats} disk stats) "
+                + $"— kept {kept}, deleted {deleted}, spared {spared} recent");
+        }
+        catch (Exception ex) { Console.WriteLine("[thumbgc] video failed: " + ex.Message); }
     }
 
     // <16 hex>_<digits>_<digits>[a] + .jpg/.webp — ThumbCache.KeyFor's exact shape.

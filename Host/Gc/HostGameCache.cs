@@ -69,6 +69,11 @@ namespace LbApiHost.Host.Gc
         public static bool HasAnyVideo(string plat, Guid id)
         { try { var l = Game(plat, id)?.FindAllVideos(); return l != null && l.Count > 0; } catch { return false; } }
 
+        /// <summary>Every video of the game as REFS (path + lazily-memoised FileSize/ModifiedTicks) —
+        /// lets the thumb GC build the vid- valid-set without disk stats (both fields ride the build).</summary>
+        public static List<GameCacheVideoRef> AllVideoRefs(string plat, Guid id)
+        { try { return Game(plat, id)?.FindAllVideos() ?? new List<GameCacheVideoRef>(); } catch { return new List<GameCacheVideoRef>(); } }
+
         // ── Lifecycle ─────────────────────────────────────────────────────────
         /// <summary>Build the cache (async; flips IsGlobalReady when done). No-op if disabled.
         /// Logs whether Everything is active, and the element counts once the build finishes.</summary>

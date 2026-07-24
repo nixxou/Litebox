@@ -231,13 +231,20 @@ internal static class VideoThumbnailer
         try
         {
             var fi = new FileInfo(videoPath);
-            string key = videoPath.ToLowerInvariant() + "|" + fi.Length + "|" + fi.LastWriteTimeUtc.Ticks
-                       + "|" + MaxDim + "|v" + Position.ToString("0.###", CultureInfo.InvariantCulture);   // invariant: the key must not depend on the locale
-            using var md5 = MD5.Create();
-            return Path.Combine(Media.ThumbCache.VideoFolder,
-                "vid-" + Convert.ToHexString(md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(key))).ToLowerInvariant() + ".jpg");
+            return Path.Combine(Media.ThumbCache.VideoFolder, CacheFileName(videoPath, fi.Length, fi.LastWriteTimeUtc.Ticks));
         }
         catch { return null; }
+    }
+
+    /// <summary>The exact cache FILENAME for a local video's frame given its (path, size, mtime) — the
+    /// single source of truth for the vid- key, shared with the thumb GC's valid-set (which feeds it
+    /// sizes/dates from the game cache instead of stat'ing the disk).</summary>
+    internal static string CacheFileName(string videoPath, long size, long modifiedTicks)
+    {
+        string key = videoPath.ToLowerInvariant() + "|" + size + "|" + modifiedTicks
+                   + "|" + MaxDim + "|v" + Position.ToString("0.###", CultureInfo.InvariantCulture);   // invariant: the key must not depend on the locale
+        using var md5 = MD5.Create();
+        return "vid-" + Convert.ToHexString(md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(key))).ToLowerInvariant() + ".jpg";
     }
 
     // Web videos: same video sub-folder, "vidweb-" prefix. Keyed by the caller (the DB row's CRC — immutable for a row),

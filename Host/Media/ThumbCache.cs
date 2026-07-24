@@ -1,8 +1,8 @@
 // Degraded-thumbnail cache for the GUI.
 //
-//   • On-disk directory       : <LB>\Core\litebox\cache\thumbs — LiteBox-OWN, like every file LiteBox
-//     creates (integration-extenddb: nothing lives under Plugins\ExtendDB anymore). The legacy shared
-//     dir is left alone for a real LaunchBox+ExtendDB on the same install; thumbs regenerate on demand.
+//   • On-disk directory       : <LB>\Core\litebox\cache\thumbs\degraded — LiteBox-OWN, like every file
+//     LiteBox creates (integration-extenddb: nothing lives under Plugins\ExtendDB anymore). The legacy
+//     shared dir is left alone for a real LaunchBox+ExtendDB install; thumbs regenerate on demand.
 //   • KEY algorithm           : unchanged (historically byte-identical to ExtendDB's KeyFor).
 //   • Output                  : JPEG q72 (keepAlpha=false) / WebP q82 w/ alpha
 //     (keepAlpha=true, used for clear logos). "WxH>" = shrink-to-fit, never upscale.
@@ -61,10 +61,13 @@ internal static class ThumbCache
     public static void Init(string lbRoot)
         => _dir = Path.Combine(LiteBoxPaths.Data, "cache", "thumbs");
 
-    /// <summary>The thumbs directory (ROOT), created on demand. Holds the game's OWN image thumbnails.
-    /// Video frames and web-image previews live in dedicated SUB-folders
-    /// (<see cref="VideoFolder"/> / <see cref="WebImgFolder"/>) so the root stays purely the game-image set.</summary>
+    /// <summary>The thumbs directory (ROOT), created on demand. Pure container: every thumbnail family
+    /// lives in its own SUB-folder (<see cref="DegradedFolder"/> for the game's own image thumbnails,
+    /// <see cref="VideoFolder"/> / <see cref="WebImgFolder"/> / <see cref="DocFolder"/> for the rest).</summary>
     public static string Folder => Dir;
+
+    /// <summary>Sub-folder for the game's OWN degraded image thumbnails (the GetOrCreate/GetCachedOnly set).</summary>
+    public static string DegradedFolder => Sub("degraded");
 
     /// <summary>Sub-folder for VIDEO thumbnails (local frames + web-video frames). See Host.Video.VideoThumbnailer.</summary>
     public static string VideoFolder => Sub("video");
@@ -180,7 +183,7 @@ internal static class ThumbCache
         long size;
         try { var fi = new FileInfo(sourcePath); if (!fi.Exists) return null; size = fi.Length; }
         catch { return null; }
-        try { return Path.Combine(Dir, KeyFor(sourcePath, size, maxDim, keepAlpha) + (keepAlpha ? ".webp" : ".jpg")); }
+        try { return Path.Combine(DegradedFolder, KeyFor(sourcePath, size, maxDim, keepAlpha) + (keepAlpha ? ".webp" : ".jpg")); }
         catch { return null; }
     }
 

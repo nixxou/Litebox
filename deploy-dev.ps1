@@ -34,7 +34,10 @@ $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 if (-not $Lb10Root) { $Lb10Root = [IO.Path]::GetFullPath((Join-Path $here '..\..\..\LB')) }
 $proj = Join-Path $here 'LiteBox.csproj'
-$hostFiles = @('LiteBox.exe', 'LiteBox.dll', 'LiteBox.deps.json', 'LiteBox.runtimeconfig.json')
+# Mirror LightPayload.Files (the installer's Core set): forgetting a loose app dll here means the dev
+# installs silently lose the feature it backs (Magick absent = thumb generation no-ops, for one).
+$hostFiles = @('LiteBox.exe', 'LiteBox.dll', 'LiteBox.deps.json', 'LiteBox.runtimeconfig.json',
+               'LibVLCSharp.dll', 'ZstdSharp.dll', 'Magick.NET-Q16-AnyCPU.dll', 'Magick.NET.Core.dll')
 $sites = @('litebox', 'bigbox', 'vendor')
 $fail = $false
 

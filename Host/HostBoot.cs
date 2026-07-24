@@ -253,6 +253,19 @@ internal static class HostBoot
             Platforms.EditPlatformRenderProbe.RenderCategory(lbR, cat, outDir);
             return 0;
         }
+        // --thumb-gen <imagePath>: generate the degraded thumbnail for one image and print the cache path —
+        // headless test of the ThumbCache pipeline (Magick presence, cache dir layout).
+        if (args.Contains("--thumb-gen"))
+        {
+            string src = GetArg(args, "--thumb-gen") ?? "";
+            string lbRt = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            Media.MagickSupport.Init(lbRt);
+            Media.ThumbCache.Init(lbRt);
+            var outPath = Media.ThumbCache.GetOrCreate(src, keepAlpha: false);
+            Console.WriteLine("[thumb-gen] src    = " + src);
+            Console.WriteLine("[thumb-gen] result = " + (outPath ?? "NULL (generation failed — Magick missing from Core, or unreadable source)"));
+            return outPath != null ? 0 : 1;
+        }
         // --fbneo-hiscore <destFile>: extract the embedded FBNeo hiscore.dat to a path (test the embed/extract).
         if (args.Contains("--fbneo-hiscore"))
         {

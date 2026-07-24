@@ -5467,6 +5467,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         private readonly Button _cancel;
         private readonly System.Threading.CancellationTokenSource _cts = new();
         private int _done;
+        private int _failed;
         private readonly float _s;
         private int S(int px) => (int)Math.Round(px * _s);
 
@@ -5512,9 +5513,12 @@ internal sealed class MainWindow : Form, IMessageFilter
                             var s = _resolve(g);
                             if (s != null)
                             {
-                                if (!string.IsNullOrEmpty(s[0])) ThumbCache.GetOrCreate(s[0], ThumbCache.DefaultMaxDim, keepAlpha: true);
-                                if (!string.IsNullOrEmpty(s[1])) ThumbCache.GetOrCreate(s[1], ThumbCache.DefaultMaxDim, keepAlpha: false);
-                                if (!string.IsNullOrEmpty(s[2])) ThumbCache.GetOrCreate(s[2], ThumbCache.DefaultMaxDim, keepAlpha: false);
+                                // GetOrCreate returns null when generation FAILED (typically Magick.NET
+                                // missing from Core) — count those so the dialog can't claim success
+                                // while writing nothing.
+                                if (!string.IsNullOrEmpty(s[0]) && ThumbCache.GetOrCreate(s[0], ThumbCache.DefaultMaxDim, keepAlpha: true) == null) System.Threading.Interlocked.Increment(ref _failed);
+                                if (!string.IsNullOrEmpty(s[1]) && ThumbCache.GetOrCreate(s[1], ThumbCache.DefaultMaxDim, keepAlpha: false) == null) System.Threading.Interlocked.Increment(ref _failed);
+                                if (!string.IsNullOrEmpty(s[2]) && ThumbCache.GetOrCreate(s[2], ThumbCache.DefaultMaxDim, keepAlpha: false) == null) System.Threading.Interlocked.Increment(ref _failed);
                             }
                         }
                         catch { }
@@ -5536,7 +5540,20 @@ internal sealed class MainWindow : Form, IMessageFilter
         private void Finish()
         {
             if (IsDisposed) return;
-            try { BeginInvoke((Action)(() => { if (!IsDisposed) { DialogResult = DialogResult.OK; Close(); } })); }
+            try
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    if (IsDisposed) return;
+                    int failed = _failed;
+                    if (failed > 0 && !_cts.IsCancellationRequested)
+                        MessageBox.Show(this,
+                            $"{failed} thumbnail(s) could not be generated.\n\nMost likely cause: Magick.NET is missing from Core " +
+                            "(Magick.NET-Q16-AnyCPU.dll + Magick.NET.Core.dll next to LiteBox.exe).",
+                            "Generate Image Cache", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    DialogResult = DialogResult.OK; Close();
+                }));
+            }
             catch { }
         }
 

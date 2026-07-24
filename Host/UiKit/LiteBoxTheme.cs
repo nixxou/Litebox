@@ -18,7 +18,8 @@ internal static class LiteBoxTheme
     // captured into each Swatch.Default below (field initializers run top-to-bottom, so these are set
     // before the Swatches array reads them).
     public static Color Bg        = Color.FromArgb(30, 30, 30);
-    public static Color PanelC    = Color.FromArgb(37, 37, 38);
+    public static Color PanelC    = Color.FromArgb(32, 33, 40);   // #202128 — LaunchBox look: side panels (tree, detail)
+    public static Color Center    = Color.FromArgb(42, 43, 52);   // #2A2B34 — the centre game-list column
     public static Color Panel2    = Color.FromArgb(45, 45, 48);
     public static Color Fg        = Color.FromArgb(222, 222, 222);
     public static Color SubFg     = Color.FromArgb(150, 150, 152);
@@ -42,7 +43,8 @@ internal static class LiteBoxTheme
     public static readonly Swatch[] Swatches =
     {
         new() { Key = "Bg",        Name = "Window background",   Default = Bg,        Get = () => Bg,        Set = c => Bg = c },
-        new() { Key = "PanelC",    Name = "Panel / header",      Default = PanelC,    Get = () => PanelC,    Set = c => PanelC = c },
+        new() { Key = "PanelC",    Name = "Side panels",         Default = PanelC,    Get = () => PanelC,    Set = c => PanelC = c },
+        new() { Key = "Center",    Name = "Centre game list",    Default = Center,    Get = () => Center,    Set = c => Center = c },
         new() { Key = "Panel2",    Name = "Field / input",       Default = Panel2,    Get = () => Panel2,    Set = c => Panel2 = c },
         new() { Key = "Fg",        Name = "Text",                Default = Fg,        Get = () => Fg,        Set = c => Fg = c },
         new() { Key = "SubFg",     Name = "Secondary text",      Default = SubFg,     Get = () => SubFg,     Set = c => SubFg = c },

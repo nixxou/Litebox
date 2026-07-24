@@ -34,9 +34,10 @@ internal sealed class MainWindow : Form, IMessageFilter
     // palette change only has one place to edit. Row2 has no LiteBoxTheme equivalent (a striped-row
     // shade specific to this list), so it stays local.
     private static readonly Color Bg      = LiteBoxTheme.Bg;
-    private static readonly Color Panel   = LiteBoxTheme.PanelC;
+    private static readonly Color Panel   = LiteBoxTheme.PanelC;   // side panels (tree, detail) — #202128
+    private static readonly Color Center  = LiteBoxTheme.Center;   // centre game-list column — #2A2B34
     private static readonly Color Panel2  = LiteBoxTheme.Panel2;
-    private static readonly Color Row2    = Color.FromArgb(34, 34, 36);
+    private static readonly Color Row2    = Color.FromArgb(47, 48, 58);   // striped-row alt: a hair lighter than Center (#2A2B34)
     private static readonly Color Fg      = LiteBoxTheme.Fg;
     private static readonly Color SubFg   = LiteBoxTheme.SubFg;
     private static readonly Color Accent  = LiteBoxTheme.Accent;
@@ -276,7 +277,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _poster = BuildPoster();
 
         var inner = new ThemedSplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
-        inner.Panel1.BackColor = Panel;       // shows in the side margins around the centred poster grid
+        inner.Panel1.BackColor = Center;      // centre column — #2A2B34 (shows in the poster-grid side margins too)
         inner.Panel1.Controls.Add(_poster);   // hidden until poster mode; same cell as the list
         inner.Panel1.Controls.Add(_games);
         // Launch buttons docked at the bottom of the details pane (always visible,
@@ -662,8 +663,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         var lv = new GameListView
         {
-            Dock = DockStyle.Fill, Font = Font, BackColor = Panel, ForeColor = Fg,
-            Striped = true, RowBack = Panel, RowAlt = Row2, RowFore = Fg,
+            Dock = DockStyle.Fill, Font = Font, BackColor = Center, ForeColor = Fg,   // centre column — #2A2B34
+            Striped = true, RowBack = Center, RowAlt = Row2, RowFore = Fg,
         };
 
         // key = stable INI identity; never localise it. sort = comparable value; text = displayed
@@ -2718,7 +2719,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             // panel's right edge — so icons (left-aligned) start at the centred position, the empty
             // slack falls on the right, and the vertical scrollbar stays at the right edge.
             Dock = DockStyle.None, View = View.LargeIcon, VirtualMode = true, OwnerDraw = od,
-            BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None, MultiSelect = true,
+            BackColor = Center, ForeColor = Fg, BorderStyle = BorderStyle.None, MultiSelect = true,
             Visible = false, HideSelection = false, Scrollable = true,
             LargeImageList = od ? _posterGeom : null,
         };

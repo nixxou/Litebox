@@ -204,6 +204,20 @@ internal static class ThumbCache
         return File.Exists(target) ? target : null;
     }
 
+    /// <summary>Refresh a cache file's LastWriteTimeUtc — throttled to once a day — so AGE-based purges
+    /// (the webimg 30-day TTL) measure last USE, not creation. Only meaningful for families whose key
+    /// does NOT include the mtime (webimg); cheap metadata write, failures swallowed.</summary>
+    internal static void TouchForLru(string path)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            if (now - File.GetLastWriteTimeUtc(path) < TimeSpan.FromDays(1)) return;
+            File.SetLastWriteTimeUtc(path, now);
+        }
+        catch { }
+    }
+
     /// <summary>The exact cache FILENAME (key + extension) a source would map to — used by the
     /// mark-and-sweep GC (ThumbGc) to build its valid-set without touching the disk.</summary>
     internal static string FileNameFor(string sourcePath, long size, int maxDim, bool keepAlpha)

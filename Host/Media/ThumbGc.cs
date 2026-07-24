@@ -92,6 +92,8 @@ internal static class ThumbGc
             valid.Clear();          // release the mark structures before the next sweeps run
             SweepVideos(games);
             SweepDocs(games);
+            SweepWebImg();
+            SweepRelated();
         }
         catch (Exception ex) { Console.WriteLine("[thumbgc] failed: " + ex.Message); }
     }
@@ -168,6 +170,59 @@ internal static class ThumbGc
 
     private static Unbroken.LaunchBox.Plugins.Data.IAdditionalApplication[]? SafeApps(IGame g)
     { try { return g.GetAllAdditionalApplications(); } catch { return null; } }
+
+    // Web-image previews (thumbs\webimg): no local source to mark against — their "source" is a remote DB
+    // row (editor stand-ins keyed MD5(WebImage.Key), 32-hex; web-UI materialised covers keyed <dbid>.<ext>).
+    // Validity therefore = USE: both read paths TouchForLru on hit, and anything not touched for 30 days is
+    // dropped (a re-fetch costs network, so the TTL is deliberately long — 48h would defeat multi-day
+    // scraping sessions). Junk names are swept on sight as everywhere else.
+    private static readonly TimeSpan WebImgTtl = TimeSpan.FromDays(30);
+
+    private static void SweepWebImg()
+    {
+        try
+        {
+            int kept = 0, deleted = 0;
+            var cutoff = DateTime.UtcNow - WebImgTtl;
+            foreach (var f in Directory.GetFiles(ThumbCache.WebImgFolder))
+            {
+                string name = Path.GetFileName(f);
+                if (name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;   // in-flight write
+                bool conforming =
+                    System.Text.RegularExpressions.Regex.IsMatch(name, @"^[0-9a-f]{32}\.jpg$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                    || System.Text.RegularExpressions.Regex.IsMatch(name, @"^\d+\.[a-z0-9]{1,5}$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                bool del = !conforming;
+                if (conforming)
+                    try { del = File.GetLastWriteTimeUtc(f) <= cutoff; } catch { del = false; }
+                if (!del) { kept++; continue; }
+                try { File.Delete(f); deleted++; } catch { }
+            }
+            Console.WriteLine($"[thumbgc] webimg: TTL {WebImgTtl.TotalDays:0}d — kept {kept}, deleted {deleted}");
+        }
+        catch (Exception ex) { Console.WriteLine("[thumbgc] webimg failed: " + ex.Message); }
+    }
+
+    // Related-games card thumbs (cache\related-thumbs): already self-bounded by design (RAM LRU 300 +
+    // disk count-cap 500→400 at write time, see RelatedGamesUi.RelatedThumbCache) — only the junk-name
+    // rule applies here ({dbid}.jpg is the one legitimate shape).
+    private static void SweepRelated()
+    {
+        try
+        {
+            string? dir = LiteBoxPaths.Dir("cache") is { } c ? Path.Combine(c, "related-thumbs") : null;
+            if (dir == null || !Directory.Exists(dir)) return;
+            int deleted = 0;
+            foreach (var f in Directory.GetFiles(dir))
+            {
+                string name = Path.GetFileName(f);
+                if (name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
+                if (System.Text.RegularExpressions.Regex.IsMatch(name, @"^\d+\.jpg$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
+                try { File.Delete(f); deleted++; } catch { }
+            }
+            if (deleted > 0) Console.WriteLine($"[thumbgc] related-thumbs: deleted {deleted} junk file(s)");
+        }
+        catch (Exception ex) { Console.WriteLine("[thumbgc] related failed: " + ex.Message); }
+    }
 
     // Video-thumb sweep (thumbs\video), right after the degraded one:
     //   vid-    (local-video frames)  : mark-and-sweep — valid-set = the vid- key of EVERY video the game

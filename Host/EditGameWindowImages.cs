@@ -1371,7 +1371,8 @@ internal sealed partial class EditGameWindow
         string? path = ImgWebThumbPath(w.Key);
         if (path != null && File.Exists(path))
         {
-            try { return File.ReadAllBytes(path); } catch { try { File.Delete(path); } catch { } }   // corrupt → refetch
+            try { var b = File.ReadAllBytes(path); ThumbCache.TouchForLru(path); return b; }   // touch: the 30-day TTL measures USE
+            catch { try { File.Delete(path); } catch { } }   // corrupt → refetch
         }
         var preview = ImgEncodeWebPreview(ImgFetchWebBytes(w));
         if (preview != null && path != null) ImgSaveThumbAtomic(path, preview);

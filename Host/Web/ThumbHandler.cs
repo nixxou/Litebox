@@ -44,6 +44,8 @@ internal static class ThumbHandler
                 if (!File.Exists(srcPath)) return HttpResponse.NotFound();
             }
 
+            ThumbCache.TouchForLru(srcPath);   // the 30-day webimg TTL measures USE (throttled; degraded key has no mtime, so safe)
+
             // Degrade. On a miss with Magick absent this returns null → serve the full source instead of failing.
             var thumbPath = ThumbCache.GetOrCreate(srcPath) ?? srcPath;
             var thumbBytes = File.ReadAllBytes(thumbPath);

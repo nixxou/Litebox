@@ -564,6 +564,10 @@ internal sealed class MainWindow : Form, IMessageFilter
                 }
                 catch (Exception ex) { Console.WriteLine("[edit-emu] " + ex.Message); }
             }
+            else if (HostBoot.AutoGenCache != null)
+            {
+                BeginInvoke((Action)(() => GenCacheSelfTest(HostBoot.AutoGenCache)));
+            }
             else if (HostBoot.AutoOptions != null)
             {
                 BeginInvoke((Action)(() =>
@@ -4114,12 +4118,139 @@ internal sealed class MainWindow : Form, IMessageFilter
         return new[] { logo, box, shot };
     }
 
+    private GenerateCacheProgressForm? _genCacheLive;   // restore the running generation instead of double-launching
+
     private void GenerateAllCachedImages()
     {
+        if (_genCacheLive is { IsDisposed: false } live) { try { live.RestoreFromMinimized(); } catch { } return; }
         var games = Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>();
         if (games.Length == 0) return;
-        using var dlg = new GenerateCacheForm(games, ResolveCacheSources);
-        dlg.ShowDialog(this);
+
+        using var opts = new GenerateCacheOptionsForm();
+        if (opts.ShowDialog(this) != DialogResult.OK) return;
+
+        // Open-ended phase list — the coming 3D-model (GLB) bake slots in as just another CachePhase.
+        var phases = BuildCachePhases(opts.Logos, opts.Fronts, opts.Shots, opts.Videos, opts.Docs);
+        if (phases.Count == 0) return;
+
+        var dlg = new GenerateCacheProgressForm(phases, games);
+        _genCacheLive = dlg;
+        dlg.FormClosed += (_, _) => _genCacheLive = null;
+        dlg.ShowPseudoModal(this);
+    }
+
+    // One image REGROUPEMENT per phase (slot: 0=clear logo→webp/alpha, 1=box front, 2=screenshot).
+    // Failures are counted only when a source EXISTS and still would not generate (Magick trouble).
+    private static CachePhase ImagePhase(string title, int slot) => new(title, Math.Min(4, Math.Max(1, Environment.ProcessorCount)), g =>
+    {
+        var s = ResolveCacheSources(g);
+        string? src = s?[slot];
+        if (string.IsNullOrEmpty(src)) return 0;
+        return ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: slot == 0) == null && File.Exists(src) ? 1 : 0;
+    });
+
+    // Every video of the game (cache-first, IGame fallback) — frame-extracted unless already cached.
+    private static int VideoWork(IGame g)
+    {
+        int fail = 0;
+        foreach (var p in VideoPathsOf(g))
+        {
+            try
+            {
+                if (Video.VideoThumbnailer.IsCached(p)) continue;
+                using var img = Video.VideoThumbnailer.Get(p);
+                if (img == null) fail++;
+            }
+            catch { fail++; }
+        }
+        return fail;
+    }
+
+    private static List<string> VideoPathsOf(IGame g)
+    {
+        var res = new List<string>();
+        try
+        {
+            string plat = g.Platform;
+            if (!string.IsNullOrEmpty(plat) && Gc.HostGameCache.Ready(plat) && Guid.TryParse(g.Id, out var id))
+                foreach (var v in Gc.HostGameCache.AllVideoRefs(plat, id))
+                    if (v?.FullPath is { Length: > 0 } p) res.Add(p);
+            if (res.Count == 0)
+            {
+                var p = Safe(() => g.GetVideoPath(false));
+                if (!string.IsNullOrEmpty(p) && File.Exists(p)) res.Add(p);
+            }
+        }
+        catch { }
+        return res;
+    }
+
+    // Every document of the game (AdditionalApplication Section=Document), rendered at DocRenderDim.
+    private static int DocWork(IGame g)
+    {
+        int fail = 0;
+        try
+        {
+            foreach (var a in g.GetAllAdditionalApplications() ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IAdditionalApplication>())
+            {
+                if (a is not Data.HostAdditionalApplication { IsDocument: true } h) continue;
+                string abs = EditGameWindow.DocResolve(h.ApplicationPath);
+                if (string.IsNullOrEmpty(abs) || !File.Exists(abs)) continue;
+                if (!EditGameWindow.DocEnsureThumb(abs)) fail++;
+            }
+        }
+        catch { }
+        return fail;
+    }
+
+    /// <summary>One step of the bulk cache generation: a title, its parallelism, and the per-game worker
+    /// (returns the number of FAILURES for that game). The progress dialog runs the phases in order.</summary>
+    internal sealed record CachePhase(string Title, int Dop, Func<IGame, int> Work);
+
+    private List<CachePhase> BuildCachePhases(bool logos, bool fronts, bool shots, bool videos, bool docs)
+    {
+        var phases = new List<CachePhase>();
+        if (logos) phases.Add(ImagePhase("Clear logos", 0));
+        if (fronts) phases.Add(ImagePhase("Box fronts", 1));
+        if (shots) phases.Add(ImagePhase("Screenshots", 2));
+        if (videos) phases.Add(new CachePhase("Video thumbnails", 1, VideoWork));
+        if (docs) phases.Add(new CachePhase("Document thumbnails", 1, DocWork));
+        return phases;
+    }
+
+    // --gencache driver: runs the REAL progress form pseudo-modally, verifies the owner block, drives the
+    // Minimize button (verifies the unblock), waits for completion and exits. Prints [gencache] lines.
+    private void GenCacheSelfTest(string csv)
+    {
+        try
+        {
+            var sel = csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            bool Has(string k) => sel.Contains(k, StringComparer.OrdinalIgnoreCase);
+            var games = Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>();
+            var phases = BuildCachePhases(Has("logos"), Has("fronts"), Has("shots"), Has("videos"), Has("docs"));
+            Console.WriteLine($"[gencache] phases=[{string.Join(", ", phases.Select(p => p.Title))}] games={games.Length}");
+            if (phases.Count == 0 || games.Length == 0) { Application.Exit(); return; }
+
+            var dlg = new GenerateCacheProgressForm(phases, games);
+            _genCacheLive = dlg;
+            dlg.FormClosed += (_, _) =>
+            {
+                Console.WriteLine($"[gencache] finished: failed={dlg.FailedCount}");
+                _genCacheLive = null;
+                BeginInvoke((Action)Application.Exit);
+            };
+            dlg.ShowPseudoModal(this);
+            var t = new System.Windows.Forms.Timer { Interval = 2000 };
+            t.Tick += (_, _) =>
+            {
+                t.Stop(); t.Dispose();
+                Console.WriteLine($"[gencache] pseudo-modal: owner.Enabled={Enabled} (expect False)");
+                dlg.DriveMinimize();
+                Console.WriteLine($"[gencache] after minimize: owner.Enabled={Enabled} (expect True), state={dlg.WindowState}");
+            };
+            t.Start();
+        }
+        catch (Exception ex) { Console.WriteLine("[gencache] " + ex.Message); Application.Exit(); }
     }
 
     // Generate/load the right-pane images OFF the UI thread (degraded thumbs from the
@@ -5454,87 +5585,172 @@ internal sealed class MainWindow : Form, IMessageFilter
         }
     }
 
-    // ── Bulk image-cache generation modal ────────────────────────────────────
-    // Generates the per-game cached thumbnails in parallel (≤ min(4, cores)) with a
-    // progress bar keyed on the number of games. Cancellable; idempotent (cache HITs
-    // are skipped instantly, so re-running only fills the gaps).
-    private sealed class GenerateCacheForm : Form
+    // ── Bulk cache generation (selection modal + two-bar progress) ───────────
+    // The options modal picks WHICH caches to generate (per image regroupement, videos, documents);
+    // the progress form runs the CachePhase list with two bars — phase-level and per-game — and is
+    // pseudo-modal: shown non-modal with the owner disabled, so its Minimize button can hand control
+    // back (owner re-enabled, window to the taskbar) while generation keeps running in the background.
+
+    private sealed class GenerateCacheOptionsForm : Form
     {
+        public bool Logos => _logo.Checked;
+        public bool Fronts => _front.Checked;
+        public bool Shots => _shot.Checked;
+        public bool Videos => _video.Checked;
+        public bool Docs => _doc.Checked;
+
+        private readonly CheckBox _logo, _front, _shot, _video, _doc;
+        private readonly float _s;
+        private int S(int px) => (int)Math.Round(px * _s);
+
+        public GenerateCacheOptionsForm()
+        {
+            _s = DeviceDpi / 96f;
+            Text = "Generate Media Cache";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
+            ClientSize = new Size(S(340), S(238));
+            BackColor = Bg; ForeColor = Fg; Font = new Font("Segoe UI", 9f);
+
+            CheckBox Cb(string text, int x, int y, bool check) =>
+                new() { Text = text, Location = new Point(S(x), S(y)), Size = new Size(S(300), S(22)), Checked = check, ForeColor = Fg };
+
+            var header = new Label { Text = "Image thumbnails", Location = new Point(S(16), S(12)), Size = new Size(S(300), S(20)),
+                                     ForeColor = Fg, Font = new Font("Segoe UI Semibold", 9f) };
+            _logo = Cb("Clear logos", 32, 34, false);
+            _front = Cb("Box fronts", 32, 58, true);
+            _shot = Cb("Screenshots", 32, 82, true);
+            _video = Cb("Video thumbnails", 16, 116, false);
+            _doc = Cb("Document thumbnails", 16, 140, false);
+
+            var ok = new Button { Text = "Generate", Location = new Point(S(134), S(188)), Size = new Size(S(90), S(28)),
+                                  FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, DialogResult = DialogResult.OK };
+            var cancel = new Button { Text = "Cancel", Location = new Point(S(232), S(188)), Size = new Size(S(90), S(28)),
+                                      FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, DialogResult = DialogResult.Cancel };
+            ok.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
+            cancel.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
+            AcceptButton = ok; CancelButton = cancel;
+            Controls.AddRange(new Control[] { header, _logo, _front, _shot, _video, _doc, ok, cancel });
+        }
+    }
+
+    private sealed class GenerateCacheProgressForm : Form
+    {
+        private readonly List<CachePhase> _phases;
         private readonly IGame[] _games;
-        private readonly Func<IGame, string[]> _resolve;
-        private readonly ProgressBar _bar;
-        private readonly Label _label;
-        private readonly Button _cancel;
+        private readonly ProgressBar _phaseBar, _itemBar;
+        private readonly Label _phaseLabel, _itemLabel;
+        private readonly Button _minBtn, _cancel;
         private readonly System.Threading.CancellationTokenSource _cts = new();
-        private int _done;
+        private Form _blockedOwner;                     // non-null while pseudo-modal (owner disabled)
         private int _failed;
         private readonly float _s;
         private int S(int px) => (int)Math.Round(px * _s);
 
-        public GenerateCacheForm(IGame[] games, Func<IGame, string[]> resolve)
+        public GenerateCacheProgressForm(List<CachePhase> phases, IGame[] games)
         {
-            _games = games; _resolve = resolve;
+            _phases = phases; _games = games;
             _s = DeviceDpi / 96f;
-            Text = "Generate Image Cache";
+            Text = "Generate Media Cache";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false; ControlBox = false;
-            ClientSize = new Size(S(452), S(116));
+            ClientSize = new Size(S(452), S(168));
             BackColor = Bg; ForeColor = Fg; Font = new Font("Segoe UI", 9f);
 
-            _label = new Label { Location = new Point(S(16), S(14)), Size = new Size(S(420), S(20)), ForeColor = Fg,
-                                 Text = $"Preparing…  0 / {games.Length}" };
-            _bar = new ProgressBar { Location = new Point(S(16), S(42)), Size = new Size(S(420), S(18)),
-                                     Minimum = 0, Maximum = Math.Max(1, games.Length), Style = ProgressBarStyle.Continuous };
-            _cancel = new Button { Location = new Point(S(346), S(78)), Size = new Size(S(90), S(26)), Text = "Cancel",
+            _phaseLabel = new Label { Location = new Point(S(16), S(12)), Size = new Size(S(420), S(20)), ForeColor = Fg, Text = "Preparing…" };
+            _phaseBar = new ProgressBar { Location = new Point(S(16), S(36)), Size = new Size(S(420), S(14)),
+                                          Minimum = 0, Maximum = Math.Max(1, phases.Count), Style = ProgressBarStyle.Continuous };
+            _itemLabel = new Label { Location = new Point(S(16), S(60)), Size = new Size(S(420), S(20)), ForeColor = Fg, Text = "" };
+            _itemBar = new ProgressBar { Location = new Point(S(16), S(84)), Size = new Size(S(420), S(18)),
+                                         Minimum = 0, Maximum = Math.Max(1, games.Length), Style = ProgressBarStyle.Continuous };
+            _minBtn = new Button { Location = new Point(S(238), S(126)), Size = new Size(S(100), S(26)), Text = "Minimize",
                                    FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+            _cancel = new Button { Location = new Point(S(346), S(126)), Size = new Size(S(90), S(26)), Text = "Cancel",
+                                   FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+            _minBtn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
             _cancel.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
+            _minBtn.Click += (_, _) => MinimizeUnblock();
             _cancel.Click += (_, _) => { try { _cts.Cancel(); } catch { } _cancel.Enabled = false; _cancel.Text = "Cancelling…"; };
-            Controls.Add(_label); Controls.Add(_bar); Controls.Add(_cancel);
+            Controls.AddRange(new Control[] { _phaseLabel, _phaseBar, _itemLabel, _itemBar, _minBtn, _cancel });
+        }
+
+        /// <summary>Show non-modal but with the owner DISABLED — behaves like ShowDialog, except the
+        /// Minimize button can lift the block while the work carries on.</summary>
+        public void ShowPseudoModal(Form owner)
+        {
+            _blockedOwner = owner;
+            owner.Enabled = false;
+            Show(owner);
+        }
+
+        // Minimize → give the owner back and drop to the taskbar; generation keeps running.
+        private void MinimizeUnblock()
+        {
+            Unblock();
+            ShowInTaskbar = true;
+            WindowState = FormWindowState.Minimized;
+        }
+
+        internal int FailedCount => _failed;
+        internal void DriveMinimize() => MinimizeUnblock();   // --gencache driver
+
+        public void RestoreFromMinimized()
+        {
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            try { Activate(); } catch { }
+        }
+
+        private void Unblock()
+        {
+            var o = _blockedOwner; _blockedOwner = null;
+            if (o is { IsDisposed: false }) { try { o.Enabled = true; } catch { } }
         }
 
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            int dop = Math.Min(4, Math.Max(1, Environment.ProcessorCount));
-            System.Threading.Tasks.Task.Run(() => RunGeneration(dop));
+            System.Threading.Tasks.Task.Run(RunGeneration);
         }
 
-        private void RunGeneration(int dop)
+        private void RunGeneration()
         {
-            try
+            for (int p = 0; p < _phases.Count; p++)
             {
-                System.Threading.Tasks.Parallel.ForEach(_games,
-                    new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = dop, CancellationToken = _cts.Token },
-                    g =>
-                    {
-                        try
+                if (_cts.IsCancellationRequested) break;
+                var phase = _phases[p];
+                int done = 0, pIx = p;
+                Ui(() =>
+                {
+                    _phaseLabel.Text = $"Step {pIx + 1} / {_phases.Count} — {phase.Title}";
+                    _phaseBar.Value = Math.Min(_phaseBar.Maximum, pIx);
+                    _itemBar.Value = 0;
+                    _itemLabel.Text = $"0 / {_games.Length}";
+                });
+                try
+                {
+                    System.Threading.Tasks.Parallel.ForEach(_games,
+                        new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = phase.Dop, CancellationToken = _cts.Token },
+                        g =>
                         {
-                            var s = _resolve(g);
-                            if (s != null)
-                            {
-                                // GetOrCreate returns null when generation FAILED (typically Magick.NET
-                                // missing from Core) — count those so the dialog can't claim success
-                                // while writing nothing.
-                                if (!string.IsNullOrEmpty(s[0]) && ThumbCache.GetOrCreate(s[0], ThumbCache.DefaultMaxDim, keepAlpha: true) == null) System.Threading.Interlocked.Increment(ref _failed);
-                                if (!string.IsNullOrEmpty(s[1]) && ThumbCache.GetOrCreate(s[1], ThumbCache.DefaultMaxDim, keepAlpha: false) == null) System.Threading.Interlocked.Increment(ref _failed);
-                                if (!string.IsNullOrEmpty(s[2]) && ThumbCache.GetOrCreate(s[2], ThumbCache.DefaultMaxDim, keepAlpha: false) == null) System.Threading.Interlocked.Increment(ref _failed);
-                            }
-                        }
-                        catch { }
-                        Report(System.Threading.Interlocked.Increment(ref _done));
-                    });
+                            try { System.Threading.Interlocked.Add(ref _failed, phase.Work(g)); }
+                            catch { }
+                            int n = System.Threading.Interlocked.Increment(ref done);
+                            Ui(() => { _itemBar.Value = Math.Min(_itemBar.Maximum, n); _itemLabel.Text = $"{n} / {_games.Length}"; });
+                        });
+                }
+                catch (OperationCanceledException) { break; }
+                catch { }
+                Ui(() => _phaseBar.Value = Math.Min(_phaseBar.Maximum, pIx + 1));
             }
-            catch (OperationCanceledException) { }
-            catch { }
             Finish();
         }
 
-        private void Report(int n)
+        private void Ui(Action a)
         {
             if (IsDisposed) return;
-            try { BeginInvoke((Action)(() => { if (IsDisposed) return; _bar.Value = Math.Min(_bar.Maximum, n); _label.Text = $"Generating cached images…  {n} / {_games.Length}"; })); }
-            catch { }
+            try { BeginInvoke((Action)(() => { if (!IsDisposed) a(); })); } catch { }
         }
 
         private void Finish()
@@ -5545,16 +5761,26 @@ internal sealed class MainWindow : Form, IMessageFilter
                 BeginInvoke((Action)(() =>
                 {
                     if (IsDisposed) return;
+                    Unblock();
                     int failed = _failed;
                     if (failed > 0 && !_cts.IsCancellationRequested)
+                    {
+                        if (WindowState == FormWindowState.Minimized) RestoreFromMinimized();
                         MessageBox.Show(this,
-                            $"{failed} thumbnail(s) could not be generated.\n\nMost likely cause: Magick.NET is missing from Core " +
-                            "(Magick.NET-Q16-AnyCPU.dll + Magick.NET.Core.dll next to LiteBox.exe).",
-                            "Generate Image Cache", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    DialogResult = DialogResult.OK; Close();
+                            failed + " thumbnail(s) could not be generated.\n\nCheck litebox-debug.log — a common cause is Magick.NET " +
+                            "missing from Core (Magick.NET-Q16-AnyCPU.dll + Magick.NET.Core.dll next to LiteBox.exe).",
+                            "Generate Media Cache", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                    Close();
                 }));
             }
             catch { }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            Unblock();                                   // never leave the main window disabled
+            base.OnFormClosed(e);
         }
 
         protected override void Dispose(bool disposing)

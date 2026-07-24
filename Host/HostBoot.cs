@@ -47,6 +47,7 @@ internal static class HostBoot
     //   --options ["<section>"]       open the Options window, optionally on the named section
     //                                 (fuzzy: "gameplay" → "LB · Gameplay")
     public static string AutoPlay;      // --play "<title|id>" → launch on boot (pair with --drylaunch to audit)
+    public static string AutoGenCache;  // --gencache [csv] → self-driving bulk cache generation test
     public static string AutoEditGame;
     public static string AutoEditEmu;   // --edit-emu "<title|id>" → open Edit Emulator on boot
     public static string AutoEditPage;
@@ -456,6 +457,13 @@ internal static class HostBoot
         AutoEditPage = GetArg(args, "--edit-page");
         string legacySaves = GetArg(args, "--edit-gamesaves");
         if (legacySaves != null) { AutoEditGame = legacySaves; AutoEditPage ??= "GameSaves"; }
+        // --gencache [logos,fronts,shots,videos,docs]: drive the bulk cache generation hands-free —
+        // opens the progress form pseudo-modally, verifies the block, minimizes (verifies the unblock),
+        // waits for completion, prints [gencache] lines and exits. Default selection: fronts,shots.
+        int genIx = Array.IndexOf(args, "--gencache");
+        if (genIx >= 0)
+            AutoGenCache = (genIx + 1 < args.Length && !args[genIx + 1].StartsWith("--", StringComparison.Ordinal))
+                ? args[genIx + 1] : "fronts,shots";
         int optIx = Array.IndexOf(args, "--options");
         if (optIx >= 0)
             AutoOptions = (optIx + 1 < args.Length && !args[optIx + 1].StartsWith("--", StringComparison.Ordinal))

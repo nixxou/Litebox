@@ -680,8 +680,23 @@ internal sealed partial class EditGameWindow
         });
     }
 
+    /// <summary>Ensure the document's cached preview EXISTS (render + save if missing) without keeping a
+    /// bitmap — the bulk cache generator's entry point. True = cached / rendered / nothing to render
+    /// (non-previewable type); false = the render failed for a renderable type.</summary>
+    internal static bool DocEnsureThumb(string absPath)
+    {
+        string ext = Path.GetExtension(absPath).ToLowerInvariant();
+        if (ext is not (".pdf" or ".cbz" or ".zip" or ".txt" or ".docx")) return true;
+        string? cache = DocThumbCachePath(absPath, DocRenderDim);
+        if (cache == null) return false;               // source missing/unreadable
+        if (File.Exists(cache)) return true;           // HIT
+        Bitmap? bmp = null;
+        try { bmp = DocThumb(absPath, DocRenderDim); return bmp != null; }
+        finally { bmp?.Dispose(); }
+    }
+
     /// <summary>Real preview for a document (disk-cached), or null when the type has no preview (→ badge).</summary>
-    private Bitmap? DocThumb(string absPath, int maxDim)
+    private static Bitmap? DocThumb(string absPath, int maxDim)
     {
         string ext = Path.GetExtension(absPath).ToLowerInvariant();
         bool renderable = ext is ".pdf" or ".cbz" or ".zip" or ".txt" or ".docx";

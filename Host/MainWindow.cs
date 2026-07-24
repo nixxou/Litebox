@@ -347,6 +347,31 @@ internal sealed class MainWindow : Form, IMessageFilter
         posterBtn.CheckedChanged += (_, _) => SetPosterMode(posterBtn.Checked);
         _posterBtn = posterBtn;
         bar.Items.Add(posterBtn);
+
+        // Poster IMAGE GROUP — which regroupement the tiles show (LB's "Image Group" submenu), limited to
+        // the regroupements we manage/cache. Persisted; switching flushes the tile caches (zoom pattern).
+        _posterGroup = _cfg.Get("PosterImageGroup", null) ?? "Front";
+        var grpBtn = new ToolStripDropDownButton("Image Group") { ForeColor = Fg, ToolTipText = "Poster view: which image type the tiles show" };
+        void SelectGroup(string key)
+        {
+            _posterGroup = key;
+            try { _cfg.Set("PosterImageGroup", key); _cfg.Save(); } catch { }
+            foreach (ToolStripItem it in grpBtn.DropDownItems)
+                if (it is ToolStripMenuItem mi && mi.Tag is string k) mi.Checked = string.Equals(k, key, StringComparison.OrdinalIgnoreCase);
+            try { RebuildPosterGeometry(); } catch { }
+            if (_posterMode) { try { RefreshPoster(); LayoutPoster(); } catch { } }
+        }
+        ToolStripMenuItem GroupItem(string key, string label)
+        {
+            var mi = new ToolStripMenuItem(label) { Tag = key, Checked = string.Equals(_posterGroup, key, StringComparison.OrdinalIgnoreCase) };
+            mi.Click += (_, _) => SelectGroup(key);
+            return mi;
+        }
+        grpBtn.DropDownItems.Add(GroupItem("Front", "Use Default (Box fronts)"));
+        grpBtn.DropDownItems.Add(new ToolStripSeparator());
+        foreach (var (key, title) in CacheRegroupements)
+            if (key != "Front") grpBtn.DropDownItems.Add(GroupItem(key, title));
+        bar.Items.Add(grpBtn);
         bar.Items.Add(new ToolStripSeparator());
         var genBtn = new ToolStripButton("Generate Image Cache")
         { ForeColor = Fg, ToolTipText = "Pre-generate the cached thumbnails (logo, box, screenshot) for every game" };
@@ -3105,15 +3130,22 @@ internal sealed class MainWindow : Form, IMessageFilter
     // once) it decodes it SYNCHRONOUSLY here — so the tile is composited once WITH its image and never
     // triggers an async load → DrainPosterDone Invalidate. That async path is what produced the full-grid
     // repaint storm that froze a held scroll in big views. Only a genuinely uncached thumb falls back to async.
+    // The tile's source image for the SELECTED image group ("Front" keeps its Box3D fallback chain).
+    private string _posterGroup;
+    private string PosterSrc(IGame model) =>
+        string.Equals(_posterGroup, "Front", StringComparison.OrdinalIgnoreCase) || string.IsNullOrEmpty(_posterGroup)
+            ? DetailSource(model, "Front", () => Safe(() => model.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => model.Box3DImagePath))
+            : CacheSourceFor(model, _posterGroup);
+    private bool PosterAlpha => ThumbCache.IsAlphaRegroupement(_posterGroup ?? "Front");
+
     private Image PosterThumbSync(IGame model, Guid id)
     {
         if (_posterBmp.TryGetValue(id, out var bmp)) return bmp;   // already decoded (may be a null sentinel)
         if (_useImageCache)
         {
-            string src = DetailSource(model, "Front", () =>
-                  Safe(() => model.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => model.Box3DImagePath));
+            string src = PosterSrc(model);
             string cachedFile = string.IsNullOrEmpty(src) ? null
-                : ThumbCache.GetCachedOnly(src, ThumbCache.DefaultMaxDim, keepAlpha: false);   // instant: no Magick
+                : ThumbCache.GetCachedOnly(src, ThumbCache.DefaultMaxDim, keepAlpha: PosterAlpha);   // instant: no Magick
             if (cachedFile != null)
             {
                 Image img = null;
@@ -3170,8 +3202,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             Image img = null;
             try
             {
-                string src = DetailSource(model, "Front", () =>
-                      Safe(() => model.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => model.Box3DImagePath));
+                string src = PosterSrc(model);
                 if (!string.IsNullOrEmpty(src))
                 {
                     // Poster grid: load the SMALL cached thumb ONLY — never the full-res original.
@@ -3180,7 +3211,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                     // → back-to-back Gen2 GCs that suspend the UI thread → the grid freezes until the key
                     // is released. GetOrCreate makes the 360px thumb via Magick (native downscale, no
                     // managed LOH) on first use — bounded by THIS pool — and the 2nd pass is a cache HIT.
-                    string thumb = _useImageCache ? ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: false) : null;
+                    string thumb = _useImageCache ? ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: PosterAlpha) : null;
                     using var raw = LoadImage(thumb ?? src);   // small thumb — or the original only if the cache/Magick is unavailable
                     if (raw != null) img = ScaleContain(raw, PCellW, PImgH);   // pre-size to the cell once
                 }
@@ -4208,7 +4239,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         string src = CacheSourceFor(g, regroupement);
         if (string.IsNullOrEmpty(src)) return 0;
-        return ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: regroupement == "ClearLogo") == null && File.Exists(src) ? 1 : 0;
+        return ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: ThumbCache.IsAlphaRegroupement(regroupement)) == null && File.Exists(src) ? 1 : 0;
     });
 
     // Every video of the game (cache-first, IGame fallback) — frame-extracted unless already cached.

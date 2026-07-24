@@ -86,7 +86,8 @@ internal static class ThumbGc
                     if (string.IsNullOrEmpty(src)) continue;
                     long size = SourceSize(g, reg, src, ref stats);
                     if (size < 0) continue;
-                    valid.Add(ThumbCache.FileNameFor(src, size, ThumbCache.DefaultMaxDim, keepAlpha: reg == "ClearLogo"));
+                    foreach (var name in ThumbCache.FileNamesFor(src, size, ThumbCache.DefaultMaxDim, keepAlpha: ThumbCache.IsAlphaRegroupement(reg)))
+                        valid.Add(name);
                 }
             }
             if (valid.Count == 0) return;   // degenerate mark — never wipe the folder on an empty set

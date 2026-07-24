@@ -610,6 +610,38 @@ internal static class HostBoot
                 Console.WriteLine($"[mediatest] scanned {scanned} game(s), {shown} with media shown");
             }
 
+            // --thumbtest: replay the Generate-Image-Cache pipeline headless and DIAGNOSE the failures —
+            // per-source result (empty / file missing / generated / FAILED) with the first failing paths.
+            if (args.Contains("--thumbtest"))
+            {
+                Media.ThumbCache.Init(Path.GetFullPath(Path.Combine(coreDir, "..")));
+                // Direct Magick smoke test with the REAL exception (ThumbCache swallows it).
+                try
+                {
+                    var probeImg = Directory.EnumerateFiles(Path.Combine(coreDir, "..", "Images"), "*.png", SearchOption.AllDirectories).FirstOrDefault();
+                    if (probeImg != null) { using var mimg = new ImageMagick.MagickImage(probeImg); Console.WriteLine($"[thumbtest] magick smoke OK: {mimg.Width}x{mimg.Height} ({probeImg})"); }
+                }
+                catch (Exception mex) { Console.WriteLine("[thumbtest] MAGICK SMOKE FAILED: " + mex); }
+                int okC = 0, emptyC = 0, missC = 0, failC = 0, shownFails = 0;
+                var games2 = PluginHelper.DataManager.GetAllGames();
+                Console.WriteLine($"[thumbtest] {games2.Length} game(s)");
+                foreach (var g in games2)
+                {
+                    var srcs = MainWindow.ResolveCacheSources(g);
+                    if (srcs == null) continue;
+                    for (int si = 0; si < 3; si++)
+                    {
+                        string src = srcs[si];
+                        if (string.IsNullOrEmpty(src)) { emptyC++; continue; }
+                        if (!File.Exists(src)) { missC++; if (shownFails < 5) { Console.WriteLine($"[thumbtest] MISSING src ({(si == 0 ? "logo" : si == 1 ? "box" : "shot")}): {src}"); shownFails++; } continue; }
+                        var r = Media.ThumbCache.GetOrCreate(src, Media.ThumbCache.DefaultMaxDim, keepAlpha: si == 0);
+                        if (r != null) okC++;
+                        else { failC++; if (shownFails < 15) { Console.WriteLine($"[thumbtest] GEN FAILED ({(si == 0 ? "logo/webp" : "jpeg")}): {src}"); shownFails++; } }
+                    }
+                }
+                Console.WriteLine($"[thumbtest] generated/hit={okC}  empty-src={emptyC}  file-missing={missC}  gen-FAILED={failC}");
+            }
+
             if (args.Contains("--apitest"))
             {
                 var dm2 = PluginHelper.DataManager;

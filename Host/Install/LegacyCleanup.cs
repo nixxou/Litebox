@@ -1,9 +1,8 @@
 // Removes files/directories left by OLDER LiteBox versions at locations current versions no longer use —
 // chiefly everything that lived directly in <LB>\Core before the Core\litebox\ reorg (config, write-back
 // journal, RA/store caches + badges, rom-selection.json, ra-platform-overrides.json, logs), plus the old
-// launcher's markers (_litebox_files.txt, _litebox_backup\, "LiteBox uninstall.bat", *.bak), the Magick.NET
-// managed DLLs an old build copied into Core, and the loose native .api payload old flat/zip installs
-// dropped in Core root.
+// launcher's markers (_litebox_files.txt, _litebox_backup\, "LiteBox uninstall.bat", *.bak), and the loose
+// native .api payload old flat/zip installs dropped in Core root.
 //
 // This is the SINGLE source of truth for "obsolete LiteBox leftovers":
 //   • boot (upgrade / extract-over-old): SweepObsolete() deletes them — idempotent, a no-op on a clean
@@ -11,9 +10,8 @@
 //     the root re-launcher, ThirdParty\Steam) — that stays the uninstaller's job.
 //   • uninstall: Uninstaller.BuildScript emits del/rmdir for the same lists (on top of the current files).
 //
-// Verified against the real installs: the Magick.NET DLLs are a LiteBox-era copy (a clean .NET 10 LaunchBox
-// Core has none); the moved Core-root files are the reorg commit's orphans; the launcher markers are the
-// pre-merge launcher's. None belongs to LaunchBox or ExtendDB.
+// Verified against the real installs: the moved Core-root files are the reorg commit's orphans; the
+// launcher markers are the pre-merge launcher's. None belongs to LaunchBox or ExtendDB.
 
 #nullable enable
 
@@ -31,9 +29,10 @@ internal static class LegacyCleanup
         "LiteBox.ini", "LiteBox.pending", "LiteBox.pending.db", "LiteBox.pending.db-wal", "LiteBox.pending.db-shm",
         "rom-selection.json", "ra-platform-overrides.json", "whitelist.txt",
         // stray build / launcher artifacts (NOT the current LiteBox.exe/.dll/.deps.json/.runtimeconfig.json)
+        // NB: Magick.NET-Q16-AnyCPU.dll / Magick.NET.Core.dll used to be listed here as an old build's
+        // litter — they are CURRENT app files now (LightPayload.Files ships them to Core; thumb generation
+        // needs them). Deleting them at boot silently killed the whole ThumbCache pipeline.
         "LiteBox.exe.bak", "LiteBox.pdb", "_litebox_files.txt",
-        // managed DLLs an old build copied into Core (current resolves Magick from ExtendDB, not Core)
-        "Magick.NET-Q16-AnyCPU.dll", "Magick.NET.Core.dll",
         // loose native payload old flat/zip installs dropped in Core root (current ships it under litebox\thirdparty\)
         "Everything64.dll.api", "Magick.Native-Q16-x64.dll.api", "RahasherExtendDB.exe", "7z.dll.api",
         "MSVCP140.dll.api", "VCRUNTIME140.dll.api", "VCRUNTIME140_1.dll.api", "steam_api64.dll.api",

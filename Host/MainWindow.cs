@@ -4100,7 +4100,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     // ── Bulk cache pre-generation ────────────────────────────────────────────
     // The 3 cached thumbnails per game, picked the SAME way as the detail pane /
     // the web: clear logo (WebP), box "Front" (JPEG), main screenshot (JPEG).
-    private static string[] ResolveCacheSources(IGame g)
+    internal static string[] ResolveCacheSources(IGame g)   // internal: --thumbtest replays this headless
     {
         if (g == null) return null;
         string logo = DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath));

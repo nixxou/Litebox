@@ -86,7 +86,7 @@ internal static class ThumbGc
                     if (string.IsNullOrEmpty(src)) continue;
                     long size = SourceSize(g, reg, src, ref stats);
                     if (size < 0) continue;
-                    foreach (var name in ThumbCache.FileNamesFor(src, size, ThumbCache.DefaultMaxDim, keepAlpha: ThumbCache.IsAlphaRegroupement(reg)))
+                    foreach (var name in ThumbCache.FileNamesFor(src, size, ThumbCache.DefaultMaxDim, ThumbCache.FormatFor(reg)))
                         valid.Add(name);
                 }
             }

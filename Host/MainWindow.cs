@@ -2010,6 +2010,38 @@ internal sealed class MainWindow : Form, IMessageFilter
         AddClean("Related-games thumbnails (junk files)", "CleanThumbsRelated");
         AddClean("Size-budget sweep (500 MB cap on the thumbs tree)", "CleanThumbsBudget");
 
+        // ── Per-regroupement thumbnail format (Webp / Jpg / Auto) ──
+        flow.Controls.Add(Header("Thumbnail image format"));
+        flow.Controls.Add(Sub("WebP keeps transparency but decodes slower (and needs Magick to read); JPEG is "
+            + "the fastest, opaque only. Auto = JPEG for a JPEG source, and for a PNG: WebP if it really has "
+            + "transparency, else JPEG. Changing a format re-generates that type's thumbnails on next use."));
+        var fmtCombos = new Dictionary<string, ComboBox>(StringComparer.OrdinalIgnoreCase);
+        void SaveFormats()
+        {
+            var webp = new List<string>(); var jpg = new List<string>();
+            foreach (var (key, _) in CacheRegroupements)
+                if (fmtCombos.TryGetValue(key, out var cb))
+                    switch (cb.SelectedIndex) { case 1: jpg.Add(key); break; case 2: webp.Add(key); break; }
+            try { _cfg.Set("ThumbWebpRegroupements", string.Join(",", webp));
+                  _cfg.Set("ThumbJpgRegroupements", string.Join(",", jpg)); _cfg.Save();
+                  ThumbCache.InvalidateFormatCache(); } catch { }
+        }
+        foreach (var (key, title) in CacheRegroupements)
+        {
+            var row = new Panel { Width = S(360), Height = S(26), BackColor = Bg, Margin = new Padding(S(6), 0, 0, S(2)) };
+            row.Controls.Add(new Label { Text = title, AutoSize = false, Size = new Size(S(180), S(22)),
+                Location = new Point(0, S(3)), ForeColor = Fg, BackColor = Bg });
+            var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(184), 0),
+                Size = new Size(S(120), S(22)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+            combo.Items.AddRange(new object[] { "Auto", "JPEG", "WebP" });
+            combo.SelectedIndex = ThumbCache.FormatFor(key) switch
+            { ThumbCache.ThumbFormat.Jpg => 1, ThumbCache.ThumbFormat.Webp => 2, _ => 0 };
+            combo.SelectedIndexChanged += (_, _) => SaveFormats();
+            fmtCombos[key] = combo;
+            row.Controls.Add(combo);
+            flow.Controls.Add(row);
+        }
+
         var cacheRefreshers = new List<Action>();
 
         void AddRow(DataMaintenance.Item it)
@@ -3136,7 +3168,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         string.Equals(_posterGroup, "Front", StringComparison.OrdinalIgnoreCase) || string.IsNullOrEmpty(_posterGroup)
             ? DetailSource(model, "Front", () => Safe(() => model.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => model.Box3DImagePath))
             : CacheSourceFor(model, _posterGroup);
-    private bool PosterAlpha => ThumbCache.IsAlphaRegroupement(_posterGroup ?? "Front");
+    private ThumbCache.ThumbFormat PosterFmt => ThumbCache.FormatFor(_posterGroup ?? "Front");
 
     private Image PosterThumbSync(IGame model, Guid id)
     {
@@ -3145,7 +3177,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         {
             string src = PosterSrc(model);
             string cachedFile = string.IsNullOrEmpty(src) ? null
-                : ThumbCache.GetCachedOnly(src, ThumbCache.DefaultMaxDim, keepAlpha: PosterAlpha);   // instant: no Magick
+                : ThumbCache.GetCachedOnly(src, PosterFmt);   // instant: no Magick
             if (cachedFile != null)
             {
                 Image img = null;
@@ -3211,7 +3243,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                     // → back-to-back Gen2 GCs that suspend the UI thread → the grid freezes until the key
                     // is released. GetOrCreate makes the 360px thumb via Magick (native downscale, no
                     // managed LOH) on first use — bounded by THIS pool — and the 2nd pass is a cache HIT.
-                    string thumb = _useImageCache ? ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: PosterAlpha) : null;
+                    string thumb = _useImageCache ? ThumbCache.GetOrCreate(src, PosterFmt) : null;
                     using var raw = LoadImage(thumb ?? src);   // small thumb — or the original only if the cache/Magick is unavailable
                     if (raw != null) img = ScaleContain(raw, PCellW, PImgH);   // pre-size to the cell once
                 }
@@ -4239,7 +4271,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         string src = CacheSourceFor(g, regroupement);
         if (string.IsNullOrEmpty(src)) return 0;
-        return ThumbCache.GetOrCreate(src, ThumbCache.DefaultMaxDim, keepAlpha: ThumbCache.IsAlphaRegroupement(regroupement)) == null && File.Exists(src) ? 1 : 0;
+        return ThumbCache.GetOrCreate(src, ThumbCache.FormatFor(regroupement)) == null && File.Exists(src) ? 1 : 0;
     });
 
     // Every video of the game (cache-first, IGame fallback) — frame-extracted unless already cached.

@@ -98,44 +98,62 @@ internal static class ThumbCache
     }
 
     // ── Format policy ────────────────────────────────────────────────────────
-    // keepAlpha=true ("alpha class" — regroupements in ThumbWebpRegroupements, ClearLogo by default,
-    // configurable to add e.g. disc art later): ALWAYS .webp, readers check .webp directly.
-    // keepAlpha=false: ADAPTIVE — the generator inspects the resized image and writes .webp only when it
-    // carries REAL transparency (Magick IsOpaque + the plugin's border heuristic: alpha < 210 tolerated in
-    // a 3 px rim), .jpg otherwise. Readers therefore check .jpg FIRST (the overwhelmingly common, fastest
-    // to decode), then .webp. Same key seed either way — only the extension varies by content.
-    private static HashSet<string> _alphaRegs;
+    // A regroupement maps to one of THREE policies (Options → Caches; two ini csv lists drive it):
+    //   • Webp  — always .webp (ThumbWebpRegroupements, default "ClearLogo"; e.g. disc art later). Alpha
+    //             preserved; readers probe .webp directly.
+    //   • Jpg   — always .jpg  (ThumbJpgRegroupements, default "Front,Back,Screenshots"). Any alpha is
+    //             flattened; the transparency check is skipped entirely (fastest generation).
+    //   • Auto  — everything else. A JPEG source has no alpha → .jpg. A PNG (or anything with an alpha
+    //             channel) is inspected on the RESIZED image (IsOpaque + the plugin's 3 px anti-aliased-rim
+    //             tolerance): real transparency → .webp, else → .jpg.
+    // KEY namespace = Webp ("a") vs not-Webp ("o"): Jpg and Auto share the "o" key, so they never double-
+    // generate — whoever runs first picks an extension, later callers HIT it (reader probes .jpg then .webp).
+    public enum ThumbFormat { Auto, Jpg, Webp }
 
-    /// <summary>True when the regroupement belongs to the always-WebP class (ThumbWebpRegroupements
-    /// csv in LiteBox.ini, default "ClearLogo").</summary>
-    public static bool IsAlphaRegroupement(string regroupement)
-    {
-        var set = _alphaRegs ??= new HashSet<string>(
-            (LiteBoxConfig.LoadForExe().Get("ThumbWebpRegroupements", null) ?? "ClearLogo")
+    private static HashSet<string> _webpRegs, _jpgRegs;
+    private static HashSet<string> Regs(ref HashSet<string> cache, string key, string def)
+        => cache ??= new HashSet<string>(
+            (LiteBoxConfig.LoadForExe().Get(key, null) ?? def)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             StringComparer.OrdinalIgnoreCase);
-        return regroupement != null && set.Contains(regroupement);
+
+    /// <summary>Drop the cached policy sets so a live ini edit (Options → Caches) takes effect without a
+    /// restart — the next FormatFor re-reads the csv lists.</summary>
+    public static void InvalidateFormatCache() { _webpRegs = null; _jpgRegs = null; }
+
+    /// <summary>The format policy of a regroupement (Webp / Jpg / Auto). Unlisted → Auto.</summary>
+    public static ThumbFormat FormatFor(string regroupement)
+    {
+        if (regroupement == null) return ThumbFormat.Auto;
+        if (Regs(ref _webpRegs, "ThumbWebpRegroupements", "ClearLogo").Contains(regroupement)) return ThumbFormat.Webp;
+        if (Regs(ref _jpgRegs, "ThumbJpgRegroupements", "Front,Back,Screenshots").Contains(regroupement)) return ThumbFormat.Jpg;
+        return ThumbFormat.Auto;
     }
 
-    /// <summary>Path of a cached resized thumbnail for <paramref name="sourcePath"/>,
-    /// generating it synchronously on first use (see the format policy above). Returns null on any
-    /// failure (caller serves the original). A cache HIT needs no Magick; a MISS needs Magick.</summary>
+    // A format shares the WebP key namespace iff it is Webp-office (the historical keepAlpha "a" seed).
+    private static bool IsWebpKey(ThumbFormat fmt) => fmt == ThumbFormat.Webp;
+
+    /// <summary>Path of a cached resized thumbnail, generating it synchronously on first use (see the
+    /// format policy). Returns null on failure. A cache HIT needs no Magick; a MISS needs Magick.</summary>
     public static string GetOrCreate(string sourcePath, int maxDim = DefaultMaxDim, bool keepAlpha = false)
+        => GetOrCreate(sourcePath, keepAlpha ? ThumbFormat.Webp : ThumbFormat.Auto, maxDim);
+
+    public static string GetOrCreate(string sourcePath, ThumbFormat fmt, int maxDim = DefaultMaxDim)
     {
         KickSweep();
-        var hit = CachedPath(sourcePath, maxDim, keepAlpha, out string targetBase);
+        var hit = CachedPath(sourcePath, maxDim, IsWebpKey(fmt), out string targetBase);
         if (hit != null) return hit;                   // shared cache HIT — no Magick needed
         if (targetBase == null) return null;
-        try { return Generate(sourcePath, targetBase, maxDim, keepAlpha); }
+        try { return Generate(sourcePath, targetBase, maxDim, fmt); }
         catch { return null; }                          // missing Magick (standalone) → null
     }
 
-    // HIT probe: .webp direct for the alpha class; .jpg then .webp for the adaptive class.
-    private static string CachedPath(string sourcePath, int maxDim, bool keepAlpha, out string targetBase)
+    // HIT probe: .webp direct for the Webp namespace; .jpg then .webp for Jpg/Auto.
+    private static string CachedPath(string sourcePath, int maxDim, bool webpKey, out string targetBase)
     {
-        targetBase = TargetBaseFor(sourcePath, maxDim, keepAlpha);
+        targetBase = TargetBaseFor(sourcePath, maxDim, webpKey);
         if (targetBase == null) return null;
-        if (keepAlpha)
+        if (webpKey)
         {
             string w = targetBase + ".webp";
             return File.Exists(w) ? w : null;
@@ -180,9 +198,11 @@ internal static class ThumbCache
     }
 
     /// <summary>Cached thumbnail path if it ALREADY exists, else null. Never runs
-    /// Magick — instant, safe in a hot UI path (.jpg probed first for the adaptive class).</summary>
+    /// Magick — instant, safe in a hot UI path (.jpg probed first for the Jpg/Auto class).</summary>
     public static string GetCachedOnly(string sourcePath, int maxDim = DefaultMaxDim, bool keepAlpha = false)
         => CachedPath(sourcePath, maxDim, keepAlpha, out _);
+    public static string GetCachedOnly(string sourcePath, ThumbFormat fmt, int maxDim = DefaultMaxDim)
+        => CachedPath(sourcePath, maxDim, IsWebpKey(fmt), out _);
 
     // ── Async generation queue ───────────────────────────────────────────────
     // On a MISS the UI shows the full original immediately and enqueues the thumb
@@ -194,15 +214,19 @@ internal static class ThumbCache
     /// <summary>Queue background generation of a thumbnail (no-op if it already
     /// exists or is already queued). Fire-and-forget; never throws.</summary>
     public static void EnqueueGenerate(string sourcePath, int maxDim = DefaultMaxDim, bool keepAlpha = false)
+        => EnqueueGenerate(sourcePath, keepAlpha ? ThumbFormat.Webp : ThumbFormat.Auto, maxDim);
+
+    public static void EnqueueGenerate(string sourcePath, ThumbFormat fmt, int maxDim = DefaultMaxDim)
     {
         KickSweep();
-        var hit = CachedPath(sourcePath, maxDim, keepAlpha, out string targetBase);
+        bool webpKey = IsWebpKey(fmt);
+        var hit = CachedPath(sourcePath, maxDim, webpKey, out string targetBase);
         if (hit != null || targetBase == null) return;
         if (!_pending.TryAdd(targetBase, 0)) return;    // already generating/queued (dedupe on the ext-less base)
         _ = Task.Run(async () =>
         {
             await _gate.WaitAsync().ConfigureAwait(false);
-            try { if (CachedPath(sourcePath, maxDim, keepAlpha, out _) == null) Generate(sourcePath, targetBase, maxDim, keepAlpha); }
+            try { if (CachedPath(sourcePath, maxDim, webpKey, out _) == null) Generate(sourcePath, targetBase, maxDim, fmt); }
             catch { }
             finally { _gate.Release(); _pending.TryRemove(targetBase, out _); }
         });
@@ -221,16 +245,16 @@ internal static class ThumbCache
     }
 
     // Isolated so the JIT-time assembly-not-found (Magick absent) is caught by GetOrCreate.
-    // Adaptive class (keepAlpha=false): the format is decided from the RESIZED pixels — .webp only when
-    // real transparency survives (beyond the plugin's 3 px anti-aliased-rim tolerance), else .jpg.
-    private static string Generate(string sourcePath, string targetBase, int maxDim, bool keepAlpha)
+    // Format: Webp → always webp; Jpg → always jpg (no transparency check); Auto → webp only when the
+    // RESIZED image carries real transparency (beyond the 3 px anti-aliased-rim tolerance), else jpg.
+    private static string Generate(string sourcePath, string targetBase, int maxDim, ThumbFormat fmt)
     {
         string target;
         var tmpGuid = Guid.NewGuid().ToString("N");
         using (var img = new ImageMagick.MagickImage(sourcePath))
         {
             img.Thumbnail(new ImageMagick.MagickGeometry($"{maxDim}x{maxDim}>"));  // shrink-to-fit only
-            bool webp = keepAlpha || HasRealTransparency(img);
+            bool webp = fmt == ThumbFormat.Webp || (fmt == ThumbFormat.Auto && HasRealTransparency(img));
             if (webp) { img.Format = ImageMagick.MagickFormat.WebP; img.Quality = 82; }
             else { img.Format = ImageMagick.MagickFormat.Jpeg; img.Quality = 72; }
             target = targetBase + (webp ? ".webp" : ".jpg");
@@ -283,12 +307,17 @@ internal static class ThumbCache
     }
 
     /// <summary>The cache FILENAME candidates a source maps to — used by the mark-and-sweep GC
-    /// (ThumbGc) to build its valid-set without touching the disk. Alpha class → the single .webp;
-    /// adaptive class → both extensions (the generator picks one by content, the GC marks either).</summary>
-    internal static string[] FileNamesFor(string sourcePath, long size, int maxDim, bool keepAlpha)
+    /// (ThumbGc) to build its valid-set without touching the disk. Webp → the single .webp; Jpg → the
+    /// single .jpg; Auto → both (the generator picks one by content, the GC marks either).</summary>
+    internal static string[] FileNamesFor(string sourcePath, long size, int maxDim, ThumbFormat fmt)
     {
-        string key = KeyFor(sourcePath, size, maxDim, keepAlpha);
-        return keepAlpha ? new[] { key + ".webp" } : new[] { key + ".jpg", key + ".webp" };
+        string key = KeyFor(sourcePath, size, maxDim, IsWebpKey(fmt));
+        return fmt switch
+        {
+            ThumbFormat.Webp => new[] { key + ".webp" },
+            ThumbFormat.Jpg => new[] { key + ".jpg" },
+            _ => new[] { key + ".jpg", key + ".webp" },
+        };
     }
 
     // Byte-identical to ExtendDB.Web.Theme.ThumbCache.KeyFor — do NOT change.

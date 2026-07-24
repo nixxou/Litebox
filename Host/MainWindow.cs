@@ -5776,10 +5776,33 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (o is { IsDisposed: false }) { try { o.Enabled = true; } catch { } }
         }
 
+        // Workers only bump these counters — NEVER post to the UI. A per-item BeginInvoke floods the
+        // message queue when items are cache HITs (microseconds each → tens of thousands of posts/s):
+        // the queue starves paint/input and the window looks frozen, as if the work ran on the UI thread.
+        // A 100 ms UI timer samples the counters instead: bounded, smooth, and phase-atomic.
+        private volatile int _curPhase = -1;     // index of the running phase (-1 = not started)
+        private int _curDone;                    // items finished in the running phase (Interlocked)
+
+        private System.Windows.Forms.Timer _uiTimer;
+
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            _uiTimer = new System.Windows.Forms.Timer { Interval = 100 };
+            _uiTimer.Tick += (_, _) => PaintProgress();
+            _uiTimer.Start();
             System.Threading.Tasks.Task.Run(RunGeneration);
+        }
+
+        private void PaintProgress()
+        {
+            int p = _curPhase;
+            if (p < 0 || p >= _phases.Count) return;
+            int done = System.Threading.Volatile.Read(ref _curDone);
+            _phaseLabel.Text = $"Step {p + 1} / {_phases.Count} — {_phases[p].Title}";
+            _phaseBar.Value = Math.Min(_phaseBar.Maximum, p);
+            _itemBar.Value = Math.Min(_itemBar.Maximum, done);
+            _itemLabel.Text = $"{done} / {_games.Length}";
         }
 
         private void RunGeneration()
@@ -5788,14 +5811,8 @@ internal sealed class MainWindow : Form, IMessageFilter
             {
                 if (_cts.IsCancellationRequested) break;
                 var phase = _phases[p];
-                int done = 0, pIx = p;
-                Ui(() =>
-                {
-                    _phaseLabel.Text = $"Step {pIx + 1} / {_phases.Count} — {phase.Title}";
-                    _phaseBar.Value = Math.Min(_phaseBar.Maximum, pIx);
-                    _itemBar.Value = 0;
-                    _itemLabel.Text = $"0 / {_games.Length}";
-                });
+                System.Threading.Interlocked.Exchange(ref _curDone, 0);
+                _curPhase = p;
                 try
                 {
                     System.Threading.Tasks.Parallel.ForEach(_games,
@@ -5804,21 +5821,13 @@ internal sealed class MainWindow : Form, IMessageFilter
                         {
                             try { System.Threading.Interlocked.Add(ref _failed, phase.Work(g)); }
                             catch { }
-                            int n = System.Threading.Interlocked.Increment(ref done);
-                            Ui(() => { _itemBar.Value = Math.Min(_itemBar.Maximum, n); _itemLabel.Text = $"{n} / {_games.Length}"; });
+                            System.Threading.Interlocked.Increment(ref _curDone);
                         });
                 }
                 catch (OperationCanceledException) { break; }
                 catch { }
-                Ui(() => _phaseBar.Value = Math.Min(_phaseBar.Maximum, pIx + 1));
             }
             Finish();
-        }
-
-        private void Ui(Action a)
-        {
-            if (IsDisposed) return;
-            try { BeginInvoke((Action)(() => { if (!IsDisposed) a(); })); } catch { }
         }
 
         private void Finish()
@@ -5829,6 +5838,8 @@ internal sealed class MainWindow : Form, IMessageFilter
                 BeginInvoke((Action)(() =>
                 {
                     if (IsDisposed) return;
+                    try { _uiTimer?.Stop(); _uiTimer?.Dispose(); } catch { }
+                    try { _curPhase = _phases.Count - 1; PaintProgress(); _phaseBar.Value = _phaseBar.Maximum; } catch { }
                     Unblock();
                     int failed = _failed;
                     if (failed > 0 && !_cts.IsCancellationRequested)

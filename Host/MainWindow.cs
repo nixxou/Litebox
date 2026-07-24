@@ -4299,9 +4299,9 @@ internal sealed class MainWindow : Form, IMessageFilter
             t.Tick += (_, _) =>
             {
                 t.Stop(); t.Dispose();
-                Console.WriteLine($"[gencache] pseudo-modal: owner.Enabled={Enabled} (expect False)");
+                Console.WriteLine($"[gencache] pseudo-modal: owner input-enabled={GenerateCacheProgressForm.IsWindowEnabled(Handle)} (expect False)");
                 dlg.DriveMinimize();
-                Console.WriteLine($"[gencache] after minimize: owner.Enabled={Enabled} (expect True), state={dlg.WindowState}");
+                Console.WriteLine($"[gencache] after minimize: owner input-enabled={GenerateCacheProgressForm.IsWindowEnabled(Handle)} (expect True), state={dlg.WindowState}");
             };
             t.Start();
         }
@@ -5744,12 +5744,20 @@ internal sealed class MainWindow : Form, IMessageFilter
             Controls.AddRange(new Control[] { _phaseLabel, _phaseBar, _itemLabel, _itemBar, _minBtn, _cancel });
         }
 
-        /// <summary>Show non-modal but with the owner DISABLED — behaves like ShowDialog, except the
-        /// Minimize button can lift the block while the work carries on.</summary>
+        // Win32 EnableWindow — the SAME mechanism the real modal loop uses: it blocks input on the whole
+        // window WITHOUT flipping Control.Enabled on the children, so the game list does not repaint in
+        // the washed-out "disabled" look (which Form.Enabled = false caused).
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern bool IsWindowEnabled(IntPtr hWnd);
+
+        /// <summary>Show non-modal but with the owner input-DISABLED (Win32-level, like ShowDialog) —
+        /// the Minimize button can lift the block while the work carries on.</summary>
         public void ShowPseudoModal(Form owner)
         {
             _blockedOwner = owner;
-            owner.Enabled = false;
+            try { EnableWindow(owner.Handle, false); } catch { }
             Show(owner);
         }
 
@@ -5773,7 +5781,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         private void Unblock()
         {
             var o = _blockedOwner; _blockedOwner = null;
-            if (o is { IsDisposed: false }) { try { o.Enabled = true; } catch { } }
+            if (o is { IsDisposed: false }) { try { EnableWindow(o.Handle, true); } catch { } }
         }
 
         // Workers only bump these counters — NEVER post to the UI. A per-item BeginInvoke floods the

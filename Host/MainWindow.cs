@@ -1842,7 +1842,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                 min: 0, max: 5000, step: 50,
                 help: "How long after selecting a game the deferred right-pane parts load — the thumbnail strip, "
                 + "the full-resolution box, the RetroAchievements/store panels, and the fanart fade-in. This debounce "
-                + "keeps a fast scroll smooth by not loading media for games you skip past. Default 500 ms; "
+                + "keeps a fast scroll smooth by not loading media for games you skip past. Default 300 ms; "
                 + "0 = load immediately (heavier while scrolling), max 5000. Applies to the next selection."),
             Options.OptionItem.Action("Display", "Edit colours…", ShowColorEditor,
                 "Customise the shared LiteBox palette. Takes full effect after restarting LiteBox."),

@@ -203,7 +203,7 @@ internal sealed class LiteBoxConfig
     // Settle delay (ms) before the deferred detail-pane parts load on selection (thumb strip + full box
     // upgrade + RA/store panels, and the fanart fade-in) — one value for both debounce timers. Clamped
     // 0..5000; 0 = load immediately (heavier while scrolling fast).
-    public int DetailLoadDelayMs { get => Math.Clamp(GetInt("DetailLoadDelayMs", 500), 0, 5000); set => SetInt("DetailLoadDelayMs", Math.Clamp(value, 0, 5000)); }
+    public int DetailLoadDelayMs { get => Math.Clamp(GetInt("DetailLoadDelayMs", 300), 0, 5000); set => SetInt("DetailLoadDelayMs", Math.Clamp(value, 0, 5000)); }
     public bool ShowGameRunningScreen { get => GetBool("ShowGameRunningScreen", true); set => SetBool("ShowGameRunningScreen", value); }
     public bool UnloadListDuringGame  { get => GetBool("UnloadListDuringGame", true); set => SetBool("UnloadListDuringGame", value); }
     // Close the GOG/Steam/Epic/Ubisoft client after a store game exits — by default only the instance

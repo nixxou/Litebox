@@ -127,6 +127,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     // input latency near that library size. 150ms feels instant once typing pauses, yet collapses a fast
     // typist's whole word into one measure pass.
     private readonly System.Windows.Forms.Timer _searchDebounce = new() { Interval = 150 };
+    private ToolStripButton _filterBtn;                               // advanced search filter (dialog + active indicator)
+    private Search.FilterCriteria _filter;                            // null = no advanced filter
     private readonly ToolStripComboBox _sortCombo;
     private readonly ToolStripButton _dirBtn;
     private readonly ToolStripLabel _count;
@@ -328,6 +330,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         _searchDebounce.Tick += (_, _) => { _searchDebounce.Stop(); ApplyFilter(); };
         _search.TextChanged += (_, _) => { _searchDebounce.Stop(); _searchDebounce.Start(); };
         bar.Items.Add(_search);
+        _filterBtn = new ToolStripButton("Filter") { ForeColor = Fg, ToolTipText = "Advanced search filter" };
+        _filterBtn.Click += (_, _) => OpenFilterDialog();
+        _filterBtn.MouseUp += (_, e) => { if (e.Button == MouseButtons.Right) ClearAdvancedFilter(); };
+        bar.Items.Add(_filterBtn);
         bar.Items.Add(new ToolStripSeparator());
 
         bar.Items.Add(new ToolStripLabel("Sort:") { ForeColor = SubFg });
@@ -2590,15 +2596,77 @@ internal sealed class MainWindow : Form, IMessageFilter
         string txt = _search?.Text;
         bool hasTxt = !string.IsNullOrWhiteSpace(txt);
         bool parental = ParentalBridge.Active;   // hide restricted games (kept in memory, just not shown)
-        _games.FilterPredicate = (!hasTxt && !parental)
+        var filt = _filter;                       // advanced dialog criteria (null = none)
+        _games.FilterPredicate = (!hasTxt && !parental && filt == null)
             ? (Func<IGame, bool>)null
             : g =>
             {
                 if (parental && ParentalHidesGame(g)) return false;
-                if (!hasTxt) return true;
-                return Contains(S(Safe(() => g.Title)), txt) || Contains(S(Safe(() => g.Platform)), txt) || Contains(S(Safe(() => g.Developer)), txt);
+                if (hasTxt && !(Contains(S(Safe(() => g.Title)), txt) || Contains(S(Safe(() => g.Platform)), txt) || Contains(S(Safe(() => g.Developer)), txt))) return false;
+                if (filt != null && !filt.Matches(g)) return false;   // AND the advanced criteria
+                return true;
             };
         _games.RebuildView();   // count + poster updated via ViewChanged
+    }
+
+    // ── Advanced search filter (dialog + indicator) ───────────────────────────
+    private void OpenFilterDialog()
+    {
+        var (genres, pubs, devs, types) = ComputeFacets();
+        using var dlg = new Search.FilterDialog(_filter ?? new Search.FilterCriteria(), genres, pubs, devs, types, Search.SearchHistory.Load());
+        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Result == null) return;
+        var c = dlg.Result;
+        _filter = (c.IsActive || c.SortBy != "alpha") ? c : null;   // keep only if it does something
+        if (c.IsActive) Search.SearchHistory.Add(c);
+
+        // The filter's "Order by" is a one-shot: drive the toolbar sort so the user can still re-sort after.
+        string sortKey = c.SortBy switch { "year" => "year", "rating" => "rating", "lastplayed" => "lastplayed", _ => null };
+        if (sortKey != null)
+        {
+            int idx = Array.IndexOf(_sortKeys, sortKey);
+            if (idx >= 0) { _suppressSort = true; try { _sortCombo.SelectedIndex = idx; } catch { } _suppressSort = false; }
+            _ascending = false; if (_dirBtn != null) _dirBtn.Text = "▼";
+            DoSort(sortKey, false);   // sets SortGetter + calls ApplyFilter (predicate applied too)
+        }
+        else ApplyFilter();
+
+        UpdateFilterIndicator();
+    }
+
+    private void ClearAdvancedFilter()
+    {
+        if (_filter == null) return;
+        _filter = null;
+        ApplyFilter();
+        UpdateFilterIndicator();
+    }
+
+    private void UpdateFilterIndicator()
+    {
+        if (_filterBtn == null) return;
+        bool active = _filter != null && _filter.IsActive;
+        _filterBtn.Text = active ? "● Filter" : "Filter";
+        _filterBtn.ForeColor = active ? Accent : Fg;
+        _filterBtn.ToolTipText = active ? "Filter active — click to edit, right-click to clear" : "Advanced search filter";
+    }
+
+    // Facet value lists (genres split on ';', single-valued pub/dev/releaseType) from the current node's games.
+    private (System.Collections.Generic.List<string> genres, System.Collections.Generic.List<string> pubs,
+             System.Collections.Generic.List<string> devs, System.Collections.Generic.List<string> types) ComputeFacets()
+    {
+        var gs = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pb = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var dv = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var rt = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var g in _current ?? Array.Empty<IGame>())
+        {
+            foreach (var x in S(Safe(() => g.GenresString)).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) gs.Add(x);
+            var p = S(Safe(() => g.Publisher)).Trim(); if (p.Length > 0) pb.Add(p);
+            var d = S(Safe(() => g.Developer)).Trim(); if (d.Length > 0) dv.Add(d);
+            var t = S(Safe(() => g.ReleaseType)).Trim(); if (t.Length > 0) rt.Add(t);
+        }
+        System.Collections.Generic.List<string> Sorted(System.Collections.Generic.HashSet<string> h) => h.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        return (Sorted(gs), Sorted(pb), Sorted(dv), Sorted(rt));
     }
 
     // ── Poster (grid) view ────────────────────────────────────────────────────

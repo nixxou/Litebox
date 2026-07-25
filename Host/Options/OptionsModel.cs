@@ -21,6 +21,7 @@ internal enum OptionKind
 {
     Bool,     // checkbox
     Text,     // single-line textbox
+    Number,   // numeric-only spinner (NumericUpDown), clamped to [NumMin, NumMax]
     Choice,   // combobox over Choices
     Button,   // a plain button that runs OnClick (e.g. open a sub-dialog)
 }
@@ -40,6 +41,10 @@ internal sealed class OptionItem
     /// shows a red "No impact on LiteBox" note under the control (the value still
     /// round-trips to Settings.xml for LaunchBox's benefit).</summary>
     public bool NoImpact;
+
+    /// <summary>Number kind: inclusive range + spinner step. Get/Set still speak strings (the numeric value
+    /// formatted invariant).</summary>
+    public int NumMin, NumMax = 100, NumStep = 1;
 
     public Func<string> Get = () => "";
     public Action<string> Set = _ => { };
@@ -61,6 +66,16 @@ internal sealed class OptionItem
 
     public static OptionItem Text(string section, string label, Func<string> get, Action<string> set, string? help = null, Action? applyLive = null)
         => new(section, label, OptionKind.Text) { Help = help, Get = get, Set = set, ApplyLive = applyLive };
+
+    // Numeric spinner (digits only, clamped to [min, max]). Get/Set speak the integer as an invariant string.
+    public static OptionItem Number(string section, string label, Func<int> get, Action<int> set,
+                                    int min, int max, int step = 1, string? help = null, Action? applyLive = null)
+        => new(section, label, OptionKind.Number)
+        {
+            Help = help, NumMin = min, NumMax = max, NumStep = step, ApplyLive = applyLive,
+            Get = () => get().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Set = v => { if (int.TryParse(v, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n)) set(n); },
+        };
 
     public static OptionItem Choice(string section, string label, string[] choices, Func<string> get, Action<string> set, string? help = null, Action? applyLive = null)
         => new(section, label, OptionKind.Choice) { Choices = choices, Help = help, Get = get, Set = set, ApplyLive = applyLive };

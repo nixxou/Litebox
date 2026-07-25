@@ -61,6 +61,30 @@ internal static class OptionRows
                     applies.Add(() => ApplyIfChanged(it, tb.Text));
                     break;
                 }
+                case OptionKind.Number:
+                {
+                    // Label beside a numeric spinner (digits only, clamped) — own left-to-right sub-flow.
+                    var numRow = new FlowLayoutPanel
+                    {
+                        FlowDirection = FlowDirection.LeftToRight, WrapContents = false,
+                        AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = LiteBoxTheme.Bg,
+                    };
+                    var lbl = new Label { Text = it.Label, AutoSize = true, ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg, Margin = new Padding(0, S(6), S(12), 0) };
+                    var nud = new NumericUpDown
+                    {
+                        Width = S(120), Margin = new Padding(0),
+                        Minimum = it.NumMin, Maximum = it.NumMax, Increment = it.NumStep,
+                        BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
+                    };
+                    decimal init = it.NumMin;
+                    if (int.TryParse(it.Get(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var iv))
+                        init = Math.Max(it.NumMin, Math.Min(it.NumMax, iv));
+                    nud.Value = init;
+                    numRow.Controls.Add(lbl); numRow.Controls.Add(nud);
+                    row.Controls.Add(numRow);
+                    applies.Add(() => ApplyIfChanged(it, ((int)nud.Value).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                    break;
+                }
                 case OptionKind.Choice:
                 {
                     // Label beside the combo, so this pair needs its own left-to-right sub-flow.

@@ -1837,11 +1837,11 @@ internal sealed class MainWindow : Form, IMessageFilter
                 + "more games fit on screen. Wrapping is all-or-nothing (a Windows list limitation): the row "
                 + "height applies to every column, there is no per-column setting.",
                 applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
-            Options.OptionItem.Text("Display", "Detail load delay (ms)",
-                () => _cfg.DetailLoadDelayMs.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                v => { if (int.TryParse(v?.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var ms)) _cfg.DetailLoadDelayMs = ms; },
-                "How long after selecting a game the deferred right-pane parts load — the thumbnail strip, the "
-                + "full-resolution box, the RetroAchievements/store panels, and the fanart fade-in. This debounce "
+            Options.OptionItem.Number("Display", "Detail load delay (ms)",
+                () => _cfg.DetailLoadDelayMs, v => _cfg.DetailLoadDelayMs = v,
+                min: 0, max: 5000, step: 50,
+                help: "How long after selecting a game the deferred right-pane parts load — the thumbnail strip, "
+                + "the full-resolution box, the RetroAchievements/store panels, and the fanart fade-in. This debounce "
                 + "keeps a fast scroll smooth by not loading media for games you skip past. Default 500 ms; "
                 + "0 = load immediately (heavier while scrolling), max 5000. Applies to the next selection."),
             Options.OptionItem.Action("Display", "Edit colours…", ShowColorEditor,

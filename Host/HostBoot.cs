@@ -278,6 +278,28 @@ internal static class HostBoot
             th.Start(); th.Join();
             return rc;
         }
+        // --medialayout-selftest: build the media-layout editor + round-trip the config, headless.
+        if (args.Contains("--medialayout-selftest"))
+        {
+            int rc = 0;
+            var th = new Thread(() =>
+            {
+                try
+                {
+                    var def = Media.MediaLayout.Default();
+                    Console.WriteLine($"[medialayout-selftest] default: imm(list={def.ImmediateList},poster={def.ImmediatePoster}), postLoad={def.PostLoad.Count} entries, families={Media.MediaLayout.Families.Length}, exactTypes={Media.MediaLayout.ExactTypes().Length}");
+                    using var p = new Media.MediaLayoutPanel();
+                    p.CreateControl();
+                    int n = 0; void Walk(System.Windows.Forms.Control c) { var _ = c.Handle; n++; foreach (System.Windows.Forms.Control ch in c.Controls) Walk(ch); }
+                    Walk(p);
+                    Console.WriteLine("[medialayout-selftest] editor built OK (" + n + " controls)");
+                }
+                catch (Exception ex) { Console.WriteLine("[medialayout-selftest] FAILED: " + ex); rc = 1; }
+            });
+            th.SetApartmentState(ApartmentState.STA);
+            th.Start(); th.Join();
+            return rc;
+        }
         // --thumb-gen <imagePath>: generate the degraded thumbnail for one image and print the cache path —
         // headless test of the ThumbCache pipeline (Magick presence, cache dir layout).
         if (args.Contains("--thumb-gen"))

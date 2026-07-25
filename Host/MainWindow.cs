@@ -1762,6 +1762,89 @@ internal sealed class MainWindow : Form, IMessageFilter
     // RetroAchievements scanning now lives entirely in the RA options page (RaPanel + RaPanelActions,
     // which use PluginHelper.DataManager directly), so MainWindow no longer hosts a scan launcher.
 
+    // Display options, organised into internal tabs (General / Middle · General / Middle · List /
+    // Middle · Poster / Right panel). The Right panel tab stacks its OptionItems (16:9, load delay) over
+    // the media-layout editor (immediate image per view + the ordered post-load image list).
+    private void BuildDisplaySection(Options.OptionsWindow w)
+    {
+        float dpi = LiteBoxTheme.DpiScale(this);
+        int RS(int px) => (int)Math.Round(px * dpi);
+
+        var general = new[]
+        {
+            Options.OptionItem.Toggle("Display", "Use the image cache (degraded thumbnails)",
+                () => _cfg.UseImageCache, v => _cfg.UseImageCache = v,
+                applyLive: () => _useImageCache = _cfg.UseImageCache),
+            Options.OptionItem.Toggle("Display", "Use game cache (when ExtendDB absent)",
+                () => _cfg.UseGameCache, v => _cfg.UseGameCache = v,
+                "Builds an in-memory media cache (Everything-backed) when the ExtendDB plugin isn't loaded.",
+                applyLive: ApplyGameCacheOption),
+            Options.OptionItem.Toggle("Display", "Unload the game cache while a game runs",
+                () => _cfg.UnloadGameCacheDuringGame, v => _cfg.UnloadGameCacheDuringGame = v),
+            Options.OptionItem.Action("Display", "Edit colours…", ShowColorEditor,
+                "Customise the shared LiteBox palette. Takes full effect after restarting LiteBox."),
+        };
+
+        var midList = new[]
+        {
+            Options.OptionItem.Toggle("Display", "Auto-fit column widths to content",
+                () => _cfg.GetBool("AutoFitColumns", true), v => _cfg.SetBool("AutoFitColumns", v),
+                "On (default): the non-Title columns shrink to fit their content and the Title column grows to "
+                + "fill the leftover space (never below the width you set for it). Off: every column, Title "
+                + "included, keeps exactly the width you drag it to — classic manual sizing.",
+                applyLive: () => _games.AutoFitColumns = _cfg.GetBool("AutoFitColumns", true)),
+            Options.OptionItem.Toggle("Display", "Two-line rows (wrap long cell text)",
+                () => _cfg.GetBool("TwoLineRows", true), v => _cfg.SetBool("TwoLineRows", v),
+                "On (default): rows wrap long cell text onto a second line. Off: compact single-line rows, "
+                + "truncated with an ellipsis, more games on screen.",
+                applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
+        };
+
+        var midPoster = new[]
+        {
+            Options.OptionItem.Toggle("Display", "Poster grid: legacy owner-draw rendering (needs restart)",
+                () => _cfg.GetBool("PosterOwnerDraw", false), v => _cfg.SetBool("PosterOwnerDraw", v),
+                "Off (default): native image-list grid (smooth held-scroll). On: the previous owner-draw "
+                + "renderer (rounded selection + hover grow, but can stutter). Takes effect after restart."),
+        };
+
+        // Middle · General placeholder — shared list/poster options land here as they appear.
+        var midGeneral = new Panel { BackColor = LiteBoxTheme.Bg };
+        midGeneral.Controls.Add(new Label { Text = "Options shared by the list and poster views will appear here.",
+            AutoSize = true, ForeColor = LiteBoxTheme.SubFg, Location = new Point(RS(4), RS(6)) });
+
+        // Right panel tab = OptionItems (16:9 + load delay) on top, media-layout editor below.
+        var rightOpts = new[]
+        {
+            Options.OptionItem.Toggle("Display", "Use 16:9 for the main media (else poster ratio)",
+                () => _cfg.Use169ForMainScreenshot, v => _cfg.Use169ForMainScreenshot = v,
+                applyLive: () => { _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0); RelayoutDetail(); }),
+            Options.OptionItem.Number("Display", "Detail load delay (ms)",
+                () => _cfg.DetailLoadDelayMs, v => _cfg.DetailLoadDelayMs = v,
+                min: 0, max: 5000, step: 50,
+                help: "How long after selecting a game the deferred right-pane parts load (thumbnail strip, "
+                + "full-res box, RA/store panels, fanart). Default 300 ms; 0 = immediate. Applies next selection."),
+        };
+        var (rightRows, rightApply) = UiKit.OptionRows.Build(rightOpts, RS);
+        var mediaPanel = new Media.MediaLayoutPanel();
+        var rightTab = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = LiteBoxTheme.Bg };
+        rightTab.RowStyles.Add(new RowStyle(SizeType.Absolute, RS(150)));
+        rightTab.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        ((Control)rightRows).Dock = DockStyle.Fill;
+        mediaPanel.Dock = DockStyle.Fill;
+        rightTab.Controls.Add((Control)rightRows, 0, 0);
+        rightTab.Controls.Add(mediaPanel, 0, 1);
+
+        w.AddTabbedSection("Display", new (string, object, Action?)[]
+        {
+            ("General", general, null),
+            ("Middle · General", midGeneral, null),
+            ("Middle · List", midList, null),
+            ("Middle · Poster", midPoster, null),
+            ("Right panel", rightTab, () => { rightApply(); mediaPanel.Apply(); }),
+        });
+    }
+
     private Options.OptionsWindow BuildOptionsWindow()
     {
         var w = new Options.OptionsWindow("LiteBox — Options");
@@ -1809,50 +1892,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         var (pluginsPanel, applyPlugins) = BuildPluginsSection();
         w.AddSection("Plugins", pluginsPanel, applyPlugins);
 
-        w.AddSection("Display", new[]
-        {
-            Options.OptionItem.Toggle("Display", "Use 16:9 for the main media (else poster ratio)",
-                () => _cfg.Use169ForMainScreenshot, v => _cfg.Use169ForMainScreenshot = v,
-                applyLive: () => { _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0); RelayoutDetail(); }),
-            Options.OptionItem.Toggle("Display", "Use the image cache (degraded thumbnails)",
-                () => _cfg.UseImageCache, v => _cfg.UseImageCache = v,
-                applyLive: () => _useImageCache = _cfg.UseImageCache),
-            Options.OptionItem.Toggle("Display", "Poster grid: legacy owner-draw rendering (needs restart)",
-                () => _cfg.GetBool("PosterOwnerDraw", false), v => _cfg.SetBool("PosterOwnerDraw", v),
-                "Off (default): the poster grid uses a native image list — the control scrolls and draws the "
-                + "tiles itself, so a held arrow key stays smooth even in huge views. On: the previous owner-draw "
-                + "renderer (custom rounded selection + hover grow, but can stutter on a long held scroll). "
-                + "Takes effect after restarting LiteBox."),
-            Options.OptionItem.Toggle("Display", "Use game cache (when ExtendDB absent)",
-                () => _cfg.UseGameCache, v => _cfg.UseGameCache = v,
-                "Builds an in-memory media cache (Everything-backed) when the ExtendDB plugin isn't loaded.",
-                applyLive: ApplyGameCacheOption),
-            Options.OptionItem.Toggle("Display", "Unload the game cache while a game runs",
-                () => _cfg.UnloadGameCacheDuringGame, v => _cfg.UnloadGameCacheDuringGame = v),
-            Options.OptionItem.Toggle("Display", "Auto-fit column widths to content",
-                () => _cfg.GetBool("AutoFitColumns", true), v => _cfg.SetBool("AutoFitColumns", v),
-                "On (default): the non-Title columns shrink to fit their content and the Title column grows to "
-                + "fill the leftover space (never below the width you set for it). Off: every column, Title "
-                + "included, keeps exactly the width you drag it to — classic manual sizing (a gap may appear "
-                + "before the detail pane).",
-                applyLive: () => _games.AutoFitColumns = _cfg.GetBool("AutoFitColumns", true)),
-            Options.OptionItem.Toggle("Display", "Two-line rows (wrap long cell text)",
-                () => _cfg.GetBool("TwoLineRows", true), v => _cfg.SetBool("TwoLineRows", v),
-                "On (default): rows are tall enough that long cell text (titles, developers…) wraps onto a "
-                + "second line. Off: compact single-line rows — long text is truncated with an ellipsis and "
-                + "more games fit on screen. Wrapping is all-or-nothing (a Windows list limitation): the row "
-                + "height applies to every column, there is no per-column setting.",
-                applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
-            Options.OptionItem.Number("Display", "Detail load delay (ms)",
-                () => _cfg.DetailLoadDelayMs, v => _cfg.DetailLoadDelayMs = v,
-                min: 0, max: 5000, step: 50,
-                help: "How long after selecting a game the deferred right-pane parts load — the thumbnail strip, "
-                + "the full-resolution box, the RetroAchievements/store panels, and the fanart fade-in. This debounce "
-                + "keeps a fast scroll smooth by not loading media for games you skip past. Default 300 ms; "
-                + "0 = load immediately (heavier while scrolling), max 5000. Applies to the next selection."),
-            Options.OptionItem.Action("Display", "Edit colours…", ShowColorEditor,
-                "Customise the shared LiteBox palette. Takes full effect after restarting LiteBox."),
-        });
+        BuildDisplaySection(w);
 
         // (The standalone "Pause screen" section was merged into LB · Gameplay → Game Pause:
         //  "Use Game Pause Screen" is the master switch, "Pause Key" the hotkey, "Pause mode" the
@@ -3558,10 +3598,14 @@ internal sealed class MainWindow : Form, IMessageFilter
     private (string logoSrc, string artSrc) DetailImageSources(IGame g)
     {
         string logoSrc = DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath));
-        string artSrc = DetailSource(g, "Front", () =>
-              Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
-            : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
-            : Safe(() => g.ScreenshotImagePath));
+        // Immediate main image family is configurable PER VIEW (Options → Display → Right panel).
+        string fam = _posterMode ? Media.MediaLayout.Current.ImmediatePoster : Media.MediaLayout.Current.ImmediateList;
+        if (string.IsNullOrEmpty(fam)) fam = "Front";
+        string artSrc = CacheSourceFor(g, fam);
+        if (string.IsNullOrEmpty(artSrc))   // family had nothing → the old Front→Box3D→Screenshot fallback
+            artSrc = Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
+                   : Safe(() => g.Box3DImagePath) is { Length: > 0 } b ? b
+                   : Safe(() => g.ScreenshotImagePath);
         return (logoSrc, artSrc);
     }
 
@@ -4145,35 +4189,54 @@ internal sealed class MainWindow : Form, IMessageFilter
     // only the box uses the cache-or-IO "best" pick. NOTE: single extension point — a
     // future video item would be inserted into this order.
     private const int MaxMediaItems = 24;
+    // Config-driven (Options → Display → Right panel). Each MediaEntry names a FAMILY or an EXACT LB type
+    // plus a count; entries are taken in order (= priority), deduped, capped at MaxMediaItems. entry[0]'s
+    // first image is the main box the delay upgrades to full-res. Default layout == the old hard-coded list.
     private static List<string> BuildMediaList(IGame g)
     {
         var items = new List<string>();
-        void Add(string s)
+        bool Add(string s)
         {
-            if (items.Count >= MaxMediaItems) return;
-            if (!string.IsNullOrEmpty(s) && !items.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) items.Add(s);
+            if (items.Count >= MaxMediaItems) return false;
+            if (string.IsNullOrEmpty(s) || items.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) return false;
+            items.Add(s); return true;
         }
-        void AddAll(IEnumerable<string> ss) { if (ss != null) foreach (var s in ss) Add(s); }
-
-        // 1. The box = the main image (best Front; cache when ready, else IO).
-        Add(DetailSource(g, "Front", () =>
-              Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f : Safe(() => g.Box3DImagePath)));
 
         string plat = Safe(() => g.Platform);
         string title = S(Safe(() => g.Title));
-        if (!string.IsNullOrEmpty(plat) && Guid.TryParse(S(Safe(() => g.Id)), out var id))
+        bool haveId = !string.IsNullOrEmpty(plat) && Guid.TryParse(S(Safe(() => g.Id)), out var id);
+        Guid.TryParse(S(Safe(() => g.Id)), out var gid);
+
+        foreach (var e in Media.MediaLayout.Current.PostLoad)
         {
-            // 2. title screen → 3. gameplay → 4. fanart, all with type/region priority (IO, cache-independent).
-            AddAll(MediaResolver.AllOfType(plat, id, title, "Screenshot - Game Title"));
-            AddAll(MediaResolver.AllOfType(plat, id, title, "Screenshot - Gameplay"));
-            AddAll(MediaResolver.AllOfType(plat, id, title, "Fanart - Background"));
+            int taken = 0;
+            foreach (var path in ResolveMediaEntry(g, e, plat, title, gid, haveId))
+            {
+                if (taken >= e.Count) break;
+                if (Add(path)) taken++;
+                if (items.Count >= MaxMediaItems) return items;
+            }
         }
-        else
+        if (items.Count == 0)   // no id / empty layout → minimal IGame fallback
         {
-            Add(Safe(() => g.ScreenshotImagePath));
-            Add(Safe(() => g.BackgroundImagePath));
+            Add(Safe(() => g.FrontImagePath)); Add(Safe(() => g.ScreenshotImagePath)); Add(Safe(() => g.BackgroundImagePath));
         }
         return items;
+    }
+
+    // The ordered candidate paths for one layout entry (auto selection: LB type→region→number).
+    private static IEnumerable<string> ResolveMediaEntry(IGame g, Media.MediaEntry e, string plat, string title, Guid id, bool haveId)
+    {
+        if (e.ExactType)
+            return haveId ? MediaResolver.AllOfType(plat, id, title, e.Sel) : Array.Empty<string>();
+
+        // Family: the best pick first (cache-or-IO, keeps the IGame fallback), then all files of its LB types.
+        var list = new List<string>();
+        var best = CacheSourceFor(g, e.Sel);
+        if (!string.IsNullOrEmpty(best)) list.Add(best);
+        if (haveId && Gc.SettingsWatcher.GetImageRegroupementPriorities().TryGetValue(e.Sel, out var types))
+            foreach (var t in types) list.AddRange(MediaResolver.AllOfType(plat, id, title, t));
+        return list;
     }
 
     private void PopulateStrip(List<string> items, int token)

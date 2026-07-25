@@ -124,6 +124,63 @@ internal sealed class OptionsWindow : LiteBoxForm
         AddSection(title, panel, applyOrNull);
     }
 
+    /// <summary>Adds ONE nav section whose content is split across internal TABS (a flat tab strip over
+    /// swappable OptionItem stacks) — e.g. Display → General / Middle / Right panel. A tab's body may be an
+    /// OptionItem list OR a custom Control (with its own apply). The section's apply runs every tab's apply.</summary>
+    public void AddTabbedSection(string title, IEnumerable<(string tab, object body, Action? apply)> tabs)
+    {
+        var container = new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg };
+
+        var strip = new FlowLayoutPanel { Dock = DockStyle.Top, Height = S(38), BackColor = LiteBoxTheme.PanelC, Padding = new Padding(S(4), S(5), 0, 0), WrapContents = false };
+        var content = new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg };
+        container.Controls.Add(content);
+        container.Controls.Add(strip);
+
+        var applies = new List<Action>();
+        var buttons = new List<Button>();
+        var hosts = new List<Panel>();
+
+        foreach (var (tab, body, apply) in tabs)
+        {
+            Control panel;
+            if (body is IEnumerable<OptionItem> items)
+            {
+                var (p, ap) = OptionRows.Build(items, S);
+                panel = p; if (ap != null) applies.Add(ap);
+            }
+            else { panel = (Control)body; if (apply != null) applies.Add(apply); }
+
+            var host = new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg, Visible = hosts.Count == 0 };
+            panel.Dock = DockStyle.Fill;
+            host.Controls.Add(panel);
+            content.Controls.Add(host);
+            hosts.Add(host);
+
+            int ix = hosts.Count - 1;
+            var b = new Button
+            {
+                Text = tab, AutoSize = false, Size = new Size(S(120), S(26)), Margin = new Padding(0, 0, S(3), 0),
+                FlatStyle = FlatStyle.Flat, ForeColor = ix == 0 ? Color.White : LiteBoxTheme.SubFg,
+                BackColor = ix == 0 ? LiteBoxTheme.Accent : LiteBoxTheme.PanelC, FlatAppearance = { BorderSize = 0 },
+                Font = new Font("Segoe UI", 9f),
+            };
+            buttons.Add(b);
+            b.Click += (_, _) =>
+            {
+                for (int i = 0; i < hosts.Count; i++)
+                {
+                    hosts[i].Visible = i == ix;
+                    buttons[i].ForeColor = i == ix ? Color.White : LiteBoxTheme.SubFg;
+                    buttons[i].BackColor = i == ix ? LiteBoxTheme.Accent : LiteBoxTheme.PanelC;
+                }
+            };
+            strip.Controls.Add(b);
+        }
+
+        content.Controls.SetChildIndex(hosts[0], 0);   // first host at back so docking fills correctly
+        AddSection(title, container, () => { foreach (var a in applies) a(); });
+    }
+
     private void ShowSection(int i)
     {
         if (i < 0 || i >= _sections.Count) return;

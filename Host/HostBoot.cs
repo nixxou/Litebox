@@ -254,6 +254,30 @@ internal static class HostBoot
             Platforms.EditPlatformRenderProbe.RenderCategory(lbR, cat, outDir);
             return 0;
         }
+        // --filter-selftest: build the advanced-search dialog + range slider with dummy facets, force handle
+        // creation, and report — a headless catch for construction/layout exceptions (no user interaction).
+        if (args.Contains("--filter-selftest"))
+        {
+            int rc = 0;
+            var th = new Thread(() =>
+            {
+                try
+                {
+                    var facet = new[] { "Action", "RPG", "Puzzle" };
+                    var hist = new System.Collections.Generic.List<Search.FilterCriteria> { new() { Fav = true, Genres = { "Action" } } };
+                    using var dlg = new Search.FilterDialog(new Search.FilterCriteria(), facet, facet, facet, new[] { "Physical", "Digital" }, hist);
+                    dlg.CreateControl();
+                    int n = 0;
+                    void Walk(System.Windows.Forms.Control c) { var _ = c.Handle; n++; foreach (System.Windows.Forms.Control ch in c.Controls) Walk(ch); }
+                    Walk(dlg);
+                    Console.WriteLine("[filter-selftest] dialog built OK (" + n + " controls)");
+                }
+                catch (Exception ex) { Console.WriteLine("[filter-selftest] FAILED: " + ex); rc = 1; }
+            });
+            th.SetApartmentState(ApartmentState.STA);
+            th.Start(); th.Join();
+            return rc;
+        }
         // --thumb-gen <imagePath>: generate the degraded thumbnail for one image and print the cache path —
         // headless test of the ThumbCache pipeline (Magick presence, cache dir layout).
         if (args.Contains("--thumb-gen"))

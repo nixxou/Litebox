@@ -38,6 +38,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     private static readonly Color Center  = LiteBoxTheme.Center;   // centre game-list column — #2A2B34
     private static readonly Color Panel2  = LiteBoxTheme.Panel2;
     private static readonly Color Row2    = Color.FromArgb(47, 48, 58);   // striped-row alt: a hair lighter than Center (#2A2B34)
+    // Poster empty-tile placeholder: a hair lighter than Center so it blends into the zone (near-invisible).
+    private static readonly Color PosterPlaceholder = Color.FromArgb(52, 53, 63);
     private static readonly Color Fg      = LiteBoxTheme.Fg;
     private static readonly Color SubFg   = LiteBoxTheme.SubFg;
     private static readonly Color Accent  = LiteBoxTheme.Accent;
@@ -2712,7 +2714,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         bool od = _posterOwnerDraw;
         if (od) _posterGeom = new ImageList { ColorDepth = ColorDepth.Depth32Bit, ImageSize = new Size(PCellW, PImgH + PLabelH) };
-        else _himl = ImageList_Create(PCellW, PImgH + PLabelH, ILC_COLOR32, 0, 64);
+        else _himl = ImageList_Create(PCellW, PImgH + PLabelH, ILC_COLOR32, 0, 64);   // 32bpp: matches the screen depth → direct (fast) blit on scroll
         var lv = new PosterListView
         {
             // NOT docked: LayoutPoster gives it a left margin of (leftover/2) and extends it to the
@@ -2860,7 +2862,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         else
         {
             var oldHiml = _himl;
-            _himl = ImageList_Create(PCellW, PImgH + PLabelH, ILC_COLOR32, 0, 64);
+            _himl = ImageList_Create(PCellW, PImgH + PLabelH, ILC_COLOR32, 0, 64);   // 32bpp: matches the screen depth → direct (fast) blit on scroll
             try { if (_poster.IsHandleCreated) SendMessage(_poster.Handle, LVM_SETIMAGELIST, (IntPtr)LVSIL_NORMAL, _himl); } catch { }
             if (oldHiml != IntPtr.Zero) ImageList_Destroy(oldHiml);
         }
@@ -2985,7 +2987,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     [System.Runtime.InteropServices.DllImport("comctl32.dll")] private static extern bool ImageList_Replace(IntPtr himl, int i, IntPtr hbmImage, IntPtr hbmMask);
     [System.Runtime.InteropServices.DllImport("comctl32.dll")] private static extern bool ImageList_Destroy(IntPtr himl);
     [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hgdiobj);
-    private const int ILC_COLOR32 = 0x20, LVM_SETIMAGELIST = 0x1000 + 3, LVSIL_NORMAL = 0;
+    private const int ILC_COLOR32 = 0x20, ILC_COLOR24 = 0x18, LVM_SETIMAGELIST = 0x1000 + 3, LVSIL_NORMAL = 0;
 
     // The image-list slot for a game, building + interning its tile on first use (slots recycle LRU).
     private int SlotFor(IGame model, Guid id)
@@ -3050,7 +3052,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             using var tile = new Bitmap(PCellW, PImgH + PLabelH, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
             using (var tg = Graphics.FromImage(tile))
             {
-                tg.Clear(Panel);
+                tg.Clear(Center);   // match the centre-column zone (#2A2B34), not the side panels
                 var imgArea = new Rectangle(0, 0, PCellW, PImgH);
                 var img = PosterThumbSync(model, id);         // sync decode if the thumb is on disk; else null + async
                 if (img != null)
@@ -3062,10 +3064,11 @@ internal sealed class MainWindow : Form, IMessageFilter
                 }
                 else
                 {
+                    // No art → a barely-there placeholder that blends into the zone (a hair lighter than Center).
                     tg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                     int pw = (int)(PCellW * 0.78f), ph = (int)(PImgH * 0.92f);
                     var ph_r = new Rectangle((PCellW - pw) / 2, imgArea.Bottom - ph, pw, ph);
-                    using var pb = new SolidBrush(Color.FromArgb(65, 67, 75));
+                    using var pb = new SolidBrush(PosterPlaceholder);
                     using var pp = RoundRect(ph_r, 10);
                     tg.FillPath(pb, pp);
                 }
@@ -3099,8 +3102,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void DrawPosterItem(object sender, DrawListViewItemEventArgs e)
     {
         var g = e.Graphics; var b = e.Bounds;
-        _panelBrush ??= new SolidBrush(Panel);
-        g.FillRectangle(_panelBrush, b);                  // gaps around the tile
+        _panelBrush ??= new SolidBrush(Center);           // gaps around the tile — match the centre zone
+        g.FillRectangle(_panelBrush, b);
         var model = PosterModel(e.ItemIndex);
         if (model == null) return;
         if (!Guid.TryParse(S(Safe(() => model.Id)), out var id)) return;

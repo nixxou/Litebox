@@ -30,8 +30,14 @@ internal sealed class MediaEntry
     public string Sel { get; set; } = "Front";
     /// <summary>True → <see cref="Sel"/> is an exact LB image type ("Screenshot - Game Title"); false → a family.</summary>
     public bool ExactType { get; set; }
-    /// <summary>Max images to take from this entry (1 = a single best image).</summary>
+    /// <summary>Max images to take from this entry (1 = a single best image). When <see cref="Cumulative"/>,
+    /// this is a TARGET TOTAL counting the images already contributed by the <see cref="CumulativeDepth"/>
+    /// entries above — this entry only tops up to reach it.</summary>
     public int Count { get; set; } = 99;
+    /// <summary>Count cumulatively: the target includes the images from the N entries above.</summary>
+    public bool Cumulative { get; set; }
+    /// <summary>How many entries directly above to include in the cumulative total (1 = just the one above).</summary>
+    public int CumulativeDepth { get; set; } = 1;
     /// <summary>"auto" (LB algorithm) or "weighted" (reserved — not yet resolved).</summary>
     public string Mode { get; set; } = "auto";
     /// <summary>Reserved weighted-picker weights (region / type / numeric / aspect). Unused for now.</summary>
@@ -41,7 +47,10 @@ internal sealed class MediaEntry
     public int WAspect { get; set; }
 
     public MediaEntry Clone() => (MediaEntry)MemberwiseClone();
-    public string Label() => (ExactType ? "🎞 " : "") + Sel + (Count < 99 ? $"  ×{Count}" : "");
+    public string Label()
+        => (ExactType ? "🎞 " : "") + Sel
+         + (Count < 99 ? $"  ×{Count}" : "")
+         + (Cumulative ? $"  (Σ{CumulativeDepth}↑)" : "");
 }
 
 internal sealed class MediaLayout

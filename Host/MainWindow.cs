@@ -4207,13 +4207,26 @@ internal sealed class MainWindow : Form, IMessageFilter
         bool haveId = !string.IsNullOrEmpty(plat) && Guid.TryParse(S(Safe(() => g.Id)), out var id);
         Guid.TryParse(S(Safe(() => g.Id)), out var gid);
 
-        foreach (var e in Media.MediaLayout.Current.PostLoad)
+        var layout = Media.MediaLayout.Current.PostLoad;
+        var contrib = new int[layout.Count];   // images each entry actually added (for cumulative counting)
+        for (int ei = 0; ei < layout.Count; ei++)
         {
+            var e = layout[ei];
+            // Cumulative: the target counts the images already added by the N entries directly above, so
+            // this entry only tops up to reach e.Count. Non-cumulative: take up to e.Count from this entry.
+            int budget = e.Count;
+            if (e.Cumulative)
+            {
+                int depth = Math.Max(0, e.CumulativeDepth);
+                int above = 0;
+                for (int k = Math.Max(0, ei - depth); k < ei; k++) above += contrib[k];
+                budget = Math.Max(0, e.Count - above);
+            }
             int taken = 0;
             foreach (var path in ResolveMediaEntry(g, e, plat, title, gid, haveId))
             {
-                if (taken >= e.Count) break;
-                if (Add(path)) taken++;
+                if (taken >= budget) break;
+                if (Add(path)) { taken++; contrib[ei]++; }
                 if (items.Count >= MaxMediaItems) return items;
             }
         }

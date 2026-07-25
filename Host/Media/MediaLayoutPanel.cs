@@ -23,7 +23,8 @@ internal sealed class MediaLayoutPanel : Panel
     private readonly ComboBox _immList = null!, _immPoster = null!;
     private readonly ListBox _list = null!;
     private readonly ComboBox _addKind = null!, _addSel = null!;
-    private readonly NumericUpDown _addCount = null!;
+    private readonly NumericUpDown _addCount = null!, _addDepth = null!;
+    private readonly CheckBox _addCumul = null!;
 
     private static Color Bg => LiteBoxTheme.Bg;
     private static Color Panel2 => LiteBoxTheme.Panel2;
@@ -78,13 +79,21 @@ internal sealed class MediaLayoutPanel : Panel
         Controls.Add(_addSel);
         FillAddSel();
 
-        _addCount = new NumericUpDown { Location = new Point(S(416), S(326)), Size = new Size(S(60), S(22)), Minimum = 1, Maximum = 99, Value = 99, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        Controls.Add(new Label { Text = "count:", AutoSize = true, ForeColor = SubFg, Location = new Point(S(416), S(329)) });
+        _addCount = new NumericUpDown { Location = new Point(S(460), S(326)), Size = new Size(S(52), S(22)), Minimum = 1, Maximum = 99, Value = 99, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
         Controls.Add(_addCount);
-        var add = new Button { Text = "Add", Size = new Size(S(70), S(24)), Location = new Point(S(484), S(325)), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Accent, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
+        var add = new Button { Text = "Add", Size = new Size(S(66), S(24)), Location = new Point(S(520), S(325)), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Accent, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
         add.Click += (_, _) => AddEntry();
         Controls.Add(add);
 
-        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 360, 560);
+        // Cumulative: the count is a TOTAL that also counts the images from the N entries above.
+        _addCumul = new CheckBox { Text = "Cumulative — count also the", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(356)) };
+        Controls.Add(_addCumul);
+        _addDepth = new NumericUpDown { Location = new Point(S(180), S(354)), Size = new Size(S(48), S(22)), Minimum = 1, Maximum = 20, Value = 1, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        Controls.Add(_addDepth);
+        Controls.Add(new Label { Text = "entr(ies) above (so 'count' becomes a target total)", AutoSize = true, ForeColor = SubFg, Location = new Point(S(232), S(357)) });
+
+        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 384, 560);
     }
 
     private ComboBox FamilyCombo((string Key, string Title)[] families, string current, int x, int y)
@@ -124,7 +133,7 @@ internal sealed class MediaLayoutPanel : Panel
 
     private void AddEntry()
     {
-        var e = new MediaEntry { Count = (int)_addCount.Value };
+        var e = new MediaEntry { Count = (int)_addCount.Value, Cumulative = _addCumul.Checked, CumulativeDepth = (int)_addDepth.Value };
         if (_addKind.SelectedIndex == 0)
         {
             e.ExactType = false;

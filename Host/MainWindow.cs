@@ -4214,6 +4214,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         Guid.TryParse(S(Safe(() => g.Id)), out var gid);
         string gameReg = S(Safe(() => g.Region));   // used by entries flagged "game region first"
 
+        // Refresh the game's image-pool signature (zero-IO from the cache; memoised + persisted). Foundation
+        // for the anti-duplicate media cache — recomputed here since this is where its dedup data will be keyed.
+        if (haveId) try { Media.MediaSignature.For(plat, gid, title); } catch { }
+
         var layout = Media.MediaLayout.Current.PostLoadFor(poster);
         var contrib = new int[layout.Count];   // images each entry actually added (for cumulative counting)
         for (int ei = 0; ei < layout.Count; ei++)

@@ -40,6 +40,9 @@ internal static class GameCacheBridge
     private static MethodInfo _findAllVideos;
     private static PropertyInfo _imgFullPath;
     private static PropertyInfo _vidFullPath;
+    private static PropertyInfo _imagesProp;        // GameCacheGame.Images (GameCacheImage[])
+    private static MethodInfo _resolveImagePath;    // GameCacheGame.ResolveImagePath(GameCacheImage)
+    private static FieldInfo _imgFileSizeField;     // GameCacheImage.FileSize
 
     private static void Probe()
     {
@@ -100,6 +103,9 @@ internal static class GameCacheBridge
         {
             try { LbApiHost.Host.Gc.GameCache.RebuildPlatform(platform, false); } catch { }
         }
+        // The platform's image pool may have changed on disk → drop its cached per-game signatures so they
+        // recompute against the fresh cache on next request.
+        try { MediaSignature.Invalidate(platform.Name); } catch { }
     }
 
     /// <summary>True iff ExtendDB's GameCache is loaded, globally ready, and holds this platform.</summary>
@@ -197,6 +203,42 @@ internal static class GameCacheBridge
         }
         catch { }
         return result;
+    }
+
+    /// <summary>Every IMAGE of the game as (absolutePath, sizeBytes), from whichever cache is live (ExtendDB's
+    /// reflected one, else the host port) — zero-IO: sizes ride the cache. Returns null when NO cache can answer
+    /// (caller falls back to a disk walk). Feeds the per-game image-pool signature; videos are excluded.</summary>
+    public static List<(string path, long size)> ImagePairs(string platformName, Guid id)
+    {
+        if (ExtendReady(platformName))
+        {
+            var res = new List<(string, long)>();
+            try
+            {
+                var game = GameObj(platformName, id);
+                if (game == null) return res;
+                var gt = game.GetType();
+                _imagesProp ??= gt.GetProperty("Images", IF);
+                if (_imagesProp?.GetValue(game) is not Array imgs) return res;
+                var elem = imgs.GetType().GetElementType();
+                if (elem == null) return res;
+                _resolveImagePath ??= gt.GetMethod("ResolveImagePath", new[] { elem });
+                _imgFileSizeField ??= elem.GetField("FileSize");
+                if (_resolveImagePath == null || _imgFileSizeField == null) return res;
+                var one = new object[1];
+                foreach (var img in imgs)   // img = boxed GameCacheImage struct
+                {
+                    one[0] = img;
+                    if (_resolveImagePath.Invoke(game, one) is not string p || string.IsNullOrEmpty(p)) continue;
+                    long size = _imgFileSizeField.GetValue(img) is long s ? s : -1;
+                    res.Add((p, size));
+                }
+            }
+            catch { }
+            return res;
+        }
+        if (HostGameCache.Ready(platformName)) return HostGameCache.ImagePairs(platformName, id);
+        return null;   // no cache is authoritative for this platform
     }
 
     /// <summary>First video path for a sub-dir (null = root) via the cache, or null.</summary>

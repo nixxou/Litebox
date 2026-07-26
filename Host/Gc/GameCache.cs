@@ -1134,7 +1134,10 @@ namespace LbApiHost.Host.Gc
         /// <summary>
         /// Walks the platform's image folders (default + custom paths)
         /// and populates the build lists of every <see cref="GameCacheGame"/>.
-        /// Uses Everything when available, falls back to Directory.EnumerateFiles.
+        /// Uses Everything when available, else DirectoryInfo.EnumerateFiles
+        /// (withDates: true) — so each image's FileSize is captured for free
+        /// (from the directory find-data, no extra stat) in BOTH cases, letting
+        /// the per-game image signature be computed with zero disk IO.
         /// </summary>
         public void ScanImages()
         {
@@ -1167,7 +1170,7 @@ namespace LbApiHost.Host.Gc
                     .OrderByDescending(t => t.FullPathLowerWithSlash.Length)
                     .ToList();
 
-                foreach (var fi in EnumerateFiles(DefaultImagePathFull, ImageExtensions, useEverything))
+                foreach (var fi in EnumerateFiles(DefaultImagePathFull, ImageExtensions, useEverything, withDates: true))
                 {
                     var lowerFile = fi.FullPath.ToLower().Replace('/', '\\');
 
@@ -1201,7 +1204,7 @@ namespace LbApiHost.Host.Gc
 
                 int imtypePathLen = absolutePath.TrimEnd('\\').Length + 1;
 
-                foreach (var fi in EnumerateFiles(absolutePath, ImageExtensions, useEverything))
+                foreach (var fi in EnumerateFiles(absolutePath, ImageExtensions, useEverything, withDates: true))
                 {
                     var lowerFile = fi.FullPath.ToLower();
                     string relative = lowerFile.Substring(imtypePathLen);

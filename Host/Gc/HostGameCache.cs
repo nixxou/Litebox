@@ -55,6 +55,27 @@ namespace LbApiHost.Host.Gc
             return res;
         }
 
+        /// <summary>Every IMAGE of the game as (absolutePath, sizeBytes) — zero-IO: paths are pre-resolved and
+        /// sizes ride the cache (filled at build time in both Everything and fallback-walk modes). Size is -1 for
+        /// the rare slot whose size wasn't captured; the caller keeps it as-is (still deterministic). Videos are
+        /// intentionally excluded — this feeds the per-game image-pool signature.</summary>
+        public static List<(string path, long size)> ImagePairs(string plat, Guid id)
+        {
+            var res = new List<(string, long)>();
+            try
+            {
+                var g = Game(plat, id); if (g == null) return res;
+                var imgs = g.Images; if (imgs == null) return res;
+                foreach (var img in imgs)
+                {
+                    string p = g.ResolveImagePath(img);
+                    if (!string.IsNullOrEmpty(p)) res.Add((p, img.FileSize));
+                }
+            }
+            catch { }
+            return res;
+        }
+
         public static string Video(string plat, Guid id, string subDir)
         {
             try

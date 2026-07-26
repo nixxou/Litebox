@@ -389,6 +389,12 @@ internal static class HostBoot
             Data.ProblemKeys.Build();
             Data.LiteBoxOptionsDb.Open();
             Data.ProblemKeys.SeedRenamedFromXml(Path.Combine(dataDir, "Settings.xml"));
+            // Guarantee every LiteBox-own gameplay GLOBAL default is present in LiteBox.ini with a
+            // visible value (no hidden keys), and reverse-migrate any leftover options-DB global row
+            // from the short-lived R2 phase-A experiment back into the ini. Must run BEFORE anything
+            // resolves a launch (PauseManager.Configure, DependencyCheck, first game start) — hence
+            // here, right after the DB opens (the drain needs it).
+            Gameplay.GameplayDefaults.Seed(LiteBoxConfig.LoadForExe());
             // The LaunchBox settings <ID> is the key for encrypted values (EmuMovies password, …). LaunchBox
             // writes it on its very first run; a real install always has it. If it's missing, LaunchBox was never
             // launched here — tell the user and stop rather than guessing or minting a bogus id.

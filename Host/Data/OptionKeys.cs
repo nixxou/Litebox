@@ -63,7 +63,16 @@ internal static class OptionKeys
         new("Module.parental",         Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
         new("Module.web",              Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
 
-        // ── Gameplay overrides (tri-state: no row = inherit; resolution game → emulator → global) ──
+        // ── Gameplay PER-ENTITY overrides (tri-state: no row = inherit; game → emulator → GLOBAL) ──
+        // ONLY the per-entity tiers (game/emulator) live in the DB — that's what the EAV store is for.
+        // The GLOBAL default of each lives in LiteBox.ini, seeded there with a visible value by
+        // GameplayDefaults (no hidden keys). So a resolution reads the DB for the two entity tiers and
+        // the ini for the global fallback — each store doing what it's best at, NOT a problematic split.
+        // Cold: read when resolving a launch, never on a list/search/detail path.
+        // (SmartCaptureShowBorder is declared like its siblings so the resolver's per-key probe of the
+        //  entity tiers stays legal even though no editor writes a per-entity value for it.)
+        // (SmartCaptureIgnoreExes and the StartupStayOnTop.<category> global defaults are ini-ONLY —
+        //  no per-entity tier — so they are NOT declared here.)
         new("StartupStayOnTop",         GameEmu, OptionType.Bool,   OptionCache.Cold, "Gameplay"),
         new("ExitScreenEagerMs",        GameEmu, OptionType.String, OptionCache.Cold, "Gameplay", Note: "int ms, or -1 = disabled"),
         new("PauseHotkey",              GameEmu, OptionType.String, OptionCache.Cold, "Pause"),
@@ -85,12 +94,8 @@ internal static class OptionKeys
         new("SmartCaptureMinSizePct",       GameEmu, OptionType.String, OptionCache.Cold, "SmartCapture"),
         new("SmartCaptureTitle",            GameEmu, OptionType.String, OptionCache.Cold, "SmartCapture"),
         new("SmartCaptureStopOnWindowClose",GameEmu, OptionType.Bool,   OptionCache.Cold, "SmartCapture"),
-        // READ-ONLY here: documented as a hidden LiteBox.ini opt-in and absent from SmartCaptureConfig.Keys
-        // (no editor ever writes it), but GameplaySettings.ResolveSmartCapture's R() helper probes the
-        // game/emulator tiers BEFORE the ini for every key — so it does reach this store and must be
-        // declared, or every SmartCapture resolution would log (and throw under --debug).
         new("SmartCaptureShowBorder",       GameEmu, OptionType.Bool,   OptionCache.Cold, "SmartCapture",
-            Note: "ini-only opt-in in practice; declared because the resolver probes per-entity tiers first."),
+            Note: "global default seeded in LiteBox.ini; per-entity tier declared only so the resolver probe is legal."),
 
         // ── Per-game DATA (not option overrides) ──
         new("FieldLocks", Game, OptionType.Json, OptionCache.Cold, "Editor/LockStore", SharedWithPlugin: true,

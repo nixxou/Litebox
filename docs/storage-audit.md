@@ -131,19 +131,50 @@ Règle actuelle implicite : partagé-avec-LB → 1 ; version-sensible → 2 ; Li
   registre↔littéraux du code qui a trouvé le seul trou réel (`SmartCaptureShowBorder`, corrigé) ; run live
   `--debug` (Strict) : aucune clé inconnue, aucune exception, migrations RA + locks vérifiées en base.
 
-**RESTE À FAIRE** (chacun son chantier) :
+**R1 / R4 / R5 / R6 : TERMINÉS** (détail ci-dessus). `ra-platform-overrides.json` et
+`rom-selection.json` sont migrés ; il ne reste aucun store par-entité guid-keyé hors options-db.
 
-- **R1 — Par-entité guid-keyé → options-db.** Fait pour locks/3D. À migrer :
-  `ra-platform-overrides.json` (scope platform) ; à trancher : `rom-selection.json`.
-- **R2 — Global LiteBox-only : UNE maison.** Proposition : options-db `global` devient la cible et
-  `LiteBox.ini` est réduit au bootstrap (flags lus avant l'ouverture de la db : debug, chemins).
-  Migration progressive clé par clé, `ini` → db, avec seed à la ProblemKeys.
-- **R3 — Caches : tout sous `cache\`.** Move one-shot + LegacyCleanup (§4).
-- **R4 — Config structurée par feature : JSON assumé**, mais avec `ConfigVersion` systématique
-  (pattern ExtendDB versioning) — aujourd'hui inégal.
-- **R5 — Cache RAM write-through dans LiteBoxOptionsDb** (chargement intégral au boot, table sparse
-  → ~ms ; Get = hit dico, Set = dico + db sous verrou ; recheck mtime pour le cas LB-et-LiteBox
-  simultanés). Accès objet optionnel ensuite (`HostGame.GetOption/SetOption`).
-- **R6 — GC options-db** : sweep des rows orphelines (guid disparu) dans le passage de nettoyage
-  auto post-GameCache.
+**R2 — CLÔTURÉE (2026-07-27), sans migrer les globaux plats. Règle actée.**
+Décision d'architecture (Mehdi) : la base (`litebox-options.db`) ne gagne son droit d'exister QUE pour
+trois catégories — **ProblemKeys** (routage par version LB), clés **Hot** (cache RAM sur les chemins
+liste/recherche/détail), et données **assignables à une entité** (game/plateforme/émulateur, l'EAV).
+Un défaut GLOBAL plat, LiteBox-own et Cold, ne coche AUCUNE des trois → il reste dans `LiteBox.ini`.
+
+Une première tentative (phase A) avait déplacé les défauts globaux de gameplay vers la db, au motif que
+leur cascade jeu→ému→global était « à cheval sur deux stores ». **Revertée** : ce n'était pas une faute
+— chaque store faisait ce pour quoi il est bon (l'EAV pour les paliers entité, l'ini pour le défaut
+plat). La preuve que ces clés étaient ini-shaped : la db supprime les rows à valeur vide, ce qui avait
+forcé une sentinelle `Disabled` pour distinguer « vidé » de « jamais défini » sur les hotkeys —
+autrement dit, du code pour faire IMITER l'ini par la db. L'ini le fait nativement.
+
+État final (vérifié live sur G:\LB, --debug, boot + idempotence) :
+- **Paliers PAR-ENTITÉ (game/emulator)** des options de gameplay : restent en `options-db` (scope
+  `GameEmu`) — c'était déjà le cas avant, c'est légitime (critère 3). Édités par
+  `LiteBoxGameplayEditor` / `SmartCaptureEditor`.
+- **Défaut GLOBAL de chacune** : dans `LiteBox.ini`, résolu par repli après les deux paliers db.
+- **Nouveau `Host/Gameplay/GameplayDefaults.cs`** : SSOT (clé, défaut) + passe de boot `Seed(ini)` qui
+  (a) **migre à l'envers** toute row global rémanente de phase A vers l'ini via
+  `LiteBoxOptionsDb.DrainGlobalKeys` (contourne la validation car ces clés ne sont plus déclarées en
+  global), en préservant la valeur perso, puis (b) **écrit le défaut** de toute clé absente. Garantit
+  qu'AUCUNE clé n'est cachée : tout gameplay-global est visible dans l'ini (règle Mehdi : plus de clé
+  « hidden » définie seulement en code, ex. `SmartCaptureShowBorder`, désormais `=false` dans l'ini).
+  Vérif live : 20 défauts écrits + 8 valeurs perso restaurées, base réduite aux 2 ProblemKeys, 2ᵉ boot
+  = no-op.
+- **Deux exceptions non seedées** : `PauseHotkey` / `ScreenCaptureKey`. Leur défaut correct est
+  « absent = hériter de la touche configurée dans LaunchBox » ; aucune valeur ini fixe ne peut
+  l'exprimer (`=` vide voudrait dire « désactivé »). Restaurées si une row phase-A existe, jamais
+  dotées d'un défaut. **Décision Mehdi 2026-07-27 : on garde l'héritage LB** (elles restent absentes
+  de l'ini) — l'unique entorse assumée à la règle « tout visible avec défaut ».
+- **Durcissement conservé** : un `Open()` raté relance sous `--debug` (trouvé à la dure — un ordre
+  d'init statique dans `OptionKeys` s'était manifesté par une ligne de log pendant que toutes les
+  options repartaient au défaut).
+
+**RESTE À FAIRE** :
+
+- **R2 — rien.** Les toggles globaux ordinaires (`UseImageCache`, `UseGameCache`, `CleanThumbs*`,
+  `ThumbAlpha*`, `DetailLoadDelayMs`, `GameRunning*`…) sont des propriétés typées de `LiteBoxConfig`
+  consommées via l'instance partagée `_cfg` : les migrer serait soit une inversion de couche, soit du
+  churn sur des dizaines de sites, pour zéro palier par-entité à réunifier. **Écartée** (voir la règle
+  ci-dessus). L'état d'UI (`Win*`, `Sort*`, `Col.*`…) reste évidemment dans l'ini.
+- **R3 — Caches : tout sous `cache\`.** Move one-shot + LegacyCleanup (§4). Le vrai chantier restant.
 - **ADS (R0)** : ne pas toucher — bon store pour la donnée par-fichier.

@@ -131,7 +131,7 @@ internal static class LbGlobalOptions
         var Dim = LiteBoxTheme.SubFg;
         var Panel2 = LiteBoxTheme.Panel2;
         var applies = new List<Action>();
-        var ini = cfg ?? LiteBoxConfig.LoadForExe();   // SHARED with ApplyFinished's save (see AddSections); PauseHotkey / ScreenCaptureKey live here
+        var ini = cfg ?? LiteBoxConfig.LoadForExe();   // SHARED with ApplyFinished's save (see AddSections). The LiteBox-own GAMEPLAY options moved to the options DB — see the BindDb* helpers below
         bool iniDirty = false;
 
         CheckBox Chk(string t, bool v, Point loc) => new() { Text = t, Location = loc, AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = v, Enabled = !readOnly };
@@ -141,11 +141,6 @@ internal static class LbGlobalOptions
         void BindChk(CheckBox cb, string field) => applies.Add(() => { if (cb.Checked != s.GetBool(field)) s.SetBool(field, cb.Checked); });
         void BindTxt(TextBox tb, string field) => applies.Add(() => { if (tb.Text != s.Get(field)) s.Set(field, tb.Text); });
         void BindIniHk(HotkeyCaptureBox hb, string key) => applies.Add(() => { if (hb.HotkeyValue != ini.Get(key)) { ini.Set(key, hb.HotkeyValue); iniDirty = true; } });
-        // Hotkey box seeded from the EFFECTIVE value (which may be inherited from LaunchBox when the
-        // ini key is absent). Persist ONLY when the user actually changed it — otherwise opening +
-        // OK would freeze the inherited value into the ini and stop it following LaunchBox.
-        void BindIniHkFrom(HotkeyCaptureBox hb, string key, string initial)
-            => applies.Add(() => { if (hb.HotkeyValue != initial) { ini.Set(key, hb.HotkeyValue); iniDirty = true; } });
         void BindIniTxt(TextBox tb, string key) => applies.Add(() => { if (tb.Text != ini.Get(key, "")) { ini.Set(key, tb.Text); iniDirty = true; } });
         void BindIniCbo(ComboBox cb, string key) => applies.Add(() => { var v = cb.SelectedItem as string ?? ""; if (v != ini.Get(key, "")) { ini.Set(key, v); iniDirty = true; } });
         // A framed, titled group in the LiteBox accent colour — marks options that are LiteBox-specific
@@ -160,6 +155,12 @@ internal static class LbGlobalOptions
         }
         ComboBox Cbo(string[] items, string sel, Point loc, int w) { var c = new ComboBox { Location = loc, Width = S(w), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat, Enabled = !readOnly }; c.Items.AddRange(items); c.SelectedItem = sel; if (c.SelectedIndex < 0) c.SelectedIndex = 0; return c; }
         void BindIniChk(CheckBox cb, string key, bool def = false) => applies.Add(() => { if (cb.Checked != ini.GetBool(key, def)) { ini.SetBool(key, cb.Checked); iniDirty = true; } });
+        // Hotkey box seeded from the EFFECTIVE value (which may be inherited from LaunchBox when the
+        // ini key is absent). Persist ONLY a real change, or opening + OK would freeze the inherited
+        // value into the ini and stop it following LaunchBox. A cleared box writes "" (ini stores it
+        // natively — "" = disabled, distinct from an absent key = inherit).
+        void BindIniHkFrom(HotkeyCaptureBox hb, string key, string initial)
+            => applies.Add(() => { if (hb.HotkeyValue != initial) { ini.Set(key, hb.HotkeyValue); iniDirty = true; } });
         // The 13.28-format keys route through LbSettingsStore transparently (ProblemKeys →
         // LB XML on 13.28+, LiteBox DB on 13.27), so plain s.Get/s.Set is all this page needs.
 
@@ -269,14 +270,14 @@ internal static class LbGlobalOptions
             p.Controls.Add(ignBtn);
             applies.Add(() =>
             {
-                if (!ignoreEdited) return;   // untouched → leave the ini (default) alone
+                if (!ignoreEdited) return;   // untouched → leave the stored (default) list alone
                 var toStore = ignoreList == Gameplay.GameplaySettings.SmartCaptureIgnoreDefaultRaw() ? "" : ignoreList;
                 if (toStore != (ini.Get("SmartCaptureIgnoreExes") ?? "")) { ini.Set("SmartCaptureIgnoreExes", toStore); iniDirty = true; }
             });
             // Detection = titleMatch(if set) OR (fps [AND/OR] size). See SmartCapture.cs.
             // TITLE — OR-priority: a matching window is the game on its own.
             p.Controls.Add(Lbl("Title filter (wildcard) — optional, matches on its own if set:", new Point(S(12), S(136)), Dim));
-            var scTitle = Txt(ini.Get("SmartCaptureTitle", ""), new Point(S(12), S(156)), 420); p.Controls.Add(scTitle);
+            var scTitle = Txt(ini.Get("SmartCaptureTitle"), new Point(S(12), S(156)), 420); p.Controls.Add(scTitle);
 
             p.Controls.Add(Lbl("— otherwise, detect the game window by: —", new Point(S(12), S(184)), Dim));
             // fps test:  [x] Renders at ≥ [fps] fps for [sus] ms
@@ -295,7 +296,7 @@ internal static class LbGlobalOptions
             // with any other RadioButton on the page.
             var scLblComb = Lbl("When both are on, combine with:", new Point(S(12), S(260)));
             p.Controls.Add(scLblComb);
-            bool scIsOr = (ini.Get("SmartCaptureCombine", "and") ?? "and").Equals("or", StringComparison.OrdinalIgnoreCase);
+            bool scIsOr = ini.Get("SmartCaptureCombine", "and").Equals("or", StringComparison.OrdinalIgnoreCase);
             var scCombPanel = new Panel { Location = new Point(S(230), S(258)), Size = new Size(S(150), S(22)), BackColor = Bg };
             var scAnd = new RadioButton { Text = "AND", Location = new Point(0, S(1)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = !scIsOr, Enabled = !readOnly };
             var scOr = new RadioButton { Text = "OR", Location = new Point(S(64), S(1)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = scIsOr, Enabled = !readOnly };
@@ -315,7 +316,7 @@ internal static class LbGlobalOptions
             BindIniTxt(scFps, "SmartCaptureMinFps"); BindIniTxt(scSus, "SmartCaptureSustainMs");
             BindIniTxt(scSz, "SmartCaptureMinSizePct"); BindIniTxt(scTitle, "SmartCaptureTitle");
             BindIniChk(scStop, "SmartCaptureStopOnWindowClose");
-            applies.Add(() => { var v = scOr.Checked ? "or" : "and"; if (v != (ini.Get("SmartCaptureCombine") ?? "and")) { ini.Set("SmartCaptureCombine", v); iniDirty = true; } });
+            applies.Add(() => { var v = scOr.Checked ? "or" : "and"; if (v != ini.Get("SmartCaptureCombine", "and")) { ini.Set("SmartCaptureCombine", v); iniDirty = true; } });
 
             void ScSync()
             {
@@ -339,9 +340,9 @@ internal static class LbGlobalOptions
             exEn.CheckedChanged += (_, _) => exMs.Enabled = !readOnly && exEn.Checked;
             applies.Add(() =>
             {
-                int curEager = int.TryParse(ini.Get("ExitScreenEagerMs"), out var ce) ? ce : -1;
+                int curEager = ini.GetInt("ExitScreenEagerMs", -1);
                 var ev = exEn.Checked ? (int)exMs.Value : -1;
-                if (ev != curEager) { ini.Set("ExitScreenEagerMs", ev.ToString()); iniDirty = true; }
+                if (ev != curEager) { ini.Set("ExitScreenEagerMs", ev.ToString(System.Globalization.CultureInfo.InvariantCulture)); iniDirty = true; }
             });
 
             int pauseY = 434;
@@ -420,7 +421,7 @@ internal static class LbGlobalOptions
                 string mode = exkCbo.SelectedIndex == 0 ? "none" : exkCbo.SelectedIndex == 2 ? "process" : "smartcapture";
                 int sec = int.TryParse(exkSec.Text, out var sv) ? Math.Max(0, Math.Min(600, sv)) : Gameplay.GameplaySettings.PauseExitKillDefaultSeconds;
                 string v = mode == "none" ? "none" : mode + ":" + sec.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                string cur = ini.Get("PauseExitKill", Gameplay.GameplaySettings.PauseExitKillDefaultMode + ":" + Gameplay.GameplaySettings.PauseExitKillDefaultSeconds) ?? "";
+                string cur = ini.Get("PauseExitKill", Gameplay.GameplaySettings.PauseExitKillDefaultMode + ":" + Gameplay.GameplaySettings.PauseExitKillDefaultSeconds);
                 if (v != cur) { ini.Set("PauseExitKill", v); iniDirty = true; }
             });
 
@@ -444,7 +445,7 @@ internal static class LbGlobalOptions
                 string mode = exk2Cbo.SelectedIndex == 0 ? "none" : exk2Cbo.SelectedIndex == 2 ? "process" : "smartcapture";
                 int sec = int.TryParse(exk2Sec.Text, out var sv) ? Math.Max(0, Math.Min(600, sv)) : Gameplay.GameplaySettings.PauseExitKillAhkDefaultSeconds;
                 string v = mode == "none" ? "none" : mode + ":" + sec.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                string cur = ini.Get("PauseExitKillAhk", Gameplay.GameplaySettings.PauseExitKillDefaultMode + ":" + Gameplay.GameplaySettings.PauseExitKillAhkDefaultSeconds) ?? "";
+                string cur = ini.Get("PauseExitKillAhk", Gameplay.GameplaySettings.PauseExitKillDefaultMode + ":" + Gameplay.GameplaySettings.PauseExitKillAhkDefaultSeconds);
                 if (v != cur) { ini.Set("PauseExitKillAhk", v); iniDirty = true; }
             });
 

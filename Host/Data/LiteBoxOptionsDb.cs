@@ -91,7 +91,18 @@ internal static class LiteBoxOptionsDb
                 LoadHotLocked();
                 Console.WriteLine($"[options-db] open {dbPath} (hot cache: {CountHotLocked()} row(s))");
             }
-            catch (Exception ex) { Console.WriteLine("[options-db] open failed: " + ex.Message); _conn = null; }
+            catch (Exception ex)
+            {
+                // A failed Open is not a degraded store, it's NO store: every option then reads as
+                // "unset" and the whole tri-state resolution silently falls back to defaults. In
+                // production that must not stop LiteBox from starting (a locked file, a bad disk).
+                // Under --debug it is always a bug — fail loudly, the way an undeclared key does.
+                // (Found the hard way: a static-init ordering slip in OptionKeys surfaced here as one
+                // easily-missed log line while every gameplay option quietly reverted to its default.)
+                Console.WriteLine("[options-db] open failed: " + ex);
+                _conn = null;
+                if (Strict) throw;
+            }
         }
     }
 
@@ -341,6 +352,45 @@ internal static class LiteBoxOptionsDb
             catch (Exception ex) { Console.WriteLine("[options-db] sweep failed: " + ex.Message); }
             return deleted;
         }
+    }
+
+    /// <summary>Read then DELETE the global-scope rows for the given keys, returning the values found.
+    /// Bypasses the OptionKeys namespace check ON PURPOSE: this is the reverse-migration primitive for
+    /// keys that are NO LONGER declared at global scope (the R2 gameplay-globals revert — they went
+    /// back to LiteBox.ini). A normal GetGlobal/SetGlobal would throw "unknown key" under Strict. Never
+    /// touches per-entity rows or still-declared global keys (ProblemKeys). One-shot by nature: after it
+    /// runs the rows are gone. Returns the found key→value map (empty when nothing to drain).</summary>
+    public static Dictionary<string, string> DrainGlobalKeys(IEnumerable<string> keys)
+    {
+        var found = new Dictionary<string, string>(StringComparer.Ordinal);
+        lock (_lock)
+        {
+            if (_conn == null) return found;
+            try
+            {
+                foreach (var key in keys)
+                {
+                    if (string.IsNullOrEmpty(key)) continue;
+                    using (var sel = _conn.CreateCommand())
+                    {
+                        sel.CommandText = "SELECT value FROM options WHERE scope=$s AND entity_id='' AND key=$k";
+                        sel.Parameters.AddWithValue("$s", Global);
+                        sel.Parameters.AddWithValue("$k", key);
+                        var o = sel.ExecuteScalar();
+                        if (o == null || o is DBNull) continue;   // no row → nothing to migrate
+                        found[key] = (string)o;
+                    }
+                    using var del = _conn.CreateCommand();
+                    del.CommandText = "DELETE FROM options WHERE scope=$s AND entity_id='' AND key=$k";
+                    del.Parameters.AddWithValue("$s", Global);
+                    del.Parameters.AddWithValue("$k", key);
+                    del.ExecuteNonQuery();
+                }
+                if (found.Count > 0) TouchMtimeLocked();
+            }
+            catch (Exception ex) { Console.WriteLine("[options-db] drain-global failed: " + ex.Message); }
+        }
+        return found;
     }
 
     /// <summary>Rename an entity in place — for PLATFORM rows, which are NAME-keyed (LB platforms have

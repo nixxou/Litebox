@@ -4,9 +4,13 @@
 // them on rewrite — see LbSettingsStore's strip caution):
 //   UseStartupScreen, MinimumStartupScreenDisplayTime (ms), MinimumShutdownScreenDisplayTime (ms),
 //   HideMouseCursorOnStartupScreens, UsePauseScreen, PauseScreenFading, PauseScreenMuting.
-// The pause/screenshot HOTKEYS stay in LiteBox.ini (PauseHotkey / ScreenCaptureKey):
-//   LaunchBox stores them as a single WPF-Key int (KeyboardGamePause), which can't
-//   represent LiteBox's "Ctrl+F12"-style combos — so they're LiteBox-owned.
+// The pause/screenshot HOTKEYS are LiteBox-owned (PauseHotkey / ScreenCaptureKey): LaunchBox
+//   stores them as a single WPF-Key int (KeyboardGamePause) which can't represent LiteBox's
+//   "Ctrl+F12"-style combos. Every LiteBox-own gameplay option here (pause, SmartCapture,
+//   stay-on-top, exit-early) has its GLOBAL default in LiteBox.ini — seeded with a visible value by
+//   GameplayDefaults so no key is hidden. The PER-ENTITY overrides (game/emulator) live in
+//   litebox-options.db (that's the EAV store's job). A resolution reads the DB for the two entity
+//   tiers and the ini for the global fallback; the store split is deliberate, not accidental.
 //
 // Read FRESH each launch so option edits apply to the next game with no restart.
 // Per-GAME overrides come from the LaunchedGame snapshot (captured pre-drop). A
@@ -109,7 +113,7 @@ internal static class GameplaySettings
     {
         try
         {
-            var v = LiteBoxConfig.LoadForExe().Get("PauseHotkey");   // null = never set in LiteBox
+            var v = LiteBoxConfig.LoadForExe().Get("PauseHotkey");   // null = never set → inherit LB; "" = explicitly cleared
             if (v != null) return v;
             return LbKeyToCombo(GIntXml("KeyboardGamePause", 7)) ?? "Pause";
         }
@@ -133,7 +137,7 @@ internal static class GameplaySettings
         catch { return true; }
     }
 
-    /// <summary>LiteBox.ini StartupStayOnTop (LiteBox-specific → NOT Settings.xml, which LB
+    /// <summary>StartupStayOnTop (LiteBox-specific → NOT Settings.xml, which LB
     /// strips of unknown keys): the startup/end overlays keep TOPMOST for their whole
     /// configured duration WITHOUT ever taking the focus — non-blocking, so an emulator
     /// that pauses when unfocused (RetroArch pause_nonactive) keeps running behind the
@@ -160,6 +164,11 @@ internal static class GameplaySettings
     };
 
     public static bool StayOnTopDefault(string category) => string.Equals(category, "Emulator", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The LiteBox.ini key for one launch category's stay-on-top GLOBAL default. Composite
+    /// ("StartupStayOnTop.Emulator", …) because the global is split per category, while the per-entity
+    /// override (litebox-options.db) uses the bare "StartupStayOnTop". Seeded with its default by
+    /// GameplayDefaults so every category is visible in the ini.</summary>
     public static string StayOnTopIniKey(string category) => "StartupStayOnTop." + category;
 
     /// <summary>The GLOBAL default for whether startup/end screens stay on top, for a given launch
@@ -206,7 +215,7 @@ internal static class GameplaySettings
     { try { return LiteBoxConfig.LoadForExe().GetBool("NonEmuForcefulActivation", false); } catch { return false; } }
 
     /// <summary>Which process the pause FREEZES: "smartcapture" (default — the detected game window's owner,
-    /// fallback to the launched process) or "process" (always the launched emulator/app). LiteBox.ini.</summary>
+    /// fallback to the launched process) or "process" (always the launched emulator/app). LiteBox.ini global.</summary>
     public static string PauseTargetGlobal()
     { try { var v = LiteBoxConfig.LoadForExe().Get("PauseTarget"); return string.IsNullOrWhiteSpace(v) ? "smartcapture" : v!; } catch { return "smartcapture"; } }
 
@@ -230,8 +239,8 @@ internal static class GameplaySettings
         catch { return (true, 0); }
     }
 
-    /// <summary>Freeze↔screen timing resolved game → emulator → global (LiteBox.ini), like SmartCapture.
-    /// Per-entity overrides live in litebox-options.db (edited by <see cref="LiteBoxGameplayEditor"/>).</summary>
+    /// <summary>Freeze↔screen timing resolved game → emulator → global. The two entity tiers come from
+    /// litebox-options.db (edited by <see cref="LiteBoxGameplayEditor"/>); the global from LiteBox.ini.</summary>
     public static (bool showBefore, int offsetMs) ResolvePauseScreenFreezeTiming(string? emuId, string? gameId)
     {
         try
@@ -256,14 +265,14 @@ internal static class GameplaySettings
     {
         try
         {
-            var v = LiteBoxConfig.LoadForExe().Get("ScreenCaptureKey");   // null = never set in LiteBox
+            var v = LiteBoxConfig.LoadForExe().Get("ScreenCaptureKey");   // null = never set → inherit LB; "" = explicitly disabled
             if (v != null) return v;
             return LbKeyToCombo(GIntXml("KeyboardScreenshot", 0)) ?? "";
         }
         catch { return ""; }
     }
 
-    /// <summary>SmartCapture config resolved game → emulator → global (LiteBox-own). Per-entity
+    /// <summary>SmartCapture config resolved game → emulator → global (LiteBox-own). The per-entity
     /// overrides live in litebox-options.db; the global default in LiteBox.ini.</summary>
     public static SmartCaptureConfig ResolveSmartCapture(string? emuId, string? gameId)
     {
@@ -303,7 +312,7 @@ internal static class GameplaySettings
     /// else the built-in default). This is what the options modal edits.</summary>
     public static string SmartCaptureIgnoreExesRaw()
     {
-        try { var v = LiteBoxConfig.LoadForExe().Get("SmartCaptureIgnoreExes"); return string.IsNullOrWhiteSpace(v) ? SmartCaptureIgnoreDefaultRaw() : v.Replace("\r\n", "\n"); }
+        try { var v = LiteBoxConfig.LoadForExe().Get("SmartCaptureIgnoreExes"); return string.IsNullOrWhiteSpace(v) ? SmartCaptureIgnoreDefaultRaw() : v!.Replace("\r\n", "\n"); }
         catch { return SmartCaptureIgnoreDefaultRaw(); }
     }
 
@@ -343,7 +352,7 @@ internal static class GameplaySettings
     /// <summary>LiteBox-own: on an explicit exit (pause-menu "Exit Game"), show the end/exit screen
     /// this many ms AFTER the exit AutoHotkey script runs — covering the display while the emulator
     /// is still closing, instead of waiting for the process to fully exit. -1 = disabled (default).
-    /// Resolved game → emulator → global (litebox-options.db over LiteBox.ini).</summary>
+    /// Resolved game → emulator → global (all three tiers in litebox-options.db).</summary>
     public static int ResolveExitScreenEagerMs(string? emuId, string? gameId = null)
     {
         try
@@ -425,20 +434,19 @@ internal static class GameplaySettings
         catch { return (PauseExitKillDefaultMode, PauseExitKillAhkDefaultSeconds); }
     }
 
-    /// <summary>Pause-exit force-kill behaviour resolved game → emulator → global (litebox-options.db over
-    /// LiteBox.ini), like <see cref="ResolvePauseScreenFreezeTiming"/>. Consumed by PauseManager's exit path.
-    /// <paramref name="ahk"/> picks the exit-script-present rule (PauseExitKillAhk) over the no-script one.</summary>
+    /// <summary>Pause-exit force-kill behaviour resolved game → emulator → global (the two entity tiers in
+    /// litebox-options.db, the global in LiteBox.ini), like <see cref="ResolvePauseScreenFreezeTiming"/>.
+    /// Consumed by PauseManager's exit path. <paramref name="ahk"/> picks the exit-script-present rule.</summary>
     public static (string mode, int seconds) ResolvePauseExitKill(string? emuId, string? gameId, bool ahk = false)
     {
         int defSec = ahk ? PauseExitKillAhkDefaultSeconds : PauseExitKillDefaultSeconds;
         string key = ahk ? "PauseExitKillAhk" : "PauseExitKill";
         try
         {
-            var ini = LiteBoxConfig.LoadForExe();
             string? raw = null;
             if (!string.IsNullOrEmpty(gameId)) { var g = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeGame, gameId!, key); if (!string.IsNullOrEmpty(g)) raw = g; }
             if (raw == null && !string.IsNullOrEmpty(emuId)) { var e = Data.LiteBoxOption.GetOverride(Data.LiteBoxOption.ScopeEmulator, emuId!, key); if (!string.IsNullOrEmpty(e)) raw = e; }
-            if (raw == null) raw = ini.Get(key);
+            if (raw == null) raw = LiteBoxConfig.LoadForExe().Get(key);
             return ParseKill(raw, defSec);
         }
         catch { return (PauseExitKillDefaultMode, defSec); }
@@ -471,7 +479,7 @@ internal static class GameplaySettings
     /// <summary>Controller-pause button/combo (LiteBox.ini), e.g. "Back+Start". Default a safe combo.</summary>
     public static string PadPauseButton()
     {
-        try { var v = LiteBoxConfig.LoadForExe().Get("PadPauseButton"); return string.IsNullOrEmpty(v) ? "Back+Start" : v; }
+        try { var v = LiteBoxConfig.LoadForExe().Get("PadPauseButton"); return string.IsNullOrEmpty(v) ? "Back+Start" : v!; }
         catch { return "Back+Start"; }
     }
 

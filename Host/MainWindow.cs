@@ -141,6 +141,7 @@ internal sealed class MainWindow : Form, IMessageFilter
 
     // right-hand details
     private readonly HeroPanel _hero;            // fanart + clear logo (pulse) + rating + heart
+    private Model3d.Model3dBlock _model3d;       // 3D case model under the hero (GLB cache, thumb-first)
     private readonly MediaPanel _media;          // main media (box → screenshots, click to switch)
     private readonly MediaStrip _strip;          // clickable mini-thumbnails under the main media (slim custom scrollbar)
     private SplitContainer _outerSplit;          // left tree | (middle list + right details) — % persisted
@@ -929,8 +930,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
         _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
 
-        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 11, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 12, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // 3D case model (0 until a model/thumb lands)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // OVERVIEW | RELATED GAMES tab strip (0 for tree nodes)
@@ -944,6 +946,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         _detailGrid = tlp;
 
         hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
+        _model3d = new Model3d.Model3dBlock { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
+        _model3d.ContentChanged = RelayoutDetail;
         media = new MediaPanel { Dock = DockStyle.Fill, BackColor = Panel };
         strip = new MediaStrip { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 4, 0, 4) };
         meta = new MetaCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
@@ -967,17 +971,18 @@ internal sealed class MainWindow : Form, IMessageFilter
         _related.OpenLocalGame = id => { try { SelectGameById(id); } catch { } };
 
         tlp.Controls.Add(hero, 0, 0);
-        tlp.Controls.Add(media, 0, 1);
-        tlp.Controls.Add(strip, 0, 2);
-        tlp.Controls.Add(_detailTabs, 0, 3);
-        tlp.Controls.Add(meta, 0, 4);
-        tlp.Controls.Add(vndb, 0, 5);
-        tlp.Controls.Add(_raCard, 0, 6);
-        tlp.Controls.Add(_storeAchCard, 0, 7);
-        tlp.Controls.Add(notes, 0, 8);
-        tlp.Controls.Add(_related, 0, 9);
+        tlp.Controls.Add(_model3d, 0, 1);
+        tlp.Controls.Add(media, 0, 2);
+        tlp.Controls.Add(strip, 0, 3);
+        tlp.Controls.Add(_detailTabs, 0, 4);
+        tlp.Controls.Add(meta, 0, 5);
+        tlp.Controls.Add(vndb, 0, 6);
+        tlp.Controls.Add(_raCard, 0, 7);
+        tlp.Controls.Add(_storeAchCard, 0, 8);
+        tlp.Controls.Add(notes, 0, 9);
+        tlp.Controls.Add(_related, 0, 10);
         _highScores = new Mame.HighScoresPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0) };
-        tlp.Controls.Add(_highScores, 0, 10);
+        tlp.Controls.Add(_highScores, 0, 11);
         // After an auto-submit, drop the stale board and reload if the HIGH SCORES tab is showing this rom.
         Mame.MameHighScoreSubmit.Submitted += rom =>
         {
@@ -1035,7 +1040,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void RelayoutDetail()
     {
         var host = _detailHost; var tlp = _detailGrid;
-        if (host == null || tlp == null || tlp.RowStyles.Count < 11 || _inRelayout) return;
+        if (host == null || tlp == null || tlp.RowStyles.Count < 12 || _inRelayout) return;
         _inRelayout = true;
         try { RelayoutDetailCore(host, tlp); }
         finally { _inRelayout = false; }
@@ -1062,9 +1067,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         bool highScoresMode = gameMode && _detailTabSel == 2;   // HIGH SCORES tab: swaps overview rows for the leaderboards panel
 
         // Minimum content height for a given grid width (media capped to the viewport).
-        int MinContent(int gridW, out int mediaH, out int metaH, out int vndbH, out int raH, out int storeH)
+        // 3D case block (row 1): a square-ish viewport under the hero, only when it has content.
+        int M3dH(int colW) => _model3d is { HasContent: true } ? Math.Min(colW, Math.Max(120, (int)(viewH * 0.5))) : 0;
+
+        int MinContent(int gridW, out int m3dH, out int mediaH, out int metaH, out int vndbH, out int raH, out int storeH)
         {
             int colW = Math.Max(20, gridW - padH);
+            m3dH = M3dH(colW);
             mediaH = (int)Math.Round(colW / _mediaAspect);
             int cap = (int)(viewH * 0.62);
             if (cap > 100 && mediaH > cap) mediaH = cap;
@@ -1072,39 +1081,41 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (relatedMode || highScoresMode)
             {
                 metaH = vndbH = raH = storeH = 0;
-                return padV + 158 + mediaH + _stripRowH + tabH + MinRelatedH;
+                return padV + 158 + m3dH + mediaH + _stripRowH + tabH + MinRelatedH;
             }
             metaH = _meta.HeightForWidth(colW);
             vndbH = _vndb.HeightForWidth(colW);
             raH = _raCard?.HeightForWidth(colW) ?? 0;
             storeH = _storeAchCard?.HeightForWidth(colW) ?? 0;
-            return padV + 158 + mediaH + _stripRowH + tabH + metaH + vndbH + raH + storeH + MinNotesH;
+            return padV + 158 + m3dH + mediaH + _stripRowH + tabH + metaH + vndbH + raH + storeH + MinNotesH;
         }
 
-        bool overflow = MinContent(fullW, out _, out _, out _, out _, out _) > viewH;
+        bool overflow = MinContent(fullW, out _, out _, out _, out _, out _, out _) > viewH;
         int wantW = overflow ? Math.Max(80, fullW - sbw) : fullW;
-        int minContent = MinContent(wantW, out int media, out int meta, out int vndb, out int ra, out int store);
+        int minContent = MinContent(wantW, out int m3d, out int media, out int meta, out int vndb, out int ra, out int store);
 
-        var rsMedia = tlp.RowStyles[1];
+        var rsM3d = tlp.RowStyles[1];
+        if (rsM3d.SizeType != SizeType.Absolute || Math.Abs(rsM3d.Height - m3d) > 0.5) { rsM3d.SizeType = SizeType.Absolute; rsM3d.Height = m3d; }
+        var rsMedia = tlp.RowStyles[2];
         if (rsMedia.SizeType != SizeType.Absolute || Math.Abs(rsMedia.Height - media) > 0.5) { rsMedia.SizeType = SizeType.Absolute; rsMedia.Height = media; }
-        var rsStrip = tlp.RowStyles[2];
+        var rsStrip = tlp.RowStyles[3];
         if (rsStrip.SizeType != SizeType.Absolute || Math.Abs(rsStrip.Height - _stripRowH) > 0.5) { rsStrip.SizeType = SizeType.Absolute; rsStrip.Height = _stripRowH; }
-        var rsTabs = tlp.RowStyles[3];
+        var rsTabs = tlp.RowStyles[4];
         if (rsTabs.SizeType != SizeType.Absolute || Math.Abs(rsTabs.Height - tabH) > 0.5) { rsTabs.SizeType = SizeType.Absolute; rsTabs.Height = tabH; }
-        var rsMeta = tlp.RowStyles[4];
+        var rsMeta = tlp.RowStyles[5];
         if (rsMeta.SizeType != SizeType.Absolute || Math.Abs(rsMeta.Height - meta) > 0.5) { rsMeta.SizeType = SizeType.Absolute; rsMeta.Height = meta; }
-        var rsVndb = tlp.RowStyles[5];
+        var rsVndb = tlp.RowStyles[6];
         if (rsVndb.SizeType != SizeType.Absolute || Math.Abs(rsVndb.Height - vndb) > 0.5) { rsVndb.SizeType = SizeType.Absolute; rsVndb.Height = vndb; }
-        var rsRa = tlp.RowStyles[6];
+        var rsRa = tlp.RowStyles[7];
         if (rsRa.SizeType != SizeType.Absolute || Math.Abs(rsRa.Height - ra) > 0.5) { rsRa.SizeType = SizeType.Absolute; rsRa.Height = ra; }
-        var rsStore = tlp.RowStyles[7];
+        var rsStore = tlp.RowStyles[8];
         if (rsStore.SizeType != SizeType.Absolute || Math.Abs(rsStore.Height - store) > 0.5) { rsStore.SizeType = SizeType.Absolute; rsStore.Height = store; }
 
         // Notes vs Related: exactly one of the two absorbs the leftover space (Percent 100); the
         // other collapses. In Related overflow, the related panel gets its fixed minimum instead.
-        var rsNotes = tlp.RowStyles[8];
-        var rsRelated = tlp.RowStyles[9];
-        var rsHs = tlp.RowStyles[10];
+        var rsNotes = tlp.RowStyles[9];
+        var rsRelated = tlp.RowStyles[10];
+        var rsHs = tlp.RowStyles[11];
         void Collapse(RowStyle rs) { if (rs.SizeType != SizeType.Absolute || rs.Height != 0) { rs.SizeType = SizeType.Absolute; rs.Height = 0; } }
         void FillPane(RowStyle rs)   // like Related: fixed minimum on overflow, else absorbs the slack
         {
@@ -2099,6 +2110,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         AddClean("Web-image previews (unused for 30 days)", "CleanThumbsWebImg");
         AddClean("Related-games thumbnails (junk files)", "CleanThumbsRelated");
         AddClean("Size-budget sweep (500 MB cap on the thumbs tree)", "CleanThumbsBudget");
+        AddClean("3D box models (stale bakes / removed games)", "CleanModel3d");
+        AddClean("Options DB (rows of removed games / emulators / platforms)", "CleanOptionsDb");
 
         // ── Thumbnail format: global transparent container + per-regroupement policy ──
         flow.Controls.Add(Header("Thumbnail image format"));
@@ -2250,6 +2263,42 @@ internal sealed class MainWindow : Form, IMessageFilter
                 }
                 catch { }
             });
+        };
+
+        // ── 3D box models: the GLB cache (Core\litebox\cache\3d) ──
+        flow.Controls.Add(Header("3D box models"));
+        flow.Controls.Add(Sub("Baked 3D case models (one GLB per game, thumb-first). Models are (re)baked on selection or in "
+            + "bulk via Tools → Generate Media Cache. \"Clean stale\" removes bakes whose game/art/settings changed; "
+            + "the automatic cleaner (above) does the same once per launch."));
+        var m3dRow = new Panel { Width = S(690), Height = S(30), BackColor = Bg, Margin = new Padding(S(6), 0, 0, S(4)) };
+        var m3dClean = MkBtn("Clean stale models"); m3dClean.Location = new Point(0, 0);
+        var m3dWipe = MkBtn("Delete all"); m3dWipe.Location = new Point(S(156), 0);
+        var m3dLbl = new Label { AutoSize = true, ForeColor = SubFg, BackColor = Bg, Location = new Point(S(318), S(5)) };
+        m3dRow.Controls.Add(m3dClean); m3dRow.Controls.Add(m3dWipe); m3dRow.Controls.Add(m3dLbl);
+        flow.Controls.Add(m3dRow);
+        void M3dStats(string? suffix = null)
+        {
+            var (files, bytes) = Model3d.Model3dCache.Stats();
+            m3dLbl.Text = $"{files} model(s), {bytes / (1024.0 * 1024.0):0.#} MB" + (suffix != null ? " — " + suffix : "");
+        }
+        M3dStats();
+        m3dClean.Click += (_, _) =>
+        {
+            m3dClean.Enabled = false; m3dWipe.Enabled = false;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                IGame[] games;
+                try { games = _dm.GetAllGames(); } catch { games = Array.Empty<IGame>(); }
+                var (kept, deletedN) = Model3d.Model3dCache.SweepStale(games);
+                try { BeginInvoke(new Action(() => { if (m3dLbl.IsDisposed) return; M3dStats($"{deletedN} stale deleted, {kept} kept"); m3dClean.Enabled = true; m3dWipe.Enabled = true; })); } catch { }
+            });
+        };
+        m3dWipe.Click += (_, _) =>
+        {
+            if (MessageBox.Show(p.FindForm(), "Delete ALL baked 3D models? They are re-baked on the next visits.",
+                    "3D box models", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            int n = Model3d.Model3dCache.CleanAll();
+            M3dStats($"{n} deleted");
         };
 
         var cacheRefreshers = new List<Action>();
@@ -3636,6 +3685,9 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void OnActivatedStoreResync()
     {
         if (_storeLostFocus) _storeRegainedFocus = true;   // foreground came back after the game took it
+        // Options-db hot cache: reload if the db file changed on disk (ExtendDB under a simultaneously
+        // running real LB writes it directly). One stat when nothing changed.
+        try { Data.LiteBoxOptionsDb.RevalidateHotCache(); } catch { }
         if (_gameRunning) return;                          // don't re-sync store status while a game runs
         try
         {
@@ -3759,6 +3811,9 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         ScheduleFanart(g, null);
         ScheduleMedia(g);   // 0.5s later: build the thumb strip + upgrade the main to full
+        // 3D case block (independent of the media list): thumb from the GLB head instantly, model behind.
+        if (Media.MediaLayout.Current.Show3dBox) _model3d?.ShowFor(g);
+        else _model3d?.Clear();
 
         // Title + platform live in the card; the rest are the expandable rows.
         var rows = new List<(string, string)>();
@@ -3900,6 +3955,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         _detailsShown = node;
         _heroGame = null;
+        _model3d?.Clear();            // 3D case block is game-only
         _launchButtons?.HideGame();   // launch group is game-only
         _related?.ClearAll();         // tab strip + related list are game-only
         _highScores?.ClearAll();      // MAME leaderboards are game-only too
@@ -4591,10 +4647,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         var csvParts = new List<string>(chosen);
         if (opts.Videos) csvParts.Add("videos");
         if (opts.Docs) csvParts.Add("docs");
+        if (opts.Models3d) csvParts.Add("models3d");
         try { _cfg.Set("GenCacheSelection", string.Join(",", csvParts)); _cfg.Save(); } catch { }
 
-        // Open-ended phase list — the coming 3D-model (GLB) bake slots in as just another CachePhase.
-        var phases = BuildCachePhases(chosen, opts.Videos, opts.Docs);
+        var phases = BuildCachePhases(chosen, opts.Videos, opts.Docs, opts.Models3d);
         if (phases.Count == 0) return;
 
         var dlg = new GenerateCacheProgressForm(phases, games);
@@ -4670,13 +4726,20 @@ internal sealed class MainWindow : Form, IMessageFilter
     /// (returns the number of FAILURES for that game). The progress dialog runs the phases in order.</summary>
     internal sealed record CachePhase(string Title, int Dop, Func<IGame, int> Work);
 
-    private List<CachePhase> BuildCachePhases(ISet<string> regroupements, bool videos, bool docs)
+    private List<CachePhase> BuildCachePhases(ISet<string> regroupements, bool videos, bool docs, bool models3d = false)
     {
         var phases = new List<CachePhase>();
         foreach (var (key, title) in CacheRegroupements)
             if (regroupements.Contains(key)) phases.Add(ImagePhase(title, key));
         if (videos) phases.Add(new CachePhase("Video thumbnails", 1, VideoWork));
         if (docs) phases.Add(new CachePhase("Document thumbnails", 1, DocWork));
+        // Bakes serialize on the STA worker anyway → Dop 1. A game with no case art is a skip, not a failure.
+        if (models3d) phases.Add(new CachePhase("3D box models", 1, g =>
+        {
+            var idn = Model3d.Model3dCache.Resolve(g);
+            if (idn == null || !idn.HasArt) return 0;
+            return Model3d.Model3dCache.Ensure(g) == null ? 1 : 0;
+        }));
         return phases;
     }
 
@@ -4694,7 +4757,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (Has("logos")) regs.Add("ClearLogo");
             if (Has("fronts")) regs.Add("Front");
             if (Has("shots")) regs.Add("Screenshots");
-            var phases = BuildCachePhases(regs, Has("videos"), Has("docs"));
+            var phases = BuildCachePhases(regs, Has("videos"), Has("docs"), Has("models3d"));
             Console.WriteLine($"[gencache] phases=[{string.Join(", ", phases.Select(p => p.Title))}] games={games.Length}");
             if (phases.Count == 0 || games.Length == 0) { Application.Exit(); return; }
 
@@ -6064,9 +6127,10 @@ internal sealed class MainWindow : Form, IMessageFilter
             _regs.Where(kv => kv.Value.Checked).Select(kv => kv.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         public bool Videos => _video.Checked;
         public bool Docs => _doc.Checked;
+        public bool Models3d => _m3d.Checked;
 
         private readonly Dictionary<string, CheckBox> _regs = new(StringComparer.OrdinalIgnoreCase);
-        private readonly CheckBox _video, _doc;
+        private readonly CheckBox _video, _doc, _m3d;
         private readonly float _s;
         private int S(int px) => (int)Math.Round(px * _s);
 
@@ -6101,9 +6165,10 @@ internal sealed class MainWindow : Form, IMessageFilter
 
             _video = Cb("Video thumbnails", 16, yAfter, initial.Contains("videos"), 320);
             _doc = Cb("Document thumbnails", 16, yAfter + 24, initial.Contains("docs"), 320);
-            Controls.Add(_video); Controls.Add(_doc);
+            _m3d = Cb("3D box models (GLB cache)", 16, yAfter + 48, initial.Contains("models3d"), 320);
+            Controls.Add(_video); Controls.Add(_doc); Controls.Add(_m3d);
 
-            int yBtn = yAfter + 24 * 2 + 16;
+            int yBtn = yAfter + 24 * 3 + 16;
             var ok = new Button { Text = "Generate", Location = new Point(S(174), S(yBtn)), Size = new Size(S(90), S(28)),
                                   FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, DialogResult = DialogResult.OK };
             var cancel = new Button { Text = "Cancel", Location = new Point(S(272), S(yBtn)), Size = new Size(S(90), S(28)),

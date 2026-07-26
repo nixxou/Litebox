@@ -1,12 +1,16 @@
 // Pending in-archive ROM selection, persisted per (game, version) — the host-side equivalent of
 // LaunchBox-Web's localStorage (lbw.selectedRoms + lbw.romForce). It survives leaving the detail
 // pane and restarting LiteBox, so a "Clear" (force-priority) or an explicit ROM pick sticks exactly
-// like the web (see app.js seeding at launchbox/app.js:2702 — a persisted force suppresses the
-// re-seed from launch history).
+// like the web (a persisted force suppresses the re-seed from launch history).
 //
-// This is the CLIENT's pending pick, deliberately separate from the plugin's launch HISTORY
-// (launch-history.db owns what was actually launched). The web keeps it per-browser; LiteBox is one
-// client, so it keeps it in one JSON file next to its other state (Core\rom-selection.json).
+// This is the DESKTOP CLIENT's pending pick, deliberately separate from the plugin's launch HISTORY
+// (launch-history.db owns what was actually launched) AND from the web clients' picks (each browser
+// keeps its own in localStorage — per-client semantics, decided with the user).
+//
+// STORAGE — options-db row (scope='game', key='RomSelection', value = JSON {verKey:{rom,force}});
+// verKey = additional-app id or "__default__". Declared HOT in OptionKeys: read at detail display
+// (Play-button seeding). The previous store was Core\litebox\rom-selection.json — migrated once at
+// first access, then renamed *.migrated.
 
 #nullable enable
 
@@ -21,29 +25,18 @@ internal static class RomSelectionStore
 {
     private sealed class Entry { public string? rom { get; set; } public bool force { get; set; } }
 
+    private const string OptionKey = "RomSelection";
     private static readonly object _gate = new();
-    private static Dictionary<string, Dictionary<string, Entry>>? _map;   // gameId → verKey → entry
+    private static bool _migrated;
 
-    private static string FilePath => LiteBoxPaths.File("rom-selection.json");
     private static string VerKey(string? appId) => string.IsNullOrEmpty(appId) ? "__default__" : appId!;
 
-    private static void EnsureLoaded()
-    {
-        if (_map != null) return;
-        try
-        {
-            if (File.Exists(FilePath))
-                _map = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, Entry>>>(File.ReadAllText(FilePath));
-        }
-        catch { /* corrupt / unreadable → start fresh */ }
-        _map ??= new Dictionary<string, Dictionary<string, Entry>>(StringComparer.Ordinal);
-    }
+    private static Dictionary<string, Entry>? Read(string gameId)
+        => Data.LiteBoxOptionsDb.GetJson<Dictionary<string, Entry>>("game", gameId, OptionKey);
 
-    private static void Save()
-    {
-        try { File.WriteAllText(FilePath, JsonSerializer.Serialize(_map)); }
-        catch (Exception ex) { Console.WriteLine("[rom-selection] save failed: " + ex.Message); }
-    }
+    private static void Write(string gameId, Dictionary<string, Entry>? map)
+        => Data.LiteBoxOptionsDb.Set("game", gameId, OptionKey,
+                                     map == null || map.Count == 0 ? null : JsonSerializer.Serialize(map));
 
     /// <summary>The persisted pending pick for (game, version), or null when none — caller then seeds
     /// from launch history. rom == null with force == true is a "Clear".</summary>
@@ -52,8 +45,9 @@ internal static class RomSelectionStore
         if (string.IsNullOrEmpty(gameId)) return null;
         lock (_gate)
         {
-            EnsureLoaded();
-            if (_map!.TryGetValue(gameId, out var pg) && pg.TryGetValue(VerKey(appId), out var e))
+            EnsureMigrated();
+            var map = Read(gameId);
+            if (map != null && map.TryGetValue(VerKey(appId), out var e) && e != null)
                 return (e.rom, e.force);
             return null;
         }
@@ -66,8 +60,8 @@ internal static class RomSelectionStore
         if (string.IsNullOrEmpty(gameId)) return;
         lock (_gate)
         {
-            EnsureLoaded();
-            if (_map!.Remove(gameId)) Save();
+            EnsureMigrated();
+            Write(gameId, null);
         }
     }
 
@@ -79,23 +73,40 @@ internal static class RomSelectionStore
         if (string.IsNullOrEmpty(gameId)) return;
         lock (_gate)
         {
-            EnsureLoaded();
+            EnsureMigrated();
+            var map = Read(gameId) ?? new Dictionary<string, Entry>(StringComparer.Ordinal);
             var key = VerKey(appId);
             bool empty = string.IsNullOrEmpty(rom) && !force;
-            if (empty)
-            {
-                if (_map!.TryGetValue(gameId, out var pg))
-                {
-                    pg.Remove(key);
-                    if (pg.Count == 0) _map.Remove(gameId);
-                }
-            }
-            else
-            {
-                if (!_map!.TryGetValue(gameId, out var pg)) { pg = new Dictionary<string, Entry>(StringComparer.Ordinal); _map[gameId] = pg; }
-                pg[key] = new Entry { rom = string.IsNullOrEmpty(rom) ? null : rom, force = force };
-            }
-            Save();
+            if (empty) { if (!map.Remove(key)) return; }
+            else map[key] = new Entry { rom = string.IsNullOrEmpty(rom) ? null : rom, force = force };
+            Write(gameId, map);
         }
+    }
+
+    // ── One-shot migration from the previous JSON file (caller holds _gate) ──
+
+    private static void EnsureMigrated()
+    {
+        if (_migrated) return;
+        _migrated = true;   // one attempt per session
+        string path = LiteBoxPaths.File("rom-selection.json");
+        try
+        {
+            if (!File.Exists(path)) return;                                        // nothing to migrate
+            if (!Data.LiteBoxOptionsDb.Enabled) { _migrated = false; return; }     // too early — retry on a later call
+            var all = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, Entry>>>(File.ReadAllText(path));
+            int games = 0;
+            if (all != null)
+                foreach (var (gameId, picks) in all)
+                {
+                    if (string.IsNullOrEmpty(gameId) || picks == null || picks.Count == 0) continue;
+                    if (Read(gameId) is { Count: > 0 }) continue;   // row already present → don't clobber
+                    Write(gameId, picks);
+                    games++;
+                }
+            File.Move(path, path + ".migrated", overwrite: true);
+            Console.WriteLine($"[rom-selection] migrated rom-selection.json → options DB ({games} game(s))");
+        }
+        catch (Exception ex) { Console.WriteLine("[rom-selection] migration failed: " + ex.Message); }
     }
 }

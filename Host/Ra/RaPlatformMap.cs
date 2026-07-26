@@ -212,6 +212,16 @@ internal static class RaPlatformMap
     public static IEnumerable<string> AllConsoleKeys() => KeyToId.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase);
 
     // ── User overrides: platform name → RAHasher key ("" = explicit none). Only diffs-from-auto stored. ──
+    //
+    // STORAGE — options-db rows (scope='platform', entity_id = platform NAME — LB platforms have no
+    // guid — key='RaConsoleKey'). "" (explicit none) is stored as the "-" SENTINEL because an empty
+    // options-db value deletes the row (= inherit auto), which would lose the "none" intent. The
+    // previous store was Core\litebox\ra-platform-overrides.json — migrated once, renamed *.migrated.
+    // LiteBoxOptionsDb.RenameEntity can move a platform's rows if renaming ever lands (LiteBox's Edit
+    // Platform title is READ-ONLY today, so there is no trigger to hook yet — same exposure as the old
+    // json, which was name-keyed too).
+    private const string OptionKey = "RaConsoleKey";
+    private const string NoneSentinel = "-";
     private static Dictionary<string, string> _overrides;
     private static readonly object _ovLock = new();
     private static string OverridesFile => LiteBoxPaths.File("ra-platform-overrides.json");
@@ -222,13 +232,27 @@ internal static class RaPlatformMap
         {
             if (_overrides != null) return _overrides;
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // DB not open yet (very early call) → serve the legacy json WITHOUT memoizing, so the real
+            // rows are picked up on a later call instead of a permanently-empty cache for the session.
+            if (!Data.LiteBoxOptionsDb.Enabled)
+            {
+                try
+                {
+                    if (File.Exists(OverridesFile))
+                    {
+                        var legacy = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(OverridesFile));
+                        if (legacy != null) foreach (var kv in legacy) if (!string.IsNullOrWhiteSpace(kv.Key)) d[kv.Key.Trim()] = kv.Value ?? "";
+                    }
+                }
+                catch { }
+                return d;
+            }
+            MigrateJsonLocked();
             try
             {
-                if (File.Exists(OverridesFile))
-                {
-                    var j = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(OverridesFile));
-                    if (j != null) foreach (var kv in j) if (!string.IsNullOrWhiteSpace(kv.Key)) d[kv.Key.Trim()] = kv.Value ?? "";
-                }
+                foreach (var kv in Data.LiteBoxOptionsDb.AllOf(Data.LiteBoxOption.ScopePlatform, OptionKey))
+                    if (!string.IsNullOrWhiteSpace(kv.Key))
+                        d[kv.Key.Trim()] = kv.Value == NoneSentinel ? "" : (kv.Value ?? "");
             }
             catch { }
             _overrides = d;
@@ -240,15 +264,51 @@ internal static class RaPlatformMap
     public static Dictionary<string, string> GetOverrides()
         => new Dictionary<string, string>(Overrides(), StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Replaces the override set and persists it (Core\ra-platform-overrides.json). Pass only the
+    /// <summary>Replaces the override set and persists it (options-db platform rows). Pass only the
     /// platforms that DIFFER from the auto mapping.</summary>
     public static void SaveOverrides(Dictionary<string, string> map)
     {
         lock (_ovLock)
         {
-            _overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (map != null) foreach (var kv in map) if (!string.IsNullOrWhiteSpace(kv.Key)) _overrides[kv.Key.Trim()] = kv.Value ?? "";
-            try { File.WriteAllText(OverridesFile, JsonSerializer.Serialize(_overrides)); } catch { }
+            var next = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (map != null) foreach (var kv in map) if (!string.IsNullOrWhiteSpace(kv.Key)) next[kv.Key.Trim()] = kv.Value ?? "";
+            try
+            {
+                // Delete rows that vanished, upsert the rest ("" → the none sentinel).
+                foreach (var kv in Data.LiteBoxOptionsDb.AllOf(Data.LiteBoxOption.ScopePlatform, OptionKey))
+                    if (!next.ContainsKey(kv.Key))
+                        Data.LiteBoxOptionsDb.Set(Data.LiteBoxOption.ScopePlatform, kv.Key, OptionKey, null);
+                foreach (var kv in next)
+                    Data.LiteBoxOptionsDb.Set(Data.LiteBoxOption.ScopePlatform, kv.Key, OptionKey,
+                                              kv.Value.Length == 0 ? NoneSentinel : kv.Value);
+            }
+            catch { }
+            _overrides = next;
         }
+    }
+
+    // One-shot ra-platform-overrides.json → options-db migration (caller holds _ovLock).
+    private static void MigrateJsonLocked()
+    {
+        try
+        {
+            if (!File.Exists(OverridesFile) || !Data.LiteBoxOptionsDb.Enabled) return;
+            var j = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(OverridesFile));
+            int n = 0;
+            if (j != null)
+            {
+                var existing = Data.LiteBoxOptionsDb.AllOf(Data.LiteBoxOption.ScopePlatform, OptionKey);
+                foreach (var kv in j)
+                {
+                    if (string.IsNullOrWhiteSpace(kv.Key) || existing.ContainsKey(kv.Key.Trim())) continue;
+                    Data.LiteBoxOptionsDb.Set(Data.LiteBoxOption.ScopePlatform, kv.Key.Trim(), OptionKey,
+                                              string.IsNullOrEmpty(kv.Value) ? NoneSentinel : kv.Value);
+                    n++;
+                }
+            }
+            File.Move(OverridesFile, OverridesFile + ".migrated", overwrite: true);
+            Console.WriteLine($"[ra] migrated ra-platform-overrides.json → options DB ({n} platform(s))");
+        }
+        catch (Exception ex) { Console.WriteLine("[ra] overrides migration failed: " + ex.Message); }
     }
 }

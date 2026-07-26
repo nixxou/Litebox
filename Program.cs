@@ -52,6 +52,9 @@ try
         // Debug mode also unlocks the per-comparison dup-check trace ([dedup] file-vs-file scores,
         // cache hits, verdicts) — kept off otherwise so the hot path pays no string formatting.
         LbApiHost.Host.Media.Dedup.DedupEngine.Verbose = true;
+        // Debug mode also makes options-db namespace violations THROW (typo'd keys fail loudly in dev;
+        // production only logs them).
+        LbApiHost.Host.Data.LiteBoxOptionsDb.Strict = true;
     }
 }
 catch { }

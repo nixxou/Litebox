@@ -66,8 +66,62 @@ internal static class ThumbGc
             if (doDocs) SweepDocs(games); else Console.WriteLine("[thumbgc] docs sweep disabled (option)");
             if (doWebImg) SweepWebImg(); else Console.WriteLine("[thumbgc] webimg sweep disabled (option)");
             if (doRelated) SweepRelated(); else Console.WriteLine("[thumbgc] related sweep disabled (option)");
+            // 3D GLB cache: identity read from each file's extras, current key recomputed per game.
+            if (cfg.GetBool("CleanModel3d", true)) Model3d.Model3dCache.SweepStale(games);
+            else Console.WriteLine("[thumbgc] model3d sweep disabled (option)");
+            // Options-db: rows of entities that no longer exist (games/emulators/playlists by guid,
+            // platforms by name — their natural key).
+            if (cfg.GetBool("CleanOptionsDb", true)) SweepOptionsDb(games);
+            else Console.WriteLine("[thumbgc] options-db sweep disabled (option)");
         }
         catch (Exception ex) { Console.WriteLine("[thumbgc] failed: " + ex.Message); }
+    }
+
+    // Options-db orphan sweep: one live-id set per scope, straight from the data manager. Platform rows
+    // are NAME-keyed (LB platforms have no guid). Global scope is never swept (SweepOrphans refuses it).
+    private static void SweepOptionsDb(IGame[] games)
+    {
+        try
+        {
+            var dm = PluginHelper.DataManager;
+
+            // A live-set is only trustworthy when the enumeration SUCCEEDED and returned something: a
+            // swallowed failure (or a not-yet-populated collection) would look like "every entity is
+            // gone" and wipe perfectly valid overrides. So each scope is swept ONLY on an explicit
+            // success flag + non-empty set; anything else skips that scope entirely (rows survive to
+            // the next launch — an orphan row is inert, a deleted override is user data lost).
+            static bool Collect<T>(Func<T[]?> enumerate, Func<T, string?> idOf, HashSet<string> into)
+            {
+                try
+                {
+                    var items = enumerate();
+                    if (items == null || items.Length == 0) return false;
+                    foreach (var it in items) { try { if (idOf(it) is { Length: > 0 } id) into.Add(id); } catch { } }
+                    return into.Count > 0;
+                }
+                catch { return false; }
+            }
+
+            var gameIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool okGames = Collect(() => games, g => g.Id, gameIds);
+            var emuIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool okEmus = Collect(() => dm?.GetAllEmulators(), e => e.Id, emuIds);
+            var platNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool okPlats = Collect(() => dm?.GetAllPlatforms(), p => p.Name, platNames);
+            var playlistIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool okPlaylists = Collect(() => dm?.GetAllPlaylists(), p => p.PlaylistId, playlistIds);
+
+            int n = 0;
+            if (okGames) n += Data.LiteBoxOptionsDb.SweepOrphans("game", gameIds);
+            if (okEmus) n += Data.LiteBoxOptionsDb.SweepOrphans("emulator", emuIds);
+            if (okPlats) n += Data.LiteBoxOptionsDb.SweepOrphans("platform", platNames);
+            if (okPlaylists) n += Data.LiteBoxOptionsDb.SweepOrphans("playlist", playlistIds);
+            if (!okGames || !okEmus || !okPlats || !okPlaylists)
+                Console.WriteLine($"[thumbgc] options-db: skipped scope(s) with no reliable live set " +
+                                  $"(games={okGames} emulators={okEmus} platforms={okPlats} playlists={okPlaylists})");
+            if (n > 0) Console.WriteLine($"[thumbgc] options-db: {n} orphan row(s) deleted");
+        }
+        catch (Exception ex) { Console.WriteLine("[thumbgc] options-db sweep failed: " + ex.Message); }
     }
 
     private static void SweepDegraded(IGame[] games)

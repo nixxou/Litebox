@@ -116,7 +116,15 @@ internal static class DupCheckAds
         var own = poster ? dto.Poster : dto.List;
         if (own != null && own.Matches(sort, pool, par)) { dup = own.Dup != 0; return true; }
         var other = poster ? dto.List : dto.Poster;
-        if (other != null && other.Matches(sort, pool, par)) { dup = other.Dup != 0; return true; }
+        if (other != null && other.Matches(sort, pool, par))
+        {
+            dup = other.Dup != 0;
+            // Write-through: copy the reused record into OUR view. Without this a stale own-view record
+            // survives forever (the reuse keeps answering for it), which reads as "recompute never fires"
+            // in the Info box. One write per image, then the own record matches directly.
+            Write(imgPath, poster, sort, pool, par, dup, other.Score);
+            return true;
+        }
         return false;
     }
 

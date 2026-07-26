@@ -8,7 +8,10 @@
 #nullable enable
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
+using System.Security.Cryptography;
 
 namespace LbApiHost.Host.Media;
 
@@ -42,11 +45,54 @@ internal sealed class MediaDupFilter
         catch { return null; }
     }
 
+    // ── Exact-twin guard (byte-identical files under two names) ───────────────
+    // Runs BEFORE the cached records and regardless of them. Rationale: records can be poisoned by a
+    // mid-rename build (Edit Game renumber/move enumerates the folder with one twin briefly absent), and
+    // byte-identical twins have IDENTICAL SIZES — the pool signature cannot see such an edit, so the
+    // poisoned dup=0 records stay "valid" forever. Same bytes must never display twice, records or not.
+    // Cost: one memoized stat per accepted image; MD5 only on a size collision (rare), memoized too.
+    private readonly Dictionary<string, long> _sizeMemo = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, string> _md5Memo = new(StringComparer.OrdinalIgnoreCase);
+
+    private long SizeOf(string p)
+    {
+        if (_sizeMemo.TryGetValue(p, out var s)) return s;
+        try { s = new FileInfo(p).Length; } catch { s = -1; }
+        _sizeMemo[p] = s;
+        return s;
+    }
+
+    private static string? Md5Of(string p, long size)
+    {
+        string key = p + "|" + size;   // size in the key: a replaced file re-hashes instead of serving stale
+        if (_md5Memo.TryGetValue(key, out var m)) return m;
+        try { m = Convert.ToHexString(MD5.HashData(File.ReadAllBytes(p))); }
+        catch { return null; }
+        _md5Memo[key] = m;
+        return m;
+    }
+
+    private bool IsExactTwin(string path, IReadOnlyList<string> accepted)
+    {
+        long sz = SizeOf(path);
+        if (sz <= 0) return false;
+        foreach (var a in accepted)
+        {
+            if (SizeOf(a) != sz) continue;
+            if (Md5Of(path, sz) is not string mc || Md5Of(a, sz) is not string ma || mc != ma) continue;
+            if (Dedup.DedupEngine.Verbose)
+                Console.WriteLine($"[dedup] exact-twin (size+md5) => skip: {Dedup.DedupEngine.Short(path)} == {Dedup.DedupEngine.Short(a)}");
+            return true;
+        }
+        return false;
+    }
+
     /// <summary>True → skip this candidate (it duplicates an image already accepted into the list).</summary>
     public bool IsDup(string path, IReadOnlyList<string> accepted)
     {
         try
         {
+            if (IsExactTwin(path, accepted)) return true;
             if (!_force && DupCheckAds.TryGetResult(path, _poster, _sort, _pool, _par, out bool cached))
             {
                 if (Dedup.DedupEngine.Verbose)

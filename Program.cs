@@ -242,6 +242,9 @@ if (args.Contains("--dedup-test"))
             var eb = cnn.Embed(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadCnnInput(b));
             Console.WriteLine($"cnn:   cosine={LbApiHost.Host.Media.Dedup.CnnEmbedder.Cosine(ea, eb):0.0000}  gpu={cnn.GpuActive}  ({sw.ElapsedMilliseconds} ms)");
             Console.WriteLine($"cnn:   session cost: workingset +{(Environment.WorkingSet - ws0) / (1024.0 * 1024):0} MB (total {Environment.WorkingSet / (1024.0 * 1024):0} MB)");
+            // "hold": keep the live session 10 s so an external tool can sample the process's GPU
+            // (VRAM) counters — the session is what holds the DirectML/D3D12 allocations.
+            if (args.Contains("hold")) { Console.WriteLine($"cnn:   holding session 10 s (pid {Environment.ProcessId})..."); System.Threading.Thread.Sleep(10000); }
         }
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
         Console.WriteLine($"cnn:   after dispose: workingset {Environment.WorkingSet / (1024.0 * 1024):0} MB");

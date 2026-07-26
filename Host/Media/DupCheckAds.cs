@@ -3,14 +3,19 @@
 // resident alongside ExtendDB's :info/:crc32 (each named stream costs its own ~100-byte attribute header).
 //
 // Content = compact JSON with one record per VIEW:
-//   {"list":{"sort":"9f3ab2c1","pool":"4e21d0aa","par":"7c19e3b2","dup":0,"score":0.6411},"poster":{...}}
-//     sort = 8-hex of the view's post-load config hash (MediaLayout.PostLoadHash)
-//     pool = the game's image-pool signature (MediaSignature sig8)
-//     par  = 8-hex of the dup-check params (engine/threshold/gpu/version — MediaLayout.DupParamHash8)
-//     dup  = 1 when this image duplicates one accepted BEFORE it in that view's list
-// A record is valid iff its (sort,pool,par) triplet matches the current one; a stale record is simply
-// overwritten (the OTHER view's record is preserved). Cross-view reuse: when the other view's stored
-// triplet equals the CURRENT one (e.g. poster reuses the list config), its result is used directly.
+//   {"list":{"ctx":"4dd8f10a","par":"7c19e3b2","dup":0,"score":0.6411},"poster":{...}}
+//     ctx = 8-hex MD5 of the EVALUATION CONTEXT: the ordered "path|size" lines of the images accepted
+//           BEFORE this one in that view's list, plus the candidate's own "path|size" (see
+//           MediaDupFilter.CtxOf). Computed from the very files the build enumerated on disk, so the key
+//           and the evaluation are coherent BY CONSTRUCTION — no async-cache desync, and any renumber
+//           (the candidate's own path is part of its key) or predecessor change forces a recompute.
+//           It subsumes the former sort+pool keys (config order AND pool membership both shift the ctx).
+//     par = 8-hex of the dup-check params (engine/threshold/gpu/version — MediaLayout.DupParamHash8)
+//     dup = 1 when this image duplicates one accepted BEFORE it in that view's list
+// A record is valid iff its (ctx,par) pair matches the current one; a stale record is simply overwritten
+// (the OTHER view's record is preserved). Cross-view reuse: when the other view's stored pair equals the
+// CURRENT one (e.g. poster reuses the list config → identical list → identical ctx), its result is used
+// directly and copied into our view (write-through).
 //
 // Writes go through a session memo first (one persistent read per image per session). Volumes WITHOUT
 // named-stream support (exFAT, network shares) fall back to a JSON sidecar — same ADS-else-sidecar
@@ -34,8 +39,7 @@ internal static class DupCheckAds
 
     internal sealed class Rec
     {
-        [JsonPropertyName("sort")] public string Sort { get; set; } = "";
-        [JsonPropertyName("pool")] public string Pool { get; set; } = "";
+        [JsonPropertyName("ctx")] public string Ctx { get; set; } = "";
         [JsonPropertyName("par")] public string Par { get; set; } = "";
         [JsonPropertyName("dup")] public int Dup { get; set; }
         /// <summary>Similarity vs the images accepted before this one, in the engine's native scale (cnn:
@@ -45,8 +49,8 @@ internal static class DupCheckAds
         /// there was nothing to compare against (first image of the list).</summary>
         [JsonPropertyName("score")] public double? Score { get; set; }
 
-        public bool Matches(string sort, string pool, string par)
-            => Sort == sort && Pool == pool && Par == par;
+        public bool Matches(string ctx, string par)
+            => Ctx.Length > 0 && Ctx == ctx && Par == par;   // legacy sort/pool records have no ctx → stale
     }
 
     internal sealed class Dto
@@ -105,24 +109,24 @@ internal static class DupCheckAds
         return removed;
     }
 
-    /// <summary>Cached dup result for this image under the CURRENT (sort,pool,par) triplet — own view
-    /// first, then the other view when its stored triplet matches (identical effective config). False
-    /// return = no valid cached result, compute it.</summary>
-    public static bool TryGetResult(string imgPath, bool poster, string sort, string pool, string par, out bool dup)
+    /// <summary>Cached dup result for this image under the CURRENT (ctx,par) pair — own view first, then
+    /// the other view when its stored pair matches (identical effective list). False return = no valid
+    /// cached result, compute it.</summary>
+    public static bool TryGetResult(string imgPath, bool poster, string ctx, string par, out bool dup)
     {
         dup = false;
         var dto = Load(imgPath);
         if (dto == null) return false;
         var own = poster ? dto.Poster : dto.List;
-        if (own != null && own.Matches(sort, pool, par)) { dup = own.Dup != 0; return true; }
+        if (own != null && own.Matches(ctx, par)) { dup = own.Dup != 0; return true; }
         var other = poster ? dto.List : dto.Poster;
-        if (other != null && other.Matches(sort, pool, par))
+        if (other != null && other.Matches(ctx, par))
         {
             dup = other.Dup != 0;
             // Write-through: copy the reused record into OUR view. Without this a stale own-view record
             // survives forever (the reuse keeps answering for it), which reads as "recompute never fires"
             // in the Info box. One write per image, then the own record matches directly.
-            Write(imgPath, poster, sort, pool, par, dup, other.Score);
+            Write(imgPath, poster, ctx, par, dup, other.Score);
             return true;
         }
         return false;
@@ -131,10 +135,10 @@ internal static class DupCheckAds
     /// <summary>Store this view's result (the other view's record is preserved). Memo always updated;
     /// the persistent write is best-effort — ADS on capable volumes, else the dedicated sidecar (hidden
     /// .ads folder, created on demand like FileMetaStore's).</summary>
-    public static void Write(string imgPath, bool poster, string sort, string pool, string par, bool dup, double? score = null)
+    public static void Write(string imgPath, bool poster, string ctx, string par, bool dup, double? score = null)
     {
         var dto = Load(imgPath) ?? new Dto();
-        var rec = new Rec { Sort = sort, Pool = pool, Par = par, Dup = dup ? 1 : 0, Score = score };
+        var rec = new Rec { Ctx = ctx, Par = par, Dup = dup ? 1 : 0, Score = score };
         if (poster) dto.Poster = rec; else dto.List = rec;
         _memo[imgPath] = dto;
         try

@@ -1874,40 +1874,31 @@ internal sealed partial class EditGameWindow
         }
         else text += "(:info):  (none)\n";
 
-        // ── Duplicate-check ADS (:lb.dupcheck) vs the CURRENT keys ──
-        // Shows the stored per-view records AND what the keys are right now, flagging exactly which of
-        // sort/pool/par went stale (a stale record is harmless — it recomputes on the next visit).
+        // ── Duplicate-check ADS (:lb.dupcheck) ──
+        // Shows the stored per-view records. par is validated against the current settings here; ctx (the
+        // evaluation-context hash: ordered predecessors + the file itself) is per-BUILD, so its validity is
+        // checked when the media list is built — a stale ctx simply recomputes on the next visit (see the
+        // [dedup] debug trace for the full detail).
         try
         {
             var ml = MediaLayout.Current;
-            var gDup = ImgGame;
-            string platDup = Safe(() => gDup.Platform) ?? "";
-            Guid.TryParse(Safe(() => gDup.Id) ?? "", out var gidDup);
-            string curPool = (gidDup != Guid.Empty && platDup.Length > 0)
-                ? MediaSignature.For(platDup, gidDup, Safe(() => gDup.Title) ?? "") : "";
             string curPar = ml.DupParamHash8();
-            string curSortL = ml.PostLoadHash(false).Substring(0, 8);
-            string curSortP = ml.PostLoadHash(true).Substring(0, 8);
 
             text += "\n── Duplicate check (:lb.dupcheck) ──\n";
             text += $"Option:  {(ml.PreventDuplicates ? "enabled" : "disabled")}  ({ml.DupEngine}, thr {ml.EffectiveDupThreshold():0.##}, gpu {(ml.DupGpu ? "on" : "off")})\n";
-            text += $"Current keys:  pool={(curPool.Length > 0 ? curPool : "(n/a)")}  par={curPar}\n";
-            text += $"               sort list={curSortL}  poster={curSortP}\n";
+            text += $"Current par:  {curPar}   (ctx is per-build — validated when the list is built)\n";
 
-            string One(DupCheckAds.Rec? r, string curSort)
+            string One(DupCheckAds.Rec? r)
             {
                 if (r == null) return "(none)";
-                var bad = new List<string>();
-                if (r.Sort != curSort) bad.Add("sort");
-                if (r.Pool != curPool) bad.Add("pool");
-                if (r.Par != curPar) bad.Add("par");
+                if (string.IsNullOrEmpty(r.Ctx)) return "(legacy record — recomputes on next visit)";
                 string score = r.Score is double s ? $"  score={s:0.####}" : "";
-                return $"sort={r.Sort}  pool={r.Pool}  par={r.Par}  dup={r.Dup}{score}\n"
-                     + "           " + (bad.Count == 0 ? "✓ matches current keys" : "✗ STALE — mismatch: " + string.Join(", ", bad));
+                return $"ctx={r.Ctx}  par={r.Par}  dup={r.Dup}{score}"
+                     + (r.Par == curPar ? "   par ✓" : "   par ✗ STALE");
             }
             var dto = DupCheckAds.Peek(img.Path);
-            text += $"List:    {One(dto?.List, curSortL)}\n";
-            text += $"Poster:  {One(dto?.Poster, curSortP)}\n";
+            text += $"List:    {One(dto?.List)}\n";
+            text += $"Poster:  {One(dto?.Poster)}\n";
         }
         catch { }
 

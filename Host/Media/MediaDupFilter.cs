@@ -1,6 +1,8 @@
-// Per-game/per-view duplicate filter applied while BUILDING the post-load media list. Snapshot of the
-// three cache keys (sort / pool / par — see DupCheckAds) + the engine settings, taken once per build:
-//   • cached ADS result under the current triplet → reuse, zero decode;
+// Per-game/per-view duplicate filter applied while BUILDING the post-load media list. Per candidate:
+//   • compute the EVALUATION-CONTEXT key (ctx = md5-8 of the ordered "path|size" of the images accepted
+//     before it + the candidate's own "path|size" — sizes from the build's own stat memo, so key and
+//     evaluation come from the same on-disk snapshot);
+//   • cached ADS result under the current (ctx,par) → reuse, zero decode;
 //   • else evaluate via DedupEngine (candidate vs the images already ACCEPTED into the list) and persist;
 //   • engine can't answer (missing natives, decode error) → fail OPEN (keep the image), persist nothing.
 // `force` (the Caches → "update duplicates" pass) recomputes and rewrites even valid cached results.
@@ -19,30 +21,40 @@ internal sealed class MediaDupFilter
 {
     private readonly bool _poster;
     private readonly bool _force;
-    private readonly string _sort, _pool, _par;
+    private readonly string _par;
     private readonly Dedup.DupEngineMode _mode;
     private readonly double _threshold;
     private readonly bool _gpu;
 
-    private MediaDupFilter(bool poster, bool force, string sort, string pool, string par,
+    private MediaDupFilter(bool poster, bool force, string par,
                            Dedup.DupEngineMode mode, double threshold, bool gpu)
-    { _poster = poster; _force = force; _sort = sort; _pool = pool; _par = par; _mode = mode; _threshold = threshold; _gpu = gpu; }
+    { _poster = poster; _force = force; _par = par; _mode = mode; _threshold = threshold; _gpu = gpu; }
 
-    /// <summary>The filter for one game+view build, or null when disabled / the game has no usable
-    /// pool signature (no keys → no caching → filtering would recompute forever).</summary>
+    /// <summary>The filter for one game+view build, or null when disabled. The ctx key is per-candidate
+    /// (computed in <see cref="IsDup"/> from the build's own accepted list) — no game-level key needed.</summary>
     public static MediaDupFilter? For(MediaLayout ml, bool poster, string plat, Guid id, string title, bool force = false)
     {
         try
         {
             if (ml == null || !ml.PreventDuplicates) return null;
-            string pool = MediaSignature.For(plat, id, title);
-            if (string.IsNullOrEmpty(pool)) return null;
             return new MediaDupFilter(
-                poster, force,
-                ml.PostLoadHash(poster).Substring(0, 8), pool, ml.DupParamHash8(),
+                poster, force, ml.DupParamHash8(),
                 Dedup.DedupEngine.ParseMode(ml.DupEngine), ml.EffectiveDupThreshold(), ml.DupGpu);
         }
         catch { return null; }
+    }
+
+    /// <summary>The evaluation-context key: md5-8 of the ordered "path|size" lines of the images accepted
+    /// BEFORE the candidate, a separator, then the candidate's own "path|size" (lower-cased paths). The
+    /// candidate being part of its OWN key is what forces a recompute when the file is renumbered — a
+    /// record travelling with a rename (ADS follows File.Move) can never match its new name.</summary>
+    private string CtxOf(string path, IReadOnlyList<string> accepted)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var a in accepted) sb.Append(a.ToLowerInvariant()).Append('|').Append(SizeOf(a)).Append('\n');
+        sb.Append("--\n").Append(path.ToLowerInvariant()).Append('|').Append(SizeOf(path));
+        var md5 = Convert.ToHexString(MD5.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString()))).ToLowerInvariant();
+        return md5.Substring(0, 8);
     }
 
     // ── Exact-twin guard (byte-identical files under two names) ───────────────
@@ -93,10 +105,11 @@ internal sealed class MediaDupFilter
         try
         {
             if (IsExactTwin(path, accepted)) return true;
-            if (!_force && DupCheckAds.TryGetResult(path, _poster, _sort, _pool, _par, out bool cached))
+            string ctx = CtxOf(path, accepted);
+            if (!_force && DupCheckAds.TryGetResult(path, _poster, ctx, _par, out bool cached))
             {
                 if (Dedup.DedupEngine.Verbose)
-                    Console.WriteLine($"[dedup] cache {(_poster ? "poster" : "list")}: dup={(cached ? 1 : 0)}  {Dedup.DedupEngine.Short(path)}");
+                    Console.WriteLine($"[dedup] cache {(_poster ? "poster" : "list")} (ctx={ctx}): dup={(cached ? 1 : 0)}  {Dedup.DedupEngine.Short(path)}");
                 return cached;
             }
             var (r, score) = Dedup.DedupEngine.Evaluate(_mode, _threshold, _gpu, path, accepted);
@@ -106,7 +119,7 @@ internal sealed class MediaDupFilter
                     Console.WriteLine($"[dedup] no-verdict (fail-open, kept): {Dedup.DedupEngine.Short(path)}");
                 return false;   // can't evaluate → keep the image, don't persist
             }
-            DupCheckAds.Write(path, _poster, _sort, _pool, _par, r.Value, score);
+            DupCheckAds.Write(path, _poster, ctx, _par, r.Value, score);
             return r.Value;
         }
         catch { return false; }

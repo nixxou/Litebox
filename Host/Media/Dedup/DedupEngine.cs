@@ -20,9 +20,10 @@ internal enum DupEngineMode { DHash, PHash, Cnn }
 
 internal static class DedupEngine
 {
-    /// <summary>Bump when the fingerprint pipeline changes (decoder, preprocessing, model) — salts the
-    /// dup-param hash so every persisted ADS result is invalidated at once.</summary>
-    public const int Version = 1;
+    /// <summary>Bump when the fingerprint pipeline OR the record keying changes (decoder, preprocessing,
+    /// model, key schema) — salts the dup-param hash so every persisted ADS result is invalidated at once.
+    /// v2 = ctx-based keying (evaluation-context hash replaced the sort+pool pair).</summary>
+    public const int Version = 2;
 
     /// <summary>Per-comparison trace ([dedup] lines: every file-vs-file score, cache hits, verdicts).
     /// Set at boot ONLY in debug mode (--debug / DebugLog=true) — stays false in normal use so the

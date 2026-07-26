@@ -198,21 +198,9 @@ internal static class SaveVault
             {
                 if (File.Exists(FilePath))
                 {
-                    string text = File.ReadAllText(FilePath);
-                    // Legacy (pre-versioning) files start with '[' — a bare entry array.
-                    string trimmed = text.TrimStart();
-                    if (trimmed.StartsWith("[", StringComparison.Ordinal))
-                    {
-                        _entries = JsonSerializer.Deserialize<List<VaultEntry>>(text) ?? new();
-                        _loadedVersion = "0.0.0";
-                        Console.WriteLine($"[saves] vault json read in legacy (unversioned) shape — {_entries.Count} entr(ies); will be rewritten versioned on the next change");
-                    }
-                    else
-                    {
-                        var store = JsonSerializer.Deserialize<VaultStore>(text);
-                        _entries = store?.Entries ?? new();
-                        _loadedVersion = store?.ConfigVersion ?? "0.0.0";
-                    }
+                    var store = JsonSerializer.Deserialize<VaultStore>(File.ReadAllText(FilePath));
+                    _entries = store?.Entries ?? new();
+                    _loadedVersion = store?.ConfigVersion ?? "0.0.0";
                 }
             }
             catch (Exception ex) { Console.WriteLine("[saves] vault json unreadable: " + ex.Message); }

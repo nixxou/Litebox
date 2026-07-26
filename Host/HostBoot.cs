@@ -390,10 +390,8 @@ internal static class HostBoot
             Data.LiteBoxOptionsDb.Open();
             Data.ProblemKeys.SeedRenamedFromXml(Path.Combine(dataDir, "Settings.xml"));
             // Guarantee every LiteBox-own gameplay GLOBAL default is present in LiteBox.ini with a
-            // visible value (no hidden keys), and reverse-migrate any leftover options-DB global row
-            // from the short-lived R2 phase-A experiment back into the ini. Must run BEFORE anything
-            // resolves a launch (PauseManager.Configure, DependencyCheck, first game start) — hence
-            // here, right after the DB opens (the drain needs it).
+            // visible value (no hidden keys). Must run BEFORE anything resolves a launch
+            // (PauseManager.Configure, DependencyCheck, first game start).
             Gameplay.GameplayDefaults.Seed(LiteBoxConfig.LoadForExe());
             // The LaunchBox settings <ID> is the key for encrypted values (EmuMovies password, …). LaunchBox
             // writes it on its very first run; a real install always has it. If it's missing, LaunchBox was never
@@ -443,15 +441,6 @@ internal static class HostBoot
             names = names.Where(n => !IsExtendDb(n)).ToList();
             if (names.Count != before) Console.WriteLine("[loader] ExtendDB skipped (functionality integrated into LiteBox)");
         }
-
-        // Sweep obsolete leftovers from OLDER LiteBox versions (pre-litebox\ Core-root config/journal/caches,
-        // old launcher markers, whitelist.txt, copied Magick DLLs, loose .api payload) so an upgrade or a
-        // zip-extract-over-an-old-install self-cleans. Idempotent; never touches current data. See LegacyCleanup.
-        try { LbApiHost.Host.Install.LegacyCleanup.SweepObsolete(Path.GetFullPath(Path.Combine(coreDir, ".."))); } catch { }
-
-        // Relocate the rebuildable cache dirs that used to sit loose at litebox\ root into litebox\cache\
-        // (R3). One-shot, idempotent, runs BEFORE any cache is opened. See CacheReorg.
-        try { LbApiHost.Host.Install.CacheReorg.Run(); } catch { }
 
         Console.WriteLine($"Plugins root: {pluginsRoot}");
         Console.WriteLine($"Enabled plugins: [{string.Join(", ", names)}]"

@@ -196,17 +196,6 @@ if (args.Contains("--deploy-natives"))
     return 0;
 }
 
-// Sweep obsolete leftovers of OLDER LiteBox versions under <root> (dev/test — same as the boot sweep):
-//   --sweep-legacy <lbRoot>
-if (args.Contains("--sweep-legacy"))
-{
-    int di = Array.IndexOf(args, "--sweep-legacy");
-    string r = (di >= 0 && di + 1 < args.Length) ? args[di + 1].TrimEnd('\\', '/') : AppContext.BaseDirectory;
-    LbApiHost.Host.Install.LegacyCleanup.SweepObsolete(r);
-    Console.WriteLine("[sweep-legacy] done -> " + r);
-    return 0;
-}
-
 // Dump the per-view post-load config JSON + its MD5 key (dev/test): --media-hash
 if (args.Contains("--media-hash"))
 {

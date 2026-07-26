@@ -9,14 +9,12 @@
 //
 // STORAGE — options-db row (scope='game', key='RomSelection', value = JSON {verKey:{rom,force}});
 // verKey = additional-app id or "__default__". Declared HOT in OptionKeys: read at detail display
-// (Play-button seeding). The previous store was Core\litebox\rom-selection.json — migrated once at
-// first access, then renamed *.migrated.
+// (Play-button seeding).
 
 #nullable enable
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Text.Json;
 
 namespace LbApiHost.Host;
@@ -27,7 +25,6 @@ internal static class RomSelectionStore
 
     private const string OptionKey = "RomSelection";
     private static readonly object _gate = new();
-    private static bool _migrated;
 
     private static string VerKey(string? appId) => string.IsNullOrEmpty(appId) ? "__default__" : appId!;
 
@@ -45,7 +42,6 @@ internal static class RomSelectionStore
         if (string.IsNullOrEmpty(gameId)) return null;
         lock (_gate)
         {
-            EnsureMigrated();
             var map = Read(gameId);
             if (map != null && map.TryGetValue(VerKey(appId), out var e) && e != null)
                 return (e.rom, e.force);
@@ -60,7 +56,6 @@ internal static class RomSelectionStore
         if (string.IsNullOrEmpty(gameId)) return;
         lock (_gate)
         {
-            EnsureMigrated();
             Write(gameId, null);
         }
     }
@@ -73,7 +68,6 @@ internal static class RomSelectionStore
         if (string.IsNullOrEmpty(gameId)) return;
         lock (_gate)
         {
-            EnsureMigrated();
             var map = Read(gameId) ?? new Dictionary<string, Entry>(StringComparer.Ordinal);
             var key = VerKey(appId);
             bool empty = string.IsNullOrEmpty(rom) && !force;
@@ -81,32 +75,5 @@ internal static class RomSelectionStore
             else map[key] = new Entry { rom = string.IsNullOrEmpty(rom) ? null : rom, force = force };
             Write(gameId, map);
         }
-    }
-
-    // ── One-shot migration from the previous JSON file (caller holds _gate) ──
-
-    private static void EnsureMigrated()
-    {
-        if (_migrated) return;
-        _migrated = true;   // one attempt per session
-        string path = LiteBoxPaths.File("rom-selection.json");
-        try
-        {
-            if (!File.Exists(path)) return;                                        // nothing to migrate
-            if (!Data.LiteBoxOptionsDb.Enabled) { _migrated = false; return; }     // too early — retry on a later call
-            var all = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, Entry>>>(File.ReadAllText(path));
-            int games = 0;
-            if (all != null)
-                foreach (var (gameId, picks) in all)
-                {
-                    if (string.IsNullOrEmpty(gameId) || picks == null || picks.Count == 0) continue;
-                    if (Read(gameId) is { Count: > 0 }) continue;   // row already present → don't clobber
-                    Write(gameId, picks);
-                    games++;
-                }
-            File.Move(path, path + ".migrated", overwrite: true);
-            Console.WriteLine($"[rom-selection] migrated rom-selection.json → options DB ({games} game(s))");
-        }
-        catch (Exception ex) { Console.WriteLine("[rom-selection] migration failed: " + ex.Message); }
     }
 }

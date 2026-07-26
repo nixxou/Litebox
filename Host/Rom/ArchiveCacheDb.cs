@@ -85,19 +85,6 @@ internal static class ArchiveCacheDb
                         "CREATE INDEX IF NOT EXISTS ix_ra_game_console ON ra_game(console_id);" +
                         "CREATE INDEX IF NOT EXISTS ix_ra_hash_game ON ra_hash(game_id);";
                     cmd.ExecuteNonQuery();
-
-                    // Pre-migration DBs lack the RA columns on the two listing tables — additive,
-                    // idempotent ALTERs ("duplicate column" swallowed). Existing rows untouched.
-                    foreach (var alter in new[]
-                    {
-                        "ALTER TABLE archive ADD COLUMN parse_state INTEGER DEFAULT 0;",
-                        "ALTER TABLE archive_entry ADD COLUMN RetroAchievementsHash TEXT;",
-                        "ALTER TABLE archive_entry ADD COLUMN RetroAchievementsId INTEGER;",
-                    })
-                    {
-                        try { using var a = conn.CreateCommand(); a.CommandText = alter; a.ExecuteNonQuery(); }
-                        catch { /* column already exists */ }
-                    }
                     _ready = true;
                 }
             }

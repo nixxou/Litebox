@@ -10,8 +10,7 @@
 //   • RaLaunchCorrect reads the launched ROM entry to correct the IGame's RA hash,
 //   • the startup progress bar / reveal ceiling read detection_ms.
 //
-// Connection-per-op (WAL), same shape as ArchiveHistory. The schema is ensured once per session; a one-time
-// migration lifts any rows the legacy LiteBox.pending.db still holds and then drops that stale table.
+// Connection-per-op (WAL), same shape as ArchiveHistory. The schema is ensured once per session.
 
 #nullable enable
 
@@ -30,7 +29,7 @@ internal static class LaunchHistoryDb
 
     private static void Log(string m) { try { Console.WriteLine("[launch-history] " + m); } catch { } }
 
-    /// <summary>Fresh connection, schema ensured (and legacy rows migrated) once. Null on failure → callers
+    /// <summary>Fresh connection, schema ensured once. Null on failure → callers
     /// no-op / return null, exactly like the old op-log's disabled state.</summary>
     private static SqliteConnection? Open()
     {
@@ -50,60 +49,12 @@ internal static class LaunchHistoryDb
                             "  extracted_rom_path TEXT, last_launched_utc TEXT NOT NULL, detection_ms INTEGER);";
                         cmd.ExecuteNonQuery();
                     }
-                    TryMigrateFromPending(conn);
                     _ready = true;
                 }
             }
             return conn;
         }
         catch (Exception ex) { Log("open failed: " + ex.Message); return null; }
-    }
-
-    // One-time lift of legacy rows from LiteBox.pending.db (where launch_history used to live), then drop the
-    // stale table so it isn't an orphan. Best-effort: any failure just leaves the history to rebuild itself.
-    private static void TryMigrateFromPending(SqliteConnection conn)
-    {
-        try
-        {
-            using (var chk = conn.CreateCommand())
-            {
-                chk.CommandText = "SELECT COUNT(*) FROM launch_history;";
-                if (Convert.ToInt64(chk.ExecuteScalar()) > 0) return;   // already populated → nothing to do
-            }
-            string old = LiteBoxPaths.File("LiteBox.pending.db");
-            if (!File.Exists(old)) return;
-
-            using (var att = conn.CreateCommand())
-            {
-                att.CommandText = "ATTACH DATABASE $p AS legacy;";
-                att.Parameters.AddWithValue("$p", old);
-                att.ExecuteNonQuery();
-            }
-            try
-            {
-                using (var has = conn.CreateCommand())
-                {
-                    has.CommandText = "SELECT COUNT(*) FROM legacy.sqlite_master WHERE type='table' AND name='launch_history';";
-                    if (Convert.ToInt64(has.ExecuteScalar()) == 0) return;   // legacy table absent → nothing to migrate
-                }
-                long moved;
-                using (var cp = conn.CreateCommand())
-                {
-                    cp.CommandText =
-                        "INSERT OR IGNORE INTO launch_history(game_id, additional_app_id, emulator_id, extracted_rom_path, last_launched_utc, detection_ms) " +
-                        "SELECT game_id, additional_app_id, emulator_id, extracted_rom_path, last_launched_utc, detection_ms FROM legacy.launch_history;";
-                    moved = cp.ExecuteNonQuery();
-                }
-                try { using var drop = conn.CreateCommand(); drop.CommandText = "DROP TABLE legacy.launch_history;"; drop.ExecuteNonQuery(); }
-                catch (Exception ex) { Log("legacy drop skipped (db in use): " + ex.Message); }
-                if (moved > 0) Log($"migrated {moved} row(s) from LiteBox.pending.db");
-            }
-            finally
-            {
-                try { using var det = conn.CreateCommand(); det.CommandText = "DETACH DATABASE legacy;"; det.ExecuteNonQuery(); } catch { }
-            }
-        }
-        catch (Exception ex) { Log("migrate skipped: " + ex.Message); }
     }
 
     /// <summary>Upsert the last emulator/version used for a game (ROM left NULL — RecordLaunchRomEntry sets it).

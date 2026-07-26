@@ -191,8 +191,6 @@ internal sealed class GameStore
     private OpLog _oplog;
     private string _opDbOverride;   // set only by the self-test, to isolate from the real log
     private string OpDbPath => _opDbOverride ?? LiteBoxPaths.File("LiteBox.pending.db");
-    // Legacy positional journal (pre-WAL); migrated into the op-log + deleted on first boot.
-    private string LegacyJournalPath => LiteBoxPaths.File("LiteBox.pending");
 
     /// <summary>Read-only mode (config, default true): NOTHING is ever written to disk — neither
     /// the journal nor the Platform XMLs. Mutations update the in-memory Rows only, for this run.</summary>
@@ -603,12 +601,10 @@ internal sealed class GameStore
         m[Pooled(xmlName)] = Pooled(value);
     }
 
-    /// <summary>At boot: migrate any legacy journal, re-apply the surviving op-log to memory (UI
-    /// correct), then flush to XML if LaunchBox/BigBox aren't running. If they're running, keep the
-    /// log for later.</summary>
+    /// <summary>At boot: re-apply the surviving op-log to memory (UI correct), then flush to XML if
+    /// LaunchBox/BigBox aren't running. If they're running, keep the log for later.</summary>
     public void RecoverJournalOnLoad()
     {
-        MigrateLegacyJournal();
         var ops = _oplog?.ReadAll();
         if (ops != null && ops.Count > 0)
         {
@@ -639,29 +635,6 @@ internal sealed class GameStore
             else if (op.OpType == "replace" && Guid.TryParse(op.ParentId, out var sg) && _byId.ContainsKey(sg))
             { ApplySubEntityReplaceToMemory(sg, op.Entity, op.Value); }   // generic per-game sub-entity
         }
-    }
-
-    // Old positional journal (guid|fav|rating|playcount|lastplayedticks|playtime): apply to memory,
-    // and when not ReadOnly re-emit as ops + delete the file. In ReadOnly it is left untouched.
-    private void MigrateLegacyJournal()
-    {
-        try
-        {
-            if (!File.Exists(LegacyJournalPath)) return;
-            foreach (var line in File.ReadAllLines(LegacyJournalPath))
-            {
-                var p = line.Split('|');
-                if (p.Length < 6 || !Guid.TryParse(p[0], out var id) || !_byId.TryGetValue(id, out var i)) continue;
-                RecordModify(i, "Favorite", p[1] == "1" ? "true" : "false");
-                RecordModify(i, "StarRatingFloat", p[2]);
-                RecordModify(i, "PlayCount", p[3]);
-                if (long.TryParse(p[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var lp) && lp != 0)
-                    RecordModify(i, "LastPlayedDate", new DateTime(lp, DateTimeKind.Local).ToString("o", CultureInfo.InvariantCulture));
-                RecordModify(i, "PlayTime", p[5]);
-            }
-            if (!ReadOnly) { File.Delete(LegacyJournalPath); Console.WriteLine("[store] migrated legacy journal → op-log"); }
-        }
-        catch (Exception ex) { Console.WriteLine("[store] legacy journal migrate: " + ex.Message); }
     }
 
     /// <summary>At close: flush the op-log to XML if safe, else keep it for next time.</summary>

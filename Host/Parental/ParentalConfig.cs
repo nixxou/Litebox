@@ -182,7 +182,7 @@ internal sealed class ParentalConfig
             {
                 // Stamp the version WRITING the file (echoing the old value made the field inert —
                 // every file stayed "0.0.0" and carried no information). This file holds USER data:
-                // no reset gate, a future format change migrates against ConfigVersioning.IsBelow.
+                // no reset gate — the stamp is provenance (format breaks = fresh install).
                 ConfigVersion = Data.ConfigVersioning.Stamp(),
                 Rules = Clean(Rules),
                 HiddenPlatformsBigBoxOn = Clean(HiddenPlatformsBigBoxOn),

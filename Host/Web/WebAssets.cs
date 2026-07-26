@@ -36,14 +36,8 @@ internal static class WebAssets
             LiteBoxPaths.Web("database");
 
             // Source staging lives under Core\litebox\ (LiteBox-own, removed with the data dir on uninstall).
-            // Fall back to the pre-relocation Core\web-assets so an existing install still deploys.
             string baseDir = Path.Combine(LiteBoxPaths.Data, "web-assets");
-            if (!Directory.Exists(baseDir))
-            {
-                string legacy = Path.Combine(AppContext.BaseDirectory, "web-assets");
-                if (Directory.Exists(legacy)) baseDir = legacy;
-                else { LbLog.Info("web", "no bundled web assets to deploy"); return; }
-            }
+            if (!Directory.Exists(baseDir)) { LbLog.Info("web", "no bundled web assets to deploy"); return; }
 
             string version = LiteBoxVersion.Current.ToString();
             foreach (var site in Sites)

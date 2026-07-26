@@ -6,9 +6,8 @@
 // Always removed (LiteBox-exclusive): the app files in Core (LiteBox.exe + LiteBox.dll + json + the extra
 // managed deps LaunchBox doesn't ship — LibVLCSharp / ZstdSharp / Magick.NET — derived from
 // LightPayload.Files), Core\litebox\ (ALL our data — dbs, caches, config, logs, our own thirdparty\ +
-// cache\thumbs), Core\web-assets\ (installer web-theme staging), Core\LiteBox.exe.WebView2\ (WebView2
-// profile), the root re-launcher, the LiteBox-ONLY ThirdParty natives (Steam / Pdfium / RomExtractor —
-// derived from NativeInstaller.Payload), and every obsolete leftover from OLDER LiteBox versions (LegacyCleanup).
+// cache\thumbs + web-assets\ + the WebView2 profiles), the root re-launcher, and the LiteBox-ONLY
+// ThirdParty natives (Steam / Pdfium / RomExtractor — derived from NativeInstaller.Payload).
 //
 // Opt-in (off by default): the ThirdParty tools SHARED with ExtendDB (Everything / ImageMagick native /
 // RAHasher) — removed as files, then their dirs are rmdir'd empty-only so a real ExtendDB's content is never
@@ -63,8 +62,6 @@ internal static class Uninstaller
         // extra managed deps LaunchBox's Core doesn't provide (LibVLCSharp / ZstdSharp / Magick.NET).
         foreach (var f in LightPayload.Files) sb.AppendLine($"del /q \"{core}\\{f}\" 2>nul");
         sb.AppendLine($"rmdir /s /q \"{core}\\litebox\" 2>nul");                  // ALL LiteBox data (dbs, caches, our thirdparty\, cache\thumbs, web-assets\, webview2-kiosk\)
-        sb.AppendLine($"rmdir /s /q \"{core}\\web-assets\" 2>nul");               // LEGACY (pre-relocation): staging now lives in Core\litebox\web-assets
-        sb.AppendLine($"rmdir /s /q \"{core}\\LiteBox.exe.WebView2\" 2>nul");     // LEGACY (pre-relocation): kiosk profile now Core\litebox\webview2-kiosk
         sb.AppendLine($"del /q \"{root}\\LiteBox.exe\" 2>nul");
 
         // Always: the LiteBox-ONLY ThirdParty natives (Steam / Pdfium / RomExtractor), derived from the deploy
@@ -73,14 +70,6 @@ internal static class Uninstaller
             sb.AppendLine($"del /q \"{root}\\{rel}\" 2>nul");
         foreach (var dir in NativeInstaller.LiteBoxOnlySubDirs())
             sb.AppendLine($"rmdir /s /q \"{root}\\{dir}\" 2>nul");
-
-        // Obsolete leftovers from OLDER LiteBox versions (pre-litebox\ Core-root config/journal/caches, old
-        // launcher markers, copied Magick DLLs, loose .api payload, …) — the SAME list the boot sweep uses.
-        foreach (var f in LegacyCleanup.CoreFiles) sb.AppendLine($"del /q \"{core}\\{f}\" 2>nul");
-        foreach (var g in LegacyCleanup.CoreGlobs) sb.AppendLine($"del /q \"{core}\\{g}\" 2>nul");
-        foreach (var d in LegacyCleanup.CoreDirs)  sb.AppendLine($"rmdir /s /q \"{core}\\{d}\" 2>nul");
-        foreach (var f in LegacyCleanup.RootFiles) sb.AppendLine($"del /q \"{root}\\{f}\" 2>nul");
-        foreach (var g in LegacyCleanup.RootGlobs) sb.AppendLine($"del /q \"{root}\\{g}\" 2>nul");
 
         // Opt-in: the ThirdParty tools SHARED with ExtendDB. Delete the files LiteBox deploys, then rmdir the
         // dirs EMPTY-ONLY (no /s) so a real ExtendDB's own content in them is never nuked.

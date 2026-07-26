@@ -1880,13 +1880,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             ("Middle · General", midGeneral, null),
             ("Middle · List", midList, null),
             ("Middle · Poster", midPoster, null),
-            ("Right panel", rightTab, () => {
-                rightApply(); mediaPanel.Apply();
-                // The MediaPostLoadHash* ini keys were the v1 anti-dup config fingerprints; the ctx-based
-                // keying (DupCheckAds) made them obsolete — scrub them from LiteBox.ini on apply.
-                _cfg.Remove("MediaPostLoadHashList");
-                _cfg.Remove("MediaPostLoadHashPoster");
-            }),
+            ("Right panel", rightTab, () => { rightApply(); mediaPanel.Apply(); }),
         });
     }
 

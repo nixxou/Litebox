@@ -12,10 +12,6 @@
 //                    RA full-parse (0 unparsed / 1 ok / 2 failed), distinct from the listing flags
 //   ra_game/ra_hash — per-console catalogue + reverse hash→raid index (lowercase hashes)
 //   ra_console      — refresh schedule stamps (games_refreshed_at / next_refresh_at)
-//
-// One-shot JSON import: ImportJsonCatalog folds an existing ra-cache\catalog-<console>.json
-// (the lite era's hash→raid map) into ra_hash so LookupRaid keeps answering before the first
-// real API refresh; titles/counts arrive with that refresh (the JSON never carried them).
 
 #nullable enable
 
@@ -418,47 +414,6 @@ internal static class RaStore
         foreach (var (hash, raid) in pairs)
             if (hashes.Contains(hash)) return true;
         return false;
-    }
-
-    // ── One-shot import of the lite era's JSON catalogue ────────────────────────
-
-    /// <summary>Fold ra-cache\catalog-&lt;console&gt;.json (hash→raid map) into ra_hash when the console
-    /// has no catalogue yet — keeps LookupRaid answering before the first real API refresh. Titles
-    /// and counts arrive with that refresh (the JSON never carried them). Schedule stamped from the
-    /// file's mtime so the first refresh comes due naturally.</summary>
-    public static void ImportJsonCatalog(int consoleId)
-    {
-        try
-        {
-            if (CatalogueCount(consoleId) > 0) return;   // real catalogue already present
-            string path = Path.Combine(LiteBoxPaths.CacheDir("ra-cache"), $"catalog-{consoleId}.json");
-            if (!File.Exists(path)) return;
-
-            var map = JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(path));
-            if (map == null || map.Count == 0) return;
-
-            using var conn = Open(); if (conn == null) return;
-            using var tx = conn.BeginTransaction();
-            using (var ins = conn.CreateCommand())
-            {
-                ins.Transaction = tx;
-                ins.CommandText = "INSERT OR IGNORE INTO ra_hash (hash, game_id) VALUES ($h, $g);";
-                var pH = ins.Parameters.Add("$h", SqliteType.Text);
-                var pG = ins.Parameters.Add("$g", SqliteType.Integer);
-                foreach (var (hash, raid) in map)
-                {
-                    if (string.IsNullOrWhiteSpace(hash) || raid <= 0) continue;
-                    pH.Value = hash.Trim().ToLowerInvariant();
-                    pG.Value = raid;
-                    ins.ExecuteNonQuery();
-                }
-            }
-            DateTime mtime; try { mtime = File.GetLastWriteTimeUtc(path); } catch { mtime = DateTime.UtcNow; }
-            StampSchedule(conn, tx, consoleId, mtime, mtime);   // due immediately-ish; jitter comes from the engine
-            tx.Commit();
-            Log($"imported JSON catalog for console {consoleId} ({map.Count} hashes).");
-        }
-        catch (Exception ex) { Log("ImportJsonCatalog: " + ex.Message); }
     }
 
     private static void StampSchedule(SqliteConnection conn, SqliteTransaction? tx, int consoleId,

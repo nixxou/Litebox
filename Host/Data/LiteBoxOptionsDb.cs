@@ -354,45 +354,6 @@ internal static class LiteBoxOptionsDb
         }
     }
 
-    /// <summary>Read then DELETE the global-scope rows for the given keys, returning the values found.
-    /// Bypasses the OptionKeys namespace check ON PURPOSE: this is the reverse-migration primitive for
-    /// keys that are NO LONGER declared at global scope (the R2 gameplay-globals revert — they went
-    /// back to LiteBox.ini). A normal GetGlobal/SetGlobal would throw "unknown key" under Strict. Never
-    /// touches per-entity rows or still-declared global keys (ProblemKeys). One-shot by nature: after it
-    /// runs the rows are gone. Returns the found key→value map (empty when nothing to drain).</summary>
-    public static Dictionary<string, string> DrainGlobalKeys(IEnumerable<string> keys)
-    {
-        var found = new Dictionary<string, string>(StringComparer.Ordinal);
-        lock (_lock)
-        {
-            if (_conn == null) return found;
-            try
-            {
-                foreach (var key in keys)
-                {
-                    if (string.IsNullOrEmpty(key)) continue;
-                    using (var sel = _conn.CreateCommand())
-                    {
-                        sel.CommandText = "SELECT value FROM options WHERE scope=$s AND entity_id='' AND key=$k";
-                        sel.Parameters.AddWithValue("$s", Global);
-                        sel.Parameters.AddWithValue("$k", key);
-                        var o = sel.ExecuteScalar();
-                        if (o == null || o is DBNull) continue;   // no row → nothing to migrate
-                        found[key] = (string)o;
-                    }
-                    using var del = _conn.CreateCommand();
-                    del.CommandText = "DELETE FROM options WHERE scope=$s AND entity_id='' AND key=$k";
-                    del.Parameters.AddWithValue("$s", Global);
-                    del.Parameters.AddWithValue("$k", key);
-                    del.ExecuteNonQuery();
-                }
-                if (found.Count > 0) TouchMtimeLocked();
-            }
-            catch (Exception ex) { Console.WriteLine("[options-db] drain-global failed: " + ex.Message); }
-        }
-        return found;
-    }
-
     /// <summary>Rename an entity in place — for PLATFORM rows, which are NAME-keyed (LB platforms have
     /// no guid). Existing rows under the new name win on conflict; the rest move.</summary>
     public static void RenameEntity(string scope, string oldId, string newId)

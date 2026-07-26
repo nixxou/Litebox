@@ -215,16 +215,13 @@ internal static class RaPlatformMap
     //
     // STORAGE — options-db rows (scope='platform', entity_id = platform NAME — LB platforms have no
     // guid — key='RaConsoleKey'). "" (explicit none) is stored as the "-" SENTINEL because an empty
-    // options-db value deletes the row (= inherit auto), which would lose the "none" intent. The
-    // previous store was Core\litebox\ra-platform-overrides.json — migrated once, renamed *.migrated.
+    // options-db value deletes the row (= inherit auto), which would lose the "none" intent.
     // LiteBoxOptionsDb.RenameEntity can move a platform's rows if renaming ever lands (LiteBox's Edit
-    // Platform title is READ-ONLY today, so there is no trigger to hook yet — same exposure as the old
-    // json, which was name-keyed too).
+    // Platform title is READ-ONLY today, so there is no trigger to hook yet).
     private const string OptionKey = "RaConsoleKey";
     private const string NoneSentinel = "-";
     private static Dictionary<string, string> _overrides;
     private static readonly object _ovLock = new();
-    private static string OverridesFile => LiteBoxPaths.File("ra-platform-overrides.json");
 
     private static Dictionary<string, string> Overrides()
     {
@@ -232,22 +229,9 @@ internal static class RaPlatformMap
         {
             if (_overrides != null) return _overrides;
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            // DB not open yet (very early call) → serve the legacy json WITHOUT memoizing, so the real
-            // rows are picked up on a later call instead of a permanently-empty cache for the session.
-            if (!Data.LiteBoxOptionsDb.Enabled)
-            {
-                try
-                {
-                    if (File.Exists(OverridesFile))
-                    {
-                        var legacy = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(OverridesFile));
-                        if (legacy != null) foreach (var kv in legacy) if (!string.IsNullOrWhiteSpace(kv.Key)) d[kv.Key.Trim()] = kv.Value ?? "";
-                    }
-                }
-                catch { }
-                return d;
-            }
-            MigrateJsonLocked();
+            // DB not open yet (very early call) → serve empty WITHOUT memoizing, so the real rows are
+            // picked up on a later call instead of a permanently-empty cache for the session.
+            if (!Data.LiteBoxOptionsDb.Enabled) return d;
             try
             {
                 foreach (var kv in Data.LiteBoxOptionsDb.AllOf(Data.LiteBoxOption.ScopePlatform, OptionKey))
@@ -285,30 +269,5 @@ internal static class RaPlatformMap
             catch { }
             _overrides = next;
         }
-    }
-
-    // One-shot ra-platform-overrides.json → options-db migration (caller holds _ovLock).
-    private static void MigrateJsonLocked()
-    {
-        try
-        {
-            if (!File.Exists(OverridesFile) || !Data.LiteBoxOptionsDb.Enabled) return;
-            var j = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(OverridesFile));
-            int n = 0;
-            if (j != null)
-            {
-                var existing = Data.LiteBoxOptionsDb.AllOf(Data.LiteBoxOption.ScopePlatform, OptionKey);
-                foreach (var kv in j)
-                {
-                    if (string.IsNullOrWhiteSpace(kv.Key) || existing.ContainsKey(kv.Key.Trim())) continue;
-                    Data.LiteBoxOptionsDb.Set(Data.LiteBoxOption.ScopePlatform, kv.Key.Trim(), OptionKey,
-                                              string.IsNullOrEmpty(kv.Value) ? NoneSentinel : kv.Value);
-                    n++;
-                }
-            }
-            File.Move(OverridesFile, OverridesFile + ".migrated", overwrite: true);
-            Console.WriteLine($"[ra] migrated ra-platform-overrides.json → options DB ({n} platform(s))");
-        }
-        catch (Exception ex) { Console.WriteLine("[ra] overrides migration failed: " + ex.Message); }
     }
 }

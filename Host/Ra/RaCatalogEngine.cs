@@ -15,10 +15,6 @@
 //     raid) is never gated. Consoles without canaries never drop (safe default).
 //   • After an applied refresh: ReResolveScannedIds (re-link stored hashes, no re-hashing) then
 //     the IGame sync — activate new/changed raids, drop dead ones only under the canary gate.
-//
-// Migration: RaStore.ImportJsonCatalog folds an existing lite-era catalog-<id>.json into the store
-// before a console's first pull; once a REAL pull is applied, the legacy JSON is deleted (the store
-// is the only catalogue since the lite reader was removed).
 
 #nullable enable
 
@@ -128,8 +124,6 @@ internal static class RaCatalogEngine
         if (Interlocked.Exchange(ref _running, 1) == 1) return false;   // single-flight
         try
         {
-            RaStore.ImportJsonCatalog(consoleId);   // migration bridging (no-op once a catalogue exists)
-
             var pull = FetchGames(consoleId);
             var now = DateTime.UtcNow;
             if (pull == null)                        // HTTP / parse error
@@ -154,7 +148,6 @@ internal static class RaCatalogEngine
             bool allowDrop = RaStore.CanaryPresent(consoleId, pull);
             RaStore.ReplaceConsoleCatalog(consoleId, pull, now, NextSuccess(now));
             RaStore.ReResolveScannedIds();
-            DeleteLegacyJson(consoleId);             // the store owns the catalogue now
             SyncIGamesAfterRefresh(consoleId, allowDrop);
             Log($"console {consoleId}: applied {pull.Count} games (drop {(allowDrop ? "allowed" : "blocked — no canary")}).");
             return true;
@@ -205,17 +198,6 @@ internal static class RaCatalogEngine
         catch (Exception ex) { Log("SyncIGamesAfterRefresh failed: " + ex.Message); }
     }
 
-    /// <summary>Delete the lite-era per-console JSON after a real pull was applied — its content was
-    /// folded in by ImportJsonCatalog and the store is now authoritative (no reader left).</summary>
-    private static void DeleteLegacyJson(int consoleId)
-    {
-        try
-        {
-            string file = Path.Combine(LiteBoxPaths.CacheDir("ra-cache"), $"catalog-{consoleId}.json");
-            if (File.Exists(file)) File.Delete(file);
-        }
-        catch (Exception ex) { Log("DeleteLegacyJson failed: " + ex.Message); }
-    }
 
     // ── Fetch (full rows) ───────────────────────────────────────────────────────
 

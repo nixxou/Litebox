@@ -113,7 +113,7 @@ internal sealed class YouTubePlayerDialog : Form
         try
         {
             var options = new CoreWebView2EnvironmentOptions("--autoplay-policy=no-user-gesture-required");
-            env = await CoreWebView2Environment.CreateAsync(null, LiteBoxPaths.Dir("webview2-yt"), options);
+            env = await CoreWebView2Environment.CreateAsync(null, LiteBoxPaths.CacheDir("webview2-yt"), options);
         }
         catch { }
 
@@ -131,7 +131,7 @@ internal sealed class YouTubePlayerDialog : Form
             // Serve a tiny local page as a real https origin so the embed player has a valid origin (Error 153 fix).
             try
             {
-                _web.CoreWebView2.SetVirtualHostNameToFolderMapping(VHost, LiteBoxPaths.Dir("webview2-yt-page"), CoreWebView2HostResourceAccessKind.Allow);
+                _web.CoreWebView2.SetVirtualHostNameToFolderMapping(VHost, LiteBoxPaths.CacheDir("webview2-yt-page"), CoreWebView2HostResourceAccessKind.Allow);
                 _mapped = true;
             }
             catch { _mapped = false; }
@@ -149,7 +149,7 @@ internal sealed class YouTubePlayerDialog : Form
         if (!_mapped) { Nav(_watchUrl); return; }
         try
         {
-            var dir = LiteBoxPaths.Dir("webview2-yt-page");
+            var dir = LiteBoxPaths.CacheDir("webview2-yt-page");
             File.WriteAllText(Path.Combine(dir, "player.html"), PageHtml.Replace("__VID__", _videoId));
             Nav($"https://{VHost}/player.html");
         }

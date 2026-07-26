@@ -81,7 +81,7 @@ internal static class RaService
     internal static string? Token { get { ReadSettings(); return _token; } }
 
     // ── cache: Core\litebox\ra-cache\<raid>.json ─────────────────────────────────────────────
-    private static string CacheDir => LiteBoxPaths.Dir("ra-cache");
+    private static string CacheDir => LiteBoxPaths.CacheDir("ra-cache");
     private static string CacheFile(int raid) => Path.Combine(CacheDir, raid + ".json");
 
     public static RaGameCache? ReadCache(int raid)

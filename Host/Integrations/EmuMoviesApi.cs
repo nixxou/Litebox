@@ -184,7 +184,7 @@ internal sealed class EmuMoviesApi
     {
         try
         {
-            string dir = LiteBoxPaths.Dir("emumovies");
+            string dir = LiteBoxPaths.CacheDir("emumovies");
             string safe = string.Concat(platform.Split(Path.GetInvalidFileNameChars()));
             return Path.Combine(dir, safe + ".json");
         }

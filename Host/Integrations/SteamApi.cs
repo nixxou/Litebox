@@ -160,7 +160,7 @@ internal static class SteamApi
     // ── Disk cache ──────────────────────────────────────────────────────────
     private static string? CachePath(string appid)
     {
-        try { return Path.Combine(LiteBoxPaths.Dir("steam"), appid + ".json"); }
+        try { return Path.Combine(LiteBoxPaths.CacheDir("steam"), appid + ".json"); }
         catch { return null; }
     }
     private static string? ReadFreshCache(string appid)

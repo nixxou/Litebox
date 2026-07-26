@@ -211,7 +211,7 @@ internal static class RaCatalogEngine
     {
         try
         {
-            string file = Path.Combine(LiteBoxPaths.Dir("ra-cache"), $"catalog-{consoleId}.json");
+            string file = Path.Combine(LiteBoxPaths.CacheDir("ra-cache"), $"catalog-{consoleId}.json");
             if (File.Exists(file)) File.Delete(file);
         }
         catch (Exception ex) { Log("DeleteLegacyJson failed: " + ex.Message); }

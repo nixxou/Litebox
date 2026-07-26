@@ -35,6 +35,29 @@ internal static class LiteBoxPaths
         return d;
     }
 
+    /// <summary><LB>\Core\litebox\cache — the parent of every REBUILDABLE cache LiteBox writes (thumbs,
+    /// 3D GLB, RA/store JSON + badges, romcache, WebView2 profiles, download staging). Created on demand.
+    /// One home so "clear caches" and DataMaintenance target a single tree; CacheReorg relocated the dirs
+    /// that historically sat loose at the litebox\ root.</summary>
+    public static string Cache
+    {
+        get
+        {
+            string d = Path.Combine(Data, "cache");
+            try { Directory.CreateDirectory(d); } catch { }
+            return d;
+        }
+    }
+
+    /// <summary><LB>\Core\litebox\cache\<paramref name="name"/> (a cache subdirectory — created on demand).
+    /// Use this for anything rebuildable so it lands under the single cache\ tree, NOT <see cref="Dir"/>.</summary>
+    public static string CacheDir(string name)
+    {
+        string d = Path.Combine(Cache, name);
+        try { Directory.CreateDirectory(d); } catch { }
+        return d;
+    }
+
     /// <summary>Web root for a site served by the embedded server:
     /// <LB>\Core\litebox\web\<paramref name="site"/> — "bigbox", "litebox", "database" or "vendor".
     /// Each of the three web frontends serves from its own folder; "vendor" is the shared JS/CSS lib root.</summary>

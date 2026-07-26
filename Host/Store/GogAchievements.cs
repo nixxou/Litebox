@@ -33,7 +33,7 @@ internal static class GogAchievements
     private static readonly HashSet<string> _inFlight = new(StringComparer.Ordinal);
 
     // ── cache: Core\litebox\store-ach-cache\gog-<appId>.json ─────────────────────────────────
-    private static string CacheDir => LiteBoxPaths.Dir("store-ach-cache");
+    private static string CacheDir => LiteBoxPaths.CacheDir("store-ach-cache");
     private static string CacheFile(string appId) => Path.Combine(CacheDir, "gog-" + appId + ".json");
 
     public static StoreAchCache? ReadCache(string appId)

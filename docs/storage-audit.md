@@ -79,14 +79,22 @@ Déclaré (`LiteBoxOption.ScopePlatform`) mais **aucune clé en service à ce jo
 Autres fichiers racine `litebox\` : `LiteBox.ini` (§1.4), `pending-cleanup.txt` (état interne),
 `LaunchBox.Extended.Metadata.db` (DB étendue téléchargée), logs (§1.9).
 
-## 4. Dossiers de cache — INCOHÉRENCE de placement
+## 4. Dossiers de cache — RANGÉS sous `cache\` (R3 FAIT 2026-07-27)
 
-Sous `cache\` : téléchargements ExtDb, `related-thumbs`, snapshot suggester, `thumbs\degraded`,
-`3d` (GLB). **Mais à la RACINE de `litebox\`** : `romcache`, `emumovies`, `steam`, `ra-cache`,
-`ra-badges`, `store-ach-cache`, `store-ach-badges`, `webview2-yt`, `webview2-yt-page`,
-`webview2-kiosk` (+ `thirdparty`, `config`, `web` qui eux n'y sont pas des caches).
-→ **Standardiser : tout cache rebuildable sous `cache\`** (DataMaintenance et « clear cache »
-deviennent triviaux). Migration = move au boot + LegacyCleanup.
+Tout cache rebuildable vit désormais sous `litebox\cache\`. Les 10 dossiers qui traînaient à la racine
+(`romcache`, `emumovies`, `steam`, `ra-cache`, `ra-badges`, `store-ach-cache`, `store-ach-badges`,
+`webview2-yt`, `webview2-yt-page`, `webview2-kiosk`) ont été relocalisés ; ils rejoignent ceux déjà en
+place (`3d`, `thumbs`, `related-thumbs`, `thumbs\degraded`, staging ExtDb, snapshot suggester).
+- **Chokepoint** : `LiteBoxPaths.CacheDir(name)` → `litebox\cache\<name>` (nouveau, à côté de `Cache`).
+  Les 14 sites `Dir("x")` de ces dossiers sont passés à `CacheDir`. **Nouveaux caches = `CacheDir`,
+  jamais `Dir`.**
+- **Migration** : `Host/Install/CacheReorg.cs`, one-shot au boot (après LegacyCleanup, AVANT toute
+  ouverture de cache). MOVE (pas delete — évite un re-téléchargement massif des badges après upgrade),
+  atomique même-volume ; si le `cache\` cible existe déjà, la copie racine périmée est droppée.
+  Vérif live G:\LB : 6 dossiers relocalisés, racine propre, 2ᵉ boot = no-op, `--debug` sans erreur.
+- **DataMaintenance** : champ `Rel` sur les 10 rows (`FullPath` = `cache\<name>`, `Name` = affichage) ;
+  la row parapluie `cache` couvre tout l'arbre (les rows individuelles restent pour un clear granulaire).
+- Restent à la racine (NON-caches, correct) : `thirdparty`, `config`, `web`, `web-assets`.
 
 ## 5. ADS par fichier (sain, ne pas toucher)
 
@@ -176,5 +184,6 @@ autrement dit, du code pour faire IMITER l'ini par la db. L'ini le fait nativeme
   consommées via l'instance partagée `_cfg` : les migrer serait soit une inversion de couche, soit du
   churn sur des dizaines de sites, pour zéro palier par-entité à réunifier. **Écartée** (voir la règle
   ci-dessus). L'état d'UI (`Win*`, `Sort*`, `Col.*`…) reste évidemment dans l'ini.
-- **R3 — Caches : tout sous `cache\`.** Move one-shot + LegacyCleanup (§4). Le vrai chantier restant.
+- **R3 — FAIT (2026-07-27).** Tous les caches sous `litebox\cache\` (`LiteBoxPaths.CacheDir` +
+  migration `CacheReorg` au boot). Voir §4. Standardisation du stockage : **plus rien en attente.**
 - **ADS (R0)** : ne pas toucher — bon store pour la donnée par-fichier.

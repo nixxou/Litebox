@@ -449,6 +449,10 @@ internal static class HostBoot
         // zip-extract-over-an-old-install self-cleans. Idempotent; never touches current data. See LegacyCleanup.
         try { LbApiHost.Host.Install.LegacyCleanup.SweepObsolete(Path.GetFullPath(Path.Combine(coreDir, ".."))); } catch { }
 
+        // Relocate the rebuildable cache dirs that used to sit loose at litebox\ root into litebox\cache\
+        // (R3). One-shot, idempotent, runs BEFORE any cache is opened. See CacheReorg.
+        try { LbApiHost.Host.Install.CacheReorg.Run(); } catch { }
+
         Console.WriteLine($"Plugins root: {pluginsRoot}");
         Console.WriteLine($"Enabled plugins: [{string.Join(", ", names)}]"
             + (enabled == null ? "  (default: all present)" : ""));

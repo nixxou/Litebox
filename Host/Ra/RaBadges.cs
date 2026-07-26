@@ -13,7 +13,7 @@ internal static class RaBadges
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
-    private static string Dir => LiteBoxPaths.Dir("ra-badges");
+    private static string Dir => LiteBoxPaths.CacheDir("ra-badges");
 
     /// <summary>Local path to the badge image (coloured when unlocked, greyed _lock when not), downloading
     /// it once if absent. Null when badge is empty or the download fails. BLOCKING — call off the UI thread.</summary>

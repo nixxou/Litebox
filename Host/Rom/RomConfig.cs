@@ -312,7 +312,7 @@ internal sealed class RomConfig
 
     private static string DefaultCachePath()
     {
-        try { return LiteBoxPaths.Dir("romcache"); } catch { return "romcache"; }
+        try { return LiteBoxPaths.CacheDir("romcache"); } catch { return "romcache"; }
     }
 
     private static string ProfilesPath => LiteBoxPaths.File("rom-profiles.json");

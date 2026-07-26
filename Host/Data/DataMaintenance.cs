@@ -27,14 +27,17 @@ internal static class DataMaintenance
 
     public sealed class Item
     {
-        public string Name = "";           // file/dir name under litebox\ (also the display name)
+        public string Name = "";           // display name (also the on-disk name when Rel is null)
         public string Role = "";           // one-line description
         public Kind Kind;
         public ActionType Action;
         public bool IsDir;
         public string? Warning;            // extra confirmation line (data loss); null = safe
+        public string? Rel;                // path RELATIVE to litebox\ when it differs from Name
+                                           // (e.g. "cache/romcache" after the R3 cache reorg)
 
-        public string FullPath => IsDir ? Path.Combine(LiteBoxPaths.Data, Name) : LiteBoxPaths.File(Name);
+        // Rel wins when set (the cache dirs live under cache\ but display as their bare name); else Name.
+        public string FullPath => IsDir ? Path.Combine(LiteBoxPaths.Data, Rel ?? Name) : LiteBoxPaths.File(Rel ?? Name);
     }
 
     // ── Catalog ──────────────────────────────────────────────────────────────────────────────────────
@@ -61,26 +64,26 @@ internal static class DataMaintenance
 
         // Cache directories (cleared immediately).
         new() { Name = "cache",             Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
-                Role = "Download staging (extended DB) + regenerated thumbnails + snapshots." },
-        new() { Name = "romcache",          Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+                Role = "The whole rebuildable-cache tree (thumbnails, 3D models, download staging, and the individual caches below)." },
+        new() { Name = "romcache",          Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/romcache",
                 Role = "ROMs extracted from archives (self-evicting). Re-extracted on next launch." },
-        new() { Name = "emumovies",         Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+        new() { Name = "emumovies",         Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/emumovies",
                 Role = "Cached EmuMovies API responses (time-limited)." },
-        new() { Name = "webview2-yt",       Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+        new() { Name = "webview2-yt",       Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/webview2-yt",
                 Role = "YouTube player browser profile (cookies / cache)." },
-        new() { Name = "webview2-yt-page",  Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+        new() { Name = "webview2-yt-page",  Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/webview2-yt-page",
                 Role = "Generated YouTube player page (regenerated each play)." },
-        new() { Name = "webview2-kiosk",    Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+        new() { Name = "webview2-kiosk",    Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/webview2-kiosk",
                 Role = "Kiosk web-view browser profile (cookies / cache)." },
-        new() { Name = "ra-cache",          Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+        new() { Name = "ra-cache",          Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/ra-cache",
                 Role = "RetroAchievements catalogue JSON." },
-        new() { Name = "ra-badges",         Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+        new() { Name = "ra-badges",         Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/ra-badges",
                 Role = "Downloaded RetroAchievements badge images." },
-        new() { Name = "store-ach-cache",   Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+        new() { Name = "store-ach-cache",   Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/store-ach-cache",
                 Role = "Steam / GOG achievement data (time-limited)." },
-        new() { Name = "store-ach-badges",  Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+        new() { Name = "store-ach-badges",  Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/store-ach-badges",
                 Role = "Store achievement badge images." },
-        new() { Name = "steam",             Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true,
+        new() { Name = "steam",             Kind = Kind.CacheDir, Action = ActionType.ClearDirNow, IsDir = true, Rel = "cache/steam",
                 Role = "Cached Steam store media JSON (time-limited)." },
 
         // Logs (deleted immediately).

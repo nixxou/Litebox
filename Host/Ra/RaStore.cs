@@ -431,7 +431,7 @@ internal static class RaStore
         try
         {
             if (CatalogueCount(consoleId) > 0) return;   // real catalogue already present
-            string path = Path.Combine(LiteBoxPaths.Dir("ra-cache"), $"catalog-{consoleId}.json");
+            string path = Path.Combine(LiteBoxPaths.CacheDir("ra-cache"), $"catalog-{consoleId}.json");
             if (!File.Exists(path)) return;
 
             var map = JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(path));

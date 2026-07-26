@@ -37,6 +37,10 @@ internal static class LegacyCleanup
         "Everything64.dll.api", "Magick.Native-Q16-x64.dll.api", "RahasherExtendDB.exe", "7z.dll.api",
         "MSVCP140.dll.api", "VCRUNTIME140.dll.api", "VCRUNTIME140_1.dll.api", "steam_api64.dll.api",
         "RAHasher.COPYING.txt", "RAHasher.7z-LICENSE.txt", "RAHasher.RVZ-SUPPORT.txt",
+        // v1 anti-dup era: the per-game image-pool signature store (MediaSignature) — the ctx-based dup
+        // keying removed its only consumer. Sub-path INSIDE litebox\ is fine: the sweep targets exact
+        // obsolete FILES, the "never touch Core\litebox\" rule is about current data.
+        @"litebox\image-signatures.json",
     };
 
     // Obsolete directories, relative to <LB>\Core (recursive delete). NB: NOT "litebox" (that's current data).

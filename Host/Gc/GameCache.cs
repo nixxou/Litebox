@@ -1137,7 +1137,7 @@ namespace LbApiHost.Host.Gc
         /// Uses Everything when available, else DirectoryInfo.EnumerateFiles
         /// (withDates: true) — so each image's FileSize is captured for free
         /// (from the directory find-data, no extra stat) in BOTH cases, letting
-        /// the per-game image signature be computed with zero disk IO.
+        /// size consumers (the thumb GC's valid-set, GetFileSize) skip disk stats.
         /// </summary>
         public void ScanImages()
         {

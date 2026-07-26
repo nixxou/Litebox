@@ -4365,9 +4365,6 @@ internal sealed class MainWindow : Form, IMessageFilter
         Guid.TryParse(S(Safe(() => g.Id)), out var gid);
         string gameReg = S(Safe(() => g.Region));   // used by entries flagged "game region first"
 
-        // Refresh the game's image-pool signature (zero-IO from the cache; memoised + persisted) — it is
-        // also the "pool" key of the duplicate filter below.
-        if (haveId) try { Media.MediaSignature.For(plat, gid, title); } catch { }
         if (haveId) dupFilter = Media.MediaDupFilter.For(Media.MediaLayout.Current, poster, plat, gid, title, forceDup);
 
         var layout = Media.MediaLayout.Current.PostLoadFor(poster);

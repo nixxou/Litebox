@@ -145,11 +145,22 @@ internal static class DedupEngine
     private static float[]? EmbeddingOf(string path, bool gpu)
     {
         if (_emb.TryGetValue(path, out var cached)) return cached;
-        var cnn = Session(gpu);
-        if (cnn == null) return null;
+        // Decode/preprocess OUTSIDE the session lock (no session needed, and it's the slow part).
+        float[] chw;
+        try { chw = DedupPreprocess.LoadCnnInput(path); }
+        catch (Exception ex) { Console.WriteLine("[dedup] decode failed (" + path + "): " + ex.Message); return null; }
         float[] emb;
-        try { emb = cnn.Embed(DedupPreprocess.LoadCnnInput(path)); }
-        catch (Exception ex) { Console.WriteLine("[dedup] embed failed (" + path + "): " + ex.Message); return null; }
+        // Inference UNDER the lock: the idle sweep and Suspend take the same lock, so a dispose can never
+        // hit a run in flight — a caller either lands before (fresh _lastUse → the sweep skips) or after
+        // (session gone → clean ~0.5 s re-create). Worst case is a re-init, never an error.
+        lock (_cnnLock)
+        {
+            var cnn = SessionUnderLock(gpu);
+            if (cnn == null) return null;
+            _lastUse = DateTime.UtcNow;
+            try { emb = cnn.Embed(chw); }
+            catch (Exception ex) { Console.WriteLine("[dedup] embed failed (" + path + "): " + ex.Message); return null; }
+        }
         if (_emb.Count >= EmbCap) _emb.Clear();   // crude but bounded; features recompute on demand
         _emb[path] = emb;
         return emb;
@@ -182,29 +193,51 @@ internal static class DedupEngine
     /// <summary>Allow the CNN session again (game exit). Lazy — nothing is created until needed.</summary>
     public static void Resume() => _suspended = false;
 
-    private static bool _cnnGpuPref;
-    private static CnnEmbedder? Session(bool gpu)
+    // ── Idle auto-release ────────────────────────────────────────────────────
+    // The session is created OPPORTUNISTICALLY (first cache miss) and, once idle for IdleReleaseMinutes,
+    // released again (~230 MB RAM + the DirectML device back) by a 60 s sweep. The embedding memo is KEPT
+    // on an idle release (a few MB at most; still valid — same gpu pref on re-create) so a later burst
+    // only pays the ~0.5 s session init, not the re-embeds.
+    private const int IdleReleaseMinutes = 5;
+    private static DateTime _lastUse;              // written under _cnnLock
+    private static System.Threading.Timer? _idleTimer;
+
+    private static void IdleSweep()
     {
-        if (_suspended) return null;   // game running → never re-create mid-play
-        var cur = _cnn;
-        if (cur != null && _cnnGpuPref == gpu) return cur;
-        if (_cnnFailed || !CnnEmbedder.IsAvailable()) return null;
         lock (_cnnLock)
         {
-            if (_suspended || _cnnFailed) return null;   // re-check under the lock (Suspend can race the fast path)
-            if (_cnn != null && _cnnGpuPref == gpu) return _cnn;
-            // GPU preference flipped (or first use): recreate the session AND drop memoized embeddings —
-            // CPU/GPU floats differ in low-order bits, and the dup-param hash labels results by preference.
-            try { _cnn?.Dispose(); } catch { }
+            if (_cnn == null) return;
+            if (DateTime.UtcNow - _lastUse < TimeSpan.FromMinutes(IdleReleaseMinutes)) return;
+            Console.WriteLine($"[dedup] CNN session released after {IdleReleaseMinutes} min idle");
+            try { _cnn.Dispose(); } catch { }
             _cnn = null;
-            _emb.Clear();
-            try { _cnn = new CnnEmbedder(gpu); _cnnGpuPref = gpu; }
-            catch (Exception ex)
-            {
-                _cnnFailed = true;   // don't retry a broken runtime every image
-                Console.WriteLine("[dedup] CNN session failed: " + ex.Message);
-            }
-            return _cnn;
         }
+    }
+
+    private static bool _cnnGpuPref;
+    /// <summary>Get-or-create the CNN session. MUST be called holding <see cref="_cnnLock"/> — that lock is
+    /// what makes the idle sweep / Suspend unable to dispose a session mid-inference.</summary>
+    private static CnnEmbedder? SessionUnderLock(bool gpu)
+    {
+        if (_suspended || _cnnFailed) return null;   // game running / broken runtime → no session
+        if (_cnn != null && _cnnGpuPref == gpu) return _cnn;
+        if (!CnnEmbedder.IsAvailable()) return null;
+        // GPU preference flipped (or first use): recreate the session AND drop memoized embeddings —
+        // CPU/GPU floats differ in low-order bits, and the dup-param hash labels results by preference.
+        try { _cnn?.Dispose(); } catch { }
+        _cnn = null;
+        if (_cnnGpuPref != gpu) _emb.Clear();
+        try
+        {
+            _cnn = new CnnEmbedder(gpu);
+            _cnnGpuPref = gpu;
+            _idleTimer ??= new System.Threading.Timer(_ => IdleSweep(), null, 60_000, 60_000);
+        }
+        catch (Exception ex)
+        {
+            _cnnFailed = true;   // don't retry a broken runtime every image
+            Console.WriteLine("[dedup] CNN session failed: " + ex.Message);
+        }
+        return _cnn;
     }
 }

@@ -1871,10 +1871,10 @@ internal sealed class MainWindow : Form, IMessageFilter
             ("Middle · Poster", midPoster, null),
             ("Right panel", rightTab, () => {
                 rightApply(); mediaPanel.Apply();
-                // Persist the per-view post-load fingerprints in LiteBox.ini (foundation for the anti-dup cache);
-                // _cfg.Save() (ApplyFinished) writes them. Change any post-load setting → the key changes.
-                _cfg.Set("MediaPostLoadHashList", Media.MediaLayout.Current.PostLoadHash(false));
-                _cfg.Set("MediaPostLoadHashPoster", Media.MediaLayout.Current.PostLoadHash(true));
+                // The MediaPostLoadHash* ini keys were the v1 anti-dup config fingerprints; the ctx-based
+                // keying (DupCheckAds) made them obsolete — scrub them from LiteBox.ini on apply.
+                _cfg.Remove("MediaPostLoadHashList");
+                _cfg.Remove("MediaPostLoadHashPoster");
             }),
         });
     }

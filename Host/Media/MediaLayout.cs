@@ -78,10 +78,11 @@ internal sealed class MediaLayout
     public List<MediaEntry> PostLoadFor(bool poster)
         => (poster && PosterIndependent && PostLoadPoster.Count > 0) ? PostLoadPoster : PostLoad;
 
-    // ── Fingerprint (foundation for the anti-duplicate cache) ─────────────────
-    // Per-view MD5 of the EFFECTIVE post-load config. Change any post-load setting and the key changes, so a
-    // cache built for the old config can be detected and invalidated. The keys are stored in LiteBox.ini
-    // (NOT in their own file) by the Options → Display apply; here they are recomputed on demand.
+    // ── Config fingerprint (dev/diagnostic only) ──────────────────────────────
+    // Per-view MD5 of the EFFECTIVE post-load config, dumped by the --media-hash dev flag to diff two
+    // machines'/moments' configs at a glance. HISTORY: this was the v1 anti-dup "sort" key (persisted in
+    // LiteBox.ini); the ctx-based keying (DupCheckAds — evaluation-context hash) subsumed it, and the ini
+    // keys are scrubbed by the Options → Display apply.
 
     /// <summary>Canonical JSON of a view's effective post-load list — ONLY the resolution-affecting fields,
     /// in order, so it is stable (identical config → identical JSON → identical MD5).</summary>
@@ -91,7 +92,7 @@ internal sealed class MediaLayout
             e.Sel, e.ExactType, e.Count, e.Cumulative, e.CumulativeDepth, e.IgnoreGameRegion, e.AllRegions,
         }), Json);
 
-    /// <summary>Lower-case hex MD5 of <see cref="PostLoadJson"/> — the config fingerprint / anti-dup cache key.</summary>
+    /// <summary>Lower-case hex MD5 of <see cref="PostLoadJson"/> — the config fingerprint (--media-hash).</summary>
     public string PostLoadHash(bool poster)
         => Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(PostLoadJson(poster)))).ToLowerInvariant();
 

@@ -80,6 +80,7 @@ internal sealed class LiteBoxConfig
             try { if (File.Exists(_path)) foreach (var kv in ParseFile(_path)) merged[kv.Key] = kv.Value; }
             catch { }
             foreach (var k in _dirty) merged[k] = _kv.TryGetValue(k, out var v) ? v : "";
+            foreach (var k in _removed) merged.Remove(k);   // explicit deletions win over the disk copy
             // Root keys first (historical flat block), then one "[Section]" block per module section.
             var sb = new StringBuilder();
             sb.AppendLine("; LiteBox configuration");
@@ -95,6 +96,7 @@ internal sealed class LiteBoxConfig
             File.WriteAllText(_path, sb.ToString());
             foreach (var kv in merged) _kv[kv.Key] = kv.Value;   // this instance is now consistent with disk
             _dirty.Clear();
+            _removed.Clear();
         }
         catch { }
     }
@@ -167,6 +169,10 @@ internal sealed class LiteBoxConfig
     // ── Raw accessors ────────────────────────────────────────────────────────
     public string Get(string key, string def = null) => _kv.TryGetValue(key, out var v) ? v : def;
     public void Set(string key, string val) { _kv[key] = val ?? ""; _dirty.Add(key); }
+
+    /// <summary>Delete a key from the file at the next Save (obsolete-key scrub). No-op if absent.</summary>
+    public void Remove(string key) { _kv.Remove(key); _removed.Add(key); _dirty.Add(key); }
+    private readonly HashSet<string> _removed = new(StringComparer.OrdinalIgnoreCase);
 
     public bool GetBool(string key, bool def)
     {

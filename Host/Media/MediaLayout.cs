@@ -124,16 +124,19 @@ internal sealed class MediaLayout
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault };
     private static string Path => LiteBoxPaths.File("media-layout.json");
 
-    /// <summary>The default layout — byte-for-byte the previous hard-coded BuildMediaList behaviour.</summary>
+    /// <summary>The default layout — the curated set: box front as the main box, ONE marquee (global
+    /// region priority — marquees rarely exist per-region), then up to 5 screenshots and 5 backgrounds.
+    /// (The original default mirrored the old hard-coded BuildMediaList: Front ×1 + every game-title/
+    /// gameplay screenshot + every fanart, which flooded the strip on well-scraped libraries.)</summary>
     public static MediaLayout Default() => new()
     {
         ImmediateList = "Front", ImmediatePoster = "Front",
         PostLoad = new()
         {
             new MediaEntry { Sel = "Front", ExactType = false, Count = 1 },
-            new MediaEntry { Sel = "Screenshot - Game Title", ExactType = true, Count = 99 },
-            new MediaEntry { Sel = "Screenshot - Gameplay", ExactType = true, Count = 99 },
-            new MediaEntry { Sel = "Fanart - Background", ExactType = true, Count = 99 },
+            new MediaEntry { Sel = "Marquee", ExactType = false, Count = 1, IgnoreGameRegion = true },
+            new MediaEntry { Sel = "Screenshots", ExactType = false, Count = 5 },
+            new MediaEntry { Sel = "Background", ExactType = false, Count = 5 },
         },
     };
 

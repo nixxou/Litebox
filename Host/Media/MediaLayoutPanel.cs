@@ -146,7 +146,7 @@ internal sealed class MediaLayoutPanel : Panel
         _dupGpu = new CheckBox { Text = "use GPU (DirectML, auto CPU fallback)", AutoSize = true, ForeColor = Fg, Location = new Point(S(372), S(469)), Checked = _layout.DupGpu };
         Controls.Add(_dupGpu);
 
-        Sub("CNN: duplicate when cosine similarity ≥ threshold (default 0.90). Hashes: when Hamming distance ≤ threshold (default 10). "
+        Sub("CNN: duplicate when cosine similarity ≥ threshold (default 0.85). Hashes: when Hamming distance ≤ threshold (default 10). "
             + "First visit of a game computes once; results are then cached per image (ADS).", 18, 494, 640);
         UpdateDupEnabled();
 
@@ -166,7 +166,7 @@ internal sealed class MediaLayoutPanel : Panel
     private void OnDupEngineChanged()
     {
         bool cnn = _dupEngine.SelectedIndex == 0;
-        _dupThr.Value = (decimal)(cnn ? 0.90 : 10);
+        _dupThr.Value = (decimal)Dedup.DedupEngine.DefaultThreshold(cnn ? Dedup.DupEngineMode.Cnn : Dedup.DupEngineMode.PHash);
         _dupThr.Increment = cnn ? 0.05m : 1m;
         UpdateDupEnabled();
     }

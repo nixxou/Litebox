@@ -45,8 +45,10 @@ internal static class DedupEngine
         _ => DupEngineMode.PHash,
     };
 
-    /// <summary>Engine default threshold: max Hamming distance (hashes) / min cosine similarity (cnn).</summary>
-    public static double DefaultThreshold(DupEngineMode m) => m == DupEngineMode.Cnn ? 0.90 : 10;
+    /// <summary>Engine default threshold: max Hamming distance (hashes) / min cosine similarity (cnn).
+    /// cnn 0.85 (not imagededup's 0.90): validated on a real library — regional box variants of the same
+    /// art land around 0.89, which 0.90 would keep as "different".</summary>
+    public static double DefaultThreshold(DupEngineMode m) => m == DupEngineMode.Cnn ? 0.85 : 10;
 
     // ── Session feature memos ────────────────────────────────────────────────
     // Keys are full paths (ordinal-ignore-case normalized). Entries are only appended; a config change

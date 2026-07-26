@@ -24,6 +24,19 @@ internal static class DedupEngine
     /// dup-param hash so every persisted ADS result is invalidated at once.</summary>
     public const int Version = 1;
 
+    /// <summary>Per-comparison trace ([dedup] lines: every file-vs-file score, cache hits, verdicts).
+    /// Set at boot ONLY in debug mode (--debug / DebugLog=true) — stays false in normal use so the
+    /// hot path doesn't even pay the string formatting.</summary>
+    public static bool Verbose;
+
+    /// <summary>Last 3 path segments ("Type\Region\file.jpg") — full paths would drown the trace, but a
+    /// bare filename is ambiguous (the SAME name in two region folders is precisely the dup case).</summary>
+    internal static string Short(string p)
+    {
+        try { var parts = p.Split('\\', '/'); return string.Join("\\", parts[Math.Max(0, parts.Length - 3)..]); }
+        catch { return p; }
+    }
+
     public static DupEngineMode ParseMode(string? s) => s?.ToLowerInvariant() switch
     {
         "dhash" => DupEngineMode.DHash,
@@ -67,6 +80,7 @@ internal static class DedupEngine
         if (accepted == null || accepted.Count == 0) return (false, null);
         try
         {
+            if (Verbose) Console.WriteLine($"[dedup] eval {Short(candidate)}  ({mode.ToString().ToLowerInvariant()} thr={threshold:0.###}, {accepted.Count} ref)");
             if (mode == DupEngineMode.Cnn)
             {
                 var emb = EmbeddingOf(candidate, gpu);
@@ -77,10 +91,16 @@ internal static class DedupEngine
                     var ea = EmbeddingOf(a, gpu);
                     if (ea == null) continue;   // unreadable reference → skip it, not fatal
                     double c = CnnEmbedder.Cosine(emb, ea);
+                    if (Verbose) Console.WriteLine($"[dedup]   cos={c:0.0000}  vs {Short(a)}");
                     if (c > best) best = c;
-                    if (c >= threshold) return (true, Math.Round(c, 4));   // early-out: the filtering match
+                    if (c >= threshold)   // early-out: the filtering match
+                    {
+                        if (Verbose) Console.WriteLine($"[dedup]   => dup=1 (early-out, score={Math.Round(c, 4)})");
+                        return (true, Math.Round(c, 4));
+                    }
                 }
                 if (double.IsNegativeInfinity(best)) return (false, null);   // no readable reference
+                if (Verbose) Console.WriteLine($"[dedup]   => dup=0 (best={Math.Round(best, 4)})");
                 return (false, Math.Round(best, 4));
             }
             else
@@ -91,9 +111,15 @@ internal static class DedupEngine
                 foreach (var a in accepted)
                 {
                     int d = DedupHash.Hamming(h, HashOf(mode, a));
+                    if (Verbose) Console.WriteLine($"[dedup]   ham={d}  vs {Short(a)}");
                     if (d < best) best = d;
-                    if (d <= max) return (true, d);   // early-out: the filtering match
+                    if (d <= max)   // early-out: the filtering match
+                    {
+                        if (Verbose) Console.WriteLine($"[dedup]   => dup=1 (early-out, score={d})");
+                        return (true, d);
+                    }
                 }
+                if (Verbose) Console.WriteLine($"[dedup]   => dup=0 (best={best})");
                 return (false, best);
             }
         }

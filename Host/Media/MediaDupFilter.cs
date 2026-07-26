@@ -48,9 +48,18 @@ internal sealed class MediaDupFilter
         try
         {
             if (!_force && DupCheckAds.TryGetResult(path, _poster, _sort, _pool, _par, out bool cached))
+            {
+                if (Dedup.DedupEngine.Verbose)
+                    Console.WriteLine($"[dedup] cache {(_poster ? "poster" : "list")}: dup={(cached ? 1 : 0)}  {Dedup.DedupEngine.Short(path)}");
                 return cached;
+            }
             var (r, score) = Dedup.DedupEngine.Evaluate(_mode, _threshold, _gpu, path, accepted);
-            if (r == null) return false;   // can't evaluate → keep the image, don't persist
+            if (r == null)
+            {
+                if (Dedup.DedupEngine.Verbose)
+                    Console.WriteLine($"[dedup] no-verdict (fail-open, kept): {Dedup.DedupEngine.Short(path)}");
+                return false;   // can't evaluate → keep the image, don't persist
+            }
             DupCheckAds.Write(path, _poster, _sort, _pool, _par, r.Value, score);
             return r.Value;
         }

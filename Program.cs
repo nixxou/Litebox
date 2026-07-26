@@ -49,6 +49,9 @@ try
         var fw = new StreamWriter(Path.Combine(logDir, "litebox-debug.log"), append: false, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(new TeeTextWriter(Console.Out, fw));
         Console.SetError(Console.Out);
+        // Debug mode also unlocks the per-comparison dup-check trace ([dedup] file-vs-file scores,
+        // cache hits, verdicts) — kept off otherwise so the hot path pays no string formatting.
+        LbApiHost.Host.Media.Dedup.DedupEngine.Verbose = true;
     }
 }
 catch { }

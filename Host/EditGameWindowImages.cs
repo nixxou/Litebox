@@ -1874,6 +1874,42 @@ internal sealed partial class EditGameWindow
         }
         else text += "(:info):  (none)\n";
 
+        // ── Duplicate-check ADS (:lb.dupcheck) vs the CURRENT keys ──
+        // Shows the stored per-view records AND what the keys are right now, flagging exactly which of
+        // sort/pool/par went stale (a stale record is harmless — it recomputes on the next visit).
+        try
+        {
+            var ml = MediaLayout.Current;
+            var gDup = ImgGame;
+            string platDup = Safe(() => gDup.Platform) ?? "";
+            Guid.TryParse(Safe(() => gDup.Id) ?? "", out var gidDup);
+            string curPool = (gidDup != Guid.Empty && platDup.Length > 0)
+                ? MediaSignature.For(platDup, gidDup, Safe(() => gDup.Title) ?? "") : "";
+            string curPar = ml.DupParamHash8();
+            string curSortL = ml.PostLoadHash(false).Substring(0, 8);
+            string curSortP = ml.PostLoadHash(true).Substring(0, 8);
+
+            text += "\n── Duplicate check (:lb.dupcheck) ──\n";
+            text += $"Option:  {(ml.PreventDuplicates ? "enabled" : "disabled")}  ({ml.DupEngine}, thr {ml.EffectiveDupThreshold():0.##}, gpu {(ml.DupGpu ? "on" : "off")})\n";
+            text += $"Current keys:  pool={(curPool.Length > 0 ? curPool : "(n/a)")}  par={curPar}\n";
+            text += $"               sort list={curSortL}  poster={curSortP}\n";
+
+            string One(DupCheckAds.Rec? r, string curSort)
+            {
+                if (r == null) return "(none)";
+                var bad = new List<string>();
+                if (r.Sort != curSort) bad.Add("sort");
+                if (r.Pool != curPool) bad.Add("pool");
+                if (r.Par != curPar) bad.Add("par");
+                return $"sort={r.Sort}  pool={r.Pool}  par={r.Par}  dup={r.Dup}\n"
+                     + "           " + (bad.Count == 0 ? "✓ matches current keys" : "✗ STALE — mismatch: " + string.Join(", ", bad));
+            }
+            var dto = DupCheckAds.Peek(img.Path);
+            text += $"List:    {One(dto?.List, curSortL)}\n";
+            text += $"Poster:  {One(dto?.Poster, curSortP)}\n";
+        }
+        catch { }
+
         text += $"\n{img.Path}";
         MessageBox.Show(this, text, "Image info", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }

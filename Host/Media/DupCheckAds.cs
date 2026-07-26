@@ -66,6 +66,10 @@ internal static class DupCheckAds
         return dto;
     }
 
+    /// <summary>The raw stored records (both views) for display/diagnostics (the Edit-Game image Info box),
+    /// or null when the image has no :lb.dupcheck data. Served through the session memo like every read.</summary>
+    public static Dto? Peek(string imgPath) => Load(imgPath);
+
     /// <summary>Cached dup result for this image under the CURRENT (sort,pool,par) triplet — own view
     /// first, then the other view when its stored triplet matches (identical effective config). False
     /// return = no valid cached result, compute it.</summary>

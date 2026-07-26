@@ -96,6 +96,18 @@ internal sealed class MediaLayout
     public string PostLoadHash(bool poster)
         => Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(PostLoadJson(poster)))).ToLowerInvariant();
 
+    // ── 3D case block ─────────────────────────────────────────────────────────
+    // Independent of the post-load image list (own row under the hero, own GLB cache) — deliberately NOT
+    // part of PostLoadJson/PostLoadHash nor of the dup params.
+
+    /// <summary>Stored INVERTED (default-off booleans survive the WhenWritingDefault serializer; a
+    /// default-ON one would lose the user's "off" on reload). Use <see cref="Show3dBox"/>.</summary>
+    public bool Hide3dBox { get; set; }
+
+    /// <summary>Show the 3D case model under the hero image (right detail panel). Default on.</summary>
+    [JsonIgnore]
+    public bool Show3dBox { get => !Hide3dBox; set => Hide3dBox = !value; }
+
     // ── Duplicate prevention (post-load filter) ───────────────────────────────
     // These settings are deliberately NOT part of PostLoadJson/PostLoadHash: toggling the dup filter must
     // not shift the per-view config fingerprints. They are fingerprinted SEPARATELY (DupParamHash8) — the
@@ -168,7 +180,7 @@ internal sealed class MediaLayout
         ImmediateList = ImmediateList, ImmediatePoster = ImmediatePoster,
         PostLoad = PostLoad.Select(e => e.Clone()).ToList(),
         PostLoadPoster = PostLoadPoster.Select(e => e.Clone()).ToList(),
-        PosterIndependent = PosterIndependent,
+        PosterIndependent = PosterIndependent, Hide3dBox = Hide3dBox,
         PreventDuplicates = PreventDuplicates, DupEngine = DupEngine, DupThreshold = DupThreshold, DupGpu = DupGpu,
     };
 

@@ -67,7 +67,7 @@ internal static class EditPlatformModel
     // when a platform has NO hardcoded defaults (GetDefaultSettings → null, e.g. SNES) and no override. Used as
     // the last-resort fallback so checking Override with untouched controls reproduces the no-override look
     // (the ctor draws spine on left/right and logo on left/top/right; our panel used to start all-unchecked).
-    private static Dictionary<string, string> CtorDefaults() => new(StringComparer.OrdinalIgnoreCase)
+    internal static Dictionary<string, string> CtorDefaults() => new(StringComparer.OrdinalIgnoreCase)
     {
         ["ModelType"] = "box",                 // ctor ModelType is null; LB renders a box for null
         ["FullImageSpineWidth"] = "0.143",
@@ -86,8 +86,9 @@ internal static class EditPlatformModel
         // a custom-named platform with Scrape As "Sony Playstation" pre-fills the PS1 jewel preset), else the
         // ModelSettings ctor defaults (platforms LB has no entry for, e.g. SNES).
         // Preview = a sample game of this platform (title filled lazily by SwitchSampleGame; bare case otherwise).
-        return BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs) ?? CtorDefaults(),
-                         f => PlatformModelStore.Write(name, f), readOnly, s, name, PreviewSampleTitle(name), null);
+        var (panel, apply, _) = BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs) ?? CtorDefaults(),
+                                          f => PlatformModelStore.Write(name, f), readOnly, s, name, PreviewSampleTitle(name), null, null);
+        return (panel, apply);
     }
 
     /// <summary>Per-GAME override (Edit Game window) — the SAME panel: the game's own block drives the Override
@@ -95,9 +96,20 @@ internal static class EditPlatformModel
     /// observed on the real dialog), else from LB's hardcoded defaults. Writes the game-keyed block in
     /// Data\Platforms\&lt;Platform&gt;.xml. Preview textures with THIS game's box art.</summary>
     public static (Control panel, Action apply) BuildForGame(string platformName, string gameId, bool readOnly, float s, string? scrapeAs = null, string? gameTitle = null)
+    {
+        var (panel, apply, _) = BuildForGame(platformName, gameId, readOnly, s, scrapeAs, gameTitle, null);
+        return (panel, apply);
+    }
+
+    /// <summary>Full per-game variant: <paramref name="imgOv"/> supplies the CURRENT (possibly unsaved)
+    /// Image Selection picks so the live preview renders with them, and the returned <c>redraw</c> lets the
+    /// Image Selection tab re-render the preview on every pick change.</summary>
+    public static (Control panel, Action apply, Action redraw) BuildForGame(string platformName, string gameId, bool readOnly, float s,
+                                                                            string? scrapeAs, string? gameTitle,
+                                                                            Func<Dictionary<string, string>?>? imgOv)
         => BuildCore(PlatformModelStore.ReadGame(platformName, gameId),
                      PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? "") ?? CtorDefaults(),
-                     f => PlatformModelStore.WriteGame(platformName, gameId, f), readOnly, s, platformName, gameTitle ?? "", platformName);
+                     f => PlatformModelStore.WriteGame(platformName, gameId, f), readOnly, s, platformName, gameTitle ?? "", platformName, imgOv);
 
     // A representative game of a platform to texture the platform-level preview: the first title with a Box -
     // Front image on disk (any region). Empty when none → the preview shows a bare (untextured) case.
@@ -159,11 +171,12 @@ internal static class EditPlatformModel
         return list;
     }
 
-    private static (Control panel, Action apply) BuildCore(Dictionary<string, string>? own,
+    private static (Control panel, Action apply, Action redraw) BuildCore(Dictionary<string, string>? own,
                                                            Dictionary<string, string>? fallback,
                                                            Action<Dictionary<string, string>?> write,
                                                            bool readOnly, float s,
-                                                           string previewPlatform, string previewGameTitle, string? _unused)
+                                                           string previewPlatform, string previewGameTitle, string? _unused,
+                                                           Func<Dictionary<string, string>?>? imgOv)
     {
         int S(int px) => (int)Math.Round(px * s);
         var cur = own ?? fallback;   // displayed values: own override, else the parent level's (game←platform)
@@ -482,7 +495,7 @@ internal static class EditPlatformModel
         void RedrawPreview()
         {
             var map = ApplyMapExtra(BuildFieldMap() ?? fallback);
-            try { home.Build(map, CurrentSampleTitle(), previewPlatform); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
+            try { home.Build(map, CurrentSampleTitle(), previewPlatform, imgOv?.Invoke()); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
         }
         // Redraw after every option change (Refresh calls RedrawPreview) + once the host handle exists.
         redrawPreview = RedrawPreview;
@@ -494,7 +507,7 @@ internal static class EditPlatformModel
         }
         root.Disposed += (_, _) => { try { home?.Dispose(); } catch { } };
 
-        return (root, Apply);
+        return (root, Apply, RedrawPreview);
 
         // local scaled-control factories (capture S)
         ComboBox Combo(int x, int yy, int wd) => new()
@@ -548,6 +561,9 @@ internal static class EditPlatformModel
     // swallows. WinForms host events are kept as a belt-and-suspenders fallback.
     private static void WireOrbit(Control host, OrbitController orbit)
     {
+        // Drag = IMMEDIATE rotation (1:1 tracking; the restarted ease stuttered), 0.25°/px, natural
+        // direction (drag right → the front face follows right) — same feel as the detail-pane 3D block.
+        const double Sens = 12.0;   // px per 7.5°-unit → 0.625°/px (~145 px drag = 90°)
         if (host is System.Windows.Forms.Integration.ElementHost eh && eh.Child is System.Windows.UIElement ui)
         {
             bool wd = false; System.Windows.Point wl = default;
@@ -557,7 +573,7 @@ internal static class EditPlatformModel
             {
                 if (!wd) return;
                 var p = e.GetPosition(ui); double dx = p.X - wl.X, dy = p.Y - wl.Y; wl = p;
-                orbit.Orbit(-dx / 15.0, dy / 15.0);
+                orbit.OrbitImmediate(dx / Sens, dy / Sens);
                 e.Handled = true;   // stop LB's FlowModel from also rotating on the same drag
             };
             ui.PreviewMouseWheel += (_, e) => { orbit.Zoom(e.Delta); e.Handled = true; };
@@ -565,7 +581,7 @@ internal static class EditPlatformModel
         bool dragging = false; int lx = 0, ly = 0;
         host.MouseDown += (_, e) => { dragging = true; lx = e.X; ly = e.Y; };
         host.MouseUp += (_, _) => dragging = false;
-        host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; orbit.Orbit(-dx / 15.0, dy / 15.0); };
+        host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; orbit.OrbitImmediate(dx / Sens, dy / Sens); };
         host.MouseWheel += (_, e) => orbit.Zoom(e.Delta);
     }
 

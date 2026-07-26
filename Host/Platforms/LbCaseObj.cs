@@ -57,7 +57,12 @@ internal static class LbCaseObj
                 m => vars.TryGetValue(m.Groups[1].Value, out var v) ? v : "0.5 0.5 0.5");
         var mats = mtlText != null ? ParseMtl(mtlText) : new Dictionary<string, Material>(StringComparer.OrdinalIgnoreCase);
         var (grp, names) = ParseObj(objText, mats);
-        // NOT frozen: callers swap segment materials (the DVD wrap). Frozen would block that.
+        // FROZEN: the cache is shared across THREADS (UI previews + the GLB bake STA worker — whichever
+        // populates it first would otherwise own the objects and the other thread throws "different thread
+        // owns it"). Every caller Clone()s before mutating (the DVD wrap material swap works on the clone),
+        // and cloning a frozen Freezable from any thread is legal — freezing costs nothing here.
+        if (grp.CanFreeze) grp.Freeze();
+        else Console.WriteLine("[caseobj] " + baseName + ": not freezable — cross-thread use will fail");
         return (grp, names);
     }
 

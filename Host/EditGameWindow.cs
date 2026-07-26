@@ -340,9 +340,11 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         _host.ResumeLayout();
     }
 
-    // ── 3D Model Settings page — the Edit Platform panel reused verbatim, keyed per-GAME (same field schema,
-    // block lives in Data\Platforms\<Platform>.xml keyed by <GameId>; pre-fills from the platform override when
-    // the game has none — full LB parity, see PlatformModelStore). Applied on OK like the other pages.
+    // ── 3D Model Settings page — TWO tabs: "Settings" (the Edit Platform panel reused verbatim, keyed
+    // per-GAME — same field schema, block in Data\Platforms\<Platform>.xml keyed by <GameId>, pre-fills from
+    // the platform override; full LB parity, see PlatformModelStore) and "Image Selection" (LiteBox-own: pick
+    // the exact image per texture slot — Model3dImagesPanel / Model3dImageStore). The live preview renders
+    // with the CURRENT unsaved picks; both tabs apply together on OK / page navigation.
     private Action _applyModelSettings;
     private Control BuildModelSettingsPage()
     {
@@ -352,9 +354,50 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         try { id = g.Id ?? ""; } catch { }
         try { title = g.Title ?? ""; } catch { }
         try { scrapeAs = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetPlatformByName(plat)?.ScrapeAs ?? ""; } catch { }
-        var (panel, apply) = Platforms.EditPlatformModel.BuildForGame(plat, id, _readOnly, _s, scrapeAs, title);
-        _applyModelSettings = apply;
-        return panel;
+
+        var imgPanel = new Model3d.Model3dImagesPanel(plat, g, title, _s, _readOnly) { Dock = DockStyle.Fill, Visible = false };
+        var (setPanel, applySet, redraw) = Platforms.EditPlatformModel.BuildForGame(plat, id, _readOnly, _s, scrapeAs, title,
+                                                                                    () => imgPanel.CurrentSelection);
+        setPanel.Dock = DockStyle.Fill;
+        imgPanel.SelectionChanged = redraw;
+        _applyModelSettings = () => { applySet(); imgPanel.Apply(); };
+
+        // The tabs swap only the LEFT column of the settings panel — the 3D preview (docked right inside
+        // it) stays visible on BOTH tabs, so picks re-render the case live. The left column is the panel's
+        // single Fill-docked child; the image panel slides in at the same dock slot (index 0 = fills last).
+        var leftCol = setPanel.Controls.Cast<Control>().FirstOrDefault(c => c.Dock == DockStyle.Fill);
+        setPanel.Controls.Add(imgPanel);
+        setPanel.Controls.SetChildIndex(imgPanel, 0);
+
+        var root = new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg };
+        var strip = new Panel { Dock = DockStyle.Top, Height = S(34), BackColor = LiteBoxTheme.Bg };
+
+        Button Tab(string text, int x)
+            => new()
+            {
+                Text = text, Location = new Point(S(x), S(4)), Size = new Size(S(150), S(26)),
+                FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg,
+                FlatAppearance = { BorderSize = 0 },
+            };
+        var tabSet = Tab("Settings", 8);
+        var tabImg = Tab("Image Selection", 164);
+        void Select(bool images)
+        {
+            if (leftCol != null) leftCol.Visible = !images;
+            imgPanel.Visible = images;
+            tabSet.BackColor = images ? LiteBoxTheme.Panel2 : LiteBoxTheme.Accent;
+            tabImg.BackColor = images ? LiteBoxTheme.Accent : LiteBoxTheme.Panel2;
+            if (images) redraw();   // entering the tab: make sure the preview shows the current picks
+        }
+        tabSet.Click += (_, _) => Select(false);
+        tabImg.Click += (_, _) => Select(true);
+        strip.Controls.Add(tabSet);
+        strip.Controls.Add(tabImg);
+        Select(false);
+
+        root.Controls.Add(setPanel);
+        root.Controls.Add(strip);
+        return root;
     }
 
     private Control Placeholder(string title)

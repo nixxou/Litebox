@@ -32,6 +32,7 @@ internal sealed class MediaLayoutPanel : Panel
     private readonly CheckBox _dupOn = null!, _dupGpu = null!;
     private readonly ComboBox _dupEngine = null!;
     private readonly NumericUpDown _dupThr = null!;
+    private readonly CheckBox _show3d = null!;
 
     private bool _editingPoster;   // which post-load list the editor is currently showing
 
@@ -150,7 +151,11 @@ internal sealed class MediaLayoutPanel : Panel
             + "First visit of a game computes once; results are then cached per image (ADS).", 18, 494, 640);
         UpdateDupEnabled();
 
-        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 522, 600);
+        // ── 3D case block (independent of the post-load list — own row under the hero, own GLB cache) ──
+        _show3d = new CheckBox { Text = "Show the 3D case model under the hero image (baked to the GLB cache on first visit)", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(524)), Checked = _layout.Show3dBox };
+        Controls.Add(_show3d);
+
+        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 552, 600);
     }
 
     private void UpdateDupEnabled()
@@ -269,6 +274,7 @@ internal sealed class MediaLayoutPanel : Panel
         _layout.DupEngine = _dupEngine.SelectedIndex switch { 1 => "phash", 2 => "dhash", _ => "cnn" };
         _layout.DupThreshold = (double)_dupThr.Value;
         _layout.DupGpu = _dupGpu.Checked;
+        _layout.Show3dBox = _show3d.Checked;
         _layout.Save();
     }
 }

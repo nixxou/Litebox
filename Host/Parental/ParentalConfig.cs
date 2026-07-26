@@ -180,7 +180,10 @@ internal sealed class ParentalConfig
         {
             var store = new ListStore
             {
-                ConfigVersion = ConfigVersion ?? "0.0.0",
+                // Stamp the version WRITING the file (echoing the old value made the field inert —
+                // every file stayed "0.0.0" and carried no information). This file holds USER data:
+                // no reset gate, a future format change migrates against ConfigVersioning.IsBelow.
+                ConfigVersion = Data.ConfigVersioning.Stamp(),
                 Rules = Clean(Rules),
                 HiddenPlatformsBigBoxOn = Clean(HiddenPlatformsBigBoxOn),
                 HiddenPlatformsBigBoxOff = Clean(HiddenPlatformsBigBoxOff),

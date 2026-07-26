@@ -411,7 +411,9 @@ internal sealed class RomConfig
         {
             var store = new ProfileStore
             {
-                ConfigVersion = ConfigVersion ?? "0.0.0",
+                // Stamp the writing version (the previous echo left every file at "0.0.0", i.e. useless).
+                // Profiles are user config with nested structures — the most likely to need a migration.
+                ConfigVersion = Data.ConfigVersioning.Stamp(),
                 GlobalDefault = GlobalDefault,
                 Priorities = Priorities ?? new(),
             };

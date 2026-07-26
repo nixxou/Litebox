@@ -176,7 +176,18 @@ internal static class SaveVault
 {
     private static readonly object _lock = new();
     private static List<VaultEntry>? _entries;
+    private static string _loadedVersion = "0.0.0";   // stamp of the file we read (diagnostic + future gates)
     private static string FilePath => LiteBoxPaths.File("saves-vault.json");
+
+    /// <summary>Versioned root of saves-vault.json. The file USED to be a bare JSON array of entries;
+    /// Load still accepts that legacy shape (stamp "0.0.0") and the next Save rewrites it as this object,
+    /// so a format change can be detected instead of silently mis-parsed. This file holds USER data (the
+    /// backup index) — it is never reset on a version mismatch, only migrated.</summary>
+    private sealed class VaultStore
+    {
+        public string ConfigVersion { get; set; } = "0.0.0";
+        public List<VaultEntry> Entries { get; set; } = new();
+    }
 
     private static List<VaultEntry> Load()
     {
@@ -186,7 +197,23 @@ internal static class SaveVault
             try
             {
                 if (File.Exists(FilePath))
-                    _entries = JsonSerializer.Deserialize<List<VaultEntry>>(File.ReadAllText(FilePath)) ?? new();
+                {
+                    string text = File.ReadAllText(FilePath);
+                    // Legacy (pre-versioning) files start with '[' — a bare entry array.
+                    string trimmed = text.TrimStart();
+                    if (trimmed.StartsWith("[", StringComparison.Ordinal))
+                    {
+                        _entries = JsonSerializer.Deserialize<List<VaultEntry>>(text) ?? new();
+                        _loadedVersion = "0.0.0";
+                        Console.WriteLine($"[saves] vault json read in legacy (unversioned) shape — {_entries.Count} entr(ies); will be rewritten versioned on the next change");
+                    }
+                    else
+                    {
+                        var store = JsonSerializer.Deserialize<VaultStore>(text);
+                        _entries = store?.Entries ?? new();
+                        _loadedVersion = store?.ConfigVersion ?? "0.0.0";
+                    }
+                }
             }
             catch (Exception ex) { Console.WriteLine("[saves] vault json unreadable: " + ex.Message); }
             return _entries ??= new List<VaultEntry>();
@@ -199,9 +226,11 @@ internal static class SaveVault
         {
             try
             {
+                var store = new VaultStore { ConfigVersion = Data.ConfigVersioning.Stamp(), Entries = _entries ?? new() };
                 string tmp = FilePath + ".tmp";
-                File.WriteAllText(tmp, JsonSerializer.Serialize(_entries, new JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(tmp, JsonSerializer.Serialize(store, new JsonSerializerOptions { WriteIndented = true }));
                 File.Move(tmp, FilePath, overwrite: true);
+                _loadedVersion = store.ConfigVersion;
             }
             catch (Exception ex) { Console.WriteLine("[saves] vault json write failed: " + ex.Message); }
         }

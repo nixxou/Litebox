@@ -631,6 +631,34 @@ internal sealed class MainWindow : Form, IMessageFilter
                 }
                 catch (Exception ex) { Console.WriteLine("[play] " + ex.Message); }
             }
+            else if (!string.IsNullOrEmpty(HostBoot.DupCycle))
+            {
+                // Hands-free dup-filter lifecycle test: cold build (CNN session may create) → Suspend
+                // (what a game launch does) → build during suspension (cached verdicts / hint, NO session)
+                // → Resume → warm build (pure cache hits). Pair with --debug to see the [dedup] trace.
+                var g = FindGameForCli(HostBoot.DupCycle);
+                if (g == null) Console.WriteLine($"[dup-cycle] game not found: \"{HostBoot.DupCycle}\"");
+                else new System.Threading.Thread(() =>
+                {
+                    try
+                    {
+                        Console.WriteLine($"[dup-cycle] game \"{Safe(() => g.Title)}\" — 1: COLD build (both views)");
+                        var l1 = BuildMediaList(g, poster: false); var p1 = BuildMediaList(g, poster: true);
+                        Console.WriteLine($"[dup-cycle] cold: list={l1.Count} poster={p1.Count}");
+                        Console.WriteLine("[dup-cycle] 2: SUSPEND (simulated game launch) + build during suspension");
+                        Media.Dedup.DedupEngine.Suspend();
+                        var l2 = BuildMediaList(g, poster: false);
+                        Console.WriteLine($"[dup-cycle] suspended build: list={l2.Count}");
+                        Console.WriteLine("[dup-cycle] 3: RESUME + warm build");
+                        Media.Dedup.DedupEngine.Resume();
+                        var l3 = BuildMediaList(g, poster: false);
+                        Console.WriteLine($"[dup-cycle] warm build: list={l3.Count}");
+                        Console.WriteLine("[dup-cycle] done");
+                    }
+                    catch (Exception ex) { Console.WriteLine("[dup-cycle] " + ex.Message); }
+                })
+                { IsBackground = true, Name = "dup-cycle" }.Start();
+            }
             // Automatic Progress Tracking sweep (LB parity) — background, opt-in (LiteBox option) and
             // gated internally on the Settings.xml master switch; local data only (play time, last
             // played, RA cache). Off by default: the on-select / on-exit triggers cover normal use.

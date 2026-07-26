@@ -47,6 +47,7 @@ internal static class HostBoot
     //   --options ["<section>"]       open the Options window, optionally on the named section
     //                                 (fuzzy: "gameplay" → "LB · Gameplay")
     public static string AutoPlay;      // --play "<title|id>" → launch on boot (pair with --drylaunch to audit)
+    public static string DupCycle;      // --dup-cycle "<title|id>" → hands-free dup-filter lifecycle test (cold/suspend/warm builds)
     public static string AutoGenCache;  // --gencache [csv] → self-driving bulk cache generation test
     public static string AutoEditGame;
     public static string AutoEditEmu;   // --edit-emu "<title|id>" → open Edit Emulator on boot
@@ -498,6 +499,7 @@ internal static class HostBoot
         // --drylaunch it prints the exact spawn command line without starting anything (the
         // hands-free way to audit a launch: DOSBox args, emulator command, working dir).
         AutoPlay = GetArg(args, "--play");
+        DupCycle = GetArg(args, "--dup-cycle");
         AutoEditGame = GetArg(args, "--edit-game");
         AutoEditEmu = GetArg(args, "--edit-emu");
         AutoEditPage = GetArg(args, "--edit-page");

@@ -92,6 +92,19 @@ internal static class DupCheckAds
     /// or null when the image has no :lb.dupcheck data. Served through the session memo like every read.</summary>
     public static Dto? Peek(string imgPath) => Load(imgPath);
 
+    /// <summary>Removes this image's stored dup-check data entirely — BOTH backends are tried (the ADS
+    /// stream and the dedicated sidecar), regardless of the volume probe, so a library moved between
+    /// filesystems still comes out clean. Session memo reset too. True when something was deleted.
+    /// (Deleting "file:stream" removes just that stream, not the file.)</summary>
+    public static bool Delete(string imgPath)
+    {
+        bool removed = false;
+        try { string p = imgPath + StreamSuffix; if (File.Exists(p)) { File.Delete(p); removed = true; } } catch { }
+        try { string? sp = SidecarPathOf(imgPath); if (sp != null && File.Exists(sp)) { File.Delete(sp); removed = true; } } catch { }
+        _memo[imgPath] = null;
+        return removed;
+    }
+
     /// <summary>Cached dup result for this image under the CURRENT (sort,pool,par) triplet — own view
     /// first, then the other view when its stored triplet matches (identical effective config). False
     /// return = no valid cached result, compute it.</summary>

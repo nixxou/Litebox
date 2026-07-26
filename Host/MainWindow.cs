@@ -2128,12 +2128,61 @@ internal sealed class MainWindow : Form, IMessageFilter
             + "selection never pays the first-visit cost. Needs the option enabled (Display → Right panel)."));
         var dupRow = new Panel { Width = S(690), Height = S(30), BackColor = Bg, Margin = new Padding(S(6), 0, 0, S(4)) };
         var dupBtn = MkBtn("Update duplicates"); dupBtn.Location = new Point(0, 0);
-        var dupStop = MkBtn("Stop"); dupStop.Location = new Point(S(156), 0); dupStop.Enabled = false;
-        var dupLbl = new Label { AutoSize = true, ForeColor = SubFg, BackColor = Bg, Location = new Point(S(320), S(5)) };
-        dupRow.Controls.Add(dupBtn); dupRow.Controls.Add(dupStop); dupRow.Controls.Add(dupLbl);
+        var dupClean = MkBtn("Clean dupcheck keys"); dupClean.Location = new Point(S(156), 0);
+        var dupStop = MkBtn("Stop"); dupStop.Location = new Point(S(312), 0); dupStop.Enabled = false;
+        var dupLbl = new Label { AutoSize = true, ForeColor = SubFg, BackColor = Bg, Location = new Point(S(474), S(5)) };
+        dupRow.Controls.Add(dupBtn); dupRow.Controls.Add(dupClean); dupRow.Controls.Add(dupStop); dupRow.Controls.Add(dupLbl);
         flow.Controls.Add(dupRow);
         bool dupCancel = false;
         dupStop.Click += (_, _) => dupCancel = true;
+
+        // Clean: walk every game's image files and DELETE their stored dup-check data (the :lb.dupcheck
+        // stream and/or the .ads sidecar). Next selections recompute from scratch (if the option is on).
+        dupClean.Click += (_, _) =>
+        {
+            IGame[] games;
+            try { games = _dm.GetAllGames(); } catch { games = Array.Empty<IGame>(); }
+            if (MessageBox.Show(p.FindForm(),
+                    $"Remove the stored duplicate-check data (:lb.dupcheck) from the images of all {games.Length} games?\n\n"
+                    + "The images themselves are untouched. Results are recomputed on the next visits when "
+                    + "\"Prevent duplicate images\" is enabled.",
+                    "Clean dupcheck keys", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            dupCancel = false; dupBtn.Enabled = false; dupClean.Enabled = false; dupStop.Enabled = true;
+            dupLbl.Text = $"0/{games.Length} games";
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                int done = 0, removed = 0;
+                foreach (var gg in games)
+                {
+                    if (dupCancel) break;
+                    try
+                    {
+                        string plat2 = Safe(() => gg.Platform) ?? "";
+                        string title2 = Safe(() => gg.Title) ?? "";
+                        if (plat2.Length > 0 && Guid.TryParse(Safe(() => gg.Id) ?? "", out var id2))
+                            foreach (var (path2, _, _) in MediaResolver.AllImageFiles(plat2, id2, title2))
+                                if (Media.DupCheckAds.Delete(path2)) removed++;
+                    }
+                    catch { }
+                    done++;
+                    if (done % 10 == 0 || done == games.Length)
+                    {
+                        int d = done, k = removed;
+                        try { BeginInvoke(new Action(() => { if (!dupLbl.IsDisposed) dupLbl.Text = $"{d}/{games.Length} games — {k} key(s) removed"; })); } catch { }
+                    }
+                }
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (dupLbl.IsDisposed) return;
+                        dupLbl.Text = (dupCancel ? $"stopped at {done}/{games.Length}" : $"done — {games.Length} games") + $" — {removed} key(s) removed";
+                        dupBtn.Enabled = true; dupClean.Enabled = true; dupStop.Enabled = false;
+                    }));
+                }
+                catch { }
+            });
+        };
         dupBtn.Click += (_, _) =>
         {
             if (!Media.MediaLayout.Current.PreventDuplicates)
@@ -2145,7 +2194,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             }
             IGame[] games;
             try { games = _dm.GetAllGames(); } catch { games = Array.Empty<IGame>(); }
-            dupCancel = false; dupBtn.Enabled = false; dupStop.Enabled = true;
+            dupCancel = false; dupBtn.Enabled = false; dupClean.Enabled = false; dupStop.Enabled = true;
             dupLbl.Text = $"0/{games.Length} games";
             System.Threading.Tasks.Task.Run(() =>
             {
@@ -2168,7 +2217,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                     {
                         if (dupLbl.IsDisposed) return;
                         dupLbl.Text = dupCancel ? $"stopped at {done}/{games.Length}" : $"done — {games.Length} games";
-                        dupBtn.Enabled = true; dupStop.Enabled = false;
+                        dupBtn.Enabled = true; dupClean.Enabled = true; dupStop.Enabled = false;
                     }));
                 }
                 catch { }

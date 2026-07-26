@@ -45,19 +45,22 @@ internal static class LbRegions
     {
         var order = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var r in userPriorities ?? Enumerable.Empty<string>())
+        void Add(string r)
         {
-            if (string.IsNullOrWhiteSpace(r)) continue;
+            if (string.IsNullOrWhiteSpace(r)) return;
             var lr = r.Trim().ToLowerInvariant();
             if (seen.Add(lr)) order.Add(lr);
         }
+
+        foreach (var r in userPriorities ?? Enumerable.Empty<string>()) Add(r);   // user priorities first (World stays HERE if the user ranked it)
+        // LaunchBox's fallback, EXCEPT "World": region-specific images should win over the generic World one,
+        // so World is demoted to the last-resort region (just before root) unless the user placed it higher.
         foreach (var r in Fallback)
-        {
-            var lr = r.ToLowerInvariant();
-            if (seen.Add(lr)) order.Add(lr);
-        }
-        if (seen.Add(None)) order.Add(None);   // root last (unless the user explicitly ranked it)
+            if (!string.Equals(r, WorldRegion, StringComparison.OrdinalIgnoreCase)) Add(r);
+        Add(WorldRegion);   // World = final fallback region…
+        Add(None);          // …then root ("none") absolute last
         return order;
     }
+
+    private const string WorldRegion = "World";
 }

@@ -58,6 +58,16 @@ internal static class MediaResolver
     private static List<string> _regionOrder = LbRegions.Order(Array.Empty<string>());
     private static List<string> RegionOrder() => _regionOrder;
 
+    /// <summary>Region order with the GAME's own region(s) prepended (LaunchBox step 1, which LiteBox skips by
+    /// default). Empty game region → the plain global order. Split on comma/semicolon; the user priorities,
+    /// LB fallback and root ("none") still follow, de-duplicated.</summary>
+    private static IEnumerable<string> RegionOrderForGame(string? gameRegion)
+    {
+        if (string.IsNullOrWhiteSpace(gameRegion)) return RegionOrder();
+        var own = gameRegion.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return LbRegions.Order(own.Concat(_regions));
+    }
+
     /// <summary>The LaunchBox Images root (or null before Init).</summary>
     public static string ImagesRoot => string.IsNullOrEmpty(_lbRoot) ? null : Path.Combine(_lbRoot, "Images");
 
@@ -338,6 +348,12 @@ internal static class MediaResolver
     /// returns the same set whether or not ExtendDB's GameCache is active. Empty if none.
     /// </summary>
     public static List<string> AllOfType(string platformName, Guid id, string title, string imageType)
+        => AllOfType(platformName, id, title, imageType, null);
+
+    /// <summary>As above, but the game's own region(s) can be tried FIRST (<paramref name="preferGameRegion"/>
+    /// non-empty = LaunchBox-identical), and <paramref name="allRegions"/> controls breadth: false = only the
+    /// BEST region (the first in priority order with a match); true = every region (can duplicate the same art).</summary>
+    public static List<string> AllOfType(string platformName, Guid id, string title, string imageType, string? preferGameRegion, bool allRegions = true)
     {
         var result = new List<string>();
         if (string.IsNullOrEmpty(platformName) || string.IsNullOrEmpty(imageType)) return result;
@@ -346,10 +362,11 @@ internal static class MediaResolver
         string folder = SafeFolder(plat, imageType);
         if (folder == null || !Directory.Exists(folder)) return result;
         string sani = Sanitize(title);
-        foreach (var region in RegionOrder())   // priorities → LB fallback → root ("none") last
+        foreach (var region in RegionOrderForGame(preferGameRegion))   // [game region] → priorities → LB fallback → root last
         {
             var dir = region == LbRegions.None ? folder : Path.Combine(folder, region);
             result.AddRange(AllInDir(dir, id, sani, ImageExts));
+            if (!allRegions && result.Count > 0) break;   // best-region-only: stop at the first region that has a match
         }
         return result;
     }

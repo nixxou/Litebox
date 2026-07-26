@@ -1,8 +1,10 @@
 // The Options → Display → Right panel editor for the detail-pane image layout (MediaLayout):
 //   • Immediate image family, separately for List view and Poster view.
-//   • The ordered post-load image list — each row a FAMILY or an EXACT type + a count; add / remove /
-//     move up / move down. Apply() writes it back and saves.
-// Selection mode (auto vs weighted) is reserved in the model; this first UI edits families/types/counts.
+//   • The ordered post-load image list — each row a FAMILY or an EXACT type + a count. It can be SHARED
+//     between List and Poster views (default) or made INDEPENDENT per view via the "use same configuration"
+//     checkbox; the "Editing" selector then picks which view's list you're editing.
+//   • Per entry: "prefer the game's own region" (LaunchBox-identical region order) vs the global LB priority.
+//   Apply() writes it back and saves.
 
 #nullable enable
 
@@ -21,10 +23,14 @@ internal sealed class MediaLayoutPanel : Panel
 
     private readonly MediaLayout _layout;
     private readonly ComboBox _immList = null!, _immPoster = null!;
+    private readonly CheckBox _posterSame = null!;
+    private readonly ComboBox _editWhich = null!;
     private readonly ListBox _list = null!;
     private readonly ComboBox _addKind = null!, _addSel = null!;
     private readonly NumericUpDown _addCount = null!, _addDepth = null!;
-    private readonly CheckBox _addCumul = null!;
+    private readonly CheckBox _addCumul = null!, _addRegion = null!, _addAllRegions = null!;
+
+    private bool _editingPoster;   // which post-load list the editor is currently showing
 
     private static Color Bg => LiteBoxTheme.Bg;
     private static Color Panel2 => LiteBoxTheme.Panel2;
@@ -36,6 +42,7 @@ internal sealed class MediaLayoutPanel : Panel
         _s = LiteBoxTheme.DpiScale(this);
         _layout = MediaLayout.Current.Clone();
         BackColor = Bg;
+        AutoScroll = true;   // the editor is tall (immediate + sharing + list + add + region rows) — never clip
 
         Label Head(string t, int x, int y) { var l = new Label { Text = t, AutoSize = true, ForeColor = Fg, Location = new Point(S(x), S(y)), Font = new Font("Segoe UI Semibold", 9f) }; Controls.Add(l); return l; }
         Label Sub(string t, int x, int y, int w) { var l = new Label { Text = t, AutoSize = false, Size = new Size(S(w), S(16)), ForeColor = SubFg, Location = new Point(S(x), S(y)), Font = new Font("Segoe UI", 8.25f) }; Controls.Add(l); return l; }
@@ -51,9 +58,22 @@ internal sealed class MediaLayoutPanel : Panel
         _immPoster = FamilyCombo(families, _layout.ImmediatePoster, S(340), S(22));
         Controls.Add(_immPoster);
 
+        // ── Per-view sharing of the post-load list ──
+        _posterSame = new CheckBox { Text = "Poster view uses the same post-load images as List view", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(54)), Checked = !_layout.PosterIndependent };
+        _posterSame.CheckedChanged += (_, _) => OnPosterSameChanged();
+        Controls.Add(_posterSame);
+
+        Controls.Add(new Label { Text = "Editing:", AutoSize = true, ForeColor = SubFg, Location = new Point(S(0), S(81)) });
+        _editWhich = new ComboBox { Location = new Point(S(56), S(78)), Size = new Size(S(150), S(22)), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+        _editWhich.Items.AddRange(new object[] { "List view", "Poster view" });
+        _editWhich.SelectedIndex = 0;
+        _editWhich.SelectedIndexChanged += (_, _) => OnEditWhichChanged();
+        Controls.Add(_editWhich);
+        _editWhich.Enabled = _layout.PosterIndependent;
+
         // ── Post-load ordered list ──
-        Head("Post-load images — loaded after the delay, in this order (first = the main box)", 0, 64);
-        _list = new ListBox { Location = new Point(S(0), S(88)), Size = new Size(S(360), S(210)), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false };
+        Head("Post-load images — loaded after the delay, in this order (first = the main box)", 0, 108);
+        _list = new ListBox { Location = new Point(S(0), S(132)), Size = new Size(S(360), S(168)), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false };
         Controls.Add(_list);
         RefreshList();
 
@@ -63,37 +83,46 @@ internal sealed class MediaLayoutPanel : Panel
             b.Click += (_, _) => onClick();
             Controls.Add(b); return b;
         }
-        SideBtn("Move up", 88, () => Move(-1));
-        SideBtn("Move down", 118, () => Move(+1));
-        SideBtn("Remove", 148, RemoveSel);
+        SideBtn("Move up", 132, () => Move(-1));
+        SideBtn("Move down", 162, () => Move(+1));
+        SideBtn("Remove", 192, RemoveSel);
 
         // ── Add row ──
-        Sub("Add: choose a family or a specific image type, and how many to take.", 0, 306, 500);
-        _addKind = new ComboBox { Location = new Point(S(0), S(326)), Size = new Size(S(120), S(22)), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+        Sub("Add: choose a family or a specific image type, and how many to take.", 0, 312, 500);
+        _addKind = new ComboBox { Location = new Point(S(0), S(332)), Size = new Size(S(120), S(22)), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
         _addKind.Items.AddRange(new object[] { "Family", "Specific type" });
         _addKind.SelectedIndex = 0;
         _addKind.SelectedIndexChanged += (_, _) => FillAddSel();
         Controls.Add(_addKind);
 
-        _addSel = new ComboBox { Location = new Point(S(128), S(326)), Size = new Size(S(280), S(22)), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+        _addSel = new ComboBox { Location = new Point(S(128), S(332)), Size = new Size(S(280), S(22)), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
         Controls.Add(_addSel);
         FillAddSel();
 
-        Controls.Add(new Label { Text = "count:", AutoSize = true, ForeColor = SubFg, Location = new Point(S(416), S(329)) });
-        _addCount = new NumericUpDown { Location = new Point(S(460), S(326)), Size = new Size(S(52), S(22)), Minimum = 1, Maximum = 99, Value = 99, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        Controls.Add(new Label { Text = "count:", AutoSize = true, ForeColor = SubFg, Location = new Point(S(416), S(335)) });
+        _addCount = new NumericUpDown { Location = new Point(S(460), S(332)), Size = new Size(S(52), S(22)), Minimum = 1, Maximum = 99, Value = 99, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
         Controls.Add(_addCount);
-        var add = new Button { Text = "Add", Size = new Size(S(66), S(24)), Location = new Point(S(520), S(325)), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Accent, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
+        var add = new Button { Text = "Add", Size = new Size(S(66), S(24)), Location = new Point(S(520), S(331)), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Accent, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
         add.Click += (_, _) => AddEntry();
         Controls.Add(add);
 
-        // Cumulative: the count is a TOTAL that also counts the images from the N entries above.
-        _addCumul = new CheckBox { Text = "Cumulative — count also the", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(356)) };
+        // Cumulative: the count is a TOTAL that also counts the images from the N entries above. The spinner
+        // and trailing label are placed AFTER the checkbox's real text width (PreferredSize) so nothing
+        // overlaps at any DPI / font.
+        _addCumul = new CheckBox { Text = "Cumulative — count also the", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(362)) };
         Controls.Add(_addCumul);
-        _addDepth = new NumericUpDown { Location = new Point(S(180), S(354)), Size = new Size(S(48), S(22)), Minimum = 1, Maximum = 20, Value = 1, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        int cumX = _addCumul.Location.X + _addCumul.PreferredSize.Width + S(8);
+        _addDepth = new NumericUpDown { Location = new Point(cumX, S(360)), Size = new Size(S(48), S(22)), Minimum = 1, Maximum = 20, Value = 1, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
         Controls.Add(_addDepth);
-        Controls.Add(new Label { Text = "entr(ies) above (so 'count' becomes a target total)", AutoSize = true, ForeColor = SubFg, Location = new Point(S(232), S(357)) });
+        Controls.Add(new Label { Text = "entr(ies) above (so 'count' becomes a target total)", AutoSize = true, ForeColor = SubFg, Location = new Point(cumX + S(48) + S(8), S(364)) });
 
-        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 384, 560);
+        // Per-entry region behaviour.
+        _addRegion = new CheckBox { Text = "Ignore the game's own region — use only the global region priority (default: game region first, LaunchBox-identical)", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(390)) };
+        Controls.Add(_addRegion);
+        _addAllRegions = new CheckBox { Text = "Add images from ALL regions  —  ⚠ may create duplicates (default: best region only)", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(414)) };
+        Controls.Add(_addAllRegions);
+
+        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 440, 600);
     }
 
     private ComboBox FamilyCombo((string Key, string Title)[] families, string current, int x, int y)
@@ -112,6 +141,25 @@ internal sealed class MediaLayoutPanel : Panel
         return cb.SelectedIndex >= 0 && cb.SelectedIndex < families.Length ? families[cb.SelectedIndex].Key : "Front";
     }
 
+    // The post-load list the editor is currently acting on (List's, or Poster's when editing independently).
+    private System.Collections.Generic.List<MediaEntry> CurPostLoad()
+        => _editingPoster ? _layout.PostLoadPoster : _layout.PostLoad;
+
+    private void OnPosterSameChanged()
+    {
+        _layout.PosterIndependent = !_posterSame.Checked;
+        if (_layout.PosterIndependent && _layout.PostLoadPoster.Count == 0)
+            _layout.PostLoadPoster = _layout.PostLoad.Select(e => e.Clone()).ToList();   // seed Poster from List
+        _editWhich.Enabled = _layout.PosterIndependent;
+        if (!_layout.PosterIndependent && _editWhich.SelectedIndex != 0) _editWhich.SelectedIndex = 0;   // back to List
+    }
+
+    private void OnEditWhichChanged()
+    {
+        _editingPoster = _editWhich.SelectedIndex == 1;
+        RefreshList();
+    }
+
     private void FillAddSel()
     {
         _addSel.BeginUpdate();
@@ -126,14 +174,14 @@ internal sealed class MediaLayoutPanel : Panel
     {
         int sel = _list.SelectedIndex;
         _list.BeginUpdate(); _list.Items.Clear();
-        foreach (var e in _layout.PostLoad) _list.Items.Add(e.Label());
+        foreach (var e in CurPostLoad()) _list.Items.Add(e.Label());
         _list.EndUpdate();
         if (_list.Items.Count > 0) _list.SelectedIndex = Math.Max(0, Math.Min(sel, _list.Items.Count - 1));
     }
 
     private void AddEntry()
     {
-        var e = new MediaEntry { Count = (int)_addCount.Value, Cumulative = _addCumul.Checked, CumulativeDepth = (int)_addDepth.Value };
+        var e = new MediaEntry { Count = (int)_addCount.Value, Cumulative = _addCumul.Checked, CumulativeDepth = (int)_addDepth.Value, IgnoreGameRegion = _addRegion.Checked, AllRegions = _addAllRegions.Checked };
         if (_addKind.SelectedIndex == 0)
         {
             e.ExactType = false;
@@ -141,24 +189,26 @@ internal sealed class MediaLayoutPanel : Panel
             e.Sel = ix >= 0 && ix < MediaLayout.Families.Length ? MediaLayout.Families[ix].Key : "Front";
         }
         else { e.ExactType = true; e.Sel = _addSel.SelectedItem as string ?? ""; if (string.IsNullOrEmpty(e.Sel)) return; }
-        _layout.PostLoad.Add(e);
+        CurPostLoad().Add(e);
         RefreshList();
         _list.SelectedIndex = _list.Items.Count - 1;
     }
 
     private void RemoveSel()
     {
+        var cur = CurPostLoad();
         int i = _list.SelectedIndex;
-        if (i < 0 || i >= _layout.PostLoad.Count) return;
-        _layout.PostLoad.RemoveAt(i);
+        if (i < 0 || i >= cur.Count) return;
+        cur.RemoveAt(i);
         RefreshList();
     }
 
     private void Move(int d)
     {
+        var cur = CurPostLoad();
         int i = _list.SelectedIndex, j = i + d;
-        if (i < 0 || j < 0 || j >= _layout.PostLoad.Count) return;
-        (_layout.PostLoad[i], _layout.PostLoad[j]) = (_layout.PostLoad[j], _layout.PostLoad[i]);
+        if (i < 0 || j < 0 || j >= cur.Count) return;
+        (cur[i], cur[j]) = (cur[j], cur[i]);
         RefreshList();
         _list.SelectedIndex = j;
     }

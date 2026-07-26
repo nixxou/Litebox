@@ -19,6 +19,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -45,19 +47,53 @@ internal sealed class MediaEntry
     public int WType { get; set; } = 1;
     public int WNumeric { get; set; } = 1;
     public int WAspect { get; set; }
+    /// <summary>Region pick for THIS entry: false (DEFAULT) = LaunchBox-identical — the GAME's own region(s)
+    /// FIRST, then the user's region priorities + LB fallback; true = ignore the game's region and use only
+    /// the global region priority list.</summary>
+    public bool IgnoreGameRegion { get; set; }
+    /// <summary>false (DEFAULT) = take images from the BEST region only (the first region in priority order
+    /// that has one) — like LaunchBox, and avoids the same art appearing once per region; true = take from
+    /// ALL regions (⚠ can produce visual duplicates of the same image that exists in several region folders).</summary>
+    public bool AllRegions { get; set; }
 
     public MediaEntry Clone() => (MediaEntry)MemberwiseClone();
     public string Label()
         => (ExactType ? "🎞 " : "") + Sel
          + (Count < 99 ? $"  ×{Count}" : "")
-         + (Cumulative ? $"  (Σ{CumulativeDepth}↑)" : "");
+         + (Cumulative ? $"  (Σ{CumulativeDepth}↑)" : "")
+         + (IgnoreGameRegion ? "  ⊘region" : "")
+         + (AllRegions ? "  ∗all-regions" : "");
 }
 
 internal sealed class MediaLayout
 {
     public string ImmediateList { get; set; } = "Front";     // family shown instantly when selecting in LIST view
     public string ImmediatePoster { get; set; } = "Front";   // …in POSTER view
-    public List<MediaEntry> PostLoad { get; set; } = new();
+    public List<MediaEntry> PostLoad { get; set; } = new();        // post-load list for LIST view (and Poster when !PosterIndependent)
+    public List<MediaEntry> PostLoadPoster { get; set; } = new();  // Poster view's OWN post-load list (used only when PosterIndependent)
+    public bool PosterIndependent { get; set; }                    // false (default) = Poster reuses the List post-load list
+
+    /// <summary>The post-load list for the active view. Poster reuses List's unless it has its own
+    /// (<see cref="PosterIndependent"/> + a non-empty <see cref="PostLoadPoster"/>).</summary>
+    public List<MediaEntry> PostLoadFor(bool poster)
+        => (poster && PosterIndependent && PostLoadPoster.Count > 0) ? PostLoadPoster : PostLoad;
+
+    // ── Fingerprint (foundation for the anti-duplicate cache) ─────────────────
+    // Per-view MD5 of the EFFECTIVE post-load config. Change any post-load setting and the key changes, so a
+    // cache built for the old config can be detected and invalidated. The keys are stored in LiteBox.ini
+    // (NOT in their own file) by the Options → Display apply; here they are recomputed on demand.
+
+    /// <summary>Canonical JSON of a view's effective post-load list — ONLY the resolution-affecting fields,
+    /// in order, so it is stable (identical config → identical JSON → identical MD5).</summary>
+    public string PostLoadJson(bool poster)
+        => JsonSerializer.Serialize(PostLoadFor(poster).Select(e => new
+        {
+            e.Sel, e.ExactType, e.Count, e.Cumulative, e.CumulativeDepth, e.IgnoreGameRegion, e.AllRegions,
+        }), Json);
+
+    /// <summary>Lower-case hex MD5 of <see cref="PostLoadJson"/> — the config fingerprint / anti-dup cache key.</summary>
+    public string PostLoadHash(bool poster)
+        => Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(PostLoadJson(poster)))).ToLowerInvariant();
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault };
     private static string Path => LiteBoxPaths.File("media-layout.json");
@@ -102,6 +138,8 @@ internal sealed class MediaLayout
     {
         ImmediateList = ImmediateList, ImmediatePoster = ImmediatePoster,
         PostLoad = PostLoad.Select(e => e.Clone()).ToList(),
+        PostLoadPoster = PostLoadPoster.Select(e => e.Clone()).ToList(),
+        PosterIndependent = PosterIndependent,
     };
 
     // ── Catalogs for the config UI ────────────────────────────────────────────

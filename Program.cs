@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves");
+bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash");
 if (debugConsole)
     DebugConsole.Enable();
 
@@ -198,6 +198,17 @@ if (args.Contains("--sweep-legacy"))
     string r = (di >= 0 && di + 1 < args.Length) ? args[di + 1].TrimEnd('\\', '/') : AppContext.BaseDirectory;
     LbApiHost.Host.Install.LegacyCleanup.SweepObsolete(r);
     Console.WriteLine("[sweep-legacy] done -> " + r);
+    return 0;
+}
+
+// Dump the per-view post-load config JSON + its MD5 key (dev/test): --media-hash
+if (args.Contains("--media-hash"))
+{
+    var ml = LbApiHost.Host.Media.MediaLayout.Current;
+    Console.WriteLine("list   hash = " + ml.PostLoadHash(false));
+    Console.WriteLine("poster hash = " + ml.PostLoadHash(true));
+    Console.WriteLine("--- media-postload-list.json ---");   Console.WriteLine(ml.PostLoadJson(false));
+    Console.WriteLine("--- media-postload-poster.json ---"); Console.WriteLine(ml.PostLoadJson(true));
     return 0;
 }
 

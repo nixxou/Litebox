@@ -1841,7 +1841,13 @@ internal sealed class MainWindow : Form, IMessageFilter
             ("Middle · General", midGeneral, null),
             ("Middle · List", midList, null),
             ("Middle · Poster", midPoster, null),
-            ("Right panel", rightTab, () => { rightApply(); mediaPanel.Apply(); }),
+            ("Right panel", rightTab, () => {
+                rightApply(); mediaPanel.Apply();
+                // Persist the per-view post-load fingerprints in LiteBox.ini (foundation for the anti-dup cache);
+                // _cfg.Save() (ApplyFinished) writes them. Change any post-load setting → the key changes.
+                _cfg.Set("MediaPostLoadHashList", Media.MediaLayout.Current.PostLoadHash(false));
+                _cfg.Set("MediaPostLoadHashPoster", Media.MediaLayout.Current.PostLoadHash(true));
+            }),
         });
     }
 
@@ -3986,7 +3992,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             // achievements. No-op without the plugin / OnSelect mode. Backgrounded inside.
             try { LoadRaPanel(g, token); } catch { }
             try { LoadStoreAchPanel(g, token); } catch { }
-            var items = BuildMediaList(g);
+            var items = BuildMediaList(g, _posterMode);
             _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
             if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
             PopulateStrip(items, token);
@@ -4192,7 +4198,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     // Config-driven (Options → Display → Right panel). Each MediaEntry names a FAMILY or an EXACT LB type
     // plus a count; entries are taken in order (= priority), deduped, capped at MaxMediaItems. entry[0]'s
     // first image is the main box the delay upgrades to full-res. Default layout == the old hard-coded list.
-    private static List<string> BuildMediaList(IGame g)
+    private static List<string> BuildMediaList(IGame g, bool poster)
     {
         var items = new List<string>();
         bool Add(string s)
@@ -4206,8 +4212,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         string title = S(Safe(() => g.Title));
         bool haveId = !string.IsNullOrEmpty(plat) && Guid.TryParse(S(Safe(() => g.Id)), out var id);
         Guid.TryParse(S(Safe(() => g.Id)), out var gid);
+        string gameReg = S(Safe(() => g.Region));   // used by entries flagged "game region first"
 
-        var layout = Media.MediaLayout.Current.PostLoad;
+        var layout = Media.MediaLayout.Current.PostLoadFor(poster);
         var contrib = new int[layout.Count];   // images each entry actually added (for cumulative counting)
         for (int ei = 0; ei < layout.Count; ei++)
         {
@@ -4223,7 +4230,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                 budget = Math.Max(0, e.Count - above);
             }
             int taken = 0;
-            foreach (var path in ResolveMediaEntry(g, e, plat, title, gid, haveId))
+            foreach (var path in ResolveMediaEntry(g, e, plat, title, gid, haveId, gameReg))
             {
                 if (taken >= budget) break;
                 if (Add(path)) { taken++; contrib[ei]++; }
@@ -4238,17 +4245,18 @@ internal sealed class MainWindow : Form, IMessageFilter
     }
 
     // The ordered candidate paths for one layout entry (auto selection: LB type→region→number).
-    private static IEnumerable<string> ResolveMediaEntry(IGame g, Media.MediaEntry e, string plat, string title, Guid id, bool haveId)
+    private static IEnumerable<string> ResolveMediaEntry(IGame g, Media.MediaEntry e, string plat, string title, Guid id, bool haveId, string? gameRegion)
     {
+        string? region = e.IgnoreGameRegion ? null : gameRegion;   // default = prefer the game's own region (LB-identical); checked = ignore it
         if (e.ExactType)
-            return haveId ? MediaResolver.AllOfType(plat, id, title, e.Sel) : Array.Empty<string>();
+            return haveId ? MediaResolver.AllOfType(plat, id, title, e.Sel, region, e.AllRegions) : Array.Empty<string>();
 
         // Family: the best pick first (cache-or-IO, keeps the IGame fallback), then all files of its LB types.
         var list = new List<string>();
         var best = CacheSourceFor(g, e.Sel);
         if (!string.IsNullOrEmpty(best)) list.Add(best);
         if (haveId && Gc.SettingsWatcher.GetImageRegroupementPriorities().TryGetValue(e.Sel, out var types))
-            foreach (var t in types) list.AddRange(MediaResolver.AllOfType(plat, id, title, t));
+            foreach (var t in types) list.AddRange(MediaResolver.AllOfType(plat, id, title, t, region, e.AllRegions));
         return list;
     }
 

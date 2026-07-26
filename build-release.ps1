@@ -53,17 +53,18 @@ $tmp        = Join-Path $env:TEMP 'litebox-pub'
 if (-not $Lb10Root) { $Lb10Root = Join-Path $here '..\..\..\LB' }   # primary LB beside the repo
 $Lb10Root   = [IO.Path]::GetFullPath($Lb10Root)
 
-# The 8 native payload files shipped LOOSE in each light zip (under litebox\thirdparty\). Same list as the
+# The native payload files shipped LOOSE in each light zip (under litebox\thirdparty\). Same list as the
 # csproj EmbeddedResource block and NativeInstaller.Payload - keep the three in sync.
 $payload = @(
   'Everything64.dll.api','Magick.Native-Q16-x64.dll.api','RahasherExtendDB.exe','7z.dll.api',
-  'MSVCP140.dll.api','VCRUNTIME140.dll.api','VCRUNTIME140_1.dll.api','steam_api64.dll.api','pdfium.dll.api'
+  'MSVCP140.dll.api','VCRUNTIME140.dll.api','VCRUNTIME140_1.dll.api','steam_api64.dll.api','pdfium.dll.api',
+  'onnxruntime.dll.api','DirectML.dll.api','mobilenetv3s_embed.onnx'
 )
 
 # The ONLY files the light build ships (everything else the publish produced is the .NET runtime, which
 # LaunchBox\Core already provides). deps.json + runtimeconfig.json make it self-contained-flat. These four
 # are BOTH the zip contents AND what the universal installer embeds (per TFM) and extracts into Core.
-$appFiles = @('LiteBox.exe','LiteBox.dll','LiteBox.deps.json','LiteBox.runtimeconfig.json','LibVLCSharp.dll','ZstdSharp.dll','Magick.NET-Q16-AnyCPU.dll','Magick.NET.Core.dll')
+$appFiles = @('LiteBox.exe','LiteBox.dll','LiteBox.deps.json','LiteBox.runtimeconfig.json','LibVLCSharp.dll','ZstdSharp.dll','Magick.NET-Q16-AnyCPU.dll','Magick.NET.Core.dll','Microsoft.ML.OnnxRuntime.dll')
 
 # net9.0-windows -> "net9" (uses Lb9Root), net10.0-windows -> "net10" (uses Lb10Root)
 $targets = @(

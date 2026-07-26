@@ -50,12 +50,18 @@ internal static class NativeInstaller
         ("RamDiskHelper.dll",             @"RomExtractor\ramdisk",    "RamDiskHelper.dll"),
         ("RamDiskHelper.deps.json",       @"RomExtractor\ramdisk",    "RamDiskHelper.deps.json"),
         ("RamDiskHelper.runtimeconfig.json", @"RomExtractor\ramdisk", "RamDiskHelper.runtimeconfig.json"),
+        // Duplicate-image detection (LiteBox-only): ONNX Runtime + DirectML natives + the MobileNetV3
+        // embedding model. Preloaded by full path from here (Host\Media\Dedup\CnnEmbedder) — keep the
+        // native version in lockstep with the Microsoft.ML.OnnxRuntime.Managed package reference.
+        ("onnxruntime.dll.api",           "ImageDedup",        "onnxruntime.dll"),
+        ("DirectML.dll.api",              "ImageDedup",        "DirectML.dll"),
+        ("mobilenetv3s_embed.onnx",       "ImageDedup",        "mobilenetv3s_embed.onnx"),
     };
 
     // ThirdParty sub-folders that are LiteBox-only (not shared with ExtendDB) — a refresh overwrites them
     // freely instead of prompting. The rest (ExtendDB / RetroAchievements / Everything) are shared.
     private static bool IsLiteBoxOnlySub(string sub)
-        => sub is "Steam" or "Pdfium" || sub.StartsWith("RomExtractor", OIC);
+        => sub is "Steam" or "Pdfium" or "ImageDedup" || sub.StartsWith("RomExtractor", OIC);
 
     // ── Uninstall support: the deployed ThirdParty targets, split by ownership (single source of truth) ──
     private static string TopSub(string sub) => sub.Split('\\', '/')[0];

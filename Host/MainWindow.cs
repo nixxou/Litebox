@@ -2121,6 +2121,60 @@ internal sealed class MainWindow : Form, IMessageFilter
             flow.Controls.Add(row);
         }
 
+        // ── Duplicate detection: re-evaluate every game's prevent-duplicates results ──
+        flow.Controls.Add(Header("Duplicate detection"));
+        flow.Controls.Add(Sub("Recomputes the \"prevent duplicate images\" results for EVERY game and rewrites the per-image "
+            + "caches (:lb.dupcheck ADS). Run it after changing the engine/threshold, or to pre-compute everything so game "
+            + "selection never pays the first-visit cost. Needs the option enabled (Display → Right panel)."));
+        var dupRow = new Panel { Width = S(690), Height = S(30), BackColor = Bg, Margin = new Padding(S(6), 0, 0, S(4)) };
+        var dupBtn = MkBtn("Update duplicates"); dupBtn.Location = new Point(0, 0);
+        var dupStop = MkBtn("Stop"); dupStop.Location = new Point(S(156), 0); dupStop.Enabled = false;
+        var dupLbl = new Label { AutoSize = true, ForeColor = SubFg, BackColor = Bg, Location = new Point(S(320), S(5)) };
+        dupRow.Controls.Add(dupBtn); dupRow.Controls.Add(dupStop); dupRow.Controls.Add(dupLbl);
+        flow.Controls.Add(dupRow);
+        bool dupCancel = false;
+        dupStop.Click += (_, _) => dupCancel = true;
+        dupBtn.Click += (_, _) =>
+        {
+            if (!Media.MediaLayout.Current.PreventDuplicates)
+            {
+                MessageBox.Show(p.FindForm(), "Enable \"Prevent duplicate images\" first (Display → Right panel), then Apply — "
+                    + "this pass rewrites the caches for the engine/threshold configured there.",
+                    "Duplicate detection", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            IGame[] games;
+            try { games = _dm.GetAllGames(); } catch { games = Array.Empty<IGame>(); }
+            dupCancel = false; dupBtn.Enabled = false; dupStop.Enabled = true;
+            dupLbl.Text = $"0/{games.Length} games";
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                int done = 0;
+                foreach (var gg in games)
+                {
+                    if (dupCancel) break;
+                    // Both views, force = recompute + rewrite even valid cached results.
+                    try { BuildMediaList(gg, poster: false, forceDup: true); BuildMediaList(gg, poster: true, forceDup: true); } catch { }
+                    done++;
+                    if (done % 5 == 0 || done == games.Length)
+                    {
+                        int d = done;
+                        try { BeginInvoke(new Action(() => { if (!dupLbl.IsDisposed) dupLbl.Text = $"{d}/{games.Length} games"; })); } catch { }
+                    }
+                }
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (dupLbl.IsDisposed) return;
+                        dupLbl.Text = dupCancel ? $"stopped at {done}/{games.Length}" : $"done — {games.Length} games";
+                        dupBtn.Enabled = true; dupStop.Enabled = false;
+                    }));
+                }
+                catch { }
+            });
+        };
+
         var cacheRefreshers = new List<Action>();
 
         void AddRow(DataMaintenance.Item it)
@@ -3992,10 +4046,26 @@ internal sealed class MainWindow : Form, IMessageFilter
             // achievements. No-op without the plugin / OnSelect mode. Backgrounded inside.
             try { LoadRaPanel(g, token); } catch { }
             try { LoadStoreAchPanel(g, token); } catch { }
-            var items = BuildMediaList(g, _posterMode);
-            _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
-            if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
-            PopulateStrip(items, token);
+            // Build the media list OFF the UI thread: with the prevent-duplicates filter on, a game's first
+            // visit decodes/embeds images (CNN can take a second+); cached visits stay near-instant. The
+            // token guard drops the result if the selection moved on meanwhile.
+            bool posterNow = _posterMode;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                List<string> items;
+                try { items = BuildMediaList(g, posterNow); } catch { items = new List<string>(); }
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (IsDisposed || token != _detailsLoadToken) return;
+                        _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
+                        if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
+                        PopulateStrip(items, token);
+                    }));
+                }
+                catch { }   // window closed mid-build
+            });
         };
         t.Start();
     }
@@ -4198,13 +4268,17 @@ internal sealed class MainWindow : Form, IMessageFilter
     // Config-driven (Options → Display → Right panel). Each MediaEntry names a FAMILY or an EXACT LB type
     // plus a count; entries are taken in order (= priority), deduped, capped at MaxMediaItems. entry[0]'s
     // first image is the main box the delay upgrades to full-res. Default layout == the old hard-coded list.
-    private static List<string> BuildMediaList(IGame g, bool poster)
+    private static List<string> BuildMediaList(IGame g, bool poster, bool forceDup = false)
     {
         var items = new List<string>();
+        Media.MediaDupFilter dupFilter = null;   // set below once the game is identified
         bool Add(string s)
         {
             if (items.Count >= MaxMediaItems) return false;
             if (string.IsNullOrEmpty(s) || items.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) return false;
+            // Prevent-duplicates filter: a visually-duplicate candidate is skipped — it doesn't consume the
+            // entry budget, so the next candidate takes its place. Cached per image in the :lb.dupcheck ADS.
+            if (dupFilter != null && dupFilter.IsDup(s, items)) return false;
             items.Add(s); return true;
         }
 
@@ -4214,9 +4288,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         Guid.TryParse(S(Safe(() => g.Id)), out var gid);
         string gameReg = S(Safe(() => g.Region));   // used by entries flagged "game region first"
 
-        // Refresh the game's image-pool signature (zero-IO from the cache; memoised + persisted). Foundation
-        // for the anti-duplicate media cache — recomputed here since this is where its dedup data will be keyed.
+        // Refresh the game's image-pool signature (zero-IO from the cache; memoised + persisted) — it is
+        // also the "pool" key of the duplicate filter below.
         if (haveId) try { Media.MediaSignature.For(plat, gid, title); } catch { }
+        if (haveId) dupFilter = Media.MediaDupFilter.For(Media.MediaLayout.Current, poster, plat, gid, title, forceDup);
 
         var layout = Media.MediaLayout.Current.PostLoadFor(poster);
         var contrib = new int[layout.Count];   // images each entry actually added (for cumulative counting)

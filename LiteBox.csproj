@@ -150,6 +150,13 @@
          Like LibVLCSharp above, it becomes an extra loose app DLL: keep build-release.ps1 $appFiles +
          LightPayload.Files + the light/<tfm>/* EmbeddedResource block in sync when shipping it. -->
     <PackageReference Include="ZstdSharp.Port" Version="0.8.1" />
+    <!-- ONNX Runtime MANAGED wrapper only (duplicate-image detection — Host/Media/Dedup). Deliberately the
+         .Managed package (no native assets): the natives (onnxruntime.dll + DirectML.dll, ~33 MB) and the
+         MobileNetV3 embedding model ship through the thirdparty payload to ThirdParty\ImageDedup\ and are
+         preloaded by full path (CnnEmbedder.PreloadNatives) — keep the managed/native versions in lockstep
+         (1.20.1 ↔ the bundled onnxruntime.dll.api). Loose app DLL (Microsoft.ML.OnnxRuntime.dll): keep
+         build-release.ps1 $appFiles + LightPayload.Files + the light/<tfm> EmbeddedResource block in sync. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.20.1" />
     <!-- Harmony: runtime method patching, used by the MAME leaderboard key ORACLE (Host/Diag/MameKeyHook.cs):
          hook the core's BouncyCastle cipher in-process to read the current upload key, and block the outbound
          POST so nothing is sent. Diagnostic path only (the mame-keyhook flag); the shipping upload just calls
@@ -198,6 +205,10 @@
     <EmbeddedResource Include="thirdparty\RamDiskHelper.dll"><LogicalName>natives/RamDiskHelper.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\RamDiskHelper.deps.json"><LogicalName>natives/RamDiskHelper.deps.json</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\RamDiskHelper.runtimeconfig.json"><LogicalName>natives/RamDiskHelper.runtimeconfig.json</LogicalName></EmbeddedResource>
+    <!-- Duplicate-image detection (ONNX Runtime + DirectML + MobileNetV3 embedding model) → ThirdParty\ImageDedup. -->
+    <EmbeddedResource Include="thirdparty\onnxruntime.dll.api"><LogicalName>natives/onnxruntime.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\DirectML.dll.api"><LogicalName>natives/DirectML.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\mobilenetv3s_embed.onnx"><LogicalName>natives/mobilenetv3s_embed.onnx</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- Web frontend theme assets: embedded in the STANDALONE installer ONLY (the light zip ships them loose
@@ -226,6 +237,7 @@
     <EmbeddedResource Include="$(LightPayloadDir)\net9\ZstdSharp.dll"><LogicalName>light/net9/ZstdSharp.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\Magick.NET-Q16-AnyCPU.dll"><LogicalName>light/net9/Magick.NET-Q16-AnyCPU.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\Magick.NET.Core.dll"><LogicalName>light/net9/Magick.NET.Core.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\Microsoft.ML.OnnxRuntime.dll"><LogicalName>light/net9/Microsoft.ML.OnnxRuntime.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.exe"><LogicalName>light/net10/LiteBox.exe</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.dll"><LogicalName>light/net10/LiteBox.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.deps.json"><LogicalName>light/net10/LiteBox.deps.json</LogicalName></EmbeddedResource>
@@ -234,6 +246,7 @@
     <EmbeddedResource Include="$(LightPayloadDir)\net10\ZstdSharp.dll"><LogicalName>light/net10/ZstdSharp.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\Magick.NET-Q16-AnyCPU.dll"><LogicalName>light/net10/Magick.NET-Q16-AnyCPU.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\Magick.NET.Core.dll"><LogicalName>light/net10/Magick.NET.Core.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\Microsoft.ML.OnnxRuntime.dll"><LogicalName>light/net10/Microsoft.ML.OnnxRuntime.dll</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- Web frontend assets (embedded web server, slice S1). The folder is populated by the integrator (not by

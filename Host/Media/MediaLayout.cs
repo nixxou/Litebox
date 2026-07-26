@@ -95,6 +95,31 @@ internal sealed class MediaLayout
     public string PostLoadHash(bool poster)
         => Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(PostLoadJson(poster)))).ToLowerInvariant();
 
+    // ── Duplicate prevention (post-load filter) ───────────────────────────────
+    // These settings are deliberately NOT part of PostLoadJson/PostLoadHash: toggling the dup filter must
+    // not shift the per-view config fingerprints. They are fingerprinted SEPARATELY (DupParamHash8) — the
+    // third key of each per-image cached result (see DupCheckAds).
+
+    /// <summary>Skip a post-load image when it duplicates one already accepted before it (per view).</summary>
+    public bool PreventDuplicates { get; set; }
+    /// <summary>Engine: "cnn" (deep embeddings — default), "phash" or "dhash".</summary>
+    public string DupEngine { get; set; } = "cnn";
+    /// <summary>Decision threshold; &lt; 0 = engine default (Hamming ≤ 10 for hashes, cosine ≥ 0.90 for cnn).</summary>
+    public double DupThreshold { get; set; } = -1;
+    /// <summary>cnn only: prefer the DirectML GPU session (auto CPU fallback).</summary>
+    public bool DupGpu { get; set; } = true;
+
+    public double EffectiveDupThreshold()
+        => DupThreshold >= 0 ? DupThreshold : Dedup.DedupEngine.DefaultThreshold(Dedup.DedupEngine.ParseMode(DupEngine));
+
+    /// <summary>Canonical JSON of the dup-check params (incl. the engine Version salt).</summary>
+    public string DupParamJson()
+        => JsonSerializer.Serialize(new { v = Dedup.DedupEngine.Version, e = DupEngine, t = EffectiveDupThreshold(), g = DupGpu });
+
+    /// <summary>First 8 hex of MD5(<see cref="DupParamJson"/>) — the "par" key of cached ADS results.</summary>
+    public string DupParamHash8()
+        => Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(DupParamJson()))).ToLowerInvariant().Substring(0, 8);
+
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault };
     private static string Path => LiteBoxPaths.File("media-layout.json");
 
@@ -140,6 +165,7 @@ internal sealed class MediaLayout
         PostLoad = PostLoad.Select(e => e.Clone()).ToList(),
         PostLoadPoster = PostLoadPoster.Select(e => e.Clone()).ToList(),
         PosterIndependent = PosterIndependent,
+        PreventDuplicates = PreventDuplicates, DupEngine = DupEngine, DupThreshold = DupThreshold, DupGpu = DupGpu,
     };
 
     // ── Catalogs for the config UI ────────────────────────────────────────────

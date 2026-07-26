@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash");
+bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash") || args.Contains("--dedup-test");
 if (debugConsole)
     DebugConsole.Enable();
 
@@ -209,6 +209,35 @@ if (args.Contains("--media-hash"))
     Console.WriteLine("poster hash = " + ml.PostLoadHash(true));
     Console.WriteLine("--- media-postload-list.json ---");   Console.WriteLine(ml.PostLoadJson(false));
     Console.WriteLine("--- media-postload-poster.json ---"); Console.WriteLine(ml.PostLoadJson(true));
+    return 0;
+}
+
+// Compare two images with every dedup engine (dev/test): --dedup-test <imgA> <imgB> [cpu]
+// Prints dhash/phash Hamming distances + the CNN cosine similarity (exercises the Magick preprocess,
+// the ONNX natives under ThirdParty\ImageDedup and the DirectML→CPU fallback).
+if (args.Contains("--dedup-test"))
+{
+    int di = Array.IndexOf(args, "--dedup-test");
+    if (di + 2 >= args.Length) { Console.WriteLine("usage: --dedup-test <imgA> <imgB> [cpu]"); return 2; }
+    string a = args[di + 1], b = args[di + 2];
+    bool gpu = !args.Contains("cpu");
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    ulong da = LbApiHost.Host.Media.Dedup.DedupHash.DHash(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadGrayResized(a, 9, 8));
+    ulong db = LbApiHost.Host.Media.Dedup.DedupHash.DHash(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadGrayResized(b, 9, 8));
+    Console.WriteLine($"dhash: {da:x16} vs {db:x16}  hamming={LbApiHost.Host.Media.Dedup.DedupHash.Hamming(da, db)}  ({sw.ElapsedMilliseconds} ms)");
+    sw.Restart();
+    ulong pa = LbApiHost.Host.Media.Dedup.DedupHash.PHash(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadGrayResized(a, 32, 32));
+    ulong pb = LbApiHost.Host.Media.Dedup.DedupHash.PHash(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadGrayResized(b, 32, 32));
+    Console.WriteLine($"phash: {pa:x16} vs {pb:x16}  hamming={LbApiHost.Host.Media.Dedup.DedupHash.Hamming(pa, pb)}  ({sw.ElapsedMilliseconds} ms)");
+    sw.Restart();
+    if (LbApiHost.Host.Media.Dedup.CnnEmbedder.IsAvailable())
+    {
+        using var cnn = new LbApiHost.Host.Media.Dedup.CnnEmbedder(gpu);
+        var ea = cnn.Embed(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadCnnInput(a));
+        var eb = cnn.Embed(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadCnnInput(b));
+        Console.WriteLine($"cnn:   cosine={LbApiHost.Host.Media.Dedup.CnnEmbedder.Cosine(ea, eb):0.0000}  gpu={cnn.GpuActive}  ({sw.ElapsedMilliseconds} ms)");
+    }
+    else Console.WriteLine("cnn:   UNAVAILABLE (deploy ThirdParty\\ImageDedup first — LiteBox.exe --deploy-natives)");
     return 0;
 }
 

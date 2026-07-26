@@ -29,6 +29,9 @@ internal sealed class MediaLayoutPanel : Panel
     private readonly ComboBox _addKind = null!, _addSel = null!;
     private readonly NumericUpDown _addCount = null!, _addDepth = null!;
     private readonly CheckBox _addCumul = null!, _addRegion = null!, _addAllRegions = null!;
+    private readonly CheckBox _dupOn = null!, _dupGpu = null!;
+    private readonly ComboBox _dupEngine = null!;
+    private readonly NumericUpDown _dupThr = null!;
 
     private bool _editingPoster;   // which post-load list the editor is currently showing
 
@@ -122,7 +125,50 @@ internal sealed class MediaLayoutPanel : Panel
         _addAllRegions = new CheckBox { Text = "Add images from ALL regions  —  ⚠ may create duplicates (default: best region only)", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(414)) };
         Controls.Add(_addAllRegions);
 
-        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 440, 600);
+        // ── Prevent duplicates (applies to BOTH views; results cached per image in its :lb.dupcheck ADS,
+        //    keyed on the view's config hash + the game's image-pool signature + these params) ──
+        _dupOn = new CheckBox { Text = "Prevent duplicate images — skip a post-load image that duplicates one already in the list", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(444)), Checked = _layout.PreventDuplicates };
+        _dupOn.CheckedChanged += (_, _) => UpdateDupEnabled();
+        Controls.Add(_dupOn);
+
+        Controls.Add(new Label { Text = "Engine:", AutoSize = true, ForeColor = SubFg, Location = new Point(S(18), S(471)) });
+        _dupEngine = new ComboBox { Location = new Point(S(70), S(468)), Size = new Size(S(150), S(22)), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+        _dupEngine.Items.AddRange(new object[] { "CNN (deep, best)", "pHash (fast)", "dHash (fastest)" });
+        _dupEngine.SelectedIndex = _layout.DupEngine?.ToLowerInvariant() switch { "phash" => 1, "dhash" => 2, _ => 0 };
+        _dupEngine.SelectedIndexChanged += (_, _) => OnDupEngineChanged();
+        Controls.Add(_dupEngine);
+
+        Controls.Add(new Label { Text = "threshold:", AutoSize = true, ForeColor = SubFg, Location = new Point(S(232), S(471)) });
+        _dupThr = new NumericUpDown { Location = new Point(S(296), S(468)), Size = new Size(S(64), S(22)), Minimum = 0, Maximum = 64, DecimalPlaces = 2, Increment = 0.05m, BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle };
+        _dupThr.Value = (decimal)Math.Min(64.0, Math.Max(0.0, _layout.EffectiveDupThreshold()));
+        Controls.Add(_dupThr);
+
+        _dupGpu = new CheckBox { Text = "use GPU (DirectML, auto CPU fallback)", AutoSize = true, ForeColor = Fg, Location = new Point(S(372), S(469)), Checked = _layout.DupGpu };
+        Controls.Add(_dupGpu);
+
+        Sub("CNN: duplicate when cosine similarity ≥ threshold (default 0.90). Hashes: when Hamming distance ≤ threshold (default 10). "
+            + "First visit of a game computes once; results are then cached per image (ADS).", 18, 494, 640);
+        UpdateDupEnabled();
+
+        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 522, 600);
+    }
+
+    private void UpdateDupEnabled()
+    {
+        bool on = _dupOn.Checked;
+        _dupEngine.Enabled = on;
+        _dupThr.Enabled = on;
+        _dupGpu.Enabled = on && _dupEngine.SelectedIndex == 0;   // GPU is a CNN-only knob
+    }
+
+    // Switching engine swaps the threshold to that engine's default (the scales are unrelated:
+    // cosine 0..1 vs Hamming 0..64) unless the user had typed a custom value for the SAME scale.
+    private void OnDupEngineChanged()
+    {
+        bool cnn = _dupEngine.SelectedIndex == 0;
+        _dupThr.Value = (decimal)(cnn ? 0.90 : 10);
+        _dupThr.Increment = cnn ? 0.05m : 1m;
+        UpdateDupEnabled();
     }
 
     private ComboBox FamilyCombo((string Key, string Title)[] families, string current, int x, int y)
@@ -219,6 +265,10 @@ internal sealed class MediaLayoutPanel : Panel
         _layout.ImmediateList = FamilyKeyOf(_immList);
         _layout.ImmediatePoster = FamilyKeyOf(_immPoster);
         if (_layout.PostLoad.Count == 0) _layout.PostLoad.Add(new MediaEntry { Sel = "Front", Count = 1 });
+        _layout.PreventDuplicates = _dupOn.Checked;
+        _layout.DupEngine = _dupEngine.SelectedIndex switch { 1 => "phash", 2 => "dhash", _ => "cnn" };
+        _layout.DupThreshold = (double)_dupThr.Value;
+        _layout.DupGpu = _dupGpu.Checked;
         _layout.Save();
     }
 }

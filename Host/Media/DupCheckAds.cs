@@ -12,8 +12,11 @@
 // overwritten (the OTHER view's record is preserved). Cross-view reuse: when the other view's stored
 // triplet equals the CURRENT one (e.g. poster reuses the list config), its result is used directly.
 //
-// Writes go through a session memo first (one ADS read per image per session); volumes without ADS
-// support (exFAT, network shares) degrade to the memo only — results just aren't persisted there.
+// Writes go through a session memo first (one persistent read per image per session). Volumes WITHOUT
+// named-stream support (exFAT, network shares) fall back to a JSON sidecar — same ADS-else-sidecar
+// strategy as FileMetaStore, but a DEDICATED file (<dir>\.ads\<name>.dupcheck.json): the shared .ads
+// sidecar has ExtendDB's fixed {crc32,info,lock} shape, and ExtendDB would drop any extra field when it
+// rewrites that file. Backend choice reuses FileMetaStore's cached per-drive capability probe.
 
 #nullable enable
 
@@ -52,16 +55,29 @@ internal static class DupCheckAds
     // on volumes where the ADS write fails.
     private static readonly ConcurrentDictionary<string, Dto?> _memo = new(StringComparer.OrdinalIgnoreCase);
 
+    // ── Persistent backend: ADS on capable volumes, dedicated sidecar elsewhere ──
+    private const string SidecarSuffix = ".dupcheck.json";
+
+    private static string? SidecarPathOf(string imgPath)
+    {
+        string? dir = FileMetaStore.SidecarDirOf(imgPath);
+        return dir == null ? null : Path.Combine(dir, Path.GetFileName(imgPath) + SidecarSuffix);
+    }
+
     private static Dto? Load(string imgPath)
     {
         if (_memo.TryGetValue(imgPath, out var cached)) return cached;
         Dto? dto = null;
         try
         {
-            string raw = File.ReadAllText(imgPath + StreamSuffix);
-            if (!string.IsNullOrWhiteSpace(raw)) dto = JsonSerializer.Deserialize<Dto>(raw);
+            string? p = FileMetaStore.VolumeSupportsAds(imgPath) ? imgPath + StreamSuffix : SidecarPathOf(imgPath);
+            if (p != null && File.Exists(p))
+            {
+                string raw = File.ReadAllText(p);
+                if (!string.IsNullOrWhiteSpace(raw)) dto = JsonSerializer.Deserialize<Dto>(raw);
+            }
         }
-        catch { }   // stream absent / non-NTFS / malformed → treated as no data
+        catch { }   // absent / malformed → treated as no data
         _memo[imgPath] = dto;
         return dto;
     }
@@ -86,14 +102,34 @@ internal static class DupCheckAds
     }
 
     /// <summary>Store this view's result (the other view's record is preserved). Memo always updated;
-    /// the ADS write is best-effort (non-NTFS volumes keep the session memo only).</summary>
+    /// the persistent write is best-effort — ADS on capable volumes, else the dedicated sidecar (hidden
+    /// .ads folder, created on demand like FileMetaStore's).</summary>
     public static void Write(string imgPath, bool poster, string sort, string pool, string par, bool dup)
     {
         var dto = Load(imgPath) ?? new Dto();
         var rec = new Rec { Sort = sort, Pool = pool, Par = par, Dup = dup ? 1 : 0 };
         if (poster) dto.Poster = rec; else dto.List = rec;
         _memo[imgPath] = dto;
-        try { File.WriteAllText(imgPath + StreamSuffix, JsonSerializer.Serialize(dto, Json)); }
-        catch { }   // ADS unsupported here → session memo only
+        try
+        {
+            string json = JsonSerializer.Serialize(dto, Json);
+            if (FileMetaStore.VolumeSupportsAds(imgPath))
+            {
+                File.WriteAllText(imgPath + StreamSuffix, json);
+            }
+            else
+            {
+                string? p = SidecarPathOf(imgPath);
+                if (p == null) return;
+                string? folder = Path.GetDirectoryName(p);
+                if (!string.IsNullOrEmpty(folder) && !Directory.Exists(folder))
+                {
+                    var di = Directory.CreateDirectory(folder);
+                    try { di.Attributes |= FileAttributes.Hidden | FileAttributes.System; } catch { }
+                }
+                File.WriteAllText(p, json);
+            }
+        }
+        catch { }   // persistence unavailable → session memo only
     }
 }

@@ -186,6 +186,20 @@ internal static class FileMetaStore
     /// <summary>Test-only: force the sidecar backend regardless of the volume (exercises the non-NTFS path).</summary>
     internal static bool ForceSidecarForTests;
 
+    /// <summary>Whether this file's volume supports named streams (cached per drive letter). Exposed for
+    /// LiteBox-own streams (DupCheckAds) that use the same ADS-else-sidecar strategy but their OWN sidecar
+    /// file — the shared .ads JSON has ExtendDB's fixed {crc32,info,lock} shape and must not grow fields
+    /// ExtendDB would drop on rewrite.</summary>
+    internal static bool VolumeSupportsAds(string filePath) => SupportsAds(filePath);
+
+    /// <summary>The ".ads" sidecar folder path for a file (shared with the ExtendDB-format sidecars), or
+    /// null when the path can't be split. The folder is created hidden+system on first write.</summary>
+    internal static string? SidecarDirOf(string filePath)
+    {
+        string? dir = Path.GetDirectoryName(filePath);
+        return string.IsNullOrEmpty(dir) ? null : Path.Combine(dir, SidecarFolder);
+    }
+
     private static bool SupportsAds(string filePath)
     {
         if (ForceSidecarForTests) return false;

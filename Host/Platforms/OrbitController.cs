@@ -20,6 +20,11 @@ internal sealed class OrbitController
     public void Orbit(double dYawUnits, double dPitchUnits)
         => _home?.OrbitBy(dYawUnits * UnitDegrees, dPitchUnits * UnitDegrees);
 
+    /// <summary>Rotate by the given 7.5°-unit deltas with NO animation — for live mouse-drag tracking
+    /// (the restarted ease of <see cref="Orbit"/> lags and stutters under a stream of move events).</summary>
+    public void OrbitImmediate(double dYawUnits, double dPitchUnits)
+        => _home?.OrbitImmediate(dYawUnits * UnitDegrees, dPitchUnits * UnitDegrees);
+
     /// <summary>Wheel zoom: scales the fixed camera's distance.</summary>
     public void Zoom(double wheelDelta)
     {

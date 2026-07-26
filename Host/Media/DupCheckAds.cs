@@ -3,7 +3,7 @@
 // resident alongside ExtendDB's :info/:crc32 (each named stream costs its own ~100-byte attribute header).
 //
 // Content = compact JSON with one record per VIEW:
-//   {"list":{"sort":"9f3ab2c1","pool":"4e21d0aa","par":"7c19e3b2","dup":0},"poster":{...}}
+//   {"list":{"sort":"9f3ab2c1","pool":"4e21d0aa","par":"7c19e3b2","dup":0,"score":0.6411},"poster":{...}}
 //     sort = 8-hex of the view's post-load config hash (MediaLayout.PostLoadHash)
 //     pool = the game's image-pool signature (MediaSignature sig8)
 //     par  = 8-hex of the dup-check params (engine/threshold/gpu/version — MediaLayout.DupParamHash8)
@@ -38,6 +38,11 @@ internal static class DupCheckAds
         [JsonPropertyName("pool")] public string Pool { get; set; } = "";
         [JsonPropertyName("par")] public string Par { get; set; } = "";
         [JsonPropertyName("dup")] public int Dup { get; set; }
+        /// <summary>Best similarity found vs the images accepted before this one, in the engine's native
+        /// scale (cnn: max cosine; hashes: min Hamming). DEBUG-ONLY — the decision only reads Dup; this
+        /// just makes the Info box / a manual ADS dump interpretable. Null on old records or when there
+        /// was nothing to compare against (first image of the list).</summary>
+        [JsonPropertyName("score")] public double? Score { get; set; }
 
         public bool Matches(string sort, string pool, string par)
             => Sort == sort && Pool == pool && Par == par;
@@ -104,10 +109,10 @@ internal static class DupCheckAds
     /// <summary>Store this view's result (the other view's record is preserved). Memo always updated;
     /// the persistent write is best-effort — ADS on capable volumes, else the dedicated sidecar (hidden
     /// .ads folder, created on demand like FileMetaStore's).</summary>
-    public static void Write(string imgPath, bool poster, string sort, string pool, string par, bool dup)
+    public static void Write(string imgPath, bool poster, string sort, string pool, string par, bool dup, double? score = null)
     {
         var dto = Load(imgPath) ?? new Dto();
-        var rec = new Rec { Sort = sort, Pool = pool, Par = par, Dup = dup ? 1 : 0 };
+        var rec = new Rec { Sort = sort, Pool = pool, Par = par, Dup = dup ? 1 : 0, Score = score };
         if (poster) dto.Poster = rec; else dto.List = rec;
         _memo[imgPath] = dto;
         try

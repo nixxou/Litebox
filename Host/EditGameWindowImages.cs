@@ -1901,7 +1901,8 @@ internal sealed partial class EditGameWindow
                 if (r.Sort != curSort) bad.Add("sort");
                 if (r.Pool != curPool) bad.Add("pool");
                 if (r.Par != curPar) bad.Add("par");
-                return $"sort={r.Sort}  pool={r.Pool}  par={r.Par}  dup={r.Dup}\n"
+                string score = r.Score is double s ? $"  score={s:0.####}" : "";
+                return $"sort={r.Sort}  pool={r.Pool}  par={r.Par}  dup={r.Dup}{score}\n"
                      + "           " + (bad.Count == 0 ? "✓ matches current keys" : "✗ STALE — mismatch: " + string.Join(", ", bad));
             }
             var dto = DupCheckAds.Peek(img.Path);

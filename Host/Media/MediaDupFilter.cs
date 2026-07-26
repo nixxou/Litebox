@@ -49,9 +49,9 @@ internal sealed class MediaDupFilter
         {
             if (!_force && DupCheckAds.TryGetResult(path, _poster, _sort, _pool, _par, out bool cached))
                 return cached;
-            bool? r = Dedup.DedupEngine.IsDuplicate(_mode, _threshold, _gpu, path, accepted);
+            var (r, score) = Dedup.DedupEngine.Evaluate(_mode, _threshold, _gpu, path, accepted);
             if (r == null) return false;   // can't evaluate → keep the image, don't persist
-            DupCheckAds.Write(path, _poster, _sort, _pool, _par, r.Value);
+            DupCheckAds.Write(path, _poster, _sort, _pool, _par, r.Value, score);
             return r.Value;
         }
         catch { return false; }

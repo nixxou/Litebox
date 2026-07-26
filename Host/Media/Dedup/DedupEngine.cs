@@ -51,39 +51,50 @@ internal static class DedupEngine
     public static bool IsAvailable(DupEngineMode mode)
         => mode != DupEngineMode.Cnn || (!_cnnFailed && CnnEmbedder.IsAvailable());
 
-    /// <summary>True when <paramref name="candidate"/> duplicates ANY of <paramref name="accepted"/>;
-    /// null when the engine can't answer (missing natives, decode failure) — caller fails open.</summary>
-    public static bool? IsDuplicate(DupEngineMode mode, double threshold, bool gpu,
-                                    string candidate, IReadOnlyList<string> accepted)
+    /// <summary>Evaluates <paramref name="candidate"/> against ALL of <paramref name="accepted"/> and
+    /// returns (dup, bestScore): dup = duplicates at least one; bestScore = the CLOSEST similarity found,
+    /// in the engine's native scale (cnn: max cosine, rounded 4 decimals; hashes: MIN Hamming distance) —
+    /// stored in the ADS record purely for visual/manual debugging (the decision only uses dup).
+    /// dup = null when the engine can't answer (missing natives, decode failure) — caller fails open.
+    /// No early-out on the first match: the full scan is what makes bestScore the true best, and the
+    /// per-image feature memos make the extra comparisons (dot products / popcounts) negligible.</summary>
+    public static (bool? dup, double? score) Evaluate(DupEngineMode mode, double threshold, bool gpu,
+                                                      string candidate, IReadOnlyList<string> accepted)
     {
-        if (accepted == null || accepted.Count == 0) return false;
+        if (accepted == null || accepted.Count == 0) return (false, null);
         try
         {
             if (mode == DupEngineMode.Cnn)
             {
                 var emb = EmbeddingOf(candidate, gpu);
-                if (emb == null) return null;
+                if (emb == null) return (null, null);
+                double best = double.NegativeInfinity;
                 foreach (var a in accepted)
                 {
                     var ea = EmbeddingOf(a, gpu);
                     if (ea == null) continue;   // unreadable reference → skip it, not fatal
-                    if (CnnEmbedder.Cosine(emb, ea) >= threshold) return true;
+                    double c = CnnEmbedder.Cosine(emb, ea);
+                    if (c > best) best = c;
                 }
-                return false;
+                if (double.IsNegativeInfinity(best)) return (false, null);   // no readable reference
+                return (best >= threshold, Math.Round(best, 4));
             }
             else
             {
                 ulong h = HashOf(mode, candidate);
-                int max = (int)Math.Round(threshold);
+                int best = int.MaxValue;
                 foreach (var a in accepted)
-                    if (DedupHash.Hamming(h, HashOf(mode, a)) <= max) return true;
-                return false;
+                {
+                    int d = DedupHash.Hamming(h, HashOf(mode, a));
+                    if (d < best) best = d;
+                }
+                return (best <= (int)Math.Round(threshold), best);
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine("[dedup] evaluate failed (" + candidate + "): " + ex.Message);
-            return null;
+            return (null, null);
         }
     }
 

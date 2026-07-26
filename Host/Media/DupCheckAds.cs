@@ -38,10 +38,11 @@ internal static class DupCheckAds
         [JsonPropertyName("pool")] public string Pool { get; set; } = "";
         [JsonPropertyName("par")] public string Par { get; set; } = "";
         [JsonPropertyName("dup")] public int Dup { get; set; }
-        /// <summary>Best similarity found vs the images accepted before this one, in the engine's native
-        /// scale (cnn: max cosine; hashes: min Hamming). DEBUG-ONLY — the decision only reads Dup; this
-        /// just makes the Info box / a manual ADS dump interpretable. Null on old records or when there
-        /// was nothing to compare against (first image of the list).</summary>
+        /// <summary>Similarity vs the images accepted before this one, in the engine's native scale (cnn:
+        /// cosine; hashes: Hamming). dup=0 → the TRUE closest (full scan was needed anyway); dup=1 → the
+        /// FIRST match that crossed the threshold (early-out). DEBUG-ONLY — the decision only reads Dup;
+        /// this just makes the Info box / a manual ADS dump interpretable. Null on old records or when
+        /// there was nothing to compare against (first image of the list).</summary>
         [JsonPropertyName("score")] public double? Score { get; set; }
 
         public bool Matches(string sort, string pool, string par)

@@ -51,13 +51,16 @@ internal static class DedupEngine
     public static bool IsAvailable(DupEngineMode mode)
         => mode != DupEngineMode.Cnn || (!_cnnFailed && CnnEmbedder.IsAvailable());
 
-    /// <summary>Evaluates <paramref name="candidate"/> against ALL of <paramref name="accepted"/> and
-    /// returns (dup, bestScore): dup = duplicates at least one; bestScore = the CLOSEST similarity found,
-    /// in the engine's native scale (cnn: max cosine, rounded 4 decimals; hashes: MIN Hamming distance) —
-    /// stored in the ADS record purely for visual/manual debugging (the decision only uses dup).
-    /// dup = null when the engine can't answer (missing natives, decode failure) — caller fails open.
-    /// No early-out on the first match: the full scan is what makes bestScore the true best, and the
-    /// per-image feature memos make the extra comparisons (dot products / popcounts) negligible.</summary>
+    /// <summary>Evaluates <paramref name="candidate"/> against <paramref name="accepted"/> and returns
+    /// (dup, score). EARLY-OUT on the first match (zero perf cost vs a plain yes/no):
+    ///   • dup=1 → score = the similarity of the FIRST reference that crossed the threshold (the image
+    ///     that got the candidate filtered) — not necessarily the global best;
+    ///   • dup=0 → score = the TRUE closest similarity: concluding "not a dup" required comparing against
+    ///     every reference anyway, so the best is free. This is the debug case that matters ("this image
+    ///     displays — how close was it to being filtered?").
+    /// Scale is the engine's native one (cnn: cosine, 4 decimals; hashes: Hamming distance). The decision
+    /// only uses dup; score is stored in the ADS record purely for visual/manual debugging.
+    /// dup = null when the engine can't answer (missing natives, decode failure) — caller fails open.</summary>
     public static (bool? dup, double? score) Evaluate(DupEngineMode mode, double threshold, bool gpu,
                                                       string candidate, IReadOnlyList<string> accepted)
     {
@@ -75,20 +78,23 @@ internal static class DedupEngine
                     if (ea == null) continue;   // unreadable reference → skip it, not fatal
                     double c = CnnEmbedder.Cosine(emb, ea);
                     if (c > best) best = c;
+                    if (c >= threshold) return (true, Math.Round(c, 4));   // early-out: the filtering match
                 }
                 if (double.IsNegativeInfinity(best)) return (false, null);   // no readable reference
-                return (best >= threshold, Math.Round(best, 4));
+                return (false, Math.Round(best, 4));
             }
             else
             {
                 ulong h = HashOf(mode, candidate);
+                int max = (int)Math.Round(threshold);
                 int best = int.MaxValue;
                 foreach (var a in accepted)
                 {
                     int d = DedupHash.Hamming(h, HashOf(mode, a));
                     if (d < best) best = d;
+                    if (d <= max) return (true, d);   // early-out: the filtering match
                 }
-                return (best <= (int)Math.Round(threshold), best);
+                return (false, best);
             }
         }
         catch (Exception ex)

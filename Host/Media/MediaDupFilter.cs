@@ -122,6 +122,19 @@ internal sealed class MediaDupFilter
                 DupCheckAds.Write(path, _poster, ctx, _par, true, _mode == Dedup.DupEngineMode.Cnn ? 1.0 : 0);
                 return true;
             }
+            // Game running → the CNN session is released (Suspend) and must not re-create mid-play. Serve
+            // the last STORED verdict as a best-effort HINT (keys deliberately ignored — the list rarely
+            // changes while a game runs), else keep the image. Nothing is persisted; the first post-game
+            // build re-evaluates properly under the real keys. Hash engines are pure CPU and stay live.
+            if (_mode == Dedup.DupEngineMode.Cnn && Dedup.DedupEngine.Suspended)
+            {
+                var dto = DupCheckAds.Peek(path);
+                var rec = (_poster ? dto?.Poster : dto?.List) ?? (_poster ? dto?.List : dto?.Poster);
+                bool hint = rec != null && rec.Dup != 0;
+                if (Dedup.DedupEngine.Verbose)
+                    Console.WriteLine($"[dedup] suspended → stored-verdict hint dup={(hint ? 1 : 0)} (keys ignored): {Dedup.DedupEngine.Short(path)}");
+                return hint;
+            }
             var (r, score) = Dedup.DedupEngine.Evaluate(_mode, _threshold, _gpu, path, accepted);
             if (r == null)
             {

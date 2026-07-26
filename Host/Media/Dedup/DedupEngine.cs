@@ -155,15 +155,43 @@ internal static class DedupEngine
         return emb;
     }
 
+    // ── Game-launch lifecycle (RAM-at-launch policy, like HostGameCache / VlcService) ────────────────
+    // A live CNN session costs ~230 MB working set (DirectML device + arenas + model) AND holds a D3D12
+    // device with VRAM allocations — exactly what a running game wants back. Suspend() drops it (and the
+    // embedding memo); while suspended the CNN never re-creates, and MediaDupFilter serves cached ADS
+    // verdicts (best-effort hint on a key miss). Resume() just lifts the flag — the session lazily
+    // re-creates (~0.5 s) on the next media-list build that needs it.
+    private static bool _suspended;
+
+    /// <summary>True while a game runs (CNN session released — see Suspend).</summary>
+    public static bool Suspended => _suspended;
+
+    /// <summary>Release the CNN session + embedding memo (game launch). Cheap no-op when none is live.</summary>
+    public static void Suspend()
+    {
+        _suspended = true;
+        lock (_cnnLock)
+        {
+            if (_cnn != null) Console.WriteLine("[dedup] CNN session released for game launch");
+            try { _cnn?.Dispose(); } catch { }
+            _cnn = null;
+            _emb.Clear();
+        }
+    }
+
+    /// <summary>Allow the CNN session again (game exit). Lazy — nothing is created until needed.</summary>
+    public static void Resume() => _suspended = false;
+
     private static bool _cnnGpuPref;
     private static CnnEmbedder? Session(bool gpu)
     {
+        if (_suspended) return null;   // game running → never re-create mid-play
         var cur = _cnn;
         if (cur != null && _cnnGpuPref == gpu) return cur;
         if (_cnnFailed || !CnnEmbedder.IsAvailable()) return null;
         lock (_cnnLock)
         {
-            if (_cnnFailed) return null;
+            if (_suspended || _cnnFailed) return null;   // re-check under the lock (Suspend can race the fast path)
             if (_cnn != null && _cnnGpuPref == gpu) return _cnn;
             // GPU preference flipped (or first use): recreate the session AND drop memoized embeddings —
             // CPU/GPU floats differ in low-order bits, and the dup-param hash labels results by preference.

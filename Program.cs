@@ -235,10 +235,16 @@ if (args.Contains("--dedup-test"))
     sw.Restart();
     if (LbApiHost.Host.Media.Dedup.CnnEmbedder.IsAvailable())
     {
-        using var cnn = new LbApiHost.Host.Media.Dedup.CnnEmbedder(gpu);
-        var ea = cnn.Embed(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadCnnInput(a));
-        var eb = cnn.Embed(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadCnnInput(b));
-        Console.WriteLine($"cnn:   cosine={LbApiHost.Host.Media.Dedup.CnnEmbedder.Cosine(ea, eb):0.0000}  gpu={cnn.GpuActive}  ({sw.ElapsedMilliseconds} ms)");
+        long ws0 = Environment.WorkingSet;
+        using (var cnn = new LbApiHost.Host.Media.Dedup.CnnEmbedder(gpu))
+        {
+            var ea = cnn.Embed(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadCnnInput(a));
+            var eb = cnn.Embed(LbApiHost.Host.Media.Dedup.DedupPreprocess.LoadCnnInput(b));
+            Console.WriteLine($"cnn:   cosine={LbApiHost.Host.Media.Dedup.CnnEmbedder.Cosine(ea, eb):0.0000}  gpu={cnn.GpuActive}  ({sw.ElapsedMilliseconds} ms)");
+            Console.WriteLine($"cnn:   session cost: workingset +{(Environment.WorkingSet - ws0) / (1024.0 * 1024):0} MB (total {Environment.WorkingSet / (1024.0 * 1024):0} MB)");
+        }
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        Console.WriteLine($"cnn:   after dispose: workingset {Environment.WorkingSet / (1024.0 * 1024):0} MB");
     }
     else Console.WriteLine("cnn:   UNAVAILABLE (deploy ThirdParty\\ImageDedup first — LiteBox.exe --deploy-natives)");
     return 0;

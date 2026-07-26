@@ -177,6 +177,10 @@ internal static class HostLaunch
             // libvlc holds ~50 MB once it has decoded frames. LiteBox is idle while the game runs, so hand it
             // back; the next thumbnail re-creates the instance transparently (~200 ms).
             Video.VlcService.Shutdown();
+            // The dup-check CNN session holds ~230 MB + a DirectML/D3D12 device (VRAM) — release it for the
+            // game (always, not option-gated: the GPU belongs to the game). Lazily re-creates (~0.5 s) after
+            // exit; meanwhile cached ADS verdicts (and a stored-verdict hint) keep the dup filter answering.
+            try { Media.Dedup.DedupEngine.Suspend(); } catch { }
             Mem.Trim();
             Mem.Report("after drop+trim (launch)");
         }
@@ -310,6 +314,7 @@ internal static class HostLaunch
             // Restore the optional data dropped at launch BEFORE the kiosk reopens / GUI reloads (see RunAndWait).
             try { _store?.ReloadOptional(); } catch { }
             try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) Gc.HostGameCache.Reload(); } catch { }
+            try { Media.Dedup.DedupEngine.Resume(); } catch { }   // CNN session allowed again (lazy re-create)
             EndOfGameFinish(endSnap);                     // OnGameExited (kiosk reopen) + GAME OVER, per WebReturnTiming
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
         }
@@ -497,6 +502,7 @@ internal static class HostLaunch
             // this runs behind the GAME OVER cover (already shown at the top of the finally).
             try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
             try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) { Gc.HostGameCache.Reload(); Console.WriteLine("[gamecache] rebuilding after game exit"); } } catch { }
+            try { Media.Dedup.DedupEngine.Resume(); } catch { }   // CNN session allowed again (lazy re-create)
             // OnGameExited (reopens the ExtendDB kiosk) + the GAME OVER screen, ordered per WebReturnTiming.
             EndOfGameFinish(endSnap);
             // GUI: game over + data reloaded → reload its list and restore selection.

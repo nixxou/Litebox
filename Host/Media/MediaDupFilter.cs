@@ -104,13 +104,23 @@ internal sealed class MediaDupFilter
     {
         try
         {
-            if (IsExactTwin(path, accepted)) return true;
             string ctx = CtxOf(path, accepted);
+            // Cache first: with the ctx key a matching record is trustworthy by construction (the poisoning
+            // that once forced the twin guard to run before everything is structurally gone), and the warm
+            // path then costs zero file reads.
             if (!_force && DupCheckAds.TryGetResult(path, _poster, ctx, _par, out bool cached))
             {
                 if (Dedup.DedupEngine.Verbose)
                     Console.WriteLine($"[dedup] cache {(_poster ? "poster" : "list")} (ctx={ctx}): dup={(cached ? 1 : 0)}  {Dedup.DedupEngine.Short(path)}");
                 return cached;
+            }
+            // Twin guard on cache miss: byte-identical files are dup by definition — no decode, and it also
+            // covers the fail-open case (engine unavailable). PERSISTED like an engine verdict, with the
+            // engine's perfect-match score, so the ADS reflects it and the next visit is a cache hit.
+            if (IsExactTwin(path, accepted))
+            {
+                DupCheckAds.Write(path, _poster, ctx, _par, true, _mode == Dedup.DupEngineMode.Cnn ? 1.0 : 0);
+                return true;
             }
             var (r, score) = Dedup.DedupEngine.Evaluate(_mode, _threshold, _gpu, path, accepted);
             if (r == null)

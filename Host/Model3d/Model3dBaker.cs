@@ -28,7 +28,7 @@ internal static class Model3dBaker
     public const double DefaultYawDeg = 20;     // +yaw turns the LEFT side (spine) toward the camera
     public const double DefaultPitchDeg = 7;    // +pitch tilts the top slightly toward the camera
     public const double CameraDistance = 1.55;  // closer than the editor preview's 2.0 → the case fills the block
-    public const int ThumbPx = 640;             // square transparent PNG snapshot
+    public const int ThumbPx = 640;             // snapshot HEIGHT; width = ThumbPx × TargetAspect()
 
     // ── single STA bake worker ───────────────────────────────────────────────
     private static readonly BlockingCollection<Action> _queue = new();
@@ -153,19 +153,40 @@ internal static class Model3dBaker
     }
 
     // ── the transparent scene snapshot at the default pose (HomeModel3d's exact scene constants) ──
+    // The snapshot is rendered AT THE MAIN MEDIA BOX'S ASPECT with the SAME aspect-compensated camera
+    // the live viewport uses (distance × max(1, aspect), horizontal FOV 50 — see Model3dBlock). The
+    // PNG and the live model thus come out of the IDENTICAL camera: the swap can't shift by a pixel,
+    // and no display-time compensation is needed. (The first attempt kept the PNG square and bent the
+    // live camera to match — FOV compensation subtly changed the projection. The PNG follows the
+    // viewport now, not the other way around.)
+
+    /// <summary>The media box aspect the whole 3D pipeline targets (ini "Use16:9ForMainScreenshot").
+    /// Part of the bake manifest — flipping the option re-bakes.</summary>
+    public static double TargetAspect()
+    {
+        try { return LiteBoxConfig.LoadForExe().Use169ForMainScreenshot ? 16.0 / 9.0 : 2.0 / 3.0; }
+        catch { return 16.0 / 9.0; }
+    }
+
+    /// <summary>The live-viewport camera distance for <paramref name="aspect"/> — shared by the bake
+    /// and Model3dBlock so both cameras are the same object in two places.</summary>
+    public static double CameraDistanceFor(double aspect) => CameraDistance * Math.Max(1.0, aspect);
+
     private static byte[]? RenderThumb(Model3D model)
     {
         try
         {
+            double aspect = TargetAspect();
+            int w = Math.Max(64, (int)Math.Round(ThumbPx * aspect)), h = ThumbPx;
             var tg = new Transform3DGroup();
             tg.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), DefaultYawDeg)));
             tg.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(1, 0, 0), DefaultPitchDeg)));
             var viewport = new System.Windows.Controls.Viewport3D
             {
-                Width = ThumbPx, Height = ThumbPx,
+                Width = w, Height = h,
                 Camera = new PerspectiveCamera
                 {
-                    Position = new Point3D(0, 0, CameraDistance),
+                    Position = new Point3D(0, 0, CameraDistanceFor(aspect)),
                     LookDirection = new Vector3D(0, 0, -1),
                     UpDirection = new Vector3D(0, 1, 0),
                     FieldOfView = 50, NearPlaneDistance = 0.001, FarPlaneDistance = 20,
@@ -174,9 +195,9 @@ internal static class Model3dBaker
             viewport.Children.Add(new ModelVisual3D { Content = new DirectionalLight(Color.FromRgb(0xFF, 0xFF, 0xFF), new Vector3D(0, -0.5, -1)) });
             viewport.Children.Add(new ModelVisual3D { Content = new AmbientLight(Color.FromRgb(0x33, 0x33, 0x33)) });
             viewport.Children.Add(new ModelVisual3D { Content = model, Transform = tg });
-            viewport.Measure(new System.Windows.Size(ThumbPx, ThumbPx));
-            viewport.Arrange(new System.Windows.Rect(0, 0, ThumbPx, ThumbPx));
-            var rtb = new RenderTargetBitmap(ThumbPx, ThumbPx, 96, 96, PixelFormats.Pbgra32);
+            viewport.Measure(new System.Windows.Size(w, h));
+            viewport.Arrange(new System.Windows.Rect(0, 0, w, h));
+            var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
             rtb.Render(viewport);   // no background element → transparent where the case isn't
             return EncodePng(rtb);
         }

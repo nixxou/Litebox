@@ -33,7 +33,7 @@ internal static class Model3dCache
 {
     /// <summary>Salts every key — bump when the bake output changes (geometry, materials, thumb pose/size,
     /// GLB layout) so stale files are re-keyed away in one move.</summary>
-    public const int BakerVersion = 1;
+    public const int BakerVersion = 2;   // v2: thumb baked at the media box aspect with the live camera (was square)
 
     public static string Dir
     {
@@ -73,7 +73,9 @@ internal static class Model3dCache
         catch { }
 
         var sb = new StringBuilder();
-        sb.Append("v").Append(BakerVersion).Append('\n');
+        sb.Append("v").Append(BakerVersion)
+          .Append('@').Append(Model3dBaker.TargetAspect().ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))
+          .Append('\n');   // the thumb aspect is part of the bake → flipping the 16:9/poster ini option re-bakes
         if (map != null)
             foreach (var kv in map.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
                 sb.Append(kv.Key.ToLowerInvariant()).Append('=').Append(kv.Value ?? "").Append('\n');
@@ -119,18 +121,108 @@ internal static class Model3dCache
         return new Identity(key, Path.Combine(Dir, key + ".glb"), manifest, map, platform, title, id, hasArt, ov);
     }
 
+    // ── instant lookup index (gameId → cached GLB path) ──────────────────────
+    // The INSTANT image path runs for EVERY game a fast scroll transits — Resolve() there (art-slot
+    // IO, per-slot stats, platform settings) made each step cost tens of ms and froze the transit
+    // loader. The instant question is only "does this game have a cached model?": answered from a RAM
+    // index built once from the GLB headers, updated by bakes, invalidated by sweeps. A slightly stale
+    // hit is harmless — the settle-time pipeline re-resolves properly and re-bakes.
+
+    private static Dictionary<string, string>? _instantIndex;   // gameId → glb path
+    private static readonly object _indexLock = new();
+
+    /// <summary>The cached GLB for <paramref name="g"/> per the RAM index — O(1), no art resolution.
+    /// Null when the game has no baked model (the caller falls back to a plain image family).</summary>
+    public static string? CachedGlbForInstant(IGame g)
+    {
+        string id;
+        try { id = g.Id ?? ""; } catch { return null; }
+        if (id.Length == 0) return null;
+        lock (_indexLock)
+        {
+            if (_instantIndex == null)
+            {
+                var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                try
+                {
+                    foreach (var f in Directory.EnumerateFiles(Dir, "*.glb"))
+                        try { if (GlbFile.ReadInfo(f) is { GameId.Length: > 0 } info) map[info.GameId] = f; } catch { }
+                }
+                catch { }
+                _instantIndex = map;
+                Console.WriteLine($"[model3d] instant index built ({map.Count} model(s))");
+            }
+            return _instantIndex.TryGetValue(id, out var p) ? p : null;
+        }
+    }
+
+    private static void IndexAdd(string gameId, string glbPath)
+    {
+        if (string.IsNullOrEmpty(gameId)) return;
+        lock (_indexLock) { if (_instantIndex != null) _instantIndex[gameId] = glbPath; }
+    }
+
+    private static void IndexInvalidate()
+    {
+        lock (_indexLock) { _instantIndex = null; }   // rebuilt lazily on the next instant lookup
+    }
+
+    // ── snapshot sidecar (<key>.png next to <key>.glb) ───────────────────────
+    // The baked thumb ALSO lives as a loose PNG beside the GLB: the instant/strip display is then a
+    // plain ReadAllBytes (no GLB header walk, and the OS caches the small file independently). The GLB
+    // keeps embedding the thumb (single self-contained artifact, web/three.js reuse); the sidecar is a
+    // pure accelerator, restored from the GLB whenever it's missing.
+
+    /// <summary>The sidecar snapshot path of a cached GLB.</summary>
+    public static string PngPathFor(string glbPath) => Path.ChangeExtension(glbPath, ".png");
+
+    /// <summary>The baked snapshot PNG bytes: the sidecar when present (fast path), else extracted
+    /// from the GLB head — and written back beside it so the next read is the fast path.</summary>
+    public static byte[]? ReadThumbPng(string glbPath)
+    {
+        string png = PngPathFor(glbPath);
+        try { if (File.Exists(png)) return File.ReadAllBytes(png); } catch { }
+        var bytes = GlbFile.ReadThumb(glbPath);
+        if (bytes != null) TryWritePng(png, bytes);   // restore the sidecar
+        return bytes;
+    }
+
+    private static void TryWritePng(string png, byte[] bytes)
+    {
+        try
+        {
+            string tmp = png + ".tmp";
+            File.WriteAllBytes(tmp, bytes);
+            File.Move(tmp, png, overwrite: true);
+        }
+        catch (Exception ex) { Console.WriteLine("[model3d] sidecar write failed: " + ex.Message); }
+    }
+
     /// <summary>Get the game's cached GLB, baking it if missing. Blocking (bakes serialize on the STA
-    /// worker) — call from a background thread. Null when the game has no art or the bake failed.</summary>
-    public static string? Ensure(IGame g, bool allowBake = true)
+    /// worker) — call from a background thread. Null when the game has no art or the bake failed.
+    /// A present GLB with a MISSING sidecar PNG gets it restored here — which makes the bulk
+    /// Generate-Media-Cache pass repair sidecar-less caches for free.
+    /// <paramref name="stillWanted"/> (optional) is re-checked INSIDE the STA job right before the
+    /// expensive bake: fast scrolling queues one bake per settled game, and without this check every
+    /// stale job still baked in turn — the queue ground for seconds behind games long since left.</summary>
+    public static string? Ensure(IGame g, bool allowBake = true, Func<bool>? stillWanted = null)
     {
         var idn = Resolve(g);
         if (idn == null || !idn.HasArt) return null;   // nothing real to show → no bake, block hides
-        try { if (File.Exists(idn.GlbPath)) return idn.GlbPath; } catch { }
+        try
+        {
+            if (File.Exists(idn.GlbPath))
+            {
+                if (!File.Exists(PngPathFor(idn.GlbPath))) ReadThumbPng(idn.GlbPath);   // restore sidecar
+                return idn.GlbPath;
+            }
+        }
+        catch { }
         if (!allowBake) return null;
-        return BakeTo(idn) ? idn.GlbPath : null;
+        return BakeTo(idn, stillWanted) ? idn.GlbPath : null;
     }
 
-    private static bool BakeTo(Identity idn)
+    private static bool BakeTo(Identity idn, Func<bool>? stillWanted = null)
     {
         try
         {
@@ -140,11 +232,14 @@ internal static class Model3dCache
             return Model3dBaker.Run(() =>
             {
                 if (File.Exists(idn.GlbPath)) return true;
+                if (stillWanted != null && !stillWanted()) return false;   // selection moved on → skip, drain the queue
                 var baked = Model3dBaker.Bake(idn.Map, idn.Title, idn.Platform, idn.ImgOv);
                 if (baked == null) return false;
                 var (meshes, mats, thumb) = baked.Value;
                 GlbFile.Write(idn.GlbPath, meshes, mats, thumb,
                               new GlbInfo(idn.Key, idn.GameId, idn.Platform, idn.Title, BakerVersion, idn.Manifest));
+                if (thumb != null) TryWritePng(PngPathFor(idn.GlbPath), thumb);   // sidecar, same bake
+                IndexAdd(idn.GameId, idn.GlbPath);
                 Console.WriteLine($"[model3d] baked {idn.Title} → {Path.GetFileName(idn.GlbPath)} ({new FileInfo(idn.GlbPath).Length / 1024} KB)");
                 return true;
             });
@@ -157,7 +252,14 @@ internal static class Model3dCache
     public static (int files, long bytes) Stats()
     {
         int n = 0; long b = 0;
-        try { foreach (var f in Directory.EnumerateFiles(Dir, "*.glb")) { n++; try { b += new FileInfo(f).Length; } catch { } } }
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(Dir))   // bytes: GLBs + their PNG sidecars
+            {
+                if (f.EndsWith(".glb", StringComparison.OrdinalIgnoreCase)) n++;
+                try { b += new FileInfo(f).Length; } catch { }
+            }
+        }
         catch { }
         return (n, b);
     }
@@ -165,6 +267,7 @@ internal static class Model3dCache
     /// <summary>Delete every cached model (Options → Caches "Delete all").</summary>
     public static int CleanAll()
     {
+        IndexInvalidate();
         int n = 0;
         try
         {
@@ -202,12 +305,20 @@ internal static class Model3dCache
                         curKey[info.GameId] = k = Resolve(g)?.Key;
                     stale = k == null || !string.Equals(k, Path.GetFileNameWithoutExtension(f), StringComparison.OrdinalIgnoreCase);
                 }
-                if (stale) { try { File.Delete(f); deleted++; } catch { } }
+                if (stale)
+                {
+                    try { File.Delete(f); deleted++; } catch { }
+                    try { File.Delete(PngPathFor(f)); } catch { }   // the sidecar follows its GLB out
+                }
                 else kept++;
             }
+            // Orphan sidecars: a PNG whose GLB is gone (deleted above, or externally) has no source of
+            // truth left — drop it. A PNG WITH its GLB is never touched here.
+            foreach (var f in Directory.EnumerateFiles(Dir, "*.png"))
+                try { if (!File.Exists(Path.ChangeExtension(f, ".glb"))) File.Delete(f); } catch { }
         }
         catch (Exception ex) { Console.WriteLine("[model3d] sweep: " + ex.Message); }
-        if (deleted > 0) Console.WriteLine($"[model3d] sweep: {deleted} stale model(s) deleted, {kept} kept");
+        if (deleted > 0) { IndexInvalidate(); Console.WriteLine($"[model3d] sweep: {deleted} stale model(s) deleted, {kept} kept"); }
         return (kept, deleted);
     }
 }

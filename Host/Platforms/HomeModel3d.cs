@@ -98,6 +98,15 @@ internal sealed class HomeModel3d : IDisposable
         if (_viewport.Camera is PerspectiveCamera pc) pc.Position = new Point3D(0, 0, 2 * zoom);
     }
 
+    /// <summary>Match the WinForms host's backdrop exactly (root grid + ElementHost) — a shade
+    /// difference with a layer above (the anti-flicker PNG) reads as a flash at swap time.</summary>
+    public void SetBackground(System.Drawing.Color c)
+    {
+        _root.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(c.R, c.G, c.B));
+        _host.BackColor = c;
+    }
+
+
     /// <summary>Build the model for the given settings map + sample game. Unknown/absent ModelType renders as
     /// a box (what LB does for null settings). <paramref name="imgOv"/> = optional per-slot image override
     /// (front/back/spine/logo/full — see Model3dImageStore).</summary>

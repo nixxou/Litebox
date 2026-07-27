@@ -42,7 +42,16 @@ internal sealed class Model3dBlock : Panel
         _pic = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = BackColor };
         Controls.Add(_pic);
         BackColorChanged += (_, _) => _pic.BackColor = BackColor;
+        // The pane width (→ the box aspect) can change while the viewport is live — keep the framing law.
+        Resize += (_, _) => { if (_home is { } h) ApplyFraming(h); };
     }
+
+    // BOTH layers fill the whole host and come out of the SAME camera, so the PNG → viewport swap
+    // can't shift by a pixel: the thumb is BAKED at the media box's aspect with the aspect-compensated
+    // distance (Model3dBaker.TargetAspect/CameraDistanceFor), and the live viewport uses exactly that
+    // camera. No display-time compensation of either layer.
+    private void ApplyFraming(Platforms.HomeModel3d home)
+        => home.SetZoom(Model3dBaker.CameraDistanceFor(Model3dBaker.TargetAspect()) / 2.0);
 
     private Platforms.HomeModel3d EnsureHome()
     {
@@ -50,9 +59,15 @@ internal sealed class Model3dBlock : Panel
         {
             _home = new Platforms.HomeModel3d();
             _home.Control.Dock = DockStyle.Fill;
-            _home.Control.Visible = false;
-            _home.SetZoom(Model3dBaker.CameraDistance / 2.0);   // same framing as the baked thumb
+            // The host stays VISIBLE forever once created, always UNDER the PNG layer. Toggling its
+            // visibility per swap was the flicker: showing an ElementHost HWND can flash OVER its
+            // WinForms siblings for a frame (airspace), regardless of z-order — the cover PNG itself
+            // blinked out. With the host permanently shown (a null model renders just the backdrop),
+            // the whole swap is _pic.Visible alone, which cannot flash through anything.
+            _home.SetBackground(BackColor);   // same backdrop as the PNG layer (anti-flash)
+            ApplyFraming(_home);              // bake-identical framing (distance + aspect FOV)
             Controls.Add(_home.Control);
+            _pic.BringToFront();               // the PNG layer stays above the (always-visible) host
             _orbit = new Platforms.OrbitController();
             _orbit.Attach(_home);
             WireOrbit(_home.Control, _orbit);
@@ -65,16 +80,23 @@ internal sealed class Model3dBlock : Panel
     {
         _token++;
         SetThumb(null);
-        _home?.SetModel(null);
-        if (_home != null) _home.Control.Visible = false;
+        _home?.SetModel(null);   // host STAYS visible (backdrop only) — hiding it re-arms the show-flash
+        _pic.Visible = true;     // cover layer back in place for the next game
         if (_hasContent) { _hasContent = false; ContentChanged?.Invoke(); }
     }
 
     /// <summary>Show the 3D case of <paramref name="g"/> (thumb first, live model behind). Non-blocking.</summary>
     public void ShowFor(IGame g)
     {
+        // The block starts HIDDEN (content-driven visibility) — but a never-shown control has no HWND,
+        // and Apply()'s BeginInvoke marshalling needs one. Reading Handle creates it even while hidden;
+        // without this the content could never land and the overlay never appeared (chicken-and-egg).
+        try { if (!IsHandleCreated && !IsDisposed) _ = Handle; } catch { }
         int token = ++_token;
-        System.Threading.Tasks.Task.Run(() =>
+        // LongRunning (dedicated thread): a cache MISS BLOCKS on the serialized STA bake queue — doing
+        // that on a pool thread starved the pool during fast scrolling (the transit image loader is a
+        // pool task too, and it froze).
+        System.Threading.Tasks.Task.Factory.StartNew(() =>
         {
             try
             {
@@ -86,9 +108,9 @@ internal sealed class Model3dBlock : Panel
                 try { existed = File.Exists(glb); } catch { existed = false; }
 
                 // HIT → snapshot right now (partial read), model behind. MISS → bake first (STA worker,
-                // serialized), then the same two-step. Every UI hand-off re-checks the token.
-                if (!existed && Model3dCache.Ensure(g) == null) { Collapse(token); return; }
-                var thumb = GlbFile.ReadThumb(glb);
+                // serialized, stale-dropped when the selection moves on), then the same two-step.
+                if (!existed && Model3dCache.Ensure(g, stillWanted: () => _token == token) == null) { Collapse(token); return; }
+                var thumb = Model3dCache.ReadThumbPng(glb);   // sidecar fast path, GLB-extract fallback
                 if (thumb != null && _token == token) Apply(token, ThumbImage(thumb), null);
 
                 var model = GlbFile.LoadModel(glb);   // frozen → UI-thread safe
@@ -96,7 +118,8 @@ internal sealed class Model3dBlock : Panel
                 else if (thumb == null && model == null) Collapse(token);
             }
             catch (Exception ex) { Console.WriteLine("[model3d] block: " + ex.Message); Collapse(token); }
-        });
+        }, System.Threading.CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.LongRunning,
+           System.Threading.Tasks.TaskScheduler.Default);
     }
 
     private static Image? ThumbImage(byte[] png)
@@ -124,16 +147,55 @@ internal sealed class Model3dBlock : Panel
                 {
                     SetThumb(thumb);
                     _pic.Visible = true;
-                    if (_home != null) { _home.SetModel(null); _home.Control.Visible = false; }
+                    _pic.BringToFront();
                 }
                 if (model != null)
                 {
                     var home = EnsureHome();
                     home.SetPose(Model3dBaker.DefaultYawDeg, Model3dBaker.DefaultPitchDeg);
-                    home.SetZoom(Model3dBaker.CameraDistance / 2.0);
+                    ApplyFraming(home);
                     home.SetModel(model);
-                    home.Control.Visible = true;
-                    _pic.Visible = false;
+                    _pic.BringToFront();          // PNG stays the top cover while the model composes beneath
+                    // Anti-flicker reveal: there is no single WPF "fully on screen" event, but
+                    // CompositionTarget.Rendering ticks once per RENDERED frame. Subscribed after
+                    // SetModel, two ticks mean the compositor has presented frames CONTAINING the
+                    // model — only then is the PNG dropped. (ContextIdle wasn't enough: it signals
+                    // an idle dispatcher, not a presented frame.)
+                    var ui = (home.Control as System.Windows.Forms.Integration.ElementHost)?.Child;
+                    if (ui != null)
+                    {
+                        // Reveal = FIRST of: 7 presented WPF frames (CompositionTarget.Rendering), or a
+                        // 400 ms timer fallback — so the swap can never be lost to a quiet compositor.
+                        bool revealed = false;
+                        void Reveal(string via)
+                        {
+                            if (revealed || _token != token || IsDisposed) return;
+                            revealed = true;
+                            _pic.Visible = false;
+                            Console.WriteLine("[model3d] reveal via " + via);
+                        }
+                        var fallback = new System.Windows.Forms.Timer { Interval = 400 };
+                        fallback.Tick += (_, _) => { fallback.Stop(); fallback.Dispose(); Reveal("timer"); };
+                        fallback.Start();
+                        ui.Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            int frames = 0;
+                            EventHandler? h = null;
+                            h = (_, _) =>
+                            {
+                                if (++frames < 7) return;   // a few presented frames (~120 ms @60fps) — fully covered by the PNG
+                                System.Windows.Media.CompositionTarget.Rendering -= h;
+                                try
+                                {
+                                    if (IsDisposed || !IsHandleCreated) return;
+                                    BeginInvoke((Action)(() => Reveal("frames")));
+                                }
+                                catch { }
+                            };
+                            System.Windows.Media.CompositionTarget.Rendering += h;
+                        }), System.Windows.Threading.DispatcherPriority.Loaded);
+                    }
+                    else _pic.Visible = false;
                 }
                 if (!_hasContent) { _hasContent = true; ContentChanged?.Invoke(); }
             }));

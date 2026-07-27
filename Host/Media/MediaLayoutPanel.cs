@@ -32,7 +32,8 @@ internal sealed class MediaLayoutPanel : Panel
     private readonly CheckBox _dupOn = null!, _dupGpu = null!;
     private readonly ComboBox _dupEngine = null!;
     private readonly NumericUpDown _dupThr = null!;
-    private readonly CheckBox _show3d = null!;
+    private readonly ComboBox _immFallback = null!;
+    private readonly (string Key, string Title)[] _famWith3d;
 
     private bool _editingPoster;   // which post-load list the editor is currently showing
 
@@ -52,14 +53,19 @@ internal sealed class MediaLayoutPanel : Panel
         Label Sub(string t, int x, int y, int w) { var l = new Label { Text = t, AutoSize = false, Size = new Size(S(w), S(16)), ForeColor = SubFg, Location = new Point(S(x), S(y)), Font = new Font("Segoe UI", 8.25f) }; Controls.Add(l); return l; }
 
         var families = MediaLayout.Families;
+        // The family catalogs + the 3D pseudo-family (immediate combos and the post-load add list —
+        // NOT the fallback combo, which must resolve to a real image family).
+        _famWith3d = families.Append((Media3dItem.FamilyKey, Media3dItem.FamilyTitle)).ToArray();
 
         // ── Immediate image (per view) ──
         Head("Immediate image (shown instantly, before the load delay)", 0, 0);
         Controls.Add(new Label { Text = "List view:", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(26)) });
-        _immList = FamilyCombo(families, _layout.ImmediateList, S(90), S(22));
+        _immList = FamilyCombo(_famWith3d, _layout.ImmediateList, S(90), S(22));
+        _immList.SelectedIndexChanged += (_, _) => Update3dFallbackEnabled();
         Controls.Add(_immList);
         Controls.Add(new Label { Text = "Poster view:", AutoSize = true, ForeColor = Fg, Location = new Point(S(240), S(26)) });
-        _immPoster = FamilyCombo(families, _layout.ImmediatePoster, S(340), S(22));
+        _immPoster = FamilyCombo(_famWith3d, _layout.ImmediatePoster, S(340), S(22));
+        _immPoster.SelectedIndexChanged += (_, _) => Update3dFallbackEnabled();
         Controls.Add(_immPoster);
 
         // ── Per-view sharing of the post-load list ──
@@ -151,9 +157,13 @@ internal sealed class MediaLayoutPanel : Panel
             + "First visit of a game computes once; results are then cached per image (ADS).", 18, 494, 640);
         UpdateDupEnabled();
 
-        // ── 3D case block (independent of the post-load list — own row under the hero, own GLB cache) ──
-        _show3d = new CheckBox { Text = "Show the 3D case model under the hero image (baked to the GLB cache on first visit)", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(524)), Checked = _layout.Show3dBox };
-        Controls.Add(_show3d);
+        // ── 3D-model immediate fallback (only meaningful when an immediate combo is "3D Model":
+        //    instant shows the baked snapshot PNG ONLY — no bake, no viewport — so when the model can't
+        //    exist or isn't baked yet, this real image family is shown instead) ──
+        Controls.Add(new Label { Text = "If '3D Model' is the immediate image but no baked model exists yet, show instead:", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(527)) });
+        _immFallback = FamilyCombo(families, _layout.Immediate3dFallback, S(452), S(524));
+        Controls.Add(_immFallback);
+        Update3dFallbackEnabled();
 
         Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 552, 600);
     }
@@ -164,6 +174,15 @@ internal sealed class MediaLayoutPanel : Panel
         _dupEngine.Enabled = on;
         _dupThr.Enabled = on;
         _dupGpu.Enabled = on && _dupEngine.SelectedIndex == 0;   // GPU is a CNN-only knob
+    }
+
+    // The fallback combo only matters when an immediate combo is set to the 3D pseudo-family.
+    private void Update3dFallbackEnabled()
+    {
+        if (_immFallback == null) return;
+        bool any3d = string.Equals(FamilyKeyOf(_immList), Media3dItem.FamilyKey, StringComparison.OrdinalIgnoreCase)
+                  || string.Equals(FamilyKeyOf(_immPoster), Media3dItem.FamilyKey, StringComparison.OrdinalIgnoreCase);
+        _immFallback.Enabled = any3d;
     }
 
     // Switching engine swaps the threshold to that engine's default (the scales are unrelated:
@@ -215,7 +234,7 @@ internal sealed class MediaLayoutPanel : Panel
     {
         _addSel.BeginUpdate();
         _addSel.Items.Clear();
-        if (_addKind.SelectedIndex == 0) foreach (var (_, title) in MediaLayout.Families) _addSel.Items.Add(title);
+        if (_addKind.SelectedIndex == 0) foreach (var (_, title) in _famWith3d) _addSel.Items.Add(title);
         else foreach (var t in MediaLayout.ExactTypes()) _addSel.Items.Add(t);
         if (_addSel.Items.Count > 0) _addSel.SelectedIndex = 0;
         _addSel.EndUpdate();
@@ -237,7 +256,7 @@ internal sealed class MediaLayoutPanel : Panel
         {
             e.ExactType = false;
             int ix = _addSel.SelectedIndex;
-            e.Sel = ix >= 0 && ix < MediaLayout.Families.Length ? MediaLayout.Families[ix].Key : "Front";
+            e.Sel = ix >= 0 && ix < _famWith3d.Length ? _famWith3d[ix].Key : "Front";
         }
         else { e.ExactType = true; e.Sel = _addSel.SelectedItem as string ?? ""; if (string.IsNullOrEmpty(e.Sel)) return; }
         CurPostLoad().Add(e);
@@ -274,7 +293,7 @@ internal sealed class MediaLayoutPanel : Panel
         _layout.DupEngine = _dupEngine.SelectedIndex switch { 1 => "phash", 2 => "dhash", _ => "cnn" };
         _layout.DupThreshold = (double)_dupThr.Value;
         _layout.DupGpu = _dupGpu.Checked;
-        _layout.Show3dBox = _show3d.Checked;
+        _layout.Immediate3dFallback = FamilyKeyOf(_immFallback);
         _layout.Save();
     }
 }

@@ -141,7 +141,7 @@ internal sealed class MainWindow : Form, IMessageFilter
 
     // right-hand details
     private readonly HeroPanel _hero;            // fanart + clear logo (pulse) + rating + heart
-    private Model3d.Model3dBlock _model3d;       // 3D case model under the hero (GLB cache, thumb-first)
+    private Model3d.Model3dBlock _media3d;       // 3D model overlay INSIDE the main media box (a media-list item)
     private readonly MediaPanel _media;          // main media (box → screenshots, click to switch)
     private readonly MediaStrip _strip;          // clickable mini-thumbnails under the main media (slim custom scrollbar)
     private SplitContainer _outerSplit;          // left tree | (middle list + right details) — % persisted
@@ -930,9 +930,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         // Reserved main-media aspect (width/height): 16:9 by default, or poster 2:3 (INI option).
         _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0);
 
-        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 12, Padding = new Padding(12) };
+        var tlp = new TableLayoutPanel { BackColor = Panel, ColumnCount = 1, RowCount = 11, Padding = new Padding(12) };
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));   // hero: fanart + logo + rating/heart
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // 3D case model (0 until a model/thumb lands)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));   // main media (sized from pane width → _mediaAspect)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // mini-thumbnail strip + slim scrollbar (reserved)
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // OVERVIEW | RELATED GAMES tab strip (0 for tree nodes)
@@ -946,9 +945,19 @@ internal sealed class MainWindow : Form, IMessageFilter
         _detailGrid = tlp;
 
         hero = new HeroPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
-        _model3d = new Model3d.Model3dBlock { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
-        _model3d.ContentChanged = RelayoutDetail;
         media = new MediaPanel { Dock = DockStyle.Fill, BackColor = Panel };
+        // 3D model OVERLAY: lives INSIDE the main media box and covers it while the current media item
+        // is the 3D sentinel (thumb PNG first, live viewport swapped in — the proven Model3dBlock flow).
+        // VISIBILITY IS CONTENT-DRIVEN: the overlay only appears once its cover PNG is actually set
+        // (HasContent) — showing it eagerly covered the instant image with an EMPTY panel for the
+        // background hop of the thumb load, which read as the jacket blinking out at post-load time.
+        _media3d = new Model3d.Model3dBlock { Dock = DockStyle.Fill, BackColor = Panel, Visible = false };
+        _media3d.ContentChanged = () =>
+        {
+            _media3d.Visible = _media3d.HasContent;
+            if (_media3d.HasContent) _media3d.BringToFront();
+        };
+        media.Controls.Add(_media3d);
         strip = new MediaStrip { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 4, 0, 4) };
         meta = new MetaCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         vndb = new VndbCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
@@ -971,18 +980,17 @@ internal sealed class MainWindow : Form, IMessageFilter
         _related.OpenLocalGame = id => { try { SelectGameById(id); } catch { } };
 
         tlp.Controls.Add(hero, 0, 0);
-        tlp.Controls.Add(_model3d, 0, 1);
-        tlp.Controls.Add(media, 0, 2);
-        tlp.Controls.Add(strip, 0, 3);
-        tlp.Controls.Add(_detailTabs, 0, 4);
-        tlp.Controls.Add(meta, 0, 5);
-        tlp.Controls.Add(vndb, 0, 6);
-        tlp.Controls.Add(_raCard, 0, 7);
-        tlp.Controls.Add(_storeAchCard, 0, 8);
-        tlp.Controls.Add(notes, 0, 9);
-        tlp.Controls.Add(_related, 0, 10);
+        tlp.Controls.Add(media, 0, 1);
+        tlp.Controls.Add(strip, 0, 2);
+        tlp.Controls.Add(_detailTabs, 0, 3);
+        tlp.Controls.Add(meta, 0, 4);
+        tlp.Controls.Add(vndb, 0, 5);
+        tlp.Controls.Add(_raCard, 0, 6);
+        tlp.Controls.Add(_storeAchCard, 0, 7);
+        tlp.Controls.Add(notes, 0, 8);
+        tlp.Controls.Add(_related, 0, 9);
         _highScores = new Mame.HighScoresPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0) };
-        tlp.Controls.Add(_highScores, 0, 11);
+        tlp.Controls.Add(_highScores, 0, 10);
         // After an auto-submit, drop the stale board and reload if the HIGH SCORES tab is showing this rom.
         Mame.MameHighScoreSubmit.Submitted += rom =>
         {
@@ -1017,7 +1025,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private string RelatedLocalArt(string gameId)
     {
         var g = Safe(() => _dm?.GetGameById(gameId));
-        return g == null ? null : DetailImageSources(g).artSrc;
+        return g == null ? null : DetailImageSources(g, allow3d: false).artSrc;   // cards need a real file
     }
 
     // Minimum height reserved for the notes box before the whole pane starts scrolling.
@@ -1040,7 +1048,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void RelayoutDetail()
     {
         var host = _detailHost; var tlp = _detailGrid;
-        if (host == null || tlp == null || tlp.RowStyles.Count < 12 || _inRelayout) return;
+        if (host == null || tlp == null || tlp.RowStyles.Count < 11 || _inRelayout) return;
         _inRelayout = true;
         try { RelayoutDetailCore(host, tlp); }
         finally { _inRelayout = false; }
@@ -1067,13 +1075,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         bool highScoresMode = gameMode && _detailTabSel == 2;   // HIGH SCORES tab: swaps overview rows for the leaderboards panel
 
         // Minimum content height for a given grid width (media capped to the viewport).
-        // 3D case block (row 1): a square-ish viewport under the hero, only when it has content.
-        int M3dH(int colW) => _model3d is { HasContent: true } ? Math.Min(colW, Math.Max(120, (int)(viewH * 0.5))) : 0;
-
-        int MinContent(int gridW, out int m3dH, out int mediaH, out int metaH, out int vndbH, out int raH, out int storeH)
+        int MinContent(int gridW, out int mediaH, out int metaH, out int vndbH, out int raH, out int storeH)
         {
             int colW = Math.Max(20, gridW - padH);
-            m3dH = M3dH(colW);
             mediaH = (int)Math.Round(colW / _mediaAspect);
             int cap = (int)(viewH * 0.62);
             if (cap > 100 && mediaH > cap) mediaH = cap;
@@ -1081,41 +1085,39 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (relatedMode || highScoresMode)
             {
                 metaH = vndbH = raH = storeH = 0;
-                return padV + 158 + m3dH + mediaH + _stripRowH + tabH + MinRelatedH;
+                return padV + 158 + mediaH + _stripRowH + tabH + MinRelatedH;
             }
             metaH = _meta.HeightForWidth(colW);
             vndbH = _vndb.HeightForWidth(colW);
             raH = _raCard?.HeightForWidth(colW) ?? 0;
             storeH = _storeAchCard?.HeightForWidth(colW) ?? 0;
-            return padV + 158 + m3dH + mediaH + _stripRowH + tabH + metaH + vndbH + raH + storeH + MinNotesH;
+            return padV + 158 + mediaH + _stripRowH + tabH + metaH + vndbH + raH + storeH + MinNotesH;
         }
 
-        bool overflow = MinContent(fullW, out _, out _, out _, out _, out _, out _) > viewH;
+        bool overflow = MinContent(fullW, out _, out _, out _, out _, out _) > viewH;
         int wantW = overflow ? Math.Max(80, fullW - sbw) : fullW;
-        int minContent = MinContent(wantW, out int m3d, out int media, out int meta, out int vndb, out int ra, out int store);
+        int minContent = MinContent(wantW, out int media, out int meta, out int vndb, out int ra, out int store);
 
-        var rsM3d = tlp.RowStyles[1];
-        if (rsM3d.SizeType != SizeType.Absolute || Math.Abs(rsM3d.Height - m3d) > 0.5) { rsM3d.SizeType = SizeType.Absolute; rsM3d.Height = m3d; }
-        var rsMedia = tlp.RowStyles[2];
+        var rsMedia = tlp.RowStyles[1];
         if (rsMedia.SizeType != SizeType.Absolute || Math.Abs(rsMedia.Height - media) > 0.5) { rsMedia.SizeType = SizeType.Absolute; rsMedia.Height = media; }
-        var rsStrip = tlp.RowStyles[3];
+        var rsStrip = tlp.RowStyles[2];
         if (rsStrip.SizeType != SizeType.Absolute || Math.Abs(rsStrip.Height - _stripRowH) > 0.5) { rsStrip.SizeType = SizeType.Absolute; rsStrip.Height = _stripRowH; }
-        var rsTabs = tlp.RowStyles[4];
+        var rsTabs = tlp.RowStyles[3];
         if (rsTabs.SizeType != SizeType.Absolute || Math.Abs(rsTabs.Height - tabH) > 0.5) { rsTabs.SizeType = SizeType.Absolute; rsTabs.Height = tabH; }
-        var rsMeta = tlp.RowStyles[5];
+        var rsMeta = tlp.RowStyles[4];
         if (rsMeta.SizeType != SizeType.Absolute || Math.Abs(rsMeta.Height - meta) > 0.5) { rsMeta.SizeType = SizeType.Absolute; rsMeta.Height = meta; }
-        var rsVndb = tlp.RowStyles[6];
+        var rsVndb = tlp.RowStyles[5];
         if (rsVndb.SizeType != SizeType.Absolute || Math.Abs(rsVndb.Height - vndb) > 0.5) { rsVndb.SizeType = SizeType.Absolute; rsVndb.Height = vndb; }
-        var rsRa = tlp.RowStyles[7];
+        var rsRa = tlp.RowStyles[6];
         if (rsRa.SizeType != SizeType.Absolute || Math.Abs(rsRa.Height - ra) > 0.5) { rsRa.SizeType = SizeType.Absolute; rsRa.Height = ra; }
-        var rsStore = tlp.RowStyles[8];
+        var rsStore = tlp.RowStyles[7];
         if (rsStore.SizeType != SizeType.Absolute || Math.Abs(rsStore.Height - store) > 0.5) { rsStore.SizeType = SizeType.Absolute; rsStore.Height = store; }
 
         // Notes vs Related: exactly one of the two absorbs the leftover space (Percent 100); the
         // other collapses. In Related overflow, the related panel gets its fixed minimum instead.
-        var rsNotes = tlp.RowStyles[9];
-        var rsRelated = tlp.RowStyles[10];
-        var rsHs = tlp.RowStyles[11];
+        var rsNotes = tlp.RowStyles[8];
+        var rsRelated = tlp.RowStyles[9];
+        var rsHs = tlp.RowStyles[10];
         void Collapse(RowStyle rs) { if (rs.SizeType != SizeType.Absolute || rs.Height != 0) { rs.SizeType = SizeType.Absolute; rs.Height = 0; } }
         void FillPane(RowStyle rs)   // like Related: fixed minimum on overflow, else absorbs the slack
         {
@@ -3764,6 +3766,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         // with no clear logo shows its title as text — with the same pulse.
         var (logoSrc, artSrc) = DetailImageSources(g);
         SetHeroGame(g);
+        Hide3dOverlay();   // instant is ALWAYS a flat image (3D immediate = the baked PNG via the loaders)
         LoadImagesAsync(logoSrc, artSrc);
         PopulateDetailMeta(g);
 
@@ -3778,12 +3781,30 @@ internal sealed class MainWindow : Form, IMessageFilter
     }
 
     // The box + clear-logo source files for a game (same resolution launchbox-web/bigbox-web use).
-    private (string logoSrc, string artSrc) DetailImageSources(IGame g)
+    // allow3d=false (related cards, callers that need a real FILE) resolves the 3D immediate straight
+    // to its fallback family instead of the sentinel.
+    private (string logoSrc, string artSrc) DetailImageSources(IGame g, bool allow3d = true)
     {
         string logoSrc = DetailSource(g, "ClearLogo", () => Safe(() => g.ClearLogoImagePath));
         // Immediate main image family is configurable PER VIEW (Options → Display → Right panel).
         string fam = _posterMode ? Media.MediaLayout.Current.ImmediatePoster : Media.MediaLayout.Current.ImmediateList;
         if (string.IsNullOrEmpty(fam)) fam = "Front";
+        // "3D Model" immediate: the baked snapshot PNG ONLY (no bake, no viewport at instant time).
+        // Not bakeable / not baked yet → the configured fallback family takes over.
+        if (string.Equals(fam, Media.Media3dItem.FamilyKey, StringComparison.OrdinalIgnoreCase))
+        {
+            if (allow3d)
+                try
+                {
+                    // O(1) RAM-index lookup — NEVER Model3dCache.Resolve here: this path runs for every
+                    // game a fast scroll transits, and Resolve's art-slot IO froze the transit loader.
+                    var glb = Model3d.Model3dCache.CachedGlbForInstant(g);
+                    if (glb != null) return (logoSrc, Media.Media3dItem.For(glb));
+                }
+                catch (Exception ex) { Console.WriteLine("[media3d] instant lookup failed: " + ex.Message); }
+            fam = Media.MediaLayout.Current.Immediate3dFallback;
+            if (string.IsNullOrEmpty(fam) || string.Equals(fam, Media.Media3dItem.FamilyKey, StringComparison.OrdinalIgnoreCase)) fam = "Front";
+        }
         string artSrc = CacheSourceFor(g, fam);
         if (string.IsNullOrEmpty(artSrc))   // family had nothing → the old Front→Box3D→Screenshot fallback
             artSrc = Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
@@ -3805,9 +3826,6 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         ScheduleFanart(g, null);
         ScheduleMedia(g);   // 0.5s later: build the thumb strip + upgrade the main to full
-        // 3D case block (independent of the media list): thumb from the GLB head instantly, model behind.
-        if (Media.MediaLayout.Current.Show3dBox) _model3d?.ShowFor(g);
-        else _model3d?.Clear();
 
         // Title + platform live in the card; the rest are the expandable rows.
         var rows = new List<(string, string)>();
@@ -3881,7 +3899,11 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (g == null) return;
         bool start = false;
         lock (_detailLock) { _detailWant = g; if (!_detailRunning) { _detailRunning = true; start = true; } }
-        if (start) System.Threading.Tasks.Task.Run(DetailLoop);
+        // LongRunning: this loop lives as long as selections keep arriving — on a pool thread it both
+        // hogged a pool slot AND could be starved by other blocked pool work (the 3D bake waits).
+        if (start) System.Threading.Tasks.Task.Factory.StartNew(DetailLoop,
+            System.Threading.CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.LongRunning,
+            System.Threading.Tasks.TaskScheduler.Default);
     }
 
     private void DetailLoop()
@@ -3928,6 +3950,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         ++_detailsLoadToken;        // invalidate any async load/fanart still in flight from a prior detail
         SetHeroGame(g);             // title (text fallback) before the logo
         _hero.SetLogo(logo);
+        Hide3dOverlay();            // a flat image takes the box — the previous game's 3D must not linger
         _media.SetImage(art);
         PopulateDetailMeta(g);
     }
@@ -3941,6 +3964,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         ++_detailsLoadToken;        // cancel a previous settle's fanart/strip still loading, mid-scroll
         SetHeroGame(g);
         _hero.SetLogo(logo);
+        Hide3dOverlay();            // scrolling past: the previous game's 3D must not cover the new thumb
         _media.SetImage(art);
     }
 
@@ -3949,7 +3973,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         _detailsShown = node;
         _heroGame = null;
-        _model3d?.Clear();            // 3D case block is game-only
+        Hide3dOverlay();              // 3D media overlay is game-only
         _launchButtons?.HideGame();   // launch group is game-only
         _related?.ClearAll();         // tab strip + related list are game-only
         _highScores?.ClearAll();      // MAME leaderboards are game-only too
@@ -4189,6 +4213,8 @@ internal sealed class MainWindow : Form, IMessageFilter
                         _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
                         if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
                         PopulateStrip(items, token);
+                        try { Kick3dBake(g, items, token); } catch { }   // GLB missing → bake at settle, then refresh the 3D tile
+
                     }));
                 }
                 catch { }   // window closed mid-build
@@ -4365,12 +4391,38 @@ internal sealed class MainWindow : Form, IMessageFilter
         });
     }
 
+    // ── 3D media overlay (the 3D sentinel item shown in the main box) ─────────────────────────────
+    // Show = the proven Model3dBlock flow (GLB thumb PNG immediately, live viewport swapped in behind —
+    // bakes on the STA worker when the GLB is missing). Hide = leaving to a normal image or a node.
+    private void Show3dOverlay(IGame g)
+    {
+        if (_media3d == null) return;
+        Console.WriteLine("[media3d] overlay showfor: " + S(Safe(() => g.Title)));
+        _media3d.BringToFront();
+        _media3d.ShowFor(g);   // the overlay turns visible via ContentChanged, WITH its PNG already set
+    }
+
+    private void Hide3dOverlay()
+    {
+        if (_media3d == null || (!_media3d.Visible && !_media3d.HasContent)) return;
+        _media3d.Clear();
+        _media3d.Visible = false;
+    }
+
     // Sets the main media. NOTE: single extension point — a future video item would be
     // detected here and hosted in the 16:9 zone instead of an image.
     private void SetMainMedia(string src, bool full, int token)
     {
         if (_mediaItems != null) { int ix = _mediaItems.FindIndex(s => string.Equals(s, src, StringComparison.OrdinalIgnoreCase)); if (ix >= 0) _mediaSel = ix; }
         HighlightStrip();
+        // The 3D sentinel: the overlay takes the box over (PNG first, viewport behind). Any other
+        // item hides it back to the plain image panel.
+        if (Media.Media3dItem.Is(src))
+        {
+            if (_detailsShown is IGame g3) Show3dOverlay(g3);
+            return;
+        }
+        Hide3dOverlay();
         if (string.IsNullOrEmpty(src)) { _media.SetImage(null); return; }
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -4398,15 +4450,20 @@ internal sealed class MainWindow : Form, IMessageFilter
     private static List<string> BuildMediaList(IGame g, bool poster, bool forceDup = false)
     {
         var items = new List<string>();
+        var dupAccepted = new List<string>();    // the accepted REAL images (3D sentinel excluded both ways)
         Media.MediaDupFilter dupFilter = null;   // set below once the game is identified
-        bool Add(string s)
+        bool Add(string s, bool is3d = false)
         {
             if (items.Count >= MaxMediaItems) return false;
             if (string.IsNullOrEmpty(s) || items.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) return false;
             // Prevent-duplicates filter: a visually-duplicate candidate is skipped — it doesn't consume the
             // entry budget, so the next candidate takes its place. Cached per image in the :lb.dupcheck ADS.
-            if (dupFilter != null && dupFilter.IsDup(s, items)) return false;
-            items.Add(s); return true;
+            // The 3D model item BYPASSES it both ways: its PNG is a render of the front — comparing would
+            // evict the real front (and the sentinel isn't a decodable file for later candidates either).
+            if (!is3d && dupFilter != null && dupFilter.IsDup(s, dupAccepted)) return false;
+            items.Add(s);
+            if (!is3d) dupAccepted.Add(s);
+            return true;
         }
 
         string plat = Safe(() => g.Platform);
@@ -4431,6 +4488,20 @@ internal sealed class MainWindow : Form, IMessageFilter
                 int above = 0;
                 for (int k = Math.Max(0, ei - depth); k < ei; k++) above += contrib[k];
                 budget = Math.Max(0, e.Count - above);
+            }
+            // The 3D pseudo-family: at most ONE item, present only when the model CAN exist (front art,
+            // or a full scan in full-scan mode — Model3dCache.Resolve's HasArt). The GLB may not be
+            // baked yet: the sentinel still goes in, the settle-time bake fills it (Kick3dBake).
+            if (!e.ExactType && string.Equals(e.Sel, Media.Media3dItem.FamilyKey, StringComparison.OrdinalIgnoreCase))
+            {
+                if (budget > 0)
+                    try
+                    {
+                        var idn = Model3d.Model3dCache.Resolve(g);
+                        if (idn is { HasArt: true } && Add(Media.Media3dItem.For(idn.GlbPath), is3d: true)) contrib[ei]++;
+                    }
+                    catch { }
+                continue;
             }
             int taken = 0;
             foreach (var path in ResolveMediaEntry(g, e, plat, title, gid, haveId, gameReg))
@@ -4463,6 +4534,41 @@ internal sealed class MainWindow : Form, IMessageFilter
         return list;
     }
 
+    // The post-load list may carry a 3D sentinel whose GLB isn't baked yet (its strip tile shows only
+    // the badge, the main box nothing). Bake it at settle on the STA worker, then refresh the tile —
+    // and the main box when the 3D item is the selected one. Idempotent with the overlay's own
+    // bake-on-miss (Ensure re-checks existence inside the STA job).
+    private void Kick3dBake(IGame g, List<string> items, int token)
+    {
+        string it = items.FirstOrDefault(Media.Media3dItem.Is);
+        if (it == null) return;
+        string glb = Media.Media3dItem.GlbPath(it);
+        bool exists; try { exists = File.Exists(glb); } catch { exists = false; }
+        if (exists) return;
+        // LongRunning: Ensure BLOCKS on the serialized STA bake queue — parking pool threads there
+        // during fast scrolling starved the pool and froze the transit image loader. The stale-check
+        // also drops the bake entirely once the selection has moved on.
+        System.Threading.Tasks.Task.Factory.StartNew(() =>
+        {
+            if (Model3d.Model3dCache.Ensure(g, stillWanted: () => token == _detailsLoadToken) == null) return;   // couldn't bake / stale → tile stays empty
+            try
+            {
+                if (IsDisposed || token != _detailsLoadToken) return;
+                BeginInvoke((Action)(() =>
+                {
+                    if (IsDisposed || token != _detailsLoadToken || _mediaItems == null) return;
+                    int ix = _mediaItems.IndexOf(it);
+                    if (ix < 0) return;
+                    if (ix < _strip.Flow.Controls.Count && _strip.Flow.Controls[ix] is MediaThumb th)
+                        th.SetImage(Media.Media3dItem.Thumb(it));
+                    if (_mediaSel == ix) SetMainMedia(it, full: true, token);   // overlay now hits the fresh GLB
+                }));
+            }
+            catch { }
+        }, System.Threading.CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.LongRunning,
+           System.Threading.Tasks.TaskScheduler.Default);
+    }
+
     private void PopulateStrip(List<string> items, int token)
     {
         if (token != _detailsLoadToken) return;
@@ -4474,6 +4580,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             {
                 Width = 92, Height = 52, BackColor = Panel,
                 Margin = new Padding(0, 0, 6, 0), Cursor = Cursors.Hand,
+                Badge3d = Media.Media3dItem.Is(src),   // little "3D" tag, bottom-right of the tile
             };
             th.Click += (_, _) => SetMainMedia(captured, full: true, _detailsLoadToken);
             th.MouseWheel += (_, e) => _strip.WheelScroll(e.Delta);   // wheel over a thumb scrolls the strip
@@ -4808,6 +4915,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private static Image LoadThumbOrFull(string src, bool keepAlpha)
     {
         if (string.IsNullOrEmpty(src)) return null;
+        if (Media.Media3dItem.Is(src)) return Media.Media3dItem.Thumb(src);   // 3D sentinel → the GLB's baked PNG (never ThumbCache)
         if (!_useImageCache) return LoadImage(src);   // option off → full original, no cache
         var cached = ThumbCache.GetCachedOnly(src, ThumbCache.DefaultMaxDim, keepAlpha);
         if (cached != null) return LoadImage(cached);
@@ -4844,6 +4952,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         try
         {
+            if (Media.Media3dItem.Is(path)) return Media.Media3dItem.Thumb(path);   // 3D sentinel → baked PNG
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
             var bytes = File.ReadAllBytes(path);
             // GDI+ can't decode WebP (clear logos) → route those through Magick.NET.
@@ -5674,6 +5783,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         }
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
         public bool Selected { get => _selected; set { if (_selected != value) { _selected = value; Invalidate(); } } }
+        /// <summary>Little "3D" tag in the bottom-right corner — marks the 3D-model media item.</summary>
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool Badge3d { get; set; }
         public void SetImage(Image img) { var old = _img; _img = img; if (!ReferenceEquals(old, img)) old?.Dispose(); Invalidate(); }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -5688,6 +5800,20 @@ internal sealed class MainWindow : Form, IMessageFilter
                 int iw, ih;
                 if (ir > ar) { iw = rect.Width; ih = (int)(iw / ir); } else { ih = rect.Height; iw = (int)(ih * ir); }
                 g.DrawImage(_img, rect.X + (rect.Width - iw) / 2, rect.Y + (rect.Height - ih) / 2, Math.Max(1, iw), Math.Max(1, ih));
+            }
+            if (Badge3d)
+            {
+                // Overlay drawn at paint time (never baked into the cached PNG — the main box must stay clean).
+                using var f = new Font("Segoe UI Semibold", 7f);
+                var sz = g.MeasureString("3D", f);
+                var br = new Rectangle(rect.Right - (int)sz.Width - 8, rect.Bottom - (int)sz.Height - 5,
+                                       (int)sz.Width + 5, (int)sz.Height + 2);
+                using var bg = new SolidBrush(Color.FromArgb(190, 20, 20, 24));
+                g.FillRectangle(bg, br);
+                using var pen = new Pen(Color.FromArgb(120, 255, 255, 255), 1f);
+                g.DrawRectangle(pen, br.X, br.Y, br.Width - 1, br.Height - 1);
+                using var txt = new SolidBrush(Color.White);
+                g.DrawString("3D", f, txt, br.X + 2, br.Y);
             }
             if (_selected)
             {

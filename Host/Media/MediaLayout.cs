@@ -96,17 +96,14 @@ internal sealed class MediaLayout
     public string PostLoadHash(bool poster)
         => Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(PostLoadJson(poster)))).ToLowerInvariant();
 
-    // ── 3D case block ─────────────────────────────────────────────────────────
-    // Independent of the post-load image list (own row under the hero, own GLB cache) — deliberately NOT
-    // part of PostLoadJson/PostLoadHash nor of the dup params.
+    // ── 3D model as an immediate image ────────────────────────────────────────
+    // "Model3d" (Media3dItem.FamilyKey) is a valid immediate family: it shows the GLB cache's baked
+    // snapshot PNG instantly — never a bake, never a viewport at instant time. When the game can't
+    // have a model (no front / full art) or the GLB isn't baked yet, the fallback family below is
+    // shown instead.
 
-    /// <summary>Stored INVERTED (default-off booleans survive the WhenWritingDefault serializer; a
-    /// default-ON one would lose the user's "off" on reload). Use <see cref="Show3dBox"/>.</summary>
-    public bool Hide3dBox { get; set; }
-
-    /// <summary>Show the 3D case model under the hero image (right detail panel). Default on.</summary>
-    [JsonIgnore]
-    public bool Show3dBox { get => !Hide3dBox; set => Hide3dBox = !value; }
+    /// <summary>Family shown when the immediate image is "Model3d" but no baked model is available.</summary>
+    public string Immediate3dFallback { get; set; } = "Front";
 
     // ── Duplicate prevention (post-load filter) ───────────────────────────────
     // These settings are deliberately NOT part of PostLoadJson/PostLoadHash: toggling the dup filter must
@@ -146,6 +143,9 @@ internal sealed class MediaLayout
         PostLoad = new()
         {
             new MediaEntry { Sel = "Front", ExactType = false, Count = 1 },
+            // The 3D case model rides the list like an image (the old always-on under-hero block's
+            // default visibility, translated): one click away in the strip, front stays the main box.
+            new MediaEntry { Sel = Media3dItem.FamilyKey, ExactType = false, Count = 1 },
             new MediaEntry { Sel = "Marquee", ExactType = false, Count = 1, IgnoreGameRegion = true },
             new MediaEntry { Sel = "Screenshots", ExactType = false, Count = 5 },
             new MediaEntry { Sel = "Background", ExactType = false, Count = 5 },
@@ -180,7 +180,7 @@ internal sealed class MediaLayout
         ImmediateList = ImmediateList, ImmediatePoster = ImmediatePoster,
         PostLoad = PostLoad.Select(e => e.Clone()).ToList(),
         PostLoadPoster = PostLoadPoster.Select(e => e.Clone()).ToList(),
-        PosterIndependent = PosterIndependent, Hide3dBox = Hide3dBox,
+        PosterIndependent = PosterIndependent, Immediate3dFallback = Immediate3dFallback,
         PreventDuplicates = PreventDuplicates, DupEngine = DupEngine, DupThreshold = DupThreshold, DupGpu = DupGpu,
     };
 

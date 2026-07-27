@@ -218,17 +218,28 @@ PosterMode / PosterImageGroup / PosterOwnerDraw  Réglages de la vue Poster.
 Écrit à l'apply des options Display → Right panel (MediaLayout.Save()).
 Décrit, PAR VUE (liste / poster), l'image immédiate puis la liste post-load.
 
-    { "ImmediateList": "Front", "ImmediatePoster": "Front",
-      "PosterIndependent": false, "Show3dBox": true,
-      "PostLoad": [ { "Sel": "Front", "Count": 1, "Mode": "auto",
-                      "WRegion": 1, "WType": 1, "Cumulative": false } ] }
+    { "ImmediateList": "Front", "ImmediatePoster": "Model3d",
+      "Immediate3dFallback": "Front", "PosterIndependent": false,
+      "PostLoad": [ { "Sel": "Front", "Count": 1 },
+                    { "Sel": "Model3d", "Count": 1 },
+                    { "Sel": "Screenshots", "Count": 5 } ] }
 
-Clés d'une entrée PostLoad (Host/Media/MediaLayout.cs) : Sel = famille ou type
-exact (ExactType) ; Count = nombre max ; Mode auto|all ; WRegion/WType/WNumeric/
-WAspect = poids de tri ; Cumulative(+Depth) = accumulation multi-entrées ;
-IgnoreGameRegion / AllRegions = élargissement des régions. Le hash MD5 de cette
-config sert de clé au cache anti-doublons (ADS :lb.dupcheck).
-Cas d'usage : afficher la jaquette immédiatement puis 3 screenshots post-load.
+Clés d'une entrée PostLoad (Host/Media/MediaLayout.cs) : Sel = famille, type
+exact (ExactType), ou la pseudo-famille "Model3d" (le modèle 3D de boîte) ;
+Count = nombre max ; Mode auto|all ; WRegion/WType/WNumeric/WAspect = poids de
+tri ; Cumulative(+Depth) = accumulation multi-entrées ; IgnoreGameRegion /
+AllRegions = élargissement des régions. Le hash MD5 de cette config sert de clé
+au cache anti-doublons (ADS :lb.dupcheck).
+
+La pseudo-famille "Model3d" : l'entrée n'existe que si le jeu PEUT avoir un
+modèle (front présent, ou full scan en mode full-scan) ; elle est IGNORÉE par
+l'anti-doublons (dans les deux sens) ; sa vignette porte un badge « 3D » ; en
+main box elle affiche la PNG du cache GLB puis bascule sur le viewport 3D
+interactif (orbite). En IMAGE IMMÉDIATE ("ImmediateList"/"ImmediatePoster" =
+"Model3d") : PNG du cache uniquement — jamais de bake ni de viewport à
+l'instant ; si le modèle n'est pas bakable ou pas encore en cache, la famille
+"Immediate3dFallback" (défaut Front) est affichée à la place.
+Cas d'usage : Front en immédiat, puis le modèle 3D en 2e vignette post-load.
 
 --------------------------------------------------------------------------------
  youtube.json — intégration YouTube / yt-dlp
@@ -533,7 +544,10 @@ ADS NTFS (flux :nom)       Métadonnées attachées aux FICHIERS d'images/ROMs,
                              :lb.dupcheck  cache anti-doublons par vue
                            Repli sidecar .ads\ sur les volumes non-NTFS.
 cache\                     Tout le reconstructible : thumbs\ (miniatures),
-                           3d\ (modèles GLB), ra-cache\ + ra-badges\ (RA),
+                           3d\ (modèles GLB + snapshot .png sidecar par modèle —
+                           lu en direct pour l'affichage, ré-extrait du GLB si
+                           absent, supprimé avec son GLB),
+                           ra-cache\ + ra-badges\ (RA),
                            store-ach-cache\ + store-ach-badges\ (succès
                            boutiques), emumovies\, steam\, romcache\ (ROMs
                            extraites, éviction LRU), webview2-*\ (profils

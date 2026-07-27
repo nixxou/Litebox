@@ -33,7 +33,7 @@ namespace LbApiHost.Host.Model3d;
 internal sealed record BakedMesh(Point3D[] Pos, Vector3D[] Nrm, System.Windows.Point[] Uv, int[] Tri, int MaterialIndex);
 
 /// <summary>A flattened material: solid colour w/ alpha, or a pre-rasterized PNG texture.</summary>
-internal sealed record BakedMaterial(Color Color, double Opacity, byte[]? TexturePng);
+internal sealed record BakedMaterial(Color Color, double Opacity, byte[]? TexturePng);   // TexturePng = encoded bytes (PNG, or JPEG for opaque faces since baker v4)
 
 /// <summary>The cache identity stored in a GLB's <c>extras.litebox</c> block.</summary>
 internal sealed record GlbInfo(string Key, string GameId, string Platform, string Title, int BakerVersion, string Manifest);
@@ -80,7 +80,9 @@ internal static class GlbFile
             if (m.TexturePng != null)
             {
                 int iv = AddView(m.TexturePng);
-                images.Add($"{{\"bufferView\":{iv},\"mimeType\":\"image/png\"}}");
+                string mime = mats[i].TexturePng is { Length: > 2 } tb && tb[0] == 0xFF && tb[1] == 0xD8
+                    ? "image/jpeg" : "image/png";   // sniffed — opaque faces are JPEG since baker v4
+                images.Add($"{{\"bufferView\":{iv},\"mimeType\":\"{mime}\"}}");
                 textures.Add($"{{\"source\":{images.Count - 1}}}");
                 pbr = $"\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":{textures.Count - 1}}},\"metallicFactor\":0,\"roughnessFactor\":1}}";
             }

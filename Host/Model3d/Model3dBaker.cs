@@ -129,7 +129,7 @@ internal static class Model3dBaker
                     switch (dm.Brush)
                     {
                         case SolidColorBrush sb: col = sb.Color; opacity = sb.Opacity * sb.Color.A / 255.0; break;
-                        case ImageBrush ib when ib.ImageSource is BitmapSource bs: tex = EncodePng(bs); break;
+                        case ImageBrush ib when ib.ImageSource is BitmapSource bs: tex = EncodeTexture(bs); break;
                         case VisualBrush vb when vb.Visual is System.Windows.FrameworkElement fe: tex = RasterizeVisual(fe); break;
                     }
                     break;
@@ -149,9 +149,65 @@ internal static class Model3dBaker
             if (sz.Width < 1 || sz.Height < 1) return null;
             var rtb = new RenderTargetBitmap((int)Math.Ceiling(sz.Width), (int)Math.Ceiling(sz.Height), 96, 96, PixelFormats.Pbgra32);
             rtb.Render(fe);
-            return EncodePng(rtb);
+            return EncodeTexture(rtb);
         }
         catch { return null; }
+    }
+
+    // ── texture encoding: sized to DISPLAY need, format by content ───────────────────────────────
+    // The v1-v3 bakes embedded every face at its SOURCE resolution, PNG-encoded — a 2140px JPEG scan
+    // became a multi-MB lossless PNG inside the GLB. The box renders in a ~500px pane: cap the longest
+    // side at MaxTexPx (zoom headroom included) and use JPEG (q85) for OPAQUE faces — the vast
+    // majority (fronts/backs/spines/scans). PNG stays for anything actually using alpha (jewel shells).
+    private const int MaxTexPx = 1024;
+
+    private static byte[]? EncodeTexture(BitmapSource bs)
+    {
+        try
+        {
+            int w = bs.PixelWidth, h = bs.PixelHeight;
+            int longest = Math.Max(w, h);
+            if (longest > MaxTexPx)
+            {
+                double k = (double)MaxTexPx / longest;
+                var scaled = new TransformedBitmap(bs, new System.Windows.Media.ScaleTransform(k, k));
+                scaled.Freeze();
+                bs = scaled;
+            }
+            if (HasRealAlpha(bs)) return EncodePng(bs);
+            var enc = new JpegBitmapEncoder { QualityLevel = 85 };
+            enc.Frames.Add(BitmapFrame.Create(bs));
+            using var ms = new MemoryStream();
+            enc.Save(ms);
+            return ms.ToArray();
+        }
+        catch { try { return EncodePng(bs); } catch { return null; } }
+    }
+
+    // True when any pixel is meaningfully transparent. Formats without an alpha channel short-circuit;
+    // alpha-capable ones (RTB output is Pbgra32) get a pixel scan — ~ms at the capped size.
+    private static bool HasRealAlpha(BitmapSource bs)
+    {
+        try
+        {
+            var f = bs.Format;
+            if (f != PixelFormats.Bgra32 && f != PixelFormats.Pbgra32 && f != PixelFormats.Prgba64 && f != PixelFormats.Rgba64)
+            {
+                if (f == PixelFormats.Bgr24 || f == PixelFormats.Rgb24 || f == PixelFormats.Bgr32 || f == PixelFormats.Bgr565) return false;
+                var conv = new FormatConvertedBitmap(bs, PixelFormats.Bgra32, null, 0); conv.Freeze(); bs = conv;
+            }
+            else if (f == PixelFormats.Prgba64 || f == PixelFormats.Rgba64)
+            {
+                var conv = new FormatConvertedBitmap(bs, PixelFormats.Bgra32, null, 0); conv.Freeze(); bs = conv;
+            }
+            int w = bs.PixelWidth, h = bs.PixelHeight, stride = w * 4;
+            var px = new byte[stride * h];
+            bs.CopyPixels(px, stride, 0);
+            for (int i = 3; i < px.Length; i += 4)
+                if (px[i] < 250) return true;
+            return false;
+        }
+        catch { return true; }   // unsure → keep PNG (never lose alpha)
     }
 
     private static byte[] EncodePng(BitmapSource bs)

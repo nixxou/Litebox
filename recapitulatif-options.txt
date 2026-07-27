@@ -1,0 +1,544 @@
+================================================================================
+ RÉCAPITULATIF DES OPTIONS ET FICHIERS DE DONNÉES — LiteBox 0.8.9
+================================================================================
+
+Tout ce que LiteBox écrit vit sous <LaunchBox>\Core\litebox\ (LiteBoxPaths.Data).
+Rien n'est écrit ailleurs, à trois exceptions près : les XML LaunchBox (Data\*.xml,
+champs du schéma LB uniquement), les flux ADS NTFS attachés aux fichiers d'images
+(§6), et ThirdParty\ (outils natifs déployés par NativeInstaller).
+
+Règles de rangement (décidées avec le chantier "standardisation du stockage") :
+
+  LiteBox.ini          scalaires plats : bootstrap, toggles globaux, défauts
+                       globaux gameplay, état d'interface (fenêtre, colonnes…)
+  *.json               config STRUCTURÉE par fonctionnalité (listes, objets) —
+                       créés uniquement au premier usage de la fonctionnalité
+  litebox-options.db   données PAR-ENTITÉ (jeu / émulateur / plateforme), clés
+                       "problématiques" routées selon la version LB, clés Hot
+  dbs dédiées          état durable à fort volume (historique, cache d'archives)
+  cache\               tout ce qui est reconstructible (thumbs, GLB 3D, badges…)
+  logs *.log           diagnostic, purgeables à tout moment
+
+Un réglage GLOBAL plat ne va JAMAIS dans la base ; une donnée par-entité ne va
+JAMAIS dans l'ini. Les fichiers de config n'apparaissent qu'à l'usage : une
+install fraîche ne contient que LiteBox.ini, les dbs et cache\.
+
+================================================================================
+ 1. LiteBox.ini — configuration principale (clé=valeur, sections [Nom])
+================================================================================
+
+Créé au premier lancement avec un en-tête commenté. Écriture en "merge-save" :
+chaque instance ne réécrit que les clés qu'elle a modifiées (deux fenêtres
+ouvertes ne s'écrasent pas). Exemple d'extrait réel :
+
+    ReadOnly=false
+    UseGameCache=true
+    SmartCaptureEnabled=true
+    StartupStayOnTop.Emulator=true
+    Col.title=320,1,0
+    [Base]
+    AutoUpdateDb=true
+
+Accès code : LiteBoxConfig.LoadForExe().Get/GetBool/GetInt, GetSec pour les
+sections. Exemple type (Host/LiteBoxConfig.cs) :
+
+    public bool UseGameCache { get => GetBool("UseGameCache", true);
+                               set => SetBool("UseGameCache", value); }
+
+--------------------------------------------------------------------------------
+ 1.1 Bootstrap — lues AVANT l'ouverture des bases (ne jamais déplacer en db)
+--------------------------------------------------------------------------------
+DebugLog         false   Écrit litebox-debug.log (trace complète). --debug au
+                         lancement = équivalent one-shot + mode Strict.
+ReadOnly         false   true = ne JAMAIS écrire dans les XML LaunchBox ; les
+                         modifs (favoris, notes…) restent en mémoire.
+                         Cas d'usage : tester LiteBox sur une bibliothèque
+                         qu'on ne veut prendre aucun risque d'altérer.
+EnabledPlugins   (tous)  CSV des dossiers de Plugins\ à charger. Clé ABSENTE =
+                         tout charger ; valeur vide = aucun.
+Version          0.8.9   Stampée par Install/Migration.cs à chaque boot ; sert
+                         à la détection d'upgrade (refresh des natives, redéploi
+                         des web-assets sur changement).
+
+--------------------------------------------------------------------------------
+ 1.2 Toggles globaux LiteBox
+--------------------------------------------------------------------------------
+ShowGameRunningScreen      true    Écran fanart/couleur pendant qu'un jeu tourne.
+GameRunningText / GameRunningColor  Texte et couleur (#RRGGBB) de cet écran.
+UnloadListDuringGame       true    Libère la liste de jeux pendant une partie.
+UseGameCache               true    Cache média en RAM (Everything) quand le
+                                   plugin ExtendDB est absent.
+UnloadGameCacheDuringGame  true    Libère ce cache pendant une partie.
+UseImageCache              true    Utilise le cache de miniatures dégradées.
+Use16:9ForMainScreenshot   true    Zone média principale 16:9 (false = 2:3).
+DetailLoadDelayMs          300     Délai (0-5000) avant le chargement différé du
+                                   panneau de détail (anti-scroll-rapide).
+KillStoreLauncherAfterGame false   Ferme le client GOG/Steam/Epic/Ubisoft à la
+                                   fin d'un jeu boutique — seulement l'instance
+                                   que CE lancement a démarrée.
+KillStoreLauncherEvenIfPreRunning false  … même s'il tournait déjà avant.
+StoreExitFocusFallback     false   Détection de fin de jeu boutique : ajoute le
+                                   repli "perte de focus fenêtre" (plus fragile).
+CheckDependencies          true    Vérification bios/dépendances avant lancement.
+ProgressSweepOnBoot        false   Passe "progress tracking" sur toute la
+                                   bibliothèque au démarrage (coûteux).
+ProgressApplyOnSelect      true    Ré-évalue le progress d'un jeu à sa sélection.
+StartupLoadDelay           (ms)    Plafond global "révéler quand même" du Smart
+                                   Capture (les overrides LB par-ému gagnent).
+StartupProgressBar         true    Barre de progression sur l'écran de démarrage.
+PauseMode                  legacy  legacy = overlay natif ; advanced = WebView
+                                   (non implémenté, retombe sur legacy).
+WebReturnTiming            behind  Retour du kiosque web après un jeu :
+                                   behind | after | immediate.
+NonEmuUsePauseScreen       true    ┐ Défauts de pause pour les jeux SANS
+NonEmuSuspendOnPause       true    │ émulateur (boutique / exe direct / DOSBox),
+NonEmuForcefulActivation   false   ┘ un override par-jeu gagne toujours.
+
+Caches / miniatures (Options → Caches) :
+CleanThumbsImages/Video/Related/WebImg/Docs  true  Familles couvertes par le
+                                   nettoyage auto post-GameCache (ThumbGc.Run).
+CleanThumbsBudget          true    Applique le budget disque des thumbs.
+CleanModel3d               true    Sweep auto des GLB 3D orphelins.
+CleanOptionsDb             true    Sweep des rows options-db orphelines.
+ThumbAlphaFormat           png     Conteneur des thumbs transparents (png|webp).
+ThumbAlphaRegroupements    ClearLogo            Familles forcées PNG (alpha).
+ThumbJpgRegroupements      Front,Back,Screenshots  Familles forcées JPEG.
+GenCacheSelection          Front,Screenshots    Dernière sélection de la fenêtre
+                                   Generate Media Cache (csv, familles+phases).
+
+Extrait code (résolution d'un toggle avec repli) — Host/Media/ThumbCache.cs :
+
+    (LiteBoxConfig.LoadForExe().Get("ThumbAlphaFormat", null) ?? "png")
+
+--------------------------------------------------------------------------------
+ 1.3 Défauts GLOBAUX gameplay — seedés au boot, tous visibles
+--------------------------------------------------------------------------------
+Ces 28 clés sont écrites avec leur défaut par GameplayDefaults.Seed() au premier
+boot : AUCUNE clé cachée. Elles sont le PALIER GLOBAL d'une résolution
+jeu → émulateur → global ; les deux paliers entité vivent dans litebox-options.db
+(§3.1) et gagnent toujours. Cas d'usage type : SmartCapture activé globalement,
+désactivé sur un seul émulateur via Edit Emulator → onglet LiteBox.
+
+Extrait code (repli global depuis l'ini) — Host/Gameplay/GameplaySettings.cs :
+
+    string R(string key, string def)
+    {
+        // palier jeu, puis émulateur (options-db)…
+        return ini.Get(key) ?? def;   // …sinon le global de l'ini
+    }
+
+ExitScreenEagerMs         -1               Écran de fin affiché N ms après le
+                                           script AHK de sortie ; -1 = désactivé.
+PadPauseEnabled           false            Pause à la manette (XInput).
+PadPauseButton            Back+Start       Combo manette de pause.
+PauseTarget               smartcapture     Processus gelé par la pause :
+                                           smartcapture | process.
+PauseFreezeTree           false            Geler tout l'arbre de processus.
+PauseScreenFreezeTiming   before           Overlay avant ou après le gel.
+PauseScreenFreezeOffsetMs 0                Délai (0-5000) entre les deux.
+PauseExitKill             smartcapture:1   Force-kill à la sortie pause SANS
+                                           script AHK : none|smartcapture:<s>|
+                                           process:<s>.
+PauseExitKillAhk          smartcapture:30  Idem quand un script AHK a tourné
+                                           sans fermer le jeu.
+SmartCaptureEnabled       true             Détection de la fenêtre de jeu.
+SmartCaptureUseFps        true             Critère "rend à ≥ N fps".
+SmartCaptureMinFps        25               … le N en question.
+SmartCaptureSustainMs     600              … maintenu pendant N ms.
+SmartCaptureUseSize       true             Critère "couvre ≥ N% de l'écran".
+SmartCaptureMinSizePct    50               … le N en question.
+SmartCaptureCombine       and              and | or quand les deux critères sont
+                                           actifs.
+SmartCaptureTitle         (vide)           Filtre de titre (wildcard) — matche
+                                           seul s'il est défini.
+SmartCaptureStopOnWindowClose false        Fin de session à la fermeture de la
+                                           fenêtre (au lieu de l'exit processus).
+SmartCaptureShowBorder    false            Garde la bordure jaune WGC (debug).
+SmartCaptureIgnoreExes    (vide)           Blacklist : lignes *.exe/*.bat = noms
+                                           de process, autres = fragments de
+                                           titre ; vide = liste intégrée des
+                                           clients boutique.
+StartupStayOnTop.<cat>    Emulator=true,   Écran de démarrage maintenu au-dessus
+                          le reste=false   SANS voler le focus, par type de
+                                           lancement (Emulator / App / DosBox /
+                                           Store.Gog / .Steam / .Epic / .Uplay /
+                                           .Ea).
+
+Cas SPÉCIAL — deux clés volontairement ABSENTES de l'ini :
+PauseHotkey / ScreenCaptureKey : absente = hériter de la touche configurée dans
+LaunchBox (KeyboardGamePause / KeyboardScreenshot) ; valeur vide = désactivé ;
+valeur posée = combo LiteBox ("Ctrl+F12"). Aucun défaut fixe ne peut exprimer
+"hériter", donc elles ne sont pas seedées (Host/Gameplay/GameplaySettings.cs) :
+
+    var v = LiteBoxConfig.LoadForExe().Get("PauseHotkey"); // null = jamais posée
+    if (v != null) return v;
+    return LbKeyToCombo(GIntXml("KeyboardGamePause", 7)) ?? "Pause";
+
+--------------------------------------------------------------------------------
+ 1.4 État d'interface (persisté, sans intérêt à éditer à la main)
+--------------------------------------------------------------------------------
+WinX/WinY/WinW/WinH/WinMax     Position/taille de la fenêtre principale.
+SplitLeftPermille/SplitMidPermille  Largeur des trois panneaux (‰).
+GroupView / LastCategory / LastGame  Vue de l'arbre + dernière sélection
+                               (restaurée au boot).
+SortColumn / SortAsc           Tri de la liste de jeux.
+Col.<nom>=<largeur,visible,ordre>  Une clé par colonne de la liste
+                               (ex. Col.title=320,1,0).
+Color.<slot>                   Overrides du thème (Options → Theme).
+ZoomPercent / TwoLineRows / AutoFitColumns  Confort de liste.
+MetaExpanded / VndbExpanded / RaExpanded / StoreAchExpanded  Sections du
+                               panneau de détail repliées/dépliées.
+PosterMode / PosterImageGroup / PosterOwnerDraw  Réglages de la vue Poster.
+
+--------------------------------------------------------------------------------
+ 1.5 Sections
+--------------------------------------------------------------------------------
+[Base]                Module bdd étendue :
+  AutoUpdateDb=true     Mise à jour auto de LaunchBox.Extended.Metadata.db.
+  UseAsMainDb=…         La bdd étendue devient la source principale de métadata.
+  EnableOverviewCache=… Cache des overviews (OverviewCache).
+  OverviewSources=…     Sources d'overview retenues (csv ordonné).
+  UpdateRepo=…          Dépôt de téléchargement de la bdd étendue.
+[Web]                 Module web :
+  Port=8080             Port du serveur web embarqué.
+  KioskHotKeys=true     Raccourcis clavier actifs dans le kiosque.
+[Mame]
+  UploadFbneoHighScores=…  Upload des hi-scores FBNeo vers gamesdb.
+[LaunchBoxAccount]
+  Email / PasswordBlob  Compte LaunchBox ; PasswordBlob est CHIFFRÉ (crypto
+                        Settings de LB, LbSettingsCrypto) — jamais en clair.
+
+================================================================================
+ 2. Fichiers JSON — un par fonctionnalité, créés au premier usage
+================================================================================
+
+--------------------------------------------------------------------------------
+ media-layout.json — pipeline d'images du panneau de détail
+--------------------------------------------------------------------------------
+Écrit à l'apply des options Display → Right panel (MediaLayout.Save()).
+Décrit, PAR VUE (liste / poster), l'image immédiate puis la liste post-load.
+
+    { "ImmediateList": "Front", "ImmediatePoster": "Front",
+      "PosterIndependent": false, "Show3dBox": true,
+      "PostLoad": [ { "Sel": "Front", "Count": 1, "Mode": "auto",
+                      "WRegion": 1, "WType": 1, "Cumulative": false } ] }
+
+Clés d'une entrée PostLoad (Host/Media/MediaLayout.cs) : Sel = famille ou type
+exact (ExactType) ; Count = nombre max ; Mode auto|all ; WRegion/WType/WNumeric/
+WAspect = poids de tri ; Cumulative(+Depth) = accumulation multi-entrées ;
+IgnoreGameRegion / AllRegions = élargissement des régions. Le hash MD5 de cette
+config sert de clé au cache anti-doublons (ADS :lb.dupcheck).
+Cas d'usage : afficher la jaquette immédiatement puis 3 screenshots post-load.
+
+--------------------------------------------------------------------------------
+ youtube.json — intégration YouTube / yt-dlp
+--------------------------------------------------------------------------------
+Écrit par le dialogue vidéo (roue dentée) et l'onglet YT-DLP des options.
+JSON et PAS ini car Searches est une liste multi-lignes (Host/Integrations/
+YtConfig.cs) :
+
+    { "Searches": [ "{GameName} trailer", "{GameName} {Platform} gameplay" ],
+      "Quality": "1080p", "Cookies": "None" }
+
+Searches : gabarits de recherche, tags {GameName} {Platform} {AltNameN}.
+Quality  : Best | 1080p | 720p | 480p.   Cookies : navigateur source (yt-dlp).
+Cas d'usage : ajouter un gabarit "{GameName} longplay" pour les vidéos longues.
+
+--------------------------------------------------------------------------------
+ ra-panel.json — RetroAchievements (compte + activation par plateforme)
+--------------------------------------------------------------------------------
+Écrit à la connexion RA et à chaque changement dans Options → LB·Integrations →
+RetroAchievements (RaPanelSupport.Persist).
+
+    { "mode": "onselect", "enabled": { "Nintendo 64": true },
+      "hasherPath": "", "refreshHours": 0,
+      "user": "…", "passwordBlob": "<chiffré>", "apiKey": "…",
+      "tokenObtainedUtc": "2026-07-27T…", "renewTokenEveryDays": 0 }
+
+mode : quand résoudre le hash (onselect…) ; enabled : diff par plateforme par
+rapport au défaut ; passwordBlob : chiffré via la crypto Settings de LB ;
+tokenObtainedUtc + renewTokenEveryDays : renouvellement auto du token.
+Cas d'usage : activer la résolution RA seulement sur ses consoles Nintendo.
+
+--------------------------------------------------------------------------------
+ rom-profiles.json — profils de l'extracteur de ROMs
+--------------------------------------------------------------------------------
+Écrit quand on modifie un profil (Options → modules Rom). Un profil par couple
+(émulateur, plateforme), "All" = générique (Host/Rom/RomConfig.cs) :
+
+    { "ConfigVersion": "0.8.9", "Profiles": [ {
+        "Emulator": "RetroArch", "Platform": "Sony Playstation",
+        "Mode": "SmartExtract", "CacheSubDir": "", "Priority": "(Europe);(USA)",
+        "ExtractCompanions": true, "CompanionExtensions": "bin",
+        "FlattenExtraction": false, "ConvertAfterExtract": false,
+        "Conversions": [ { "Input": "chd", "Output": "cue/bin" } ],
+        "RomExtensions": "", "IgnoredExtensions": "" } ] }
+
+Mode : SmartExtract / etc. ; Priority : tags pondérés de choix de ROM
+("(Europe)" ou wildcard "*[!]*") ; Conversions : règles chdman/DolphinTool ;
+CompanionExtensions : fichiers compagnons à extraire avec la ROM (bin pour cue).
+Cas d'usage : préférer les dumps (Europe) et convertir les .chd en cue/bin pour
+un émulateur qui ne lit pas le CHD.
+
+--------------------------------------------------------------------------------
+ game-suggester.json — règles de suggestion (Similar / Recommended / Ports)
+--------------------------------------------------------------------------------
+Écrit quand on édite les règles de scoring (GameSuggesterConfig.Save()).
+Trois catégories, chacune : AllowDbGames (proposer des jeux hors bibliothèque),
+MinimumScore, et une liste Criteria :
+
+    { "Similar": { "AllowDbGames": false, "MinimumScore": 3, "Criteria": [
+        { "FieldKey": "Genre", "UseGameValue": true, "Weight": 2 },
+        { "FieldKey": "Platform", "ComparisonValue": "Arcade", "Weight": null } ] },
+      "UseLbSimilarGames": true, "UseLbRecommendedGames": true }
+
+Weight=null = FILTRE dur (obligatoire) ; sinon poids additionné au score.
+UseLb* : fusionner avec les listes calculées par LaunchBox.
+Cas d'usage : exiger le même genre (filtre) + bonus si même développeur.
+
+--------------------------------------------------------------------------------
+ search-history.json — historique du filtre de recherche avancé
+--------------------------------------------------------------------------------
+Écrit à chaque application d'un critère actif (SearchHistory.Add — dédup,
+insertion en tête, plafonné à 10). Contenu : la liste sérialisée des derniers
+FilterCriteria (mêmes objets que le filtre avancé). État client pur.
+
+--------------------------------------------------------------------------------
+ parental-lists.json — listes du contrôle parental
+--------------------------------------------------------------------------------
+Écrit par la page Parental (ParentalConfig). Le PIN N'EST PAS ici : c'est le
+LockPin chiffré de BigBox (BigBoxSettings.xml), credential unique partagé.
+
+    { "LaunchBoxEnabled": false, "BigBoxEnabled": true,
+      "Rules": [ "E", "E10+", "T*" ],
+      "HiddenPlatformsBigBoxOn": [ "Sony Playstation 2" ],
+      "AllowLockedModifyFavorites": false, "BlockInstallWhenLocked": true,
+      "HotKey": 0, "ConfigVersion": "0.8.9" }
+
+Rules : ratings autorisés, wildcards * et ? ancrés. HiddenPlatformsBigBoxOn/Off :
+plateformes masquées selon l'état verrouillé. AllowLockedModify* : exceptions
+autorisées sous verrou.
+Cas d'usage : en mode verrouillé, ne montrer que les jeux E/E10+ et masquer
+les plateformes adultes.
+
+--------------------------------------------------------------------------------
+ saves-vault.json — index du coffre de sauvegardes
+--------------------------------------------------------------------------------
+Écrit par la page Game Saves (SaveManager). Racine versionnée + une entrée par
+backup (le zip pointé vit sous litebox\) :
+
+    { "ConfigVersion": "0.8.9", "Entries": [ {
+        "GameId": "81ad5a6f-…", "GroupId": "…", "GroupName": "Slot interne",
+        "IsState": false, "Slot": null, "VaultPath": "Core\\litebox\\saves\\…zip",
+        "OriginalFileName": "game.srm", "Label": "Avant le boss final",
+        "CreatedUtc": "2026-07-27T…", "Md5": "…", "SizeBytes": 8192,
+        "IsDirectory": false } ] }
+
+VaultPath est relatif à la racine LB quand possible (portable). Md5 = fichier ou
+manifeste de dossier. Label = nom donné par l'utilisateur à cette version.
+
+--------------------------------------------------------------------------------
+ model-defaults.json — presets 3D par plateforme (PAS sur disque)
+--------------------------------------------------------------------------------
+Ressource EMBARQUÉE dans LiteBox.dll (ModelDefaults.TryGet), table figée des
+paramètres de boîte 3D par plateforme. Ne se modifie pas ; les overrides
+utilisateur passent par Edit Platform → 3D (PlatformModelStore).
+
+================================================================================
+ 3. Bases SQLite
+================================================================================
+
+--------------------------------------------------------------------------------
+ 3.1 litebox-options.db — LE store par-entité (table options, EAV)
+--------------------------------------------------------------------------------
+    options(scope TEXT, entity_id TEXT, key TEXT, value TEXT,
+            PRIMARY KEY(scope, entity_id, key)) WITHOUT ROWID
+
+scope     : global | game | emulator | platform | playlist.
+entity_id : GUID du jeu/émulateur ; NOM pour une plateforme (pas de guid LB) ;
+            "" pour global.
+key/value : une option posée = une row ; supprimer la valeur = SUPPRIMER la row
+            (tri-state : pas de row = hériter du palier supérieur).
+
+Toute clé doit être DÉCLARÉE dans Host/Data/OptionKeys.cs (scope autorisés,
+type, cache Hot/Cold, propriétaire). Une clé inconnue est loggée en prod et
+LÈVE sous --debug. Les clés Hot sont préchargées en RAM au boot (write-through);
+les Cold lisent la base à la demande (chemins de lancement).
+
+Registre actuel :
+  scope global (routées "ProblemKeys" — en db SEULEMENT si le LaunchBox détecté
+  est < 13.28, sinon partagées dans Settings.xml) :
+    StartupScreenPostLaunchDisplayTime, ShutdownScreenPostReadyDisplayTime,
+    ForceFrontendFocusOnShutdown, MonitorStartupShutdownWithProcess
+  scope global (switchs de modules, row absente = défaut du module) :
+    Module.base, Module.rom, Module.retroachievements, Module.parental,
+    Module.web
+  scopes game+emulator (overrides gameplay, §1.3 pour la sémantique ; édités par
+  Edit Game / Edit Emulator → onglets LiteBox) :
+    StartupStayOnTop, ExitScreenEagerMs, PauseHotkey, ScreenCaptureKey,
+    PadPauseEnabled, PadPauseButton, PauseTarget, PauseFreezeTree,
+    PauseScreenFreezeTiming, PauseScreenFreezeOffsetMs, PauseExitKill,
+    PauseExitKillAhk, SmartCaptureEnabled, SmartCaptureUseFps,
+    SmartCaptureUseSize, SmartCaptureCombine, SmartCaptureMinFps,
+    SmartCaptureSustainMs, SmartCaptureMinSizePct, SmartCaptureTitle,
+    SmartCaptureStopOnWindowClose, SmartCaptureShowBorder
+  scope game (données, pas des overrides) :
+    FieldLocks      JSON {"colonne":"valeur préservée"} — verrous de champs de
+                    métadonnées, CONTRAT PARTAGÉ avec le plugin ExtendDB (qui
+                    lit/écrit ces rows en SQLite direct sous vrai LaunchBox).
+    Model3dImages   JSON {"slot":"chemin relatif LB"} — images forcées du
+                    modèle 3D (onglet Image Selection).
+    RomSelection    JSON {"verKey":{"rom":"…","force":bool}} — pick de ROM en
+                    attente par version de jeu (client desktop).
+  scope platform (entity_id = NOM de plateforme) :
+    RaConsoleKey    Console RAHasher forcée ; sentinelle "-" = explicitement
+                    aucune (une valeur vide supprimerait la row = auto).
+
+Exemples de rows réelles :
+
+    global  |                                      | StartupScreenPostLaunchDisplayTime | 3000
+    game    | 81ad5a6f-1655-47ae-9ffb-3861b3f00b19 | SmartCaptureEnabled | false
+    game    | 81ad5a6f-1655-47ae-9ffb-3861b3f00b19 | FieldLocks | {"title":"Chrono Trigger"}
+    platform| Nintendo 64                          | RaConsoleKey | n64
+
+Extrait code (résolution tri-state) — Host/Data/LiteBoxOption.cs :
+
+    public static bool ResolveBool(string key, string emuId, bool globalValue,
+                                   string gameId = null)
+    {
+        var g = GetOverride(ScopeGame, gameId ?? "", key);
+        if (!string.IsNullOrEmpty(g)) return g == "true";
+        var e = GetOverride(ScopeEmulator, emuId ?? "", key);
+        return string.IsNullOrEmpty(e) ? globalValue : e == "true";
+    }
+
+Maintenance : sweep automatique des rows dont l'entité a disparu (opt-out
+CleanOptionsDb) ; rows platform déplaçables par RenameEntity.
+
+--------------------------------------------------------------------------------
+ 3.2 LiteBox.pending.db — journal d'écriture vers les XML LaunchBox (ops)
+--------------------------------------------------------------------------------
+    ops(seq INTEGER PK AUTOINCREMENT, ts INTEGER, op TEXT, entity TEXT,
+        id TEXT, parent_id TEXT, field TEXT, value TEXT)
+
+Ce n'est PAS un stockage : c'est un tampon WAL. Chaque modification destinée aux
+XML LaunchBox (favori, note, champ édité…) devient une op ordonnée ; le journal
+est rejoué en mémoire au boot puis FLUSHÉ vers les XML quand c'est sûr (LB/BB
+fermés), puis vidé. Exemple de row :
+
+    12 | 1753576800000 | modify | Game | 81ad5a6f-… | | Favorite | true
+
+op = modify/add/remove/entity-replace ; entity = Game / Emulator / Settings /
+AdditionalApplication… ; parent_id pour les sous-entités. Reset intégral protégé
+par PRAGMA user_version. Supprimer ce fichier = perdre les modifs pas encore
+écrites dans les XML (et rien d'autre).
+
+--------------------------------------------------------------------------------
+ 3.3 launch-history.db — dernier lancement par jeu (table launch_history)
+--------------------------------------------------------------------------------
+    launch_history(game_id TEXT PK, additional_app_id TEXT, emulator_id TEXT,
+                   extracted_rom_path TEXT, last_launched_utc TEXT,
+                   detection_ms INTEGER)
+
+Une row par jeu : quelle version (additional_app_id), quel émulateur et quelle
+ROM extraite ont servi au dernier lancement, quand, et combien de temps la
+détection de fenêtre a pris (detection_ms alimente la barre de progression de
+l'écran de démarrage). Sert à re-proposer le même choix sur le bouton Play et à
+la correction RA au lancement. Exemple :
+
+    81ad5a6f-… | NULL | retroarch-guid | R:\romcache\AB12CD34\game.z64
+               | 2026-07-27T00:41:12Z | 5230
+
+Écrit par RecordLaunch/RecordLaunchRomEntry (UPSERT — jamais INSERT OR REPLACE,
+pour ne pas perdre detection_ms).
+
+--------------------------------------------------------------------------------
+ 3.4 rom-archive-cache.db — listings d'archives + moteur RetroAchievements
+--------------------------------------------------------------------------------
+Entièrement RECONSTRUCTIBLE (re-scan / re-hash / re-téléchargement API).
+
+  archive(signature PK, path, size, short_sig, cached_at, parse_state)
+     Une row par ARCHIVE scannée. signature = clé portable du fichier (chemin
+     relatif à LB + taille, 10 hex) ; parse_state = état du parse RA complet
+     (0 à faire / 1 ok / 2 échec).
+  archive_entry(signature, filename, path_in_archive, size,
+                RetroAchievementsHash, RetroAchievementsId,
+                PK(signature, path_in_archive))
+     Une row par FICHIER contenu dans l'archive, avec son hash RA et le raid
+     résolu. C'est ce qui permet d'afficher 🏆 par ROM dans le sélecteur.
+  cache_entry(signature PK, game_title, platform, emulator, source_path, mode,
+              output_file, size_bytes, cached_utc, last_played_utc)
+     Manifeste du cache d'EXTRACTION : une row par dossier romcache\<SIG>\ —
+     l'unité d'éviction LRU (last_played_utc).
+  rom_hash(signature PK, path, size, RetroAchievementsHash,
+           RetroAchievementsId, computed_at)
+     Hash RA des ROMs "nues" (hors archive).
+  ra_game(id PK, console_id, title, console_name, image_icon,
+          num_achievements, num_leaderboards, points, date_modified,
+          forum_topic_id)
+     Catalogue RetroAchievements par console (API_GetGameList) : une row par
+     jeu RA connu. Ex : 10078 | 2 | "Banjo-Kazooie" | "Nintendo 64" | … | 85 | …
+  ra_hash(hash PK, game_id)
+     Index inverse hash → id de jeu RA (hash en minuscules). C'est la table
+     interrogée à chaque résolution ("ce hash correspond-il à un jeu RA ?").
+  ra_console(id PK, key, name, games_refreshed_at, next_refresh_at)
+     Planification du rafraîchissement du catalogue par console (backoff,
+     garde anti-troncature).
+
+--------------------------------------------------------------------------------
+ 3.5 rom-archive-history.db — état DURABLE du sélecteur de ROMs
+--------------------------------------------------------------------------------
+    archive_history(short_signature, entry_filename, kind, last_touched_utc,
+                    PK(short_signature, entry_filename, kind))
+
+kind = favorite | played : étoiles ★ et marqueurs "récemment joué" ↻ du
+sélecteur in-archive. Séparé du cache (3.4) exprès : vider le cache ne perd
+jamais vos favoris. Exemple :
+
+    AB12CD34 | Super Game (Europe).z64 | favorite | 2026-07-26T22:03:00Z
+
+--------------------------------------------------------------------------------
+ 3.6 LaunchBox.Extended.Metadata.db — base de métadonnées étendue (EXTERNE)
+--------------------------------------------------------------------------------
+Téléchargée par le module Base ([Base] du §1.5), pas produite par LiteBox.
+Schéma géré par le projet ExtendDB (Games, GameImages, Platforms…). LiteBox la
+lit (overviews, images web, mapping plateformes) et ne la modifie pas — son
+user_version n'est JAMAIS stampé par nous.
+
+================================================================================
+ 4. Fichiers texte
+================================================================================
+pending-cleanup.txt   Liste des bases marquées "supprimer au prochain
+                      redémarrage" par la page Options → Caches (une base
+                      ouverte ne peut pas être supprimée à chaud). Lu et purgé
+                      par DataMaintenance.RunPendingCleanup AVANT toute
+                      ouverture de db.
+litebox-debug.log     Trace complète — uniquement si DebugLog=true ou --debug.
+litebox-store.log     Trace de la sélection/synchro boutiques (GOG/Steam/Epic).
+saves-diag.log        Diagnostic de la synchro Game Saves.
+mame-submit.log       Trace des soumissions de hi-scores MAME.
+
+================================================================================
+ 5. Hors litebox\ — pour être complet
+================================================================================
+XML LaunchBox (Data\)      Seuls les champs du schéma LB y sont écrits, via le
+                           journal (§3.2). Le save du vrai LaunchBox reconstruit
+                           ses XML à schéma FIXE : tout élément étranger serait
+                           jeté — d'où litebox-options.db pour nos données.
+ADS NTFS (flux :nom)       Métadonnées attachées aux FICHIERS d'images/ROMs,
+                           qui suivent les renommages de LB :
+                             :crc32        hash du fichier (dédoublonnage web)
+                             :info         méta d'origine (source, url…)
+                             :lock         verrou d'image (partagé plugin)
+                             :lb.dupcheck  cache anti-doublons par vue
+                           Repli sidecar .ads\ sur les volumes non-NTFS.
+cache\                     Tout le reconstructible : thumbs\ (miniatures),
+                           3d\ (modèles GLB), ra-cache\ + ra-badges\ (RA),
+                           store-ach-cache\ + store-ach-badges\ (succès
+                           boutiques), emumovies\, steam\, romcache\ (ROMs
+                           extraites, éviction LRU), webview2-*\ (profils
+                           navigateur), staging de téléchargement de la bdd
+                           étendue. "Tout supprimer" est toujours sans risque.
+web\ / web-assets\         Thèmes web servis / staging de déploiement.
+thirdparty\                Payload natif déployé (yt-dlp, RAHasher…).
+================================================================================

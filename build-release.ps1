@@ -149,6 +149,10 @@ foreach ($t in $targets) {
   if (Test-Path $waSrc) { Copy-Item $waSrc (Join-Path $stageZip 'litebox\web-assets') -Recurse -Force; Write-Host "  + web-assets bundled ($label)" }
   else { Write-Host "  (note: no web-assets\ - Web module ships without its theme this build)" }
 
+  # c2) Options/data reference doc: shipped INSIDE litebox\ so it lands next to the very files it
+  #     documents (Core\litebox\recapitulatif-options.txt) and is swept by the uninstaller's rmdir.
+  Copy-Item (Join-Path $PSScriptRoot 'recapitulatif-options.txt') (Join-Path $stageZip 'litebox\recapitulatif-options.txt')
+
   # d) ROM-extractor tools (optional): chdman.exe / DolphinTool.exe / RamDiskHelper.exe are NOT bundled here
   #    (they live at <LB>\ThirdParty\RomExtractor\, outside Core, and need a NativeInstaller deploy step). The
   #    extractor's tool resolver ALSO reuses the ExtendDB plugin's thirdparty\ when installed, and every convert/
@@ -164,6 +168,9 @@ $instDir = Join-Path $tmp 'installer'
 Publish 'net10.0-windows' $instDir @('-p:PublishSingleFile=true', '-p:LiteBoxDist=standalone', "-p:LightPayloadDir=$lightPayload")
 Copy-Item (Join-Path $instDir 'LiteBox.exe') (Join-Path $out "LiteBox-Setup-$liteBoxVer.exe")
 Copy-Item $readme (Join-Path $out 'README.txt')
+# The options/data reference doc also sits loose in the release dir (installer users read it from here;
+# zip users additionally get it deployed at Core\litebox\recapitulatif-options.txt).
+Copy-Item (Join-Path $PSScriptRoot 'recapitulatif-options.txt') (Join-Path $out 'recapitulatif-options.txt')
 
 # ---- summary ----
 Write-Host "`n== release tree ($out) =="

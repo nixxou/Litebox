@@ -1859,7 +1859,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         {
             Options.OptionItem.Toggle("Display", "Use 16:9 for the main media (else poster ratio)",
                 () => _cfg.Use169ForMainScreenshot, v => _cfg.Use169ForMainScreenshot = v,
-                applyLive: () => { _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0); RelayoutDetail(); }),
+                applyLive: () => { _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0); RelayoutDetail(); Model3d.Model3dKeyIndex.KickAll(); }),
             Options.OptionItem.Number("Display", "Detail load delay (ms)",
                 () => _cfg.DetailLoadDelayMs, v => _cfg.DetailLoadDelayMs = v,
                 min: 0, max: 5000, step: 50,
@@ -2286,6 +2286,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                 IGame[] games;
                 try { games = _dm.GetAllGames(); } catch { games = Array.Empty<IGame>(); }
                 var (kept, deletedN) = Model3d.Model3dCache.SweepStale(games);
+                Model3d.Model3dKeyIndex.RefreshPresence();
                 try { BeginInvoke(new Action(() => { if (m3dLbl.IsDisposed) return; M3dStats($"{deletedN} stale deleted, {kept} kept"); m3dClean.Enabled = true; m3dWipe.Enabled = true; })); } catch { }
             });
         };
@@ -3796,10 +3797,18 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (allow3d)
                 try
                 {
-                    // O(1) RAM-index lookup — NEVER Model3dCache.Resolve here: this path runs for every
+                    // O(1) RAM lookups only — NEVER Model3dCache.Resolve here: this path runs for every
                     // game a fast scroll transits, and Resolve's art-slot IO froze the transit loader.
-                    var glb = Model3d.Model3dCache.CachedGlbForInstant(g);
-                    if (glb != null) return (logoSrc, Media.Media3dItem.For(glb));
+                    // Primary: the GameCache-companion key index (exact: knows the CURRENT key). Fallback
+                    // (index not ready / host cache disabled): the header-scan index (may serve a stale bake).
+                    if (Model3d.Model3dKeyIndex.Ready)
+                    {
+                        var e = Model3d.Model3dKeyIndex.Get(Safe(() => g.Id));
+                        if (e is { HasGlb: true })
+                            return (logoSrc, Media.Media3dItem.For(Path.Combine(Model3d.Model3dCache.Dir, e.Key + ".glb")));
+                    }
+                    else if (Model3d.Model3dCache.CachedGlbForInstant(g) is { } glb)
+                        return (logoSrc, Media.Media3dItem.For(glb));
                 }
                 catch (Exception ex) { Console.WriteLine("[media3d] instant lookup failed: " + ex.Message); }
             fam = Media.MediaLayout.Current.Immediate3dFallback;
@@ -4497,8 +4506,16 @@ internal sealed class MainWindow : Form, IMessageFilter
                 if (budget > 0)
                     try
                     {
-                        var idn = Model3d.Model3dCache.Resolve(g);
-                        if (idn is { HasArt: true } && Add(Media.Media3dItem.For(idn.GlbPath), is3d: true)) contrib[ei]++;
+                        // Key index first (RAM, current key); Resolve only when it isn't ready.
+                        string? glbPath = null;
+                        if (Model3d.Model3dKeyIndex.Ready)
+                        {
+                            if (Model3d.Model3dKeyIndex.Get(S(Safe(() => g.Id))) is { } ke)
+                                glbPath = Path.Combine(Model3d.Model3dCache.Dir, ke.Key + ".glb");
+                        }
+                        else if (Model3d.Model3dCache.Resolve(g) is { HasArt: true } idn)
+                            glbPath = idn.GlbPath;
+                        if (glbPath != null && Add(Media.Media3dItem.For(glbPath), is3d: true)) contrib[ei]++;
                     }
                     catch { }
                 continue;

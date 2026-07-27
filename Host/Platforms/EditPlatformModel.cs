@@ -87,7 +87,7 @@ internal static class EditPlatformModel
         // ModelSettings ctor defaults (platforms LB has no entry for, e.g. SNES).
         // Preview = a sample game of this platform (title filled lazily by SwitchSampleGame; bare case otherwise).
         var (panel, apply, _) = BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs) ?? CtorDefaults(),
-                                          f => PlatformModelStore.Write(name, f), readOnly, s, name, PreviewSampleTitle(name), null, null);
+                                          f => { PlatformModelStore.Write(name, f); Model3d.Model3dKeyIndex.KickPlatform(name); }, readOnly, s, name, PreviewSampleTitle(name), null, null);
         return (panel, apply);
     }
 
@@ -109,7 +109,7 @@ internal static class EditPlatformModel
                                                                             Func<Dictionary<string, string>?>? imgOv)
         => BuildCore(PlatformModelStore.ReadGame(platformName, gameId),
                      PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? "") ?? CtorDefaults(),
-                     f => PlatformModelStore.WriteGame(platformName, gameId, f), readOnly, s, platformName, gameTitle ?? "", platformName, imgOv);
+                     f => { PlatformModelStore.WriteGame(platformName, gameId, f); try { var gg = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId); if (gg != null) Model3d.Model3dKeyIndex.KickGame(gg); } catch { } }, readOnly, s, platformName, gameTitle ?? "", platformName, imgOv);
 
     // A representative game of a platform to texture the platform-level preview: the first title with a Box -
     // Front image on disk (any region). Empty when none → the preview shows a bare (untextured) case.

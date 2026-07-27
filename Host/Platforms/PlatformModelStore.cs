@@ -99,6 +99,29 @@ internal static class PlatformModelStore
         catch { return null; }
     }
 
+    /// <summary>ALL of one platform's per-game ModelSettings overrides in ONE parse (gameId → map).
+    /// The per-pass bulk read for Model3dKeyIndex — calling ReadGame per game re-parsed the (multi-MB)
+    /// platform XML thousands of times. Empty dict when the file has none.</summary>
+    public static Dictionary<string, Dictionary<string, string>> ReadAllGameOverrides(string platformName)
+    {
+        var all = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            string file = GamePlatformFile(platformName);
+            if (!File.Exists(file)) return all;
+            foreach (var el in XDocument.Load(file).Root?.Elements("ModelSettings") ?? Enumerable.Empty<XElement>())
+            {
+                string gid = (string?)el.Element("GameId") ?? "";
+                if (gid.Length == 0) continue;
+                var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var c in el.Elements()) map[c.Name.LocalName] = c.Value;
+                all[gid] = map;
+            }
+        }
+        catch { }
+        return all;
+    }
+
     /// <summary>Write (override ON) or remove (fields == null) the game's ModelSettings block.</summary>
     public static bool WriteGame(string platformName, string gameId, Dictionary<string, string>? fields)
     {

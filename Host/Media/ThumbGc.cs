@@ -66,9 +66,8 @@ internal static class ThumbGc
             if (doDocs) SweepDocs(games); else Console.WriteLine("[thumbgc] docs sweep disabled (option)");
             if (doWebImg) SweepWebImg(); else Console.WriteLine("[thumbgc] webimg sweep disabled (option)");
             if (doRelated) SweepRelated(); else Console.WriteLine("[thumbgc] related sweep disabled (option)");
-            // 3D GLB cache: identity read from each file's extras, current key recomputed per game.
-            if (cfg.GetBool("CleanModel3d", true)) Model3d.Model3dCache.SweepStale(games);
-            else Console.WriteLine("[thumbgc] model3d sweep disabled (option)");
+            // 3D models: swept by Model3dKeyIndex's unified pass (same CleanModel3d opt-out) —
+            // the old per-file SweepStale walk here would be duplicate work.
             // Options-db: rows of entities that no longer exist (games/emulators/playlists by guid,
             // platforms by name — their natural key).
             if (cfg.GetBool("CleanOptionsDb", true)) SweepOptionsDb(games);

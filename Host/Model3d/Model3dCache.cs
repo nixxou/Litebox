@@ -52,21 +52,55 @@ internal static class Model3dCache
                                     string Platform, string Title, string GameId, bool HasArt,
                                     Dictionary<string, string>? ImgOv);
 
+    /// <summary>Per-pass memoization for bulk key computation (Model3dKeyIndex): platform settings and
+    /// per-game overrides are parsed ONCE PER FILE instead of once per game (the naive per-game reads
+    /// re-parsed multi-MB platform XMLs thousands of times — a 10-minute pass), and size/mtime can be
+    /// served from a bulk Everything map. Single-game runtime callers pass null and keep per-call reads.</summary>
+    internal sealed class ResolveContext
+    {
+        public Func<string, (long size, long mtimeTicks)?>? Stat;
+        private readonly Dictionary<string, Dictionary<string, string>?> _platform = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Dictionary<string, Dictionary<string, string>>> _games = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _scrapeAs = new(StringComparer.OrdinalIgnoreCase);
+
+        public string ScrapeAs(string platform)
+        {
+            if (_scrapeAs.TryGetValue(platform, out var v)) return v;
+            string s = "";
+            try { s = PluginHelper.DataManager?.GetPlatformByName(platform)?.ScrapeAs ?? ""; } catch { }
+            return _scrapeAs[platform] = s;
+        }
+
+        public Dictionary<string, string>? PlatformSettings(string platform)
+        {
+            if (_platform.TryGetValue(platform, out var v)) return v;
+            return _platform[platform] = Platforms.PlatformModelStore.Read(platform);
+        }
+
+        public Dictionary<string, string>? GameSettings(string platform, string gameId)
+        {
+            if (!_games.TryGetValue(platform, out var per))
+                _games[platform] = per = Platforms.PlatformModelStore.ReadAllGameOverrides(platform);
+            return per.TryGetValue(gameId, out var m) ? m : null;
+        }
+    }
+
     /// <summary>Resolve a game's settings map + art sources and compute its cache key. Cheap (a few stats,
-    /// no decode) — safe to call per selection on a background thread. Null on unusable input.</summary>
-    public static Identity? Resolve(IGame g)
+    /// no decode) — safe to call per selection on a background thread. Null on unusable input.
+    /// <paramref name="ctx"/> (optional) memoizes the per-file reads for bulk passes.</summary>
+    public static Identity? Resolve(IGame g, ResolveContext? ctx = null)
     {
         string platform, title, id;
         try { platform = g.Platform ?? ""; title = g.Title ?? ""; id = g.Id ?? ""; } catch { return null; }
         if (platform.Length == 0 || title.Length == 0) return null;
 
         string scrapeAs = "";
-        try { scrapeAs = PluginHelper.DataManager?.GetPlatformByName(platform)?.ScrapeAs ?? ""; } catch { }
+        try { scrapeAs = ctx?.ScrapeAs(platform) ?? PluginHelper.DataManager?.GetPlatformByName(platform)?.ScrapeAs ?? ""; } catch { }
         Dictionary<string, string>? map = null;
         try
         {
-            map = (id.Length > 0 ? Platforms.PlatformModelStore.ReadGame(platform, id) : null)
-                  ?? Platforms.PlatformModelStore.Read(platform)
+            map = (id.Length > 0 ? (ctx != null ? ctx.GameSettings(platform, id) : Platforms.PlatformModelStore.ReadGame(platform, id)) : null)
+                  ?? (ctx != null ? ctx.PlatformSettings(platform) : Platforms.PlatformModelStore.Read(platform))
                   ?? Platforms.ModelDefaults.TryGet(platform, scrapeAs)
                   ?? Platforms.EditPlatformModel.CtorDefaults();
         }
@@ -90,8 +124,12 @@ internal static class Model3dCache
             {
                 if (!string.IsNullOrEmpty(path))
                 {
-                    var fi = new FileInfo(path);
-                    if (fi.Exists) { size = fi.Length; mtime = fi.LastWriteTimeUtc.Ticks; }
+                    if (ctx?.Stat?.Invoke(path!) is { } st) { size = st.size; mtime = st.mtimeTicks; }
+                    else
+                    {
+                        var fi = new FileInfo(path);
+                        if (fi.Exists) { size = fi.Length; mtime = fi.LastWriteTimeUtc.Ticks; }
+                    }
                 }
             }
             catch { }
@@ -183,7 +221,7 @@ internal static class Model3dCache
         string png = PngPathFor(glbPath);
         try { if (File.Exists(png)) return File.ReadAllBytes(png); } catch { }
         var bytes = GlbFile.ReadThumb(glbPath);
-        if (bytes != null) TryWritePng(png, bytes);   // restore the sidecar
+        if (bytes != null) { TryWritePng(png, bytes); Model3dKeyIndex.NotifySidecar(glbPath); }   // restore the sidecar
         return bytes;
     }
 
@@ -240,6 +278,7 @@ internal static class Model3dCache
                               new GlbInfo(idn.Key, idn.GameId, idn.Platform, idn.Title, BakerVersion, idn.Manifest));
                 if (thumb != null) TryWritePng(PngPathFor(idn.GlbPath), thumb);   // sidecar, same bake
                 IndexAdd(idn.GameId, idn.GlbPath);
+                Model3dKeyIndex.NotifyBaked(idn.GameId, idn.Key);
                 Console.WriteLine($"[model3d] baked {idn.Title} → {Path.GetFileName(idn.GlbPath)} ({new FileInfo(idn.GlbPath).Length / 1024} KB)");
                 return true;
             });
@@ -268,6 +307,7 @@ internal static class Model3dCache
     public static int CleanAll()
     {
         IndexInvalidate();
+        Model3dKeyIndex.NotifyAllDeleted();
         int n = 0;
         try
         {

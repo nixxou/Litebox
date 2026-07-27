@@ -93,7 +93,13 @@ namespace LbApiHost.Host.Gc
         // Fired by GameCache when a platform (name) or the whole cache (null) becomes ready.
         private static void OnReady(string platform)
         {
-            if (platform != null) return;   // only on global-ready
+            if (platform != null)
+            {
+                // Platform-scoped rebuild (media edits arrive through the watchers): re-key that
+                // platform's 3D entries — art paths/mtimes may have changed.
+                try { Model3d.Model3dKeyIndex.KickPlatform(platform); } catch { }
+                return;
+            }
             try
             {
                 int plats = 0; long games = 0, images = 0, videos = 0;
@@ -116,6 +122,9 @@ namespace LbApiHost.Host.Gc
             // The cache is settled — the degraded-thumbs mark-and-sweep can now build its valid-set
             // (zero/low-IO: sizes ride the cache). Once per process; later re-readies are no-ops.
             try { Media.ThumbGc.Kick(); } catch { }
+            // 3D key index: EVERY global-ready (the post-game rebuild wiped it with the cache). The
+            // unified pass also owns the stale/orphan sweep (once per launch) + sidecar repair.
+            try { Model3d.Model3dKeyIndex.KickAll(); } catch { }
         }
 
         /// <summary>Drop the whole cache to free memory (e.g. while a game runs).</summary>

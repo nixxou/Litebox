@@ -282,15 +282,23 @@ internal static class Model3dBaker
     // The v1-v3 bakes embedded every face at its SOURCE resolution, PNG-encoded — a 2140px JPEG scan
     // became a multi-MB lossless PNG inside the GLB. The box renders in a ~500px pane: cap the longest
     // side at MaxTexPx (zoom headroom included) and use JPEG (q85) for OPAQUE faces — the vast
-    // majority (fronts/backs/spines/scans). PNG stays for anything actually using alpha (jewel shells).
+    // majority (fronts/backs/full sheets). PNG stays for anything actually using alpha (jewel shells).
     private const int MaxTexPx = 1024;
+    // …EXCEPT thin strips (spine scans, edge logos): their SHORT side is already small, so downscaling
+    // saves nothing (a 75×1383 spine → 56×1024 is a handful of KB either way) while the cap + JPEG q85
+    // turn fine vertical title text into illegible mush — the exact PS1-spine defect. A strip whose
+    // shorter side is ≤ ThinSidePx keeps FULL resolution and lossless PNG, matching what LaunchBox
+    // renders live from the same source. Cheap in bytes, sharp where it matters.
+    private const int ThinSidePx = 256;
 
     private static byte[]? EncodeTexture(BitmapSource bs)
     {
         try
         {
             int w = bs.PixelWidth, h = bs.PixelHeight;
-            int longest = Math.Max(w, h);
+            int shorter = Math.Min(w, h), longest = Math.Max(w, h);
+            // Thin strip → full-res, lossless (never JPEG fine text). Tiny regardless of length.
+            if (shorter <= ThinSidePx) return EncodePng(bs);
             if (longest > MaxTexPx)
             {
                 double k = (double)MaxTexPx / longest;

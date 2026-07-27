@@ -50,6 +50,14 @@ sections. Exemple type (Host/LiteBoxConfig.cs) :
 --------------------------------------------------------------------------------
 DebugLog         false   Écrit litebox-debug.log (trace complète). --debug au
                          lancement = équivalent one-shot + mode Strict.
+Model3dLbOracle  false   DEV. true = l'onglet 3D d'Edit Platform affiche une
+                         DEUXIÈME zone de preview rendue par le core LaunchBox
+                         (CoreModelHost/FlowModel) au-dessus du rendu LiteBox —
+                         harnais de comparaison des builders 3D. false (défaut) :
+                         aucun code oracle ne tourne, aucun assembly core chargé
+                         par ce chemin. Code balisé « LB-ORACLE » dans les
+                         sources (CoreModelHost.cs, EditPlatformModel,
+                         JewelRenderProbe --render-oracle).
 ReadOnly         false   true = ne JAMAIS écrire dans les XML LaunchBox ; les
                          modifs (favoris, notes…) restent en mémoire.
                          Cas d'usage : tester LiteBox sur une bibliothèque

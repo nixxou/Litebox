@@ -190,8 +190,8 @@ internal static class EditPlatformModel
 
         var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
         var left = new Panel { Dock = DockStyle.Fill, BackColor = Bg, AutoScroll = true, Padding = new Padding(S(12)) };
-        var preview = BuildPreview(S, previewPlatform, out var homeOut, out var orbitOut, out var sampleBtn);
-        var home = homeOut; var orbit = orbitOut;   // stable locals (out vars can't be captured)
+        var preview = BuildPreview(S, previewPlatform, out var homeOut, out var orbitOut, out var sampleBtn, out var liveOut);
+        var home = homeOut; var orbit = orbitOut; var live = liveOut;   // stable locals (out vars can't be captured); live = LB-ORACLE zone (null when off)
         root.Controls.Add(left);
         root.Controls.Add(preview);      // preview docks right first, left fills the rest
         // Sample-game rotation state: platform preview cycles through titles-with-box-art; game preview is fixed.
@@ -496,6 +496,8 @@ internal static class EditPlatformModel
         {
             var map = ApplyMapExtra(BuildFieldMap() ?? fallback);
             try { home.Build(map, CurrentSampleTitle(), previewPlatform, imgOv?.Invoke()); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
+            // ═══ LB-ORACLE ═══ mirror every redraw into the LaunchBox zone (no-op when the flag is off).
+            try { live?.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
         }
         // Redraw after every option change (Refresh calls RedrawPreview) + once the host handle exists.
         redrawPreview = RedrawPreview;
@@ -505,7 +507,7 @@ internal static class EditPlatformModel
             sampleBtn.Enabled = true; sampleBtn.ForeColor = Fg;
             sampleBtn.Click += (_, _) => { sampleIdx = (sampleIdx + 1) % sampleTitles.Count; RedrawPreview(); };
         }
-        root.Disposed += (_, _) => { try { home?.Dispose(); } catch { } };
+        root.Disposed += (_, _) => { try { home?.Dispose(); } catch { } try { live?.Dispose(); } catch { } };   // live = LB-ORACLE
 
         return (root, Apply, RedrawPreview);
 
@@ -526,10 +528,13 @@ internal static class EditPlatformModel
         }
     }
 
-    // ── right-hand "3D Model Preview" panel — LiteBox's OWN renderer (HomeModel3d), full height. No LaunchBox
-    // involvement. `sampleBtn` is the "Switch Sample Game" button (enabled only for a platform preview with
-    // >1 sample title). ──
-    private static Panel BuildPreview(Func<int, int> S, string previewPlatform, out HomeModel3d home, out OrbitController orbit, out Button sampleBtn)
+    // ── right-hand "3D Model Preview" panel — LiteBox's OWN renderer (HomeModel3d), full height. `sampleBtn`
+    // is the "Switch Sample Game" button (enabled only for a platform preview with >1 sample title).
+    // ═══ LB-ORACLE (Model3dLbOracle=true) ═══ with the ini flag on AND the LB core available, the panel
+    // becomes the historical DUAL-ZONE comparison harness instead: LaunchBox's own FlowModel on top (native
+    // mouse rotation), the home-made renderer below — side-by-side ground truth for the 3D builders.
+    // `live` stays null (and no core assembly is loaded) whenever the flag is off. ──
+    private static Panel BuildPreview(Func<int, int> S, string previewPlatform, out HomeModel3d home, out OrbitController orbit, out Button sampleBtn, out CoreModelHost.Preview? live)
     {
         orbit = new OrbitController();
         LastOrbit = orbit;   // exposed for the --model3d-live probe to drive rotate/zoom
@@ -546,6 +551,47 @@ internal static class EditPlatformModel
         box.Controls.Add(home.Control);
         orbit.Attach(home);
         WireOrbit(home.Control, orbit);
+
+        // ═══ LB-ORACLE (Model3dLbOracle=true) — everything inside this block is oracle-only ═══
+        live = null;
+        bool oracleWanted = false;
+        try { oracleWanted = LiteBoxConfig.LoadForExe().Model3dLbOracle; } catch { }
+        if (oracleWanted)
+        {
+            try { live = CoreModelHost.Preview.Create(nativeRotate: true); } catch (Exception ex) { Console.WriteLine("[model3d] oracle: " + ex.Message); }
+            if (live != null)
+            {
+                // Stack: LB zone (top, fills) + home-made zone (bottom, ~50%), each with its own header —
+                // the historical 8966b19^ layout.
+                var stack = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
+                var homeWrap = new Panel { Dock = DockStyle.Bottom, Height = 0, BackColor = Bg };
+                var homeHeader = new Label { Dock = DockStyle.Top, Height = S(26), Text = "  LiteBox renderer", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
+                box.Dock = DockStyle.Fill;
+                homeWrap.Controls.Add(box);
+                homeWrap.Controls.Add(homeHeader);
+                var gap = new Panel { Dock = DockStyle.Bottom, Height = S(8), BackColor = Bg };
+                var lbHeader = new Label { Dock = DockStyle.Top, Height = S(26), Text = "  LaunchBox (oracle)", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft };
+                var lbGap = new Panel { Dock = DockStyle.Top, Height = S(6), BackColor = Bg };
+                var lbBox = new Panel { Dock = DockStyle.Fill, BackColor = GroupBody, BorderStyle = BorderStyle.FixedSingle };
+                live.Control.Dock = DockStyle.Fill;
+                lbBox.Controls.Add(live.Control);   // native FlowModel rotation — no orbit wiring needed
+
+                stack.Controls.Add(lbBox);
+                stack.Controls.Add(lbGap);
+                stack.Controls.Add(lbHeader);
+                stack.Controls.Add(homeWrap);
+                stack.Controls.Add(gap);
+                void ReLayout() { homeWrap.Height = Math.Max(120, (stack.ClientSize.Height - S(6) - S(26) - S(8)) / 2); }
+                stack.SizeChanged += (_, _) => ReLayout();
+                stack.HandleCreated += (_, _) => ReLayout();
+
+                p.Controls.Add(stack);
+                p.Controls.Add(btnGap);
+                p.Controls.Add(sampleBtn);
+                return p;
+            }
+        }
+        // ═══ end LB-ORACLE ═══
 
         p.Controls.Add(box);
         p.Controls.Add(headerGap);

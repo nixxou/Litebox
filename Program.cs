@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash") || args.Contains("--dedup-test");
+bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash") || args.Contains("--dedup-test") || args.Contains("--render-jewel") || args.Contains("--render-glb") || args.Contains("--render-oracle");
 if (debugConsole)
     DebugConsole.Enable();
 
@@ -244,6 +244,14 @@ if (args.Contains("--dedup-test"))
     else Console.WriteLine("cnn:   UNAVAILABLE (deploy ThirdParty\\ImageDedup first — LiteBox.exe --deploy-natives)");
     return 0;
 }
+
+// Dev-only: render a jewel case (FF7 PS1) headless to a PNG at a chosen angle — geometry iteration harness.
+if (args.Contains("--render-jewel"))
+    return LbApiHost.Tools.JewelRenderProbe.Run(args, Array.IndexOf(args, "--render-jewel"));
+if (args.Contains("--render-glb"))
+    return LbApiHost.Tools.JewelRenderProbe.RunGlb(args, Array.IndexOf(args, "--render-glb"));
+if (args.Contains("--render-oracle"))   // ═══ LB-ORACLE ═══ ground-truth render via LB's own FlowModel
+    return LbApiHost.Tools.JewelRenderProbe.RunOracle(args, Array.IndexOf(args, "--render-oracle"));
 
 // Run the config migration against THIS exe's Core\litebox (dev/test): --migrate
 if (args.Contains("--migrate"))

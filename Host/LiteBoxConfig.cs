@@ -225,6 +225,12 @@ internal sealed class LiteBoxConfig
     public bool UnloadGameCacheDuringGame { get => GetBool("UnloadGameCacheDuringGame", true); set => SetBool("UnloadGameCacheDuringGame", value); }
     // true → reserve a 16:9 area for the main media; false → a poster-ratio (2:3) area.
     public bool Use169ForMainScreenshot { get => GetBool("Use16:9ForMainScreenshot", true); set => SetBool("Use16:9ForMainScreenshot", value); }
+    // ═══ LB-ORACLE (Model3dLbOracle) — dev/diagnostic, default OFF ═══
+    // true → the Edit Platform 3D tab shows a SECOND preview zone rendered by LaunchBox's own core
+    // (CoverFlow.FlowModel via CoreModelHost) above LiteBox's renderer, for side-by-side comparison of
+    // the home-made 3D builders against the original. Everything oracle-related is lazy: while false
+    // (the default) no core assembly is loaded and no oracle code path runs.
+    public bool Model3dLbOracle { get => GetBool("Model3dLbOracle", false); set => SetBool("Model3dLbOracle", value); }
     // Automatic Progress Tracking triggers (the RULES live in LB's Settings.xml; these choose WHEN
     // LiteBox runs them). Boot sweep = whole library in the background at startup (off by default —
     // avoidable cost on huge libraries); on-select = re-evaluate a game while its detail pane loads

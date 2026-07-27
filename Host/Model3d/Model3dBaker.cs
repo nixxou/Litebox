@@ -32,27 +32,38 @@ internal static class Model3dBaker
 
     // ── single STA bake worker ───────────────────────────────────────────────
     private static readonly BlockingCollection<Action> _queue = new();
-    private static Thread? _thread;
+    private static Thread[]? _threads;
     private static readonly object _startLock = new();
 
-    private static void EnsureThread()
+    /// <summary>Parallel bake workers. WPF requires STA, but nothing requires a SINGLE STA thread —
+    /// each bake is independent (own model build, own offscreen render, frozen results), so a small
+    /// pool parallelizes the bulk Generate-Media-Cache pass. Two jobs racing the SAME key both bake
+    /// (rare: a user select racing the bulk pass) — wasteful but safe, the unique-tmp atomic move wins.</summary>
+    public static readonly int WorkerCount = Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
+
+    private static void EnsureThreads()
     {
-        if (_thread != null) return;
+        if (_threads != null) return;
         lock (_startLock)
         {
-            if (_thread != null) return;
-            var t = new Thread(() => { foreach (var job in _queue.GetConsumingEnumerable()) { try { job(); } catch { } } })
-            { IsBackground = true, Name = "model3d-bake" };
-            t.SetApartmentState(ApartmentState.STA);
-            t.Start();
-            _thread = t;
+            if (_threads != null) return;
+            var arr = new Thread[WorkerCount];
+            for (int i = 0; i < arr.Length; i++)
+            {
+                var t = new Thread(() => { foreach (var job in _queue.GetConsumingEnumerable()) { try { job(); } catch { } } })
+                { IsBackground = true, Name = "model3d-bake-" + i };
+                t.SetApartmentState(ApartmentState.STA);
+                t.Start();
+                arr[i] = t;
+            }
+            _threads = arr;
         }
     }
 
-    /// <summary>Run <paramref name="job"/> on the bake STA thread and wait for its result.</summary>
+    /// <summary>Run <paramref name="job"/> on a bake STA worker and wait for its result.</summary>
     public static T Run<T>(Func<T> job)
     {
-        EnsureThread();
+        EnsureThreads();
         var tcs = new System.Threading.Tasks.TaskCompletionSource<T>(
             System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
         _queue.Add(() => { try { tcs.SetResult(job()); } catch (Exception ex) { tcs.SetException(ex); } });

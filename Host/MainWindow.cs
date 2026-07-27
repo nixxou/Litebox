@@ -4851,8 +4851,9 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (regroupements.Contains(key)) phases.Add(ImagePhase(title, key));
         if (videos) phases.Add(new CachePhase("Video thumbnails", 1, VideoWork));
         if (docs) phases.Add(new CachePhase("Document thumbnails", 1, DocWork));
-        // Bakes serialize on the STA worker anyway → Dop 1. A game with no case art is a skip, not a failure.
-        if (models3d) phases.Add(new CachePhase("3D box models", 1, g =>
+        // Bakes run on the STA worker POOL (Model3dBaker.WorkerCount) — feed it as many blocked callers.
+        // A game with no case art is a skip, not a failure.
+        if (models3d) phases.Add(new CachePhase("3D box models", Model3d.Model3dBaker.WorkerCount, g =>
         {
             var idn = Model3d.Model3dCache.Resolve(g);
             if (idn == null || !idn.HasArt) return 0;

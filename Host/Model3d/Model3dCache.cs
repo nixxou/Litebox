@@ -33,7 +33,7 @@ internal static class Model3dCache
 {
     /// <summary>Salts every key — bump when the bake output changes (geometry, materials, thumb pose/size,
     /// GLB layout) so stale files are re-keyed away in one move.</summary>
-    public const int BakerVersion = 2;   // v2: thumb baked at the media box aspect with the live camera (was square)
+    public const int BakerVersion = 3;   // v3: landscape spine scans auto-rotated to portrait (v2: aspect-baked thumb)
 
     public static string Dir
     {
@@ -229,7 +229,7 @@ internal static class Model3dCache
     {
         try
         {
-            string tmp = png + ".tmp";
+            string tmp = png + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";   // unique: parallel bakes may race
             File.WriteAllBytes(tmp, bytes);
             File.Move(tmp, png, overwrite: true);
         }

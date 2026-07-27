@@ -214,7 +214,17 @@ internal sealed class HomeModel3d : IDisposable
         // Missing front → LB's NoImage placeholder (shipped): texture, dims and corner colour all follow.
         var front = LoadBitmap(frontPath) ?? LbCaseObj.SpineImage("NoImage");
         var logo = LoadBitmap(logoPath);
-        var spine = LoadBitmap(spinePath);
+        System.Windows.Media.Imaging.BitmapSource? spine = LoadBitmap(spinePath);
+        // LANDSCAPE spine scan (the strip scanned lying down — e.g. GB 230×41): the geometry contract is
+        // PORTRAIT (the spine's height runs along the box height; box depth D = spineW/spineH), so a lying
+        // scan explodes D into a slab. Auto-rotate 90° clockwise — the US top-to-bottom reading direction,
+        // matching how portrait spine scans are oriented (verified on real NA scans).
+        if (spine != null && spine.PixelWidth > spine.PixelHeight)
+        {
+            var rot = new System.Windows.Media.Imaging.TransformedBitmap(spine, new RotateTransform(90));
+            rot.Freeze();
+            spine = rot;
+        }
         var back = LoadBitmap(backPath);
 
         // FULL-SCAN MODE (probe-decoded priority): when UseFullScanImages is on, the game's SPINE SCAN is the

@@ -160,7 +160,7 @@ internal static class GlbFile
         int binPad = (4 - binBytes.Length % 4) % 4;
         int total = 12 + 8 + jsonBytes.Length + jsonPad + 8 + binBytes.Length + binPad;
         // Write to a temp sibling then move: a reader never sees a half-written cache file.
-        string tmp = path + ".tmp";
+        string tmp = path + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";   // unique: parallel bakes may race the same key
         using (var f = new BinaryWriter(File.Create(tmp)))
         {
             f.Write(0x46546C67u); f.Write(2u); f.Write((uint)total);

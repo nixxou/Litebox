@@ -25,6 +25,14 @@ internal sealed class OrbitController
     public void OrbitImmediate(double dYawUnits, double dPitchUnits)
         => _home?.OrbitImmediate(dYawUnits * UnitDegrees, dPitchUnits * UnitDegrees);
 
+    /// <summary>Set the current zoom directly (the caller's initial framing) so subsequent wheel steps
+    /// continue from it instead of jumping back to the 1.0 default on the first notch.</summary>
+    public void InitZoom(double zoom)
+    {
+        _zoom = System.Math.Max(0.2, System.Math.Min(10, zoom));
+        _home?.SetZoom(_zoom);
+    }
+
     /// <summary>Wheel zoom: scales the fixed camera's distance.</summary>
     public void Zoom(double wheelDelta)
     {

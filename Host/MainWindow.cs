@@ -151,6 +151,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private TableLayoutPanel _detailGrid;        // detail layout — sized by RelayoutDetail (fills viewport, or taller → scrolls)
     private double _mediaAspect = 16.0 / 9.0;    // reserved main-media area aspect (16:9 default, 2:3 poster option)
     private List<string> _mediaItems;            // current game's media sources (box first, then screenshots)
+    private IGame _mediaItemsGame;                // the game _mediaItems belongs to (fullscreen-viewer guard)
     private int _mediaSel;                        // selected media index
     private System.Windows.Forms.Timer _mediaTimer;   // 0.5s debounce: build strip + upgrade main to full
     private readonly MetaCard _meta;             // title + platform + expandable game fields (or node text)
@@ -958,6 +959,10 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (_media3d.HasContent) _media3d.BringToFront();
         };
         media.Controls.Add(_media3d);
+        // Fullscreen viewers (LB parity): double-click an image → the image viewer; the 3D overlay's
+        // ⤢ badge → the fullscreen model (reloaded at source texture resolution).
+        media.DoubleClicked = OpenFullscreenImage;
+        _media3d.ExpandClicked = () => { if (_detailsShown is IGame gfs) OpenFullscreen3d(gfs); };
         strip = new MediaStrip { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 4, 0, 4) };
         meta = new MetaCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         vndb = new VndbCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
@@ -4219,7 +4224,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                     BeginInvoke(new Action(() =>
                     {
                         if (IsDisposed || token != _detailsLoadToken) return;
-                        _mediaItems = items; _mediaSel = items.Count > 0 ? 0 : -1;
+                        _mediaItems = items; _mediaItemsGame = g; _mediaSel = items.Count > 0 ? 0 : -1;
                         if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
                         PopulateStrip(items, token);
                         try { Kick3dBake(g, items, token); } catch { }   // GLB missing → bake at settle, then refresh the 3D tile
@@ -4416,6 +4421,30 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (_media3d == null || (!_media3d.Visible && !_media3d.HasContent)) return;
         _media3d.Clear();
         _media3d.Visible = false;
+    }
+
+    // ── fullscreen viewers (LB parity) ───────────────────────────────────────
+    // Double-click the main image → fullscreen image viewer over the game's IMAGE items only (the 3D
+    // sentinel — and any future video item — is filtered out; navigation is image-to-image).
+    private void OpenFullscreenImage()
+    {
+        if (_detailsShown is not IGame g || !ReferenceEquals(g, _mediaItemsGame)) return;   // node / mid-transit
+        var items = _mediaItems;
+        if (items == null) return;
+        var imgs = items.Where(s => !Media.Media3dItem.Is(s)).ToList();
+        if (imgs.Count == 0) return;
+        string cur = _mediaSel >= 0 && _mediaSel < items.Count ? items[_mediaSel] : imgs[0];
+        int start = imgs.FindIndex(s => string.Equals(s, cur, StringComparison.OrdinalIgnoreCase));
+        using var v = new Media.FullscreenImageViewer(imgs, Math.Max(0, start), LoadImage);
+        v.ShowDialog(this);
+    }
+
+    // The 3D overlay's ⤢ badge → fullscreen model viewer (cached GLB instantly, then the same model
+    // rebuilt live with source-resolution textures).
+    private void OpenFullscreen3d(IGame g)
+    {
+        using var v = new Model3d.Model3dFullscreen(g);
+        v.ShowDialog(this);
     }
 
     // Sets the main media. NOTE: single extension point — a future video item would be
@@ -5957,12 +5986,26 @@ internal sealed class MainWindow : Form, IMessageFilter
     private sealed class MediaPanel : Panel
     {
         private Image _img;
+        /// <summary>Double-click on a displayed image → the fullscreen viewer (LB parity). The 3D item
+        /// never lands here: its overlay covers this panel and has its own ⤢ badge.</summary>
+        public Action DoubleClicked;
         public MediaPanel()
         {
             DoubleBuffered = true; ResizeRedraw = true;
-            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+                   | ControlStyles.StandardClick | ControlStyles.StandardDoubleClick, true);
         }
-        public void SetImage(Image img) { var old = _img; _img = img; if (!ReferenceEquals(old, img)) old?.Dispose(); Invalidate(); }
+        public void SetImage(Image img)
+        {
+            var old = _img; _img = img; if (!ReferenceEquals(old, img)) old?.Dispose();
+            Cursor = _img != null ? Cursors.Hand : Cursors.Default;   // hover hints "click me" (LB parity)
+            Invalidate();
+        }
+        protected override void OnMouseDoubleClick(MouseEventArgs e)
+        {
+            base.OnMouseDoubleClick(e);
+            if (_img != null && e.Button == MouseButtons.Left) DoubleClicked?.Invoke();
+        }
 
         protected override void OnPaint(PaintEventArgs e)
         {

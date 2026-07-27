@@ -83,6 +83,130 @@ internal static class Model3dBaker
         return thumb == null ? null : (meshes, mats, thumb);
     }
 
+    // ── runtime hi-res model (fullscreen viewer) ─────────────────────────────
+    // The cached GLB's textures are sized for the ~500px detail pane (1024px cap + JPEG). The fullscreen
+    // viewer rebuilds the SAME model live (same builders → same geometry and shape by construction) but
+    // keeps textures at their SOURCE resolution: plain image faces reuse the full-res decoded bitmap
+    // directly, and COMPOSED faces (the VisualBrush grids, whose fixed layout sizes — W×1000, the dvd
+    // wrap's h=600 — used to bound the raster) are rasterized at the scale their largest source image
+    // actually provides (capped below). Fully frozen → build on a bake STA worker, render on the UI thread.
+    private const int HiResMaxTexPx = 4096;   // rasterization bound (full-scan sheets can be huge)
+
+    /// <summary>Build the game's model with source-resolution textures, flattened + frozen (UI-thread
+    /// safe). MUST run on a bake STA worker (callers go through <see cref="Run{T}"/>). Null when the
+    /// model can't be built.</summary>
+    public static Model3D? BakeRuntimeModel(Dictionary<string, string>? map, string title, string platform,
+                                            Dictionary<string, string>? imgOv = null)
+    {
+        var model = Platforms.HomeModel3d.BuildModel(map, title, platform, imgOv);
+        if (model == null) return null;
+        var grp = new Model3DGroup();
+        void Walk(Model3D m, Matrix3D parent)
+        {
+            var local = (m.Transform?.Value ?? Matrix3D.Identity) * parent;
+            if (m is Model3DGroup g) { foreach (var c in g.Children) Walk(c, local); return; }
+            if (m is not GeometryModel3D gm || gm.Geometry is not MeshGeometry3D mesh || mesh.Positions.Count == 0) return;
+            var mat = FlattenRuntimeMaterial(gm.Material);
+            var m2 = new MeshGeometry3D();
+            for (int i = 0; i < mesh.Positions.Count; i++) m2.Positions.Add(local.Transform(mesh.Positions[i]));
+            if (mesh.TextureCoordinates.Count == mesh.Positions.Count)
+                foreach (var uv in mesh.TextureCoordinates) m2.TextureCoordinates.Add(uv);
+            foreach (var ix in mesh.TriangleIndices) m2.TriangleIndices.Add(ix);
+            m2.Freeze();
+            // Material on both sides, like the GLB loader — the flattened set has no per-face BackMaterial.
+            var g2 = new GeometryModel3D { Geometry = m2, Material = mat, BackMaterial = mat };
+            g2.Freeze();
+            grp.Children.Add(g2);
+        }
+        Walk(model, Matrix3D.Identity);
+        if (grp.Children.Count == 0) return null;
+        grp.Freeze();
+        return grp;
+    }
+
+    // FlattenMaterial's twin for the runtime path: instead of encoding textures to bytes, it produces
+    // frozen WPF brushes directly — image faces at source resolution, composed faces via the hi-res
+    // rasterizer, solids with the GLB loader's colour-times-opacity rule.
+    private static Material FlattenRuntimeMaterial(Material? mat)
+    {
+        Color col = Color.FromRgb(0x80, 0x80, 0x80);
+        double opacity = 1;
+        System.Windows.Media.Brush? tex = null;
+        void Scan(Material? m)
+        {
+            switch (m)
+            {
+                case MaterialGroup mg: foreach (var c in mg.Children) Scan(c); break;
+                case DiffuseMaterial dm:
+                    switch (dm.Brush)
+                    {
+                        case SolidColorBrush sb: col = sb.Color; opacity = sb.Opacity * sb.Color.A / 255.0; break;
+                        case ImageBrush ib when ib.ImageSource is BitmapSource bs: tex = FrozenImageBrush(bs); break;
+                        case VisualBrush vb when vb.Visual is System.Windows.FrameworkElement fe:
+                            if (RasterizeVisualHiRes(fe) is { } hi) tex = FrozenImageBrush(hi);
+                            break;
+                    }
+                    break;
+            }
+        }
+        Scan(mat);
+        Material res;
+        if (tex != null) res = new DiffuseMaterial(tex);
+        else
+        {
+            var sb2 = new SolidColorBrush(Color.FromArgb((byte)Math.Round(Math.Clamp(opacity, 0, 1) * 255), col.R, col.G, col.B));
+            sb2.Freeze();
+            res = new DiffuseMaterial(sb2);
+        }
+        res.Freeze();
+        return res;
+    }
+
+    // Frozen Fill brush over a bitmap. Most sources are already frozen (LoadBitmap freezes); the few
+    // derived ones that aren't (CroppedBitmap halves…) get frozen, or copied when they can't be.
+    private static ImageBrush FrozenImageBrush(BitmapSource bs)
+    {
+        if (!bs.IsFrozen)
+        {
+            if (bs.CanFreeze) bs.Freeze();
+            else { var wb = new System.Windows.Media.Imaging.WriteableBitmap(bs); wb.Freeze(); bs = wb; }
+        }
+        var br = new ImageBrush(bs) { Stretch = Stretch.Fill };
+        br.Freeze();
+        return br;
+    }
+
+    // RasterizeVisual's hi-res twin: same offscreen Measure/Arrange, but the raster runs at the scale k
+    // the composite's largest source image can actually feed (each Image child's source pixels vs its
+    // arranged size), so a 2100px scan in a 600px-high wrap grid rasters at ~2100px instead of 600.
+    private static BitmapSource? RasterizeVisualHiRes(System.Windows.FrameworkElement fe)
+    {
+        try
+        {
+            fe.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+            fe.Arrange(new System.Windows.Rect(fe.DesiredSize));
+            var sz = fe.DesiredSize;
+            if (sz.Width < 1 || sz.Height < 1) return null;
+            double k = 1;
+            void WalkImages(System.Windows.DependencyObject o)
+            {
+                if (o is System.Windows.Controls.Image im && im.Source is BitmapSource b
+                    && im.ActualWidth > 0 && im.ActualHeight > 0)
+                    k = Math.Max(k, Math.Max(b.PixelWidth / im.ActualWidth, b.PixelHeight / im.ActualHeight));
+                foreach (object c in System.Windows.LogicalTreeHelper.GetChildren(o))
+                    if (c is System.Windows.DependencyObject d) WalkImages(d);
+            }
+            WalkImages(fe);
+            k = Math.Max(1, Math.Min(k, HiResMaxTexPx / Math.Max(sz.Width, sz.Height)));
+            var rtb = new RenderTargetBitmap((int)Math.Ceiling(sz.Width * k), (int)Math.Ceiling(sz.Height * k),
+                                             96 * k, 96 * k, PixelFormats.Pbgra32);
+            rtb.Render(fe);
+            rtb.Freeze();
+            return rtb;
+        }
+        catch { return null; }
+    }
+
     // ── bake: walk the model, flatten transforms into vertices, rasterize composite brushes to PNG ──
     private static (List<BakedMesh>, List<BakedMaterial>) BakeModel(Model3D root)
     {

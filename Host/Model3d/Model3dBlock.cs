@@ -25,6 +25,7 @@ namespace LbApiHost.Host.Model3d;
 internal sealed class Model3dBlock : Panel
 {
     private readonly PictureBox _pic;
+    private readonly Model3dExpandBadge _expand;
     private Platforms.HomeModel3d? _home;      // created lazily on first model (ElementHost is not free)
     private Platforms.OrbitController? _orbit;
     private int _token;
@@ -36,22 +37,38 @@ internal sealed class Model3dBlock : Panel
     /// <summary>Raised (on the UI thread) when <see cref="HasContent"/> flips — the detail pane relayouts.</summary>
     public Action? ContentChanged;
 
+    /// <summary>The ⤢ badge (bottom-right) was clicked — the host opens the fullscreen 3D viewer.</summary>
+    public Action? ExpandClicked;
+
     public Model3dBlock()
     {
         DoubleBuffered = true;
         _pic = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = BackColor };
         Controls.Add(_pic);
-        BackColorChanged += (_, _) => _pic.BackColor = BackColor;
+        // Fullscreen badge: a WinForms sibling ABOVE both layers (HWND z-order beats the ElementHost).
+        _expand = new Model3dExpandBadge { Visible = false, BackColor = BackColor };
+        _expand.Click += (_, _) => ExpandClicked?.Invoke();
+        Controls.Add(_expand);
+        BackColorChanged += (_, _) => { _pic.BackColor = BackColor; _expand.BackColor = BackColor; };
         // The pane width (→ the box aspect) can change while the viewport is live — keep the framing law.
-        Resize += (_, _) => { if (_home is { } h) ApplyFraming(h); };
+        Resize += (_, _) => { PlaceBadge(); if (_home is { } h) ApplyFraming(h); };
+        PlaceBadge();
     }
+
+    private void PlaceBadge()
+        => _expand.Location = new Point(Math.Max(0, ClientSize.Width - _expand.Width - 8),
+                                        Math.Max(0, ClientSize.Height - _expand.Height - 8));
 
     // BOTH layers fill the whole host and come out of the SAME camera, so the PNG → viewport swap
     // can't shift by a pixel: the thumb is BAKED at the media box's aspect with the aspect-compensated
     // distance (Model3dBaker.TargetAspect/CameraDistanceFor), and the live viewport uses exactly that
     // camera. No display-time compensation of either layer.
     private void ApplyFraming(Platforms.HomeModel3d home)
-        => home.SetZoom(Model3dBaker.CameraDistanceFor(Model3dBaker.TargetAspect()) / 2.0);
+    {
+        double z = Model3dBaker.CameraDistanceFor(Model3dBaker.TargetAspect()) / 2.0;
+        if (_orbit != null) _orbit.InitZoom(z);   // keeps the wheel continuing from this framing
+        else home.SetZoom(z);
+    }
 
     private Platforms.HomeModel3d EnsureHome()
     {
@@ -68,6 +85,7 @@ internal sealed class Model3dBlock : Panel
             ApplyFraming(_home);              // bake-identical framing (distance + aspect FOV)
             Controls.Add(_home.Control);
             _pic.BringToFront();               // the PNG layer stays above the (always-visible) host
+            _expand.BringToFront();            // …and the badge above everything
             _orbit = new Platforms.OrbitController();
             _orbit.Attach(_home);
             WireOrbit(_home.Control, _orbit);
@@ -82,6 +100,7 @@ internal sealed class Model3dBlock : Panel
         SetThumb(null);
         _home?.SetModel(null);   // host STAYS visible (backdrop only) — hiding it re-arms the show-flash
         _pic.Visible = true;     // cover layer back in place for the next game
+        _expand.Visible = false;
         if (_hasContent) { _hasContent = false; ContentChanged?.Invoke(); }
     }
 
@@ -148,6 +167,7 @@ internal sealed class Model3dBlock : Panel
                     SetThumb(thumb);
                     _pic.Visible = true;
                     _pic.BringToFront();
+                    _expand.BringToFront();
                 }
                 if (model != null)
                 {
@@ -156,6 +176,7 @@ internal sealed class Model3dBlock : Panel
                     ApplyFraming(home);
                     home.SetModel(model);
                     _pic.BringToFront();          // PNG stays the top cover while the model composes beneath
+                    _expand.BringToFront();
                     // Anti-flicker reveal: there is no single WPF "fully on screen" event, but
                     // CompositionTarget.Rendering ticks once per RENDERED frame. Subscribed after
                     // SetModel, two ticks mean the compositor has presented frames CONTAINING the
@@ -197,7 +218,7 @@ internal sealed class Model3dBlock : Panel
                     }
                     else _pic.Visible = false;
                 }
-                if (!_hasContent) { _hasContent = true; ContentChanged?.Invoke(); }
+                if (!_hasContent) { _hasContent = true; _expand.Visible = true; PlaceBadge(); ContentChanged?.Invoke(); }
             }));
         }
         catch { thumb?.Dispose(); }
@@ -214,7 +235,7 @@ internal sealed class Model3dBlock : Panel
     // Drag = IMMEDIATE rotation (1:1 pointer tracking — the animated ease stuttered), 0.25°/px (÷2 vs the
     // editor's historical feel, which was too twitchy), and the NATURAL direction: drag right → the front
     // face follows the pointer right (yaw+ brings the left side toward the camera).
-    private static void WireOrbit(Control host, Platforms.OrbitController orbit)
+    internal static void WireOrbit(Control host, Platforms.OrbitController orbit)   // shared with Model3dFullscreen
     {
         const double Sens = 12.0;   // px per 7.5°-unit → 0.625°/px (~145 px drag = 90°)
         if (host is System.Windows.Forms.Integration.ElementHost eh && eh.Child is System.Windows.UIElement ui)
@@ -246,5 +267,41 @@ internal sealed class Model3dBlock : Panel
             try { _home?.Dispose(); } catch { }
         }
         base.Dispose(disposing);
+    }
+}
+
+/// <summary>The little ⤢ / ⤡ chip (LB parity): expand-to-fullscreen on the detail block, back-from-
+/// fullscreen in the viewer. Owner-drawn dark chip with the diagonal-arrows glyph (Segoe UI Symbol).</summary>
+internal sealed class Model3dExpandBadge : Control
+{
+    private bool _hover;
+
+    /// <summary>⤡ (exit fullscreen) instead of ⤢.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool Shrink { get; init; }
+
+    public Model3dExpandBadge()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        Size = new Size(30, 30);
+        Cursor = Cursors.Hand;
+    }
+
+    protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
+    protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = false; Invalidate(); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.Clear(BackColor);
+        var r = new System.Drawing.Rectangle(0, 0, Width - 1, Height - 1);
+        using (var bg = new System.Drawing.SolidBrush(_hover ? Color.FromArgb(52, 52, 58) : Color.FromArgb(34, 34, 38)))
+            g.FillRectangle(bg, r);
+        using (var bd = new System.Drawing.Pen(Color.FromArgb(_hover ? 160 : 90, 255, 255, 255)))
+            g.DrawRectangle(bd, r);
+        using var f = new Font("Segoe UI Symbol", 11f);
+        TextRenderer.DrawText(g, Shrink ? "⤡" : "⤢", f, ClientRectangle,
+            _hover ? Color.White : Color.FromArgb(210, 210, 214),
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 }

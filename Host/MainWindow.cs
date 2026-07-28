@@ -142,6 +142,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     // right-hand details
     private readonly HeroPanel _hero;            // fanart + clear logo (pulse) + rating + heart
     private Model3d.Model3dBlock _media3d;       // 3D model overlay INSIDE the main media box (a media-list item)
+    private Video.VideoBlock _mediaVideo;        // video overlay in the same box (libvlc surface + hover controls)
+    private int _videoThumbToken;                // cancels the deferred video-thumb worker when the selection moves
     private readonly MediaPanel _media;          // main media (box → screenshots, click to switch)
     private readonly MediaStrip _strip;          // clickable mini-thumbnails under the main media (slim custom scrollbar)
     private SplitContainer _outerSplit;          // left tree | (middle list + right details) — % persisted
@@ -962,6 +964,15 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (_media3d.HasContent) _media3d.BringToFront();
         };
         media.Controls.Add(_media3d);
+        // Video OVERLAY: same content-driven visibility as the 3D one — it appears when a video sentinel
+        // becomes the main media, and hosts libvlc's render surface + the hover controls.
+        _mediaVideo = new Video.VideoBlock { Dock = DockStyle.Fill, Visible = false };
+        _mediaVideo.ContentChanged = () =>
+        {
+            _mediaVideo.Visible = _mediaVideo.HasContent;
+            if (_mediaVideo.HasContent) _mediaVideo.BringToFront();
+        };
+        media.Controls.Add(_mediaVideo);
         // Fullscreen viewers (LB parity): double-click an image → the image viewer; the 3D overlay's
         // ⤢ badge → the fullscreen model (reloaded at source texture resolution).
         media.DoubleClicked = OpenFullscreenImage;
@@ -1895,6 +1906,12 @@ internal sealed class MainWindow : Form, IMessageFilter
             Options.OptionItem.Toggle("Display", "Use 16:9 for the main media (else poster ratio)",
                 () => _cfg.Use169ForMainScreenshot, v => _cfg.Use169ForMainScreenshot = v,
                 applyLive: () => { _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0); RelayoutDetail(); Model3d.Model3dKeyIndex.KickAll(); }),
+            Options.OptionItem.Toggle("Display", "Videos: play automatically when selected",
+                () => _cfg.VideoAutoplay, v => _cfg.VideoAutoplay = v,
+                "On: a video starts as soon as it becomes the main media. Off (default): its still frame is "
+                + "shown with a ▶ and playback waits for a click. Controls (play/pause, seek, mute) appear "
+                + "when the mouse is over the media zone either way.",
+                applyLive: () => { if (_mediaVideo != null) _mediaVideo.Autoplay = _cfg.VideoAutoplay; }),
             Options.OptionItem.Number("Display", "Detail load delay (ms)",
                 () => _cfg.DetailLoadDelayMs, v => _cfg.DetailLoadDelayMs = v,
                 min: 0, max: 5000, step: 50,
@@ -3812,6 +3829,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         var (logoSrc, artSrc) = DetailImageSources(g);
         SetHeroGame(g);
         Hide3dOverlay();   // instant is ALWAYS a flat image (3D immediate = the baked PNG via the loaders)
+        HideVideoOverlay();   // …and a video must never keep playing over the next game
         LoadImagesAsync(logoSrc, artSrc);
         PopulateDetailMeta(g);
 
@@ -4004,6 +4022,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         SetHeroGame(g);             // title (text fallback) before the logo
         _hero.SetLogo(logo);
         Hide3dOverlay();            // a flat image takes the box — the previous game's 3D must not linger
+        HideVideoOverlay();         // idem for a playing video (it would also keep decoding)
         _media.SetImage(art);
         PopulateDetailMeta(g);
     }
@@ -4018,6 +4037,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         SetHeroGame(g);
         _hero.SetLogo(logo);
         Hide3dOverlay();            // scrolling past: the previous game's 3D must not cover the new thumb
+        HideVideoOverlay();
         _media.SetImage(art);
     }
 
@@ -4027,6 +4047,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _detailsShown = node;
         _heroGame = null;
         Hide3dOverlay();              // 3D media overlay is game-only
+        HideVideoOverlay();           // video too
         _launchButtons?.HideGame();   // launch group is game-only
         _related?.ClearAll();         // tab strip + related list are game-only
         _highScores?.ClearAll();      // MAME leaderboards are game-only too
@@ -4267,6 +4288,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                         if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
                         PopulateStrip(items, token);
                         try { Kick3dBake(g, items, token); } catch { }   // GLB missing → bake at settle, then refresh the 3D tile
+                        try { KickVideoThumbs(items, token); } catch { } // extract missing video frames, one by one, cancellable
 
                     }));
                 }
@@ -4462,6 +4484,75 @@ internal sealed class MainWindow : Form, IMessageFilter
         _media3d.Visible = false;
     }
 
+    // ── deferred video still frames ──────────────────────────────────────────────
+    // Extracting a frame costs hundreds of ms per video (VideoThumbnailer decodes 20 % in), so it must
+    // never sit on the display path: the strip shows BLACK tiles and this worker fills them in afterwards,
+    // one video at a time, on its own thread.
+    //
+    // Cancellation is the point (user's requirement): leaving the game must not keep the machine busy —
+    // but nothing is aborted mid-decode either. The token is checked BETWEEN videos, so the current
+    // extraction finishes (its result is still worth caching) and the queue simply stops there.
+    private void KickVideoThumbs(List<string> items, int token)
+    {
+        var pending = items.Where(Media.MediaVideoItem.Is)
+                           .Where(i => !Video.VideoThumbnailer.IsCached(Media.MediaVideoItem.PathOf(i)))
+                           .ToList();
+        if (pending.Count == 0) return;
+        int mine = ++_videoThumbToken;
+        System.Threading.Tasks.Task.Factory.StartNew(() =>
+        {
+            foreach (var item in pending)
+            {
+                if (mine != _videoThumbToken || token != _detailsLoadToken || IsDisposed) return;   // moved on: stop here
+                string path = Media.MediaVideoItem.PathOf(item);
+                try { using (var img = Video.VideoThumbnailer.Get(path)) { } } catch { }   // decode + disk-cache
+                if (mine != _videoThumbToken || token != _detailsLoadToken || IsDisposed) return;
+                // Landed: refresh this tile, and the main box when this video is the selected item.
+                try
+                {
+                    if (!IsDisposed && IsHandleCreated)
+                        BeginInvoke((Action)(() =>
+                        {
+                            if (mine != _videoThumbToken || token != _detailsLoadToken || IsDisposed) return;
+                            RefreshItemTile(item, token);
+                            if (_mediaItems != null && _mediaSel >= 0 && _mediaSel < _mediaItems.Count
+                                && string.Equals(_mediaItems[_mediaSel], item, StringComparison.OrdinalIgnoreCase))
+                                _mediaVideo?.SetStillFor(path, Media.MediaVideoItem.CachedThumb(item));
+                        }));
+                }
+                catch { }
+            }
+        }, System.Threading.CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.LongRunning,
+           System.Threading.Tasks.TaskScheduler.Default);
+    }
+
+    /// <summary>Re-load one strip tile's image (a deferred thumbnail landed).</summary>
+    private void RefreshItemTile(string item, int token)
+    {
+        if (_mediaItems == null || token != _detailsLoadToken) return;
+        int ix = _mediaItems.FindIndex(s => string.Equals(s, item, StringComparison.OrdinalIgnoreCase));
+        if (ix < 0 || ix >= _strip.Flow.Controls.Count) return;
+        if (_strip.Flow.Controls[ix] is MediaThumb th) th.SetImage(LoadThumbOrFull(item, keepAlpha: false));
+    }
+
+    // ── video overlay (a video sentinel is the current main media) ───────────────
+    private void ShowVideoOverlay(string item)
+    {
+        if (_mediaVideo == null) return;
+        _mediaVideo.Autoplay = _cfg.VideoAutoplay;
+        _mediaVideo.BringToFront();
+        // The still frame only if it is ALREADY extracted — otherwise black + ▶, and the deferred pass
+        // hands it over when it lands (SetStillFor).
+        _mediaVideo.ShowFor(Media.MediaVideoItem.PathOf(item), Media.MediaVideoItem.CachedThumb(item));
+    }
+
+    private void HideVideoOverlay()
+    {
+        if (_mediaVideo == null || (!_mediaVideo.Visible && !_mediaVideo.HasContent)) return;
+        _mediaVideo.Clear();
+        _mediaVideo.Visible = false;
+    }
+
     // ── fullscreen viewers (LB parity) ───────────────────────────────────────
     // Double-click the main image → fullscreen image viewer over the game's IMAGE items only (the 3D
     // sentinel — and any future video item — is filtered out; navigation is image-to-image).
@@ -4496,10 +4587,18 @@ internal sealed class MainWindow : Form, IMessageFilter
         // item hides it back to the plain image panel.
         if (Media.Media3dItem.Is(src))
         {
+            HideVideoOverlay();
             if (_detailsShown is IGame g3) Show3dOverlay(g3);
             return;
         }
         Hide3dOverlay();
+        // A video takes the main zone over: still frame + ▶, and playback when Autoplay is on.
+        if (Media.MediaVideoItem.Is(src))
+        {
+            ShowVideoOverlay(src);
+            return;
+        }
+        HideVideoOverlay();
         if (string.IsNullOrEmpty(src)) { _media.SetImage(null); return; }
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -4527,19 +4626,20 @@ internal sealed class MainWindow : Form, IMessageFilter
     private static List<string> BuildMediaList(IGame g, bool poster, bool forceDup = false)
     {
         var items = new List<string>();
-        var dupAccepted = new List<string>();    // the accepted REAL images (3D sentinel excluded both ways)
+        var dupAccepted = new List<string>();    // the accepted REAL images (sentinels excluded both ways)
         Media.MediaDupFilter dupFilter = null;   // set below once the game is identified
-        bool Add(string s, bool is3d = false)
+        // `sentinel` = a 3D model or a video item: both BYPASS the dup filter in both directions (a 3D
+        // snapshot is a render of the front, a video frame isn't an image of the game's art — comparing
+        // would evict the real thing, and neither is a decodable file for later candidates).
+        bool Add(string s, bool sentinel = false)
         {
             if (items.Count >= MaxMediaItems) return false;
             if (string.IsNullOrEmpty(s) || items.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) return false;
             // Prevent-duplicates filter: a visually-duplicate candidate is skipped — it doesn't consume the
             // entry budget, so the next candidate takes its place. Cached per image in the :lb.dupcheck ADS.
-            // The 3D model item BYPASSES it both ways: its PNG is a render of the front — comparing would
-            // evict the real front (and the sentinel isn't a decodable file for later candidates either).
-            if (!is3d && dupFilter != null && dupFilter.IsDup(s, dupAccepted)) return false;
+            if (!sentinel && dupFilter != null && dupFilter.IsDup(s, dupAccepted)) return false;
             items.Add(s);
-            if (!is3d) dupAccepted.Add(s);
+            if (!sentinel) dupAccepted.Add(s);
             return true;
         }
 
@@ -4583,7 +4683,25 @@ internal sealed class MainWindow : Form, IMessageFilter
                         }
                         else if (Model3d.Model3dCache.Resolve(g) is { HasArt: true } idn)
                             glbPath = idn.GlbPath;
-                        if (glbPath != null && Add(Media.Media3dItem.For(glbPath), is3d: true)) contrib[ei]++;
+                        if (glbPath != null && Add(Media.Media3dItem.For(glbPath), sentinel: true)) contrib[ei]++;
+                    }
+                    catch { }
+                continue;
+            }
+            // The VIDEO pseudo-family: "Video" takes every type (main, Trailer, Theme, Marquee,
+            // Recordings — in that order), "Video:<SubDir>" just one. Items ride as sentinels; their
+            // still frames are fetched AFTER the post-load delay (KickVideoThumbs), never here.
+            if (Media.MediaVideoItem.IsSelector(e.Sel))
+            {
+                if (budget > 0)
+                    try
+                    {
+                        int taken0 = 0;
+                        foreach (var vp in Media.MediaVideoItem.Resolve(g, Media.MediaVideoItem.SubDirOf(e.Sel)))
+                        {
+                            if (taken0 >= budget) break;
+                            if (Add(Media.MediaVideoItem.For(vp), sentinel: true)) { taken0++; contrib[ei]++; }
+                        }
                     }
                     catch { }
                 continue;
@@ -4666,6 +4784,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                 Width = 92, Height = 52, BackColor = Panel,
                 Margin = new Padding(0, 0, 6, 0), Cursor = Cursors.Hand,
                 Badge3d = Media.Media3dItem.Is(src),   // little "3D" tag, bottom-right of the tile
+                BadgePlay = Media.MediaVideoItem.Is(src),   // ▶ over video tiles (drawn, never baked into the cached frame)
             };
             th.Click += (_, _) => SetMainMedia(captured, full: true, _detailsLoadToken);
             th.MouseWheel += (_, e) => _strip.WheelScroll(e.Delta);   // wheel over a thumb scrolls the strip
@@ -5002,6 +5121,9 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         if (string.IsNullOrEmpty(src)) return null;
         if (Media.Media3dItem.Is(src)) return Media.Media3dItem.Thumb(src);   // 3D sentinel → the GLB's baked PNG (never ThumbCache)
+        // Video sentinel → the ALREADY-EXTRACTED frame only. Extraction costs hundreds of ms; a missing
+        // frame stays black here and is fetched after the post-load delay (KickVideoThumbs).
+        if (Media.MediaVideoItem.Is(src)) return Media.MediaVideoItem.CachedThumb(src);
         if (!_useImageCache) return LoadImage(src);   // option off → full original, no cache
         var cached = ThumbCache.GetCachedOnly(src, ThumbCache.DefaultMaxDim, keepAlpha);
         if (cached != null) return LoadImage(cached);
@@ -5039,6 +5161,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         try
         {
             if (Media.Media3dItem.Is(path)) return Media.Media3dItem.Thumb(path);   // 3D sentinel → baked PNG
+            if (Media.MediaVideoItem.Is(path)) return Media.MediaVideoItem.CachedThumb(path);   // video → cached frame only
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
             var bytes = File.ReadAllBytes(path);
             // GDI+ can't decode WebP (clear logos) → route those through Magick.NET.
@@ -5872,6 +5995,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         /// <summary>Little "3D" tag in the bottom-right corner — marks the 3D-model media item.</summary>
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
         public bool Badge3d { get; set; }
+        /// <summary>Centred ▶ — marks a video item. Painted here, never baked into the cached frame.</summary>
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool BadgePlay { get; set; }
         public void SetImage(Image img) { var old = _img; _img = img; if (!ReferenceEquals(old, img)) old?.Dispose(); Invalidate(); }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -5886,6 +6012,21 @@ internal sealed class MainWindow : Form, IMessageFilter
                 int iw, ih;
                 if (ir > ar) { iw = rect.Width; ih = (int)(iw / ir); } else { ih = rect.Height; iw = (int)(ih * ir); }
                 g.DrawImage(_img, rect.X + (rect.Width - iw) / 2, rect.Y + (rect.Height - ih) / 2, Math.Max(1, iw), Math.Max(1, ih));
+            }
+            if (BadgePlay)
+            {
+                // Centred play glyph — the tile may still be black (frame not extracted yet), which is
+                // exactly when this matters most: it says "this is a video", not "this is broken".
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                int r = Math.Max(9, Math.Min(rect.Width, rect.Height) / 5);
+                int cx = rect.Width / 2, cy = rect.Height / 2;
+                using (var bg = new SolidBrush(Color.FromArgb(150, 12, 12, 16)))
+                    g.FillEllipse(bg, cx - r, cy - r, 2 * r, 2 * r);
+                using (var pen = new Pen(Color.FromArgb(220, 255, 255, 255), 1.4f))
+                    g.DrawEllipse(pen, cx - r, cy - r, 2 * r, 2 * r);
+                using var tri = new SolidBrush(Color.FromArgb(235, 255, 255, 255));
+                int t = (int)(r * 0.55);
+                g.FillPolygon(tri, new[] { new Point(cx - t / 2, cy - t), new Point(cx - t / 2, cy + t), new Point(cx + t, cy) });
             }
             if (Badge3d)
             {

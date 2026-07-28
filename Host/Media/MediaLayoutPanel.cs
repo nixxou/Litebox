@@ -53,9 +53,16 @@ internal sealed class MediaLayoutPanel : Panel
         Label Sub(string t, int x, int y, int w) { var l = new Label { Text = t, AutoSize = false, Size = new Size(S(w), S(16)), ForeColor = SubFg, Location = new Point(S(x), S(y)), Font = new Font("Segoe UI", 8.25f) }; Controls.Add(l); return l; }
 
         var families = MediaLayout.Families;
-        // The family catalogs + the 3D pseudo-family (immediate combos and the post-load add list —
-        // NOT the fallback combo, which must resolve to a real image family).
-        _famWith3d = families.Append((Media3dItem.FamilyKey, Media3dItem.FamilyTitle)).ToArray();
+        // The family catalogs + the pseudo-families (immediate combos and the post-load add list — NOT the
+        // fallback combo, which must resolve to a real image family):
+        //   • "3D Model" — the baked case model;
+        //   • "Videos" — every video type, then one entry per LaunchBox video sub-folder (Trailer, Theme,
+        //     Marquee, Recordings) plus the platform root, so a layout can ask for exactly one kind.
+        _famWith3d = families
+            .Append((Media3dItem.FamilyKey, Media3dItem.FamilyTitle))
+            .Append((MediaVideoItem.FamilyKey, MediaVideoItem.FamilyTitle))
+            .Concat(MediaVideoItem.Types.Select(t => (MediaVideoItem.TypeKey(t.SubDir), t.Title)))
+            .ToArray();
 
         // ── Immediate image (per view) ──
         Head("Immediate image (shown instantly, before the load delay)", 0, 0);

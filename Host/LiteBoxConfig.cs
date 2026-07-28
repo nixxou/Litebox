@@ -240,6 +240,10 @@ internal sealed class LiteBoxConfig
     public bool UnloadGameCacheDuringGame { get => GetBool("UnloadGameCacheDuringGame", true); set => SetBool("UnloadGameCacheDuringGame", value); }
     // true → reserve a 16:9 area for the main media; false → a poster-ratio (2:3) area.
     public bool Use169ForMainScreenshot { get => GetBool("Use16:9ForMainScreenshot", true); set => SetBool("Use16:9ForMainScreenshot", value); }
+    /// <summary>Start playing a video as soon as it becomes the main media (Display → Right panel).
+    /// Off: its still frame is shown with a ▶ and playback waits for a click.</summary>
+    public bool VideoAutoplay { get => GetBool("VideoAutoplay", false); set => SetBool("VideoAutoplay", value); }
+
     // ── When is a 3D case model worth showing (and baking)? ──────────────────
     // Flat globals, hence the ini (media-layout.json exists for the LIST-shaped layout, not for these).
     // The FRONT is always required — without it the case wears LaunchBox's "NoImage" placeholder. These

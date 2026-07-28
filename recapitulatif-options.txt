@@ -79,6 +79,8 @@ UseGameCache               true    Cache média en RAM (Everything) quand le
 UnloadGameCacheDuringGame  true    Libère ce cache pendant une partie.
 UseImageCache              true    Utilise le cache de miniatures dégradées.
 Use16:9ForMainScreenshot   true    Zone média principale 16:9 (false = 2:3).
+VideoAutoplay              false   Lance la vidéo dès qu'elle devient le média
+                                   principal (sinon frame + ▶, clic pour lire).
 Model3dRequireBack         false   ┐ Quand un modèle 3D MÉRITE-t-il d'être
 Model3dRequireSpine        false   │ affiché ET baké ? Le FRONT est toujours
 Model3dRequireBothScans    false   │ requis ; ces clés ajoutent des exigences.
@@ -270,6 +272,21 @@ pas le rendu) : la durcir ne re-bake donc rien. Lecture via Model3dOptions =
 SNAPSHOT en mémoire, aucune I/O ini à l'usage courant (il sert aussi
 TargetAspect, qui re-parsait l'ini une fois PAR JEU résolu) ; l'apply invalide
 le snapshot et relance le calcul d'index (Model3dKeyIndex.KickAll).
+
+La pseudo-famille "Video" : les vidéos du jeu deviennent des éléments de la
+liste, comme les images. "Video" prend TOUS les types dans l'ordre (racine =
+vidéo principale, puis Trailer, Theme, Marquee, Recordings) ; "Video:<SousDoss>"
+n'en prend qu'un (entrées « Video · Trailer », etc. dans l'éditeur). Ces types
+sont les SOUS-DOSSIERS de <LB>\Videos\<plateforme>\. La vignette est la frame
+extraite à 20 % (VideoThumbnailer, cache disque) : l'extraction est LENTE, donc
+elle n'est JAMAIS faite sur le chemin d'affichage — la case reste noire et un
+worker dédié récupère les frames manquantes APRÈS le délai post-load, une vidéo
+à la fois, en s'arrêtant net (entre deux vidéos, sans rien avorter) dès que la
+sélection change. Le ▶ est DESSINÉ sur la vignette, jamais incrusté dans le
+fichier de cache. En média principal, la vidéo est jouée par libvlc dans la zone
+image ; les contrôles (play/pause, seek, temps, muet) n'apparaissent qu'au
+SURVOL ; sans autoplay (VideoAutoplay, §1.2) la frame reste affichée avec un ▶.
+L'anti-doublons l'ignore dans les deux sens.
 
 La pseudo-famille "Model3d" : l'entrée n'existe que si le jeu PEUT avoir un
 modèle (règle de validité ci-dessus) ; elle est IGNORÉE par

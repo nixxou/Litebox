@@ -297,15 +297,6 @@ internal sealed class MediaLayoutPanel : Panel
         _layout.DupThreshold = (double)_dupThr.Value;
         _layout.DupGpu = _dupGpu.Checked;
         _layout.Immediate3dFallback = FamilyKeyOf(_immFallback);
-        // This panel edits a CLONE taken when it was built, and Save() republishes it as the live instance.
-        // The 3D validity rule now lives in Display → General, which mutates the LIVE instance directly — so
-        // carry its current values over, or applying both tabs in one Options session would silently revert
-        // whichever was applied first.
-        var live = MediaLayout.Current;
-        _layout.Model3dNeedBack = live.Model3dNeedBack;
-        _layout.Model3dNeedSpine = live.Model3dNeedSpine;
-        _layout.Model3dNeedAll = live.Model3dNeedAll;
-        _layout.Model3dAcceptFull = live.Model3dAcceptFull;
         _layout.Save();
     }
 }

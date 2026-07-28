@@ -114,6 +114,10 @@ internal sealed class LiteBoxConfig
         _kv["UseGameCache"] = "true";
         _kv["UnloadGameCacheDuringGame"] = "true";
         _kv["Use16:9ForMainScreenshot"] = "true";
+        _kv["Model3dRequireBack"] = "false";
+        _kv["Model3dRequireSpine"] = "false";
+        _kv["Model3dRequireBothScans"] = "false";
+        _kv["Model3dAcceptFullScan"] = "false";
         _kv["GameRunningText"] = "Game running...";
         _kv["GameRunningColor"] = "#0F0F12";
         _kv["DebugLog"] = "false";
@@ -143,6 +147,13 @@ internal sealed class LiteBoxConfig
             sb.AppendLine("; UnloadGameCacheDuringGame : free the host game cache while a game runs, rebuild on exit.");
             sb.AppendLine("; Use16:9ForMainScreenshot : reserve a 16:9 area for the main media (true);");
             sb.AppendLine(";                            false reserves a poster-ratio (2:3) area instead.");
+            sb.AppendLine("; Model3dRequire* / Model3dAcceptFullScan : when is a 3D case model worth showing AND");
+            sb.AppendLine(";                         baking? The box FRONT is always required (without it the case");
+            sb.AppendLine(";                         wears LaunchBox's NoImage placeholder). RequireBack/RequireSpine");
+            sb.AppendLine(";                         demand those scans too; with BOTH on, RequireBothScans picks");
+            sb.AppendLine(";                         between 'need both' (true) and 'either one' (false).");
+            sb.AppendLine(";                         AcceptFullScan: a Box - Full sheet alone is enough (it composes");
+            sb.AppendLine(";                         the whole case), for games where full-scan mode applies.");
             sb.AppendLine("; GameRunningText       : message shown on the running screen");
             sb.AppendLine("; GameRunningColor      : base colour (#RRGGBB) behind the fanart");
             sb.AppendLine("; DebugLog              : write litebox-debug.log (Core\\litebox\\) with the runtime trace.");
@@ -158,6 +169,10 @@ internal sealed class LiteBoxConfig
             sb.AppendLine($"UseGameCache={_kv["UseGameCache"]}");
             sb.AppendLine($"UnloadGameCacheDuringGame={_kv["UnloadGameCacheDuringGame"]}");
             sb.AppendLine($"Use16:9ForMainScreenshot={_kv["Use16:9ForMainScreenshot"]}");
+            sb.AppendLine($"Model3dRequireBack={_kv["Model3dRequireBack"]}");
+            sb.AppendLine($"Model3dRequireSpine={_kv["Model3dRequireSpine"]}");
+            sb.AppendLine($"Model3dRequireBothScans={_kv["Model3dRequireBothScans"]}");
+            sb.AppendLine($"Model3dAcceptFullScan={_kv["Model3dAcceptFullScan"]}");
             sb.AppendLine($"GameRunningText={_kv["GameRunningText"]}");
             sb.AppendLine($"GameRunningColor={_kv["GameRunningColor"]}");
             sb.AppendLine($"DebugLog={_kv["DebugLog"]}");
@@ -225,6 +240,19 @@ internal sealed class LiteBoxConfig
     public bool UnloadGameCacheDuringGame { get => GetBool("UnloadGameCacheDuringGame", true); set => SetBool("UnloadGameCacheDuringGame", value); }
     // true → reserve a 16:9 area for the main media; false → a poster-ratio (2:3) area.
     public bool Use169ForMainScreenshot { get => GetBool("Use16:9ForMainScreenshot", true); set => SetBool("Use16:9ForMainScreenshot", value); }
+    // ── When is a 3D case model worth showing (and baking)? ──────────────────
+    // Flat globals, hence the ini (media-layout.json exists for the LIST-shaped layout, not for these).
+    // The FRONT is always required — without it the case wears LaunchBox's "NoImage" placeholder. These
+    // add optional requirements on top; the Box - Full sheet is an alternative branch on its own.
+    // Read through Model3d.Model3dOptions (cached snapshot — no ini I/O on the hot paths).
+    public bool Model3dRequireBack  { get => GetBool("Model3dRequireBack", false); set => SetBool("Model3dRequireBack", value); }
+    public bool Model3dRequireSpine { get => GetBool("Model3dRequireSpine", false); set => SetBool("Model3dRequireSpine", value); }
+    /// <summary>With BOTH of the above on: true = need both scans, false = either one is enough.</summary>
+    public bool Model3dRequireBothScans { get => GetBool("Model3dRequireBothScans", false); set => SetBool("Model3dRequireBothScans", value); }
+    /// <summary>A Box - Full scan alone validates the model (only for games where full-scan mode applies —
+    /// that mode is set per platform/game, so this stays meaningful whatever any global setting says).</summary>
+    public bool Model3dAcceptFullScan { get => GetBool("Model3dAcceptFullScan", false); set => SetBool("Model3dAcceptFullScan", value); }
+
     // ═══ LB-ORACLE (Model3dLbOracle) — dev/diagnostic, default OFF ═══
     // true → the Edit Platform 3D tab shows a SECOND preview zone rendered by LaunchBox's own core
     // (CoverFlow.FlowModel via CoreModelHost) above LiteBox's renderer, for side-by-side comparison of

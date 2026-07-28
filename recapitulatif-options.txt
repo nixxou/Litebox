@@ -79,6 +79,10 @@ UseGameCache               true    Cache média en RAM (Everything) quand le
 UnloadGameCacheDuringGame  true    Libère ce cache pendant une partie.
 UseImageCache              true    Utilise le cache de miniatures dégradées.
 Use16:9ForMainScreenshot   true    Zone média principale 16:9 (false = 2:3).
+Model3dRequireBack         false   ┐ Quand un modèle 3D MÉRITE-t-il d'être
+Model3dRequireSpine        false   │ affiché ET baké ? Le FRONT est toujours
+Model3dRequireBothScans    false   │ requis ; ces clés ajoutent des exigences.
+Model3dAcceptFullScan      false   ┘ Détail complet au §media-layout.json.
 DetailLoadDelayMs          300     Délai (0-5000) avant le chargement différé du
                                    panneau de détail (anti-scroll-rapide).
 KillStoreLauncherAfterGame false   Ferme le client GOG/Steam/Epic/Ubisoft à la
@@ -228,8 +232,6 @@ Décrit, PAR VUE (liste / poster), l'image immédiate puis la liste post-load.
 
     { "ImmediateList": "Front", "ImmediatePoster": "Model3d",
       "Immediate3dFallback": "Front", "PosterIndependent": false,
-      "Model3dNeedBack": false, "Model3dNeedSpine": false,
-      "Model3dNeedAll": false,  "Model3dAcceptFull": false,
       "PostLoad": [ { "Sel": "Front", "Count": 1 },
                     { "Sel": "Model3d", "Count": 1 },
                     { "Sel": "Screenshots", "Count": 5 } ] }
@@ -241,19 +243,24 @@ tri ; Cumulative(+Depth) = accumulation multi-entrées ; IgnoreGameRegion /
 AllRegions = élargissement des régions. Le hash MD5 de cette config sert de clé
 au cache anti-doublons (ADS :lb.dupcheck).
 
-VALIDITÉ DU MODÈLE 3D ("Model3dNeed*/AcceptFull") — décide si un jeu MÉRITE un
-modèle. Réglé dans Display → GENERAL (et non Right panel) : la règle dépasse le
-panneau droit, elle conditionne aussi le bake, la génération en masse et
-l'index des clés. Stocké ici avec le reste du pipeline média. Le FRONT est toujours requis (sans lui la boîte porte le placeholder
-"NoImage" de LaunchBox) ; Model3dNeedBack / Model3dNeedSpine ajoutent des
-exigences ; si les DEUX sont demandées, Model3dNeedAll choisit entre « les deux »
-(true) et « l'une ou l'autre » (false, défaut). Model3dAcceptFull = une planche
-Box - Full suffit à elle seule — la case reste cochable même si le mode
-full-scan est désactivé globalement, car ce mode se règle aussi par plateforme
-et par jeu : l'arbitrage se fait par jeu à la résolution. La règle filtre
-l'affichage, l'index des clés 3D ET la génération en masse, mais n'entre PAS
-dans la clé de cache (elle ne change pas le rendu) ; la durcir ne re-bake donc
-rien. Changement appliqué → recalcul de l'index (Model3dKeyIndex.KickAll).
+VALIDITÉ DU MODÈLE 3D — décide si un jeu MÉRITE un modèle (affichage ET bake).
+Réglée dans Display → GENERAL, pas Right panel : elle dépasse le panneau droit,
+conditionnant aussi le bake, la génération en masse et l'index des clés.
+STOCKÉE DANS LiteBox.ini, PAS dans ce json — ce sont des globales PLATES, et le
+json n'est justifié que par la LISTE PostLoad (même critère que youtube.json).
+Clés : Model3dRequireBack / Model3dRequireSpine / Model3dRequireBothScans /
+Model3dAcceptFullScan (toutes false par défaut, écrites dans le template ini).
+Le FRONT est toujours requis (sans lui la boîte porte le placeholder "NoImage"
+de LaunchBox) ; RequireBack/RequireSpine ajoutent des exigences ; si les DEUX
+sont demandées, RequireBothScans choisit entre « les deux » (true) et « l'une ou
+l'autre » (false). AcceptFullScan = une planche Box - Full suffit à elle seule —
+la case reste cochable même si le mode full-scan paraît désactivé globalement,
+car ce mode se règle aussi par plateforme et par jeu : l'arbitrage se fait par
+jeu à la résolution. La règle n'entre PAS dans la clé de cache (elle ne change
+pas le rendu) : la durcir ne re-bake donc rien. Lecture via Model3dOptions =
+SNAPSHOT en mémoire, aucune I/O ini à l'usage courant (il sert aussi
+TargetAspect, qui re-parsait l'ini une fois PAR JEU résolu) ; l'apply invalide
+le snapshot et relance le calcul d'index (Model3dKeyIndex.KickAll).
 
 La pseudo-famille "Model3d" : l'entrée n'existe que si le jeu PEUT avoir un
 modèle (règle de validité ci-dessus) ; elle est IGNORÉE par

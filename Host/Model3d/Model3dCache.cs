@@ -162,7 +162,7 @@ internal static class Model3dCache
         // honoured without the UI having to know which level (global/platform/game) won.
         // NOTE: the rule is NOT part of the manifest — it decides whether to SHOW/bake a model, not what the
         // bake produces, so tightening it must never re-key (and re-bake) the models that stay valid.
-        bool hasArt = Media.MediaLayout.Current.Model3dValid(
+        bool hasArt = Model3dOptions.Valid(
             present.Contains("front"), present.Contains("back"), present.Contains("spine"), present.Contains("full"));
         return new Identity(key, Path.Combine(Dir, key + ".glb"), manifest, map, platform, title, id, hasArt, ov);
     }

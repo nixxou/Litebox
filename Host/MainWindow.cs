@@ -227,6 +227,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         // MAME leaderboard toggles (download gates the HIGH SCORES tab; upload gates the auto-submit) read live too.
         if (_dm is HostDataManagerXml hdmMame) Mame.MameOptions.Bind(hdmMame.LbSettings);
         _cfg = LiteBoxConfig.LoadForExe();
+        // The 3D snapshot reads OUR live config: an option applied in the Options window is then visible to
+        // the 3D paths as soon as the snapshot is invalidated, without waiting for the ini file write.
+        Model3d.Model3dOptions.Source = () => _cfg;
         _secondInstance = InstanceGuard.AnotherInstanceRunning;
         _useImageCache = _cfg.UseImageCache;
         _posterOwnerDraw = _cfg.GetBool("PosterOwnerDraw", false);   // legacy poster renderer (vs native image list)
@@ -1832,32 +1835,30 @@ internal sealed class MainWindow : Form, IMessageFilter
             // ── 3D model validity ──
             // Lives HERE and not in the right-panel tab: it gates far more than that pane — the media list,
             // the instant path's key index, the detail overlay, the fullscreen viewer AND whether a model is
-            // baked at all (selection + bulk Generate Media Cache). Stored in media-layout.json with the rest
-            // of the media pipeline; changing it recomputes the key index (the eligible-game set moved).
+            // baked at all (selection + bulk Generate Media Cache). Flat globals → LiteBox.ini like the rest
+            // of this tab. applyLive drops the cached snapshot (the values are read per resolved game) and
+            // recomputes the key index, since the eligible-game set just moved.
             Options.OptionItem.Toggle("Display", "3D model: also require a Box - Back scan",
-                () => Media.MediaLayout.Current.Model3dNeedBack,
-                v => { Media.MediaLayout.Current.Model3dNeedBack = v; Media.MediaLayout.Current.Save(); },
+                () => _cfg.Model3dRequireBack, v => _cfg.Model3dRequireBack = v,
                 "The FRONT is always required — without it the case wears LaunchBox's 'NoImage' placeholder. "
                 + "Tick this to only consider a model worth showing (and baking) when the game also has a back scan.",
-                applyLive: () => Model3d.Model3dKeyIndex.KickAll()),
+                applyLive: Refresh3dValidity),
             Options.OptionItem.Toggle("Display", "3D model: also require a Box - Spine scan",
-                () => Media.MediaLayout.Current.Model3dNeedSpine,
-                v => { Media.MediaLayout.Current.Model3dNeedSpine = v; Media.MediaLayout.Current.Save(); },
+                () => _cfg.Model3dRequireSpine, v => _cfg.Model3dRequireSpine = v,
                 "Same idea for the spine scan — the piece that makes the case's edge real rather than flat colour.",
-                applyLive: () => Model3d.Model3dKeyIndex.KickAll()),
+                applyLive: Refresh3dValidity),
             Options.OptionItem.Choice("Display", "3D model: when both extra scans are required",
                 new[] { "either one is enough", "need both" },
-                () => Media.MediaLayout.Current.Model3dNeedAll ? "need both" : "either one is enough",
-                v => { Media.MediaLayout.Current.Model3dNeedAll = v == "need both"; Media.MediaLayout.Current.Save(); },
+                () => _cfg.Model3dRequireBothScans ? "need both" : "either one is enough",
+                v => _cfg.Model3dRequireBothScans = v == "need both",
                 "Only matters when Back AND Spine are both ticked above.",
-                applyLive: () => Model3d.Model3dKeyIndex.KickAll()),
+                applyLive: Refresh3dValidity),
             Options.OptionItem.Toggle("Display", "3D model: a Box - Full scan alone is enough",
-                () => Media.MediaLayout.Current.Model3dAcceptFull,
-                v => { Media.MediaLayout.Current.Model3dAcceptFull = v; Media.MediaLayout.Current.Save(); },
+                () => _cfg.Model3dAcceptFullScan, v => _cfg.Model3dAcceptFullScan = v,
                 "A full scan composes the whole case by itself, so it satisfies the rule on its own. Counts only "
                 + "for games where full-scan mode actually applies — that mode is set per platform and per game, "
                 + "so this stays available whatever the global setting says.",
-                applyLive: () => Model3d.Model3dKeyIndex.KickAll()),
+                applyLive: Refresh3dValidity),
         };
 
         var midList = new[]
@@ -1918,6 +1919,15 @@ internal sealed class MainWindow : Form, IMessageFilter
             ("Middle · Poster", midPoster, null),
             ("Right panel", rightTab, () => { rightApply(); mediaPanel.Apply(); }),
         });
+    }
+
+    // A 3D-validity knob changed: drop the cached snapshot (Model3dOptions reads the LIVE _cfg, so the new
+    // value is visible immediately, before the ini file is even written) and recompute the key index — the
+    // set of games that may have a model just changed.
+    private void Refresh3dValidity()
+    {
+        Model3d.Model3dOptions.Invalidate();
+        Model3d.Model3dKeyIndex.KickAll();
     }
 
     private Options.OptionsWindow BuildOptionsWindow()

@@ -363,12 +363,9 @@ internal static class Model3dBaker
     // viewport now, not the other way around.)
 
     /// <summary>The media box aspect the whole 3D pipeline targets (ini "Use16:9ForMainScreenshot").
-    /// Part of the bake manifest — flipping the option re-bakes.</summary>
-    public static double TargetAspect()
-    {
-        try { return LiteBoxConfig.LoadForExe().Use169ForMainScreenshot ? 16.0 / 9.0 : 2.0 / 3.0; }
-        catch { return 16.0 / 9.0; }
-    }
+    /// Part of the bake manifest — flipping the option re-bakes. Served from the cached snapshot: this is
+    /// called once per RESOLVED GAME (manifest), and LoadForExe re-parses the whole ini on every call.</summary>
+    public static double TargetAspect() => Model3dOptions.TargetAspect();
 
     /// <summary>The live-viewport camera distance for <paramref name="aspect"/> — shared by the bake
     /// and Model3dBlock so both cameras are the same object in two places.</summary>

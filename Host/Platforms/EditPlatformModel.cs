@@ -422,6 +422,9 @@ internal static class EditPlatformModel
             if (k.StartsWith("preset:")) PopulateVersions(int.Parse(k.Substring(7)), "");   // repopulate (versions differ per preset)
             Refresh();
         };
+        // Spine VERSION (Auto-Detect / North American / European …) — was never wired: BuildFieldMap reads it,
+        // so the value persisted, but nothing redrew the preview, and switching NA↔EU looked like a no-op.
+        spineVersion.SelectedIndexChanged += (_, _) => Refresh();
         Refresh();
 
         // Build the field→string map from the live controls (null when Override is off). Shared by Apply

@@ -74,6 +74,13 @@ internal static class JewelRenderProbe
             int ai = Array.IndexOf(args, "amb");
             if (ai >= 0 && ai + 1 < args.Length && byte.TryParse(args[ai + 1], System.Globalization.NumberStyles.HexNumber, null, out var ab)) _ambient = ab;
             ApplyMapArg(args, map);   // `map "K=V;K=V"` → spine-mode overrides etc. (empty V = remove)
+            if (map.TryGetValue("FrontSpineImage", out var dbgSpec) && dbgSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase))
+            {
+                string key = dbgSpec.Substring(12);
+                string? rgn = Host.Platforms.LbCaseObj.RegionOfImagePath(ov.TryGetValue("front", out var fp) ? fp : null);
+                var got = Host.Platforms.LbCaseObj.SpineImage(key, rgn);
+                Console.WriteLine($"[jewel-probe] SpineImage(\"{key}\", region={rgn ?? "-"}) -> {(got == null ? "NULL" : got.PixelWidth + "x" + got.PixelHeight)}");
+            }
             Console.WriteLine($"[jewel-probe] art: {string.Join(", ", ov.Keys)}  map: {string.Join(";", map.Select(kv => kv.Key + "=" + kv.Value))}  (cwd={Environment.CurrentDirectory})");
 
             byte[]? png = null;

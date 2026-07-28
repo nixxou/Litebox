@@ -33,7 +33,7 @@ internal static class Model3dCache
 {
     /// <summary>Salts every key — bump when the bake output changes (geometry, materials, thumb pose/size,
     /// GLB layout) so stale files are re-keyed away in one move.</summary>
-    public const int BakerVersion = 11;   // v11: double-jewel strips keep the game scan (preset = no-scan fallback only, the single-jewel v9 rule) (v10: doubleSided through the GLB, v9: spine modes oracle-exact, v8: scan on strips, v5: thin strips lossless)
+    public const int BakerVersion = 12;   // v12: Auto-Detect spine version follows the game's REGION (PAL game → " - EU" preset instead of always NA) (v11: double-jewel strips keep the game scan, v10: doubleSided through the GLB, v9: spine modes oracle-exact)
 
     public static string Dir
     {

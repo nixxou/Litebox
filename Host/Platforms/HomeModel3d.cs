@@ -463,7 +463,9 @@ internal sealed class HomeModel3d : IDisposable
         var plastic = LbCaseObj.Load(spineClear ? "ClearSpineJewelCase" : "JewelCase") ?? LbCaseObj.Load("JewelCase");
         if (plastic == null) return null;   // no embedded model → keep LB's clone (comparison still works)
 
-        var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front));
+        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front);
+        string? region = LbCaseObj.RegionOfImagePath(frontPath);   // drives the Auto-Detect spine version
+        var front = LoadBitmap(frontPath);
         var logo = LoadBitmap(ResolveSlot(ov, "logo", platform, gameTitle, Media.MediaResolver.ClearLogo));
 
         var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
@@ -492,7 +494,7 @@ internal sealed class HomeModel3d : IDisposable
         //   • IsClear=false + no image ("Solid Spine") → no spine quad at all (the solid-hinge plastic IS the
         //     spine look).
         System.Windows.Media.Imaging.BitmapSource? spineImg =
-            spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12))
+            spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12), region)
             : spineSpec.Length > 0 ? LoadBitmap(spineSpec)
             : null;
         // Cap only when it has an IMAGE: LB emits an imageless cap for "Empty Clear Spine", but in WPF a
@@ -649,7 +651,9 @@ internal sealed class HomeModel3d : IDisposable
     private static Model3D? BuildDoubleJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
                                              System.Collections.Generic.Dictionary<string, string>? ov = null)
     {
-        var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front));
+        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front);
+        string? region = LbCaseObj.RegionOfImagePath(frontPath);   // drives the Auto-Detect spine version
+        var front = LoadBitmap(frontPath);
         var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, new[] { "Box - Back" }));
 
         // Spine strips: the game's OWN Box - Spine scan first (ov-aware — an Image Selection pick flows
@@ -660,7 +664,7 @@ internal sealed class HomeModel3d : IDisposable
         string spineSpec = map != null && map.TryGetValue("FrontSpineImage", out var ss) ? ss : "";
         System.Windows.Media.Imaging.BitmapSource? spine =
             LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }))
-            ?? (spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12))
+            ?? (spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12), region)
                 : spineSpec.Length > 0 ? LoadBitmap(spineSpec)
                 : null);
 

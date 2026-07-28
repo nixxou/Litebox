@@ -117,9 +117,18 @@ internal static class LbCaseObj
     /// <summary>Spine-preset image by entry name (e.g. "Sony Playstation - NA"); exact key first, then the
     /// regional variants (Auto-Detect approximation — LB detects from the game's region). Sources: LiteBox's
     /// OWN shipped copies (case-assets/<name>.png) first, then LB's dll bundle as fallback. Null if none.</summary>
-    public static System.Windows.Media.Imaging.BitmapSource? SpineImage(string name)
+    public static System.Windows.Media.Imaging.BitmapSource? SpineImage(string name, string? regionHint = null)
     {
-        var candidates = new[] { name, name + " - NA", name + " - EU", name + " - NA Black", name + " - NA White" };
+        // "Auto-Detect" = the preset name with NO " - <version>" suffix. It used to fall straight through to
+        // the " - NA" asset, so a PAL game got the North-American hinge. With a regionHint (the region folder
+        // of the game's resolved FRONT art, else its Region field) a European game now prefers " - EU".
+        // An EXPLICIT version (name already carries " - …") is honoured first and only falls back if missing.
+        bool explicitVersion = name.Contains(" - ", StringComparison.Ordinal);
+        var candidates = explicitVersion
+            ? new[] { name, name + " - NA", name + " - EU", name + " - NA Black", name + " - NA White" }
+            : IsEuropeanRegion(regionHint)
+                ? new[] { name + " - EU", name, name + " - NA", name + " - NA Black", name + " - NA White" }
+                : new[] { name, name + " - NA", name + " - NA Black", name + " - NA White", name + " - EU" };
         foreach (var k in candidates)
             try
             {
@@ -144,6 +153,34 @@ internal static class LbCaseObj
                     return DecodeImage(raw);
             return null;
         }
+    }
+
+    /// <summary>PAL/European territory? Used by the Auto-Detect spine version. The names are LaunchBox's
+    /// region folder names (Images\&lt;Platform&gt;\&lt;Type&gt;\&lt;Region&gt;\) plus the usual Region-field values.</summary>
+    internal static bool IsEuropeanRegion(string? region)
+    {
+        if (string.IsNullOrWhiteSpace(region)) return false;   // unknown → LB's NA default
+        foreach (var eu in new[] { "europe", "united kingdom", "france", "germany", "italy", "spain",
+                                   "netherlands", "sweden", "norway", "denmark", "finland", "russia",
+                                   "australia", "pal" })
+            if (region.IndexOf(eu, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        return false;
+    }
+
+    /// <summary>The LaunchBox region folder of an image path (…\Images\&lt;Platform&gt;\&lt;Type&gt;\&lt;Region&gt;\file),
+    /// or null when the path isn't inside an Images tree.</summary>
+    internal static string? RegionOfImagePath(string? path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            var parts = System.IO.Path.GetFullPath(path).Split(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+            for (int i = 0; i < parts.Length; i++)
+                if (parts[i].Equals("Images", StringComparison.OrdinalIgnoreCase))
+                    return i + 3 < parts.Length ? parts[i + 3] : null;   // Images/<platform>/<type>/<region>/file
+            return null;
+        }
+        catch { return null; }
     }
 
     private static System.Windows.Media.Imaging.BitmapSource? DecodeImage(object raw)

@@ -8,6 +8,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -60,16 +61,20 @@ internal static class JewelRenderProbe
                 AddIfExists(ov, "spine", FirstExisting(
                     @"Images\Sony Playstation\Box - Spine\Europe\Final Fantasy 7-01.jpg",
                     @"Images\Sony Playstation\Box - Spine\North America\Final Fantasy 7-20.jpg"));
-            AddIfExists(ov, "back", FirstExisting(
-                @"Images\Sony Playstation\Box - Back\France\Final Fantasy 7-01.png",
-                @"Images\Sony Playstation\Box - Back\World\Final Fantasy 7-20.png"));
+            if (!args.Contains("noback"))
+                AddIfExists(ov, "back", FirstExisting(
+                    @"Images\Sony Playstation\Box - Back\France\Final Fantasy 7-01.png",
+                    @"Images\Sony Playstation\Box - Back\World\Final Fantasy 7-20.png"));
             AddIfExists(ov, "logo", FirstExisting(
                 @"Images\Sony Playstation\Clear Logo\World\Final Fantasy 7-20.png"));
             Host.Platforms.HomeModel3d.DebugSkipPlastic = args.Contains("noplastic");
+            Host.Platforms.HomeModel3d.DebugSkipCap = args.Contains("nocap");
+            Host.Platforms.HomeModel3d.DebugBackFaces = args.Contains("diagback");
             _fillLight = args.Contains("fill");
             int ai = Array.IndexOf(args, "amb");
             if (ai >= 0 && ai + 1 < args.Length && byte.TryParse(args[ai + 1], System.Globalization.NumberStyles.HexNumber, null, out var ab)) _ambient = ab;
-            Console.WriteLine($"[jewel-probe] art: {string.Join(", ", ov.Keys)}  skipPlastic={Host.Platforms.HomeModel3d.DebugSkipPlastic}  (cwd={Environment.CurrentDirectory})");
+            ApplyMapArg(args, map);   // `map "K=V;K=V"` → spine-mode overrides etc. (empty V = remove)
+            Console.WriteLine($"[jewel-probe] art: {string.Join(", ", ov.Keys)}  map: {string.Join(";", map.Select(kv => kv.Key + "=" + kv.Value))}  (cwd={Environment.CurrentDirectory})");
 
             byte[]? png = null;
             var t = new Thread(() =>
@@ -112,11 +117,16 @@ internal static class JewelRenderProbe
                     if (prev == null) { Console.WriteLine("[oracle] core unavailable (run the DEPLOYED LB\\Core exe)"); return; }
                     var ui = (prev.Control as System.Windows.Forms.Integration.ElementHost)?.Child as System.Windows.FrameworkElement;
                     if (ui == null) { Console.WriteLine("[oracle] no WPF child"); return; }
-                    var map = Host.Platforms.ModelDefaults.TryGet("Sony Playstation", "Sony Playstation");
-                    prev.Redraw(map, "Final Fantasy 7", "Sony Playstation");
+                    var map = Host.Platforms.ModelDefaults.TryGet("Sony Playstation", "Sony Playstation")
+                              ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    ApplyMapArg(args, map);   // `map "K=V;K=V"` → overrides (empty V = remove)
+                    string title = ArgValue(args, "title") ?? "Final Fantasy 7";
+                    Console.WriteLine("[oracle] map: " + string.Join(";", map.Select(kv => kv.Key + "=" + kv.Value)) + "  title=" + title);
+                    prev.Redraw(map, title, "Sony Playstation");
                     ui.Measure(new System.Windows.Size(w, h));
                     ui.Arrange(new System.Windows.Rect(0, 0, w, h));
                     Pump(wait);                    // FlowModel loads art ASYNC and rebuilds — let it settle
+                    if (args.Contains("dump")) DumpStructure(prev.BuiltGeometry());   // exact quads + materials
                     if (l != 0 || r != 0 || u != 0 || dn != 0) { prev.Rotate(l, r, u, dn); Pump(800); }
                     ui.Measure(new System.Windows.Size(w, h));
                     ui.Arrange(new System.Windows.Rect(0, 0, w, h));
@@ -144,6 +154,144 @@ internal static class JewelRenderProbe
     {
         long until = Environment.TickCount64 + ms;
         while (Environment.TickCount64 < until) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(15); }
+    }
+
+    // ═══ LB-ORACLE ═══ dump the built Model3DGroup: every leaf's transformed bounds, uv range and material —
+    // the ground-truth structure to compare our builders against (successor of the deleted DumpGroup).
+    private static void DumpStructure(Model3DGroup? root)
+    {
+        if (root == null) { Console.WriteLine("[oracle-dump] no built geometry"); return; }
+        int leaf = 0;
+        void Walk(Model3D m, Matrix3D parent, string path)
+        {
+            var local = (m.Transform?.Value ?? Matrix3D.Identity) * parent;
+            if (m is Model3DGroup g)
+            {
+                for (int i = 0; i < g.Children.Count; i++) Walk(g.Children[i], local, path + "/" + i);
+                return;
+            }
+            if (m is not GeometryModel3D gm || gm.Geometry is not MeshGeometry3D mesh || mesh.Positions.Count == 0) return;
+            double minX = double.MaxValue, maxX = double.MinValue, minY = double.MaxValue, maxY = double.MinValue, minZ = double.MaxValue, maxZ = double.MinValue;
+            foreach (var p0 in mesh.Positions)
+            {
+                var p = local.Transform(p0);
+                minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
+                minY = Math.Min(minY, p.Y); maxY = Math.Max(maxY, p.Y);
+                minZ = Math.Min(minZ, p.Z); maxZ = Math.Max(maxZ, p.Z);
+            }
+            string uv = "-";
+            if (mesh.TextureCoordinates.Count > 0)
+            {
+                double u0 = double.MaxValue, u1 = double.MinValue, v0 = double.MaxValue, v1 = double.MinValue;
+                foreach (var t in mesh.TextureCoordinates)
+                { u0 = Math.Min(u0, t.X); u1 = Math.Max(u1, t.X); v0 = Math.Min(v0, t.Y); v1 = Math.Max(v1, t.Y); }
+                uv = $"u[{u0:0.###}..{u1:0.###}] v[{v0:0.###}..{v1:0.###}]";
+            }
+            Console.WriteLine($"[oracle-dump] leaf{leaf++} {path}  verts={mesh.Positions.Count} tris={mesh.TriangleIndices.Count / 3}");
+            Console.WriteLine($"[oracle-dump]   X[{minX:0.####}..{maxX:0.####}] Y[{minY:0.####}..{maxY:0.####}] Z[{minZ:0.####}..{maxZ:0.####}]  uv {uv}");
+            Console.WriteLine($"[oracle-dump]   mat={Describe(gm.Material)}  back={Describe(gm.BackMaterial)}");
+        }
+        Walk(root, Matrix3D.Identity, "");
+        Console.WriteLine($"[oracle-dump] total {leaf} leaves");
+    }
+
+    private static string Describe(Material? m)
+    {
+        switch (m)
+        {
+            case null: return "null";
+            case MaterialGroup mg: return "Group[" + string.Join(", ", mg.Children.Select(Describe)) + "]";
+            case DiffuseMaterial dm: return "Diffuse(" + DescribeBrush(dm.Brush) + ")";
+            case SpecularMaterial sp: return $"Specular({DescribeBrush(sp.Brush)}, pow={sp.SpecularPower:0.#})";
+            case EmissiveMaterial em: return "Emissive(" + DescribeBrush(em.Brush) + ")";
+            default: return m.GetType().Name;
+        }
+    }
+
+    private static string DescribeBrush(System.Windows.Media.Brush? b)
+    {
+        switch (b)
+        {
+            case null: return "null";
+            case SolidColorBrush sb: return $"#{sb.Color.A:X2}{sb.Color.R:X2}{sb.Color.G:X2}{sb.Color.B:X2}(op={sb.Opacity:0.##})";
+            case ImageBrush ib:
+                var src = ib.ImageSource as BitmapSource;
+                return $"Image({src?.PixelWidth}x{src?.PixelHeight}, stretch={ib.Stretch}, viewbox={ib.Viewbox}, tile={ib.TileMode})";
+            case VisualBrush vb:
+                string vis = vb.Visual is System.Windows.FrameworkElement fe
+                    ? $"{fe.GetType().Name} {fe.Width:0.#}x{fe.Height:0.#} [{DescribeVisualTree(fe)}]"
+                    : vb.Visual?.GetType().Name ?? "null";
+                return $"Visual({vis}, stretch={vb.Stretch})";
+            default: return b.GetType().Name + $"(op={b.Opacity:0.##})";
+        }
+    }
+
+    // Walk a composed visual (the VisualBrush content) and describe every child: Images (source size,
+    // stretch, alignment, layout transform, grid cell), TextBlocks, nested panels, backgrounds.
+    private static string DescribeVisualTree(System.Windows.DependencyObject o)
+    {
+        var parts = new List<string>();
+        void Add(System.Windows.DependencyObject d)
+        {
+            switch (d)
+            {
+                case System.Windows.Controls.Image im:
+                    var s = im.Source as BitmapSource;
+                    string cell = "";
+                    try
+                    {
+                        int col = System.Windows.Controls.Grid.GetColumn(im), row = System.Windows.Controls.Grid.GetRow(im);
+                        if (col != 0 || row != 0) cell = $" cell={col},{row}";
+                    }
+                    catch { }
+                    string tf = im.LayoutTransform is RotateTransform rt ? $" rot={rt.Angle}" : "";
+                    string rtf = im.RenderTransform is System.Windows.Media.Transform rr && !rr.Value.IsIdentity ? $" rtf={rr.Value}" : "";
+                    parts.Add($"Img({s?.PixelWidth}x{s?.PixelHeight} st={im.Stretch} ha={im.HorizontalAlignment} va={im.VerticalAlignment}" +
+                              $" w={im.Width:0.#} h={im.Height:0.#} m={im.Margin}{cell}{tf}{rtf} op={im.Opacity:0.##})");
+                    break;
+                case System.Windows.Controls.TextBlock tb:
+                    parts.Add($"Text(\"{tb.Text}\" fg={(tb.Foreground as SolidColorBrush)?.Color})");
+                    break;
+                case System.Windows.Controls.Panel pn:
+                    string bg = pn is { } && pn.Background is SolidColorBrush pb ? $"#{pb.Color.A:X2}{pb.Color.R:X2}{pb.Color.G:X2}{pb.Color.B:X2}" : pn.Background?.GetType().Name ?? "-";
+                    string cols = pn is System.Windows.Controls.Grid gg && gg.ColumnDefinitions.Count > 0
+                        ? " cols=" + string.Join("|", gg.ColumnDefinitions.Select(c => c.Width.ToString())) : "";
+                    parts.Add($"{pn.GetType().Name}(bg={bg}{cols})");
+                    foreach (object c in pn.Children) if (c is System.Windows.DependencyObject cd) Add(cd);
+                    break;
+                case System.Windows.Controls.Decorator dec:
+                    parts.Add(dec.GetType().Name);
+                    if (dec.Child != null) Add(dec.Child);
+                    break;
+                default:
+                    parts.Add(d.GetType().Name);
+                    foreach (object c in System.Windows.LogicalTreeHelper.GetChildren(d))
+                        if (c is System.Windows.DependencyObject cd) Add(cd);
+                    break;
+            }
+        }
+        Add(o);
+        return string.Join(" ", parts);
+    }
+
+    /// <summary>`map "K=V;K=V"` CLI arg → merge into <paramref name="map"/> (empty V removes the key).</summary>
+    private static void ApplyMapArg(string[] args, Dictionary<string, string> map)
+    {
+        string? extra = ArgValue(args, "map");
+        if (string.IsNullOrEmpty(extra)) return;
+        foreach (var kv in extra!.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int eq = kv.IndexOf('=');
+            if (eq <= 0) continue;
+            string k = kv.Substring(0, eq).Trim(), v = kv.Substring(eq + 1);
+            if (v.Length == 0) map.Remove(k); else map[k] = v;
+        }
+    }
+
+    private static string? ArgValue(string[] args, string name)
+    {
+        int i = Array.IndexOf(args, name);
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
     }
 
     // usage: --render-glb <glb> <out.png> <yawDeg> <pitchDeg> [distance] [WxH] — renders an ALREADY-BAKED

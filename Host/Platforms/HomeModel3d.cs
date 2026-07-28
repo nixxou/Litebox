@@ -38,6 +38,11 @@ internal sealed class HomeModel3d : IDisposable
     //             the exact structure LB's RotateModel maintains (whose parameters are 7.5°-units).
     /// <summary>Dev harness only (JewelRenderProbe): omit the plastic shell to inspect the paper insert alone.</summary>
     internal static bool DebugSkipPlastic = false;
+    /// <summary>Dev harness only: omit the jewel spine cap/label quad (isolation of depth interactions).</summary>
+    internal static bool DebugSkipCap = false;
+    /// <summary>Dev harness only: paint the jewel BACK insert Material RED and its BackMaterial GREEN —
+    /// tells which face of that quad a given camera angle is actually showing.</summary>
+    internal static bool DebugBackFaces = false;
 
     private readonly AxisAngleRotation3D _yawRot = new(new Vector3D(0, 1, 0), 0);
     private readonly AxisAngleRotation3D _pitchRot = new(new Vector3D(1, 0, 0), 0);
@@ -448,31 +453,23 @@ internal sealed class HomeModel3d : IDisposable
     private static Model3D? BuildJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
                                        System.Collections.Generic.Dictionary<string, string>? ov = null)
     {
-        var plastic = LbCaseObj.Load("JewelCase");
+        // Spine mode first — it selects the PLASTIC MODEL (oracle-dumped 2026-07-28, all modes):
+        //   FrontSpineIsClear=true  (empty clear / {Resources} presets / custom clear) → ClearSpineJewelCase
+        //     (6 segments — see-through hinge) + the wrapped spine CAP quad carrying the spine image;
+        //   FrontSpineIsClear=false (solid / custom solid) → JewelCase (5 segments — solid hinge), NO wrapped
+        //     cap; custom solid instead gets a FLAT LABEL quad glued on the hinge FRONT (Z=+0.0271).
+        string spineSpec = map != null && map.TryGetValue("FrontSpineImage", out var ss) ? ss : "";
+        bool spineClear = map != null && map.TryGetValue("FrontSpineIsClear", out var sc) && sc == "true";
+        var plastic = LbCaseObj.Load(spineClear ? "ClearSpineJewelCase" : "JewelCase") ?? LbCaseObj.Load("JewelCase");
         if (plastic == null) return null;   // no embedded model → keep LB's clone (comparison still works)
 
         var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front));
         var logo = LoadBitmap(ResolveSlot(ov, "logo", platform, gameTitle, Media.MediaResolver.ClearLogo));
 
-        // Spine sources. The game's Box - Spine scan (`scan` below — ov-aware, an Image Selection pick flows
-        // through ResolveSlot) drives the EDGE STRIPS: when it exists it IS the spine, exactly what LaunchBox
-        // displays (user-verified FF7 screenshot), and NO wrapped cap quad is emitted at all. The cap only
-        // exists for the NO-SCAN case: FrontSpineImage = "{Resources}\<preset>" (generic plastic strip) or a
-        // custom file path. spineImg == null → no cap.
-        string spineSpec = map != null && map.TryGetValue("FrontSpineImage", out var ss) ? ss : "";
-        bool spineClear = map != null && map.TryGetValue("FrontSpineIsClear", out var sc) && sc == "true";
-
         var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
         var clear = System.Windows.Media.Colors.Transparent;
         var backScan = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, new[] { "Box - Back" }));
         var scan = LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }));
-
-        // Strip background = CoverColor option else corner-average of the front art (probe-decoded; the old
-        // #1C1116 constant was just A-Train's corner average). Text mode: CaseColor = text colour.
-        var stripBg = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
-        if (map != null && map.TryGetValue("CoverColor", out var cs) && int.TryParse(cs, out var cargb2))
-            stripBg = System.Windows.Media.Color.FromArgb((byte)(cargb2 >> 24), (byte)(cargb2 >> 16), (byte)(cargb2 >> 8), (byte)cargb2);
-        else if (front != null) stripBg = CornerAverage(front);
         string logoFont = map != null && map.TryGetValue("LogoFont", out var lf) ? lf : "";
         var textColor = System.Windows.Media.Colors.White;
         if (map != null && map.TryGetValue("CaseColor", out var tc) && int.TryParse(tc, out var targb))
@@ -482,22 +479,39 @@ internal sealed class HomeModel3d : IDisposable
                                           : new DiffuseMaterial(new SolidColorBrush(grey));
         Material backMat = backScan != null ? FaceMaterial(backScan, System.Windows.Media.Stretch.Fill, 1000, 889.628809154057, grey)
                                             : FaceMaterialNoImage(1000, 889.628809154057, grey);
-        // Wrapped spine cap (emitted LAST, after the strips — see below). Decision table:
-        //   • the game HAS a spine scan (`scan`, ov-aware) → NO CAP AT ALL: the scan on the edge strips IS
-        //     the spine LB shows. Covering it with the generic preset (a picture of ribbed plastic) was the
-        //     "unreadable dark sliver" defect.
-        //   • no scan → cap = the {Resources} preset or a custom FrontSpineImage file, opaque, as always;
-        //   • neither → NO QUAD. LB emits no spine quad either. CRITICAL: never emit a TRANSPARENT material
-        //     instead — WPF 3D transparent triangles still write the depth buffer, and this quad sits 0.001
-        //     OUTSIDE the edge strips: drawn first, it depth-culled the strips into invisibility (the spine
-        //     rendered EMPTY at yaw 90 — the original symptom).
+        // The "Front Spine Image" — oracle-decoded semantics (dumps 2026-07-28, every mode, scan or not):
+        //   • the spine image is INDEPENDENT of the game's Box - Spine scan — the scan ALWAYS rides the edge
+        //     strips (all modes confirmed), while the spine image lives on its own quad(s):
+        //   • IsClear=true → the wrapped 8-vert CAP (LB leaf0, emitted FIRST): Grid 120×1000 with a
+        //     TRANSPARENT background + the image Fill — preset ({Resources}), custom file, or NO image at all
+        //     ("Empty Clear Spine": the cap exists with an empty Image — fully transparent hinge). Its
+        //     back-plane part faces +Z (seen from the FRONT through the clear hinge — hence the name) and its
+        //     left part faces INWARD (culled from outside, so the side view shows the scan strips).
+        //   • IsClear=false + custom path ("Custom Solid Spine") → NO wrapped cap; instead a FLAT LABEL quad
+        //     glued on the hinge FRONT: X[-0.499..-0.43], Z=+0.0271, Grid 70×1000 transparent bg + image Fill.
+        //   • IsClear=false + no image ("Solid Spine") → no spine quad at all (the solid-hinge plastic IS the
+        //     spine look).
         System.Windows.Media.Imaging.BitmapSource? spineImg =
-            scan != null ? null
-            : spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12))
+            spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12))
             : spineSpec.Length > 0 ? LoadBitmap(spineSpec)
             : null;
-        bool emitCap = spineImg != null;
-        Material? spineMat = emitCap ? FaceMaterial(spineImg!, System.Windows.Media.Stretch.Fill, 120, 1000, spineClear ? clear : stripBg) : null;
+        // Cap only when it has an IMAGE: LB emits an imageless cap for "Empty Clear Spine", but in WPF a
+        // VisualBrush is classified opaque (depth-write) even when its visual paints nothing — our imageless
+        // cap depth-walled the strips into invisibility at side angles. No quad renders identically to LB's
+        // invisible quad, without the wall.
+        bool emitCap = spineClear && spineImg != null;
+        bool emitLabel = !spineClear && spineImg != null;      // custom solid → flat front label
+        Material? spineMat = emitCap ? FaceMaterial(spineImg, System.Windows.Media.Stretch.Fill, 120, 1000, clear)
+                           : emitLabel ? FaceMaterial(spineImg!, System.Windows.Media.Stretch.Fill, 70, 1000, clear)
+                           : null;
+        // Strip background cascade: CoverColor option → corner-average of the front art (the historical
+        // #1C1116 was A-Train's) → corner-average of the SPINE image (oracle: a frontless game with the
+        // black PS1 preset showed #050505 strips = that preset's corners) → grey.
+        var stripBg = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
+        if (map != null && map.TryGetValue("CoverColor", out var cs) && int.TryParse(cs, out var cargb2))
+            stripBg = System.Windows.Media.Color.FromArgb((byte)(cargb2 >> 24), (byte)(cargb2 >> 16), (byte)(cargb2 >> 8), (byte)cargb2);
+        else if (front != null) stripBg = CornerAverage(front);
+        else if (spineImg != null) stripBg = CornerAverage(spineImg);
         // Edge strips: the spine SCAN when present (bare centered image), else clear logo ROTATED 180 on the
         // strip background, else the plain-text title (Viewbox'd TextBlock, LogoFont/CaseColor), else solid.
         Material stripMat;
@@ -554,22 +568,48 @@ internal sealed class HomeModel3d : IDisposable
             paperGrp.Children.Add(new GeometryModel3D { Geometry = mesh, Material = mat, BackMaterial = back });
         }
         int[] T = { 3, 0, 2, 3, 1, 0 };
+        // Spine quad FIRST — LB's own scene order (leaf0), and the depth interactions depend on it: the cap's
+        // back-plane part (Z=-0.0203, facing +Z) is drawn before the back insert (Z=-0.0204) so the wrap
+        // region of the back shows the SPINE image (the folded flap) — or see-through for an imageless clear
+        // cap. Its left part faces INWARD (back=null → culled from outside), so the side view shows the scan
+        // strips unobstructed.
+        if (emitCap && spineMat != null && !DebugSkipCap)
+            Quad(spineMat, null,
+                 new[] { (-0.493, 0.4315, -0.0203), (-0.43, 0.4315, -0.0203), (-0.493, -0.4315, -0.0203), (-0.43, -0.4315, -0.0203),
+                         (-0.493, 0.4315, 0.0204), (-0.493, 0.4315, -0.0203), (-0.493, -0.4315, 0.0204), (-0.493, -0.4315, -0.0203) },
+                 new[] { (0.416, 0d), (1d, 0d), (0.416, 1d), (1d, 1d), (0d, 0d), (0.416, 0d), (0d, 1d), (0.416, 1d) },
+                 new[] { 3, 0, 2, 3, 1, 0, 7, 4, 6, 7, 5, 4 });
+        // Custom Solid Spine: the flat label glued on the hinge FRONT (dump-exact: X[-0.499..-0.43], Z=+0.0271).
+        else if (emitLabel && spineMat != null)
+            Quad(spineMat, null,
+                 new[] { (-0.499, 0.4315, 0.0271), (-0.43, 0.4315, 0.0271), (-0.499, -0.4315, 0.0271), (-0.43, -0.4315, 0.0271) },
+                 new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) }, T);
         // front insert (art), BackMat grey
         Quad(frontMat, new DiffuseMaterial(new SolidColorBrush(grey)),
              new[] { (-0.42, 0.4315, 0.0204), (0.492, 0.4315, 0.0204), (-0.42, -0.4315, 0.0204), (0.492, -0.4315, 0.0204) },
              new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) }, T);
-        // back insert (grey grid), BackMat near-black
-        Quad(backMat, new DiffuseMaterial(new SolidColorBrush(System.Windows.Media.Color.FromRgb(5, 5, 5))),
-             new[] { (0.492, 0.4315, -0.0204), (-0.492, 0.4315, -0.0204), (0.492, -0.4315, -0.0204), (-0.492, -0.4315, -0.0204) },
-             new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) }, T);
-        // Edge strip UVs depend on the CONTENT. A spine SCAN: the archived scans are stored reading
-        // BOTTOM-TO-TOP (PAL convention — FF7 EU and NA files alike: PlayStation at the file's bottom), and
-        // LaunchBox displays the spine reading TOP-DOWN (PlayStation at the top — user-verified screenshot):
-        // i.e. the scan is mapped ROTATED 180° from its file orientation. The historical rotated UVs are the
-        // LOGO layout (clear logo laid sideways, opposite directions like a real box) — applying them to a
-        // scan drew the FF7 spine text mirrored sideways.
+        // back insert (grey grid). Its BackMaterial = the INSIDE of the back wall, seen from the front through
+        // the clear hinge — oracle-decoded: the corner-average of the SPINE IMAGE (white for the Dreamcast
+        // White preset, ~#050505 for the black PS1 preset — the historical constant was just that), and plain
+        // black when there is no spine image (solid / empty clear).
+        // Split into TWO single-sided quads (Material+BackMaterial on one quad rendered the Material on BOTH
+        // sides in practice): the outer shell shows the back art from behind; the inner wall shows the
+        // innerBack colour from the front (through the clear hinge) — LB's leaf2 Material/Back pair.
+        var innerBack = spineImg != null ? CornerAverage(spineImg) : System.Windows.Media.Colors.Black;
+        var backPos = new[] { (0.492, 0.4315, -0.0204), (-0.492, 0.4315, -0.0204), (0.492, -0.4315, -0.0204), (-0.492, -0.4315, -0.0204) };
+        var backUv = new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) };
+        Quad(DebugBackFaces ? new DiffuseMaterial(System.Windows.Media.Brushes.Red) : backMat,
+             null, backPos, backUv, T);                                      // outer: back art, seen from behind
+        var innerPos = new[] { (0.492, 0.4315, -0.02035), (-0.492, 0.4315, -0.02035), (0.492, -0.4315, -0.02035), (-0.492, -0.4315, -0.02035) };
+        Quad(DebugBackFaces ? new DiffuseMaterial(System.Windows.Media.Brushes.Lime)
+                            : new DiffuseMaterial(new SolidColorBrush(innerBack)),
+             null, innerPos, backUv, new[] { 2, 0, 3, 0, 1, 3 });            // inner wall: nudged inward (no z-fight), reversed winding
+        // Edge strip UVs depend on the CONTENT. A spine SCAN maps PLAIN (file top = case top) — orientation
+        // verified side-by-side against the LB oracle (solid mode, FF7: "PlayStation" at the top both sides).
+        // The historical rotated UVs are the LOGO layout (clear logo laid sideways, opposite directions like
+        // a real box) — applying them to a scan drew the spine text mirrored sideways.
         bool scanStrips = scan != null;
-        var scanUv = new[] { (1d, 1d), (0d, 1d), (1d, 0d), (0d, 0d) };   // 180° of the upright mapping
+        var scanUv = new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) };   // plain (oracle-verified orientation)
         // left edge strip
         Quad(stripMat, null,
              new[] { (-0.492, 0.4315, -0.0204), (-0.492, 0.4315, 0.0204), (-0.492, -0.4315, -0.0204), (-0.492, -0.4315, 0.0204) },
@@ -580,18 +620,6 @@ internal sealed class HomeModel3d : IDisposable
              new[] { (0.494, 0.4315, 0.0204), (0.494, 0.4315, -0.0204), (0.494, -0.4315, 0.0204), (0.494, -0.4315, -0.0204) },
              scanStrips ? scanUv                                                  // scan → LB's top-down reading
                         : new[] { (0d, 1d), (0d, 0d), (1d, 1d), (1d, 0d) }, T);   // logo reads top→bottom
-        // spine cap LAST — back-plane strip (u 0.416→1) + left edge cap (u 0→0.416), one mesh, 8 verts
-        // (dump-exact geometry). Emitted AFTER the strips: it is the outermost paper surface, and WPF renders
-        // in scene order with depth-write always on — anything that must show THROUGH or BEHIND it (nothing
-        // today, but the ordering rule is load-bearing) has to be drawn first. See emitCap above for when it
-        // exists at all.
-        if (emitCap && spineMat != null)
-            Quad(spineMat, null,
-                 new[] { (-0.493, 0.4315, -0.0203), (-0.43, 0.4315, -0.0203), (-0.493, -0.4315, -0.0203), (-0.43, -0.4315, -0.0203),
-                         (-0.493, 0.4315, 0.0204), (-0.493, 0.4315, -0.0203), (-0.493, -0.4315, 0.0204), (-0.493, -0.4315, -0.0203) },
-                 new[] { (0.416, 0d), (1d, 0d), (0.416, 1d), (1d, 1d), (0d, 0d), (0.416, 0d), (0d, 1d), (0.416, 1d) },
-                 new[] { 3, 0, 2, 3, 1, 0, 7, 4, 6, 7, 5, 4 });
-
         grp.Children.Add(paperGrp);
 
         // plastic case: LB's embedded OBJ, positioned exactly as LB does (Translate THEN Scale, dump-verbatim).
@@ -909,8 +937,9 @@ internal sealed class HomeModel3d : IDisposable
     }
 
     // VisualBrush face material exactly as LB composes it: Grid sized dim×1000 px, case-colour background,
-    // one Image child (Fill for the front art, Uniform for the centred clear logo).
-    private static Material FaceMaterial(System.Windows.Media.Imaging.BitmapSource img, System.Windows.Media.Stretch stretch,
+    // one Image child (Fill for the front art, Uniform for the centred clear logo). A NULL image still emits
+    // the Image child without a source — LB's own "Empty Clear Spine" cap is exactly that (dump-verified).
+    private static Material FaceMaterial(System.Windows.Media.Imaging.BitmapSource? img, System.Windows.Media.Stretch stretch,
                                          double gridW, double gridH, System.Windows.Media.Color bg)
     {
         var grid = new System.Windows.Controls.Grid { Width = gridW, Height = gridH, Background = new SolidColorBrush(bg) };

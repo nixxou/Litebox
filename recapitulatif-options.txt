@@ -81,6 +81,8 @@ UseImageCache              true    Utilise le cache de miniatures dégradées.
 Use16:9ForMainScreenshot   true    Zone média principale 16:9 (false = 2:3).
 VideoAutoplay              false   Lance la vidéo dès qu'elle devient le média
                                    principal (sinon frame + ▶, clic pour lire).
+VideoAutoplaySound         false   L'autoplay démarre AVEC le son (sinon muet).
+                                   Un clic de lecture manuel a toujours le son.
 Model3dRequireBack         false   ┐ Quand un modèle 3D MÉRITE-t-il d'être
 Model3dRequireSpine        false   │ affiché ET baké ? Le FRONT est toujours
 Model3dRequireBothScans    false   │ requis ; ces clés ajoutent des exigences.

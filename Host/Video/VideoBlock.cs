@@ -51,6 +51,12 @@ internal sealed class VideoBlock : Panel
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public bool Autoplay { get; set; }
 
+    /// <summary>Autoplay WITH SOUND. Off (default): an autoplayed video starts muted — a game list that
+    /// starts talking as you scroll is unbearable. A video the user STARTS by clicking always has sound,
+    /// whatever this says: an explicit play is an explicit request to hear it.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool AutoplaySound { get; set; }
+
     public VideoBlock()
     {
         DoubleBuffered = true;
@@ -96,6 +102,10 @@ internal sealed class VideoBlock : Panel
         _bar.BringToFront();
 
         _tick.Tick += (_, _) => UpdateProgress();
+
+        // A game is launching: libvlc is about to be disposed to hand its memory to the game, so release
+        // the player FIRST — disposing the instance under a live MediaPlayer crashes in libvlc's threads.
+        VlcService.Stopping += OnVlcStopping;
 
         // Hover = controls. The children must forward it, or moving onto the bar/still would "leave".
         foreach (Control c in new Control[] { this, _surface, _still, _bar })
@@ -161,7 +171,7 @@ internal sealed class VideoBlock : Panel
         SetStill(still);
         _still.Visible = true;
         if (!_hasContent) { _hasContent = true; ContentChanged?.Invoke(); }
-        if (Autoplay) Play();
+        if (Autoplay) { SetMuted(!AutoplaySound); Play(); }
     }
 
     /// <summary>Late-arriving still frame (the deferred extraction landed) — only applied if it is still
@@ -181,9 +191,11 @@ internal sealed class VideoBlock : Panel
         _still.Invalidate();
     }
 
+    // Every USER-initiated start unmutes: clicking a video means wanting to hear it (the muted default
+    // only exists to keep autoplay quiet while scrolling).
     private void TogglePlay()
     {
-        if (_mp == null) { Play(); return; }
+        if (_mp == null) { SetMuted(false); Play(); return; }
         try
         {
             if (_mp.IsPlaying) { _mp.SetPause(true); _playBtn.Text = "▶"; _still.Visible = false; }
@@ -260,10 +272,23 @@ internal sealed class VideoBlock : Panel
         try { mp.Dispose(); } catch { }
     }
 
+    // Called from VlcService.Shutdown on ITS thread (usually the UI thread that started the launch, but
+    // not guaranteed): the VLC teardown itself is thread-safe, the WinForms timer is not — hence the guard.
+    private void OnVlcStopping()
+    {
+        try
+        {
+            if (IsHandleCreated && InvokeRequired) { try { Invoke((Action)Clear); return; } catch { } }
+            Clear();
+        }
+        catch { }
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
+            try { VlcService.Stopping -= OnVlcStopping; } catch { }
             try { StopPlayer(); } catch { }
             try { _tick.Dispose(); } catch { }
             try { SetStill(null); } catch { }

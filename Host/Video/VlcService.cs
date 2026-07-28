@@ -94,16 +94,34 @@ internal static class VlcService
     /// launches: LiteBox is idle, the game wants the RAM. Re-created lazily on the next use — callers never
     /// need to know this happened.
     /// </summary>
+    /// <summary>Raised at the START of <see cref="Shutdown"/>, on the caller's thread: anything PLAYING must
+    /// stop and drop its MediaPlayer before the LibVLC it was built from is disposed (the detail pane's
+    /// VideoBlock subscribes). Disposing underneath a live player crashes in libvlc's own render threads.</summary>
+    public static event Action? Stopping;
+
     public static void Shutdown()
     {
-        LibVLC? doomed;
-        lock (_lock)
+        try { Stopping?.Invoke(); } catch { }   // stop players first — they hold MediaPlayers off this instance
+
+        // A THUMBNAIL EXTRACTION may be running on a background thread (the strip's deferred worker, the bulk
+        // "Video thumbnails" phase). Disposing libvlc under it is a hard crash, so take the extraction gate:
+        // any in-flight decode finishes and no new one can start while we dispose. Same lock ORDER as the
+        // thumbnailer (gate → _lock), so this cannot deadlock; bounded so a launch is never held hostage —
+        // on timeout we simply keep the instance (memory stays, nothing breaks).
+        bool held = System.Threading.Monitor.TryEnter(VideoThumbnailer.ExtractionGate, TimeSpan.FromSeconds(3));
+        if (!held) { Console.WriteLine("[vlc] release skipped: a thumbnail extraction is still running"); return; }
+        try
         {
-            doomed = _lib;
-            _lib = null;
-            _initFailed = false;   // a shutdown is not a failure: allow a later re-init
+            LibVLC? doomed;
+            lock (_lock)
+            {
+                doomed = _lib;
+                _lib = null;
+                _initFailed = false;   // a shutdown is not a failure: allow a later re-init
+            }
+            if (doomed == null) return;
+            try { doomed.Dispose(); Console.WriteLine("[vlc] released (game launching)"); } catch { }
         }
-        if (doomed == null) return;
-        try { doomed.Dispose(); Console.WriteLine("[vlc] released (game launching)"); } catch { }
+        finally { System.Threading.Monitor.Exit(VideoThumbnailer.ExtractionGate); }
     }
 }

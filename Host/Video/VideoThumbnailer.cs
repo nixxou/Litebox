@@ -43,6 +43,11 @@ internal static class VideoThumbnailer
     private const int MaxW = MaxDim, MaxH = MaxDim;
 
     private static readonly object _gate = new();          // one extraction at a time (the callbacks share state)
+
+    /// <summary>The extraction gate, so VlcService.Shutdown can wait for an in-flight decode instead of
+    /// disposing libvlc underneath it. Lock ORDER is gate → VlcService._lock (Instance is resolved inside
+    /// the gate), and Shutdown follows the same order.</summary>
+    internal static object ExtractionGate => _gate;
     private static IntPtr _buf;                            // THE buffer — allocated once, never per-video
     private static int _w, _h, _pitch;
     private static volatile bool _captured;

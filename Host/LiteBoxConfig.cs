@@ -243,6 +243,9 @@ internal sealed class LiteBoxConfig
     /// <summary>Start playing a video as soon as it becomes the main media (Display → Right panel).
     /// Off: its still frame is shown with a ▶ and playback waits for a click.</summary>
     public bool VideoAutoplay { get => GetBool("VideoAutoplay", false); set => SetBool("VideoAutoplay", value); }
+    /// <summary>Autoplay WITH SOUND. Off: an autoplayed video starts muted (scrolling a list should not
+    /// talk). A video the user starts by CLICKING always has sound, whatever this says.</summary>
+    public bool VideoAutoplaySound { get => GetBool("VideoAutoplaySound", false); set => SetBool("VideoAutoplaySound", value); }
 
     // ── When is a 3D case model worth showing (and baking)? ──────────────────
     // Flat globals, hence the ini (media-layout.json exists for the LIST-shaped layout, not for these).

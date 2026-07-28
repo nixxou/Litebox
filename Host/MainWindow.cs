@@ -1912,6 +1912,11 @@ internal sealed class MainWindow : Form, IMessageFilter
                 + "shown with a ▶ and playback waits for a click. Controls (play/pause, seek, mute) appear "
                 + "when the mouse is over the media zone either way.",
                 applyLive: () => { if (_mediaVideo != null) _mediaVideo.Autoplay = _cfg.VideoAutoplay; }),
+            Options.OptionItem.Toggle("Display", "Videos: …with sound",
+                () => _cfg.VideoAutoplaySound, v => _cfg.VideoAutoplaySound = v,
+                "Only affects AUTOPLAY: off (default) an automatically started video is muted — a list that "
+                + "talks while you scroll is unbearable. A video you start by CLICKING always has sound.",
+                applyLive: () => { if (_mediaVideo != null) _mediaVideo.AutoplaySound = _cfg.VideoAutoplaySound; }),
             Options.OptionItem.Number("Display", "Detail load delay (ms)",
                 () => _cfg.DetailLoadDelayMs, v => _cfg.DetailLoadDelayMs = v,
                 min: 0, max: 5000, step: 50,
@@ -4541,6 +4546,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         if (_mediaVideo == null) return;
         _mediaVideo.Autoplay = _cfg.VideoAutoplay;
+        _mediaVideo.AutoplaySound = _cfg.VideoAutoplaySound;
         _mediaVideo.BringToFront();
         // The still frame only if it is ALREADY extracted — otherwise black + ▶, and the deferred pass
         // hands it over when it lands (SetStillFor).
@@ -5212,6 +5218,10 @@ internal sealed class MainWindow : Form, IMessageFilter
 
         _resumeGameId = g != null ? Safe(() => g.Id) : null;
         _gameRunning = true;
+        // A game is starting: stop the video (libvlc is about to be released for the game's RAM) and make
+        // the deferred video-thumb worker stand down — it decodes with the very instance being disposed.
+        HideVideoOverlay();
+        _videoThumbToken++;
         // Tear down the web kiosk (frees the WebView2 process) while the game runs; recreated + deep-linked
         // back to this game on exit. Mirrors ExtendDB's full teardown.
         try { Web.Kiosk.WebKioskWindow.SuspendForGameLaunch(g != null ? Safe(() => g.Id) : null, g != null ? Safe(() => g.Platform) : null); } catch { }

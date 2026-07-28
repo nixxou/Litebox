@@ -32,8 +32,11 @@ namespace LbApiHost.Host.Model3d;
 /// <summary>A baked mesh: world-space (transform-flattened) vertices + its material index.</summary>
 internal sealed record BakedMesh(Point3D[] Pos, Vector3D[] Nrm, System.Windows.Point[] Uv, int[] Tri, int MaterialIndex);
 
-/// <summary>A flattened material: solid colour w/ alpha, or a pre-rasterized PNG texture.</summary>
-internal sealed record BakedMaterial(Color Color, double Opacity, byte[]? TexturePng);   // TexturePng = encoded bytes (PNG, or JPEG for opaque faces since baker v4)
+/// <summary>A flattened material: solid colour w/ alpha, or a pre-rasterized PNG texture.
+/// <c>DoubleSided</c> mirrors the source GeometryModel3D's BackMaterial != null — single-sided faces
+/// (the jewel spine cap, the split back-insert walls) MUST stay single-sided through the GLB round
+/// trip, or the reloaded cap occludes the scan strips it is supposed to be culled in front of.</summary>
+internal sealed record BakedMaterial(Color Color, double Opacity, byte[]? TexturePng, bool DoubleSided = true);   // TexturePng = encoded bytes (PNG, or JPEG for opaque faces since baker v4)
 
 /// <summary>The cache identity stored in a GLB's <c>extras.litebox</c> block.</summary>
 internal sealed record GlbInfo(string Key, string GameId, string Platform, string Title, int BakerVersion, string Manifest);
@@ -93,7 +96,7 @@ internal static class GlbFile
                 pbr = $"\"pbrMetallicRoughness\":{{\"baseColorFactor\":[{c}],\"metallicFactor\":0,\"roughnessFactor\":1}}";
             }
             string alphaMode = m.Opacity < 0.999 ? ",\"alphaMode\":\"BLEND\"" : "";
-            materialsJson.Add($"{{{pbr}{alphaMode},\"doubleSided\":true}}");
+            materialsJson.Add($"{{{pbr}{alphaMode},\"doubleSided\":{(m.DoubleSided ? "true" : "false")}}}");
         }
 
         for (int s = 0; s < meshes.Count; s++)
@@ -247,6 +250,7 @@ internal static class GlbFile
             }
 
             var matList = new List<Material>();
+            var matDouble = new List<bool>();   // per-material doubleSided (default true for pre-v10 files)
             int[] texSources = Array.Empty<int>(), imgViews = Array.Empty<int>();
             if (root.TryGetProperty("textures", out var texEl))
             {
@@ -287,6 +291,7 @@ internal static class GlbFile
                 }
                 mat.Freeze();
                 matList.Add(mat);
+                matDouble.Add(!m.TryGetProperty("doubleSided", out var dsEl) || dsEl.GetBoolean());
             }
 
             float[] Floats(JsonElement acc)
@@ -320,8 +325,11 @@ internal static class GlbFile
                 Buffer.BlockCopy(data, ioff, idx, 0, ilen);
                 foreach (var ix in idx) mesh.TriangleIndices.Add(ix);
                 mesh.Freeze();
-                var mat = matList[prim.GetProperty("material").GetInt32()];
-                var gm = new GeometryModel3D { Geometry = mesh, Material = mat, BackMaterial = mat };
+                int matIx = prim.GetProperty("material").GetInt32();
+                var mat = matList[matIx];
+                // Single-sided faces stay single-sided (see BakedMaterial.DoubleSided) — a double-sided
+                // reloaded spine cap occluded the scan strips 0.001 behind it (unreadable GLB spine).
+                var gm = new GeometryModel3D { Geometry = mesh, Material = mat, BackMaterial = matDouble[matIx] ? mat : null };
                 gm.Freeze();
                 grp.Children.Add(gm);
             }

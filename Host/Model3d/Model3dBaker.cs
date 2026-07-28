@@ -113,8 +113,9 @@ internal static class Model3dBaker
                 foreach (var uv in mesh.TextureCoordinates) m2.TextureCoordinates.Add(uv);
             foreach (var ix in mesh.TriangleIndices) m2.TriangleIndices.Add(ix);
             m2.Freeze();
-            // Material on both sides, like the GLB loader — the flattened set has no per-face BackMaterial.
-            var g2 = new GeometryModel3D { Geometry = m2, Material = mat, BackMaterial = mat };
+            // Both sides for double-sided sources; single-sided faces (spine cap, split back walls) stay
+            // single-sided or the cap occludes the scan strips behind it.
+            var g2 = new GeometryModel3D { Geometry = m2, Material = mat, BackMaterial = gm.BackMaterial != null ? mat : null };
             g2.Freeze();
             grp.Children.Add(g2);
         }
@@ -217,7 +218,9 @@ internal static class Model3dBaker
             var local = (m.Transform?.Value ?? Matrix3D.Identity) * parent;
             if (m is Model3DGroup g) { foreach (var c in g.Children) Walk(c, local); return; }
             if (m is not GeometryModel3D gm || gm.Geometry is not MeshGeometry3D mesh || mesh.Positions.Count == 0) return;
-            var baked = FlattenMaterial(gm.Material);
+            // Single-sided source faces (BackMaterial == null: the jewel spine cap, the split back walls)
+            // must stay single-sided through the GLB — see BakedMaterial.DoubleSided.
+            var baked = FlattenMaterial(gm.Material) with { DoubleSided = gm.BackMaterial != null };
             int matIx = materials.Count;
             materials.Add(baked);
             var pos = new Point3D[mesh.Positions.Count];

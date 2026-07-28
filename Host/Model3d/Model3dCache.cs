@@ -33,7 +33,7 @@ internal static class Model3dCache
 {
     /// <summary>Salts every key — bump when the bake output changes (geometry, materials, thumb pose/size,
     /// GLB layout) so stale files are re-keyed away in one move.</summary>
-    public const int BakerVersion = 9;   // v9: jewel spine modes oracle-exact — clear/solid plastic models, front-spine cap in all clear modes, custom-solid label, inner-back/strip colours (v8: scan on strips, v7: normals, v5: thin strips lossless, v4: 1024 cap + JPEG, v3: spine rotate, v2: aspect thumb)
+    public const int BakerVersion = 10;   // v10: single-sided faces preserved through the GLB (doubleSided flag) — the reloaded spine cap no longer occludes the scan strips (v9: spine modes oracle-exact, v8: scan on strips, v5: thin strips lossless, v4: 1024 cap + JPEG)
 
     public static string Dir
     {

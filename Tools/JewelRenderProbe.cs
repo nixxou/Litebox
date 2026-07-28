@@ -341,6 +341,25 @@ internal static class JewelRenderProbe
                 Console.WriteLine($"[jewel-probe]   child[{i}] {lg.Children[i].GetType().Name} bounds {Fmt(lg.Children[i].Bounds)}");
         }
 
+        // "glb" arg: exercise the EXACT detail-pane path — full bake to a temp GLB, then reload — instead of
+        // the runtime flatten. This is what caught the doubleSided round-trip bug (live fine, GLB broken).
+        if (Environment.GetCommandLineArgs().Contains("glb"))
+        {
+            var bakedOut = Host.Model3d.Model3dBaker.Bake(map, "Final Fantasy VII", "Sony Playstation", ov);
+            if (bakedOut == null) { Console.WriteLine("[jewel-probe] Bake returned null"); return null; }
+            var (meshes, mats, thumb) = bakedOut.Value;
+            string tmp = Path.Combine(Path.GetTempPath(), "jewelprobe-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".glb");
+            try
+            {
+                Host.Model3d.GlbFile.Write(tmp, meshes, mats, thumb, new Host.Model3d.GlbInfo("probe", "", "Sony Playstation", "Final Fantasy VII", Host.Model3d.Model3dCache.BakerVersion, "probe"));
+                var reloaded = Host.Model3d.GlbFile.LoadModel(tmp);
+                if (reloaded == null) { Console.WriteLine("[jewel-probe] GLB reload null"); return null; }
+                Console.WriteLine("[jewel-probe] GLB round-trip path (bake → write → reload)");
+                return RenderModel(reloaded, yaw, pitch, dist, w, h);
+            }
+            finally { try { File.Delete(tmp); } catch { } }
+        }
+
         var model = Host.Model3d.Model3dBaker.BakeRuntimeModel(map, "Final Fantasy VII", "Sony Playstation", ov);
         if (model == null) { Console.WriteLine("[jewel-probe] BakeRuntimeModel returned null"); return null; }
         return RenderModel(model, yaw, pitch, dist, w, h);

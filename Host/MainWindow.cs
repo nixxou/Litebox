@@ -4510,6 +4510,13 @@ internal sealed class MainWindow : Form, IMessageFilter
             foreach (var item in pending)
             {
                 if (mine != _videoThumbToken || token != _detailsLoadToken || IsDisposed) return;   // moved on: stop here
+                // A game is running: do NOT start another decode. The token above is bumped from the UI
+                // thread (OnGameStarted), which may be marshalled and land AFTER the launch already released
+                // libvlc — a decode slipping through that window would re-create the instance we just gave
+                // back to the game, and burn CPU behind it. HostLaunch.GameRunning is set synchronously ON
+                // the launching thread, before any of that, so it closes the window. The queue simply
+                // resumes when the pane is rebuilt after the game (selection restored → ScheduleMedia).
+                if (HostLaunch.GameRunning) return;
                 string path = Media.MediaVideoItem.PathOf(item);
                 try { using (var img = Video.VideoThumbnailer.Get(path)) { } } catch { }   // decode + disk-cache
                 if (mine != _videoThumbToken || token != _detailsLoadToken || IsDisposed) return;

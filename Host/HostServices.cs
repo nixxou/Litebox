@@ -105,6 +105,13 @@ internal static class HostLaunch
 {
     private static PluginRegistry _reg;
     private static GameStore _store;
+
+    /// <summary>A game is running RIGHT NOW. Set synchronously on the launching thread, before anything is
+    /// released — unlike the GUI's own flag, which arrives via GameStarted and may be marshalled onto the UI
+    /// thread AFTER the drops have happened. Background workers consult this before starting new work that
+    /// would resurrect what the launch just freed (the deferred video-thumb decoder re-creating libvlc).</summary>
+    public static bool GameRunning { get; private set; }
+
     // Did THIS launch actually release the optional tier / game cache / libvlc / CNN? False when a
     // user-initiated background job was running and we deliberately kept them — the exit path then has
     // nothing to restore (see the launch drop).
@@ -160,6 +167,7 @@ internal static class HostLaunch
 
         // 0b. notify the GUI (it may show a "game running" screen / unload its list)
         //    BEFORE DropOptional so freed memory is reclaimed by the drop's GC.
+        GameRunning = true;   // BEFORE the GUI notification and the drops (see the property)
         try { GameStarted?.Invoke(game); } catch { }
 
         // 1. notify launching plugins
@@ -228,6 +236,7 @@ internal static class HostLaunch
         StoreTrace.Log($"store-launch START '{SafeStr(() => game.Title)}' kind={kind} dir={installDir ?? "(unknown)"} killLauncher={killLauncherAfter} evenIfPreRunning={killEvenIfPreRunning}");
 
         LaunchedGame.Capture(game, null, "Store." + kind);   // before any GUI unload; per-store stay-on-top default
+        GameRunning = true;   // BEFORE the GUI notification and the drops (see the property)
         try { GameStarted?.Invoke(game); } catch { }   // GUI shows the running screen + unloads its list
 
         var t = new Thread(() => RunStoreAndWait(game, kind, target, installDir, regainedFocus, killLauncherAfter, killEvenIfPreRunning))
@@ -340,6 +349,7 @@ internal static class HostLaunch
                 try { Media.Dedup.DedupEngine.Resume(); } catch { }   // CNN session allowed again (lazy re-create)
             }
             EndOfGameFinish(endSnap);                     // OnGameExited (kiosk reopen) + GAME OVER, per WebReturnTiming
+            GameRunning = false;
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
         }
     }
@@ -533,6 +543,7 @@ internal static class HostLaunch
             // OnGameExited (reopens the ExtendDB kiosk) + the GAME OVER screen, ordered per WebReturnTiming.
             EndOfGameFinish(endSnap);
             // GUI: game over + data reloaded → reload its list and restore selection.
+            GameRunning = false;
             try { GameEnded?.Invoke(game); } catch { }
         }
     }

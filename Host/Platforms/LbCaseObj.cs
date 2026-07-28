@@ -155,6 +155,65 @@ internal static class LbCaseObj
         }
     }
 
+    /// <summary>The version suffix an "Auto-Detect" preset resolves to (""=none → the bare/NA candidates).
+    ///
+    /// SEGA DREAMCAST is a special case (Mehdi's rule): its three spines are a COLOUR choice, not a region
+    /// one — NTSC shipped both black and white spines, so region is a dead end there. Only PAL is decidable
+    /// from metadata (→ blue "- EU"); otherwise we MEASURE the artwork: is the spine strip mostly black or
+    /// mostly white? Without a spine scan we read the RIGHT 3 % of the front art — the sliver that wraps onto
+    /// the spine. Mid-tones are ignored (generous tolerance) so only real black/white pixels vote.
+    ///
+    /// Every other preset (Sony Playstation…) stays region-driven: PAL → "- EU", else the NA default.</summary>
+    internal static string AutoVersionSuffix(string preset, System.Windows.Media.Imaging.BitmapSource? spineScan,
+                                             System.Windows.Media.Imaging.BitmapSource? frontArt,
+                                             string? spineRegion, string? frontRegion)
+    {
+        bool dreamcast = preset.IndexOf("Dreamcast", StringComparison.OrdinalIgnoreCase) >= 0;
+        // PAL is the one region that IS decisive (blue spine) — the spine's own region first, else the front's.
+        if (IsEuropeanRegion(spineRegion) || (spineRegion == null && IsEuropeanRegion(frontRegion)))
+            return " - EU";
+        if (!dreamcast) return "";   // non-PAL, non-Dreamcast → the caller's NA-first candidate order
+
+        bool? white = spineScan != null ? MostlyWhite(spineScan, 1.0)
+                    : frontArt != null ? MostlyWhite(frontArt, 0.03)   // right 3 % = the front→spine wrap
+                    : null;
+        return white == true ? " - NA White" : " - NA Black";          // undecidable → black (LB's common case)
+    }
+
+    /// <summary>Do light pixels outvote dark ones? <paramref name="rightFraction"/> &lt; 1 restricts the scan to
+    /// that fraction of the width on the RIGHT edge. Null when nothing readable. Mid-tones don't vote.</summary>
+    private static bool? MostlyWhite(System.Windows.Media.Imaging.BitmapSource src, double rightFraction)
+    {
+        try
+        {
+            const int DarkMax = 90, LightMin = 165;   // wide neutral band — only convincing pixels count
+            var conv = new System.Windows.Media.Imaging.FormatConvertedBitmap(src, PixelFormats.Bgra32, null, 0);
+            int w = conv.PixelWidth, h = conv.PixelHeight;
+            int x0 = rightFraction >= 1.0 ? 0 : Math.Max(0, w - Math.Max(1, (int)Math.Round(w * rightFraction)));
+            int cw = Math.Max(1, w - x0);
+            if (cw < 1 || h < 1) return null;
+            var crop = new System.Windows.Media.Imaging.CroppedBitmap(conv, new System.Windows.Int32Rect(x0, 0, cw, h));
+            int stride = cw * 4;
+            var px = new byte[stride * h];
+            crop.CopyPixels(px, stride, 0);
+            long dark = 0, light = 0;
+            // Sample at most ~40k pixels — plenty for a majority vote, instant on any scan size.
+            int step = Math.Max(1, (int)Math.Sqrt((double)cw * h / 40000.0));
+            for (int y = 0; y < h; y += step)
+                for (int x = 0; x < cw; x += step)
+                {
+                    int i = y * stride + x * 4;
+                    if (px[i + 3] < 128) continue;                          // transparent → no vote
+                    int luma = (px[i + 2] * 299 + px[i + 1] * 587 + px[i] * 114) / 1000;
+                    if (luma <= DarkMax) dark++;
+                    else if (luma >= LightMin) light++;
+                }
+            if (dark + light == 0) return null;
+            return light > dark;
+        }
+        catch { return null; }
+    }
+
     /// <summary>PAL/European territory? Used by the Auto-Detect spine version. The names are LaunchBox's
     /// region folder names (Images\&lt;Platform&gt;\&lt;Type&gt;\&lt;Region&gt;\) plus the usual Region-field values.</summary>
     internal static bool IsEuropeanRegion(string? region)

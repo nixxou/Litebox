@@ -54,13 +54,22 @@ internal static class JewelRenderProbe
             };
             // Art relative to CWD (= LB root when launched from Core). Falls through to whatever exists.
             var ov = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            AddIfExists(ov, "front", FirstExisting(
-                @"Images\Sony Playstation\Box - Front\France\Final Fantasy 7-01.png",
-                @"Images\Sony Playstation\Box - Front\World\Final Fantasy 7-20.png"));
-            if (!args.Contains("noscan"))   // "noscan" simulates a game without a Box - Spine scan (preset cap path)
-                AddIfExists(ov, "spine", FirstExisting(
-                    @"Images\Sony Playstation\Box - Spine\Europe\Final Fantasy 7-01.jpg",
-                    @"Images\Sony Playstation\Box - Spine\North America\Final Fantasy 7-20.jpg"));
+            bool na = args.Contains("naart");   // force NON-European art (World front + NA spine) to exercise the NTSC path
+            AddIfExists(ov, "front", na
+                ? FirstExisting(@"Images\Sony Playstation\Box - Front\World\Final Fantasy 7-20.png",
+                                @"Images\Sony Playstation\Box - Front\France\Final Fantasy 7-01.png")
+                : FirstExisting(@"Images\Sony Playstation\Box - Front\France\Final Fantasy 7-01.png",
+                                @"Images\Sony Playstation\Box - Front\World\Final Fantasy 7-20.png"));
+            // "spinefile <path>": use an arbitrary spine image (outside the Images tree → no region), so the
+            // Dreamcast black/white MEASUREMENT can be exercised without touching the real library.
+            string? forcedSpine = ArgValue(args, "spinefile");
+            if (forcedSpine != null && File.Exists(forcedSpine)) ov["spine"] = Path.GetFullPath(forcedSpine);
+            else if (!args.Contains("noscan"))   // "noscan" simulates a game without a Box - Spine scan (preset cap path)
+                AddIfExists(ov, "spine", na
+                    ? FirstExisting(@"Images\Sony Playstation\Box - Spine\North America\Final Fantasy 7-20.jpg",
+                                    @"Images\Sony Playstation\Box - Spine\Europe\Final Fantasy 7-01.jpg")
+                    : FirstExisting(@"Images\Sony Playstation\Box - Spine\Europe\Final Fantasy 7-01.jpg",
+                                    @"Images\Sony Playstation\Box - Spine\North America\Final Fantasy 7-20.jpg"));
             if (!args.Contains("noback"))
                 AddIfExists(ov, "back", FirstExisting(
                     @"Images\Sony Playstation\Box - Back\France\Final Fantasy 7-01.png",
@@ -77,9 +86,14 @@ internal static class JewelRenderProbe
             if (map.TryGetValue("FrontSpineImage", out var dbgSpec) && dbgSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase))
             {
                 string key = dbgSpec.Substring(12);
-                string? rgn = Host.Platforms.LbCaseObj.RegionOfImagePath(ov.TryGetValue("front", out var fp) ? fp : null);
-                var got = Host.Platforms.LbCaseObj.SpineImage(key, rgn);
-                Console.WriteLine($"[jewel-probe] SpineImage(\"{key}\", region={rgn ?? "-"}) -> {(got == null ? "NULL" : got.PixelWidth + "x" + got.PixelHeight)}");
+                string? fRgn = Host.Platforms.LbCaseObj.RegionOfImagePath(ov.TryGetValue("front", out var fp) ? fp : null);
+                string? sRgn = Host.Platforms.LbCaseObj.RegionOfImagePath(ov.TryGetValue("spine", out var sp) ? sp : null);
+                var scanBmp = LoadBmp(sp); var frontBmp = LoadBmp(fp);
+                string suffix = key.Contains(" - ", StringComparison.Ordinal) ? " (explicite)"
+                    : Host.Platforms.LbCaseObj.AutoVersionSuffix(key, scanBmp, frontBmp, sRgn, fRgn);
+                string resolved = key.Contains(" - ", StringComparison.Ordinal) ? key : key + suffix;
+                var got = Host.Platforms.LbCaseObj.SpineImage(resolved, fRgn);
+                Console.WriteLine($"[jewel-probe] auto: front={fRgn ?? "-"} spine={sRgn ?? "-"} | \"{key}\" -> \"{resolved}\" -> {(got == null ? "NULL" : got.PixelWidth + "x" + got.PixelHeight)}");
             }
             Console.WriteLine($"[jewel-probe] art: {string.Join(", ", ov.Keys)}  map: {string.Join(";", map.Select(kv => kv.Key + "=" + kv.Value))}  (cwd={Environment.CurrentDirectory})");
 
@@ -417,6 +431,18 @@ internal static class JewelRenderProbe
 
     private static double ParseD(string[] a, int i, double def)
         => i < a.Length && double.TryParse(a[i], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : def;
+
+    private static BitmapSource? LoadBmp(string? path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
+            var bi = new BitmapImage();
+            bi.BeginInit(); bi.UriSource = new Uri(path); bi.CacheOption = BitmapCacheOption.OnLoad; bi.EndInit(); bi.Freeze();
+            return bi;
+        }
+        catch { return null; }
+    }
 
     private static string? FirstExisting(params string[] paths)
     {

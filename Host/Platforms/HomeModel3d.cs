@@ -162,6 +162,17 @@ internal sealed class HomeModel3d : IDisposable
     internal static bool FullForced(System.Collections.Generic.Dictionary<string, string>? ov)
         => ov != null && ov.ContainsKey("full");
 
+    /// <summary>A "{Resources}\&lt;preset&gt;" key with its AUTO-DETECT version resolved. A key that already
+    /// carries " - &lt;version&gt;" is an EXPLICIT user pick (Black/White/European Version) and is returned
+    /// untouched; only the bare Auto-Detect form gets a suffix computed (region for PAL, measured
+    /// black-vs-white artwork for Dreamcast NTSC — see LbCaseObj.AutoVersionSuffix).</summary>
+    private static string ResolvePresetKey(string key, System.Windows.Media.Imaging.BitmapSource? scan,
+                                           System.Windows.Media.Imaging.BitmapSource? front,
+                                           string? scanRegion, string? frontRegion)
+        => key.Contains(" - ", StringComparison.Ordinal)
+            ? key
+            : key + LbCaseObj.AutoVersionSuffix(key, scan, front, scanRegion, frontRegion);
+
     /// <summary>Display an ALREADY-BUILT (e.g. GLB-cache-loaded, frozen) model — skips the builders entirely.</summary>
     public void SetModel(Model3D? model) => _modelHost.Content = model;
 
@@ -471,7 +482,9 @@ internal sealed class HomeModel3d : IDisposable
         var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
         var clear = System.Windows.Media.Colors.Transparent;
         var backScan = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, new[] { "Box - Back" }));
-        var scan = LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }));
+        string? scanPath = ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" });
+        string? scanRegion = LbCaseObj.RegionOfImagePath(scanPath);
+        var scan = LoadBitmap(scanPath);
         string logoFont = map != null && map.TryGetValue("LogoFont", out var lf) ? lf : "";
         var textColor = System.Windows.Media.Colors.White;
         if (map != null && map.TryGetValue("CaseColor", out var tc) && int.TryParse(tc, out var targb))
@@ -494,7 +507,8 @@ internal sealed class HomeModel3d : IDisposable
         //   • IsClear=false + no image ("Solid Spine") → no spine quad at all (the solid-hinge plastic IS the
         //     spine look).
         System.Windows.Media.Imaging.BitmapSource? spineImg =
-            spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12), region)
+            spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase)
+                ? LbCaseObj.SpineImage(ResolvePresetKey(spineSpec.Substring(12), scan, front, scanRegion, region), region)
             : spineSpec.Length > 0 ? LoadBitmap(spineSpec)
             : null;
         // Cap only when it has an IMAGE: LB emits an imageless cap for "Empty Clear Spine", but in WPF a
@@ -662,9 +676,12 @@ internal sealed class HomeModel3d : IDisposable
         // with the generic preset and the game's texture vanished from the side strips — the real
         // LaunchBox keeps showing the scan in that mode (user-verified, doubled-spine test).
         string spineSpec = map != null && map.TryGetValue("FrontSpineImage", out var ss) ? ss : "";
+        string? djScanPath = ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" });
+        var djScan = LoadBitmap(djScanPath);
         System.Windows.Media.Imaging.BitmapSource? spine =
-            LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }))
-            ?? (spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12), region)
+            djScan
+            ?? (spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase)
+                    ? LbCaseObj.SpineImage(ResolvePresetKey(spineSpec.Substring(12), djScan, front, LbCaseObj.RegionOfImagePath(djScanPath), region), region)
                 : spineSpec.Length > 0 ? LoadBitmap(spineSpec)
                 : null);
 

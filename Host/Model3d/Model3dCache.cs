@@ -33,7 +33,7 @@ internal static class Model3dCache
 {
     /// <summary>Salts every key — bump when the bake output changes (geometry, materials, thumb pose/size,
     /// GLB layout) so stale files are re-keyed away in one move.</summary>
-    public const int BakerVersion = 12;   // v12: Auto-Detect spine version follows the game's REGION (PAL game → " - EU" preset instead of always NA) (v11: double-jewel strips keep the game scan, v10: doubleSided through the GLB, v9: spine modes oracle-exact)
+    public const int BakerVersion = 13;   // v13: Dreamcast Auto-Detect picks its spine COLOUR by measuring the artwork (PAL -> blue, else black-vs-white on the spine scan or the front's right 3%) (v12: auto version follows the front art's region, v11: double-jewel strips keep the game scan, v10: doubleSided through the GLB)
 
     public static string Dir
     {

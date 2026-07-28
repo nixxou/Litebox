@@ -241,9 +241,10 @@ tri ; Cumulative(+Depth) = accumulation multi-entrées ; IgnoreGameRegion /
 AllRegions = élargissement des régions. Le hash MD5 de cette config sert de clé
 au cache anti-doublons (ADS :lb.dupcheck).
 
-VALIDITÉ DU MODÈLE 3D ("Model3dNeed*/AcceptFull", section « Consider the 3D
-model valid when the game has » du même onglet) — décide si un jeu MÉRITE un
-modèle. Le FRONT est toujours requis (sans lui la boîte porte le placeholder
+VALIDITÉ DU MODÈLE 3D ("Model3dNeed*/AcceptFull") — décide si un jeu MÉRITE un
+modèle. Réglé dans Display → GENERAL (et non Right panel) : la règle dépasse le
+panneau droit, elle conditionne aussi le bake, la génération en masse et
+l'index des clés. Stocké ici avec le reste du pipeline média. Le FRONT est toujours requis (sans lui la boîte porte le placeholder
 "NoImage" de LaunchBox) ; Model3dNeedBack / Model3dNeedSpine ajoutent des
 exigences ; si les DEUX sont demandées, Model3dNeedAll choisit entre « les deux »
 (true) et « l'une ou l'autre » (false, défaut). Model3dAcceptFull = une planche

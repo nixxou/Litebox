@@ -33,8 +33,6 @@ internal sealed class MediaLayoutPanel : Panel
     private readonly ComboBox _dupEngine = null!;
     private readonly NumericUpDown _dupThr = null!;
     private readonly ComboBox _immFallback = null!;
-    private readonly CheckBox _m3dBack = null!, _m3dSpine = null!, _m3dFull = null!;
-    private readonly RadioButton _m3dAny = null!, _m3dAll = null!;
     private readonly (string Key, string Title)[] _famWith3d;
 
     private bool _editingPoster;   // which post-load list the editor is currently showing
@@ -167,35 +165,10 @@ internal sealed class MediaLayoutPanel : Panel
         Controls.Add(_immFallback);
         Update3dFallbackEnabled();
 
-        // ── When is a 3D model worth showing? ──
-        // The FRONT is mandatory (a model without it wears LaunchBox's "NoImage" placeholder), the two
-        // companion scans are optional EXTRA requirements, and a Box - Full sheet is an alternative branch
-        // on its own. The all/any radio only matters when both companions are ticked, so it is enabled then.
-        Controls.Add(new Label { Text = "Consider the 3D model valid when the game has:", AutoSize = true, ForeColor = Fg, Location = new Point(S(0), S(560)) });
-        var needFront = new CheckBox { Text = "Front", AutoSize = true, ForeColor = SubFg, Checked = true, Enabled = false, Location = new Point(S(18), S(582)) };
-        Controls.Add(needFront);
-        Controls.Add(new Label { Text = "(always required)", AutoSize = true, ForeColor = SubFg, Location = new Point(S(80), S(584)) });
-        _m3dBack = new CheckBox { Text = "and Back", AutoSize = true, ForeColor = Fg, Checked = _layout.Model3dNeedBack, Location = new Point(S(190), S(582)) };
-        _m3dSpine = new CheckBox { Text = "and Spine", AutoSize = true, ForeColor = Fg, Checked = _layout.Model3dNeedSpine, Location = new Point(S(276), S(582)) };
-        Controls.Add(_m3dBack); Controls.Add(_m3dSpine);
-        _m3dAny = new RadioButton { Text = "any of the two", AutoSize = true, ForeColor = Fg, Checked = !_layout.Model3dNeedAll, Location = new Point(S(376), S(582)) };
-        _m3dAll = new RadioButton { Text = "both", AutoSize = true, ForeColor = Fg, Checked = _layout.Model3dNeedAll, Location = new Point(S(492), S(582)) };
-        Controls.Add(_m3dAny); Controls.Add(_m3dAll);
-        _m3dBack.CheckedChanged += (_, _) => Update3dValidityEnabled();
-        _m3dSpine.CheckedChanged += (_, _) => Update3dValidityEnabled();
-        _m3dFull = new CheckBox { Text = "…or a Box - Full scan (counts only for games where full-scan mode applies)", AutoSize = true, ForeColor = Fg, Checked = _layout.Model3dAcceptFull, Location = new Point(S(18), S(606)) };
-        Controls.Add(_m3dFull);
-        Update3dValidityEnabled();
-
-        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 634, 600);
-    }
-
-    // The all/any choice is only meaningful when BOTH companion scans are demanded.
-    private void Update3dValidityEnabled()
-    {
-        if (_m3dAny == null || _m3dAll == null) return;
-        bool both = _m3dBack.Checked && _m3dSpine.Checked;
-        _m3dAny.Enabled = both; _m3dAll.Enabled = both;
+        // NOTE: what makes a 3D model "worth showing" (front required, optional Back/Spine, Box - Full
+        // branch) is NOT here — it gates the bake, the bulk generation and the key index too, well beyond
+        // this pane, so it lives in Display → General.
+        Sub("Selection uses LaunchBox's automatic algorithm (type → region → number). Takes effect on the next game selection.", 0, 552, 600);
     }
 
     private void UpdateDupEnabled()
@@ -324,15 +297,15 @@ internal sealed class MediaLayoutPanel : Panel
         _layout.DupThreshold = (double)_dupThr.Value;
         _layout.DupGpu = _dupGpu.Checked;
         _layout.Immediate3dFallback = FamilyKeyOf(_immFallback);
-        // 3D validity rule. Changing it changes WHICH games get a model, so the key index (and its
-        // "bakeable" count) must be recomputed — same treatment as the 16:9 flip.
-        string before = _layout.Model3dValidityKey();
-        _layout.Model3dNeedBack = _m3dBack.Checked;
-        _layout.Model3dNeedSpine = _m3dSpine.Checked;
-        _layout.Model3dNeedAll = _m3dAll.Checked;
-        _layout.Model3dAcceptFull = _m3dFull.Checked;
-        bool validityChanged = before != _layout.Model3dValidityKey();
+        // This panel edits a CLONE taken when it was built, and Save() republishes it as the live instance.
+        // The 3D validity rule now lives in Display → General, which mutates the LIVE instance directly — so
+        // carry its current values over, or applying both tabs in one Options session would silently revert
+        // whichever was applied first.
+        var live = MediaLayout.Current;
+        _layout.Model3dNeedBack = live.Model3dNeedBack;
+        _layout.Model3dNeedSpine = live.Model3dNeedSpine;
+        _layout.Model3dNeedAll = live.Model3dNeedAll;
+        _layout.Model3dAcceptFull = live.Model3dAcceptFull;
         _layout.Save();
-        if (validityChanged) try { Model3d.Model3dKeyIndex.KickAll(); } catch { }
     }
 }

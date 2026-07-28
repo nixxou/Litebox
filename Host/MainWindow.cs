@@ -1829,6 +1829,35 @@ internal sealed class MainWindow : Form, IMessageFilter
                 () => _cfg.UnloadGameCacheDuringGame, v => _cfg.UnloadGameCacheDuringGame = v),
             Options.OptionItem.Action("Display", "Edit colours…", ShowColorEditor,
                 "Customise the shared LiteBox palette. Takes full effect after restarting LiteBox."),
+            // ── 3D model validity ──
+            // Lives HERE and not in the right-panel tab: it gates far more than that pane — the media list,
+            // the instant path's key index, the detail overlay, the fullscreen viewer AND whether a model is
+            // baked at all (selection + bulk Generate Media Cache). Stored in media-layout.json with the rest
+            // of the media pipeline; changing it recomputes the key index (the eligible-game set moved).
+            Options.OptionItem.Toggle("Display", "3D model: also require a Box - Back scan",
+                () => Media.MediaLayout.Current.Model3dNeedBack,
+                v => { Media.MediaLayout.Current.Model3dNeedBack = v; Media.MediaLayout.Current.Save(); },
+                "The FRONT is always required — without it the case wears LaunchBox's 'NoImage' placeholder. "
+                + "Tick this to only consider a model worth showing (and baking) when the game also has a back scan.",
+                applyLive: () => Model3d.Model3dKeyIndex.KickAll()),
+            Options.OptionItem.Toggle("Display", "3D model: also require a Box - Spine scan",
+                () => Media.MediaLayout.Current.Model3dNeedSpine,
+                v => { Media.MediaLayout.Current.Model3dNeedSpine = v; Media.MediaLayout.Current.Save(); },
+                "Same idea for the spine scan — the piece that makes the case's edge real rather than flat colour.",
+                applyLive: () => Model3d.Model3dKeyIndex.KickAll()),
+            Options.OptionItem.Choice("Display", "3D model: when both extra scans are required",
+                new[] { "either one is enough", "need both" },
+                () => Media.MediaLayout.Current.Model3dNeedAll ? "need both" : "either one is enough",
+                v => { Media.MediaLayout.Current.Model3dNeedAll = v == "need both"; Media.MediaLayout.Current.Save(); },
+                "Only matters when Back AND Spine are both ticked above.",
+                applyLive: () => Model3d.Model3dKeyIndex.KickAll()),
+            Options.OptionItem.Toggle("Display", "3D model: a Box - Full scan alone is enough",
+                () => Media.MediaLayout.Current.Model3dAcceptFull,
+                v => { Media.MediaLayout.Current.Model3dAcceptFull = v; Media.MediaLayout.Current.Save(); },
+                "A full scan composes the whole case by itself, so it satisfies the rule on its own. Counts only "
+                + "for games where full-scan mode actually applies — that mode is set per platform and per game, "
+                + "so this stays available whatever the global setting says.",
+                applyLive: () => Model3d.Model3dKeyIndex.KickAll()),
         };
 
         var midList = new[]

@@ -105,6 +105,10 @@ internal static class HostLaunch
 {
     private static PluginRegistry _reg;
     private static GameStore _store;
+    // Did THIS launch actually release the optional tier / game cache / libvlc / CNN? False when a
+    // user-initiated background job was running and we deliberately kept them — the exit path then has
+    // nothing to restore (see the launch drop).
+    private static bool _droppedForGame = true;
     private static string _lbRoot;
 
     /// <summary>When true, the launch logs the resolved commands instead of spawning.</summary>
@@ -168,21 +172,38 @@ internal static class HostLaunch
         // 2. free the optional tier + trim the working set — the headline
         //    "free RAM at launch" (GameStarted already unloaded the GUI list above,
         //    so the trim returns those pages to the OS too).
+        // "LiteBox is idle while the game runs" is the premise of every drop below — and it is FALSE when
+        // the user started a long job from the UI (Generate Media Cache). Those drops would take away the
+        // very resources that job is using: its game cache, the libvlc its video phase decodes with, the CNN
+        // session. So when a job is registered we drop NOTHING — and remember it, because the exit path must
+        // not "restore" what was never released (see _droppedForGame).
+        _droppedForGame = !BackgroundJobs.Busy;
+        if (!_droppedForGame)
+            Console.WriteLine("[launch] a background job is running — keeping the game cache, libvlc and the CNN session");
         try
         {
-            Mem.Report("before drop (launch)");
-            _store?.DropOptional();
-            if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame)
-            { Gc.HostGameCache.ClearForMemory(); Console.WriteLine("[gamecache] cleared for game launch"); }
-            // libvlc holds ~50 MB once it has decoded frames. LiteBox is idle while the game runs, so hand it
-            // back; the next thumbnail re-creates the instance transparently (~200 ms).
-            Video.VlcService.Shutdown();
-            // The dup-check CNN session holds ~230 MB + a DirectML/D3D12 device (VRAM) — release it for the
-            // game (always, not option-gated: the GPU belongs to the game). Lazily re-creates (~0.5 s) after
-            // exit; meanwhile cached ADS verdicts (and a stored-verdict hint) keep the dup filter answering.
-            try { Media.Dedup.DedupEngine.Suspend(); } catch { }
-            Mem.Trim();
-            Mem.Report("after drop+trim (launch)");
+            if (_droppedForGame)
+            {
+                Mem.Report("before drop (launch)");
+                _store?.DropOptional();
+                if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame)
+                { Gc.HostGameCache.ClearForMemory(); Console.WriteLine("[gamecache] cleared for game launch"); }
+                // libvlc holds ~50 MB once it has decoded frames. LiteBox is idle while the game runs, so hand it
+                // back; the next thumbnail re-creates the instance transparently (~200 ms).
+                Video.VlcService.Shutdown();
+                // The dup-check CNN session holds ~230 MB + a DirectML/D3D12 device (VRAM) — release it for the
+                // game (always, not option-gated: the GPU belongs to the game). Lazily re-creates (~0.5 s) after
+                // exit; meanwhile cached ADS verdicts (and a stored-verdict hint) keep the dup filter answering.
+                try { Media.Dedup.DedupEngine.Suspend(); } catch { }
+                Mem.Trim();
+                Mem.Report("after drop+trim (launch)");
+            }
+            else
+            {
+                // Still stop PLAYBACK: the detail pane's video would keep decoding behind the game for
+                // nothing. This does not dispose libvlc — the running job keeps using it.
+                try { Video.VlcService.StopPlayback(); } catch { }
+            }
         }
         catch { }
 
@@ -312,9 +333,12 @@ internal static class HostLaunch
             if (!DryRun && seen && gi >= 0) { try { _store.JournalPlayTime(gi, (int)sw.Elapsed.TotalSeconds); } catch { } }
             if (!DryRun && seen) { try { Data.ProgressAutomation.ApplyToGame(game); } catch { } }   // LB parity (see RunAndWait)
             // Restore the optional data dropped at launch BEFORE the kiosk reopens / GUI reloads (see RunAndWait).
-            try { _store?.ReloadOptional(); } catch { }
-            try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) Gc.HostGameCache.Reload(); } catch { }
-            try { Media.Dedup.DedupEngine.Resume(); } catch { }   // CNN session allowed again (lazy re-create)
+            if (_droppedForGame)   // never "restore" what a background job kept alive: it was never released
+            {
+                try { _store?.ReloadOptional(); } catch { }
+                try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) Gc.HostGameCache.Reload(); } catch { }
+                try { Media.Dedup.DedupEngine.Resume(); } catch { }   // CNN session allowed again (lazy re-create)
+            }
             EndOfGameFinish(endSnap);                     // OnGameExited (kiosk reopen) + GAME OVER, per WebReturnTiming
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
         }
@@ -500,9 +524,12 @@ internal static class HostLaunch
             // — otherwise they read INCOMPLETE games. This bit the "behind" timing hardest: the kiosk
             // preloads its data hidden during the GAME OVER hold, so it must be complete by then. All of
             // this runs behind the GAME OVER cover (already shown at the top of the finally).
-            try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
-            try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) { Gc.HostGameCache.Reload(); Console.WriteLine("[gamecache] rebuilding after game exit"); } } catch { }
-            try { Media.Dedup.DedupEngine.Resume(); } catch { }   // CNN session allowed again (lazy re-create)
+            if (_droppedForGame)   // a background job kept these alive through the game — nothing to restore
+            {
+                try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
+                try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) { Gc.HostGameCache.Reload(); Console.WriteLine("[gamecache] rebuilding after game exit"); } } catch { }
+                try { Media.Dedup.DedupEngine.Resume(); } catch { }   // CNN session allowed again (lazy re-create)
+            }
             // OnGameExited (reopens the ExtendDB kiosk) + the GAME OVER screen, ordered per WebReturnTiming.
             EndOfGameFinish(endSnap);
             // GUI: game over + data reloaded → reload its list and restore selection.

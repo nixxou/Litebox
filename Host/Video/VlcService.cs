@@ -99,6 +99,14 @@ internal static class VlcService
     /// VideoBlock subscribes). Disposing underneath a live player crashes in libvlc's own render threads.</summary>
     public static event Action? Stopping;
 
+    /// <summary>Stop everything that is PLAYING, keeping the instance alive. Used when a game launches
+    /// while a background job still needs libvlc: the detail pane must go quiet, but the job's decoder
+    /// must not be pulled away.</summary>
+    public static void StopPlayback()
+    {
+        try { Stopping?.Invoke(); } catch { }
+    }
+
     public static void Shutdown()
     {
         try { Stopping?.Invoke(); } catch { }   // stop players first — they hold MediaPlayers off this instance

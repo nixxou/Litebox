@@ -6569,6 +6569,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         private readonly List<CachePhase> _phases;
         private readonly IGame[] _games;
+        private IDisposable? _job;   // user-initiated job registration (suspends launch-time unloading)
         private readonly ProgressBar _phaseBar, _itemBar;
         private readonly Label _phaseLabel, _itemLabel;
         private readonly Button _minBtn, _cancel;
@@ -6661,6 +6662,9 @@ internal sealed class MainWindow : Form, IMessageFilter
             _uiTimer = new System.Windows.Forms.Timer { Interval = 100 };
             _uiTimer.Tick += (_, _) => PaintProgress();
             _uiTimer.Start();
+            // Register as a USER-INITIATED job for its whole lifetime: launching a game while this runs
+            // must not free the game cache / libvlc / CNN session out from under it (BackgroundJobs).
+            _job = BackgroundJobs.Enter("Generate Media Cache");
             System.Threading.Tasks.Task.Run(RunGeneration);
         }
 
@@ -6729,12 +6733,20 @@ internal sealed class MainWindow : Form, IMessageFilter
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             Unblock();                                   // never leave the main window disabled
+            // End the job registration on EVERY exit path (finished, cancelled, closed) — Dispose is
+            // idempotent, so the safety net below can also fire without double-counting.
+            try { _job?.Dispose(); _job = null; } catch { }
             base.OnFormClosed(e);
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { try { _cts.Cancel(); } catch { } _cts.Dispose(); }
+            if (disposing)
+            {
+                try { _cts.Cancel(); } catch { }
+                _cts.Dispose();
+                try { _job?.Dispose(); _job = null; } catch { }   // safety net: never leave the job registered
+            }
             base.Dispose(disposing);
         }
     }

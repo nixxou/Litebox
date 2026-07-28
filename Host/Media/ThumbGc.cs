@@ -45,12 +45,31 @@ internal static class ThumbGc
         _ = Task.Run(Run);
     }
 
+    // ── the mark-and-sweep's load-bearing precondition ──────────────────────────
+    // Every sweep below MARKS from the game cache and then DELETES whatever is unmarked. If the cache
+    // goes away between the two (a game launch clears it for memory — HostGameCache.ClearForMemory), the
+    // valid-set comes out empty or half-built and the sweep eats perfectly good thumbnails. So: remember
+    // whether the cache was usable when we started, and abort any sweep whose marking could have been
+    // starved. Nothing is deleted on a doubt; the GC simply runs again next launch.
+    private static bool _needCache;
+
+    /// <summary>False when the cache we marked against has since been dropped → do not delete anything.</summary>
+    private static bool MarkingTrustworthy()
+    {
+        if (!_needCache) return true;                      // cache not in use: marking is IO-based, always valid
+        if (Gc.GameCache.IsGlobalReady) return true;
+        Console.WriteLine("[thumbgc] aborted: the game cache was unloaded mid-run (a game launched?) — "
+                          + "deleting nothing, the sweep will run again next launch");
+        return false;
+    }
+
     private static void Run()
     {
         try
         {
             var games = PluginHelper.DataManager?.GetAllGames();
             if (games == null || games.Length == 0) return;
+            _needCache = Gc.HostGameCache.Enabled && Gc.GameCache.IsGlobalReady;
 
             // Per-cleaner opt-outs (Options → Caches). Read once; the GC runs once per launch anyway.
             var cfg = LiteBoxConfig.LoadForExe();
@@ -152,6 +171,7 @@ internal static class ThumbGc
             if (valid.Count == 0) return;   // degenerate mark — never wipe the folder on an empty set
 
             // ── sweep ──
+            if (!MarkingTrustworthy()) return;   // cache vanished while marking → delete nothing
             int kept = 0, deleted = 0, obsolete = 0, spared = 0;
             var cutoff = DateTime.UtcNow - Grace;
             foreach (var f in Directory.GetFiles(ThumbCache.DegradedFolder))
@@ -225,6 +245,7 @@ internal static class ThumbGc
             }
             pre.Clear();   // prefetch no longer needed once the mark is built
 
+            if (!MarkingTrustworthy()) return;   // cache vanished while marking → delete nothing
             int kept = 0, deleted = 0, spared = 0;
             var cutoff = DateTime.UtcNow - Grace;
             foreach (var f in Directory.GetFiles(ThumbCache.DocFolder))
@@ -333,6 +354,7 @@ internal static class ThumbGc
                 }
             }
 
+            if (!MarkingTrustworthy()) return;   // cache vanished while marking → delete nothing
             int kept = 0, deleted = 0, spared = 0;
             var cutoff = DateTime.UtcNow - Grace;
             bool Old(string f) { try { return File.GetLastWriteTimeUtc(f) <= cutoff; } catch { return false; } }

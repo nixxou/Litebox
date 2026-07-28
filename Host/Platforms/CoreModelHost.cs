@@ -180,6 +180,13 @@ internal static class CoreModelHost
         if (t == typeof(string)) return raw;
         if (string.IsNullOrEmpty(raw)) return null;
         if (t == typeof(bool)) return string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase);
+        // ENUMS (ModelType, DoubleSpineImageMode…): without this the SetValue threw and was swallowed, so
+        // the override silently never reached the core — every render came back with the platform default.
+        if (t.IsEnum)
+        {
+            try { return Enum.Parse(t, raw, ignoreCase: true); }
+            catch { Console.WriteLine($"[model3d] enum '{raw}' invalid for {t.Name} (values: {string.Join(",", Enum.GetNames(t))})"); return null; }
+        }
         if (t == typeof(double)) return double.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : 0.0;
         if (t == typeof(int)) return int.TryParse(raw, out var i) ? i : 0;
         if (t.FullName == "System.Windows.Media.Color")

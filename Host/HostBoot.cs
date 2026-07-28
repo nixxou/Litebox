@@ -393,9 +393,9 @@ internal static class HostBoot
             // visible value (no hidden keys). Must run BEFORE anything resolves a launch
             // (PauseManager.Configure, DependencyCheck, first game start).
             Gameplay.GameplayDefaults.Seed(LiteBoxConfig.LoadForExe());
-            // Same guarantee for the 3D-model validity knobs: the ini template only covers a FRESH install,
-            // so an existing ini would never show them until the user toggled one.
-            Model3d.Model3dOptions.Seed(LiteBoxConfig.LoadForExe());
+            // Same guarantee for every OTHER LiteBox-own global the ini template doesn't write (it only runs
+            // on a fresh install, so options added later stayed invisible until first toggled).
+            Options.GlobalDefaults.Seed(LiteBoxConfig.LoadForExe());
             // The LaunchBox settings <ID> is the key for encrypted values (EmuMovies password, …). LaunchBox
             // writes it on its very first run; a real install always has it. If it's missing, LaunchBox was never
             // launched here — tell the user and stop rather than guessing or minting a bogus id.

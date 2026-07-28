@@ -118,6 +118,15 @@ ThumbJpgRegroupements      Front,Back,Screenshots  Familles forcées JPEG.
 GenCacheSelection          Front,Screenshots    Dernière sélection de la fenêtre
                                    Generate Media Cache (csv, familles+phases).
 
+Toutes les clés ci-dessus (1.2) sont GARANTIES PRÉSENTES dans le fichier :
+Options/GlobalDefaults.Seed() les écrit avec leur défaut au boot si elles
+manquent — le template ini ne s'exécute qu'à la CRÉATION du fichier, donc une
+option ajoutée après coup restait invisible jusqu'au premier basculement. Ne
+sont volontairement PAS semées : les clés de Settings.xml de LaunchBox (pas les
+nôtres), l'ÉTAT d'interface (ZoomPercent, PosterMode, MetaExpanded, Col.*,
+géométrie fenêtre, GenCacheSelection) et PauseHotkey/ScreenCaptureKey dont le
+défaut correct est « absente = on hérite de la touche LaunchBox ».
+
 Extrait code (résolution d'un toggle avec repli) — Host/Media/ThumbCache.cs :
 
     (LiteBoxConfig.LoadForExe().Get("ThumbAlphaFormat", null) ?? "png")

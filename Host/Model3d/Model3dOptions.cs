@@ -48,22 +48,8 @@ internal static class Model3dOptions
     /// <summary>Drop the snapshot — call when the options window changed any of these.</summary>
     public static void Invalidate() { lock (_lock) _snap = null; }
 
-    /// <summary>Guarantee the four keys exist in LiteBox.ini with their visible default (no hidden keys we
-    /// only know in code). The ini TEMPLATE only covers a fresh install — on an ini created before these
-    /// keys existed they would otherwise stay invisible until first toggled. Idempotent; never throws.</summary>
-    public static void Seed(LiteBoxConfig ini)
-    {
-        if (ini == null) return;
-        try
-        {
-            int n = 0;
-            foreach (var key in new[] { "Model3dRequireBack", "Model3dRequireSpine",
-                                        "Model3dRequireBothScans", "Model3dAcceptFullScan" })
-                if (ini.Get(key) == null) { ini.SetBool(key, false); n++; }
-            if (n > 0) { ini.Save(); Invalidate(); Console.WriteLine($"[model3d] ini seeded ({n} default(s))"); }
-        }
-        catch (Exception ex) { Console.WriteLine("[model3d] seed failed: " + ex.Message); }
-    }
+    // NOTE: these keys are seeded into the ini by Options.GlobalDefaults (one mechanism for every
+    // LiteBox-own global), not from here.
 
     /// <summary>Is a model with these available sources worth showing (and baking)? <paramref name="full"/>
     /// is already gated by the game's own full-scan mode — Model3dCache only resolves that slot when the

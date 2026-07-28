@@ -4001,8 +4001,9 @@ internal sealed class MainWindow : Form, IMessageFilter
                     Invoke((Action)(() =>
                     {
                         if (IsDisposed || !ReferenceEquals(_games.SelectedGame, g)) { logo?.Dispose(); art?.Dispose(); return; }
-                        if (settled) ApplyDetails(g, logo, art);   // landed → full pane
-                        else ApplyImageTransit(g, logo, art);      // scrolled past → base thumb + title only
+                        bool art3d = Media.Media3dItem.Is(artSrc);   // 3D snapshot → fit-to-height, not letterbox
+                        if (settled) ApplyDetails(g, logo, art, art3d);   // landed → full pane
+                        else ApplyImageTransit(g, logo, art, art3d);      // scrolled past → base thumb + title only
                     }));
                 else { logo?.Dispose(); art?.Dispose(); }
             }
@@ -4014,7 +4015,7 @@ internal sealed class MainWindow : Form, IMessageFilter
 
     // Settle: the selection landed here. Images are already decoded (on the loader thread) → applied
     // directly (no re-load, no SetImage(null) flash) and the full pane is built.
-    private void ApplyDetails(IGame g, Image logo, Image art)
+    private void ApplyDetails(IGame g, Image logo, Image art, bool art3d = false)
     {
         _detailsShown = g;
         _heroGame = g;
@@ -4023,13 +4024,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         _hero.SetLogo(logo);
         Hide3dOverlay();            // a flat image takes the box — the previous game's 3D must not linger
         HideVideoOverlay();         // idem for a playing video (it would also keep decoding)
-        _media.SetImage(art);
+        _media.SetImage(art, art3d);
         PopulateDetailMeta(g);
     }
 
     // Transit: a game merely scrolled past. Update only the base thumb + title/logo (cheap) so images
     // track the scroll; the heavy pane (metadata, buttons, fanart, strip) waits for the settle above.
-    private void ApplyImageTransit(IGame g, Image logo, Image art)
+    private void ApplyImageTransit(IGame g, Image logo, Image art, bool art3d = false)
     {
         _detailsShown = g;
         _heroGame = g;
@@ -4038,7 +4039,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _hero.SetLogo(logo);
         Hide3dOverlay();            // scrolling past: the previous game's 3D must not cover the new thumb
         HideVideoOverlay();
-        _media.SetImage(art);
+        _media.SetImage(art, art3d);
     }
 
     // Right pane when a TREE node (category / platform / playlist / All) is selected.
@@ -5107,7 +5108,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             {
                 if (IsDisposed || token != _detailsLoadToken) { logo?.Dispose(); art?.Dispose(); return; }
                 _hero.SetLogo(logo);                       // hero owns + pulses the logo
-                _media.SetImage(art);                      // degraded box now; upgraded to full after 0.5s
+                _media.SetImage(art, Media.Media3dItem.Is(artSrc));   // degraded box now; upgraded to full after 0.5s
             }
             try { if (!IsDisposed) BeginInvoke((Action)Apply); else { logo?.Dispose(); art?.Dispose(); } }
             catch { logo?.Dispose(); art?.Dispose(); }
@@ -6166,6 +6167,11 @@ internal sealed class MainWindow : Form, IMessageFilter
     private sealed class MediaPanel : Panel
     {
         private Image _img;
+        // A 3D snapshot is a WIDE canvas with the model fitted vertically and empty sides: drawing it
+        // "contain" (the right rule for a photo) letterboxes it into a tiny model as soon as the box is
+        // narrower than the bake — the poster-ratio defect. Those are drawn FIT TO HEIGHT and centred
+        // instead, so the surplus width is cropped, exactly like the 3D overlay's SnapshotBox.
+        private bool _fitHeight;
         /// <summary>Double-click on a displayed image → the fullscreen viewer (LB parity). The 3D item
         /// never lands here: its overlay covers this panel and has its own ⤢ badge.</summary>
         public Action DoubleClicked;
@@ -6175,9 +6181,10 @@ internal sealed class MainWindow : Form, IMessageFilter
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                    | ControlStyles.StandardClick | ControlStyles.StandardDoubleClick, true);
         }
-        public void SetImage(Image img)
+        public void SetImage(Image img, bool fitHeight = false)
         {
             var old = _img; _img = img; if (!ReferenceEquals(old, img)) old?.Dispose();
+            _fitHeight = fitHeight;
             Cursor = _img != null ? Cursors.Hand : Cursors.Default;   // hover hints "click me" (LB parity)
             Invalidate();
         }
@@ -6194,6 +6201,12 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (_img == null) return;
             var rect = ClientRectangle;
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            if (_fitHeight && _img.Height > 0 && rect.Height > 0)
+            {
+                int w = Math.Max(1, (int)Math.Round(_img.Width * (double)rect.Height / _img.Height));
+                g.DrawImage(_img, rect.X + (rect.Width - w) / 2, rect.Y, w, rect.Height);
+                return;
+            }
             float ir = (float)_img.Width / _img.Height, ar = (float)rect.Width / Math.Max(1, rect.Height);
             int iw, ih;
             if (ir > ar) { iw = rect.Width; ih = (int)(iw / ir); } else { ih = rect.Height; iw = (int)(ih * ir); }

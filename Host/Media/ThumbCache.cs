@@ -245,7 +245,11 @@ internal static class ThumbCache
         _ = Task.Run(async () =>
         {
             await _gate.WaitAsync().ConfigureAwait(false);
-            try { if (CachedPath(sourcePath, maxDim, alphaKey, out _) == null) Generate(sourcePath, targetBase, maxDim, fmt); }
+            // A game is running: this queue is OPPORTUNISTIC (a thumb the UI wanted and will ask for again
+            // next time it displays that image), so drop it rather than decode behind the game. Checked
+            // after the gate, so a queue built up just before the launch drains instead of grinding on.
+            // The BULK generator is unaffected — it calls GetOrCreate synchronously, never this queue.
+            try { if (!HostLaunch.GameRunning && CachedPath(sourcePath, maxDim, alphaKey, out _) == null) Generate(sourcePath, targetBase, maxDim, fmt); }
             catch { }
             finally { _gate.Release(); _pending.TryRemove(targetBase, out _); }
         });

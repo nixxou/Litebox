@@ -58,8 +58,12 @@ internal static class ThumbGc
     {
         if (!_needCache) return true;                      // cache not in use: marking is IO-based, always valid
         if (Gc.GameCache.IsGlobalReady) return true;
+        // Re-arm: Kick() runs the GC once per PROCESS, so without this an abort would mean no cleanup at all
+        // this session. Clearing the latch lets the next ReadyChanged — the cache rebuild after the game
+        // exits — kick a fresh, complete pass.
+        Interlocked.Exchange(ref _ran, 0);
         Console.WriteLine("[thumbgc] aborted: the game cache was unloaded mid-run (a game launched?) — "
-                          + "deleting nothing, the sweep will run again next launch");
+                          + "deleting nothing; a fresh pass runs when the cache is rebuilt");
         return false;
     }
 

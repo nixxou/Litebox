@@ -4575,7 +4575,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (_detailsShown is not IGame g || !ReferenceEquals(g, _mediaItemsGame)) return;   // node / mid-transit
         var items = _mediaItems;
         if (items == null) return;
-        var imgs = items.Where(s => !Media.Media3dItem.Is(s)).ToList();
+        // IMAGES ONLY, as specified: navigation skips the 3D model AND the videos. (Videos slipped in when
+        // they became media items — their sentinel isn't a 3D one, so the old filter let them through and the
+        // viewer would have paged onto a video's still frame as if it were a picture.)
+        var imgs = items.Where(s => !Media.Media3dItem.Is(s) && !Media.MediaVideoItem.Is(s)).ToList();
         if (imgs.Count == 0) return;
         string cur = _mediaSel >= 0 && _mediaSel < items.Count ? items[_mediaSel] : imgs[0];
         int start = imgs.FindIndex(s => string.Equals(s, cur, StringComparison.OrdinalIgnoreCase));
@@ -4767,7 +4770,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         // also drops the bake entirely once the selection has moved on.
         System.Threading.Tasks.Task.Factory.StartNew(() =>
         {
-            if (Model3d.Model3dCache.Ensure(g, stillWanted: () => token == _detailsLoadToken) == null) return;   // couldn't bake / stale → tile stays empty
+            // stillWanted is re-checked INSIDE the STA job, right before the expensive bake: drop it when the
+            // selection moved on, and also when a GAME LAUNCHED — a bake is minutes of CPU we owe the game,
+            // and the queue naturally refills when the pane is rebuilt after the exit.
+            if (Model3d.Model3dCache.Ensure(g, stillWanted: () => token == _detailsLoadToken && !HostLaunch.GameRunning) == null) return;
             try
             {
                 if (IsDisposed || token != _detailsLoadToken) return;

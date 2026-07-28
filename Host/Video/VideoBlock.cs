@@ -33,6 +33,7 @@ internal sealed class VideoBlock : Panel
     private readonly TrackBar _seek;
     private readonly Label _time;
     private readonly Button _muteBtn;
+    private readonly Button _fsBtn;
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 250 };
 
     private MediaPlayer? _mp;
@@ -46,6 +47,9 @@ internal sealed class VideoBlock : Panel
 
     /// <summary>Raised on the UI thread when <see cref="HasContent"/> flips.</summary>
     public Action? ContentChanged;
+
+    /// <summary>The ⤢ button in the hover bar was clicked — the host opens the fullscreen player.</summary>
+    public Action? FullscreenRequested;
 
     /// <summary>Start playing as soon as a video is shown (Options → Display → Right panel).</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -96,7 +100,15 @@ internal sealed class VideoBlock : Panel
         };
         _muteBtn.FlatAppearance.BorderSize = 0;
         _muteBtn.Click += (_, _) => SetMuted(!_muted);
-        _bar.Controls.Add(_playBtn); _bar.Controls.Add(_seek); _bar.Controls.Add(_time); _bar.Controls.Add(_muteBtn);
+        _fsBtn = new Button
+        {
+            Text = "⤢", Width = 34, Height = 26, Top = 4, FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(48, 48, 58), ForeColor = Color.White, TabStop = false,
+            Font = new Font("Segoe UI Symbol", 10f),
+        };
+        _fsBtn.FlatAppearance.BorderSize = 0;
+        _fsBtn.Click += (_, _) => FullscreenRequested?.Invoke();
+        _bar.Controls.Add(_playBtn); _bar.Controls.Add(_seek); _bar.Controls.Add(_time); _bar.Controls.Add(_muteBtn); _bar.Controls.Add(_fsBtn);
         _bar.Resize += (_, _) => LayoutBar();
         Controls.Add(_bar);
         _bar.BringToFront();
@@ -120,7 +132,8 @@ internal sealed class VideoBlock : Panel
     private void LayoutBar()
     {
         int right = _bar.ClientSize.Width;
-        _muteBtn.Left = right - _muteBtn.Width - 6;
+        _fsBtn.Left = right - _fsBtn.Width - 6;
+        _muteBtn.Left = _fsBtn.Left - _muteBtn.Width - 4;
         _time.Left = _muteBtn.Left - _time.Width - 4;
         _seek.Left = _playBtn.Right + 6;
         _seek.Width = Math.Max(40, _time.Left - _seek.Left - 6);
@@ -193,6 +206,41 @@ internal sealed class VideoBlock : Panel
 
     // Every USER-initiated start unmutes: clicking a video means wanting to hear it (the muted default
     // only exists to keep autoplay quiet while scrolling).
+    /// <summary>Play/pause from outside (the fullscreen window's Space key).</summary>
+    public void TogglePlayPause() => TogglePlay();
+
+    /// <summary>Pause if playing — used when handing the video over to the fullscreen player, so the two
+    /// decoders never run (and never talk) at the same time.</summary>
+    public void PauseIfPlaying()
+    {
+        try { if (_mp?.IsPlaying == true) { _mp.SetPause(true); _playBtn.Text = "▶"; } } catch { }
+    }
+
+    /// <summary>Current position in ms (so fullscreen can resume exactly where the inline player was).</summary>
+    public long PositionMs { get { try { return _mp?.Time ?? 0; } catch { return 0; } } }
+
+    /// <summary>Jump by a FRACTION of the whole video (+ forward / − backward), clamped to its bounds.</summary>
+    public void SeekBy(double fraction)
+    {
+        try
+        {
+            var mp = _mp;
+            if (mp == null) return;
+            long dur = mp.Length;
+            if (dur <= 0) return;
+            long t = (long)Math.Clamp(mp.Time + fraction * dur, 0, dur - 1);
+            mp.Time = t;
+            UpdateProgress();
+        }
+        catch { }
+    }
+
+    /// <summary>Start at a given position (fullscreen hand-over).</summary>
+    public void StartAt(long ms)
+    {
+        try { if (_mp != null && ms > 0) _mp.Time = ms; } catch { }
+    }
+
     private void TogglePlay()
     {
         if (_mp == null) { SetMuted(false); Play(); return; }

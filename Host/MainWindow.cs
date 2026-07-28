@@ -972,6 +972,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             _mediaVideo.Visible = _mediaVideo.HasContent;
             if (_mediaVideo.HasContent) _mediaVideo.BringToFront();
         };
+        _mediaVideo.FullscreenRequested = OpenFullscreenVideo;
         media.Controls.Add(_mediaVideo);
         // Fullscreen viewers (LB parity): double-click an image → the image viewer; the 3D overlay's
         // ⤢ badge → the fullscreen model (reloaded at source texture resolution).
@@ -4591,6 +4592,20 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void OpenFullscreen3d(IGame g)
     {
         using var v = new Model3d.Model3dFullscreen(g);
+        v.ShowDialog(this);
+    }
+
+    // The video hover bar's ⤢ button → fullscreen player. The inline one is PAUSED for the duration so
+    // the two never decode (or talk) at once, and the fullscreen picks up at its exact position.
+    private void OpenFullscreenVideo()
+    {
+        if (_mediaVideo == null || _mediaItems == null) return;
+        string item = _mediaSel >= 0 && _mediaSel < _mediaItems.Count ? _mediaItems[_mediaSel] : null;
+        if (!Media.MediaVideoItem.Is(item)) return;
+        long at = _mediaVideo.PositionMs;
+        _mediaVideo.PauseIfPlaying();
+        using var v = new Video.VideoFullscreen(Media.MediaVideoItem.PathOf(item),
+                                                Media.MediaVideoItem.CachedThumb(item), _cfg.VideoAutoplaySound, at);
         v.ShowDialog(this);
     }
 

@@ -288,6 +288,10 @@ sélection change. Le ▶ est DESSINÉ sur la vignette, jamais incrusté dans le
 fichier de cache. En média principal, la vidéo est jouée par libvlc dans la zone
 image ; les contrôles (play/pause, seek, temps, muet) n'apparaissent qu'au
 SURVOL ; sans autoplay (VideoAutoplay, §1.2) la frame reste affichée avec un ▶.
+La barre porte un bouton ⤢ : PLEIN ÉCRAN (le lecteur inline est mis en pause, le
+plein écran reprend à la même position). En plein écran : Espace = pause/play,
+←/→ = ±5 % de la durée, Échap = quitter ; pas de navigation entre vidéos.
+Échap quitte aussi les plein écran image et modèle 3D.
 L'anti-doublons l'ignore dans les deux sens.
 
 La pseudo-famille "Model3d" : l'entrée n'existe que si le jeu PEUT avoir un

@@ -362,14 +362,26 @@ internal static class Model3dBaker
     // live camera to match — FOV compensation subtly changed the projection. The PNG follows the
     // viewport now, not the other way around.)
 
-    /// <summary>The media box aspect the whole 3D pipeline targets (ini "Use16:9ForMainScreenshot").
-    /// Part of the bake manifest — flipping the option re-bakes. Served from the cached snapshot: this is
-    /// called once per RESOLVED GAME (manifest), and LoadForExe re-parses the whole ini on every call.</summary>
-    public static double TargetAspect() => Model3dOptions.TargetAspect();
+    /// <summary>The aspect every snapshot is baked at — a CONSTANT, deliberately not the display ratio.
+    /// The bake used to follow the ini's 16:9/poster option, which meant two artifacts per game and a full
+    /// re-bake on every flip. One wide frame serves both: the camera fits the model VERTICALLY, so a
+    /// narrower box (poster) just shows less empty width — see Model3dBlock's fit-to-height drawing.
+    /// The value is unchanged from the old 16:9 case, so 16:9-baked caches keep their key.</summary>
+    public const double BakeAspect = 16.0 / 9.0;
+
+    /// <summary>Kept for callers that ask "what was this baked at" — now a constant.</summary>
+    public static double TargetAspect() => BakeAspect;
 
     /// <summary>The live-viewport camera distance for <paramref name="aspect"/> — shared by the bake
     /// and Model3dBlock so both cameras are the same object in two places.</summary>
-    public static double CameraDistanceFor(double aspect) => CameraDistance * Math.Max(1.0, aspect);
+    /// <summary>Camera distance for a display aspect. WPF's FieldOfView is HORIZONTAL, so the vertical
+    /// extent is (distance × tan(FOV/2)) / aspect: making the distance PROPORTIONAL to the aspect keeps
+    /// that vertical extent constant at every ratio. The model therefore always fills the same share of
+    /// the HEIGHT, and a narrower box simply crops empty width — the exact behaviour of the baked frame
+    /// drawn fit-to-height. (The old max(1, aspect) left narrow ratios uncompensated: the poster box got
+    /// a huge vertical extent and a tiny model.) At BakeAspect this returns the historical 2.756, so
+    /// existing 16:9 bakes stay pixel-valid.</summary>
+    public static double CameraDistanceFor(double aspect) => CameraDistance * Math.Max(0.05, aspect);
 
     private static byte[]? RenderThumb(Model3D model)
     {

@@ -108,8 +108,10 @@ internal static class Model3dCache
 
         var sb = new StringBuilder();
         sb.Append("v").Append(BakerVersion)
-          .Append('@').Append(Model3dBaker.TargetAspect().ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))
-          .Append('\n');   // the thumb aspect is part of the bake → flipping the 16:9/poster ini option re-bakes
+          .Append('@').Append(Model3dBaker.BakeAspect.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))
+          .Append('\n');   // the bake aspect is now a CONSTANT: ONE artifact per game, and flipping the
+                           // 16:9/poster display option never re-bakes (the display crops instead).
+                           // Kept in the manifest at its historical 16:9 value so those caches stay valid.
         if (map != null)
             foreach (var kv in map.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
                 sb.Append(kv.Key.ToLowerInvariant()).Append('=').Append(kv.Value ?? "").Append('\n');

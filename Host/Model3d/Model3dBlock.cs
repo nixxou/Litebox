@@ -22,9 +22,42 @@ using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host.Model3d;
 
+/// <summary>Draws the baked snapshot FIT TO HEIGHT, centred — never a letterbox. The frame is baked wide
+/// (Model3dBaker.BakeAspect) with the model fitted vertically, so scaling on the height and cropping the
+/// leftover width reproduces, for any box ratio, exactly what the live viewport shows with
+/// CameraDistanceFor(that ratio) — same model size to the pixel, no re-bake when the ratio changes.</summary>
+internal sealed class SnapshotBox : Panel
+{
+    private Image? _img;
+
+    public SnapshotBox()
+    {
+        DoubleBuffered = true; ResizeRedraw = true;
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+    }
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public Image? Snapshot
+    {
+        get => _img;
+        set { var old = _img; _img = value; if (!ReferenceEquals(old, value)) old?.Dispose(); Invalidate(); }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.Clear(BackColor);
+        if (_img == null || _img.Height <= 0 || ClientSize.Height <= 0) return;
+        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        double k = (double)ClientSize.Height / _img.Height;          // the HEIGHT is the invariant
+        int w = Math.Max(1, (int)Math.Round(_img.Width * k));
+        g.DrawImage(_img, (ClientSize.Width - w) / 2, 0, w, ClientSize.Height);   // centred → equal crop both sides
+    }
+}
+
 internal sealed class Model3dBlock : Panel
 {
-    private readonly PictureBox _pic;
+    private readonly SnapshotBox _pic;
     private readonly Model3dExpandBadge _expand;
     private Platforms.HomeModel3d? _home;      // created lazily on first model (ElementHost is not free)
     private Platforms.OrbitController? _orbit;
@@ -43,7 +76,7 @@ internal sealed class Model3dBlock : Panel
     public Model3dBlock()
     {
         DoubleBuffered = true;
-        _pic = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = BackColor };
+        _pic = new SnapshotBox { Dock = DockStyle.Fill, BackColor = BackColor };
         Controls.Add(_pic);
         // Fullscreen badge: a WinForms sibling ABOVE both layers (HWND z-order beats the ElementHost).
         _expand = new Model3dExpandBadge { Visible = false, BackColor = BackColor };
@@ -59,13 +92,18 @@ internal sealed class Model3dBlock : Panel
         => _expand.Location = new Point(Math.Max(0, ClientSize.Width - _expand.Width - 8),
                                         Math.Max(0, ClientSize.Height - _expand.Height - 8));
 
-    // BOTH layers fill the whole host and come out of the SAME camera, so the PNG → viewport swap
-    // can't shift by a pixel: the thumb is BAKED at the media box's aspect with the aspect-compensated
-    // distance (Model3dBaker.TargetAspect/CameraDistanceFor), and the live viewport uses exactly that
-    // camera. No display-time compensation of either layer.
+    // BOTH layers show the same framing at ANY box ratio, without re-baking anything:
+    //   • the snapshot is baked ONCE at Model3dBaker.BakeAspect (wide), with the model fitted vertically;
+    //   • the PNG layer draws it FIT TO HEIGHT, centred — a narrower box (poster ratio) simply crops the
+    //     empty width off the sides, it never shrinks the model into a letterbox;
+    //   • the viewport uses CameraDistanceFor(THIS BOX's aspect), whose vertical extent is aspect-
+    //     independent by construction — i.e. exactly the same crop.
+    // So the PNG → viewport swap still can't shift by a pixel, and flipping 16:9/poster costs no bake.
+    private double BoxAspect => ClientSize.Height > 0 ? (double)ClientSize.Width / ClientSize.Height : Model3dBaker.BakeAspect;
+
     private void ApplyFraming(Platforms.HomeModel3d home)
     {
-        double z = Model3dBaker.CameraDistanceFor(Model3dBaker.TargetAspect()) / 2.0;
+        double z = Model3dBaker.CameraDistanceFor(BoxAspect) / 2.0;
         if (_orbit != null) _orbit.InitZoom(z);   // keeps the wheel continuing from this framing
         else home.SetZoom(z);
     }
@@ -226,9 +264,7 @@ internal sealed class Model3dBlock : Panel
 
     private void SetThumb(Image? img)
     {
-        var old = _pic.Image;
-        _pic.Image = img;
-        old?.Dispose();
+        _pic.Snapshot = img;   // SnapshotBox disposes the previous one
     }
 
     // Mouse-drag orbits, wheel zooms (WPF Preview events on the ElementHost child; WinForms fallback kept).

@@ -115,7 +115,7 @@ internal static class Model3dCache
                 sb.Append(kv.Key.ToLowerInvariant()).Append('=').Append(kv.Value ?? "").Append('\n');
         sb.Append("--\n");
 
-        bool hasArt = false;
+        var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // slots that actually exist on disk
         void Slot(string name, string? path)
         {
             sb.Append(name).Append('|');
@@ -134,7 +134,7 @@ internal static class Model3dCache
             }
             catch { }
             if (size < 0) { sb.Append("-\n"); return; }
-            hasArt = true;
+            present.Add(name);
             sb.Append(path!.ToLowerInvariant()).Append('|').Append(size).Append('|').Append(mtime).Append('\n');
         }
         // The slots the builders can consume — resolution identical to HomeModel3d's own calls, INCLUDING
@@ -156,6 +156,14 @@ internal static class Model3dCache
 
         string manifest = sb.ToString();
         string key = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(manifest))).ToLowerInvariant();
+        // Worth showing? Configurable (Display → right panel): the FRONT is always required, Back/Spine can
+        // be demanded on top, and a Box - Full sheet is an alternative on its own. "full" is only ever
+        // resolved above when full-scan mode applies TO THIS GAME, so the option's per-game scope is
+        // honoured without the UI having to know which level (global/platform/game) won.
+        // NOTE: the rule is NOT part of the manifest — it decides whether to SHOW/bake a model, not what the
+        // bake produces, so tightening it must never re-key (and re-bake) the models that stay valid.
+        bool hasArt = Media.MediaLayout.Current.Model3dValid(
+            present.Contains("front"), present.Contains("back"), present.Contains("spine"), present.Contains("full"));
         return new Identity(key, Path.Combine(Dir, key + ".glb"), manifest, map, platform, title, id, hasArt, ov);
     }
 

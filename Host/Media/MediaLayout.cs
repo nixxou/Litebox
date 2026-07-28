@@ -105,6 +105,34 @@ internal sealed class MediaLayout
     /// <summary>Family shown when the immediate image is "Model3d" but no baked model is available.</summary>
     public string Immediate3dFallback { get; set; } = "Front";
 
+    // ── When is a 3D model worth showing? ─────────────────────────────────────
+    // The old rule was Model3dCache's raw HasArt = ANY consumable source, so a game with nothing but a
+    // clear logo still produced a case wearing the "NoImage" placeholder front. The FRONT is now always
+    // required, and the two companion scans can be demanded on top of it. The Box - Full sheet is a
+    // separate OR branch: it composes the whole case by itself.
+    /// <summary>Also require a Box - Back scan.</summary>
+    public bool Model3dNeedBack { get; set; }
+    /// <summary>Also require a Box - Spine scan.</summary>
+    public bool Model3dNeedSpine { get; set; }
+    /// <summary>With BOTH companions ticked: true = need both, false (default) = either one is enough.</summary>
+    public bool Model3dNeedAll { get; set; }
+    /// <summary>A Box - Full scan alone validates the model — but only when full-scan mode actually applies
+    /// to that game (the flag lives per platform/game, so this box stays tickable regardless of any global
+    /// setting: whether it fires is decided per game at resolve time).</summary>
+    public bool Model3dAcceptFull { get; set; }
+
+    /// <summary>Is a model with these available sources worth showing? <paramref name="full"/> is already
+    /// gated by the game's own full-scan mode (Model3dCache only resolves that slot when it applies).</summary>
+    public bool Model3dValid(bool front, bool back, bool spine, bool full)
+    {
+        if (Model3dAcceptFull && full) return true;
+        if (!front) return false;
+        if (Model3dNeedBack && Model3dNeedSpine) return Model3dNeedAll ? (back && spine) : (back || spine);
+        if (Model3dNeedBack) return back;
+        if (Model3dNeedSpine) return spine;
+        return true;
+    }
+
     // ── Duplicate prevention (post-load filter) ───────────────────────────────
     // These settings are deliberately NOT part of PostLoadJson/PostLoadHash: toggling the dup filter must
     // not shift the per-view config fingerprints. They are fingerprinted SEPARATELY (DupParamHash8) — the
@@ -181,8 +209,15 @@ internal sealed class MediaLayout
         PostLoad = PostLoad.Select(e => e.Clone()).ToList(),
         PostLoadPoster = PostLoadPoster.Select(e => e.Clone()).ToList(),
         PosterIndependent = PosterIndependent, Immediate3dFallback = Immediate3dFallback,
+        Model3dNeedBack = Model3dNeedBack, Model3dNeedSpine = Model3dNeedSpine,
+        Model3dNeedAll = Model3dNeedAll, Model3dAcceptFull = Model3dAcceptFull,
         PreventDuplicates = PreventDuplicates, DupEngine = DupEngine, DupThreshold = DupThreshold, DupGpu = DupGpu,
     };
+
+    /// <summary>Fingerprint of the 3D validity rule — the caller (options apply) compares it before/after
+    /// to know whether the eligible-game set changed and the 3D key index must be recomputed.</summary>
+    public string Model3dValidityKey()
+        => $"{Model3dNeedBack}|{Model3dNeedSpine}|{Model3dNeedAll}|{Model3dAcceptFull}";
 
     // ── Catalogs for the config UI ────────────────────────────────────────────
     /// <summary>Family regroupements (Key = stored value, Title = display).</summary>

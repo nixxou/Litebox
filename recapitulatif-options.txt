@@ -228,6 +228,8 @@ Décrit, PAR VUE (liste / poster), l'image immédiate puis la liste post-load.
 
     { "ImmediateList": "Front", "ImmediatePoster": "Model3d",
       "Immediate3dFallback": "Front", "PosterIndependent": false,
+      "Model3dNeedBack": false, "Model3dNeedSpine": false,
+      "Model3dNeedAll": false,  "Model3dAcceptFull": false,
       "PostLoad": [ { "Sel": "Front", "Count": 1 },
                     { "Sel": "Model3d", "Count": 1 },
                     { "Sel": "Screenshots", "Count": 5 } ] }
@@ -239,8 +241,21 @@ tri ; Cumulative(+Depth) = accumulation multi-entrées ; IgnoreGameRegion /
 AllRegions = élargissement des régions. Le hash MD5 de cette config sert de clé
 au cache anti-doublons (ADS :lb.dupcheck).
 
+VALIDITÉ DU MODÈLE 3D ("Model3dNeed*/AcceptFull", section « Consider the 3D
+model valid when the game has » du même onglet) — décide si un jeu MÉRITE un
+modèle. Le FRONT est toujours requis (sans lui la boîte porte le placeholder
+"NoImage" de LaunchBox) ; Model3dNeedBack / Model3dNeedSpine ajoutent des
+exigences ; si les DEUX sont demandées, Model3dNeedAll choisit entre « les deux »
+(true) et « l'une ou l'autre » (false, défaut). Model3dAcceptFull = une planche
+Box - Full suffit à elle seule — la case reste cochable même si le mode
+full-scan est désactivé globalement, car ce mode se règle aussi par plateforme
+et par jeu : l'arbitrage se fait par jeu à la résolution. La règle filtre
+l'affichage, l'index des clés 3D ET la génération en masse, mais n'entre PAS
+dans la clé de cache (elle ne change pas le rendu) ; la durcir ne re-bake donc
+rien. Changement appliqué → recalcul de l'index (Model3dKeyIndex.KickAll).
+
 La pseudo-famille "Model3d" : l'entrée n'existe que si le jeu PEUT avoir un
-modèle (front présent, ou full scan en mode full-scan) ; elle est IGNORÉE par
+modèle (règle de validité ci-dessus) ; elle est IGNORÉE par
 l'anti-doublons (dans les deux sens) ; sa vignette porte un badge « 3D » ; en
 main box elle affiche la PNG du cache GLB puis bascule sur le viewport 3D
 interactif (orbite). En IMAGE IMMÉDIATE ("ImmediateList"/"ImmediatePoster" =

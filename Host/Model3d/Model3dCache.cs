@@ -33,7 +33,7 @@ internal static class Model3dCache
 {
     /// <summary>Salts every key — bump when the bake output changes (geometry, materials, thumb pose/size,
     /// GLB layout) so stale files are re-keyed away in one move.</summary>
-    public const int BakerVersion = 10;   // v10: single-sided faces preserved through the GLB (doubleSided flag) — the reloaded spine cap no longer occludes the scan strips (v9: spine modes oracle-exact, v8: scan on strips, v5: thin strips lossless, v4: 1024 cap + JPEG)
+    public const int BakerVersion = 11;   // v11: double-jewel strips keep the game scan (preset = no-scan fallback only, the single-jewel v9 rule) (v10: doubleSided through the GLB, v9: spine modes oracle-exact, v8: scan on strips, v5: thin strips lossless)
 
     public static string Dir
     {

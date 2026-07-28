@@ -652,14 +652,17 @@ internal sealed class HomeModel3d : IDisposable
         var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front));
         var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, new[] { "Box - Back" }));
 
-        // Spine source: preset resource / custom path / the game's Box - Spine scan (same rules as jewel);
-        // an explicit Image Selection pick wins over all of them.
+        // Spine strips: the game's OWN Box - Spine scan first (ov-aware — an Image Selection pick flows
+        // through ResolveSlot), the FrontSpineImage preset/custom only as the NO-SCAN fallback. Same
+        // priority rule as the single jewel (v9): "Sony Playstation Spine" mode used to REPLACE the scan
+        // with the generic preset and the game's texture vanished from the side strips — the real
+        // LaunchBox keeps showing the scan in that mode (user-verified, doubled-spine test).
         string spineSpec = map != null && map.TryGetValue("FrontSpineImage", out var ss) ? ss : "";
         System.Windows.Media.Imaging.BitmapSource? spine =
-            ov != null && ov.TryGetValue("spine", out var ovSpine) && !string.IsNullOrEmpty(ovSpine) ? LoadBitmap(ovSpine)
-            : spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12))
-            : spineSpec.Length > 0 ? LoadBitmap(spineSpec)
-            : LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }));
+            LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }))
+            ?? (spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase) ? LbCaseObj.SpineImage(spineSpec.Substring(12))
+                : spineSpec.Length > 0 ? LoadBitmap(spineSpec)
+                : null);
 
         var bg = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
         if (front != null) bg = CornerAverage(front);

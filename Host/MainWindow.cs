@@ -975,7 +975,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _mediaVideo.FullscreenRequested = OpenFullscreenVideo;
         media.Controls.Add(_mediaVideo);
         // Fullscreen viewers (LB parity): double-click an image → the image viewer; the 3D overlay's
-        // ⤢ badge → the fullscreen model (reloaded at source texture resolution).
+        // badge or a double-click → the fullscreen model (reloaded at source texture resolution).
         media.DoubleClicked = OpenFullscreenImage;
         _media3d.ExpandClicked = () => { if (_detailsShown is IGame gfs) OpenFullscreen3d(gfs); };
         strip = new MediaStrip { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 4, 0, 4) };
@@ -3229,6 +3229,16 @@ internal sealed class MainWindow : Form, IMessageFilter
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        // A clicked WinForms button retains keyboard focus, so Space used to "click" the inline video's
+        // fullscreen button again. While a video occupies the media box, Space belongs to play/pause
+        // regardless of which non-text child currently has focus. Fullscreen owns its own Space handler.
+        if (keyData == Keys.Space && _mediaVideo is { Visible: true, HasContent: true }
+                                  && !FocusedControlAcceptsText())
+        {
+            _mediaVideo.TogglePlayPause();
+            return true;
+        }
+
         if ((keyData & Keys.Control) == Keys.Control)
         {
             var k = keyData & Keys.KeyCode;
@@ -3248,6 +3258,21 @@ internal sealed class MainWindow : Form, IMessageFilter
             }
         }
         return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    private bool FocusedControlAcceptsText()
+    {
+        Control? focused = FindFocusedControl(this);
+        return focused is TextBoxBase { ReadOnly: false }
+            || focused is ComboBox { DropDownStyle: not ComboBoxStyle.DropDownList };
+
+        static Control? FindFocusedControl(Control root)
+        {
+            if (root.Focused) return root;
+            foreach (Control child in root.Controls)
+                if (child.ContainsFocus) return FindFocusedControl(child) ?? child;
+            return null;
+        }
     }
 
     // Ctrl-wheel over (or with focus in) the central panel zooms instead of scrolling. This filter
@@ -4607,6 +4632,20 @@ internal sealed class MainWindow : Form, IMessageFilter
         using var v = new Video.VideoFullscreen(Media.MediaVideoItem.PathOf(item),
                                                 Media.MediaVideoItem.CachedThumb(item), _cfg.VideoAutoplaySound, at);
         v.ShowDialog(this);
+        _mediaVideo.ResumeAt(v.ExitPositionMs, v.ContinuePlaying, v.ExitEnded);
+    }
+
+    private void OpenFullscreenFromThumb(string item)
+    {
+        if (_detailsShown is not IGame g || _mediaItems == null) return;
+        SetMainMedia(item, full: true, _detailsLoadToken);
+
+        if (Media.Media3dItem.Is(item))
+            OpenFullscreen3d(g);
+        else if (Media.MediaVideoItem.Is(item))
+            OpenFullscreenVideo();
+        else
+            OpenFullscreenImage();
     }
 
     // Sets the main media. NOTE: single extension point — a future video item would be
@@ -4822,6 +4861,10 @@ internal sealed class MainWindow : Form, IMessageFilter
                 BadgePlay = Media.MediaVideoItem.Is(src),   // ▶ over video tiles (drawn, never baked into the cached frame)
             };
             th.Click += (_, _) => SetMainMedia(captured, full: true, _detailsLoadToken);
+            th.MouseDoubleClick += (_, e) =>
+            {
+                if (e.Button == MouseButtons.Left) OpenFullscreenFromThumb(captured);
+            };
             th.MouseWheel += (_, e) => _strip.WheelScroll(e.Delta);   // wheel over a thumb scrolls the strip
             _strip.Flow.Controls.Add(th);
             System.Threading.Tasks.Task.Run(() =>
@@ -6027,7 +6070,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         public MediaThumb()
         {
             DoubleBuffered = true; ResizeRedraw = true;
-            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+                   | ControlStyles.StandardClick | ControlStyles.StandardDoubleClick, true);
         }
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
         public bool Selected { get => _selected; set { if (_selected != value) { _selected = value; Invalidate(); } } }

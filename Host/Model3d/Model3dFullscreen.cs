@@ -3,7 +3,7 @@
 //   2. the SAME model is rebuilt LIVE at source texture resolution (Model3dBaker.BakeRuntimeModel on a
 //      bake STA worker — same builders, same geometry/shape by construction, only sharper faces) and
 //      swapped in silently. The current orbit pose survives the swap (SetModel doesn't touch the pose).
-// Drag orbits, wheel zooms (the detail block's exact feel), Esc / the ⤡ badge closes.
+// Drag orbits, wheel zooms (the detail block's exact feel), Esc / the top-right X closes.
 
 #nullable enable
 
@@ -41,8 +41,18 @@ internal sealed class Model3dFullscreen : Form
         _orbit = new Platforms.OrbitController();
         _orbit.Attach(_home);
         Model3dBlock.WireOrbit(_home.Control, _orbit);
+        // ElementHost/WPF owns keyboard focus after the user orbits the model. KeyPreview only covers
+        // WinForms children, so Escape must also be caught on the hosted WPF visual itself.
+        if (_home.Control is System.Windows.Forms.Integration.ElementHost eh
+            && eh.Child is System.Windows.UIElement ui)
+            ui.PreviewKeyDown += (_, e) =>
+            {
+                if (e.Key != System.Windows.Input.Key.Escape) return;
+                e.Handled = true;
+                Close();
+            };
 
-        var close = new Model3dExpandBadge { Shrink = true, BackColor = Color.Black };
+        var close = new Media.FullscreenCloseButton();
         close.Click += (_, _) => Close();
         Controls.Add(close);
         close.BringToFront();
@@ -57,13 +67,22 @@ internal sealed class Model3dFullscreen : Form
 
         void Place()
         {
-            close.Location = new Point(Math.Max(0, ClientSize.Width - close.Width - 14),
-                                       Math.Max(0, ClientSize.Height - close.Height - 14));
+            close.Location = new Point(Math.Max(0, ClientSize.Width - close.Width - 14), 14);
             _status.Location = new Point(14, Math.Max(0, ClientSize.Height - _status.Height - 14));
         }
         Resize += (_, _) => { Place(); ApplyFraming(); };
         KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) Close(); };
         Shown += (_, _) => { Place(); ApplyFraming(); LoadModels(); };
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if ((keyData & Keys.KeyCode) == Keys.Escape)
+        {
+            Close();
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     // The detail block's framing law with the SCREEN's aspect: distance × max(1, aspect), horizontal

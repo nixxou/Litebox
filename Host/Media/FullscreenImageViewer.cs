@@ -2,7 +2,7 @@
 // aspect-fit rendering (nearest-neighbour when heavily upscaled — retro screenshots stay crisp),
 // a caption line at the bottom ("Image X of Y: <LB type> | WxH" — origin/ADS info can join later),
 // and ←/→ / wheel / hover-chevron navigation across the game's IMAGE items only — the 3D model
-// (and any future video item) never enters this list. Esc or double-click closes.
+// (and any future video item) never enters this list. Esc, the top-right X or double-click closes.
 
 #nullable enable
 
@@ -61,6 +61,16 @@ internal sealed class FullscreenImageViewer : Form
         };
         MouseLeave += (_, _) => { if (_hoverZone != 0) { _hoverZone = 0; Invalidate(); } };
 
+        var close = new FullscreenCloseButton();
+        close.Click += (_, _) => Close();
+        Controls.Add(close);
+        close.BringToFront();
+
+        void PlaceClose() => close.Location = new Point(
+            Math.Max(0, ClientSize.Width - close.Width - 14), 14);
+        Resize += (_, _) => PlaceClose();
+        Shown += (_, _) => { PlaceClose(); close.BringToFront(); Focus(); };
+
         LoadCurrent();
     }
 
@@ -69,6 +79,27 @@ internal sealed class FullscreenImageViewer : Form
         if (_paths.Count < 2) return;
         _ix = (_ix + d + _paths.Count) % _paths.Count;   // wraps
         LoadCurrent();
+    }
+
+    // Arrow keys are normally treated as WinForms dialog-navigation keys before KeyDown reaches
+    // the form (notably since the close control was added). Catch them at command-key level so
+    // image navigation keeps working regardless of which child currently owns the focus.
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        switch (keyData & Keys.KeyCode)
+        {
+            case Keys.Left:
+                Nav(-1);
+                return true;
+            case Keys.Right:
+                Nav(+1);
+                return true;
+            case Keys.Escape:
+                Close();
+                return true;
+            default:
+                return base.ProcessCmdKey(ref msg, keyData);
+        }
     }
 
     private void LoadCurrent()
@@ -104,9 +135,12 @@ internal sealed class FullscreenImageViewer : Form
 
         if (_img != null)
         {
-            float ir = (float)_img.Width / _img.Height, ar = (float)box.Width / Math.Max(1, box.Height);
-            int iw, ih;
-            if (ir > ar) { iw = box.Width; ih = (int)(iw / ir); } else { ih = box.Height; iw = (int)(ih * ir); }
+            // Fit inside the screen, but never enlarge beyond twice the image's native pixel size.
+            double scale = Math.Min(2.0, Math.Min(
+                (double)box.Width / Math.Max(1, _img.Width),
+                (double)box.Height / Math.Max(1, _img.Height)));
+            int iw = Math.Max(1, (int)Math.Round(_img.Width * scale));
+            int ih = Math.Max(1, (int)Math.Round(_img.Height * scale));
             // Heavy upscales (small retro screenshots) look right with hard pixels; scans stay bicubic.
             bool pixelArt = iw >= _img.Width * 2;
             g.InterpolationMode = pixelArt ? System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor

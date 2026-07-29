@@ -33,7 +33,8 @@ internal sealed class SnapshotBox : Panel
     public SnapshotBox()
     {
         DoubleBuffered = true; ResizeRedraw = true;
-        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+               | ControlStyles.StandardClick | ControlStyles.StandardDoubleClick, true);
     }
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -77,6 +78,10 @@ internal sealed class Model3dBlock : Panel
     {
         DoubleBuffered = true;
         _pic = new SnapshotBox { Dock = DockStyle.Fill, BackColor = BackColor };
+        _pic.MouseDoubleClick += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Left) ExpandClicked?.Invoke();
+        };
         Controls.Add(_pic);
         // Fullscreen badge: a WinForms sibling ABOVE both layers (HWND z-order beats the ElementHost).
         _expand = new Model3dExpandBadge { Visible = false, BackColor = BackColor };
@@ -126,7 +131,7 @@ internal sealed class Model3dBlock : Panel
             _expand.BringToFront();            // …and the badge above everything
             _orbit = new Platforms.OrbitController();
             _orbit.Attach(_home);
-            WireOrbit(_home.Control, _orbit);
+            WireOrbit(_home.Control, _orbit, () => ExpandClicked?.Invoke());
         }
         return _home;
     }
@@ -271,13 +276,28 @@ internal sealed class Model3dBlock : Panel
     // Drag = IMMEDIATE rotation (1:1 pointer tracking — the animated ease stuttered), 0.25°/px (÷2 vs the
     // editor's historical feel, which was too twitchy), and the NATURAL direction: drag right → the front
     // face follows the pointer right (yaw+ brings the left side toward the camera).
-    internal static void WireOrbit(Control host, Platforms.OrbitController orbit)   // shared with Model3dFullscreen
+    internal static void WireOrbit(Control host, Platforms.OrbitController orbit,
+                                   Action? doubleClicked = null)   // shared with Model3dFullscreen
     {
         const double Sens = 12.0;   // px per 7.5°-unit → 0.625°/px (~145 px drag = 90°)
         if (host is System.Windows.Forms.Integration.ElementHost eh && eh.Child is System.Windows.UIElement ui)
         {
             bool wd = false; System.Windows.Point wl = default;
-            ui.PreviewMouseDown += (_, e) => { wd = true; wl = e.GetPosition(ui); ui.CaptureMouse(); e.Handled = true; };
+            ui.PreviewMouseDown += (_, e) =>
+            {
+                if (e.ChangedButton == System.Windows.Input.MouseButton.Left && e.ClickCount == 2)
+                {
+                    wd = false;
+                    ui.ReleaseMouseCapture();
+                    doubleClicked?.Invoke();
+                    e.Handled = true;
+                    return;
+                }
+                wd = true;
+                wl = e.GetPosition(ui);
+                ui.CaptureMouse();
+                e.Handled = true;
+            };
             ui.PreviewMouseUp += (_, e) => { wd = false; ui.ReleaseMouseCapture(); e.Handled = true; };
             ui.PreviewMouseMove += (_, e) =>
             {
@@ -293,6 +313,15 @@ internal sealed class Model3dBlock : Panel
         host.MouseUp += (_, _) => dragging = false;
         host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; orbit.OrbitImmediate(dx / Sens, dy / Sens); };
         host.MouseWheel += (_, e) => orbit.Zoom(e.Delta);
+        // ElementHost's WPF child owns mouse input (handled above). Wiring the WinForms double-click too
+        // can deliver the same gesture twice on some framework versions and reopen fullscreen on exit.
+        if (host is not System.Windows.Forms.Integration.ElementHost)
+            host.MouseDoubleClick += (_, e) =>
+            {
+                if (e.Button != MouseButtons.Left) return;
+                dragging = false;
+                doubleClicked?.Invoke();
+            };
     }
 
     protected override void Dispose(bool disposing)
@@ -306,15 +335,11 @@ internal sealed class Model3dBlock : Panel
     }
 }
 
-/// <summary>The little ⤢ / ⤡ chip (LB parity): expand-to-fullscreen on the detail block, back-from-
-/// fullscreen in the viewer. Owner-drawn dark chip with the diagonal-arrows glyph (Segoe UI Symbol).</summary>
+/// <summary>The little ⤢ chip (LB parity): expand-to-fullscreen on the detail block.
+/// Owner-drawn dark chip with the diagonal-arrows glyph (Segoe UI Symbol).</summary>
 internal sealed class Model3dExpandBadge : Control
 {
     private bool _hover;
-
-    /// <summary>⤡ (exit fullscreen) instead of ⤢.</summary>
-    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
-    public bool Shrink { get; init; }
 
     public Model3dExpandBadge()
     {
@@ -336,7 +361,7 @@ internal sealed class Model3dExpandBadge : Control
         using (var bd = new System.Drawing.Pen(Color.FromArgb(_hover ? 160 : 90, 255, 255, 255)))
             g.DrawRectangle(bd, r);
         using var f = new Font("Segoe UI Symbol", 11f);
-        TextRenderer.DrawText(g, Shrink ? "⤡" : "⤢", f, ClientRectangle,
+        TextRenderer.DrawText(g, "⤢", f, ClientRectangle,
             _hover ? Color.White : Color.FromArgb(210, 210, 214),
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }

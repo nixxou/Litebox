@@ -26,6 +26,12 @@ namespace LbApiHost.Host.Video;
 
 internal sealed class VideoBlock : Panel
 {
+    private sealed class VideoSurface : Panel
+    {
+        public VideoSurface()
+            => SetStyle(ControlStyles.StandardClick | ControlStyles.StandardDoubleClick, true);
+    }
+
     private readonly Panel _surface;          // libvlc's render target
     private readonly PictureBox _still;       // frame shown before playback (and when paused at start)
     private readonly Panel _bar;              // hover controls
@@ -39,8 +45,9 @@ internal sealed class VideoBlock : Panel
     private MediaPlayer? _mp;
     private string? _path;
     private int _token;
-    private bool _seeking, _hasContent, _muted = true;
-    private long _durMs;
+    private bool _seeking, _hasContent, _muted = true, _playRequested, _ended;
+    private bool _pauseWhenReady, _markEndedWhenReady;
+    private long _durMs, _pauseAtMs;
 
     /// <summary>The block has a video to show — drives its visibility in the media box.</summary>
     public bool HasContent => _hasContent;
@@ -50,6 +57,15 @@ internal sealed class VideoBlock : Panel
 
     /// <summary>The ⤢ button in the hover bar was clicked — the host opens the fullscreen player.</summary>
     public Action? FullscreenRequested;
+
+    /// <summary>Mouse movement anywhere over the video surface or its controls. The fullscreen host uses
+    /// this to reveal all overlays together, then hide them again after a short idle period.</summary>
+    public Action? MouseActivity;
+
+    /// <summary>Inline blocks reveal their bar while hovered. Fullscreen turns this off and drives the
+    /// controls explicitly so an idle pointer does not leave the overlays on screen forever.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ControlsOnHover { get; set; } = true;
 
     /// <summary>Start playing as soon as a video is shown (Options → Display → Right panel).</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -65,8 +81,9 @@ internal sealed class VideoBlock : Panel
     {
         DoubleBuffered = true;
         BackColor = Color.Black;
+        SetStyle(ControlStyles.StandardClick | ControlStyles.StandardDoubleClick, true);
 
-        _surface = new Panel { Dock = DockStyle.Fill, BackColor = Color.Black };
+        _surface = new VideoSurface { Dock = DockStyle.Fill, BackColor = Color.Black };
         Controls.Add(_surface);
 
         // The still frame sits ABOVE the surface until playback actually starts, so the zone never flashes
@@ -76,6 +93,14 @@ internal sealed class VideoBlock : Panel
         _still.Click += (_, _) => TogglePlay();
         Controls.Add(_still);
         _still.BringToFront();
+
+        // The video itself is the largest and most natural fullscreen target. The still layer handles the
+        // not-yet-started case; the VLC surface handles an already-playing video.
+        foreach (Control c in new Control[] { this, _surface, _still })
+            c.MouseDoubleClick += (_, e) =>
+            {
+                if (e.Button == MouseButtons.Left) FullscreenRequested?.Invoke();
+            };
 
         _bar = new Panel { Dock = DockStyle.Bottom, Height = 34, BackColor = Color.FromArgb(210, 18, 18, 22), Visible = false };
         _playBtn = new Button
@@ -90,7 +115,7 @@ internal sealed class VideoBlock : Panel
         _seek.MouseUp += (_, _) =>
         {
             _seeking = false;
-            try { if (_mp != null && _durMs > 0) _mp.Time = (long)(_durMs * (_seek.Value / 1000.0)); } catch { }
+            if (_durMs > 0) SeekTo((long)(_durMs * (_seek.Value / 1000.0)));
         };
         _time = new Label { AutoSize = false, Width = 96, Height = 26, Top = 6, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(210, 214, 222) };
         _muteBtn = new Button
@@ -122,9 +147,15 @@ internal sealed class VideoBlock : Panel
         // Hover = controls. The children must forward it, or moving onto the bar/still would "leave".
         foreach (Control c in new Control[] { this, _surface, _still, _bar })
         {
-            c.MouseEnter += (_, _) => ShowBar(true);
-            c.MouseLeave += (_, _) => ShowBar(ClientRectangle.Contains(PointToClient(Cursor.Position)));
+            c.MouseEnter += (_, _) => { if (ControlsOnHover) ShowBar(true); };
+            c.MouseLeave += (_, _) =>
+            {
+                if (ControlsOnHover)
+                    ShowBar(ClientRectangle.Contains(PointToClient(Cursor.Position)));
+            };
         }
+
+        WireMouseActivity(this);
     }
 
     private bool IsPlaying { get { try { return _mp?.IsPlaying == true; } catch { return false; } } }
@@ -144,6 +175,15 @@ internal sealed class VideoBlock : Panel
         if (_bar.Visible == on) return;
         _bar.Visible = on;
         if (on) { _bar.BringToFront(); LayoutBar(); }
+    }
+
+    /// <summary>Show or hide the control bar from the fullscreen inactivity controller.</summary>
+    public void SetControlsVisible(bool visible) => ShowBar(visible);
+
+    private void WireMouseActivity(Control root)
+    {
+        root.MouseMove += (_, _) => MouseActivity?.Invoke();
+        foreach (Control child in root.Controls) WireMouseActivity(child);
     }
 
     // The big ▶ over the still frame: drawn, never baked into the cached thumbnail.
@@ -166,6 +206,9 @@ internal sealed class VideoBlock : Panel
     {
         _token++;
         _tick.Stop();
+        _playRequested = false;
+        _ended = _pauseWhenReady = _markEndedWhenReady = false;
+        _durMs = 0;
         StopPlayer();
         _path = null;
         SetStill(null);
@@ -181,6 +224,9 @@ internal sealed class VideoBlock : Panel
         try { if (!IsHandleCreated && !IsDisposed) _ = Handle; } catch { }   // BeginInvoke needs an HWND
         _token++;
         _path = path;
+        _playRequested = false;
+        _ended = _pauseWhenReady = _markEndedWhenReady = false;
+        _durMs = 0;
         SetStill(still);
         _still.Visible = true;
         if (!_hasContent) { _hasContent = true; ContentChanged?.Invoke(); }
@@ -213,11 +259,74 @@ internal sealed class VideoBlock : Panel
     /// decoders never run (and never talk) at the same time.</summary>
     public void PauseIfPlaying()
     {
-        try { if (_mp?.IsPlaying == true) { _mp.SetPause(true); _playBtn.Text = "▶"; } } catch { }
+        try
+        {
+            if (_mp?.IsPlaying == true) _mp.SetPause(true);
+            _playRequested = false;
+            _playBtn.Text = "▶";
+        }
+        catch { }
     }
 
     /// <summary>Current position in ms (so fullscreen can resume exactly where the inline player was).</summary>
-    public long PositionMs { get { try { return _mp?.Time ?? 0; } catch { return 0; } } }
+    public long PositionMs
+    {
+        get
+        {
+            try { return _ended && _durMs > 0 ? Math.Max(0, _durMs - 1) : _mp?.Time ?? 0; }
+            catch { return 0; }
+        }
+    }
+
+    /// <summary>Whether playback is meant to continue. Unlike MediaPlayer.IsPlaying this remains true
+    /// while VLC is opening/buffering, which makes fullscreen hand-offs reliable even when closed quickly.</summary>
+    public bool WantsToPlay => _playRequested;
+
+    /// <summary>The last frame is displayed after natural completion. Play from here restarts at zero.</summary>
+    public bool HasEnded => _ended;
+
+    /// <summary>Apply the state returned by a fullscreen player to this block.</summary>
+    public void ResumeAt(long ms, bool play, bool ended = false)
+    {
+        try
+        {
+            if (ended && !play)
+            {
+                RestartPausedAt(ms, markEnded: true);
+                return;
+            }
+
+            if (_mp == null)
+            {
+                if (play)
+                {
+                    Play();
+                    StartAt(ms);
+                }
+                else if (ms > 0) RestartPausedAt(ms, markEnded: false);
+                return;
+            }
+
+            _ended = ended;
+            if (ms >= 0) _mp.Time = ms;
+            _playRequested = play;
+            if (play)
+            {
+                _ended = _pauseWhenReady = _markEndedWhenReady = false;
+                _mp.SetPause(false);
+                _still.Visible = false;
+                _playBtn.Text = "❚❚";
+                _tick.Start();
+            }
+            else
+            {
+                if (_mp.IsPlaying) _mp.SetPause(true);
+                _playBtn.Text = "▶";
+            }
+            UpdateProgress();
+        }
+        catch { }
+    }
 
     /// <summary>Jump by a FRACTION of the whole video (+ forward / − backward), clamped to its bounds.</summary>
     public void SeekBy(double fraction)
@@ -226,10 +335,27 @@ internal sealed class VideoBlock : Panel
         {
             var mp = _mp;
             if (mp == null) return;
-            long dur = mp.Length;
+            long dur = _durMs > 0 ? _durMs : mp.Length;
             if (dur <= 0) return;
-            long t = (long)Math.Clamp(mp.Time + fraction * dur, 0, dur - 1);
-            mp.Time = t;
+            long from = _ended ? dur : mp.Time;
+            long t = (long)Math.Clamp(from + fraction * dur, 0, dur - 1);
+            SeekTo(t);
+        }
+        catch { }
+    }
+
+    private void SeekTo(long ms)
+    {
+        try
+        {
+            if (_mp == null) return;
+            long target = _durMs > 0 ? Math.Clamp(ms, 0, Math.Max(0, _durMs - 1)) : Math.Max(0, ms);
+            if (_ended)
+            {
+                RestartPausedAt(target, markEnded: false);
+                return;
+            }
+            _mp.Time = target;
             UpdateProgress();
         }
         catch { }
@@ -243,11 +369,31 @@ internal sealed class VideoBlock : Panel
 
     private void TogglePlay()
     {
+        // A real user command overrides any pending paused seek.
+        _pauseWhenReady = _markEndedWhenReady = false;
+        if (_ended)
+        {
+            _ended = false;
+            SetMuted(false);
+            Play();   // an ended VLC player is not reliably resumable: rebuild naturally starts at zero
+            return;
+        }
         if (_mp == null) { SetMuted(false); Play(); return; }
         try
         {
-            if (_mp.IsPlaying) { _mp.SetPause(true); _playBtn.Text = "▶"; _still.Visible = false; }
-            else { _mp.Play(); _playBtn.Text = "❚❚"; }
+            if (_mp.IsPlaying)
+            {
+                _playRequested = false;
+                _mp.SetPause(true);
+                _playBtn.Text = "▶";
+                _still.Visible = false;
+            }
+            else
+            {
+                _playRequested = true;
+                _mp.Play();
+                _playBtn.Text = "❚❚";
+            }
         }
         catch { }
     }
@@ -257,6 +403,8 @@ internal sealed class VideoBlock : Panel
         if (_path == null || IsDisposed) return;
         var lib = VlcService.Instance;
         if (lib == null) return;
+        _ended = false;
+        _playRequested = true;
         int token = _token;
         try
         {
@@ -264,14 +412,85 @@ internal sealed class VideoBlock : Panel
             _mp = new MediaPlayer(lib) { EnableKeyInput = false, EnableMouseInput = false, Hwnd = _surface.Handle };
             _mp.Mute = _muted;
             // Fires on a VLC thread → hop to the UI thread before touching anything of ours.
-            _mp.Playing += (_, _) => Post(() => { if (_token == token) { _still.Visible = false; _playBtn.Text = "❚❚"; } });
-            _mp.EndReached += (_, _) => Post(() => { if (_token == token) { _still.Visible = true; _playBtn.Text = "▶"; _seek.Value = 0; } });
-            _mp.EncounteredError += (_, _) => Post(() => { if (_token == token) _still.Visible = true; });
+            _mp.Playing += (_, _) => Post(() =>
+            {
+                if (_token != token) return;
+                _still.Visible = false;
+                if (_pauseWhenReady)
+                {
+                    long at = _pauseAtMs;
+                    bool markEnded = _markEndedWhenReady;
+                    _pauseWhenReady = _markEndedWhenReady = false;
+                    try
+                    {
+                        if (_mp != null)
+                        {
+                            _mp.Time = at;
+                            _mp.SetPause(true);
+                        }
+                    }
+                    catch { }
+                    _ended = markEnded;
+                    _playRequested = false;
+                    _playBtn.Text = "▶";
+                    if (markEnded)
+                    {
+                        _seek.Value = 1000;
+                        SetEndTimeLabel();
+                    }
+                    else UpdateProgress();
+                }
+                else _playBtn.Text = "❚❚";
+            });
+            _mp.EndReached += (_, _) => Post(() =>
+            {
+                if (_token == token) ShowEndedState();
+            });
+            _mp.EncounteredError += (_, _) => Post(() =>
+            {
+                if (_token == token)
+                {
+                    _playRequested = false;
+                    _still.Visible = true;
+                }
+            });
             using var media = new VlcMedia(lib, _path, FromType.FromPath);
             _mp.Play(media);
             _tick.Start();
         }
         catch (Exception ex) { Console.WriteLine("[video] play failed (" + _path + "): " + ex.Message); }
+    }
+
+    private void ShowEndedState()
+    {
+        _tick.Stop();
+        _ended = true;
+        _playRequested = false;
+        _still.Visible = false;   // keep VLC's last rendered frame, never cover it with the cached thumb
+        _playBtn.Text = "▶";
+        _seek.Value = 1000;
+        SetEndTimeLabel();
+    }
+
+    // Seeking an ended VLC player is unreliable. Recreate it, seek after Playing fires, then pause on the
+    // requested real frame. markEnded preserves "Play means restart at zero" when handing the last frame
+    // back from fullscreen to the inline block.
+    private void RestartPausedAt(long ms, bool markEnded)
+    {
+        if (_path == null || IsDisposed) return;
+        _ended = false;
+        _pauseAtMs = Math.Max(0, ms);
+        _pauseWhenReady = true;
+        _markEndedWhenReady = markEnded;
+        Play();
+        _playRequested = false;
+    }
+
+    private void SetEndTimeLabel()
+    {
+        if (_durMs <= 0) { _time.Text = "End"; return; }
+        string d = TimeSpan.FromMilliseconds(_durMs).ToString(@"m\:ss");
+        _time.Text = $"{d} / {d}";
     }
 
     private void SetMuted(bool on)

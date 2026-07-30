@@ -73,7 +73,10 @@ internal static class PlaylistFilterCatalog
         new("Portable",                "Portable",                   PlaylistFieldKind.Bool),
         new("Progress",                "Progress",                   PlaylistFieldKind.Text),
         new("Publisher",               "Publisher",                  PlaylistFieldKind.Text),
-        new("Rating",                  "Rating",                     PlaylistFieldKind.Text),
+        // LaunchBox labels this field "Rating" and the score "Star Rating". LiteBox shows "ESRB"
+        // here and in Arrange By, matching its own list column. Label only — FieldKey stays
+        // "Rating", which is what goes into <FieldKey> and what LaunchBox reads back.
+        new("Rating",                  "ESRB",                       PlaylistFieldKind.Text),
         new("Region",                  "Region",                     PlaylistFieldKind.Text),
         new("ReleaseDate",             "Release Date",               PlaylistFieldKind.Date),
         new("ReleaseType",             "Release Type",               PlaylistFieldKind.Text),
@@ -139,7 +142,10 @@ internal static class PlaylistFilterCatalog
             .Concat((customNames ?? Array.Empty<string>())
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .Select(n => n.Trim())
-                .Where(n => !Builtin.Any(b => b.Label.Equals(n, StringComparison.OrdinalIgnoreCase)))
+                // Collides on either spelling: a custom field named "Rating" must not shadow the
+                // built-in whose key is Rating just because that built-in is labelled "ESRB".
+                .Where(n => !Builtin.Any(b => b.Label.Equals(n, StringComparison.OrdinalIgnoreCase)
+                                              || b.Key.Equals(n, StringComparison.OrdinalIgnoreCase)))
                 .Select(n => new PlaylistFilterField(n, n, PlaylistFieldKind.Text)))
             .OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase)
             .ToArray();

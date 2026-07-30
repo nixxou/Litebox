@@ -144,6 +144,16 @@ internal static class GameSortSelfTest
         f += Check("Custom fields sit inline in the alphabetical field list",
             PlaylistFilterCatalog.Fields(new[] { "abc" })[0].Label == "abc");
 
+        // Same deal as Arrange By: "ESRB" is the label, "Rating" is what <FieldKey> must carry so
+        // LaunchBox still understands the rule. Both spellings must resolve to that one field.
+        var esrb = PlaylistFilterCatalog.Find("ESRB");
+        f += Check("Auto-Populate ESRB is a label only — FieldKey stays LaunchBox's",
+            esrb != null && esrb.Key == "Rating" && esrb.Label == "ESRB"
+            && PlaylistFilterCatalog.Find("Rating")?.Key == "Rating");
+        f += Check("A custom field cannot shadow a built-in under either spelling",
+            PlaylistFilterCatalog.Fields(new[] { "Rating", "ESRB" })
+                .Count(x => x.Key == "Rating") == 1);
+
         // The exact rule from the screenshots: Broken / Is False, value unused.
         var broken = PlaylistFilterCatalog.Find("Broken");
         var isFalse = PlaylistFilterCatalog.FindComparison("IsFalse", PlaylistFieldKind.Bool);

@@ -1825,7 +1825,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     // RetroAchievements scanning now lives entirely in the RA options page (RaPanel + RaPanelActions,
     // which use PluginHelper.DataManager directly), so MainWindow no longer hosts a scan launcher.
 
-    // Display options, organised into internal tabs (General / Middle · General / Middle · List /
+    // Display options, organised into internal tabs (General / Middle · List /
     // Middle · Poster / Right panel). The Right panel tab stacks its OptionItems (16:9, load delay) over
     // the media-layout editor (immediate image per view + the ordered post-load image list).
     private void BuildDisplaySection(Options.OptionsWindow w)
@@ -1835,6 +1835,14 @@ internal sealed class MainWindow : Form, IMessageFilter
 
         var general = new[]
         {
+            Options.OptionItem.Choice("Display", "Title sort normalization",
+                new[] { "without", "simple", "advanced" },
+                () => TitleSortNormalizer.ConfigValue(_cfg.TitleSortNormalizationMode),
+                v => _cfg.TitleSortNormalizationMode = TitleSortNormalizer.Parse(v),
+                "without: use the raw Title and ignore Sort Title. simple: use Sort Title when set, then remove "
+                + "a leading The/A/An and punctuation. advanced: use Sort Title when set, then remove bracket "
+                + "annotations and articles, separate punctuation, and convert Roman numerals II-VIII.",
+                applyLive: ApplyTitleSortNormalization),
             Options.OptionItem.Toggle("Display", "Use the image cache (degraded thumbnails)",
                 () => _cfg.UseImageCache, v => _cfg.UseImageCache = v,
                 applyLive: () => _useImageCache = _cfg.UseImageCache),
@@ -1898,17 +1906,6 @@ internal sealed class MainWindow : Form, IMessageFilter
                 + "renderer (rounded selection + hover grow, but can stutter). Takes effect after restart."),
         };
 
-        var midGeneral = new[]
-        {
-            Options.OptionItem.Choice("Display", "Title sort normalization",
-                new[] { "without", "simple", "advanced" },
-                () => TitleSortNormalizer.ConfigValue(_cfg.TitleSortNormalizationMode),
-                v => _cfg.TitleSortNormalizationMode = TitleSortNormalizer.Parse(v),
-                "without: Sort Title (or Title) as-is. simple: remove a leading The/A/An and punctuation. "
-                + "advanced: remove bracket annotations and articles, separate punctuation, and convert Roman numerals II-VIII.",
-                applyLive: ApplyTitleSortNormalization),
-        };
-
         // Right panel tab = OptionItems (16:9 + load delay) on top, media-layout editor below.
         var rightOpts = new[]
         {
@@ -1945,7 +1942,6 @@ internal sealed class MainWindow : Form, IMessageFilter
         w.AddTabbedSection("Display", new (string, object, Action?)[]
         {
             ("General", general, null),
-            ("Middle · General", midGeneral, null),
             ("Middle · List", midList, null),
             ("Middle · Poster", midPoster, null),
             ("Right panel", rightTab, () => { rightApply(); mediaPanel.Apply(); }),

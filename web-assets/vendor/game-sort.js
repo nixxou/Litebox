@@ -5,6 +5,9 @@
     ["dateadded", "Date Added", "DateAdded"],
     ["datemodified", "Date Modified", "DateModified"],
     ["developer", "Developer", "Developer"],
+    // LaunchBox calls the ESRB/PEGI field "Rating"; LiteBox shows "ESRB" (its own column name) and
+    // places it where that label sorts. Label only — the XML value stays "Rating".
+    ["rating", "ESRB", "Rating"],
     ["favorite", "Favorite", "Favorite"],
     ["genre", "Genre", "Genre"],
     ["installed", "Installed", "Installed"],
@@ -19,7 +22,6 @@
     ["portable", "Portable", "Portable"],
     ["progress", "Progress", "Progress"],
     ["publisher", "Publisher", "Publisher"],
-    ["rating", "Rating", "Rating"],
     ["region", "Region", "Region"],
     ["releasedate", "Release Date", "ReleaseDate"],
     ["releaseyear", "Release Date Year", "ReleaseDateYear"],
@@ -72,6 +74,15 @@
     return key === "default" ? "Default" : (extraLabels[key] || key || "Title");
   }
 
+  // "No value" is null, never a sentinel like 0 or -1. sorted() ranks null last ascending and
+  // first descending, mirroring GameListView.ValueComparer, so a game with no year / no rating /
+  // never played lands in the same block on the desktop and here.
+  function num(v) { return v == null ? null : (isNaN(+v) ? null : +v); }
+  // Epoch 0 is how the payload spells "no date" — no game is dated 1970-01-01T00:00Z.
+  function date(v) { return +v > 0 ? +v : null; }
+  function text(v) { return String(v == null ? "" : v).toUpperCase(); }
+  function flag(v) { return v ? 1 : 0; }
+
   function value(g, key) {
     g = g || {};
     if (String(key || "").indexOf("custom:") === 0) {
@@ -80,40 +91,44 @@
       return "";
     }
     switch (key) {
-      case "dateadded": return +g.da || 0;
-      case "datemodified": return +g.dm || 0;
-      case "developer": return String(g.dev || "").toUpperCase();
-      case "favorite": return g.fav ? 1 : 0;
-      case "genre": return String(g.g || "").toUpperCase();
-      case "installed": return g.installed ? 1 : 0;
-      case "lastplayed": return +g.lp || 0;
-      case "launchboxid": return +g.dbId || -1;
-      case "mamehighscores": return g.mameHs ? 1 : 0;
-      case "maxplayers": return +g.maxPlayers || -1;
-      case "platform": return String(g.platform || "").toUpperCase();
+      case "dateadded": return date(g.da);
+      case "datemodified": return date(g.dm);
+      case "developer": return text(g.dev);
+      case "favorite": return flag(g.fav);
+      case "genre": return text(g.g);
+      // g.inst is IGame.Installed — NOT g.installed, which is the store-aware display flag.
+      case "installed": return flag(g.inst);
+      case "lastplayed": return date(g.lp);
+      case "launchboxid": return num(g.dbId);
+      case "mamehighscores": return flag(g.mameHs);
+      case "maxplayers": return num(g.maxPlayers);
+      case "platform": return text(g.platform);
       case "playcount": return +g.playCount || 0;
-      case "playmode": return String(g.playMode || "").toUpperCase();
+      case "playmode": return text(g.playMode);
       case "playtime": return +g.playTime || 0;
-      case "portable": return g.portable ? 1 : 0;
-      case "progress": return String(g.progress || "").toUpperCase();
-      case "publisher": return String(g.pub || "").toUpperCase();
-      case "rating": return String(g.esrb || "").toUpperCase();
-      case "region": return String(g.region || "").toUpperCase();
-      case "releasedate": return +g.rd || 0;
-      case "releaseyear": return parseInt(g.y, 10) || 0;
-      case "releasetype": return String(g.rt || "").toUpperCase();
-      case "series": return String(g.series || "").toUpperCase();
-      case "source": return String(g.source || "").toUpperCase();
-      case "starrating": return +g.ur || 0;
-      case "community": return +g.community || 0;
+      case "portable": return flag(g.portable);
+      case "progress": return text(g.progress);
+      case "publisher": return text(g.pub);
+      case "rating": return text(g.esrb);
+      case "region": return text(g.region);
+      case "releasedate": return date(g.rd);
+      // g.ry is the effective year (ReleaseYear, else the year inside ReleaseDate) — g.y is the
+      // formatted display string and must not drive the order.
+      case "releaseyear": return num(g.ry);
+      case "releasetype": return text(g.rt);
+      case "series": return text(g.series);
+      case "source": return text(g.source);
+      // g.sr is the local-or-community score the desktop sorts on; g.ur is user-only display.
+      case "starrating": return num(g.sr);
+      case "community": return num(g.community);
       case "votes": return +g.votes || 0;
-      case "completed": return g.completed ? 1 : 0;
-      case "broken": return g.broken ? 1 : 0;
-      case "apppath": return String(g.appPath || "").toUpperCase();
-      case "rahash": return String(g.raHash || "").toUpperCase();
-      case "status": return String(g.status || "").toUpperCase();
-      case "version": return String(g.version || "").toUpperCase();
-      case "manual": return g.mo == null ? 2147483647 : (+g.mo || 0);
+      case "completed": return flag(g.completed);
+      case "broken": return flag(g.broken);
+      case "apppath": return text(g.appPath);
+      case "rahash": return text(g.raHash);
+      case "status": return text(g.status);
+      case "version": return text(g.version);
+      case "manual": return num(g.mo);
       default: return String(g.cn != null ? g.cn : (g.t || "")).toUpperCase();
     }
   }
@@ -123,13 +138,20 @@
     var dir = state.dir === "desc" ? -1 : 1;
     return (games || []).map(function (g, i) { return { g: g, i: i }; }).sort(function (a, b) {
       var av = value(a.g, state.key), bv = value(b.g, state.key);
-      if (av < bv) return -dir;
-      if (av > bv) return dir;
-      // Old/generated playlists can legitimately contain the same ManualOrder
-      // (often zero) for every game. In that case the XML/source sequence is the
-      // only manual order available and must not be replaced by a title fallback.
+      // null = greatest, exactly like GameListView.ValueComparer: blanks sit at the bottom
+      // ascending and at the top descending, in both surfaces.
+      if (av == null || bv == null) {
+        if (av != null) return -dir;
+        if (bv != null) return dir;
+      } else {
+        if (av < bv) return -dir;
+        if (av > bv) return dir;
+      }
+      // Manual ranks are dense and unique (GameSortCatalog.ManualRanks); a tie can only mean a
+      // legacy payload with a raw ManualOrder, where the source sequence IS the manual order.
       if (state.key === "manual") return (a.i - b.i) * dir;
-      // LaunchBox-like deterministic fallback, then source order for exact duplicates.
+      // Tie key: title, ASCENDING even under a descending primary — GameListView applies
+      // .ThenBy (never .ThenByDescending) for the same reason.
       var at = value(a.g, "title"), bt = value(b.g, "title");
       if (at < bt) return -1;
       if (at > bt) return 1;
@@ -137,17 +159,16 @@
     }).map(function (x) { return x.g; });
   }
 
+  // One rule for every surface: a playlist's SortBy, applied ascending. The `bigBox` argument is
+  // kept so callers stay symmetrical, but BB-Web deliberately resolves the SAME order as LB-Web and
+  // the desktop — no per-client override exists in any real playlist file.
   function stateForPayload(payload, bigBox, globalState) {
     payload = payload || {};
-    var custom = payload.customSorts || [];
-    var hasBigBoxOverride = !!(bigBox && payload.bigBoxSortBy && compact(payload.bigBoxSortBy) !== "default");
-    var raw = payload.nodeKind === "playlist"
-      ? (hasBigBoxOverride ? payload.bigBoxSortBy : payload.sortBy)
-      : "Default";
-    var key = parse(raw, custom);
+    var raw = payload.nodeKind === "playlist" ? payload.sortBy : "Default";
+    var key = parse(raw, payload.customSorts || []);
     if (key === "manual" && (payload.autoPopulate || !payload.manualAvailable)) key = "default";
     if (key === "default") return { key: globalState.key, dir: globalState.dir, forced: false };
-    return { key: key, dir: hasBigBoxOverride && payload.bigBoxSortDescending ? "desc" : "asc", forced: true };
+    return { key: key, dir: "asc", forced: true };
   }
 
   function select(state, key, globalState) {
@@ -198,6 +219,19 @@
     catch (_) { return { key: "title", dir: "asc" }; }
   }
 
+  // The storage key carries the host's process token, so every LiteBox restart mints a new one.
+  // Without this sweep the browser would accumulate one dead entry per launch, forever.
+  function pruneForeignSessions(token) {
+    try {
+      var prefix = "litebox.game-sort.", stale = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(prefix) === 0 && k !== prefix + token) stale.push(k);
+      }
+      stale.forEach(function (k) { localStorage.removeItem(k); });
+    } catch (_) {}
+  }
+
   // One global order per host execution and per browser profile. The process token
   // prevents yesterday's sort from surviving a LiteBox restart. LB-Web and BB-Web
   // use the same origin/key, so navigation or separate tabs in that browser agree.
@@ -207,8 +241,15 @@
       sessionListeners.push(listener);
 
     if (!embedded()) {
-      var token = String(processToken || "tab");
+      // No token means the first payload was a synthetic one (an empty category, a merged
+      // category, a bare array). Refusing to connect leaves the caller on its default and lets a
+      // LATER payload — one that does carry the host's process token — establish the session.
+      // Falling back to a fixed key instead would persist the sort across LiteBox restarts, which
+      // is exactly what the per-execution scoping is there to prevent.
+      if (!processToken) return { key: "title", dir: "asc", deferred: true };
+      var token = String(processToken);
       browserStorageKey = "litebox.game-sort." + token;
+      pruneForeignSessions(token);
       if (!sessionConnected) {
         window.addEventListener("storage", function (e) {
           if (e.key === browserStorageKey && e.newValue) {

@@ -67,7 +67,10 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     internal static readonly HashSet<string> Modeled = new(StringComparer.Ordinal)
     {
         "PlaylistId", "Name", "NestedName", "Notes", "SortBy", "Category", "VideoPath", "ImageType", "SortTitle",
-        "LastGameId", "BigBoxView", "BigBoxTheme", "BigBoxSortByOverride", "BigBoxSortDescendingOverride",
+        // No BigBox sort-override entry: no such element appears in any real playlist file, so it is
+        // not modelled. Should a LaunchBox version write one, ExtraFields carries it through the
+        // round-trip untouched — which is what an unverified field deserves.
+        "LastGameId", "BigBoxView", "BigBoxTheme",
         "AutoPopulate", "IncludeWithPlatforms", "HideInBigBox",
     };
 
@@ -91,9 +94,8 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     public IReadOnlyCollection<string> ExtraFieldNames => _extra != null ? (IReadOnlyCollection<string>)_extra.Keys : Array.Empty<string>();
 
     public string PlaylistIdValue, NameValue, NestedNameValue, NotesValue, SortByValue, CategoryValue,
-                  VideoPathValue, ImageTypeValue, SortTitleValue, LastGameIdValue, BigBoxViewValue, BigBoxThemeValue,
-                  BigBoxSortByOverrideValue;
-    public bool AutoPopulateValue, IncludeWithPlatformsValue, HideInBigBoxValue, BigBoxSortDescendingOverrideValue;
+                  VideoPathValue, ImageTypeValue, SortTitleValue, LastGameIdValue, BigBoxViewValue, BigBoxThemeValue;
+    public bool AutoPopulateValue, IncludeWithPlatformsValue, HideInBigBoxValue;
     public string ImagesRootValue;   // <LB>\Images, for playlist images
     public string FileValue;         // source xml (one playlist per file) — carried in every op
 
@@ -173,8 +175,6 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     public override string LastGameId { get => LastGameIdValue ?? ""; set { LastGameIdValue = value; Rec("LastGameId", value); } }
     public override string BigBoxView { get => BigBoxViewValue ?? ""; set { BigBoxViewValue = value; Rec("BigBoxView", value); } }
     public override string BigBoxTheme { get => BigBoxThemeValue ?? ""; set { BigBoxThemeValue = value; Rec("BigBoxTheme", value); } }
-    internal string BigBoxSortByOverride { get => BigBoxSortByOverrideValue ?? ""; set { BigBoxSortByOverrideValue = value; Rec("BigBoxSortByOverride", value); } }
-    internal bool BigBoxSortDescendingOverride { get => BigBoxSortDescendingOverrideValue; set { BigBoxSortDescendingOverrideValue = value; Rec("BigBoxSortDescendingOverride", value ? "true" : "false"); } }
     public override bool AutoPopulate { get => AutoPopulateValue; set { AutoPopulateValue = value; Rec("AutoPopulate", value ? "true" : "false"); } }
     public override bool IncludeWithPlatforms { get => IncludeWithPlatformsValue; set { IncludeWithPlatformsValue = value; Rec("IncludeWithPlatforms", value ? "true" : "false"); } }
     public override bool HideInBigBox { get => HideInBigBoxValue; set { HideInBigBoxValue = value; Rec("HideInBigBox", value ? "true" : "false"); } }
@@ -234,20 +234,42 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
 
     public override IGame[] GetAllGames(bool sort)
     {
-        if (AutoPopulateValue)
-        {
-            if (_allGames == null || !_filters.Any(f => !string.IsNullOrWhiteSpace(f.FieldKey)))
-                return Array.Empty<IGame>();
+        // An auto-populate playlist whose rules cannot be resolved — none written yet, or every one
+        // of them naming a field LiteBox has no equivalent for — falls back to the stored
+        // <PlaylistGame> rows instead of showing nothing. A playlist that LaunchBox fills must not
+        // look empty here just because we could not read its recipe.
+        if (AutoPopulateValue && _allGames != null && HasEvaluableFilter())
             return _allGames().Where(g => MatchesFilters(g, _filters)).ToArray();
-        }
         return _games.OrderBy(pg => pg.ManualOrderValue).Select(pg => _resolve?.Invoke(pg.GameIdValue)).Where(g => g != null).ToArray();
+    }
+
+    private bool HasEvaluableFilter()
+    {
+        foreach (var f in _filters)
+        {
+            if (f == null || string.IsNullOrWhiteSpace(f.FieldKey)) continue;
+            var field = PlaylistFilterCatalog.Find(f.FieldKey);
+            // A field the catalog does not know is assumed to be a custom field, which IS evaluable.
+            if (field == null || field.Evaluable) return true;
+        }
+        return false;
     }
 
     public override int GetGameCount(bool includeHidden, bool includeBroken) => GetAllGames(false).Length;
     public override bool HasGames(bool includeHidden, bool includeBroken) => GetAllGames(false).Length > 0;
 
-    /// <summary>LaunchBox combines different fields with AND and repeated rules for one field with OR.
-    /// Arcade Beat Em Ups, for example, is Platform=Arcade AND (Genre=A OR Genre=B ...).</summary>
+    /// <summary>Different fields are ANDed. Repeated rules on ONE field combine by their nature:
+    ///
+    ///   • POSITIVE rules (Equal To, Contains, Starts With, Has At Least One Of…) are ORed. This is
+    ///     what makes the stock playlists work — Arcade Beat Em Ups is Platform=Arcade AND
+    ///     (Genre contains "Fighter / 2D" OR "Fighter / 2.5D" OR …); ANDing them yields nothing.
+    ///   • NEGATIVE and ORDERING rules (Is Not Equal To, Doesn't Contain, Is Greater/Less Than,
+    ///     Is Empty…) are ANDed. ORing them would break the obvious reading of a range:
+    ///     "Play Count Is Greater Than 5" + "Play Count Is Less Than 20" must be an interval,
+    ///     and ORing two exclusions never excludes anything.
+    ///
+    /// A rule LiteBox cannot evaluate (Steam achievements, controller support…) is SKIPPED rather
+    /// than failed: an unsupported field must not silently empty a playlist that LaunchBox fills.</summary>
     internal static bool MatchesFilters(IGame g, IEnumerable<PlaylistFilterDef> filters)
     {
         var groups = (filters ?? Enumerable.Empty<PlaylistFilterDef>())
@@ -256,83 +278,62 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
         bool any = false;
         foreach (var group in groups)
         {
+            var field = PlaylistFilterCatalog.Find(group.Key, CustomFieldNamesFor(g));
+            if (field == null || !field.Evaluable) continue;   // unknown/unsupported → not a constraint
+
+            bool sawPositive = false, positiveHit = false;
+            foreach (var rule in group)
+            {
+                var cmp = PlaylistFilterCatalog.FindComparison(rule.ComparisonTypeKey, field.Kind);
+                if (cmp == null) continue;
+                bool hit = PlaylistFilterCatalog.Compare(ReadField(g, field), cmp, rule.Value);
+                if (cmp.Positive)
+                {
+                    sawPositive = true;
+                    positiveHit |= hit;
+                }
+                else if (!hit) return false;   // ANDed
+            }
+            if (sawPositive && !positiveHit) return false;
             any = true;
-            if (!group.Any(f => Match(g, f))) return false;
         }
         return any;
     }
 
-    internal static bool Match(IGame g, PlaylistFilterDef f) => Compare(Field(g, f.FieldKey), f.ComparisonTypeKey, f.Value);
+    internal static bool Match(IGame g, PlaylistFilterDef f)
+    {
+        var field = PlaylistFilterCatalog.Find(f?.FieldKey, CustomFieldNamesFor(g));
+        if (field == null || !field.Evaluable) return false;
+        var cmp = PlaylistFilterCatalog.FindComparison(f.ComparisonTypeKey, field.Kind);
+        return cmp != null && PlaylistFilterCatalog.Compare(ReadField(g, field), cmp, f.Value);
+    }
 
-    private static string Field(IGame g, string key)
+    /// <summary>Built-in field, else the game's custom field of that name.</summary>
+    private static string ReadField(IGame g, PlaylistFilterField field)
+    {
+        var builtin = PlaylistFilterCatalog.Read(g, field);
+        if (builtin != null) return builtin;
+        try
+        {
+            foreach (var cf in g.GetAllCustomFields() ?? Array.Empty<ICustomField>())
+                if (string.Equals(cf?.Name?.Trim(), field.Key, StringComparison.OrdinalIgnoreCase))
+                    return cf.Value ?? "";
+        }
+        catch { }
+        return "";
+    }
+
+    // A rule naming a custom field must resolve even though the catalog's built-in list has no
+    // entry for it; the game itself carries the available names.
+    private static string[] CustomFieldNamesFor(IGame g)
     {
         try
         {
-            switch ((key ?? "").ToLowerInvariant())
-            {
-                case "platform": return g.Platform;
-                case "title": case "name": return g.Title;
-                case "sorttitle": return g.SortTitle;
-                case "developer": return g.Developer;
-                case "publisher": return g.Publisher;
-                case "genre": case "genres": return g.GenresString;
-                case "region": return g.Region;
-                case "playmode": return g.PlayMode;
-                case "rating": return g.Rating;
-                case "status": return g.Status;
-                case "version": return g.Version;
-                case "series": return g.Series;
-                case "source": case "storefront": return g.Source;
-                case "releasetype": return g.ReleaseType;
-                case "maxplayers": return g.MaxPlayers?.ToString(CultureInfo.InvariantCulture);
-                case "releaseyear": return g.ReleaseYear?.ToString(CultureInfo.InvariantCulture);
-                case "starrating": return g.StarRatingFloat.ToString(CultureInfo.InvariantCulture);
-                case "communitystarrating": return g.CommunityStarRating.ToString(CultureInfo.InvariantCulture);
-                case "favorite": return g.Favorite ? "true" : "false";
-                case "completed": return g.Completed ? "true" : "false";
-                case "broken": return g.Broken ? "true" : "false";
-                case "hide": case "hidden": return g.Hide ? "true" : "false";
-                case "installed": return g.Installed.HasValue ? (g.Installed.Value ? "true" : "false") : "";
-                case "playcount": case "played": return g.PlayCount.ToString(CultureInfo.InvariantCulture);
-                case "playtime": return g.PlayTime.ToString(CultureInfo.InvariantCulture);
-                case "dateadded": return Date(g.DateAdded);
-                case "releasedate": return Date(g.ReleaseDate);
-                case "lastplayed": case "lastplayeddate": return Date(g.LastPlayedDate);
-                default: return null;
-            }
+            return (g.GetAllCustomFields() ?? Array.Empty<ICustomField>())
+                .Select(c => c?.Name?.Trim()).Where(n => !string.IsNullOrWhiteSpace(n)).ToArray()!;
         }
-        catch { return null; }
+        catch { return Array.Empty<string>(); }
     }
-
-    private static string Date(DateTime? value)
-        => value.HasValue && value.Value != default
-            ? value.Value.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture) : "";
-
-    private static bool Compare(string field, string cmpKey, string target)
-    {
-        field ??= ""; target ??= "";
-        switch (Norm(cmpKey))
-        {
-            case "equalto": case "isequalto": return string.Equals(field, target, OIC);
-            case "notequalto": case "isnotequalto": return !string.Equals(field, target, OIC);
-            case "contains": return field.IndexOf(target, OIC) >= 0;
-            case "doesnotcontain": case "notcontains": return field.IndexOf(target, OIC) < 0;
-            case "startswith": return field.StartsWith(target, OIC);
-            case "endswith": return field.EndsWith(target, OIC);
-            case "isempty": return field.Length == 0;
-            case "isnotempty": return field.Length != 0;
-            case "greaterthan": case "isgreaterthan":
-                return double.TryParse(field, out var a1) && double.TryParse(target, out var b1)
-                    ? a1 > b1 : string.Compare(field, target, OIC) > 0;
-            case "lessthan": case "islessthan":
-                return double.TryParse(field, out var a2) && double.TryParse(target, out var b2)
-                    ? a2 < b2 : string.Compare(field, target, OIC) < 0;
-            default: return false;
-        }
-    }
-
-    private static string Norm(string key)
-        => new((key ?? "").Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 }
 
 internal static class PlaylistCatalog
@@ -365,8 +366,6 @@ internal static class PlaylistCatalog
                 LastGameIdValue = (string)pe.Element("LastGameId"),
                 BigBoxViewValue = (string)pe.Element("BigBoxView"),
                 BigBoxThemeValue = (string)pe.Element("BigBoxTheme"),
-                BigBoxSortByOverrideValue = (string)pe.Element("BigBoxSortByOverride"),
-                BigBoxSortDescendingOverrideValue = ((string)pe.Element("BigBoxSortDescendingOverride") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
                 AutoPopulateValue = ((string)pe.Element("AutoPopulate") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
                 IncludeWithPlatformsValue = ((string)pe.Element("IncludeWithPlatforms") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
                 HideInBigBoxValue = ((string)pe.Element("HideInBigBox") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),

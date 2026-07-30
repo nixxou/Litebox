@@ -83,6 +83,10 @@ internal sealed class GameListView : ListView
     public int TotalCount => _all.Length;
 
     public Func<IGame, object> SortGetter;
+    /// <summary>Secondary key applied to ties, ALWAYS ascending — including under a descending
+    /// primary. Keeps the desktop order identical to the web clients, whose sort applies the
+    /// direction to the primary key only (vendor/game-sort.js :: sorted).</summary>
+    public Func<IGame, object> SortTieGetter;
     public bool SortAscending = true;
     public GameColumn SortGlyphColumn;
     public Func<IGame, bool> FilterPredicate;
@@ -386,10 +390,16 @@ internal sealed class GameListView : ListView
         int prevLen = _view.Length;   // to detect a shrink (see the scroll-clamp below)
         IEnumerable<IGame> q = _all;
         if (FilterPredicate != null) q = q.Where(SafeFilter);
-        List<IGame> list = SortGetter == null
-            ? q.ToList()
-            : (SortAscending ? q.OrderBy(SortGetter, ValueComparer.Instance)
-                             : q.OrderByDescending(SortGetter, ValueComparer.Instance)).ToList();
+        List<IGame> list;
+        if (SortGetter == null) list = q.ToList();
+        else
+        {
+            var ordered = SortAscending ? q.OrderBy(SortGetter, ValueComparer.Instance)
+                                        : q.OrderByDescending(SortGetter, ValueComparer.Instance);
+            // ThenBy — never ThenByDescending: the tie key stays ascending in both directions.
+            if (SortTieGetter != null) ordered = ordered.ThenBy(SortTieGetter, ValueComparer.Instance);
+            list = ordered.ToList();
+        }
         _view = list.ToArray();
         RefreshHeaderGlyphs();
         bool swapped = _setSwapped; _setSwapped = false;
@@ -642,17 +652,10 @@ internal sealed class GameListView : ListView
         try { SendMessage(Handle, LVM_SETEXTENDEDLISTVIEWSTYLE, (IntPtr)LVS_EX_DOUBLEBUFFER, (IntPtr)LVS_EX_DOUBLEBUFFER); } catch { }
     }
 
-    private sealed class ValueComparer : IComparer<object>
+    // The order rule itself lives in SortValueComparer so the desktop/web parity self-test can
+    // exercise the very comparer the list uses, instead of a copy of it.
+    private static class ValueComparer
     {
-        public static readonly ValueComparer Instance = new();
-        public int Compare(object a, object b)
-        {
-            if (a == null && b == null) return 0;
-            if (a == null) return 1;
-            if (b == null) return -1;
-            if (a is string sa && b is string sb) return string.Compare(sa, sb, StringComparison.OrdinalIgnoreCase);
-            if (a is IComparable ca && a.GetType() == b.GetType()) { try { return ca.CompareTo(b); } catch { } }
-            return string.Compare(a.ToString(), b.ToString(), StringComparison.OrdinalIgnoreCase);
-        }
+        public static readonly SortValueComparer Instance = SortValueComparer.Instance;
     }
 }

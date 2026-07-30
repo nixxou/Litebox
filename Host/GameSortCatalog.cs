@@ -14,18 +14,10 @@ internal sealed record GameSortDefinition(string Key, string Label, string Launc
 /// </summary>
 internal sealed class DeferredGameSort
 {
-    private string _previousKey = "title";
-    private bool _previousAscending = true;
-
     public bool Pending { get; private set; }
 
     public void Stage(ref string sessionKey, ref bool sessionAscending, string key, bool ascending)
     {
-        if (!Pending)
-        {
-            _previousKey = sessionKey;
-            _previousAscending = sessionAscending;
-        }
         sessionKey = key;
         sessionAscending = ascending;
         Pending = true;
@@ -38,28 +30,15 @@ internal sealed class DeferredGameSort
         string selectedKey,
         bool selectedAscending)
     {
-        if (!Pending)
-        {
-            if (updatesSession)
-            {
-                sessionKey = selectedKey;
-                sessionAscending = selectedAscending;
-            }
-            return;
-        }
+        // A NODE-LOCAL pick (Manual, or any re-sort inside a playlist that imposes its own order)
+        // is not a change of the session order, so it must leave a staged kiosk choice alone —
+        // picking Manual in a playlist should not silently throw away what was chosen in the kiosk.
+        if (!updatesSession) return;
 
-        // Any explicit desktop choice cancels the deferred kiosk choice. A global
-        // desktop choice replaces it; a node-local choice restores the prior global.
-        if (updatesSession)
-        {
-            sessionKey = selectedKey;
-            sessionAscending = selectedAscending;
-        }
-        else
-        {
-            sessionKey = _previousKey;
-            sessionAscending = _previousAscending;
-        }
+        // A global desktop pick IS the user changing the order themselves: it replaces the staged
+        // kiosk choice, which then never reaches the next node load.
+        sessionKey = selectedKey;
+        sessionAscending = selectedAscending;
         Pending = false;
     }
 
@@ -82,6 +61,11 @@ internal static class GameSortCatalog
         new("dateadded",       "Date Added",                  "DateAdded"),
         new("datemodified",    "Date Modified",               "DateModified"),
         new("developer",       "Developer",                   "Developer"),
+        // LaunchBox labels the ESRB/PEGI field "Rating" and the score "Star Rating", which reads
+        // badly side by side. LiteBox shows "ESRB" — the name of its own list column — and places
+        // it where that label sorts. Only the LABEL differs: the XML value stays "Rating", and
+        // Parse still accepts "Rating", "ESRB" and the "esrb" alias.
+        new("rating",          "ESRB",                        "Rating"),
         new("favorite",        "Favorite",                    "Favorite"),
         new("genre",           "Genre",                       "Genre"),
         new("installed",       "Installed",                   "Installed"),
@@ -96,7 +80,6 @@ internal static class GameSortCatalog
         new("portable",        "Portable",                    "Portable"),
         new("progress",        "Progress",                    "Progress"),
         new("publisher",       "Publisher",                   "Publisher"),
-        new("rating",          "Rating",                      "Rating"),
         new("region",          "Region",                      "Region"),
         new("releasedate",     "Release Date",                "ReleaseDate"),
         new("releaseyear",     "Release Date Year",           "ReleaseDateYear"),
@@ -177,16 +160,50 @@ internal static class GameSortCatalog
         return result;
     }
 
-    public static string[] CustomFieldNames(IEnumerable<IGame>? games)
-        => (games ?? Array.Empty<IGame>())
-            .Where(g => g != null)
-            .SelectMany(SafeCustomFields)
-            .Select(f => Safe(() => f.Name)?.Trim())
-            .Where(n => !string.IsNullOrWhiteSpace(n))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
-            .ToArray()!;
+    // Collecting the custom-field names walks the WHOLE library and allocates an ICustomField[]
+    // per game. The Arrange By menu, the playlist editor, every games.json and every kiosk sort
+    // message need that list, so it is computed at most once per CustomFieldsTtlMs. Adding a
+    // custom field therefore shows up in the menus within a few seconds instead of instantly —
+    // an acceptable trade for not re-scanning the library on every dropdown click.
+    private const int CustomFieldsTtlMs = 5000;
+    private static readonly object CustomFieldsLock = new();
+    private static string[]? _customFieldNames;
+    private static long _customFieldNamesAt;
 
+    /// <summary>Drops the cached custom-field names — call after the library changes in a way
+    /// that can introduce one (import, game edit).</summary>
+    public static void InvalidateCustomFieldNames()
+    {
+        lock (CustomFieldsLock) _customFieldNames = null;
+    }
+
+    public static string[] CustomFieldNames(IEnumerable<IGame>? games)
+    {
+        lock (CustomFieldsLock)
+        {
+            long now = Environment.TickCount64;
+            if (_customFieldNames != null && now - _customFieldNamesAt < CustomFieldsTtlMs)
+                return _customFieldNames;
+            _customFieldNames = Collect(games);
+            _customFieldNamesAt = now;
+            return _customFieldNames;
+        }
+
+        static string[] Collect(IEnumerable<IGame>? source)
+            => (source ?? Array.Empty<IGame>())
+                .Where(g => g != null)
+                .SelectMany(SafeCustomFields)
+                .Select(f => Safe(() => f.Name)?.Trim())
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToArray()!;
+    }
+
+    /// <summary>Sort key for one field. A MISSING value is returned as null on purpose: ValueComparer
+    /// ranks null as the greatest value, which keeps blanks at the bottom ascending / the top descending —
+    /// the rule LiteBox's own columns always used. vendor/game-sort.js mirrors it exactly.
+    /// Empty TEXT stays "" (an empty string is a value, not a hole), as it always did.</summary>
     public static Func<IGame, object?> Getter(string key, TitleSortNormalization titleMode)
     {
         if (key != null && key.StartsWith(CustomPrefix, StringComparison.OrdinalIgnoreCase))
@@ -196,16 +213,16 @@ internal static class GameSortCatalog
         }
         return key?.ToLowerInvariant() switch
         {
-            "dateadded"      => g => Safe(() => (object)g.DateAdded),
-            "datemodified"   => g => Safe(() => (object)g.DateModified),
+            "dateadded"      => g => Date(Safe(() => (DateTime?)g.DateAdded)),
+            "datemodified"   => g => Date(Safe(() => (DateTime?)g.DateModified)),
             "developer"      => g => Safe(() => (object)g.Developer) ?? "",
             "favorite"       => g => Safe(() => (object)g.Favorite),
             "genre"          => g => Safe(() => (object)g.GenresString) ?? "",
             "installed"      => g => Safe(() => (object)(g.Installed == true)),
-            "lastplayed"     => g => Safe(() => (object?)g.LastPlayedDate) ?? DateTime.MinValue,
-            "launchboxid"    => g => Safe(() => (object?)g.LaunchBoxDbId) ?? -1,
+            "lastplayed"     => g => Date(Safe(() => g.LastPlayedDate)),
+            "launchboxid"    => g => Safe(() => (object?)g.LaunchBoxDbId),
             "mamehighscores" => g => MameHighScoresSupported(g),
-            "maxplayers"     => g => Safe(() => (object?)g.MaxPlayers) ?? -1,
+            "maxplayers"     => g => Safe(() => (object?)g.MaxPlayers),
             "platform"       => g => Safe(() => (object)g.Platform) ?? "",
             "playcount"      => g => Safe(() => (object)g.PlayCount),
             "playmode"       => g => Safe(() => (object)g.PlayMode) ?? "",
@@ -215,34 +232,59 @@ internal static class GameSortCatalog
             "publisher"      => g => Safe(() => (object)g.Publisher) ?? "",
             "rating"         => g => Safe(() => (object)g.Rating) ?? "",
             "region"         => g => Safe(() => (object)g.Region) ?? "",
-            "releasedate"    => g => Safe(() => (object?)g.ReleaseDate) ?? DateTime.MinValue,
-            "releaseyear"    => g => Safe(() => (object?)g.ReleaseYear) ?? -1,
+            "releasedate"    => g => Date(Safe(() => g.ReleaseDate)),
+            "releaseyear"    => g => (object?)EffectiveYear(g),
             "releasetype"    => g => Safe(() => (object)g.ReleaseType) ?? "",
             "series"         => g => Safe(() => (object)g.Series) ?? "",
             "source"         => g => Safe(() => (object)g.Source) ?? "",
-            "starrating"     => g => Safe(() => (object)g.CommunityOrLocalStarRating),
+            // Local rating when the user set one, community rating otherwise — the same value the
+            // Rating column shows. An unrated game has NO score (null), it does not score zero.
+            "starrating"     => g => Score(Safe(() => (double?)g.CommunityOrLocalStarRating)),
             "status"         => g => Safe(() => (object)g.Status) ?? "",
             "version"        => g => Safe(() => (object)g.Version) ?? "",
             _                => g => TitleSortNormalizer.Normalize(g, titleMode),
         };
     }
 
+    /// <summary>An unset date is a hole, not 01/01/0001.</summary>
+    private static object? Date(DateTime? value)
+        => value.HasValue && value.Value != default ? value.Value : null;
+
+    /// <summary>An absent score is a hole, not a zero — otherwise unrated games would outrank
+    /// nothing and still sit before the 1-star ones.</summary>
+    private static object? Score(double? value)
+        => value.HasValue && value.Value > 0 ? value.Value : null;
+
+    /// <summary>LaunchBox's "Release Date Year": the explicit ReleaseYear, else the year carried by
+    /// ReleaseDate. Shared by the Year column, the Arrange By key and the web payload so the value a
+    /// surface DISPLAYS is the value it SORTS on.</summary>
+    public static int? EffectiveYear(IGame game)
+    {
+        try { var y = game?.ReleaseYear; if (y.HasValue && y.Value > 1950 && y.Value < 2100) return y; } catch { }
+        try { var d = game?.ReleaseDate; if (d.HasValue && d.Value.Year > 1950 && d.Value.Year < 2100) return d.Value.Year; } catch { }
+        return null;
+    }
+
     public static bool MameHighScoresSupported(IGame game)
     {
         if (game == null) return false;
-        // In a real LaunchBox process the concrete Game exposes the exact computed property.
-        try
-        {
-            var p = game.GetType().GetProperty("HasMameHighScoreSupport");
-            if (p?.PropertyType == typeof(bool)) return (bool)p.GetValue(game);
-        }
-        catch { }
-
-        // LiteBox's XML-backed HostGame cannot call that concrete property. Its closest faithful
-        // local equivalent is a game that can run through the supported MAME/FBNeo integration.
+        // Cache FIRST: this runs once per game per games.json payload, and both fallbacks below are
+        // expensive (a reflection probe, or a walk over every emulator and its platforms).
         var id = Safe(() => game.Id) ?? "";
-        if (id.Length == 0) return Safe(() => Mame.MameLeaderboards.IsMameGame(game));
-        return MameSupportCache.GetOrAdd(id, _ => Safe(() => Mame.MameLeaderboards.IsMameGame(game)));
+        if (id.Length > 0 && MameSupportCache.TryGetValue(id, out bool cached)) return cached;
+
+        bool supported;
+        // In a real LaunchBox process the concrete Game exposes the exact computed property.
+        var probe = Safe(() => game.GetType().GetProperty("HasMameHighScoreSupport"));
+        if (probe?.PropertyType == typeof(bool) && Safe(() => probe.GetValue(game)) is bool value)
+            supported = value;
+        else
+            // LiteBox's XML-backed HostGame cannot call that concrete property. Its closest faithful
+            // local equivalent is a game that can run through the supported MAME/FBNeo integration.
+            supported = Safe(() => Mame.MameLeaderboards.IsMameGame(game));
+
+        if (id.Length > 0) MameSupportCache[id] = supported;
+        return supported;
     }
 
     private static string Compact(string value)

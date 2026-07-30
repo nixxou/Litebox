@@ -107,6 +107,10 @@
   // Recherche avancée (rail ☰) : modale à onglets, filtrage client transitoire (Phase 1 : Année).
   var advOpen = false, advModalEl = null, advTab = 0, advFocus = 0, advActive = false, advTargets = [];
   var advCrit = null;          // critères courants (objet, cf. defaultCrit)
+  // Critères NORMALISÉS réellement appliqués à la liste. Distinct de advCrit : appliquer une entrée
+  // d'historique filtre sans toucher à l'état d'édition du modal. arrangeFilteredGames s'en sert
+  // pour reconstruire le même filtre quand on change l'ordre.
+  var advApplied = null;
   var advTextKind = "publisher";   // champ texte courant pour le clavier adv ("publisher" | "developer")
   var ADV_TABS = ["general", "genre", "publisher", "developer", "history"];
   // Dispositions de touches (lettres + chiffres) ; la rangée du bas est commune. Choix
@@ -1275,8 +1279,7 @@
   function applyArrangePayload(payload) {
     payload = payload || {};
     if (!bbwSortSessionConnected) {
-      bbwSortSessionConnected = true;
-      bbwGlobalSort = window.LBGameSort.connectSession(payload.sortSessionId, function (state) {
+      var session = window.LBGameSort.connectSession(payload.sortSessionId, function (state) {
         bbwGlobalSort = state;
         // Configured playlist order and contextual Manual are node-local.
         if (bbwActiveSort.forced || bbwActiveSort.key === "manual") {
@@ -1294,6 +1297,9 @@
         }
         reflectSystemArrange();
       });
+      // Without a process token (synthetic payload) the session stays unconnected, so a later real
+      // payload can establish it instead of pinning a key that outlives the LiteBox process.
+      if (!session.deferred) { bbwSortSessionConnected = true; bbwGlobalSort = session; }
     }
     bbwSortPayload = payload;
     bbwRawGames = applyLibraryFilter((payload.games || []).slice());
@@ -1308,8 +1314,11 @@
   // Reordering and filtering are orthogonal: changing Arrange By from the rail
   // keeps the current quick/favorite/advanced filter and only changes row order.
   function arrangeFilteredGames(all) {
-    if (advActive && advCrit) {
-      var fns = buildAdvPredicate(normalizedCrit());
+    // advApplied is the criteria set actually APPLIED, which is not always advCrit: applying an
+    // entry from the history filters the list without touching the modal's editing state. Rebuilding
+    // the predicate from advCrit would silently swap the user's filter on the next re-sort.
+    if (advActive && advApplied) {
+      var fns = buildAdvPredicate(advApplied);
       return fns.length ? all.filter(function (g) {
         return fns.every(function (fn) { return fn(g); });
       }) : all;
@@ -1654,6 +1663,7 @@
   function applyAdvCrit(n, save) {
     var fns = buildAdvPredicate(n);
     advActive = fns.length > 0;
+    advApplied = advActive ? n : null;
     if (advActive && save) saveAdvHistory(n);
     favOnly = false; searchQuery = "";   // un seul filtre rapide à la fois
     var arr = fns.length ? DATA.gamesAll.filter(function (g) { return fns.every(function (f) { return f(g); }); }) : DATA.gamesAll;
@@ -1668,7 +1678,7 @@
   }
   function applyAdvanced() { applyAdvCrit(normalizedCrit(), true); }
   function clearAdvanced() {
-    advActive = false; advCrit = null;
+    advActive = false; advCrit = null; advApplied = null;
     DATA.games = DATA.gamesAll; DATA.platformTotal = DATA.platformTotalAll;
     setupList("games", DATA.games.map(function (g) { return g.t; })); markGameStars("games");
     shownGame = -1; setSelected("games", 0, { instant: true });
@@ -2204,7 +2214,7 @@
   // Réinitialise les filtres transitoires (changement de plateforme) : recherche vidée + favoris.
   function resetSearch() {
     searchQuery = ""; favOnly = false; if (searchOpen) closeSearch();
-    advActive = false; advCrit = null; if (advOpen) closeAdvanced(); updateAdvIndicator();
+    advActive = false; advCrit = null; advApplied = null; if (advOpen) closeAdvanced(); updateAdvIndicator();
   }
   function paintSearch() {
     if (!searchModalEl) return;

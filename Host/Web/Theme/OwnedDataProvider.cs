@@ -371,20 +371,18 @@ internal static class OwnedDataProvider
         WebStoreState.EnsureFresh();
         var titleSortMode = TitleSortNormalizer.ConfiguredMode();
         var gameArray = games.Where(g => g != null && Allowed(g, st)).ToArray();
-        var manual = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        if (playlist != null)
-            foreach (var pg in SafeValue(() => playlist.GetAllPlaylistGames()) ?? Array.Empty<IPlaylistGame>())
-            {
-                var id = Safe(() => pg.GameId) ?? "";
-                if (id.Length > 0) manual[id] = SafeValue(() => pg.ManualOrder);
-            }
+        // DENSE ranks, not the raw ManualOrder: LaunchBox writes <ManualOrder>0</ManualOrder> on
+        // every row of a manual playlist and lets the document order carry the real sequence.
+        // ManualRanks resolves that the same way the desktop does, so both surfaces get unique,
+        // directly comparable keys instead of a wall of zeroes to break ties over.
+        var manual = playlist != null
+            ? GameSortCatalog.ManualRanks(SafeValue(() => playlist.GetAllPlaylistGames()))
+            : new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var items = gameArray.Select(g => LightItem(g, titleSortMode,
             manual.TryGetValue(Safe(() => g.Id) ?? "", out var order) ? order : (int?)null)).ToArray();
         var name = playlist != null ? Safe(() => playlist.Name) ?? "" : (plat != null ? plat.Name : "");
         bool autoPopulate = playlist != null && SafeValue(() => playlist.AutoPopulate);
         string sortBy = playlist == null ? "Default" : (Safe(() => playlist.SortBy) ?? "Default");
-        string bigBoxSortBy = playlist is HostPlaylist hp ? hp.BigBoxSortByOverride : "";
-        bool bigBoxSortDescending = playlist is HostPlaylist hp2 && hp2.BigBoxSortDescendingOverride;
         return new
         {
             platform = name,
@@ -392,9 +390,9 @@ internal static class OwnedDataProvider
             platformLogoImg = PlatformLogoUrl(plat),
             platformTotal = items.Length,
             nodeKind = playlist == null ? "platform" : "playlist",
+            // One SortBy for the three surfaces: the desktop, LB-Web and BB-Web all read this and
+            // all apply it ascending. No BigBox-specific override — see HostPlaylist.Modeled.
             sortBy,
-            bigBoxSortBy,
-            bigBoxSortDescending,
             autoPopulate,
             manualAvailable = playlist != null && !autoPopulate,
             sortSessionId = SortSessionId,
@@ -435,7 +433,7 @@ internal static class OwnedDataProvider
         => new
         {
             platform = "", platformLogo = "", platformLogoImg = (string)null, platformTotal = 0,
-            nodeKind = "platform", sortBy = "Default", bigBoxSortBy = "", bigBoxSortDescending = false, autoPopulate = false,
+            nodeKind = "platform", sortBy = "Default", autoPopulate = false,
             manualAvailable = false, sortSessionId = SortSessionId,
             customSorts = Array.Empty<string>(), games = Array.Empty<object>(),
         };
@@ -458,6 +456,15 @@ internal static class OwnedDataProvider
             community = SafeValue(() => gm.CommunityStarRating),
             votes = SafeInt(() => gm.CommunityStarRatingTotalVotes),
             lp = SafeLastPlayedMs(gm),
+            // ── Arrange By keys ──────────────────────────────────────────────────────────────
+            // Kept SEPARATE from the display fields above, which carry web-only semantics the
+            // desktop does not share: ur is user-only, y is a formatted string, installed is
+            // store-aware. Sorting on those is what made the two surfaces disagree. Every key
+            // below is the value GameSortCatalog.Getter feeds the desktop list, and null means
+            // "no value" — it ranks last ascending (game-sort.js :: sorted).
+            sr = SafeDoubleN(() => gm.CommunityOrLocalStarRating),
+            ry = GameSortCatalog.EffectiveYear(gm),
+            inst = SafeBool(() => gm.Installed == true),
             da = SafeDateMs(() => gm.DateAdded),
             dm = SafeDateMs(() => gm.DateModified),
             esrb = Safe(() => gm.Rating),
@@ -929,6 +936,8 @@ internal static class OwnedDataProvider
     private static int SafeInt(Func<int?> f) { try { return f() ?? 0; } catch { return 0; } }
     private static bool SafeBool(Func<bool> f) { try { return f(); } catch { return false; } }
     private static int? SafeIntN(Func<int?> f) { try { return f(); } catch { return null; } }
+    /// <summary>Sortable score: null (not 0) when there is no rating at all, so it ranks last.</summary>
+    private static double? SafeDoubleN(Func<double> f) { try { var v = f(); return v > 0 ? v : (double?)null; } catch { return null; } }
 
     private static void Log(string msg) => LbLog.Info("web", "[theme] " + msg);
 }

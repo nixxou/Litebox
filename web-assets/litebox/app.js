@@ -2481,8 +2481,7 @@
   function lbApplySortPayload(payload) {
     payload = payload || {};
     if (!lbSortSessionConnected) {
-      lbSortSessionConnected = true;
-      lbGlobalSort = window.LBGameSort.connectSession(payload.sortSessionId, function (state) {
+      var session = window.LBGameSort.connectSession(payload.sortSessionId, function (state) {
         lbGlobalSort = state;
         // A configured playlist or a contextual Manual choice remains local.
         if (lbActiveSort.forced || lbActiveSort.key === "manual") return;
@@ -2491,6 +2490,9 @@
         if (lbRawGames.length) renderGames();
         lbReflectArrange();
       });
+      // A synthetic payload (empty or merged category, bare array) carries no process token, so the
+      // session stays unconnected and a later real payload establishes it.
+      if (!session.deferred) { lbSortSessionConnected = true; lbGlobalSort = session; }
     }
     var names = {};
     lbKnownCustomSorts.forEach(function (n) { names[n] = true; });

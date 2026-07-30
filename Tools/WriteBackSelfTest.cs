@@ -351,8 +351,11 @@ internal static class WriteBackSelfTest
         var pl = dm.GetPlaylistById(pid) as HostPlaylist;
         f += Check("playlist: found", pl != null);
         if (pl == null) { store.CloseLog(); return f; }
-        f += Check("playlist: SortBy + BigBox overrides loaded", pl.SortBy == "Manual"
-            && pl.BigBoxSortByOverride == "PlayCount" && pl.BigBoxSortDescendingOverride);
+        // The BigBox* elements are deliberately unmodelled (no real playlist file has one); they
+        // ride the generic extra-field channel, which is what the XML assertion below verifies.
+        f += Check("playlist: SortBy loaded + unmodelled elements kept", pl.SortBy == "Manual"
+            && pl.GetField("BigBoxSortByOverride") == "PlayCount"
+            && pl.GetField("BigBoxSortDescendingOverride") == "true");
         pl.Name = "NewList"; pl.Notes = "plnotes"; pl.SortBy = "Title";
         var pg = (HostPlaylistGame)pl.AddNewPlaylistGame(); pg.GameId = "g-2"; pg.GameTitle = "Two";
         var first = pl.GetAllPlaylistGames().OfType<HostPlaylistGame>().First(g => g.GameIdValue == "g-1");

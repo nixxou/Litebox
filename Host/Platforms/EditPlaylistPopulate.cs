@@ -13,6 +13,7 @@ using System.Linq;
 using System.Windows.Forms;
 using LbApiHost.Host.Data;
 using LbApiHost.Host.UiKit;
+using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host.Platforms;
@@ -46,51 +47,10 @@ internal static class EditPlaylistPopulate
     private static readonly Color Fg = LiteBoxTheme.Fg;
     private static readonly Color SubFg = LiteBoxTheme.SubFg;
 
-    // Stable XML key <-> LaunchBox label maps. Unknown keys already present in a future LaunchBox version
-    // are injected into the combo verbatim, so opening and applying the editor never destroys them.
-    private static readonly (string key, string label)[] Fields =
-    {
-        ("Platform", "Platform"),
-        ("Title", "Title"),
-        ("Developer", "Developer"),
-        ("Publisher", "Publisher"),
-        ("Genre", "Genre"),
-        ("PlayMode", "Play Mode"),
-        ("Region", "Region"),
-        ("Series", "Series"),
-        ("Status", "Status"),
-        ("Source", "Source"),
-        ("Rating", "Rating"),
-        ("ReleaseType", "Release Type"),
-        ("MaxPlayers", "Max Players"),
-        ("ReleaseYear", "Release Year"),
-        ("Version", "Version"),
-        ("StarRating", "Star Rating"),
-        ("Favorite", "Favorite"),
-        ("Completed", "Completed"),
-        ("Broken", "Broken"),
-        ("Hide", "Hidden"),
-        ("Installed", "Installed"),
-        ("PlayCount", "Play Count"),
-        ("PlayTime", "Play Time"),
-        ("DateAdded", "Date Added"),
-        ("ReleaseDate", "Release Date"),
-        ("LastPlayedDate", "Last Played Date"),
-    };
-
-    private static readonly (string key, string label)[] Comparisons =
-    {
-        ("EqualTo", "Is Equal To"),
-        ("NotEqualTo", "Is Not Equal To"),
-        ("Contains", "Contains"),
-        ("DoesNotContain", "Does Not Contain"),
-        ("StartsWith", "Starts With"),
-        ("EndsWith", "Ends With"),
-        ("IsEmpty", "Is Empty"),
-        ("IsNotEmpty", "Is Not Empty"),
-        ("GreaterThan", "Is Greater Than"),
-        ("LessThan", "Is Less Than"),
-    };
+    // The field list and the per-type comparison lists live in PlaylistFilterCatalog; this file only
+    // renders them. Custom fields are merged INTO the alphabetical field list (LaunchBox does not
+    // group them apart here, unlike Arrange By).
+    private const string UnusedValue = "(Unused)";
 
     public static (Control panel, Action apply) BuildAutoPopulate(
         HostPlaylist playlist, bool readOnly, float dpiScale, PlaylistEditorState state)
@@ -109,6 +69,10 @@ internal static class EditPlaylistPopulate
             Padding = new Padding(S(2), 0, 0, 0),
         };
 
+        var customNames = GameSortCatalog.CustomFieldNames(
+            Safe(() => PluginHelper.DataManager.GetAllGames()) ?? Array.Empty<IGame>());
+        var fields = PlaylistFilterCatalog.Fields(customNames);
+
         var grid = NewGrid(readOnly, allowNewRows: !readOnly);
         grid.Dock = DockStyle.Fill;
         grid.SelectionMode = DataGridViewSelectionMode.CellSelect;
@@ -117,16 +81,42 @@ internal static class EditPlaylistPopulate
             Name = "Field", HeaderText = "Field", FillWeight = 28,
             FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
         };
-        foreach (var x in Fields) fieldCol.Items.Add(x.label);
+        foreach (var f in fields) fieldCol.Items.Add(f.Label);
+        // The Comparison column holds the UNION of every type's vocabulary, because a
+        // DataGridViewComboBoxColumn shares its item list across rows. Each row is then narrowed to
+        // the comparisons its own field accepts, in EditingControlShowing below.
         var comparisonCol = new DataGridViewComboBoxColumn
         {
             Name = "Comparison", HeaderText = "Comparison", FillWeight = 28,
             FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
         };
-        foreach (var x in Comparisons) comparisonCol.Items.Add(x.label);
+        foreach (var label in AllComparisonLabels()) comparisonCol.Items.Add(label);
         var valueCol = new DataGridViewTextBoxColumn { Name = "Value", HeaderText = "Value", FillWeight = 44 };
         grid.Columns.AddRange(fieldCol, comparisonCol, valueCol);
         grid.DataError += (_, _) => { }; // forward-compatible combo values are inserted below; never crash on one
+
+        PlaylistFilterField FieldOfRow(DataGridViewRow row)
+        {
+            string label = Convert.ToString(row.Cells["Field"].Value)?.Trim() ?? "";
+            return fields.FirstOrDefault(f => f.Label.Equals(label, StringComparison.OrdinalIgnoreCase))
+                   ?? PlaylistFilterCatalog.Find(label, customNames);
+        }
+
+        // Is True / Is False / Is Empty / Is Not Empty carry no operand. LaunchBox greys the cell
+        // and writes "(Unused)" in it; the value is not persisted for those rules.
+        void SyncValueCell(DataGridViewRow row)
+        {
+            if (row == null || row.IsNewRow) return;
+            var field = FieldOfRow(row);
+            var cmpLabel = Convert.ToString(row.Cells["Comparison"].Value)?.Trim() ?? "";
+            var cmp = PlaylistFilterCatalog.FindComparison(cmpLabel, field?.Kind ?? PlaylistFieldKind.Text);
+            var cell = row.Cells["Value"];
+            bool uses = cmp == null || cmp.UsesValue;
+            cell.ReadOnly = readOnly || !uses;
+            cell.Style.ForeColor = uses ? Fg : SubFg;
+            if (!uses) cell.Value = UnusedValue;
+            else if (Convert.ToString(cell.Value) == UnusedValue) cell.Value = "";
+        }
 
         try
         {
@@ -134,15 +124,57 @@ internal static class EditPlaylistPopulate
             {
                 string fieldKey = Safe(() => f.FieldKey) ?? "";
                 if (fieldKey.Length == 0) continue;
-                string cmpKey = Safe(() => f.ComparisonTypeKey) ?? "";
-                string fieldLabel = LabelFor(Fields, fieldKey);
-                string comparisonLabel = LabelFor(Comparisons, cmpKey);
+                var field = PlaylistFilterCatalog.Find(fieldKey, customNames);
+                string fieldLabel = field?.Label ?? fieldKey;
+                var cmp = PlaylistFilterCatalog.FindComparison(
+                    Safe(() => f.ComparisonTypeKey) ?? "", field?.Kind ?? PlaylistFieldKind.Text);
+                string comparisonLabel = cmp?.Label ?? (Safe(() => f.ComparisonTypeKey) ?? "");
                 EnsureComboItem(fieldCol, fieldLabel);
                 EnsureComboItem(comparisonCol, comparisonLabel);
-                grid.Rows.Add(fieldLabel, comparisonLabel, Safe(() => f.Value) ?? "");
+                int added = grid.Rows.Add(fieldLabel, comparisonLabel, Safe(() => f.Value) ?? "");
+                SyncValueCell(grid.Rows[added]);
             }
         }
         catch { }
+
+        // Narrow the dropdown to the comparisons this row's field type accepts, at the moment it
+        // opens — the column's own Items list is shared by every row and cannot do it.
+        grid.EditingControlShowing += (_, e) =>
+        {
+            if (grid.CurrentCell?.OwningColumn?.Name != "Comparison") return;
+            if (e.Control is not ComboBox combo) return;
+            var field = FieldOfRow(grid.Rows[grid.CurrentCell.RowIndex]);
+            var allowed = PlaylistFilterCatalog.Comparisons(field?.Kind ?? PlaylistFieldKind.Text);
+            combo.Items.Clear();
+            foreach (var c in allowed) combo.Items.Add(c.Label);
+            var current = Convert.ToString(grid.CurrentCell.Value)?.Trim() ?? "";
+            if (current.Length > 0 && !combo.Items.Contains(current)) combo.Items.Add(current);
+            combo.SelectedItem = current;
+        };
+
+        grid.CellValueChanged += (_, e) =>
+        {
+            if (e.RowIndex < 0 || e.RowIndex >= grid.Rows.Count) return;
+            var row = grid.Rows[e.RowIndex];
+            string changed = grid.Columns[e.ColumnIndex].Name;
+            if (changed == "Field")
+            {
+                // The new field may not accept the comparison the row carried — reset to the first
+                // one its type offers rather than leaving an impossible pair behind.
+                var field = FieldOfRow(row);
+                var allowed = PlaylistFilterCatalog.Comparisons(field?.Kind ?? PlaylistFieldKind.Text);
+                var cmpLabel = Convert.ToString(row.Cells["Comparison"].Value)?.Trim() ?? "";
+                if (!allowed.Any(c => c.Label.Equals(cmpLabel, StringComparison.OrdinalIgnoreCase)))
+                    row.Cells["Comparison"].Value = allowed[0].Label;
+            }
+            if (changed is "Field" or "Comparison") SyncValueCell(row);
+        };
+        // A combo commits on selection change, otherwise CellValueChanged only fires on cell exit.
+        grid.CurrentCellDirtyStateChanged += (_, _) =>
+        {
+            if (grid.IsCurrentCellDirty && grid.CurrentCell?.OwningColumn is DataGridViewComboBoxColumn)
+                grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
 
         void RemoveCurrent()
         {
@@ -189,11 +221,18 @@ internal static class EditPlaylistPopulate
                 if (row.IsNewRow) continue;
                 string fieldLabel = Convert.ToString(row.Cells["Field"].Value)?.Trim() ?? "";
                 if (fieldLabel.Length == 0) continue;
+                var field = FieldOfRow(row);
+                // A label the catalog does not know came from the file (a field a newer LaunchBox
+                // added). Write it back verbatim rather than mangling it into something else.
+                string fieldKey = field?.Key ?? fieldLabel;
+
                 string comparisonLabel = Convert.ToString(row.Cells["Comparison"].Value)?.Trim() ?? "";
-                string fieldKey = KeyFor(Fields, fieldLabel);
-                string comparisonKey = comparisonLabel.Length == 0 ? "EqualTo" : KeyFor(Comparisons, comparisonLabel);
-                defs.Add(new PlaylistFilterDef(fieldKey, comparisonKey,
-                    Convert.ToString(row.Cells["Value"].Value) ?? ""));
+                var cmp = PlaylistFilterCatalog.FindComparison(comparisonLabel, field?.Kind ?? PlaylistFieldKind.Text);
+                string comparisonKey = cmp?.Key ?? (comparisonLabel.Length == 0 ? "EqualTo" : comparisonLabel);
+
+                string value = Convert.ToString(row.Cells["Value"].Value) ?? "";
+                if (cmp != null && !cmp.UsesValue) value = "";   // never persist the "(Unused)" placeholder
+                defs.Add(new PlaylistFilterDef(fieldKey, comparisonKey, value));
             }
             playlist.ReplaceFilters(defs);
             state.RulesApplied(); // an already-open Games section refreshes its auto-populated preview
@@ -372,7 +411,10 @@ internal static class EditPlaylistPopulate
 
         void Apply()
         {
-            if (readOnly || state.AutoPopulate) return;
+            if (readOnly) return;
+            // The manual list is written back even when Auto-Populate is ON. LaunchBox keeps the
+            // <PlaylistGame> rows either way, and dropping them here silently discarded any
+            // reorder or removal the user made before ticking the box.
             CaptureManual();
             playlist.ReplaceGames(manualRows);
         }
@@ -407,11 +449,14 @@ internal static class EditPlaylistPopulate
         return grid;
     }
 
-    private static string LabelFor((string key, string label)[] map, string key)
-        => map.FirstOrDefault(x => string.Equals(x.key, key, StringComparison.OrdinalIgnoreCase)).label ?? key;
-
-    private static string KeyFor((string key, string label)[] map, string label)
-        => map.FirstOrDefault(x => string.Equals(x.label, label, StringComparison.OrdinalIgnoreCase)).key ?? label;
+    /// <summary>Every comparison label across the three type vocabularies, deduplicated — the shared
+    /// item list a DataGridViewComboBoxColumn needs so that no row's stored value is rejected.</summary>
+    private static string[] AllComparisonLabels()
+        => new[] { PlaylistFieldKind.Text, PlaylistFieldKind.Number, PlaylistFieldKind.Bool }
+            .SelectMany(PlaylistFilterCatalog.Comparisons)
+            .Select(c => c.Label)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private static void EnsureComboItem(DataGridViewComboBoxColumn column, string value)
     {

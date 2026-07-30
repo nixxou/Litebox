@@ -198,6 +198,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private string _sessionSortKey = "title";
     private bool _sessionAscending = true;
     private bool _nodeForcesSort;
+    private string _sortedNodeKey;         // node the current sort was activated for (navigation vs refresh)
     private Dictionary<string, int> _manualOrder;
     private readonly DeferredGameSort _deferredKioskSort = new();
     private TitleSortNormalization _titleSortNormalization;
@@ -730,7 +731,11 @@ internal sealed class MainWindow : Form, IMessageFilter
         Col("version", "Version", DpiW(90), g => S(Safe(() => g.Version)), g => S(Safe(() => g.Version)), visible: false);
         Col("status", "Status", DpiW(90), g => S(Safe(() => g.Status)), g => S(Safe(() => g.Status)), visible: false);
         Col("source", "Source", DpiW(110), g => S(Safe(() => g.Source)), g => S(Safe(() => g.Source)), visible: false);
-        Col("year", "Year", DpiW(55), g => N(() => g.ReleaseYear), g => N(() => g.ReleaseYear)?.ToString() ?? "", HorizontalAlignment.Right);
+        // Effective year (explicit ReleaseYear, else the year inside ReleaseDate) — the column now
+        // SHOWS what Arrange By "Release Date Year" and the web clients SORT on, instead of leaving
+        // a blank cell for every game dated only by a full ReleaseDate.
+        Col("year", "Year", DpiW(55), g => GameSortCatalog.EffectiveYear(g),
+            g => GameSortCatalog.EffectiveYear(g)?.ToString() ?? "", HorizontalAlignment.Right);
         Col("releasedate", "Release Date", DpiW(100), g => Safe(() => (object)g.ReleaseDate), g => DateStr(Safe(() => (object)g.ReleaseDate)), HorizontalAlignment.Right, visible: false);
         // Effective rating: user (StarRatingFloat) if set, else community. Coloured per-cell: user amber, community grey.
         Col("rating", "Rating", DpiW(70), g => N(() => (double?)g.CommunityOrLocalStarRating),
@@ -2877,7 +2882,16 @@ internal sealed class MainWindow : Form, IMessageFilter
         _manualOrder = null;
         _curSortKey = _sessionSortKey;
         _ascending = _sessionAscending;
-        _deferredKioskSort.AppliedOnNodeLoad();
+        // A staged kiosk order is consumed when the user NAVIGATES, not when the current node is
+        // merely rebuilt (a refresh after an edit, a return from a game, a parental reload). Those
+        // rebuilds can happen while the kiosk is still on screen, and re-sorting the list behind it
+        // is exactly the wasted work the deferral exists to avoid.
+        string nodeKey = NodeKey(node) ?? "*";
+        if (!string.Equals(nodeKey, _sortedNodeKey, StringComparison.Ordinal))
+        {
+            _sortedNodeKey = nodeKey;
+            _deferredKioskSort.AppliedOnNodeLoad();
+        }
 
         if (node is not IPlaylist playlist) return;
         bool auto = Safe(() => playlist.AutoPopulate);
@@ -2972,11 +2986,12 @@ internal sealed class MainWindow : Form, IMessageFilter
         void Add(string key, string label)
         {
             bool active = string.Equals(_curSortKey, key, StringComparison.OrdinalIgnoreCase);
+            // LaunchBox marks the active field with a tick; we show the direction arrow instead
+            // (re-picking the active field reverses it), so a tick on top would be redundant.
             var item = new ToolStripMenuItem(label + (active ? (_ascending ? "  ▲" : "  ▼") : ""))
             {
                 Tag = key,
                 ForeColor = Fg,
-                Checked = active,
             };
             item.Click += (_, _) => SelectSort(key);
             _arrangeBtn.DropDownItems.Add(item);
@@ -3024,6 +3039,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (_games == null) return;
         _curSortKey = key;
         _games.SortGetter = SortGetterFor(key);
+        // Ties are broken by the title key, ascending, exactly like the web clients — otherwise a
+        // low-cardinality sort (Genre, Favorite, Region…) leaves each block in raw XML order here
+        // and in alphabetical order there. Skipped for Title (same key) and for Manual, whose ranks
+        // are already unique and whose ties must stay in playlist order.
+        bool titleTie = !string.Equals(key, "title", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(key, GameSortCatalog.Manual, StringComparison.OrdinalIgnoreCase);
+        _games.SortTieGetter = titleTie ? g => CompareName(g) : null;
         _games.SortAscending = asc;
         var columnKey = ColumnKeyForSort(key);
         _games.SortGlyphColumn = _games.AllColumns.FirstOrDefault(c =>

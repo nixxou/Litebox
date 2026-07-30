@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using LbApiHost.Generated;
 using LbApiHost.Host;
@@ -19,6 +20,20 @@ internal static class GameSortSelfTest
         failures += Check("custom field", GameSortCatalog.Parse("custom1", new[] { "abc", "custom1" }) == "custom:custom1");
         failures += Check("round-trip standard values", GameSortCatalog.Standard.All(d =>
             GameSortCatalog.Parse(GameSortCatalog.ToLaunchBoxValue(d.Key)) == d.Key));
+        failures += Check("Manual never replaces session sort",
+            !GameSortCatalog.UpdatesSession(false, GameSortCatalog.Manual));
+        failures += Check("configured playlist override keeps temporary sort local",
+            !GameSortCatalog.UpdatesSession(true, "developer"));
+        failures += Check("Default playlist field sort updates session",
+            GameSortCatalog.UpdatesSession(false, "developer"));
+        var equalManual = new[]
+        {
+            new HostPlaylistGame { GameIdValue = "z", ManualOrderValue = 0 },
+            new HostPlaylistGame { GameIdValue = "a", ManualOrderValue = 0 },
+        };
+        var manualRanks = GameSortCatalog.ManualRanks(equalManual);
+        failures += Check("equal ManualOrder retains PlaylistGame source order",
+            manualRanks["z"] == 0 && manualRanks["a"] == 1);
 
         var a = new DummyGame
         {
@@ -48,6 +63,30 @@ internal static class GameSortSelfTest
         playlist.Add(new HostPlaylistGame { GameIdValue = "b", ManualOrderValue = 2 });
         failures += Check("Manual playlist follows ManualOrder",
             playlist.GetAllGames(false).SequenceEqual(new[] { b, a }));
+
+        var temp = Path.Combine(Path.GetTempPath(), "LiteBoxSortTest_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var playlists = Path.Combine(temp, "Playlists");
+            Directory.CreateDirectory(playlists);
+            File.WriteAllText(Path.Combine(playlists, "Sort.xml"),
+                "<LaunchBox><Playlist><PlaylistId>p</PlaylistId><Name>P</Name><SortBy>Manual</SortBy>"
+                + "<BigBoxSortByOverride>PlayCount</BigBoxSortByOverride>"
+                + "<BigBoxSortDescendingOverride>true</BigBoxSortDescendingOverride></Playlist>"
+                + "<PlaylistGame><GameId>a</GameId><ManualOrder>7</ManualOrder></PlaylistGame>"
+                + "<PlaylistGame><GameId>b</GameId><ManualOrder>3</ManualOrder></PlaylistGame></LaunchBox>");
+            var loaded = PlaylistCatalog.Load(temp, "").Single();
+            loaded.SetResolver(id => byId.TryGetValue(id, out var game) ? game : null);
+            failures += Check("Playlist XML loads SortBy and BigBox direction",
+                loaded.SortBy == "Manual" && loaded.BigBoxSortByOverride == "PlayCount"
+                && loaded.BigBoxSortDescendingOverride);
+            failures += Check("Playlist XML ManualOrder controls resolved games",
+                loaded.GetAllGames(false).SequenceEqual(new[] { b, a }));
+        }
+        finally
+        {
+            try { Directory.Delete(temp, true); } catch { }
+        }
 
         Console.WriteLine(failures == 0 ? "[game-sort-selftest] ALL PASS" : $"[game-sort-selftest] {failures} FAILURE(S)");
         return failures == 0 ? 0 : 1;

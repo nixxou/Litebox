@@ -381,6 +381,7 @@ internal static class OwnedDataProvider
         bool autoPopulate = playlist != null && SafeValue(() => playlist.AutoPopulate);
         string sortBy = playlist == null ? "Default" : (Safe(() => playlist.SortBy) ?? "Default");
         string bigBoxSortBy = playlist is HostPlaylist hp ? hp.BigBoxSortByOverride : "";
+        bool bigBoxSortDescending = playlist is HostPlaylist hp2 && hp2.BigBoxSortDescendingOverride;
         return new
         {
             platform = name,
@@ -390,6 +391,7 @@ internal static class OwnedDataProvider
             nodeKind = playlist == null ? "platform" : "playlist",
             sortBy,
             bigBoxSortBy,
+            bigBoxSortDescending,
             autoPopulate,
             manualAvailable = playlist != null && !autoPopulate,
             // Keep Arrange By complete and stable while browsing between nodes.
@@ -429,7 +431,7 @@ internal static class OwnedDataProvider
         => new
         {
             platform = "", platformLogo = "", platformLogoImg = (string)null, platformTotal = 0,
-            nodeKind = "platform", sortBy = "Default", bigBoxSortBy = "", autoPopulate = false,
+            nodeKind = "platform", sortBy = "Default", bigBoxSortBy = "", bigBoxSortDescending = false, autoPopulate = false,
             manualAvailable = false, customSorts = Array.Empty<string>(), games = Array.Empty<object>(),
         };
 
@@ -448,6 +450,7 @@ internal static class OwnedDataProvider
             platform = Safe(() => gm.Platform),
             r = ThemeFormat.RatingStr(SafeRating(gm)),
             ur = SafeEffRating(gm),
+            votes = SafeInt(() => gm.CommunityStarRatingTotalVotes),
             lp = SafeLastPlayedMs(gm),
             da = SafeDateMs(() => gm.DateAdded),
             dm = SafeDateMs(() => gm.DateModified),

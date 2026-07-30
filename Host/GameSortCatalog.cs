@@ -85,6 +85,9 @@ internal static class GameSortCatalog
         return Standard.FirstOrDefault(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase))?.Label ?? "Title";
     }
 
+    public static bool IsStandard(string key)
+        => Standard.Any(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+
     public static string ToLaunchBoxValue(string key)
     {
         if (key != null && key.StartsWith(CustomPrefix, StringComparison.OrdinalIgnoreCase))
@@ -92,6 +95,28 @@ internal static class GameSortCatalog
         if (string.Equals(key, Manual, StringComparison.OrdinalIgnoreCase)) return "Manual";
         if (string.Equals(key, Default, StringComparison.OrdinalIgnoreCase)) return "Default";
         return Standard.FirstOrDefault(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase))?.LaunchBoxValue ?? "Default";
+    }
+
+    public static bool UpdatesSession(bool playlistHasConfiguredOverride, string key)
+        => !playlistHasConfiguredOverride
+           && !string.Equals(key, Manual, StringComparison.OrdinalIgnoreCase);
+
+    public static Dictionary<string, int> ManualRanks(IEnumerable<IPlaylistGame>? playlistGames)
+    {
+        var ranked = (playlistGames ?? Array.Empty<IPlaylistGame>())
+            .Select((pg, sourceIndex) => new
+            {
+                Id = Safe(() => pg.GameId) ?? "",
+                Order = Safe(() => pg.ManualOrder),
+                SourceIndex = sourceIndex,
+            })
+            .Where(x => x.Id.Length > 0)
+            .OrderBy(x => x.Order)
+            .ThenBy(x => x.SourceIndex)
+            .ToArray();
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < ranked.Length; i++) result[ranked[i].Id] = i;
+        return result;
     }
 
     public static string[] CustomFieldNames(IEnumerable<IGame>? games)

@@ -31,6 +31,7 @@
     ["title", "Title", "Title"],
     ["version", "Version", "Version"]
   ].map(function (x) { return { key: x[0], label: x[1], value: x[2] }; });
+  var extraLabels = { votes: "Votes" };
 
   function compact(v) {
     return String(v == null ? "" : v).toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -62,7 +63,7 @@
     if (String(key || "").indexOf("custom:") === 0) return key.substring(7);
     if (key === "manual") return "Manual";
     for (var i = 0; i < defs.length; i++) if (defs[i].key === key) return defs[i].label;
-    return key === "default" ? "Default" : "Title";
+    return key === "default" ? "Default" : (extraLabels[key] || key || "Title");
   }
 
   function value(g, key) {
@@ -98,6 +99,7 @@
       case "series": return String(g.series || "").toUpperCase();
       case "source": return String(g.source || "").toUpperCase();
       case "starrating": return +g.ur || 0;
+      case "votes": return +g.votes || 0;
       case "status": return String(g.status || "").toUpperCase();
       case "version": return String(g.version || "").toUpperCase();
       case "manual": return g.mo == null ? 2147483647 : (+g.mo || 0);
@@ -112,6 +114,10 @@
       var av = value(a.g, state.key), bv = value(b.g, state.key);
       if (av < bv) return -dir;
       if (av > bv) return dir;
+      // Old/generated playlists can legitimately contain the same ManualOrder
+      // (often zero) for every game. In that case the XML/source sequence is the
+      // only manual order available and must not be replaced by a title fallback.
+      if (state.key === "manual") return (a.i - b.i) * dir;
       // LaunchBox-like deterministic fallback, then source order for exact duplicates.
       var at = value(a.g, "title"), bt = value(b.g, "title");
       if (at < bt) return -1;
@@ -123,14 +129,31 @@
   function stateForPayload(payload, bigBox, globalState) {
     payload = payload || {};
     var custom = payload.customSorts || [];
+    var hasBigBoxOverride = !!(bigBox && payload.bigBoxSortBy && compact(payload.bigBoxSortBy) !== "default");
     var raw = payload.nodeKind === "playlist"
-      ? (bigBox && payload.bigBoxSortBy && compact(payload.bigBoxSortBy) !== "default"
-          ? payload.bigBoxSortBy : payload.sortBy)
+      ? (hasBigBoxOverride ? payload.bigBoxSortBy : payload.sortBy)
       : "Default";
     var key = parse(raw, custom);
     if (key === "manual" && (payload.autoPopulate || !payload.manualAvailable)) key = "default";
     if (key === "default") return { key: globalState.key, dir: globalState.dir, forced: false };
-    return { key: key, dir: "asc", forced: true };
+    return { key: key, dir: hasBigBoxOverride && payload.bigBoxSortDescending ? "desc" : "asc", forced: true };
+  }
+
+  function select(state, key, globalState) {
+    state = state || { key: "title", dir: "asc", forced: false };
+    globalState = globalState || { key: "title", dir: "asc" };
+    var active = {
+      key: key,
+      dir: state.key === key && state.dir === "asc" ? "desc" : "asc",
+      forced: !!state.forced
+    };
+    // A configured non-Default playlist keeps every temporary choice local.
+    // Manual is also always local, even in a Default playlist: it is meaningless
+    // after leaving that playlist and must never replace the session-wide sort.
+    var global = active.forced || key === "manual"
+      ? { key: globalState.key, dir: globalState.dir }
+      : { key: active.key, dir: active.dir };
+    return { active: active, global: global };
   }
 
   function options(payload) {
@@ -148,6 +171,7 @@
     value: value,
     sorted: sorted,
     stateForPayload: stateForPayload,
+    select: select,
     options: options
   };
 }());

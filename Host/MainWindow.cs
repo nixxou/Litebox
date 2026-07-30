@@ -911,8 +911,15 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         if (string.Equals(key, GameSortCatalog.Manual, StringComparison.OrdinalIgnoreCase))
             return g => _manualOrder != null && _manualOrder.TryGetValue(S(Safe(() => g.Id)), out var i) ? i : int.MaxValue;
-        var getter = GameSortCatalog.Getter(key, _titleSortNormalization);
-        return g => getter(g);
+        if (GameSortCatalog.IsStandard(key) || key.StartsWith(GameSortCatalog.CustomPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var getter = GameSortCatalog.Getter(key, _titleSortNormalization);
+            return g => getter(g);
+        }
+        // Extra LiteBox columns that are not in LaunchBox's canonical Arrange By list
+        // retain their native header sort instead of silently falling back to Title.
+        var col = _games.AllColumns.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
+        return col?.Sort ?? (g => CompareName(g));
     }
 
     private static string SortKeyForColumn(string key) => key?.ToLowerInvariant() switch
@@ -923,8 +930,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         "dbid" => "launchboxid",
         "year" => "releaseyear",
         "esrb" => "rating",
-        "rating" or "community" => "starrating",
-        _ => GameSortCatalog.Parse(key),
+        "rating" => "starrating",
+        _ => key?.ToLowerInvariant() ?? "title",
     };
 
     private static string ColumnKeyForSort(string key) => key?.ToLowerInvariant() switch
@@ -2872,7 +2879,16 @@ internal sealed class MainWindow : Form, IMessageFilter
 
         if (node is not IPlaylist playlist) return;
         bool auto = Safe(() => playlist.AutoPopulate);
-        var configured = GameSortCatalog.Parse(Safe(() => playlist.SortBy), GameSortCatalog.CustomFieldNames(_current));
+        if (!auto)
+        {
+            // Manual can be selected contextually even when SortBy is Default. Build its order
+            // for every non-auto playlist. Equal ManualOrder values retain PlaylistGame/XML order.
+            _manualOrder = GameSortCatalog.ManualRanks(
+                Safe(() => playlist.GetAllPlaylistGames()) ?? Array.Empty<IPlaylistGame>());
+        }
+        var configured = GameSortCatalog.Parse(
+            Safe(() => playlist.SortBy),
+            GameSortCatalog.CustomFieldNames(Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>()));
 
         // Manual has no stable meaning for an auto-populated playlist: LaunchBox falls back to Default.
         if (configured == GameSortCatalog.Manual && auto) return;
@@ -2881,15 +2897,6 @@ internal sealed class MainWindow : Form, IMessageFilter
         _nodeForcesSort = true;
         _curSortKey = configured;
         _ascending = true;
-        if (configured == GameSortCatalog.Manual)
-        {
-            _manualOrder = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            foreach (var pg in Safe(() => playlist.GetAllPlaylistGames()) ?? Array.Empty<IPlaylistGame>())
-            {
-                var id = S(Safe(() => pg.GameId));
-                if (id.Length > 0) _manualOrder[id] = Safe(() => pg.ManualOrder);
-            }
-        }
     }
 
     private void SelectSort(string key, bool? ascending = null)
@@ -2898,7 +2905,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         bool same = string.Equals(_curSortKey, key, StringComparison.OrdinalIgnoreCase);
         _ascending = ascending ?? (same ? !_ascending : true);
         _curSortKey = key;
-        if (!_nodeForcesSort)
+        // Manual only has meaning inside the current non-auto playlist. Selecting it from a
+        // Default playlist must not replace the session sort restored on the next platform.
+        if (GameSortCatalog.UpdatesSession(_nodeForcesSort, key))
         {
             _sessionSortKey = key;
             _sessionAscending = _ascending;
@@ -2929,6 +2938,20 @@ internal sealed class MainWindow : Form, IMessageFilter
             Add(GameSortCatalog.Manual, "Manual");
             _arrangeBtn.DropDownItems.Add(new ToolStripSeparator());
         }
+
+        bool activeIsExtraColumn = !GameSortCatalog.IsStandard(_curSortKey)
+            && !string.Equals(_curSortKey, GameSortCatalog.Manual, StringComparison.OrdinalIgnoreCase)
+            && !_curSortKey.StartsWith(GameSortCatalog.CustomPrefix, StringComparison.OrdinalIgnoreCase);
+        if (activeIsExtraColumn)
+        {
+            var activeColumn = _games.AllColumns.FirstOrDefault(c =>
+                string.Equals(c.Key, _curSortKey, StringComparison.OrdinalIgnoreCase));
+            if (activeColumn != null)
+            {
+                Add(_curSortKey, activeColumn.Title);
+                _arrangeBtn.DropDownItems.Add(new ToolStripSeparator());
+            }
+        }
         foreach (var d in GameSortCatalog.Standard) Add(d.Key, d.Label);
 
         // LaunchBox exposes custom-field sorts globally, even when the current node
@@ -2956,7 +2979,16 @@ internal sealed class MainWindow : Form, IMessageFilter
         var columnKey = ColumnKeyForSort(key);
         _games.SortGlyphColumn = _games.AllColumns.FirstOrDefault(c =>
             c.Visible && string.Equals(c.Key, columnKey, StringComparison.OrdinalIgnoreCase));
-        if (_arrangeBtn != null) _arrangeBtn.Text = "Arrange By: " + GameSortCatalog.Label(key) + (asc ? " ▲" : " ▼");
+        if (_arrangeBtn != null)
+        {
+            bool catalogKey = GameSortCatalog.IsStandard(key)
+                || string.Equals(key, GameSortCatalog.Manual, StringComparison.OrdinalIgnoreCase)
+                || key.StartsWith(GameSortCatalog.CustomPrefix, StringComparison.OrdinalIgnoreCase);
+            var label = catalogKey
+                ? GameSortCatalog.Label(key)
+                : _games.AllColumns.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase))?.Title ?? key;
+            _arrangeBtn.Text = "Arrange By: " + label + (asc ? " ▲" : " ▼");
+        }
         ApplyFilter();   // sets the filter predicate + rebuilds the view (single pass)
     }
 

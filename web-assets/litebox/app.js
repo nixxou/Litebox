@@ -2090,8 +2090,8 @@
     return parts.join(" ");
   }
 
-  /* Display order = indices into DATA.games, sorted by the configured column
-     (DATA.games itself is never reordered). */
+  /* DATA.games is already the one shared Arrange By order used by list and poster.
+     The list only needs the corresponding identity indices for selection handling. */
   function lbListDisplayOrder() {
     var idx = [];
     for (var i = 0; i < DATA.games.length; i++) { idx.push(i); }
@@ -2496,9 +2496,9 @@
   }
 
   function lbChooseArrange(key) {
-    var same = lbActiveSort.key === key;
-    lbActiveSort = { key: key, dir: same && lbActiveSort.dir === "asc" ? "desc" : "asc", forced: !!lbActiveSort.forced };
-    if (!lbActiveSort.forced) lbGlobalSort = { key: lbActiveSort.key, dir: lbActiveSort.dir };
+    var next = window.LBGameSort.select(lbActiveSort, key, lbGlobalSort);
+    lbActiveSort = next.active;
+    lbGlobalSort = next.global;
     var selectedId = posterSel >= 0 && DATA.games[posterSel] ? DATA.games[posterSel].id : null;
     DATA.games = window.LBGameSort.sorted(lbRawGames, lbActiveSort);
     renderGames();
@@ -2521,9 +2521,14 @@
     if (!dd) return;
     dd.innerHTML = "";
     var opts = window.LBGameSort.options(lbSortPayload);
+    if (!opts.some(function (o) { return o.key === lbActiveSort.key; })) {
+      opts.unshift({ key: lbActiveSort.key, label: window.LBGameSort.label(lbActiveSort.key), contextual: true });
+    }
     var insertedCustomSeparator = false;
     opts.forEach(function (opt, index) {
-      if ((opt.custom && !insertedCustomSeparator) || (opt.key !== "manual" && index > 0 && opts[index - 1].key === "manual")) {
+      if ((index > 0 && opts[index - 1].contextual)
+          || (opt.custom && !insertedCustomSeparator)
+          || (opt.key !== "manual" && index > 0 && opts[index - 1].key === "manual")) {
         var sep = document.createElement("li");
         sep.className = "lb-menu-sep"; sep.setAttribute("role", "separator");
         dd.appendChild(sep);

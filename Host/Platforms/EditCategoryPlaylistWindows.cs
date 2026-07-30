@@ -277,7 +277,11 @@ internal static class EditPlaylistWindow
         var customNames = GameSortCatalog.CustomFieldNames(Safe(() => PluginHelper.DataManager.GetAllGames()) ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IGame>());
         foreach (var custom in customNames) sortBy.Items.Add(custom);
         string curSort = Safe(() => pl.SortBy) ?? "";
-        string curLabel = GameSortCatalog.Label(GameSortCatalog.Parse(curSort, customNames));
+        string curKey = GameSortCatalog.Parse(curSort, customNames);
+        bool preserveUnknownSort = curKey == GameSortCatalog.Default
+            && !string.IsNullOrWhiteSpace(curSort)
+            && !curSort.Trim().Equals("Default", StringComparison.OrdinalIgnoreCase);
+        string curLabel = preserveUnknownSort ? curSort.Trim() : GameSortCatalog.Label(curKey);
         if (!sortBy.Items.Contains(curLabel)) sortBy.Items.Add(curLabel);
         sortBy.SelectedItem = curLabel;
         if (sortBy.SelectedIndex < 0) sortBy.SelectedIndex = 0;
@@ -299,7 +303,13 @@ internal static class EditPlaylistWindow
             try { pl.NestedName = nestedTb.Text.Trim(); } catch { }
             try { pl.SortTitle = sortTb.Text.Trim(); } catch { }
             try { pl.VideoPath = videoTb.Text.Trim(); } catch { }
-            try { pl.SortBy = GameSortCatalog.ToLaunchBoxValue(GameSortCatalog.Parse(sortBy.Text, customNames)); } catch { }
+            try
+            {
+                pl.SortBy = preserveUnknownSort && string.Equals(sortBy.Text, curLabel, StringComparison.Ordinal)
+                    ? curSort.Trim()
+                    : GameSortCatalog.ToLaunchBoxValue(GameSortCatalog.Parse(sortBy.Text, customNames));
+            }
+            catch { }
             try { pl.IncludeWithPlatforms = includeChk.Checked; } catch { }
             try { pl.HideInBigBox = hideChk.Checked; } catch { }
         }

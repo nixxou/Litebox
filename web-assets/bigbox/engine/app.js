@@ -1268,19 +1268,6 @@
     if (g && g._cn == null) g._cn = compareName(g && g.t);
     return String(g && g._cn || "").toUpperCase();
   }
-  // Tri de la liste de jeux par la clé canonique `cn` du serveur ; compareName reste le fallback
-  // des anciennes sources sans `cn`. La comparaison ordinale reste alignée sur le desktop. Garantit
-  // que le saut par lettre (findGameByInitial) tombe sur le PREMIER jeu de la lettre. En place,
-  // et MÉMOÏSÉ via arr._sorted : la liste ne bouge pas → on ne la retrie pas à chaque visite.
-  function sortGamesAlpha(arr) {
-    if (arr && arr.length > 1 && !arr._sorted) arr.sort(function (a, b) {
-      var ak = gameCN(a), bk = gameCN(b);
-      return ak < bk ? -1 : ak > bk ? 1 : 0;
-    });
-    if (arr) arr._sorted = true;
-    return arr;
-  }
-
   function applyArrangePayload(payload) {
     payload = payload || {};
     bbwSortPayload = payload;
@@ -1294,9 +1281,9 @@
   }
 
   function chooseArrange(key) {
-    var same = bbwActiveSort.key === key;
-    bbwActiveSort = { key: key, dir: same && bbwActiveSort.dir === "asc" ? "desc" : "asc", forced: !!bbwActiveSort.forced };
-    if (!bbwActiveSort.forced) bbwGlobalSort = { key: bbwActiveSort.key, dir: bbwActiveSort.dir };
+    var next = window.LBGameSort.select(bbwActiveSort, key, bbwGlobalSort);
+    bbwActiveSort = next.active;
+    bbwGlobalSort = next.global;
     var keep = DATA.games[currentGame] && DATA.games[currentGame].id;
     DATA.games = window.LBGameSort.sorted(bbwRawGames, bbwActiveSort);
     DATA.gamesAll = DATA.games;
@@ -4170,6 +4157,17 @@
   }
   function openArrange() {
     if (!arrangeModalEl) return;
+    // From the categories screen there is no current game node. Arrange By edits
+    // the session default for the next platform/Default playlist, never the stale
+    // override of the last playlist that happened to be open.
+    if (systemReturn !== "games") {
+      bbwSortPayload = {
+        nodeKind: "platform",
+        customSorts: (bbwSortPayload && bbwSortPayload.customSorts || []).slice()
+      };
+      bbwActiveSort = { key: bbwGlobalSort.key, dir: bbwGlobalSort.dir, forced: false };
+      reflectSystemArrange();
+    }
     arrangeOpen = true; arrangeFocus = 0;
     renderArrange(); arrangeModalEl.classList.add("open");
   }

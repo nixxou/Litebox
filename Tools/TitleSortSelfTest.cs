@@ -9,10 +9,10 @@ internal static class TitleSortSelfTest
     {
         int failures = 0;
 
-        Check("without uses SortTitle", " Zelda 1 ",
+        Check("without ignores SortTitle", "The Legend of Zelda",
             TitleSortNormalizer.Normalize("The Legend of Zelda", " Zelda 1 ", TitleSortNormalization.Without));
-        Check("without falls back to Title", "The Legend of Zelda",
-            TitleSortNormalizer.Normalize("The Legend of Zelda", "", TitleSortNormalization.Without));
+        Check("without keeps raw Title", " The Legend of Zelda ",
+            TitleSortNormalizer.Normalize(" The Legend of Zelda ", "", TitleSortNormalization.Without));
 
         Check("simple uses SortTitle", "zelda1",
             TitleSortNormalizer.Normalize("The Legend of Zelda", "Zelda 1", TitleSortNormalization.Simple));

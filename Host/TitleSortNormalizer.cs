@@ -1,6 +1,6 @@
 // One canonical title-sort key for every LiteBox surface.
 //
-// without — SortTitle (when set), otherwise Title, with no normalization.
+// without — raw Title only, ignoring SortTitle.
 // simple — the historical LiteBox desktop rule.
 // advanced — the historical LB-WEB PerformSanitize-style rule.
 
@@ -68,10 +68,12 @@ internal static class TitleSortNormalizer
 
     internal static string Normalize(string? title, string? sortTitle, TitleSortNormalization mode)
     {
+        if (mode == TitleSortNormalization.Without)
+            return title ?? "";
+
         string source = string.IsNullOrEmpty(sortTitle) ? (title ?? "") : sortTitle!;
         return mode switch
         {
-            TitleSortNormalization.Without => source,
             TitleSortNormalization.Advanced => Advanced(source),
             _ => Simple(source),
         };

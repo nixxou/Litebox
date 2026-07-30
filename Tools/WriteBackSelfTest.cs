@@ -10,6 +10,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Xml.Linq;
+using LbApiHost.Generated;
 using LbApiHost.Host.Data;
 
 namespace LbApiHost.Tools;
@@ -352,6 +353,16 @@ internal static class WriteBackSelfTest
         if (pl == null) { store.CloseLog(); return f; }
         pl.Name = "NewList"; pl.Notes = "plnotes"; pl.SortBy = "Title";
         var pg = (HostPlaylistGame)pl.AddNewPlaylistGame(); pg.GameId = "g-2"; pg.GameTitle = "Two";
+        var first = pl.GetAllPlaylistGames().OfType<HostPlaylistGame>().First(g => g.GameIdValue == "g-1");
+        pl.ReplaceGames(new[] { pg, first });
+        var filters = new[]
+        {
+            new PlaylistFilterDef("Platform", "EqualTo", "Arcade"),
+            new PlaylistFilterDef("Genre", "Contains", "Fighter / 2D"),
+            new PlaylistFilterDef("Genre", "Contains", "Fighter / 3D"),
+        };
+        pl.ReplaceFilters(filters);
+        pl.AutoPopulate = true;
         var npl = (HostPlaylist)dm.AddNewPlaylist("Brand New List"); npl.Notes = "fresh";
         dm.Save(true);
         store.CloseLog();
@@ -361,9 +372,21 @@ internal static class WriteBackSelfTest
         f += Check("playlist: modify (Name/Notes/SortBy)", pe != null
             && (string)pe.Element("Name") == "NewList" && (string)pe.Element("Notes") == "plnotes" && (string)pe.Element("SortBy") == "Title");
         var pgs = doc.Root.Elements("PlaylistGame").ToList();
-        f += Check("playlist: game added (now 2)", pgs.Count == 2
+        f += Check("playlist: game added + manual order replaced", pgs.Count == 2
             && pgs.Any(e => (string)e.Element("GameId") == "g-2" && (string)e.Element("GameTitle") == "Two")
-            && pgs.Any(e => (string)e.Element("GameId") == "g-1"));
+            && pgs.Any(e => (string)e.Element("GameId") == "g-1")
+            && (string)pgs[0].Element("GameId") == "g-2"
+            && (string)pgs[0].Element("ManualOrder") == "0"
+            && (string)pgs[1].Element("ManualOrder") == "1");
+        var pfs = doc.Root.Elements("PlaylistFilter").ToList();
+        f += Check("playlist: auto-populate filters replaced", pfs.Count == 3
+            && pfs.Count(e => (string)e.Element("FieldKey") == "Genre") == 2
+            && (string)pe.Element("AutoPopulate") == "true");
+        var matching = new DummyGame { Platform = "Arcade", GenresString = "Fighter / 2D" };
+        var wrongPlatform = new DummyGame { Platform = "Windows", GenresString = "Fighter / 2D" };
+        f += Check("playlist: repeated field rules OR, different fields AND",
+            HostPlaylist.MatchesFilters(matching, filters)
+            && !HostPlaylist.MatchesFilters(wrongPlatform, filters));
         string nfile = Path.Combine(plDir, "Brand New List.xml");
         f += Check("playlist: AddNewPlaylist created file+node", File.Exists(nfile)
             && XDocument.Load(nfile).Root.Elements("Playlist").Any(e => (string)e.Element("Name") == "Brand New List" && (string)e.Element("Notes") == "fresh"));

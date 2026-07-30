@@ -255,6 +255,24 @@ internal static class HostBoot
             Platforms.EditPlatformRenderProbe.RenderCategory(lbR, cat, outDir);
             return 0;
         }
+        // --edit-playlist-render [lbRoot] <playlist> <outDir>: all five sections + persistent Images panel.
+        // lbRoot is optional when the executable already runs from LaunchBox\Core.
+        if (args.Contains("--edit-playlist-render"))
+        {
+            int i = Array.IndexOf(args, "--edit-playlist-render");
+            string lbR = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            int valueAt = i + 1;
+            if (valueAt < args.Length && Directory.Exists(Path.Combine(args[valueAt], "Data")))
+            {
+                lbR = Path.GetFullPath(args[valueAt]);
+                valueAt++;
+            }
+            string playlist = valueAt < args.Length ? args[valueAt] : "";
+            string outDir = valueAt + 1 < args.Length ? args[valueAt + 1] : Path.Combine(AppContext.BaseDirectory, "editplaylist-render");
+            try { SetLaunchBoxCoreRootFolder(lbR); } catch { }
+            Platforms.EditPlatformRenderProbe.RenderPlaylist(lbR, playlist, outDir);
+            return 0;
+        }
         // --filter-selftest: build the advanced-search dialog + range slider with dummy facets, force handle
         // creation, and report — a headless catch for construction/layout exceptions (no user interaction).
         if (args.Contains("--filter-selftest"))

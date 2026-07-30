@@ -72,6 +72,22 @@ internal static class EditPlatformRenderProbe
         Console.WriteLine("[render] done");
     }
 
+    /// <summary>Offscreen render of all Edit Playlist sections (flag --edit-playlist-render).</summary>
+    public static void RenderPlaylist(string lbRoot, string playlistName, string outDir)
+    {
+        try { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); } catch { }
+        try { MediaResolver.Init(lbRoot); } catch { }
+        var playlists = PlaylistCatalog.Load(Path.Combine(lbRoot, "Data"), Path.Combine(lbRoot, "Images"));
+        var playlist = playlists.FirstOrDefault(p => string.Equals(p.Name, playlistName, StringComparison.OrdinalIgnoreCase))
+                       ?? playlists.FirstOrDefault();
+        if (playlist == null) { Console.WriteLine("[render] no playlist found (" + playlistName + ")"); return; }
+        Console.WriteLine("[render] playlist = " + playlist.Name);
+        Directory.CreateDirectory(outDir);
+        foreach (var (title, ctrl) in EditPlaylistWindow.BuildSectionsForRender(playlist, 1f))
+            Shot(ctrl, outDir, title, null);
+        Console.WriteLine("[render] done");
+    }
+
     /// <summary>--model3d-live &lt;platform&gt; &lt;out.png&gt;: host the REAL 3D Model Settings panel (with the live
     /// FlowModel preview) in a visible offscreen form, pump the message loop, screenshot via CopyFromScreen
     /// (DrawToBitmap can't capture WPF/ElementHost). Toggles Override on so the preview shows the case.</summary>

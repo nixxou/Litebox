@@ -9,7 +9,8 @@
 //   renamed, THEN the live object is re-pointed (SetNameInternal) so later op-log records key on the new name.
 //   Other fields go through the HostPlatformCategory setters → op-log → FlushIfSafe on close.
 //
-// Edit Playlist — Parents tab only for now (Details/Auto-Populate/Games are future work).
+// Edit Playlist — LaunchBox-style Details / Notes / Auto-Populate / Games / Parents sections with one
+// persistent Images panel. Auto rules and manual membership live in EditPlaylistPopulate.cs.
 
 #nullable enable
 
@@ -194,6 +195,8 @@ internal static class EditPlaylistWindow
         if (string.IsNullOrEmpty(id)) return;   // parents are keyed by PlaylistId
         using var w = new OptionsWindow($"Edit Playlist — {name}{(readOnly ? "   [READ-ONLY]" : "")}");
         float s = LiteBoxTheme.DpiScale(w);
+        w.SetSidePanel(BuildImagesSide(pl, readOnly, s), 350);
+        var state = new PlaylistEditorState(Safe(() => pl.AutoPopulate));
 
         var (details, applyDetails) = BuildDetails(pl, readOnly, s);
         w.AddSection("Details", details, applyDetails);
@@ -201,25 +204,51 @@ internal static class EditPlaylistWindow
         var (notes, applyNotes) = BuildNotes(pl, s, readOnly);
         w.AddSection("Notes", notes, applyNotes);
 
-        // (LB also has Auto-Populate and Games tabs — future work.)
+        var (autoPopulate, applyAutoPopulate) = EditPlaylistPopulate.BuildAutoPopulate(pl, readOnly, s, state);
+        w.AddSection("Auto-Populate", autoPopulate, applyAutoPopulate);
+
+        var (games, applyGames) = EditPlaylistPopulate.BuildGames(pl, readOnly, s, state);
+        w.AddSection("Games", games, applyGames);
+
         var (parents, applyParents) = ParentsPicker.Build(ParentChildKind.Playlist, id, readOnly, s);
         w.AddSection("Parents", parents, applyParents);
 
+        if (readOnly) DisableAllInputs(w);
         w.ShowDialog(owner);
         // Playlist edits journal per-file (RecordPlaylistModify keyed by PlaylistId + file) — flush like the rest.
         if (!readOnly) { try { (PluginHelper.DataManager as HostDataManagerXml)?.FlushIfSafe(); } catch { } }
     }
 
-    // ── Details (LB layout: Unique/Nested Name, Sort Title, Video Path, Sort Games By, 2 checkboxes) + Images ──
+    /// <summary>Build all playlist sections without the shell for the offscreen render probe.</summary>
+    internal static System.Collections.Generic.List<(string title, Control ctrl)> BuildSectionsForRender(HostPlaylist pl, float s)
+    {
+        var result = new System.Collections.Generic.List<(string, Control)>();
+        var state = new PlaylistEditorState(Safe(() => pl.AutoPopulate));
+        Control WithImages(Control body)
+        {
+            var host = new Panel { BackColor = Bg };
+            body.Dock = DockStyle.Fill;
+            var images = BuildImagesSide(pl, false, s);
+            images.Dock = DockStyle.Right;
+            images.Width = (int)Math.Round(350 * s);
+            host.Controls.Add(body);
+            host.Controls.Add(images);
+            body.BringToFront();
+            return host;
+        }
+        try { var (p, _) = BuildDetails(pl, false, s); result.Add(("Playlist Details", WithImages(p))); } catch (Exception ex) { Console.WriteLine("[render] Playlist Details: " + ex.Message); }
+        try { var (p, _) = BuildNotes(pl, s, false); result.Add(("Playlist Notes", WithImages(p))); } catch (Exception ex) { Console.WriteLine("[render] Playlist Notes: " + ex.Message); }
+        try { var (p, _) = EditPlaylistPopulate.BuildAutoPopulate(pl, false, s, state); result.Add(("Playlist Auto-Populate", WithImages(p))); } catch (Exception ex) { Console.WriteLine("[render] Playlist Auto: " + ex.Message); }
+        try { var (p, _) = EditPlaylistPopulate.BuildGames(pl, false, s, state); result.Add(("Playlist Games", WithImages(p))); } catch (Exception ex) { Console.WriteLine("[render] Playlist Games: " + ex.Message); }
+        try { var (p, _) = ParentsPicker.Build(ParentChildKind.Playlist, pl.PlaylistIdValue, false, s); result.Add(("Playlist Parents", WithImages(p))); } catch (Exception ex) { Console.WriteLine("[render] Playlist Parents: " + ex.Message); }
+        return result;
+    }
+
+    // ── Details (LB layout: Unique/Nested Name, Sort Title, Video Path, Sort Games By, 2 checkboxes) ──
     private static (Control panel, Action apply) BuildDetails(HostPlaylist pl, bool readOnly, float s)
     {
         int S(int px) => (int)Math.Round(px * s);
-        var container = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
-        var images = EditPlatformImages.BuildForPlaylist(Safe(() => pl.Name) ?? "", readOnly, s);
-        images.Dock = DockStyle.Right; images.Width = S(300);
         var left = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(S(12)) };
-        container.Controls.Add(left);
-        container.Controls.Add(images);
 
         int y = S(10);
         TextBox Row(string label, string value)
@@ -268,7 +297,7 @@ internal static class EditPlaylistWindow
             try { pl.IncludeWithPlatforms = includeChk.Checked; } catch { }
             try { pl.HideInBigBox = hideChk.Checked; } catch { }
         }
-        return (container, Apply);
+        return (left, Apply);
     }
 
     private static (Control panel, Action apply) BuildNotes(HostPlaylist pl, float s, bool readOnly)
@@ -284,6 +313,38 @@ internal static class EditPlaylistWindow
         p.Controls.Add(tb);
         void Apply() { if (!readOnly) try { pl.Notes = tb.Text; } catch { } }
         return (p, Apply);
+    }
+
+    private static Control BuildImagesSide(HostPlaylist pl, bool readOnly, float s)
+    {
+        int S(int px) => (int)Math.Round(px * s);
+        var panel = new Panel { BackColor = Bg, Padding = new Padding(S(6), S(14), S(8), S(8)) };
+        var header = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = S(30),
+            Text = "  Images",
+            ForeColor = Fg,
+            BackColor = Panel2,
+            Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
+        var body = EditPlatformImages.BuildForPlaylist(Safe(() => pl.Name) ?? "", readOnly, s);
+        body.Dock = DockStyle.Fill;
+        panel.Controls.Add(body);
+        panel.Controls.Add(header);
+        body.BringToFront();
+        return panel;
+    }
+
+    private static void DisableAllInputs(Control root)
+    {
+        foreach (Control c in root.Controls)
+        {
+            if (c is TextBox tb) tb.ReadOnly = true;
+            else if (c is CheckBox or ComboBox or Button or NumericUpDown or DataGridView) c.Enabled = false;
+            if (c.HasChildren) DisableAllInputs(c);
+        }
     }
 
     private static T? Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }

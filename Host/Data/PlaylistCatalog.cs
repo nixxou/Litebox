@@ -112,6 +112,50 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
         => _store?.RecordPlaylistChildReplace("PlaylistFilter", PlaylistIdValue, FileValue, JsonSerializer.Serialize(
             _filters.Select(f => new Dictionary<string, string> { ["Value"] = f.Value, ["FieldKey"] = f.FieldKey, ["ComparisonTypeKey"] = f.ComparisonTypeKey }).ToList()));
 
+    /// <summary>Atomically replaces the editable filter grid.  The public SDK mutators journal once per
+    /// property, which is useful to plugins but needlessly emits several intermediate collections when the
+    /// playlist editor applies a whole grid.</summary>
+    internal void ReplaceFilters(IEnumerable<PlaylistFilterDef> filters)
+    {
+        var next = (filters ?? Enumerable.Empty<PlaylistFilterDef>())
+            .Where(f => f != null && !string.IsNullOrWhiteSpace(f.FieldKey))
+            .Select(f => new PlaylistFilterDef(f.FieldKey?.Trim(), f.ComparisonTypeKey?.Trim(), f.Value ?? ""))
+            .ToList();
+        bool changed = next.Count != _filters.Count;
+        if (!changed)
+            for (int i = 0; i < next.Count && !changed; i++)
+                changed = !string.Equals(next[i].FieldKey, _filters[i].FieldKey, StringComparison.Ordinal)
+                          || !string.Equals(next[i].ComparisonTypeKey, _filters[i].ComparisonTypeKey, StringComparison.Ordinal)
+                          || !string.Equals(next[i].Value, _filters[i].Value, StringComparison.Ordinal);
+        if (!changed) return;
+        _filters.Clear();
+        _filters.AddRange(next);
+        RecordFilters();
+    }
+
+    /// <summary>Applies the manual Games-tab order/removals as one collection replacement. ManualOrder is
+    /// LaunchBox's zero-based display order; cached title/platform/file metadata is preserved for missing games.</summary>
+    internal void ReplaceGames(IEnumerable<HostPlaylistGame> games)
+    {
+        var next = (games ?? Enumerable.Empty<HostPlaylistGame>()).Where(g => g != null).Distinct().ToList();
+        bool changed = next.Count != _games.Count;
+        if (!changed)
+            for (int i = 0; i < next.Count && !changed; i++)
+                changed = !ReferenceEquals(next[i], _games[i]);
+        if (!changed) return;
+        _games.Clear();
+        for (int i = 0; i < next.Count; i++)
+        {
+            var g = next[i];
+            g.ManualOrderValue = i;
+            g.PlaylistIdValue = PlaylistIdValue;
+            g.SetOwner(this);
+            g.SetResolver(_resolve);
+            _games.Add(g);
+        }
+        RecordGames();
+    }
+
     public void SetResolver(Func<string, IGame> r) { _resolve = r; foreach (var g in _games) g.SetResolver(r); }
     public void SetAllGamesProvider(Func<IEnumerable<IGame>> p) => _allGames = p;
 
@@ -143,8 +187,18 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     public override bool TryRemovePlaylistGame(IPlaylistGame playlistGame)
     {
         int n = _games.RemoveAll(x => x.GameIdValue == playlistGame?.GameId);
-        if (n > 0) RecordGames();
+        if (n > 0)
+        {
+            for (int i = 0; i < _games.Count; i++) _games[i].ManualOrderValue = i;
+            RecordGames();
+        }
         return n > 0;
+    }
+    public override void ClearGames()
+    {
+        if (_games.Count == 0) return;
+        _games.Clear();
+        RecordGames();
     }
 
     public override IPlaylistFilter[] GetAllPlaylistFilters()
@@ -176,19 +230,32 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
 
     public override IGame[] GetAllGames(bool sort)
     {
-        if (AutoPopulateValue && _filters.Count > 0 && _allGames != null)
-            return _allGames().Where(MatchesAllFilters).ToArray();
+        if (AutoPopulateValue)
+        {
+            if (_allGames == null || !_filters.Any(f => !string.IsNullOrWhiteSpace(f.FieldKey)))
+                return Array.Empty<IGame>();
+            return _allGames().Where(g => MatchesFilters(g, _filters)).ToArray();
+        }
         return _games.Select(pg => _resolve?.Invoke(pg.GameIdValue)).Where(g => g != null).ToArray();
     }
 
     public override int GetGameCount(bool includeHidden, bool includeBroken) => GetAllGames(false).Length;
     public override bool HasGames(bool includeHidden, bool includeBroken) => GetAllGames(false).Length > 0;
 
-    private bool MatchesAllFilters(IGame g)
+    /// <summary>LaunchBox combines different fields with AND and repeated rules for one field with OR.
+    /// Arcade Beat Em Ups, for example, is Platform=Arcade AND (Genre=A OR Genre=B ...).</summary>
+    internal static bool MatchesFilters(IGame g, IEnumerable<PlaylistFilterDef> filters)
     {
-        foreach (var f in _filters)
-            if (!Match(g, f)) return false;
-        return true;
+        var groups = (filters ?? Enumerable.Empty<PlaylistFilterDef>())
+            .Where(f => f != null && !string.IsNullOrWhiteSpace(f.FieldKey))
+            .GroupBy(f => f.FieldKey.Trim(), StringComparer.OrdinalIgnoreCase);
+        bool any = false;
+        foreach (var group in groups)
+        {
+            any = true;
+            if (!group.Any(f => Match(g, f))) return false;
+        }
+        return any;
     }
 
     internal static bool Match(IGame g, PlaylistFilterDef f) => Compare(Field(g, f.FieldKey), f.ComparisonTypeKey, f.Value);
@@ -210,36 +277,58 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
                 case "rating": return g.Rating;
                 case "status": return g.Status;
                 case "version": return g.Version;
+                case "series": return g.Series;
+                case "source": case "storefront": return g.Source;
+                case "releasetype": return g.ReleaseType;
+                case "maxplayers": return g.MaxPlayers?.ToString(CultureInfo.InvariantCulture);
                 case "releaseyear": return g.ReleaseYear?.ToString(CultureInfo.InvariantCulture);
+                case "starrating": return g.StarRatingFloat.ToString(CultureInfo.InvariantCulture);
+                case "communitystarrating": return g.CommunityStarRating.ToString(CultureInfo.InvariantCulture);
                 case "favorite": return g.Favorite ? "true" : "false";
                 case "completed": return g.Completed ? "true" : "false";
+                case "broken": return g.Broken ? "true" : "false";
+                case "hide": case "hidden": return g.Hide ? "true" : "false";
+                case "installed": return g.Installed.HasValue ? (g.Installed.Value ? "true" : "false") : "";
                 case "playcount": case "played": return g.PlayCount.ToString(CultureInfo.InvariantCulture);
+                case "playtime": return g.PlayTime.ToString(CultureInfo.InvariantCulture);
+                case "dateadded": return Date(g.DateAdded);
+                case "releasedate": return Date(g.ReleaseDate);
+                case "lastplayed": case "lastplayeddate": return Date(g.LastPlayedDate);
                 default: return null;
             }
         }
         catch { return null; }
     }
 
+    private static string Date(DateTime? value)
+        => value.HasValue && value.Value != default
+            ? value.Value.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture) : "";
+
     private static bool Compare(string field, string cmpKey, string target)
     {
         field ??= ""; target ??= "";
-        switch ((cmpKey ?? "").ToLowerInvariant())
+        switch (Norm(cmpKey))
         {
-            case "equalto": return string.Equals(field, target, OIC);
-            case "notequalto": return !string.Equals(field, target, OIC);
+            case "equalto": case "isequalto": return string.Equals(field, target, OIC);
+            case "notequalto": case "isnotequalto": return !string.Equals(field, target, OIC);
             case "contains": return field.IndexOf(target, OIC) >= 0;
-            case "doesnotcontain": return field.IndexOf(target, OIC) < 0;
+            case "doesnotcontain": case "notcontains": return field.IndexOf(target, OIC) < 0;
             case "startswith": return field.StartsWith(target, OIC);
             case "endswith": return field.EndsWith(target, OIC);
-            case "greaterthan":
+            case "isempty": return field.Length == 0;
+            case "isnotempty": return field.Length != 0;
+            case "greaterthan": case "isgreaterthan":
                 return double.TryParse(field, out var a1) && double.TryParse(target, out var b1)
                     ? a1 > b1 : string.Compare(field, target, OIC) > 0;
-            case "lessthan":
+            case "lessthan": case "islessthan":
                 return double.TryParse(field, out var a2) && double.TryParse(target, out var b2)
                     ? a2 < b2 : string.Compare(field, target, OIC) < 0;
             default: return false;
         }
     }
+
+    private static string Norm(string key)
+        => new((key ?? "").Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 }
 
 internal static class PlaylistCatalog

@@ -6,6 +6,7 @@
   <title>LaunchBox</title>
   <link rel="stylesheet" href="styles.css">
   <script src="../vendor/lazyload.min.js"></script>
+  <script src="../vendor/game-sort.js"></script>
   <script src="config.js"></script>
   <script src="app.js" defer></script>
   <!-- Gamepad polling — loaded after app.js so window.LBW.nav exists. -->
@@ -55,7 +56,10 @@
           <li id="lb-view-list"  class="lb-menu-item" role="menuitemradio">List</li>
         </ul>
       </div>
-      <button class="lb-hbar-btn" type="button">ARRANGE-BY</button>
+      <div class="lb-menu-wrap" id="lb-arrange-wrap">
+        <button class="lb-hbar-btn" id="lb-arrange-btn" type="button" aria-haspopup="true" aria-expanded="false">ARRANGE BY: TITLE ▲</button>
+        <ul class="lb-menu-dropdown lb-arrange-dropdown" id="lb-arrange-dropdown" role="menu"></ul>
+      </div>
       <button class="lb-hbar-btn" type="button">IMAGE</button>
       <button class="lb-hbar-btn" type="button">GROUP</button>
       <button class="lb-hbar-btn" type="button">BADGES</button>

@@ -338,8 +338,8 @@ internal static class WriteBackSelfTest
         var pid = Guid.NewGuid().ToString();
         string pfile = Path.Combine(plDir, "Manual.xml");
         File.WriteAllText(pfile, "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
-            $"  <Playlist><PlaylistId>{pid}</PlaylistId><Name>OldList</Name></Playlist>\n" +
-            $"  <PlaylistGame><PlaylistId>{pid}</PlaylistId><GameId>g-1</GameId><GameTitle>One</GameTitle></PlaylistGame>\n" +
+            $"  <Playlist><PlaylistId>{pid}</PlaylistId><Name>OldList</Name><SortBy>Manual</SortBy><BigBoxSortByOverride>PlayCount</BigBoxSortByOverride></Playlist>\n" +
+            $"  <PlaylistGame><PlaylistId>{pid}</PlaylistId><GameId>g-1</GameId><GameTitle>One</GameTitle><ManualOrder>5</ManualOrder></PlaylistGame>\n" +
             "</LaunchBox>\n");
 
         var store = GameStore.Load(platformsDir, Path.Combine(dataDir, "pl.pending.db"));
@@ -351,6 +351,7 @@ internal static class WriteBackSelfTest
         var pl = dm.GetPlaylistById(pid) as HostPlaylist;
         f += Check("playlist: found", pl != null);
         if (pl == null) { store.CloseLog(); return f; }
+        f += Check("playlist: SortBy + BigBox override loaded", pl.SortBy == "Manual" && pl.BigBoxSortByOverride == "PlayCount");
         pl.Name = "NewList"; pl.Notes = "plnotes"; pl.SortBy = "Title";
         var pg = (HostPlaylistGame)pl.AddNewPlaylistGame(); pg.GameId = "g-2"; pg.GameTitle = "Two";
         var first = pl.GetAllPlaylistGames().OfType<HostPlaylistGame>().First(g => g.GameIdValue == "g-1");
@@ -370,7 +371,8 @@ internal static class WriteBackSelfTest
         var doc = XDocument.Load(pfile);
         var pe = doc.Root.Element("Playlist");
         f += Check("playlist: modify (Name/Notes/SortBy)", pe != null
-            && (string)pe.Element("Name") == "NewList" && (string)pe.Element("Notes") == "plnotes" && (string)pe.Element("SortBy") == "Title");
+            && (string)pe.Element("Name") == "NewList" && (string)pe.Element("Notes") == "plnotes" && (string)pe.Element("SortBy") == "Title"
+            && (string)pe.Element("BigBoxSortByOverride") == "PlayCount");
         var pgs = doc.Root.Elements("PlaylistGame").ToList();
         f += Check("playlist: game added + manual order replaced", pgs.Count == 2
             && pgs.Any(e => (string)e.Element("GameId") == "g-2" && (string)e.Element("GameTitle") == "Two")

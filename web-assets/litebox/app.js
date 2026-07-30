@@ -125,6 +125,14 @@
      (mirrors BBW DATA.platform used in fillPosterSide ~line 982) */
   var currentPlatformName = "";
 
+  /* Arrange By is deliberately page/session scoped. A playlist may impose an
+     effective order, but temporary re-sorts inside it never overwrite this global state. */
+  var lbGlobalSort = { key: "title", dir: "asc" };
+  var lbActiveSort = { key: "title", dir: "asc", forced: false };
+  var lbSortPayload = { nodeKind: "platform", sortBy: "Default", customSorts: [], manualAvailable: false };
+  var lbRawGames = [];
+  var lbKnownCustomSorts = [];
+
   /* Crossfade state for the hero fanart — mirrors BBW heroFanartActive.
      0 or 1: index of the .lb-panel-hero-bg-layer currently carrying .on.
      (ref: BigBoxWeb/web/engine/app.js :: heroFanartActive ~line 847) */
@@ -1072,6 +1080,7 @@
     /* Apply the persisted Image/List view mode to <body> + wire the VIEW menu
        (before the first game render so renderGames() builds the right view). */
     initLbViewMode();
+    setupLbArrangeMenu();
 
     /* ── f. Play button + caret wiring ────────────────────────────────────── */
     /* Play button: direct launch (uses selected version + ROM from state).
@@ -1670,7 +1679,7 @@
       lbDetailCache = {};
       lbDetailToken += 1;
 
-      DATA.games = lbGamesCache[path].games.slice();
+      lbApplySortPayload(lbGamesCache[path].payload || { games: lbGamesCache[path].games.slice() });
 
       /* Render the grid immediately — no fetch needed. */
       renderGames();
@@ -1730,15 +1739,18 @@
         /* Accept both { games: [...] } and a bare array, mirroring the BBW
            data shape (BBW uses json.games when the server wraps in an object).
            (shape ref: BigBoxWeb/web/engine/app.js :: DATA.games fill ~line 22) */
-        DATA.games = Array.isArray(json) ? json
-                   : (Array.isArray(json.games) ? json.games : []);
+        lbApplySortPayload(Array.isArray(json) ? { games: json } : json);
 
         /* Store a defensive copy in the cache so future visits avoid the
            network round-trip.  The stored objects are shared with DATA.games
            (shallow copy only at the array level), meaning toggleLbFavorite's
            direct mutation of g.fav propagates to the cache automatically.
            (ref: req §2) */
-        lbGamesCache[path] = { games: DATA.games.slice(), asOf: lbCacheCounter++ };
+        lbGamesCache[path] = {
+          games: lbRawGames.slice(),
+          payload: Array.isArray(json) ? { games: lbRawGames.slice() } : json,
+          asOf: lbCacheCounter++
+        };
         console.log("[LBW] lbw games cache store:", path, "(", DATA.games.length, "games, asOf:", lbGamesCache[path].asOf, ")");
 
         renderGames();
@@ -1795,7 +1807,7 @@
     /* ── Merged-list cache hit ────────────────────────────────────────────── */
     if (catPath && lbGamesCache[catPath]) {
       console.log("[LBW] lbw category cache hit:", catPath);
-      DATA.games = lbGamesCache[catPath].games.slice();
+      lbApplySortPayload({ games: lbGamesCache[catPath].games.slice(), nodeKind: "platform" });
       renderGames();
       return;
     }
@@ -1810,7 +1822,7 @@
 
     /* Empty category — nothing to fetch. */
     if (!leafPaths || leafPaths.length === 0) {
-      DATA.games = [];
+      lbApplySortPayload({ games: [], nodeKind: "platform" });
       renderGames();
       return;
     }
@@ -1834,11 +1846,20 @@
         .then(function (json) {
           var games = Array.isArray(json) ? json
                     : (Array.isArray(json.games) ? json.games : []);
+          if (!Array.isArray(json) && Array.isArray(json.customSorts)) {
+            var known = {};
+            lbKnownCustomSorts.concat(json.customSorts).forEach(function (n) { known[n] = true; });
+            lbKnownCustomSorts = Object.keys(known).sort();
+          }
           /* Cache the leaf too, so picking that platform directly is instant.
              Guard the store on the epoch so a stale response can't repopulate
              a cache that reloadLbAfterParental just wiped. */
           if (myEpoch === lbParentalEpoch) {
-            lbGamesCache[p] = { games: games.slice(), asOf: lbCacheCounter++ };
+            lbGamesCache[p] = {
+              games: games.slice(),
+              payload: Array.isArray(json) ? { games: games.slice() } : json,
+              asOf: lbCacheCounter++
+            };
           }
           return games;
         })
@@ -1857,8 +1878,7 @@
           return;
         }
 
-        /* Merge + de-dup by id (a game can sit in both a platform and one of
-           its playlists), then sort by title so the merged view is coherent. */
+        /* Merge + de-dup by id. The shared session Arrange By order is applied below. */
         var seen = Object.create(null);
         var merged = [];
         for (var li = 0; li < lists.length; li++) {
@@ -1873,17 +1893,12 @@
             merged.push(g);
           }
         }
-        merged.sort(function (a, b) {
-          return String(a && a.t || "").localeCompare(
-                 String(b && b.t || ""), undefined, { sensitivity: "base" });
-        });
-
-        DATA.games = merged;
+        lbApplySortPayload({ games: merged, nodeKind: "platform" });
 
         /* Cache the merged list under the category path (shared object refs with
            the per-leaf caches, so fav toggles stay in sync). */
         if (catPath) {
-          lbGamesCache[catPath] = { games: merged.slice(), asOf: lbCacheCounter++ };
+          lbGamesCache[catPath] = { games: merged.slice(), payload: { games: merged.slice(), nodeKind: "platform" }, asOf: lbCacheCounter++ };
         }
         console.log("[LBW] lbw category merged:", catPath, "(", merged.length, "games )");
 
@@ -2080,18 +2095,14 @@
   function lbListDisplayOrder() {
     var idx = [];
     for (var i = 0; i < DATA.games.length; i++) { idx.push(i); }
-    var sort = lbCfgGet("listView.sort", null) || {};
-    var def = sort.key ? LB_COL_DEFS[sort.key] : null;
-    if (!def) { return idx; }
-    var dir = (sort.dir === "desc") ? -1 : 1;
-    var sg = def.sortGet || function (g) { return String(def.get(g) || "").toLowerCase(); };
-    idx.sort(function (a, b) {
-      var va = sg(DATA.games[a]), vb = sg(DATA.games[b]);
-      if (va < vb) { return -1 * dir; }
-      if (va > vb) { return  1 * dir; }
-      return a - b;   /* stable tiebreak by original index */
-    });
     return idx;
+  }
+
+  function lbSortKeyForColumn(key) {
+    return {
+      dev: "developer", fav: "favorite", year: "releaseyear", esrb: "rating",
+      rating: "starrating", lastplayed: "lastplayed", playtime: "playtime"
+    }[key] || key;
   }
 
   /* ── buildLbList — render the header row + one row per game ───────────────── */
@@ -2104,7 +2115,7 @@
 
     var cols = lbVisibleColumns();
     var tmpl = lbColTemplate(cols);
-    var sort = lbCfgGet("listView.sort", null) || {};
+    var sort = lbActiveSort;
 
     /* One shared CSS var (--lb-tmpl on the scroll host) drives the column
        template for the header AND every row, so a live resize updates a single
@@ -2126,7 +2137,7 @@
       lbl.className = "lb-lh-label";
       lbl.textContent = def.label;
       hc.appendChild(lbl);
-      if (sort.key === key) {
+      if (sort.key === lbSortKeyForColumn(key)) {
         var sind = document.createElement("span");
         sind.className = "lb-lh-sort";
         sind.textContent = (sort.dir === "desc") ? " ▼" : " ▲";
@@ -2257,12 +2268,7 @@
       var hc = e.target.closest ? e.target.closest(".lb-lh-cell") : null;
       if (!hc) { return; }
       var key = hc.dataset.key;
-      var sort = lbCfgGet("listView.sort", null) || {};
-      sort = (sort.key === key)
-        ? { key: key, dir: (sort.dir === "asc") ? "desc" : "asc" }
-        : { key: key, dir: "asc" };
-      lbCfgSet("listView.sort", sort);
-      lbRebuildListKeepSel();
+      lbChooseArrange(lbSortKeyForColumn(key));
     });
 
     head.addEventListener("dragstart", function (e) {
@@ -2469,6 +2475,82 @@
     document.body.classList.toggle("lb-view-image", mode !== "list");
     lbReflectViewMenu(mode);
     setupLbViewMenu();
+  }
+
+  function lbApplySortPayload(payload) {
+    payload = payload || {};
+    var names = {};
+    lbKnownCustomSorts.forEach(function (n) { names[n] = true; });
+    (payload.customSorts || []).forEach(function (n) { names[n] = true; });
+    (payload.games || []).forEach(function (g) {
+      var cf = g && g.cf || {};
+      for (var n in cf) if (Object.prototype.hasOwnProperty.call(cf, n)) names[n] = true;
+    });
+    lbKnownCustomSorts = Object.keys(names).sort();
+    payload.customSorts = lbKnownCustomSorts.slice();
+    lbSortPayload = payload;
+    lbRawGames = Array.isArray(payload.games) ? payload.games.slice() : [];
+    lbActiveSort = window.LBGameSort.stateForPayload(payload, false, lbGlobalSort);
+    DATA.games = window.LBGameSort.sorted(lbRawGames, lbActiveSort);
+    lbReflectArrange();
+  }
+
+  function lbChooseArrange(key) {
+    var same = lbActiveSort.key === key;
+    lbActiveSort = { key: key, dir: same && lbActiveSort.dir === "asc" ? "desc" : "asc", forced: !!lbActiveSort.forced };
+    if (!lbActiveSort.forced) lbGlobalSort = { key: lbActiveSort.key, dir: lbActiveSort.dir };
+    var selectedId = posterSel >= 0 && DATA.games[posterSel] ? DATA.games[posterSel].id : null;
+    DATA.games = window.LBGameSort.sorted(lbRawGames, lbActiveSort);
+    renderGames();
+    if (selectedId != null) {
+      for (var i = 0; i < DATA.games.length; i++) {
+        if (String(DATA.games[i].id) === String(selectedId)) { selectCell(i); break; }
+      }
+    }
+    lbReflectArrange();
+  }
+
+  function lbReflectArrange() {
+    var btn = document.getElementById("lb-arrange-btn");
+    if (btn) btn.textContent = "ARRANGE BY: " + window.LBGameSort.label(lbActiveSort.key).toUpperCase() +
+      (lbActiveSort.dir === "desc" ? " ▼" : " ▲");
+  }
+
+  function lbBuildArrangeMenu() {
+    var dd = document.getElementById("lb-arrange-dropdown");
+    if (!dd) return;
+    dd.innerHTML = "";
+    var opts = window.LBGameSort.options(lbSortPayload);
+    var insertedCustomSeparator = false;
+    opts.forEach(function (opt, index) {
+      if ((opt.custom && !insertedCustomSeparator) || (opt.key !== "manual" && index > 0 && opts[index - 1].key === "manual")) {
+        var sep = document.createElement("li");
+        sep.className = "lb-menu-sep"; sep.setAttribute("role", "separator");
+        dd.appendChild(sep);
+        if (opt.custom) insertedCustomSeparator = true;
+      }
+      var li = document.createElement("li");
+      li.className = "lb-menu-item" + (lbActiveSort.key === opt.key ? " checked" : "");
+      li.setAttribute("role", "menuitemradio");
+      li.textContent = opt.label + (lbActiveSort.key === opt.key ? (lbActiveSort.dir === "desc" ? "  ▼" : "  ▲") : "");
+      li.addEventListener("click", function () { lbChooseArrange(opt.key); dd.classList.remove("open"); });
+      dd.appendChild(li);
+    });
+  }
+
+  function setupLbArrangeMenu() {
+    var btn = document.getElementById("lb-arrange-btn");
+    var dd = document.getElementById("lb-arrange-dropdown");
+    if (!btn || !dd) return;
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (dd.classList.contains("open")) dd.classList.remove("open");
+      else { lbBuildArrangeMenu(); dd.classList.add("open"); }
+    });
+    dd.addEventListener("click", function (e) { e.stopPropagation(); });
+    document.addEventListener("click", function () { dd.classList.remove("open"); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") dd.classList.remove("open"); });
+    lbReflectArrange();
   }
 
   /* ── buildLbGrid — poster grid (image view) ───────────────────────────────

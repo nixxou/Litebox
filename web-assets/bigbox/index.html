@@ -26,6 +26,7 @@
 <meta name="apple-mobile-web-app-title" content="BigBoxWeb">
 <link rel="stylesheet" href="styles.css">
 <script src="vendor/lazyload.min.js"></script>
+<script src="../vendor/game-sort.js"></script>
 </head>
 <body>
 <!-- Bouton exit visible UNIQUEMENT en mode kiosque embarqué (body.bbw-embedded).
@@ -209,6 +210,7 @@
       <div class="topbar"><span class="title">SYSTEM MENU</span><span class="clock">2:59 PM</span></div>
       <div class="list">
         <div class="list-item selected">Back</div>
+        <div class="list-item" data-sys="arrange">Arrange By</div>
         <div class="list-item" data-sys="settings">Settings</div>
         <div class="list-item">About</div>
         <div class="list-item" data-sys="lock">Unlock</div>
@@ -334,6 +336,14 @@
         <div class="config-tabs"></div>
         <div class="config-body"></div>
         <div class="config-hint"><span class="glyph rect">A</span> Reset option &nbsp; <span class="glyph rect">←→</span> Adjust &nbsp; <span class="glyph rect">L/R</span> Tab &nbsp; <span class="glyph rect">B</span> Close</div>
+      </div>
+    </div>
+
+    <div class="config-modal bbw-arrange-modal" data-modal="arrange">
+      <div class="config-panel">
+        <div class="config-tabs"><div class="config-tab active">ARRANGE BY</div></div>
+        <div class="config-body"></div>
+        <div class="config-hint"><span class="glyph rect">↑↓</span> Choose &nbsp; <span class="glyph rect">A</span> Apply / reverse &nbsp; <span class="glyph rect">B</span> Close</div>
       </div>
     </div>
 

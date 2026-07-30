@@ -133,6 +133,12 @@
   var relOpen = false, relModalEl = null, relTab = 0, relSel = 0;   // popup Related Games (onglets)
   var vndbOpen = false, vndbModalEl = null;                          // popup Tags VNDB (panneau scrollable)
   var cfgOpen = false, cfgModalEl = null, cfgTab = 0, cfgFocus = 0, cfgTargets = [], cfgDirty = false;   // UI Réglages (Settings)
+  var arrangeOpen = false, arrangeModalEl = null, arrangeFocus = 0, arrangeTargets = [];
+  var bbwGlobalSort = { key: "title", dir: "asc" };
+  var bbwActiveSort = { key: "title", dir: "asc", forced: false };
+  var bbwSortPayload = { nodeKind: "platform", sortBy: "Default", customSorts: [], manualAvailable: false };
+  var bbwRawGames = [];
+  var systemReturn = "categories";
   var screens = {};
 
   var $ = function (s, r) { return (r || document).querySelector(s); };
@@ -1273,6 +1279,43 @@
     });
     if (arr) arr._sorted = true;
     return arr;
+  }
+
+  function applyArrangePayload(payload) {
+    payload = payload || {};
+    bbwSortPayload = payload;
+    bbwRawGames = applyLibraryFilter((payload.games || []).slice());
+    bbwActiveSort = window.LBGameSort.stateForPayload(payload, true, bbwGlobalSort);
+    DATA.games = window.LBGameSort.sorted(bbwRawGames, bbwActiveSort);
+    DATA.gamesAll = DATA.games;
+    DATA.platformTotal = DATA.games.length;
+    DATA.platformTotalAll = DATA.platformTotal;
+    reflectSystemArrange();
+  }
+
+  function chooseArrange(key) {
+    var same = bbwActiveSort.key === key;
+    bbwActiveSort = { key: key, dir: same && bbwActiveSort.dir === "asc" ? "desc" : "asc", forced: !!bbwActiveSort.forced };
+    if (!bbwActiveSort.forced) bbwGlobalSort = { key: bbwActiveSort.key, dir: bbwActiveSort.dir };
+    var keep = DATA.games[currentGame] && DATA.games[currentGame].id;
+    DATA.games = window.LBGameSort.sorted(bbwRawGames, bbwActiveSort);
+    DATA.gamesAll = DATA.games;
+    DATA.platformTotal = DATA.games.length;
+    DATA.platformTotalAll = DATA.platformTotal;
+    resetSearch();
+    setupList("games", DATA.games.map(function (g) { return g.t; }));
+    markGameStars("games");
+    var at = 0;
+    if (keep != null) for (var i = 0; i < DATA.games.length; i++) if (String(DATA.games[i].id) === String(keep)) { at = i; break; }
+    shownGame = -1; setSelected("games", at, { instant: true });
+    if (posterMode) posterSelect(at); // setupList already rebuilt the poster grid from the same order
+    reflectSystemArrange();
+  }
+
+  function reflectSystemArrange() {
+    var item = document.querySelector('[data-sys="arrange"]');
+    if (item) item.textContent = "Arrange By: " + window.LBGameSort.label(bbwActiveSort.key) +
+      (bbwActiveSort.dir === "desc" ? " ▼" : " ▲");
   }
 
   // Filtre "bibliothèque" appliqué à la liste reçue (drapeaux par jeu de games.json). Retire
@@ -2598,6 +2641,7 @@
       else setCatHighlight(curFrame().sel, true);
       if (!window.BBW.isMobile()) doCatTransition(curFrame().sel, -(leaving.enterDir || 1), false);
     } else {
+      systemReturn = "categories";
       navTo("system", false);   // racine → menu
     }
   }
@@ -4111,6 +4155,65 @@
   // Pilotable au pad/tablette : L/R = onglets · Haut/Bas = focus · Gauche/Droite = ajuste ·
   // A = remet l'option par défaut (ou « Restore defaults » = toute la page) · B = ferme.
   // Sauvegarde en cookie (window.BBW.cfg). À la fermeture, si modifié → reload (applique tout).
+  function setupArrange() {
+    arrangeModalEl = $(".bbw-arrange-modal");
+    if (!arrangeModalEl) return;
+    arrangeModalEl.addEventListener("click", function (e) {
+      if (!arrangeOpen) return;
+      var row = e.target.closest && e.target.closest(".cfg-row");
+      if (row && row.dataset.i != null) {
+        arrangeFocus = +row.dataset.i;
+        paintArrange();
+        activateArrange();
+      } else if (!(e.target.closest && e.target.closest(".config-panel"))) closeArrange();
+    });
+  }
+  function openArrange() {
+    if (!arrangeModalEl) return;
+    arrangeOpen = true; arrangeFocus = 0;
+    renderArrange(); arrangeModalEl.classList.add("open");
+  }
+  function closeArrange() {
+    arrangeOpen = false;
+    if (arrangeModalEl) arrangeModalEl.classList.remove("open");
+  }
+  function renderArrange() {
+    var body = $(".config-body", arrangeModalEl);
+    if (!body) return;
+    body.innerHTML = ""; arrangeTargets = [];
+    var options = window.LBGameSort.options(bbwSortPayload);
+    options.forEach(function (opt, i) {
+      var row = document.createElement("div");
+      row.className = "cfg-row";
+      row.dataset.i = i;
+      var active = bbwActiveSort.key === opt.key;
+      var lab = document.createElement("span");
+      lab.className = "cfg-label";
+      lab.textContent = opt.label;
+      var val = document.createElement("span");
+      val.className = "cfg-ctrl";
+      val.textContent = active ? (bbwActiveSort.dir === "desc" ? "▼" : "▲") : "";
+      row.appendChild(lab); row.appendChild(val); body.appendChild(row);
+      row.addEventListener("mouseenter", function () { if (arrangeOpen && mouseActive) { arrangeFocus = i; paintArrange(); } });
+      arrangeTargets.push({ key: opt.key, el: row });
+    });
+    var currentIndex = options.map(function (o) { return o.key; }).indexOf(bbwActiveSort.key);
+    if (currentIndex >= 0) arrangeFocus = currentIndex;
+    paintArrange();
+  }
+  function paintArrange() {
+    arrangeTargets.forEach(function (t, i) { t.el.classList.toggle("focus", i === arrangeFocus); });
+    var t = arrangeTargets[arrangeFocus];
+    if (t && t.el.scrollIntoView) t.el.scrollIntoView({ block: "nearest" });
+  }
+  function activateArrange() {
+    var t = arrangeTargets[arrangeFocus];
+    if (!t) return;
+    chooseArrange(t.key);
+    closeArrange();
+    navTo(systemReturn === "games" ? "games" : "categories", true);
+  }
+
   function setupConfig() {
     cfgModalEl = $(".config-modal"); if (!cfgModalEl) return;
     cfgModalEl.addEventListener("click", function (e) {
@@ -5083,8 +5186,8 @@
       pl = pl || { games: [] };
       DATA.platform = pl.platform || ""; DATA.platformLogo = pl.platformLogo || "";
       DATA.platformLogoImg = pl.platformLogoImg || "";
-      DATA.games = sortGamesAlpha(applyLibraryFilter(pl.games || []));   // filtre biblio + tri alphabétique
-      DATA.gamesAll = DATA.games; DATA.platformTotal = DATA.games.length; DATA.platformTotalAll = DATA.platformTotal; resetSearch();   // nouvelle plateforme → recherche remise à zéro
+      applyArrangePayload(pl);
+      resetSearch();   // nouvelle plateforme → recherche remise à zéro
       setupList("games", DATA.games.map(function (g) { return g.t; })); markGameStars("games");   // reconstruit la liste + marque favoris
       loadPlatformStars(path);   // paliers qualité en arrière-plan (plateformes seulement)
       var tt = $(".topbar .title", screens.games); if (tt) tt.textContent = DATA.platform || "";
@@ -5123,6 +5226,7 @@
     else if (current === "system") {
       var sit = $(".list-item.selected", screens.system);
       var t = sit ? sit.textContent.trim() : "";
+      if (sit && sit.getAttribute("data-sys") === "arrange") { openArrange(); return; }
       if (sit && sit.getAttribute("data-sys") === "settings") { openConfig(); return; }   // → UI Réglages
       if (sit && sit.getAttribute("data-sys") === "exit") {
         // Mode kiosque embarqué : poste 'kiosk:exit' au host WebView2 qui
@@ -5145,7 +5249,7 @@
   function goBack() {
     if (current === "games") navTo("categories", true);
     else if (current === "details") detailBack();   // remonte d'un sous-menu, ou racine → liste de jeux
-    else if (current === "system") navTo("categories", true);
+    else if (current === "system") navTo(systemReturn || "categories", true);
     else if (current === "categories") catBack();   // dépile un niveau, ou racine → menu
   }
   // « Valider » en respectant la zone active (liste/rail/Recent).
@@ -5263,6 +5367,13 @@
       return;
     }
     // UI Réglages : L/R onglets · Haut/Bas focus · Gauche/Droite ajuste · A remet par défaut · B ferme.
+    if (arrangeOpen) {
+      if (cmd === "up") { arrangeFocus = Math.max(0, arrangeFocus - 1); paintArrange(); }
+      else if (cmd === "down") { arrangeFocus = Math.min(arrangeTargets.length - 1, arrangeFocus + 1); paintArrange(); }
+      else if (cmd === "select") activateArrange();
+      else if (cmd === "back") closeArrange();
+      return;
+    }
     if (cfgOpen) {
       if (cmd === "mediaNext") cfgMoveTab(1);
       else if (cmd === "mediaPrev") cfgMoveTab(-1);
@@ -5322,6 +5433,11 @@
       return;
     }
     // Bascule VUE POSTER (Tab · bouton View/Select manette · swipe bas tablette) — écran jeux.
+    if (cmd === "menu" && (current === "games" || current === "categories")) {
+      systemReturn = current;
+      navTo("system", false);
+      return;
+    }
     if (cmd === "poster") { if (current === "games") togglePoster(); return; }
     // Navigation dans la grille POSTER (quand le rail n'est pas ouvert ; le rail garde sa branche).
     if (current === "games" && posterMode && zone !== "rail") {
@@ -5388,7 +5504,7 @@
   // réécritures contextuelles de touches, ex. right→mediaNext, de voler les flèches aux modales.)
   function anyOverlayOpen() {
     return infoOpen || launchErrOpen || ratingOpen || pinOpen || lbdbOpen || relOpen ||
-           vndbOpen || cfgOpen || advOpen || romAdvOpen || searchOpen;
+           vndbOpen || cfgOpen || arrangeOpen || advOpen || romAdvOpen || searchOpen;
   }
 
   // ── Clavier → commandes (selon écran + zone) ────────────────────────────
@@ -5851,7 +5967,7 @@
       var left = $(".left", bar);
       if (left) left.addEventListener("click", function () {
         if (id !== current) return;
-        if (id === "categories") navTo("system", false); else goBack();
+        if (id === "categories") { systemReturn = "categories"; navTo("system", false); } else goBack();
       });
       bar.querySelectorAll(".right .hint").forEach(function (h) {
         var txt = h.textContent.toUpperCase(); h.style.cursor = "pointer";
@@ -5929,8 +6045,8 @@
     var pl = res[2] || {};
     DATA.platform = pl.platform || ""; DATA.platformLogo = pl.platformLogo || "";
     DATA.platformLogoImg = pl.platformLogoImg || "";
-    DATA.games = sortGamesAlpha(applyLibraryFilter(pl.games || []));   // filtre biblio + tri alphabétique
-    DATA.gamesAll = DATA.games; DATA.platformTotal = DATA.games.length; DATA.platformTotalAll = DATA.platformTotal; resetSearch();
+    applyArrangePayload(pl);
+    resetSearch();
     // Contrôle parental : applique l'état AVANT setupList("system") (l'item Verrou
     // est retiré du DOM si inactif → la navigation ne tombe pas sur un item caché).
     var ps = res[3];
@@ -5972,7 +6088,7 @@
     document.addEventListener("visibilitychange", function () { if (!document.hidden) refreshRecentEpoch(); });
     window.addEventListener("focus", refreshRecentEpoch);
     setupList("system");
-    setupRail(); setupRomRail(); setupRecent(); wireBottomBars(); setupRatingModal(); setupPinPad(); setupRelatedModal(); setupVndbModal(); setupConfig(); setupInfoModal(); setupLaunchErrorModal(); setupSearch(); setupAdvanced(); setupRomAdv();
+    setupRail(); setupRomRail(); setupRecent(); wireBottomBars(); setupRatingModal(); setupPinPad(); setupRelatedModal(); setupVndbModal(); setupConfig(); setupArrange(); setupInfoModal(); setupLaunchErrorModal(); setupSearch(); setupAdvanced(); setupRomAdv();
     setupWheel("categories"); setupWheel("games");   // roue tactile mobile
     setupSwipeNav("details"); setupSwipeNav("system");   // swipe horizontal = retour/select
     setupPosterGesture();   // tablette : swipe bas depuis la title bar (centre) = bascule de vue

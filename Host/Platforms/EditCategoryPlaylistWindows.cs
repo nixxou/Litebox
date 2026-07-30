@@ -270,11 +270,17 @@ internal static class EditPlaylistWindow
 
         // Sort Games By — editable combo (observed stored value: "Default"); free text persists verbatim.
         left.Controls.Add(new Label { Text = "Sort Games By:", Location = new Point(S(6), y + S(4)), AutoSize = true, ForeColor = SubFg, BackColor = Bg });
-        var sortBy = new ComboBox { Location = new Point(S(110), y), Width = S(300), DropDownStyle = ComboBoxStyle.DropDown, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
+        var sortBy = new ComboBox { Location = new Point(S(110), y), Width = S(300), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
         sortBy.Items.Add("Default");
+        sortBy.Items.Add("Manual");
+        foreach (var d in GameSortCatalog.Standard) sortBy.Items.Add(d.Label);
+        var customNames = GameSortCatalog.CustomFieldNames(Safe(() => PluginHelper.DataManager.GetAllGames()) ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IGame>());
+        foreach (var custom in customNames) sortBy.Items.Add(custom);
         string curSort = Safe(() => pl.SortBy) ?? "";
-        if (curSort.Length > 0 && !sortBy.Items.Contains(curSort)) sortBy.Items.Add(curSort);
-        sortBy.Text = curSort;
+        string curLabel = GameSortCatalog.Label(GameSortCatalog.Parse(curSort, customNames));
+        if (!sortBy.Items.Contains(curLabel)) sortBy.Items.Add(curLabel);
+        sortBy.SelectedItem = curLabel;
+        if (sortBy.SelectedIndex < 0) sortBy.SelectedIndex = 0;
         left.Controls.Add(sortBy);
         y += S(44);
 
@@ -293,7 +299,7 @@ internal static class EditPlaylistWindow
             try { pl.NestedName = nestedTb.Text.Trim(); } catch { }
             try { pl.SortTitle = sortTb.Text.Trim(); } catch { }
             try { pl.VideoPath = videoTb.Text.Trim(); } catch { }
-            try { pl.SortBy = sortBy.Text.Trim(); } catch { }
+            try { pl.SortBy = GameSortCatalog.ToLaunchBoxValue(GameSortCatalog.Parse(sortBy.Text, customNames)); } catch { }
             try { pl.IncludeWithPlatforms = includeChk.Checked; } catch { }
             try { pl.HideInBigBox = hideChk.Checked; } catch { }
         }

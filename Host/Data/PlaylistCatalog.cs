@@ -67,7 +67,7 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     internal static readonly HashSet<string> Modeled = new(StringComparer.Ordinal)
     {
         "PlaylistId", "Name", "NestedName", "Notes", "SortBy", "Category", "VideoPath", "ImageType", "SortTitle",
-        "LastGameId", "BigBoxView", "BigBoxTheme", "AutoPopulate", "IncludeWithPlatforms", "HideInBigBox",
+        "LastGameId", "BigBoxView", "BigBoxTheme", "BigBoxSortByOverride", "AutoPopulate", "IncludeWithPlatforms", "HideInBigBox",
     };
 
     private readonly List<HostPlaylistGame> _games = new();
@@ -90,7 +90,8 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     public IReadOnlyCollection<string> ExtraFieldNames => _extra != null ? (IReadOnlyCollection<string>)_extra.Keys : Array.Empty<string>();
 
     public string PlaylistIdValue, NameValue, NestedNameValue, NotesValue, SortByValue, CategoryValue,
-                  VideoPathValue, ImageTypeValue, SortTitleValue, LastGameIdValue, BigBoxViewValue, BigBoxThemeValue;
+                  VideoPathValue, ImageTypeValue, SortTitleValue, LastGameIdValue, BigBoxViewValue, BigBoxThemeValue,
+                  BigBoxSortByOverrideValue;
     public bool AutoPopulateValue, IncludeWithPlatformsValue, HideInBigBoxValue;
     public string ImagesRootValue;   // <LB>\Images, for playlist images
     public string FileValue;         // source xml (one playlist per file) — carried in every op
@@ -171,6 +172,7 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     public override string LastGameId { get => LastGameIdValue ?? ""; set { LastGameIdValue = value; Rec("LastGameId", value); } }
     public override string BigBoxView { get => BigBoxViewValue ?? ""; set { BigBoxViewValue = value; Rec("BigBoxView", value); } }
     public override string BigBoxTheme { get => BigBoxThemeValue ?? ""; set { BigBoxThemeValue = value; Rec("BigBoxTheme", value); } }
+    internal string BigBoxSortByOverride { get => BigBoxSortByOverrideValue ?? ""; set { BigBoxSortByOverrideValue = value; Rec("BigBoxSortByOverride", value); } }
     public override bool AutoPopulate { get => AutoPopulateValue; set { AutoPopulateValue = value; Rec("AutoPopulate", value ? "true" : "false"); } }
     public override bool IncludeWithPlatforms { get => IncludeWithPlatformsValue; set { IncludeWithPlatformsValue = value; Rec("IncludeWithPlatforms", value ? "true" : "false"); } }
     public override bool HideInBigBox { get => HideInBigBoxValue; set { HideInBigBoxValue = value; Rec("HideInBigBox", value ? "true" : "false"); } }
@@ -236,7 +238,7 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
                 return Array.Empty<IGame>();
             return _allGames().Where(g => MatchesFilters(g, _filters)).ToArray();
         }
-        return _games.Select(pg => _resolve?.Invoke(pg.GameIdValue)).Where(g => g != null).ToArray();
+        return _games.OrderBy(pg => pg.ManualOrderValue).Select(pg => _resolve?.Invoke(pg.GameIdValue)).Where(g => g != null).ToArray();
     }
 
     public override int GetGameCount(bool includeHidden, bool includeBroken) => GetAllGames(false).Length;
@@ -361,6 +363,7 @@ internal static class PlaylistCatalog
                 LastGameIdValue = (string)pe.Element("LastGameId"),
                 BigBoxViewValue = (string)pe.Element("BigBoxView"),
                 BigBoxThemeValue = (string)pe.Element("BigBoxTheme"),
+                BigBoxSortByOverrideValue = (string)pe.Element("BigBoxSortByOverride"),
                 AutoPopulateValue = ((string)pe.Element("AutoPopulate") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
                 IncludeWithPlatformsValue = ((string)pe.Element("IncludeWithPlatforms") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),
                 HideInBigBoxValue = ((string)pe.Element("HideInBigBox") ?? "").Equals("true", StringComparison.OrdinalIgnoreCase),

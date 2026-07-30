@@ -129,8 +129,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private readonly System.Windows.Forms.Timer _searchDebounce = new() { Interval = 150 };
     private ToolStripButton _filterBtn;                               // advanced search filter (dialog + active indicator)
     private Search.FilterCriteria _filter;                            // null = no advanced filter
-    private readonly ToolStripComboBox _sortCombo;
-    private readonly ToolStripButton _dirBtn;
+    private readonly ToolStripDropDownButton _arrangeBtn;
     private readonly ToolStripLabel _count;
     private ToolStripLabel _extDbInd;      // "ExtendDB present" indicator (toolbar, before the count)
     private ToolStripLabel _parentalInd;   // parental-control padlock indicator (toolbar, before the count)
@@ -195,9 +194,11 @@ internal sealed class MainWindow : Form, IMessageFilter
     private readonly object _detailLock = new();
     private volatile bool _closing;        // form is closing → the loader bails before its blocking Invoke
     private bool _ascending = true;
-    private string[] _sortKeys;          // parallel to SortLabels (column keys; "name" = CompareName)
-    private string _curSortKey = "title"; // current sort key (header click can pick a non-combo column)
-    private bool _suppressSort;
+    private string _curSortKey = "title";
+    private string _sessionSortKey = "title";
+    private bool _sessionAscending = true;
+    private bool _nodeForcesSort;
+    private Dictionary<string, int> _manualOrder;
     private TitleSortNormalization _titleSortNormalization;
 
     private readonly LiteBoxConfig _cfg;
@@ -216,12 +217,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     /// <summary>Marker for the synthetic "All Games" tree root.</summary>
     private sealed class AllNode { public static readonly AllNode Instance = new(); }
 
-    // Sort options (default first = Title). Sorting goes THROUGH ObjectListView (otherwise SetObjects
-    // re-sorts and clobbers a manual sort). "Title" sorts by the article-stripped, SortTitle-aware
-    // CompareName (LaunchBox-style) while DISPLAYING the full title — a per-game Sort Title overrides it.
-    private static readonly string[] SortLabels =
-        { "Title", "Platform", "Developer", "Year", "Rating", "Plays", "Date Added", "Date Modified", "Last Played" };
-
+    // Arrange By is session-scoped; playlist SortBy can temporarily override it without changing
+    // the session choice restored when the user leaves that playlist.
     public MainWindow(PluginRegistry reg, IDataManager dm)
     {
         _reg = reg; _dm = dm;
@@ -345,18 +342,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         bar.Items.Add(_filterBtn);
         bar.Items.Add(new ToolStripSeparator());
 
-        bar.Items.Add(new ToolStripLabel("Sort:") { ForeColor = SubFg });
-        _sortCombo = new ToolStripComboBox
+        _arrangeBtn = new ToolStripDropDownButton("Arrange By: Title ▲")
         {
-            AutoSize = false, Width = 130, DropDownStyle = ComboBoxStyle.DropDownList,
-            BackColor = Panel, ForeColor = Fg,
+            ForeColor = Fg,
+            ToolTipText = "Choose the game order; selecting the active field reverses it",
         };
-        foreach (var d in SortLabels) _sortCombo.Items.Add(d);
-        _sortCombo.SelectedIndexChanged += (_, _) => { if (!_suppressSort) ApplySort(); };
-        bar.Items.Add(_sortCombo);
-        _dirBtn = new ToolStripButton("▲") { ForeColor = Fg, ToolTipText = "Ascending / Descending" };
-        _dirBtn.Click += (_, _) => { _ascending = !_ascending; _dirBtn.Text = _ascending ? "▲" : "▼"; ApplySort(); };
-        bar.Items.Add(_dirBtn);
+        _arrangeBtn.DropDownOpening += (_, _) => RebuildArrangeMenu();
+        bar.Items.Add(_arrangeBtn);
         bar.Items.Add(new ToolStripSeparator());
 
         // Label shows the view you'd switch TO: "Poster View" while in list mode, "List View" while in
@@ -533,8 +525,6 @@ internal sealed class MainWindow : Form, IMessageFilter
             Controls.Add(warn);
         }
 
-        _sortCombo.SelectedIndex = 0; // default = CompareName
-
         // Dark native scrollbars (Win10/11 explorer dark theme).
         DarkScroll(_games);
         DarkScroll(_sources);
@@ -560,7 +550,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true);         // Display option (default on)
             if (Math.Abs(_zoom - 1.0) > 0.001) _games.SetZoom((float)_zoom, 9f);   // apply saved central-panel zoom to the list (poster already built at this zoom)
             Application.AddMessageFilter(this);   // enable Ctrl-wheel zoom over the central panel
-            RestoreSort();           // last sort column + direction
+            // Arrange By is deliberately session-only. Every process starts at Title ascending.
             _currentView = SourceViews.ById(_cfg.Get("GroupView"));   // restore the saved grouping…
             SyncViewCombo();                                          // …reflect it in the combo (no rebuild)
             PopulateSources();       // build the tree
@@ -769,8 +759,6 @@ internal sealed class MainWindow : Form, IMessageFilter
 
         lv.RebuildColumns();
 
-        _sortKeys = new[] { "title", "platform", "developer", "year", "rating", "plays", "dateadded", "datemodified", "lastplayed" };
-
         lv.SelectionChangedGame += OnGameSelectionChanged;
         lv.GameActivated += LaunchSelected;
         lv.GameRightClicked += OnGameRightClicked;
@@ -899,12 +887,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void OnHeaderColumnClicked(GameColumn col)
     {
         if (col == null) return;
-        bool same = string.Equals(_curSortKey, col.Key, StringComparison.OrdinalIgnoreCase);
-        _ascending = same ? !_ascending : true;
-        _dirBtn.Text = _ascending ? "▲" : "▼";
-        int idx = Array.IndexOf(_sortKeys, col.Key);
-        if (idx >= 0) { _suppressSort = true; try { _sortCombo.SelectedIndex = idx; } finally { _suppressSort = false; } }
-        DoSort(col.Key, _ascending);
+        SelectSort(SortKeyForColumn(col.Key));
     }
 
     private void ShowColumnChooser(Point screen)
@@ -926,10 +909,35 @@ internal sealed class MainWindow : Form, IMessageFilter
 
     private Func<IGame, object> SortGetterFor(string key)
     {
-        if (string.Equals(key, "name", StringComparison.OrdinalIgnoreCase)) return g => CompareName(g);
-        var col = _games.AllColumns.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
-        return col?.Sort ?? (g => CompareName(g));
+        if (string.Equals(key, GameSortCatalog.Manual, StringComparison.OrdinalIgnoreCase))
+            return g => _manualOrder != null && _manualOrder.TryGetValue(S(Safe(() => g.Id)), out var i) ? i : int.MaxValue;
+        var getter = GameSortCatalog.Getter(key, _titleSortNormalization);
+        return g => getter(g);
     }
+
+    private static string SortKeyForColumn(string key) => key?.ToLowerInvariant() switch
+    {
+        "fav" => "favorite",
+        "players" => "maxplayers",
+        "plays" => "playcount",
+        "dbid" => "launchboxid",
+        "year" => "releaseyear",
+        "esrb" => "rating",
+        "rating" or "community" => "starrating",
+        _ => GameSortCatalog.Parse(key),
+    };
+
+    private static string ColumnKeyForSort(string key) => key?.ToLowerInvariant() switch
+    {
+        "favorite" => "fav",
+        "maxplayers" => "players",
+        "playcount" => "plays",
+        "launchboxid" => "dbid",
+        "releaseyear" => "year",
+        "rating" => "esrb",
+        "starrating" => "rating",
+        _ => key,
+    };
 
     // ── Right details construction ───────────────────────────────────────────
     private Panel BuildDetails(out HeroPanel hero, out MediaPanel media, out MediaStrip strip,
@@ -1609,10 +1617,6 @@ internal sealed class MainWindow : Form, IMessageFilter
         _cfg.Set("LastCategory", NodeKey(_currentNode) ?? "*");
         var g = _games.SelectedGame;
         _cfg.Set("LastGame", g != null ? S(Safe(() => g.Id)) : "");
-        string sortKey = (_sortKeys != null && _sortCombo.SelectedIndex >= 0 && _sortCombo.SelectedIndex < _sortKeys.Length)
-                         ? _sortKeys[_sortCombo.SelectedIndex] : "title";
-        _cfg.Set("SortColumn", sortKey);
-        _cfg.SetBool("SortAsc", _ascending);
         _cfg.SetBool("MetaExpanded", _metaExpanded);
         _cfg.SetBool("VndbExpanded", _vndbExpanded);
         _cfg.SetBool("RaExpanded", _raExpanded);
@@ -2586,19 +2590,6 @@ internal sealed class MainWindow : Form, IMessageFilter
         Location = new Point(wa.Left + Math.Max(0, (wa.Width - Width) / 2), wa.Top + Math.Max(0, (wa.Height - Height) / 2));
     }
 
-    private void RestoreSort()
-    {
-        _ascending = _cfg.GetBool("SortAsc", true);
-        if (_dirBtn != null) _dirBtn.Text = _ascending ? "▲" : "▼";
-        var key = _cfg.Get("SortColumn", "title");   // legacy "name" configs fall back to "title" below (same order)
-        int idx = 0;
-        for (int i = 0; i < _sortKeys.Length; i++)
-            if (string.Equals(_sortKeys[i], key, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
-        _curSortKey = _sortKeys[idx];
-        _suppressSort = true;
-        try { _sortCombo.SelectedIndex = idx; } finally { _suppressSort = false; }
-    }
-
     private void RestoreSelection()
     {
         object node = AllNode.Instance;
@@ -2866,16 +2857,94 @@ internal sealed class MainWindow : Form, IMessageFilter
         }
         catch { _current = Array.Empty<IGame>(); }
 
+        ActivateNodeSort(node);
         ApplySort();              // fills the centre list (no game auto-selected)
         ShowNodeDetails(node);    // node info on the right
     }
 
     // ── Sort + filter ────────────────────────────────────────────────────────
+    private void ActivateNodeSort(object node)
+    {
+        _nodeForcesSort = false;
+        _manualOrder = null;
+        _curSortKey = _sessionSortKey;
+        _ascending = _sessionAscending;
+
+        if (node is not IPlaylist playlist) return;
+        bool auto = Safe(() => playlist.AutoPopulate);
+        var configured = GameSortCatalog.Parse(Safe(() => playlist.SortBy), GameSortCatalog.CustomFieldNames(_current));
+
+        // Manual has no stable meaning for an auto-populated playlist: LaunchBox falls back to Default.
+        if (configured == GameSortCatalog.Manual && auto) return;
+        if (configured == GameSortCatalog.Default) return;
+
+        _nodeForcesSort = true;
+        _curSortKey = configured;
+        _ascending = true;
+        if (configured == GameSortCatalog.Manual)
+        {
+            _manualOrder = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pg in Safe(() => playlist.GetAllPlaylistGames()) ?? Array.Empty<IPlaylistGame>())
+            {
+                var id = S(Safe(() => pg.GameId));
+                if (id.Length > 0) _manualOrder[id] = Safe(() => pg.ManualOrder);
+            }
+        }
+    }
+
+    private void SelectSort(string key, bool? ascending = null)
+    {
+        if (string.IsNullOrWhiteSpace(key)) key = "title";
+        bool same = string.Equals(_curSortKey, key, StringComparison.OrdinalIgnoreCase);
+        _ascending = ascending ?? (same ? !_ascending : true);
+        _curSortKey = key;
+        if (!_nodeForcesSort)
+        {
+            _sessionSortKey = key;
+            _sessionAscending = _ascending;
+        }
+        DoSort(key, _ascending);
+    }
+
+    private void RebuildArrangeMenu()
+    {
+        if (_arrangeBtn == null) return;
+        _arrangeBtn.DropDownItems.Clear();
+
+        void Add(string key, string label)
+        {
+            bool active = string.Equals(_curSortKey, key, StringComparison.OrdinalIgnoreCase);
+            var item = new ToolStripMenuItem(label + (active ? (_ascending ? "  ▲" : "  ▼") : ""))
+            {
+                Tag = key,
+                ForeColor = Fg,
+                Checked = active,
+            };
+            item.Click += (_, _) => SelectSort(key);
+            _arrangeBtn.DropDownItems.Add(item);
+        }
+
+        if (_currentNode is IPlaylist pl && !Safe(() => pl.AutoPopulate))
+        {
+            Add(GameSortCatalog.Manual, "Manual");
+            _arrangeBtn.DropDownItems.Add(new ToolStripSeparator());
+        }
+        foreach (var d in GameSortCatalog.Standard) Add(d.Key, d.Label);
+
+        // LaunchBox exposes custom-field sorts globally, even when the current node
+        // happens not to contain a game using that field.
+        var custom = GameSortCatalog.CustomFieldNames(Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>());
+        if (custom.Length > 0)
+        {
+            _arrangeBtn.DropDownItems.Add(new ToolStripSeparator());
+            foreach (var name in custom) Add(GameSortCatalog.CustomPrefix + name, name);
+        }
+    }
+
     private void ApplySort()
     {
-        if (_games == null || _sortKeys == null) return;
-        int idx = _sortCombo != null && _sortCombo.SelectedIndex >= 0 ? _sortCombo.SelectedIndex : 0;
-        DoSort(_sortKeys[Math.Min(idx, _sortKeys.Length - 1)], _ascending);
+        if (_games == null) return;
+        DoSort(_curSortKey, _ascending);
     }
 
     private void DoSort(string key, bool asc)
@@ -2884,8 +2953,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         _curSortKey = key;
         _games.SortGetter = SortGetterFor(key);
         _games.SortAscending = asc;
+        var columnKey = ColumnKeyForSort(key);
         _games.SortGlyphColumn = _games.AllColumns.FirstOrDefault(c =>
-            c.Visible && string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
+            c.Visible && string.Equals(c.Key, columnKey, StringComparison.OrdinalIgnoreCase));
+        if (_arrangeBtn != null) _arrangeBtn.Text = "Arrange By: " + GameSortCatalog.Label(key) + (asc ? " ▲" : " ▼");
         ApplyFilter();   // sets the filter predicate + rebuilds the view (single pass)
     }
 
@@ -2920,13 +2991,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (c.IsActive) Search.SearchHistory.Add(c);
 
         // The filter's "Order by" is a one-shot: drive the toolbar sort so the user can still re-sort after.
-        string sortKey = c.SortBy switch { "year" => "year", "rating" => "rating", "lastplayed" => "lastplayed", _ => null };
+        string sortKey = c.SortBy switch { "year" => "releaseyear", "rating" => "starrating", "lastplayed" => "lastplayed", _ => null };
         if (sortKey != null)
         {
-            int idx = Array.IndexOf(_sortKeys, sortKey);
-            if (idx >= 0) { _suppressSort = true; try { _sortCombo.SelectedIndex = idx; } catch { } _suppressSort = false; }
-            _ascending = false; if (_dirBtn != null) _dirBtn.Text = "▼";
-            DoSort(sortKey, false);   // sets SortGetter + calls ApplyFilter (predicate applied too)
+            SelectSort(sortKey, false);   // sets SortGetter + calls ApplyFilter (predicate applied too)
         }
         else ApplyFilter();
 

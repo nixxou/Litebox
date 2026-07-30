@@ -164,7 +164,7 @@ internal static class OwnedDataProvider
         var plat = ResolvePlatform(slug);
         if (plat == null) return EmptyGamesPayload();
         if (st != null && st.IsHidden(plat.Name)) return EmptyGamesPayload();
-        return GamesPayload(plat, SafeGames(plat), st);
+        return GamesPayload(plat, SafeGames(plat), st, null);
     }
 
     public static object PlaylistGames(string slug, WebParentalState st)
@@ -172,7 +172,7 @@ internal static class OwnedDataProvider
         var pl = ResolvePlaylist(slug);
         if (pl == null) return EmptyGamesPayload();
         if (st != null && st.IsHidden(pl.Name)) return EmptyGamesPayload();
-        return GamesPayload(pl as IPlatform, SafePlaylistGames(pl), st);
+        return GamesPayload(null, SafePlaylistGames(pl), st, pl);
     }
 
     // ── data/{platforms|playlists|categories}/<slug>/recent.json ──────────
@@ -363,13 +363,40 @@ internal static class OwnedDataProvider
         catch (Exception ex) { Log("Playlist.GetAllGames(" + pl?.Name + "): " + ex.Message); return Enumerable.Empty<IGame>(); }
     }
 
-    private static object GamesPayload(IPlatform plat, IEnumerable<IGame> games, WebParentalState st)
+    private static object GamesPayload(IPlatform plat, IEnumerable<IGame> games, WebParentalState st, IPlaylist playlist)
     {
         WebStoreState.EnsureFresh();
         var titleSortMode = TitleSortNormalizer.ConfiguredMode();
-        var items = games.Where(g => g != null && Allowed(g, st)).Select(g => LightItem(g, titleSortMode)).ToArray();
-        var name = (plat != null) ? plat.Name : "";
-        return new { platform = name, platformLogo = name, platformLogoImg = PlatformLogoUrl(plat), platformTotal = items.Length, games = items };
+        var gameArray = games.Where(g => g != null && Allowed(g, st)).ToArray();
+        var manual = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (playlist != null)
+            foreach (var pg in SafeValue(() => playlist.GetAllPlaylistGames()) ?? Array.Empty<IPlaylistGame>())
+            {
+                var id = Safe(() => pg.GameId) ?? "";
+                if (id.Length > 0) manual[id] = SafeValue(() => pg.ManualOrder);
+            }
+        var items = gameArray.Select(g => LightItem(g, titleSortMode,
+            manual.TryGetValue(Safe(() => g.Id) ?? "", out var order) ? order : (int?)null)).ToArray();
+        var name = playlist != null ? Safe(() => playlist.Name) ?? "" : (plat != null ? plat.Name : "");
+        bool autoPopulate = playlist != null && SafeValue(() => playlist.AutoPopulate);
+        string sortBy = playlist == null ? "Default" : (Safe(() => playlist.SortBy) ?? "Default");
+        string bigBoxSortBy = playlist is HostPlaylist hp ? hp.BigBoxSortByOverride : "";
+        return new
+        {
+            platform = name,
+            platformLogo = name,
+            platformLogoImg = PlatformLogoUrl(plat),
+            platformTotal = items.Length,
+            nodeKind = playlist == null ? "platform" : "playlist",
+            sortBy,
+            bigBoxSortBy,
+            autoPopulate,
+            manualAvailable = playlist != null && !autoPopulate,
+            // Keep Arrange By complete and stable while browsing between nodes.
+            customSorts = GameSortCatalog.CustomFieldNames(
+                SafeValue(() => PluginHelper.DataManager.GetAllGames()) ?? Array.Empty<IGame>()),
+            games = items,
+        };
     }
 
     private static readonly ConcurrentDictionary<string, string> _clearLogoPaths = new();
@@ -399,9 +426,14 @@ internal static class OwnedDataProvider
     }
 
     private static object EmptyGamesPayload()
-        => new { platform = "", platformLogo = "", platformLogoImg = (string)null, platformTotal = 0, games = Array.Empty<object>() };
+        => new
+        {
+            platform = "", platformLogo = "", platformLogoImg = (string)null, platformTotal = 0,
+            nodeKind = "platform", sortBy = "Default", bigBoxSortBy = "", autoPopulate = false,
+            manualAvailable = false, customSorts = Array.Empty<string>(), games = Array.Empty<object>(),
+        };
 
-    private static object LightItem(IGame gm, TitleSortNormalization titleSortMode)
+    private static object LightItem(IGame gm, TitleSortNormalization titleSortMode, int? manualOrder = null)
     {
         var cg = ResolveCacheGame(gm);
         return new
@@ -413,11 +445,28 @@ internal static class OwnedDataProvider
             dev = Safe(() => gm.Developer),
             pub = Safe(() => gm.Publisher),
             g = Safe(() => gm.GenresString),
+            platform = Safe(() => gm.Platform),
             r = ThemeFormat.RatingStr(SafeRating(gm)),
             ur = SafeEffRating(gm),
             lp = SafeLastPlayedMs(gm),
+            da = SafeDateMs(() => gm.DateAdded),
+            dm = SafeDateMs(() => gm.DateModified),
             esrb = Safe(() => gm.Rating),
             rt = Safe(() => gm.ReleaseType),
+            rd = SafeNullableDateMs(() => gm.ReleaseDate),
+            region = Safe(() => gm.Region),
+            playMode = Safe(() => gm.PlayMode),
+            playCount = SafeInt(() => gm.PlayCount),
+            playTime = SafeInt(() => gm.PlayTime),
+            maxPlayers = SafeIntN(() => gm.MaxPlayers),
+            progress = Safe(() => gm.Progress),
+            series = Safe(() => gm.Series),
+            source = Safe(() => gm.Source),
+            status = Safe(() => gm.Status),
+            version = Safe(() => gm.Version),
+            mameHs = SafeBool(() => GameSortCatalog.MameHighScoresSupported(gm)),
+            mo = manualOrder,
+            cf = SafeCustomFields(gm),
             file = SafeFileName(gm),
             box = ThemeFormat.BoxLines(gm.Title),
             dbId = SafeIntN(() => gm.LaunchBoxDbId),
@@ -816,6 +865,41 @@ internal static class OwnedDataProvider
     }
 
     private static readonly DateTime _epoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    private static double SafeDateMs(Func<DateTime> read)
+    {
+        try
+        {
+            var d = read();
+            return d == default ? 0 : (d.ToUniversalTime() - _epoch).TotalMilliseconds;
+        }
+        catch { return 0; }
+    }
+
+    private static double SafeNullableDateMs(Func<DateTime?> read)
+    {
+        try
+        {
+            var d = read();
+            return !d.HasValue ? 0 : (d.Value.ToUniversalTime() - _epoch).TotalMilliseconds;
+        }
+        catch { return 0; }
+    }
+
+    private static Dictionary<string, string> SafeCustomFields(IGame game)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var field in game.GetAllCustomFields() ?? Array.Empty<ICustomField>())
+            {
+                var name = Safe(() => field.Name).Trim();
+                if (name.Length > 0) result[name] = Safe(() => field.Value);
+            }
+        }
+        catch { }
+        return result;
+    }
+
     private static double SafeLastPlayedMs(IGame g)
     {
         var d = SafeLastPlayed(g);
@@ -830,6 +914,7 @@ internal static class OwnedDataProvider
     }
 
     private static string Safe(Func<string> f) { try { return f() ?? ""; } catch { return ""; } }
+    private static T SafeValue<T>(Func<T> f) { try { return f(); } catch { return default; } }
     private static int SafeInt(Func<int?> f) { try { return f() ?? 0; } catch { return 0; } }
     private static bool SafeBool(Func<bool> f) { try { return f(); } catch { return false; } }
     private static int? SafeIntN(Func<int?> f) { try { return f(); } catch { return null; } }

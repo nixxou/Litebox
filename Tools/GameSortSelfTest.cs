@@ -26,6 +26,23 @@ internal static class GameSortSelfTest
             !GameSortCatalog.UpdatesSession(true, "developer"));
         failures += Check("Default playlist field sort updates session",
             GameSortCatalog.UpdatesSession(false, "developer"));
+        var deferred = new DeferredGameSort();
+        string sessionKey = "title";
+        bool sessionAscending = true;
+        deferred.Stage(ref sessionKey, ref sessionAscending, "developer", false);
+        failures += Check("kiosk sort is staged as next session order",
+            deferred.Pending && sessionKey == "developer" && !sessionAscending);
+        deferred.DesktopSelection(ref sessionKey, ref sessionAscending, false, "manual", true);
+        failures += Check("node-local desktop sort cancels staged kiosk order",
+            !deferred.Pending && sessionKey == "title" && sessionAscending);
+        deferred.Stage(ref sessionKey, ref sessionAscending, "publisher", false);
+        deferred.DesktopSelection(ref sessionKey, ref sessionAscending, true, "playcount", true);
+        failures += Check("global desktop sort replaces staged kiosk order",
+            !deferred.Pending && sessionKey == "playcount" && sessionAscending);
+        deferred.Stage(ref sessionKey, ref sessionAscending, "genre", false);
+        deferred.AppliedOnNodeLoad();
+        failures += Check("next node load consumes staged kiosk order",
+            !deferred.Pending && sessionKey == "genre" && !sessionAscending);
         var equalManual = new[]
         {
             new HostPlaylistGame { GameIdValue = "z", ManualOrderValue = 0 },

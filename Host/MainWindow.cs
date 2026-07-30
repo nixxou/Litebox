@@ -199,6 +199,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private bool _sessionAscending = true;
     private bool _nodeForcesSort;
     private Dictionary<string, int> _manualOrder;
+    private readonly DeferredGameSort _deferredKioskSort = new();
     private TitleSortNormalization _titleSortNormalization;
 
     private readonly LiteBoxConfig _cfg;
@@ -2876,6 +2877,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _manualOrder = null;
         _curSortKey = _sessionSortKey;
         _ascending = _sessionAscending;
+        _deferredKioskSort.AppliedOnNodeLoad();
 
         if (node is not IPlaylist playlist) return;
         bool auto = Safe(() => playlist.AutoPopulate);
@@ -2907,11 +2909,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         _curSortKey = key;
         // Manual only has meaning inside the current non-auto playlist. Selecting it from a
         // Default playlist must not replace the session sort restored on the next platform.
-        if (GameSortCatalog.UpdatesSession(_nodeForcesSort, key))
-        {
-            _sessionSortKey = key;
-            _sessionAscending = _ascending;
-        }
+        bool updatesSession = GameSortCatalog.UpdatesSession(_nodeForcesSort, key);
+        _deferredKioskSort.DesktopSelection(
+            ref _sessionSortKey,
+            ref _sessionAscending,
+            updatesSession,
+            key,
+            _ascending);
         DoSort(key, _ascending);
     }
 
@@ -2948,18 +2952,16 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (key is GameSortCatalog.Default or GameSortCatalog.Manual) key = "title";
         }
 
-        _sessionSortKey = key.StartsWith(GameSortCatalog.CustomPrefix, StringComparison.OrdinalIgnoreCase)
+        key = key.StartsWith(GameSortCatalog.CustomPrefix, StringComparison.OrdinalIgnoreCase)
             ? key
             : key.ToLowerInvariant();
-        _sessionAscending = !string.Equals(dir, "desc", StringComparison.OrdinalIgnoreCase);
-
-        // A configured playlist owns the visible order. Likewise, a contextual
-        // Manual selection remains local until the user leaves that playlist.
-        if (_nodeForcesSort || string.Equals(_curSortKey, GameSortCatalog.Manual, StringComparison.OrdinalIgnoreCase))
-            return;
-        _curSortKey = _sessionSortKey;
-        _ascending = _sessionAscending;
-        DoSort(_curSortKey, _ascending);
+        _deferredKioskSort.Stage(
+            ref _sessionSortKey,
+            ref _sessionAscending,
+            key,
+            !string.Equals(dir, "desc", StringComparison.OrdinalIgnoreCase));
+        // Do not touch _curSortKey, the ListView, filters, or poster grid here.
+        // ActivateNodeSort consumes this staged session order on the next real node load.
     }
 
     private void RebuildArrangeMenu()

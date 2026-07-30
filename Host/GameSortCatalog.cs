@@ -9,6 +9,64 @@ namespace LbApiHost.Host;
 internal sealed record GameSortDefinition(string Key, string Label, string LaunchBoxValue);
 
 /// <summary>
+/// Holds a kiosk-selected global order until the desktop loads another game list.
+/// A desktop sort action before that load wins and cancels the staged kiosk order.
+/// </summary>
+internal sealed class DeferredGameSort
+{
+    private string _previousKey = "title";
+    private bool _previousAscending = true;
+
+    public bool Pending { get; private set; }
+
+    public void Stage(ref string sessionKey, ref bool sessionAscending, string key, bool ascending)
+    {
+        if (!Pending)
+        {
+            _previousKey = sessionKey;
+            _previousAscending = sessionAscending;
+        }
+        sessionKey = key;
+        sessionAscending = ascending;
+        Pending = true;
+    }
+
+    public void DesktopSelection(
+        ref string sessionKey,
+        ref bool sessionAscending,
+        bool updatesSession,
+        string selectedKey,
+        bool selectedAscending)
+    {
+        if (!Pending)
+        {
+            if (updatesSession)
+            {
+                sessionKey = selectedKey;
+                sessionAscending = selectedAscending;
+            }
+            return;
+        }
+
+        // Any explicit desktop choice cancels the deferred kiosk choice. A global
+        // desktop choice replaces it; a node-local choice restores the prior global.
+        if (updatesSession)
+        {
+            sessionKey = selectedKey;
+            sessionAscending = selectedAscending;
+        }
+        else
+        {
+            sessionKey = _previousKey;
+            sessionAscending = _previousAscending;
+        }
+        Pending = false;
+    }
+
+    public void AppliedOnNodeLoad() => Pending = false;
+}
+
+/// <summary>
 /// One vocabulary for the desktop Arrange By menu, playlist SortBy values and both web clients.
 /// Internal keys are stable and lower-case; LaunchBoxValue is what is written to playlist XML.
 /// </summary>

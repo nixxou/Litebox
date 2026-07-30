@@ -133,11 +133,25 @@
     }
   }
 
+  // Keys are computed ONCE per game, before sorting — not inside the comparator, which would
+  // recompute (and re-allocate, value() upper-cases strings) O(n log n) times instead of O(n).
+  // On a 10k-game platform that was the difference between a visible hitch and an unnoticeable one.
   function sorted(games, state) {
     state = state || { key: "title", dir: "asc" };
-    var dir = state.dir === "desc" ? -1 : 1;
-    return (games || []).map(function (g, i) { return { g: g, i: i }; }).sort(function (a, b) {
-      var av = value(a.g, state.key), bv = value(b.g, state.key);
+    var key = state.key, dir = state.dir === "desc" ? -1 : 1;
+    var manual = key === "manual", isTitle = key === "title";
+    var src = games || [], n = src.length;
+    var rows = new Array(n);
+    for (var i = 0; i < n; i++) {
+      var g = src[i], k = value(g, key);
+      rows[i] = {
+        g: g, i: i, k: k,
+        // The tie key is the title key; when that IS the primary, reuse it rather than recompute.
+        t: manual ? null : (isTitle ? k : value(g, "title")),
+      };
+    }
+    rows.sort(function (a, b) {
+      var av = a.k, bv = b.k;
       // null = greatest, exactly like GameListView.ValueComparer: blanks sit at the bottom
       // ascending and at the top descending, in both surfaces.
       if (av == null || bv == null) {
@@ -149,14 +163,16 @@
       }
       // Manual ranks are dense and unique (GameSortCatalog.ManualRanks); a tie can only mean a
       // legacy payload with a raw ManualOrder, where the source sequence IS the manual order.
-      if (state.key === "manual") return (a.i - b.i) * dir;
+      if (manual) return (a.i - b.i) * dir;
       // Tie key: title, ASCENDING even under a descending primary — GameListView applies
       // .ThenBy (never .ThenByDescending) for the same reason.
-      var at = value(a.g, "title"), bt = value(b.g, "title");
-      if (at < bt) return -1;
-      if (at > bt) return 1;
+      if (a.t < b.t) return -1;
+      if (a.t > b.t) return 1;
       return a.i - b.i;
-    }).map(function (x) { return x.g; });
+    });
+    var out = new Array(n);
+    for (var j = 0; j < n; j++) out[j] = rows[j].g;
+    return out;
   }
 
   // One rule for every surface: a playlist's SortBy, applied ascending. The `bigBox` argument is

@@ -20,6 +20,15 @@ internal static class GameSortSelfTest
         failures += Check("custom field", GameSortCatalog.Parse("custom1", new[] { "abc", "custom1" }) == "custom:custom1");
         failures += Check("round-trip standard values", GameSortCatalog.Standard.All(d =>
             GameSortCatalog.Parse(GameSortCatalog.ToLaunchBoxValue(d.Key)) == d.Key));
+        // "ESRB" is a LiteBox LABEL. What reaches <SortBy> must stay LaunchBox's own "Rating",
+        // and a file written by LaunchBox must still resolve to the same key.
+        failures += Check("ESRB is a label only — XML value stays LaunchBox's",
+            GameSortCatalog.Label("rating") == "ESRB"
+            && GameSortCatalog.ToLaunchBoxValue("rating") == "Rating"
+            && GameSortCatalog.Parse("Rating") == "rating"
+            && GameSortCatalog.Parse("ESRB") == "rating");
+        failures += Check("no catalog entry writes its label instead of its LaunchBox value",
+            GameSortCatalog.Standard.All(d => GameSortCatalog.ToLaunchBoxValue(d.Key) == d.LaunchBoxValue));
         failures += Check("Manual never replaces session sort",
             !GameSortCatalog.UpdatesSession(false, GameSortCatalog.Manual));
         failures += Check("configured playlist override keeps temporary sort local",

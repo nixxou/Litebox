@@ -39,6 +39,93 @@ internal sealed record PlaylistFilterField(string Key, string Label, PlaylistFie
 
 internal sealed record PlaylistComparison(string Key, string Label, bool UsesValue, bool Positive);
 
+/// <summary>An auto-populate rule set with its fields and comparisons already resolved.
+///
+/// Resolving them per game was costing ~28 microseconds per game per playlist: every game re-ran
+/// the field lookup, the comparison lookup and an ICustomField[] allocation, so opening a category
+/// that aggregates a few dozen auto playlists took close to a second. Compile once, evaluate many.
+/// </summary>
+internal sealed class PlaylistFilterPlan
+{
+    private sealed record Group(PlaylistFilterField Field, bool IsCustom, (PlaylistComparison Cmp, string Value)[] Rules);
+
+    private readonly Group[] _groups;
+
+    private PlaylistFilterPlan(Group[] groups) => _groups = groups;
+
+    /// <summary>True when at least one rule resolves to something LiteBox can actually evaluate.</summary>
+    public bool HasEvaluableGroup => _groups.Length > 0;
+
+    public static PlaylistFilterPlan Compile(IEnumerable<PlaylistFilterDefLike>? filters)
+    {
+        var groups = new List<Group>();
+        foreach (var byField in (filters ?? Array.Empty<PlaylistFilterDefLike>())
+                     .Where(f => f != null && !string.IsNullOrWhiteSpace(f.FieldKey))
+                     .GroupBy(f => f.FieldKey.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            var field = PlaylistFilterCatalog.Find(byField.Key)
+                        // Not a built-in: assume a custom field of that name, which is text.
+                        ?? new PlaylistFilterField(byField.Key.Trim(), byField.Key.Trim(), PlaylistFieldKind.Text);
+            if (!field.Evaluable) continue;   // unsupported → not a constraint at all
+            bool isCustom = PlaylistFilterCatalog.Find(byField.Key) == null;
+
+            var rules = byField
+                .Select(r => (Cmp: PlaylistFilterCatalog.FindComparison(r.ComparisonTypeKey, field.Kind), r.Value))
+                .Where(x => x.Cmp != null)
+                .Select(x => (x.Cmp!, x.Value ?? ""))
+                .ToArray();
+            if (rules.Length == 0) continue;
+            groups.Add(new Group(field, isCustom, rules));
+        }
+        return new PlaylistFilterPlan(groups.ToArray());
+    }
+
+    public bool Matches(IGame game)
+    {
+        if (game == null || _groups.Length == 0) return false;
+        foreach (var group in _groups)
+        {
+            string value = group.IsCustom
+                ? CustomValue(game, group.Field.Key)
+                : PlaylistFilterCatalog.Read(game, group.Field) ?? "";
+
+            bool sawPositive = false, positiveHit = false;
+            foreach (var (cmp, target) in group.Rules)
+            {
+                bool hit = PlaylistFilterCatalog.Compare(value, cmp, target);
+                if (cmp.Positive)
+                {
+                    sawPositive = true;
+                    positiveHit |= hit;
+                }
+                else if (!hit) return false;   // negative and ordering rules are ANDed
+            }
+            if (sawPositive && !positiveHit) return false;   // positive rules are ORed
+        }
+        return true;
+    }
+
+    private static string CustomValue(IGame game, string name)
+    {
+        try
+        {
+            foreach (var cf in game.GetAllCustomFields() ?? Array.Empty<ICustomField>())
+                if (string.Equals(cf?.Name?.Trim(), name, StringComparison.OrdinalIgnoreCase))
+                    return cf.Value ?? "";
+        }
+        catch { }
+        return "";
+    }
+}
+
+/// <summary>The shape Compile needs from a rule, so the plan does not depend on the storage type.</summary>
+internal interface PlaylistFilterDefLike
+{
+    string FieldKey { get; }
+    string ComparisonTypeKey { get; }
+    string Value { get; }
+}
+
 internal static class PlaylistFilterCatalog
 {
     // Alphabetical by label, exactly as LaunchBox renders it.
@@ -157,20 +244,8 @@ internal static class PlaylistFilterCatalog
         _ => TextComparisons,
     };
 
-    public static PlaylistFilterField? Find(string? fieldKey, IEnumerable<string>? customNames = null)
-    {
-        var key = Norm(fieldKey);
-        if (key.Length == 0) return null;
-        var hit = Builtin.FirstOrDefault(f => Norm(f.Key) == key || Norm(f.Label) == key);
-        if (hit != null) return hit;
-        foreach (var alias in Aliases)
-            if (key == alias.Key) return Builtin.FirstOrDefault(f => f.Key == alias.Value);
-        var custom = (customNames ?? Array.Empty<string>())
-            .FirstOrDefault(n => Norm(n) == key);
-        return custom == null ? null : new PlaylistFilterField(custom.Trim(), custom.Trim(), PlaylistFieldKind.Text);
-    }
-
     // Spellings seen in LiteBox INI / older LaunchBox files that are not the canonical key.
+    // Declared BEFORE the index that consumes it — static initialisers run in declaration order.
     private static readonly Dictionary<string, string> Aliases = new(StringComparer.Ordinal)
     {
         ["name"] = "Title",
@@ -187,38 +262,91 @@ internal static class PlaylistFilterCatalog
         ["xboxmicrosoftstore"] = "Xbox",
     };
 
+    // Every spelling of every built-in field, resolved once at type init. Find is on the hot path
+    // through PlaylistFilterPlan.Compile and used to be a linear scan that normalised all ~48
+    // entries on each call.
+    private static readonly Dictionary<string, PlaylistFilterField> ByNormalizedName = BuildIndex();
+
+    private static Dictionary<string, PlaylistFilterField> BuildIndex()
+    {
+        var index = new Dictionary<string, PlaylistFilterField>(StringComparer.Ordinal);
+        foreach (var f in Builtin)
+        {
+            index[Norm(f.Key)] = f;
+            index.TryAdd(Norm(f.Label), f);
+        }
+        foreach (var alias in Aliases)
+        {
+            var target = Builtin.FirstOrDefault(f => f.Key == alias.Value);
+            if (target != null) index.TryAdd(alias.Key, target);
+        }
+        return index;
+    }
+
+    public static PlaylistFilterField? Find(string? fieldKey, IEnumerable<string>? customNames = null)
+    {
+        var key = Norm(fieldKey);
+        if (key.Length == 0) return null;
+        if (ByNormalizedName.TryGetValue(key, out var hit)) return hit;
+        var custom = (customNames ?? Array.Empty<string>())
+            .FirstOrDefault(n => Norm(n) == key);
+        return custom == null ? null : new PlaylistFilterField(custom.Trim(), custom.Trim(), PlaylistFieldKind.Text);
+    }
+
     /// <summary>Resolves a ComparisonTypeKey to the entry for a given field kind, tolerating the
     /// "Is" prefix LaunchBox shows in its labels but may or may not store.</summary>
+    // Accepted spellings per kind, plus a catch-all, resolved once. Accepts() allocates several
+    // normalised strings per comparison, which is far too much to redo per rule per game.
+    private static readonly Dictionary<PlaylistFieldKind, Dictionary<string, PlaylistComparison>> ComparisonIndex =
+        new()
+        {
+            [PlaylistFieldKind.Text] = IndexOf(TextComparisons),
+            [PlaylistFieldKind.Bool] = IndexOf(BoolComparisons),
+            [PlaylistFieldKind.Number] = IndexOf(NumberComparisons),
+            [PlaylistFieldKind.Date] = IndexOf(NumberComparisons),
+        };
+
+    private static readonly Dictionary<string, PlaylistComparison> AnyComparison =
+        IndexOf(TextComparisons.Concat(BoolComparisons).Concat(NumberComparisons).ToArray());
+
+    private static Dictionary<string, PlaylistComparison> IndexOf(PlaylistComparison[] comparisons)
+    {
+        var index = new Dictionary<string, PlaylistComparison>(StringComparer.Ordinal);
+        foreach (var c in comparisons)
+            foreach (var spelling in Spellings(c))
+                index.TryAdd(spelling, c);
+        return index;
+    }
+
     public static PlaylistComparison? FindComparison(string? key, PlaylistFieldKind kind)
     {
         var wanted = Norm(key);
         if (wanted.Length == 0) return null;
-        foreach (var c in Comparisons(kind))
-            if (Accepts(c, wanted)) return c;
+        if (ComparisonIndex.TryGetValue(kind, out var byKind) && byKind.TryGetValue(wanted, out var hit))
+            return hit;
         // A rule may name a comparison that does not belong to this field's type (hand-edited file,
         // or a field whose type LiteBox guessed differently). Fall back to the full vocabulary.
-        foreach (var c in TextComparisons.Concat(BoolComparisons).Concat(NumberComparisons))
-            if (Accepts(c, wanted)) return c;
-        return null;
+        return AnyComparison.TryGetValue(wanted, out var any) ? any : null;
     }
 
-    private static bool Accepts(PlaylistComparison c, string normalizedKey)
+    /// <summary>Every spelling one comparison answers to — its key, its label, the same with or
+    /// without the "Is" prefix LaunchBox shows but may not store, plus the odd historical form.</summary>
+    private static IEnumerable<string> Spellings(PlaylistComparison c)
     {
-        if (normalizedKey == Norm(c.Key) || normalizedKey == Norm(c.Label)) return true;
-        // "NotEqualTo" / "IsNotEqualTo", "SimilarTo" / "IsSimilarTo", "DoesNotContain" /
-        // "NotContains" — the same comparison under the spellings LaunchBox mixes.
-        string bare = Norm(c.Key).StartsWith("is", StringComparison.Ordinal) && Norm(c.Key).Length > 2
-            ? Norm(c.Key).Substring(2) : Norm(c.Key);
-        if (normalizedKey == bare || normalizedKey == "is" + bare) return true;
-        return c.Key switch
+        string key = Norm(c.Key);
+        yield return key;
+        yield return Norm(c.Label);
+        string bare = key.StartsWith("is", StringComparison.Ordinal) && key.Length > 2 ? key.Substring(2) : key;
+        yield return bare;
+        yield return "is" + bare;
+        switch (c.Key)
         {
-            "DoesNotContain" => normalizedKey is "notcontains" or "doesntcontain",
-            "NotEqualTo" => normalizedKey is "notequals",
-            "HasNoneOfTheValues" => normalizedKey is "hasnoneofvalues" or "hasnone",
-            "DoesNotStartWithAnyValue" => normalizedKey is "doesntstartwithanyvalue" or "doesnotstartwith",
-            "DoesNotContainAnyValue" => normalizedKey is "doesntcontainanyvalue",
-            _ => false,
-        };
+            case "DoesNotContain": yield return "notcontains"; yield return "doesntcontain"; break;
+            case "NotEqualTo": yield return "notequals"; break;
+            case "HasNoneOfTheValues": yield return "hasnoneofvalues"; yield return "hasnone"; break;
+            case "DoesNotStartWithAnyValue": yield return "doesntstartwithanyvalue"; yield return "doesnotstartwith"; break;
+            case "DoesNotContainAnyValue": yield return "doesntcontainanyvalue"; break;
+        }
     }
 
     /// <summary>Multi-value comparisons take a list. LaunchBox shows them semicolon-separated.</summary>

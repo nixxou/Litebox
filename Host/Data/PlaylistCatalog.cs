@@ -20,11 +20,15 @@ using LbApiHost.Host.Media;
 namespace LbApiHost.Host.Data;
 
 /// <summary>A single auto-populate rule (mutable so plugin edits round-trip).</summary>
-internal sealed class PlaylistFilterDef
+internal sealed class PlaylistFilterDef : PlaylistFilterDefLike
 {
     public string FieldKey, ComparisonTypeKey, Value;
     public PlaylistFilterDef(string fieldKey, string comparisonTypeKey, string value)
     { FieldKey = fieldKey; ComparisonTypeKey = comparisonTypeKey; Value = value; }
+
+    string PlaylistFilterDefLike.FieldKey => FieldKey;
+    string PlaylistFilterDefLike.ComparisonTypeKey => ComparisonTypeKey;
+    string PlaylistFilterDefLike.Value => Value;
 }
 
 internal sealed class HostPlaylistFilter : DummyPlaylistFilter
@@ -100,7 +104,7 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     public string FileValue;         // source xml (one playlist per file) — carried in every op
 
     public void Add(HostPlaylistGame g) { g.SetOwner(this); _games.Add(g); }
-    public void AddFilter(PlaylistFilterDef f) => _filters.Add(f);
+    public void AddFilter(PlaylistFilterDef f) { _filters.Add(f); InvalidateFilterPlan(); }
     internal void Attach(GameStore s) => _store = s;
     private void Rec(string field, string value) => _store?.RecordPlaylistModify(PlaylistIdValue, FileValue, field, value);
 
@@ -113,8 +117,11 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
                 ["ManualOrder"] = g.ManualOrderValue.ToString(CultureInfo.InvariantCulture),
             }).ToList()));
     internal void RecordFilters()
-        => _store?.RecordPlaylistChildReplace("PlaylistFilter", PlaylistIdValue, FileValue, JsonSerializer.Serialize(
+    {
+        InvalidateFilterPlan();
+        _store?.RecordPlaylistChildReplace("PlaylistFilter", PlaylistIdValue, FileValue, JsonSerializer.Serialize(
             _filters.Select(f => new Dictionary<string, string> { ["Value"] = f.Value, ["FieldKey"] = f.FieldKey, ["ComparisonTypeKey"] = f.ComparisonTypeKey }).ToList()));
+    }
 
     /// <summary>Atomically replaces the editable filter grid.  The public SDK mutators journal once per
     /// property, which is useful to plugins but needlessly emits several intermediate collections when the
@@ -238,22 +245,22 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
         // of them naming a field LiteBox has no equivalent for — falls back to the stored
         // <PlaylistGame> rows instead of showing nothing. A playlist that LaunchBox fills must not
         // look empty here just because we could not read its recipe.
-        if (AutoPopulateValue && _allGames != null && HasEvaluableFilter())
-            return _allGames().Where(g => MatchesFilters(g, _filters)).ToArray();
+        if (AutoPopulateValue && _allGames != null)
+        {
+            var plan = FilterPlan();
+            if (plan.HasEvaluableGroup) return _allGames().Where(plan.Matches).ToArray();
+        }
         return _games.OrderBy(pg => pg.ManualOrderValue).Select(pg => _resolve?.Invoke(pg.GameIdValue)).Where(g => g != null).ToArray();
     }
 
-    private bool HasEvaluableFilter()
-    {
-        foreach (var f in _filters)
-        {
-            if (f == null || string.IsNullOrWhiteSpace(f.FieldKey)) continue;
-            var field = PlaylistFilterCatalog.Find(f.FieldKey);
-            // A field the catalog does not know is assumed to be a custom field, which IS evaluable.
-            if (field == null || field.Evaluable) return true;
-        }
-        return false;
-    }
+    // Compiled once per rule set, not once per game — and reused across calls, since a category
+    // load asks several playlists for their games in a row.
+    private PlaylistFilterPlan _plan;
+
+    private PlaylistFilterPlan FilterPlan() => _plan ??= PlaylistFilterPlan.Compile(_filters);
+
+    /// <summary>Called whenever the rules change, so the next evaluation recompiles.</summary>
+    private void InvalidateFilterPlan() => _plan = null;
 
     public override int GetGameCount(bool includeHidden, bool includeBroken) => GetAllGames(false).Length;
     public override bool HasGames(bool includeHidden, bool includeBroken) => GetAllGames(false).Length > 0;
@@ -271,69 +278,10 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     /// A rule LiteBox cannot evaluate (Steam achievements, controller support…) is SKIPPED rather
     /// than failed: an unsupported field must not silently empty a playlist that LaunchBox fills.</summary>
     internal static bool MatchesFilters(IGame g, IEnumerable<PlaylistFilterDef> filters)
-    {
-        var groups = (filters ?? Enumerable.Empty<PlaylistFilterDef>())
-            .Where(f => f != null && !string.IsNullOrWhiteSpace(f.FieldKey))
-            .GroupBy(f => f.FieldKey.Trim(), StringComparer.OrdinalIgnoreCase);
-        bool any = false;
-        foreach (var group in groups)
-        {
-            var field = PlaylistFilterCatalog.Find(group.Key, CustomFieldNamesFor(g));
-            if (field == null || !field.Evaluable) continue;   // unknown/unsupported → not a constraint
-
-            bool sawPositive = false, positiveHit = false;
-            foreach (var rule in group)
-            {
-                var cmp = PlaylistFilterCatalog.FindComparison(rule.ComparisonTypeKey, field.Kind);
-                if (cmp == null) continue;
-                bool hit = PlaylistFilterCatalog.Compare(ReadField(g, field), cmp, rule.Value);
-                if (cmp.Positive)
-                {
-                    sawPositive = true;
-                    positiveHit |= hit;
-                }
-                else if (!hit) return false;   // ANDed
-            }
-            if (sawPositive && !positiveHit) return false;
-            any = true;
-        }
-        return any;
-    }
+        => PlaylistFilterPlan.Compile(filters).Matches(g);
 
     internal static bool Match(IGame g, PlaylistFilterDef f)
-    {
-        var field = PlaylistFilterCatalog.Find(f?.FieldKey, CustomFieldNamesFor(g));
-        if (field == null || !field.Evaluable) return false;
-        var cmp = PlaylistFilterCatalog.FindComparison(f.ComparisonTypeKey, field.Kind);
-        return cmp != null && PlaylistFilterCatalog.Compare(ReadField(g, field), cmp, f.Value);
-    }
-
-    /// <summary>Built-in field, else the game's custom field of that name.</summary>
-    private static string ReadField(IGame g, PlaylistFilterField field)
-    {
-        var builtin = PlaylistFilterCatalog.Read(g, field);
-        if (builtin != null) return builtin;
-        try
-        {
-            foreach (var cf in g.GetAllCustomFields() ?? Array.Empty<ICustomField>())
-                if (string.Equals(cf?.Name?.Trim(), field.Key, StringComparison.OrdinalIgnoreCase))
-                    return cf.Value ?? "";
-        }
-        catch { }
-        return "";
-    }
-
-    // A rule naming a custom field must resolve even though the catalog's built-in list has no
-    // entry for it; the game itself carries the available names.
-    private static string[] CustomFieldNamesFor(IGame g)
-    {
-        try
-        {
-            return (g.GetAllCustomFields() ?? Array.Empty<ICustomField>())
-                .Select(c => c?.Name?.Trim()).Where(n => !string.IsNullOrWhiteSpace(n)).ToArray()!;
-        }
-        catch { return Array.Empty<string>(); }
-    }
+        => f != null && PlaylistFilterPlan.Compile(new[] { f }).Matches(g);
 }
 
 internal static class PlaylistCatalog

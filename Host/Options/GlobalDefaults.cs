@@ -39,6 +39,7 @@ internal static class GlobalDefaults
         ("AutoFitColumns",                  "true"),
         ("TwoLineRows",                     "true"),
         ("PosterOwnerDraw",                 "false"),
+        ("TitleSortNormalization",          "simple"),      // without | simple | advanced
         // Automatic cache cleaning (Options → Caches)
         ("CleanThumbsImages",               "true"),
         ("CleanThumbsVideo",                "true"),

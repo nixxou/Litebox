@@ -198,6 +198,7 @@ internal sealed class MainWindow : Form, IMessageFilter
     private string[] _sortKeys;          // parallel to SortLabels (column keys; "name" = CompareName)
     private string _curSortKey = "title"; // current sort key (header click can pick a non-combo column)
     private bool _suppressSort;
+    private TitleSortNormalization _titleSortNormalization;
 
     private readonly LiteBoxConfig _cfg;
     private static bool _useImageCache = true;   // option: use the degraded thumb cache for UI images
@@ -229,6 +230,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         // MAME leaderboard toggles (download gates the HIGH SCORES tab; upload gates the auto-submit) read live too.
         if (_dm is HostDataManagerXml hdmMame) Mame.MameOptions.Bind(hdmMame.LbSettings);
         _cfg = LiteBoxConfig.LoadForExe();
+        _titleSortNormalization = _cfg.TitleSortNormalizationMode;
         // The 3D snapshot reads OUR live config: an option applied in the Options window is then visible to
         // the 3D paths as soon as the snapshot is invalidated, without waiting for the ini file write.
         Model3d.Model3dOptions.Source = () => _cfg;
@@ -1896,10 +1898,16 @@ internal sealed class MainWindow : Form, IMessageFilter
                 + "renderer (rounded selection + hover grow, but can stutter). Takes effect after restart."),
         };
 
-        // Middle · General placeholder — shared list/poster options land here as they appear.
-        var midGeneral = new Panel { BackColor = LiteBoxTheme.Bg };
-        midGeneral.Controls.Add(new Label { Text = "Options shared by the list and poster views will appear here.",
-            AutoSize = true, ForeColor = LiteBoxTheme.SubFg, Location = new Point(RS(4), RS(6)) });
+        var midGeneral = new[]
+        {
+            Options.OptionItem.Choice("Display", "Title sort normalization",
+                new[] { "without", "simple", "advanced" },
+                () => TitleSortNormalizer.ConfigValue(_cfg.TitleSortNormalizationMode),
+                v => _cfg.TitleSortNormalizationMode = TitleSortNormalizer.Parse(v),
+                "without: Sort Title (or Title) as-is. simple: remove a leading The/A/An and punctuation. "
+                + "advanced: remove bracket annotations and articles, separate punctuation, and convert Roman numerals II-VIII.",
+                applyLive: ApplyTitleSortNormalization),
+        };
 
         // Right panel tab = OptionItems (16:9 + load delay) on top, media-layout editor below.
         var rightOpts = new[]
@@ -1942,6 +1950,12 @@ internal sealed class MainWindow : Form, IMessageFilter
             ("Middle · Poster", midPoster, null),
             ("Right panel", rightTab, () => { rightApply(); mediaPanel.Apply(); }),
         });
+    }
+
+    private void ApplyTitleSortNormalization()
+    {
+        _titleSortNormalization = _cfg.TitleSortNormalizationMode;
+        if (string.Equals(_curSortKey, "title", StringComparison.OrdinalIgnoreCase)) ApplySort();
     }
 
     // A 3D-validity knob changed: drop the cached snapshot (Model3dOptions reads the LIVE _cfg, so the new
@@ -5625,18 +5639,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         catch { return Array.Empty<IAdditionalApplication>(); }
     }
 
-    /// <summary>Normalized comparison name (default sort): SortTitle|Title, lower, no leading article, alnum only.</summary>
-    private static string CompareName(IGame g)
-    {
-        string s = S(Safe(() => g.SortTitle));
-        if (s.Length == 0) s = S(Safe(() => g.Title));
-        s = s.ToLowerInvariant().Trim();
-        foreach (var art in new[] { "the ", "a ", "an " })
-            if (s.StartsWith(art, StringComparison.Ordinal)) { s = s.Substring(art.Length); break; }
-        var sb = new StringBuilder(s.Length);
-        foreach (var c in s) if (char.IsLetterOrDigit(c)) sb.Append(c);
-        return sb.ToString();
-    }
+    /// <summary>Configured title-sort key, shared by the list and poster views.</summary>
+    private string CompareName(IGame g) => TitleSortNormalizer.Normalize(g, _titleSortNormalization);
 
     private static bool Contains(string hay, string needle)
         => !string.IsNullOrEmpty(hay) && hay.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
@@ -5644,8 +5648,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     // ── Type-to-jump (incremental search) ─────────────────────────────────────
     // Native virtual-ListView type-ahead: the control accumulates the typed keys (with its own
     // timeout) and raises SearchForVirtualItem; we answer with the index of the first game whose
-    // compare-name (article-stripped, alnum, lower) starts with what was typed — so "secre" jumps to
-    // "Secret of Mana", consistent with the name sort. Setting e.Index makes the ListView select +
+    // configured title-sort key starts with the typed text normalized through the same mode, so the
+    // jump order never disagrees with the visible Title sort. Setting e.Index makes the ListView select +
     // scroll to it natively. Shared by the list AND the poster (both mirror _games.VisibleGames).
     private void OnTypeAheadSearch(object sender, SearchForVirtualItemEventArgs e)
     {
@@ -5661,21 +5665,16 @@ internal sealed class MainWindow : Form, IMessageFilter
             for (int k = 0; k < n; k++)
             {
                 int i = (start + k) % n;                       // wrap so repeating a letter cycles
-                if (CompareName(view[i]).StartsWith(needle, StringComparison.Ordinal)) { e.Index = i; return; }
+                if (CompareName(view[i]).StartsWith(needle, StringComparison.OrdinalIgnoreCase)) { e.Index = i; return; }
             }
         }
         catch { }
     }
 
-    // Reduce typed text to the same shape as CompareName (lower, letters+digits only) so a prefix
-    // matches: spaces/punctuation typed by the user are dropped ("secret o" → "secreto").
-    private static string NormalizeTypeAhead(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return "";
-        var sb = new StringBuilder(s.Length);
-        foreach (var c in s) if (char.IsLetterOrDigit(c)) sb.Append(char.ToLowerInvariant(c));
-        return sb.ToString();
-    }
+    // Reduce typed text through the configured mode as well: simple drops punctuation/spaces,
+    // advanced retains normalized word boundaries, and without keeps the text as entered.
+    private string NormalizeTypeAhead(string s)
+        => TitleSortNormalizer.Normalize(s ?? "", "", _titleSortNormalization);
 
     private static string S(string s) => s ?? "";
     private static object N(Func<int?> f) { try { return f(); } catch { return null; } }

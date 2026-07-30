@@ -1257,14 +1257,19 @@
   // compareName MÉMOÏSÉ par jeu (g._cn) : calculé une seule fois. Les objets jeu viennent du
   // cache de BBW.get (games.json sans TTL) → la même référence est réutilisée en revisitant la
   // plateforme, donc _cn (et le tri) survivent sans recalcul.
-  function gameCN(g) { if (g && g._cn == null) g._cn = compareName(g && g.t); return (g && g._cn) || ""; }
-  // Tri de la liste de jeux par COMPARE NAME (cf. compareName ci-dessus), uniforme quelle que
-  // soit la source (Owned / ExtendedDb / dummy). numeric = « Jeu 2 » avant « Jeu 10 ». Garantit
+  function gameCN(g) {
+    if (g && g.cn != null) return String(g.cn).toUpperCase();
+    if (g && g._cn == null) g._cn = compareName(g && g.t);
+    return String(g && g._cn || "").toUpperCase();
+  }
+  // Tri de la liste de jeux par la clé canonique `cn` du serveur ; compareName reste le fallback
+  // des anciennes sources sans `cn`. La comparaison ordinale reste alignée sur le desktop. Garantit
   // que le saut par lettre (findGameByInitial) tombe sur le PREMIER jeu de la lettre. En place,
   // et MÉMOÏSÉ via arr._sorted : la liste ne bouge pas → on ne la retrie pas à chaque visite.
   function sortGamesAlpha(arr) {
     if (arr && arr.length > 1 && !arr._sorted) arr.sort(function (a, b) {
-      return gameCN(a).localeCompare(gameCN(b), undefined, { numeric: true });
+      var ak = gameCN(a), bk = gameCN(b);
+      return ak < bk ? -1 : ak > bk ? 1 : 0;
     });
     if (arr) arr._sorted = true;
     return arr;

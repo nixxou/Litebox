@@ -238,6 +238,11 @@ internal sealed class LiteBoxConfig
     public bool UseImageCache         { get => GetBool("UseImageCache", true); set => SetBool("UseImageCache", value); }
     public bool UseGameCache          { get => GetBool("UseGameCache", true); set => SetBool("UseGameCache", value); }
     public bool UnloadGameCacheDuringGame { get => GetBool("UnloadGameCacheDuringGame", true); set => SetBool("UnloadGameCacheDuringGame", value); }
+    public TitleSortNormalization TitleSortNormalizationMode
+    {
+        get => TitleSortNormalizer.Parse(Get(TitleSortNormalizer.ConfigKey, "simple"));
+        set => Set(TitleSortNormalizer.ConfigKey, TitleSortNormalizer.ConfigValue(value));
+    }
     // true → reserve a 16:9 area for the main media; false → a poster-ratio (2:3) area.
     public bool Use169ForMainScreenshot { get => GetBool("Use16:9ForMainScreenshot", true); set => SetBool("Use16:9ForMainScreenshot", value); }
     /// <summary>Start playing a video as soon as it becomes the main media (Display → Right panel).

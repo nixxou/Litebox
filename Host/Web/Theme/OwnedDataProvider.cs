@@ -219,7 +219,8 @@ internal static class OwnedDataProvider
                                    .OrderByDescending(SafeDateAdded)
                                    .Take(RecentCount - picked.Count));
         }
-        return new { recent = picked.Select(LightItem).ToArray() };
+        var titleSortMode = TitleSortNormalizer.ConfiguredMode();
+        return new { recent = picked.Select(g => LightItem(g, titleSortMode)).ToArray() };
     }
 
     private static DateTime? SafeLastPlayed(IGame g) { try { return g.LastPlayedDate; } catch { return null; } }
@@ -365,7 +366,8 @@ internal static class OwnedDataProvider
     private static object GamesPayload(IPlatform plat, IEnumerable<IGame> games, WebParentalState st)
     {
         WebStoreState.EnsureFresh();
-        var items = games.Where(g => g != null && Allowed(g, st)).Select(LightItem).ToArray();
+        var titleSortMode = TitleSortNormalizer.ConfiguredMode();
+        var items = games.Where(g => g != null && Allowed(g, st)).Select(g => LightItem(g, titleSortMode)).ToArray();
         var name = (plat != null) ? plat.Name : "";
         return new { platform = name, platformLogo = name, platformLogoImg = PlatformLogoUrl(plat), platformTotal = items.Length, games = items };
     }
@@ -399,13 +401,14 @@ internal static class OwnedDataProvider
     private static object EmptyGamesPayload()
         => new { platform = "", platformLogo = "", platformLogoImg = (string)null, platformTotal = 0, games = Array.Empty<object>() };
 
-    private static object LightItem(IGame gm)
+    private static object LightItem(IGame gm, TitleSortNormalization titleSortMode)
     {
         var cg = ResolveCacheGame(gm);
         return new
         {
             id = gm.Id,
             t = gm.Title,
+            cn = TitleSortNormalizer.Normalize(gm, titleSortMode),
             y = ThemeFormat.YearStr(EffYear(gm)),
             dev = Safe(() => gm.Developer),
             pub = Safe(() => gm.Publisher),

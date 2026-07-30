@@ -1989,7 +1989,10 @@
      cls (optional) = extra class on header + cells. */
   var LB_COL_DEFS = {
     title:      { label: "Title",       align: "left",   width: 320, get: function (g) { return g.t || ""; },
-                  sortGet: function (g) { return lbCompareName(g.t) || String(g.t || "").toUpperCase(); } },
+                  sortGet: function (g) {
+                    var key = (g.cn != null) ? String(g.cn) : (lbCompareName(g.t) || String(g.t || ""));
+                    return key.toUpperCase();
+                  } },
     dev:        { label: "Developer",   align: "left",   width: 160, get: function (g) { return g.dev || ""; } },
     publisher:  { label: "Publisher",   align: "left",   width: 160, get: function (g) { return g.pub || ""; } },
     genre:      { label: "Genre",       align: "left",   width: 150, get: function (g) { return g.g   || ""; } },

@@ -132,6 +132,7 @@
   var lbSortPayload = { nodeKind: "platform", sortBy: "Default", customSorts: [], manualAvailable: false };
   var lbRawGames = [];
   var lbKnownCustomSorts = [];
+  var lbSortSessionConnected = false;
 
   /* Crossfade state for the hero fanart — mirrors BBW heroFanartActive.
      0 or 1: index of the .lb-panel-hero-bg-layer currently carrying .on.
@@ -2479,6 +2480,18 @@
 
   function lbApplySortPayload(payload) {
     payload = payload || {};
+    if (!lbSortSessionConnected) {
+      lbSortSessionConnected = true;
+      lbGlobalSort = window.LBGameSort.connectSession(payload.sortSessionId, function (state) {
+        lbGlobalSort = state;
+        // A configured playlist or a contextual Manual choice remains local.
+        if (lbActiveSort.forced || lbActiveSort.key === "manual") return;
+        lbActiveSort = { key: state.key, dir: state.dir, forced: false };
+        DATA.games = window.LBGameSort.sorted(lbRawGames, lbActiveSort);
+        if (lbRawGames.length) renderGames();
+        lbReflectArrange();
+      });
+    }
     var names = {};
     lbKnownCustomSorts.forEach(function (n) { names[n] = true; });
     (payload.customSorts || []).forEach(function (n) { names[n] = true; });
@@ -2496,9 +2509,12 @@
   }
 
   function lbChooseArrange(key) {
+    var oldGlobal = lbGlobalSort;
     var next = window.LBGameSort.select(lbActiveSort, key, lbGlobalSort);
     lbActiveSort = next.active;
     lbGlobalSort = next.global;
+    if (oldGlobal.key !== lbGlobalSort.key || oldGlobal.dir !== lbGlobalSort.dir)
+      window.LBGameSort.publishSession(lbGlobalSort);
     var selectedId = posterSel >= 0 && DATA.games[posterSel] ? DATA.games[posterSel].id : null;
     DATA.games = window.LBGameSort.sorted(lbRawGames, lbActiveSort);
     renderGames();

@@ -17,7 +17,9 @@
 
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Windows.Forms;
 using LbApiHost.Host.Web;
 using Microsoft.Web.WebView2.Core;
@@ -266,6 +268,28 @@ internal sealed class WebKioskWindow : Form
         string msg;
         try { msg = e.TryGetWebMessageAsString(); } catch { return; }
         if (string.IsNullOrEmpty(msg)) return;
+        if (msg == "kiosk:sort:get")
+        {
+            PostSortState();
+            return;
+        }
+        const string sortPrefix = "kiosk:sort:set:";
+        if (msg.StartsWith(sortPrefix, StringComparison.Ordinal))
+        {
+            var body = msg.Substring(sortPrefix.Length);
+            var split = body.LastIndexOf(':');
+            if (split > 0)
+            {
+                try
+                {
+                    var key = Uri.UnescapeDataString(body.Substring(0, split));
+                    var dir = body.Substring(split + 1);
+                    FindMainWindow()?.ApplyKioskSessionSort(key, dir);
+                }
+                catch { }
+            }
+            return;
+        }
         switch (msg)
         {
             case "kiosk:exit": try { Close(); } catch { } break;   // System Menu "Exit" / top-right ×
@@ -273,5 +297,26 @@ internal sealed class WebKioskWindow : Form
             case "kiosk:F10":  ToggleLaunchBox(); break;
             case "kiosk:F12":  ShowDevTools();    break;
         }
+    }
+
+    private static LbApiHost.Host.MainWindow? FindMainWindow()
+    {
+        try { return Application.OpenForms.OfType<LbApiHost.Host.MainWindow>().FirstOrDefault(); }
+        catch { return null; }
+    }
+
+    private void PostSortState()
+    {
+        try
+        {
+            var state = FindMainWindow()?.KioskSessionSort() ?? ("title", "asc");
+            _web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new
+            {
+                type = "kiosk:sort",
+                key = state.Item1,
+                dir = state.Item2,
+            }));
+        }
+        catch { }
     }
 }

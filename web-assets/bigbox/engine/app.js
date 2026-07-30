@@ -22,7 +22,7 @@
   var DATA = { catTree: [], games: [], gamesAll: [], detailMenu: [], platform: "", platformLogo: "", platformLogoImg: "", platformTotal: 0, platformTotalAll: 0 };
   var relData = null;   // jeux liés du jeu courant (chargés à l'ouverture du popup Related)
 
-  var RAIL = [{ k: "search", ic: "🔍" }, { k: "view", ic: "☰" }, { k: "fav", ic: "★" }, { k: "num", ic: "#" }]
+  var RAIL = [{ k: "search", ic: "🔍" }, { k: "view", ic: "☰" }, { k: "order", ic: "↕" }, { k: "fav", ic: "★" }, { k: "num", ic: "#" }]
     .concat("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(function (c) { return { k: "letter", ic: c }; }));
   // ROM rail (sous-menu Select ROM, écran détail) : search / fav / recent / advanced / clear.
   // Recherche + Advanced sont des stubs pour l'instant — fav et recent appliquent un filtre
@@ -108,7 +108,7 @@
   var advOpen = false, advModalEl = null, advTab = 0, advFocus = 0, advActive = false, advTargets = [];
   var advCrit = null;          // critères courants (objet, cf. defaultCrit)
   var advTextKind = "publisher";   // champ texte courant pour le clavier adv ("publisher" | "developer")
-  var ADV_TABS = ["general", "genre", "publisher", "developer", "orderby", "history"];
+  var ADV_TABS = ["general", "genre", "publisher", "developer", "history"];
   // Dispositions de touches (lettres + chiffres) ; la rangée du bas est commune. Choix
   // QWERTY/AZERTY selon la langue LB (cf. chooseLayout). KB est (re)construit dans setupSearch.
   var KB_LAYOUTS = {
@@ -138,6 +138,9 @@
   var bbwActiveSort = { key: "title", dir: "asc", forced: false };
   var bbwSortPayload = { nodeKind: "platform", sortBy: "Default", customSorts: [], manualAvailable: false };
   var bbwRawGames = [];
+  var bbwSortSessionConnected = false;
+  var arrangeScope = "global";
+  var arrangeOpenedFrom = "system";
   var systemReturn = "categories";
   var screens = {};
 
@@ -597,6 +600,7 @@
     else if (item.k === "search") { exitRail(); openSearch(); }
     else if (item.k === "fav") { exitRail(); applyFavFilter(!favOnly); }   // bascule "favoris seulement"
     else if (item.k === "view") { exitRail(); if (advActive) clearAdvanced(); else openAdvanced(); }   // recherche avancée (toggle)
+    else if (item.k === "order") { exitRail(); openArrange("games"); }
   }
 
   // ── ROM rail (sous-menu Select ROM) ────────────────────────────────────
@@ -1270,6 +1274,27 @@
   }
   function applyArrangePayload(payload) {
     payload = payload || {};
+    if (!bbwSortSessionConnected) {
+      bbwSortSessionConnected = true;
+      bbwGlobalSort = window.LBGameSort.connectSession(payload.sortSessionId, function (state) {
+        bbwGlobalSort = state;
+        // Configured playlist order and contextual Manual are node-local.
+        if (bbwActiveSort.forced || bbwActiveSort.key === "manual") {
+          reflectSystemArrange();
+          return;
+        }
+        bbwActiveSort = { key: state.key, dir: state.dir, forced: false };
+        DATA.gamesAll = window.LBGameSort.sorted(bbwRawGames, bbwActiveSort);
+        DATA.games = arrangeFilteredGames(DATA.gamesAll);
+        DATA.platformTotalAll = DATA.gamesAll.length;
+        DATA.platformTotal = DATA.games.length;
+        if (bbwRawGames.length) {
+          setupList("games", DATA.games.map(function (g) { return g.t; }));
+          markGameStars("games");
+        }
+        reflectSystemArrange();
+      });
+    }
     bbwSortPayload = payload;
     bbwRawGames = applyLibraryFilter((payload.games || []).slice());
     bbwActiveSort = window.LBGameSort.stateForPayload(payload, true, bbwGlobalSort);
@@ -1280,16 +1305,32 @@
     reflectSystemArrange();
   }
 
+  // Reordering and filtering are orthogonal: changing Arrange By from the rail
+  // keeps the current quick/favorite/advanced filter and only changes row order.
+  function arrangeFilteredGames(all) {
+    if (advActive && advCrit) {
+      var fns = buildAdvPredicate(normalizedCrit());
+      return fns.length ? all.filter(function (g) {
+        return fns.every(function (fn) { return fn(g); });
+      }) : all;
+    }
+    if (favOnly) return all.filter(isStarred);
+    var nq = normSearch(searchQuery);
+    return nq ? all.filter(function (g) { return searchKeyOf(g).indexOf(nq) >= 0; }) : all;
+  }
+
   function chooseArrange(key) {
+    var oldGlobal = bbwGlobalSort;
     var next = window.LBGameSort.select(bbwActiveSort, key, bbwGlobalSort);
     bbwActiveSort = next.active;
     bbwGlobalSort = next.global;
+    if (oldGlobal.key !== bbwGlobalSort.key || oldGlobal.dir !== bbwGlobalSort.dir)
+      window.LBGameSort.publishSession(bbwGlobalSort);
     var keep = DATA.games[currentGame] && DATA.games[currentGame].id;
-    DATA.games = window.LBGameSort.sorted(bbwRawGames, bbwActiveSort);
-    DATA.gamesAll = DATA.games;
+    DATA.gamesAll = window.LBGameSort.sorted(bbwRawGames, bbwActiveSort);
+    DATA.games = arrangeFilteredGames(DATA.gamesAll);
     DATA.platformTotal = DATA.games.length;
-    DATA.platformTotalAll = DATA.platformTotal;
-    resetSearch();
+    DATA.platformTotalAll = DATA.gamesAll.length;
     setupList("games", DATA.games.map(function (g) { return g.t; }));
     markGameStars("games");
     var at = 0;
@@ -1301,8 +1342,9 @@
 
   function reflectSystemArrange() {
     var item = document.querySelector('[data-sys="arrange"]');
-    if (item) item.textContent = "Arrange By: " + window.LBGameSort.label(bbwActiveSort.key) +
-      (bbwActiveSort.dir === "desc" ? " ▼" : " ▲");
+    var state = current === "system" && systemReturn !== "games" ? bbwGlobalSort : bbwActiveSort;
+    if (item) item.textContent = "Arrange By: " + window.LBGameSort.label(state.key) +
+      (state.dir === "desc" ? " ▼" : " ▲");
   }
 
   // Filtre "bibliothèque" appliqué à la liste reçue (drapeaux par jeu de games.json). Retire
@@ -1400,7 +1442,7 @@
   }
   function defaultCrit() {
     return { yearMin: YEAR_B.min, yearMax: YEAR_B.max, ratingMin: RATING_B.min, ratingMax: RATING_B.max,
-             releaseType: "", flagFav: false, flagInstalled: false, genres: [], genreMode: "or", publisher: "", developer: "", sortBy: "alpha" };
+             releaseType: "", flagFav: false, flagInstalled: false, genres: [], genreMode: "or", publisher: "", developer: "" };
   }
 
   function setupAdvanced() {
@@ -1436,7 +1478,6 @@
     if (id === "general") renderAdvGeneral(body);
     else if (id === "genre") renderAdvGenre(body);
     else if (id === "publisher" || id === "developer") renderAdvText(body, id);
-    else if (id === "orderby") renderAdvOrderby(body);
     else if (id === "history") renderAdvHistory(body);
     var applyEl = $(".adv-apply", advModalEl);
     applyEl.style.display = (id === "history") ? "none" : "";
@@ -1512,30 +1553,6 @@
       list.appendChild(it); var i = advTargets.length; advTargets.push({ type: "textitem", kind: kind, name: v, el: it }); it.dataset.advi = i;
     });
   }
-  // Onglet "Trier par" : alphabétique (défaut) / date de sortie / note / récemment joué.
-  var ADV_SORTS = ["alpha", "year", "rating", "lastplayed"];
-  function renderAdvOrderby(body) {
-    var list = document.createElement("div"); list.className = "adv-list"; body.appendChild(list);
-    ADV_SORTS.forEach(function (opt) {
-      var on = (advCrit.sortBy || "alpha") === opt;
-      var it = document.createElement("div"); it.className = "adv-item" + (on ? " on" : ""); it.textContent = (on ? "✓ " : "") + tA("adv.sort." + opt);
-      list.appendChild(it); var i = advTargets.length; advTargets.push({ type: "sortopt", opt: opt, el: it }); it.dataset.advi = i;
-    });
-  }
-  // Tri du tableau filtré selon sortBy (desc pour date/note/joué ; alpha = ordre déjà en place).
-  function sortGamesByAdv(arr, sb) {
-    if (sb === "year") return arr.slice().sort(function (a, b) { return (parseInt(b && b.y, 10) || 0) - (parseInt(a && a.y, 10) || 0); });
-    // Note effective : note user (g.ur > 0) sinon note communauté (g.r). g.ur est désormais
-    // user-only (0 si pas de note perso) ; sans ce fallback, tous les jeux sans note user
-    // tomberaient au score 0 et seraient indiscernables des jeux non notés.
-    if (sb === "rating") return arr.slice().sort(function (a, b) {
-      var ra = (a && a.ur > 0) ? a.ur : (parseFloat(a && a.r) || 0);
-      var rb = (b && b.ur > 0) ? b.ur : (parseFloat(b && b.r) || 0);
-      return rb - ra;
-    });
-    if (sb === "lastplayed") return arr.slice().sort(function (a, b) { return ((b && b.lp) || 0) - ((a && a.lp) || 0); });
-    return arr;   // alpha : DATA.gamesAll est déjà trié, le filtre conserve l'ordre
-  }
   function renderAdvHistory(body) {
     var hist = loadAdvHistory();
     if (!hist.length) { var p = document.createElement("div"); p.className = "adv-soon"; p.textContent = tA("adv.noHistory"); body.appendChild(p); return; }
@@ -1572,7 +1589,6 @@
     else if (t.type === "genre") { var gi = advCrit.genres.indexOf(t.name); if (gi >= 0) advCrit.genres.splice(gi, 1); else advCrit.genres.push(t.name); renderAdv(); }
     else if (t.type === "textfield") openAdvKeyboard(t.kind);
     else if (t.type === "textitem") { advCrit[t.kind] = t.name; renderAdv(); }   // remplit le champ (toujours filtré en « contient »)
-    else if (t.type === "sortopt") { advCrit.sortBy = t.opt; renderAdv(); }       // choix du tri (re-render = coche déplacée)
     else if (t.type === "histitem") applyAdvCrit(t.crit, true);
   }
 
@@ -1589,7 +1605,6 @@
     if (advCrit.genres.length) { n.genres = advCrit.genres.slice(); n.genreMode = advCrit.genreMode; }
     if (advCrit.publisher && advCrit.publisher.trim()) n.publisher = advCrit.publisher.trim();
     if (advCrit.developer && advCrit.developer.trim()) n.developer = advCrit.developer.trim();
-    if (advCrit.sortBy && advCrit.sortBy !== "alpha") n.sortBy = advCrit.sortBy;
     return n;
   }
   function buildAdvPredicate(n) {
@@ -1625,7 +1640,6 @@
     if (n.developer) p.push(n.developer);
     if (n.flagFav) p.push(tA("adv.fav"));
     if (n.flagInstalled) p.push(tA("adv.installed"));
-    if (n.sortBy && n.sortBy !== "alpha") p.push("↕ " + tA("adv.sort." + n.sortBy));
     return p.join(" · ") || "—";
   }
   function loadAdvHistory() { try { return JSON.parse(localStorage.getItem(ADV_HIST_KEY) || "[]") || []; } catch (e) { return []; } }
@@ -1639,12 +1653,12 @@
   // Applique des critères normalisés `n` (depuis Appliquer ou l'historique) à la liste.
   function applyAdvCrit(n, save) {
     var fns = buildAdvPredicate(n);
-    var sb = n.sortBy || "alpha";
-    advActive = fns.length > 0 || sb !== "alpha";   // un tri non-alpha compte aussi comme filtre actif
+    advActive = fns.length > 0;
     if (advActive && save) saveAdvHistory(n);
     favOnly = false; searchQuery = "";   // un seul filtre rapide à la fois
     var arr = fns.length ? DATA.gamesAll.filter(function (g) { return fns.every(function (f) { return f(g); }); }) : DATA.gamesAll;
-    DATA.games = sortGamesByAdv(arr, sb);   // sortGamesByAdv slice() pour non-alpha → ne mute jamais gamesAll
+    // Search/filter preserves the order owned by Arrange By.
+    DATA.games = arr;
     DATA.platformTotal = DATA.games.length;
     setupList("games", DATA.games.map(function (g) { return g.t; })); markGameStars("games");
     shownGame = -1; setSelected("games", 0, { instant: true });
@@ -2630,6 +2644,7 @@
     } else {
       systemReturn = "categories";
       navTo("system", false);   // racine → menu
+      reflectSystemArrange();
     }
   }
 
@@ -4155,19 +4170,13 @@
       } else if (!(e.target.closest && e.target.closest(".config-panel"))) closeArrange();
     });
   }
-  function openArrange() {
+  function openArrange(scope) {
     if (!arrangeModalEl) return;
-    // From the categories screen there is no current game node. Arrange By edits
-    // the session default for the next platform/Default playlist, never the stale
-    // override of the last playlist that happened to be open.
-    if (systemReturn !== "games") {
-      bbwSortPayload = {
-        nodeKind: "platform",
-        customSorts: (bbwSortPayload && bbwSortPayload.customSorts || []).slice()
-      };
-      bbwActiveSort = { key: bbwGlobalSort.key, dir: bbwGlobalSort.dir, forced: false };
-      reflectSystemArrange();
-    }
+    arrangeScope = scope === "games" ? "games" : "global";
+    arrangeOpenedFrom = current;
+    // Root/System Arrange edits only the session default. It must not expose
+    // Manual from the last visited playlist. The games rail uses the live node.
+    reflectSystemArrange();
     arrangeOpen = true; arrangeFocus = 0;
     renderArrange(); arrangeModalEl.classList.add("open");
   }
@@ -4179,23 +4188,32 @@
     var body = $(".config-body", arrangeModalEl);
     if (!body) return;
     body.innerHTML = ""; arrangeTargets = [];
-    var options = window.LBGameSort.options(bbwSortPayload);
+    var payload = arrangeScope === "games" ? bbwSortPayload : {
+      nodeKind: "platform",
+      manualAvailable: false,
+      customSorts: (bbwSortPayload && bbwSortPayload.customSorts || []).slice()
+    };
+    var state = arrangeScope === "games" ? bbwActiveSort : bbwGlobalSort;
+    var options = window.LBGameSort.options(payload);
+    if (!options.some(function (o) { return o.key === state.key; })) {
+      options.unshift({ key: state.key, label: window.LBGameSort.label(state.key), contextual: true });
+    }
     options.forEach(function (opt, i) {
       var row = document.createElement("div");
       row.className = "cfg-row";
       row.dataset.i = i;
-      var active = bbwActiveSort.key === opt.key;
+      var active = state.key === opt.key;
       var lab = document.createElement("span");
       lab.className = "cfg-label";
       lab.textContent = opt.label;
       var val = document.createElement("span");
       val.className = "cfg-ctrl";
-      val.textContent = active ? (bbwActiveSort.dir === "desc" ? "▼" : "▲") : "";
+      val.textContent = active ? (state.dir === "desc" ? "▼" : "▲") : "";
       row.appendChild(lab); row.appendChild(val); body.appendChild(row);
       row.addEventListener("mouseenter", function () { if (arrangeOpen && mouseActive) { arrangeFocus = i; paintArrange(); } });
       arrangeTargets.push({ key: opt.key, el: row });
     });
-    var currentIndex = options.map(function (o) { return o.key; }).indexOf(bbwActiveSort.key);
+    var currentIndex = options.map(function (o) { return o.key; }).indexOf(state.key);
     if (currentIndex >= 0) arrangeFocus = currentIndex;
     paintArrange();
   }
@@ -4207,9 +4225,22 @@
   function activateArrange() {
     var t = arrangeTargets[arrangeFocus];
     if (!t) return;
-    chooseArrange(t.key);
+    if (arrangeScope === "games") {
+      chooseArrange(t.key);
+    } else {
+      var previous = bbwGlobalSort;
+      var next = window.LBGameSort.select(
+        { key: bbwGlobalSort.key, dir: bbwGlobalSort.dir, forced: false },
+        t.key,
+        bbwGlobalSort);
+      bbwGlobalSort = next.global;
+      if (previous.key !== bbwGlobalSort.key || previous.dir !== bbwGlobalSort.dir)
+        window.LBGameSort.publishSession(bbwGlobalSort);
+      reflectSystemArrange();
+    }
     closeArrange();
-    navTo(systemReturn === "games" ? "games" : "categories", true);
+    if (arrangeOpenedFrom === "system")
+      navTo(systemReturn === "games" ? "games" : "categories", true);
   }
 
   function setupConfig() {
@@ -5224,7 +5255,10 @@
     else if (current === "system") {
       var sit = $(".list-item.selected", screens.system);
       var t = sit ? sit.textContent.trim() : "";
-      if (sit && sit.getAttribute("data-sys") === "arrange") { openArrange(); return; }
+      if (sit && sit.getAttribute("data-sys") === "arrange") {
+        openArrange(systemReturn === "games" ? "games" : "global");
+        return;
+      }
       if (sit && sit.getAttribute("data-sys") === "settings") { openConfig(); return; }   // → UI Réglages
       if (sit && sit.getAttribute("data-sys") === "exit") {
         // Mode kiosque embarqué : poste 'kiosk:exit' au host WebView2 qui
@@ -5434,6 +5468,7 @@
     if (cmd === "menu" && (current === "games" || current === "categories")) {
       systemReturn = current;
       navTo("system", false);
+      reflectSystemArrange();
       return;
     }
     if (cmd === "poster") { if (current === "games") togglePoster(); return; }
@@ -5965,7 +6000,11 @@
       var left = $(".left", bar);
       if (left) left.addEventListener("click", function () {
         if (id !== current) return;
-        if (id === "categories") { systemReturn = "categories"; navTo("system", false); } else goBack();
+        if (id === "categories") {
+          systemReturn = "categories";
+          navTo("system", false);
+          reflectSystemArrange();
+        } else goBack();
       });
       bar.querySelectorAll(".right .hint").forEach(function (h) {
         var txt = h.textContent.toUpperCase(); h.style.cursor = "pointer";

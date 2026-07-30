@@ -32,6 +32,9 @@ namespace LbApiHost.Host.Web;
 
 internal static class OwnedDataProvider
 {
+    // Changes at every LiteBox process start. Web clients use it to scope their
+    // browser-local Arrange By state to this execution instead of persisting it.
+    private static readonly string SortSessionId = Guid.NewGuid().ToString("N");
     private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
     // BigBox semantics: hide "Hide in BigBox" games, keep broken ones.
     private const bool IncludeHidden = false;
@@ -394,6 +397,7 @@ internal static class OwnedDataProvider
             bigBoxSortDescending,
             autoPopulate,
             manualAvailable = playlist != null && !autoPopulate,
+            sortSessionId = SortSessionId,
             // Keep Arrange By complete and stable while browsing between nodes.
             customSorts = GameSortCatalog.CustomFieldNames(
                 SafeValue(() => PluginHelper.DataManager.GetAllGames()) ?? Array.Empty<IGame>()),
@@ -432,7 +436,8 @@ internal static class OwnedDataProvider
         {
             platform = "", platformLogo = "", platformLogoImg = (string)null, platformTotal = 0,
             nodeKind = "platform", sortBy = "Default", bigBoxSortBy = "", bigBoxSortDescending = false, autoPopulate = false,
-            manualAvailable = false, customSorts = Array.Empty<string>(), games = Array.Empty<object>(),
+            manualAvailable = false, sortSessionId = SortSessionId,
+            customSorts = Array.Empty<string>(), games = Array.Empty<object>(),
         };
 
     private static object LightItem(IGame gm, TitleSortNormalization titleSortMode, int? manualOrder = null)
@@ -450,6 +455,7 @@ internal static class OwnedDataProvider
             platform = Safe(() => gm.Platform),
             r = ThemeFormat.RatingStr(SafeRating(gm)),
             ur = SafeEffRating(gm),
+            community = SafeValue(() => gm.CommunityStarRating),
             votes = SafeInt(() => gm.CommunityStarRatingTotalVotes),
             lp = SafeLastPlayedMs(gm),
             da = SafeDateMs(() => gm.DateAdded),
@@ -479,6 +485,8 @@ internal static class OwnedDataProvider
             installed = WebStoreState.IsInstalledOrPresent(gm),
             store = WebStoreState.StoreLabel(gm),
             portable = SafeBool(() => gm.Portable),
+            appPath = Safe(() => gm.ApplicationPath),
+            raHash = gm is HostGame hostGame ? hostGame.RetroAchievementsHash : "",
             thumb = ThumbProxy(cg, "Front"),
             shotThumb = ThumbProxy(cg, "Screenshots", "Background"),
             logo = LogoProxy(cg),

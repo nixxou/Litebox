@@ -31,7 +31,13 @@
     ["title", "Title", "Title"],
     ["version", "Version", "Version"]
   ].map(function (x) { return { key: x[0], label: x[1], value: x[2] }; });
-  var extraLabels = { votes: "Votes" };
+  var extraLabels = {
+    community: "Community", votes: "Votes", completed: "Done", broken: "Broken",
+    apppath: "Application Path", rahash: "RA Hash"
+  };
+  var browserStorageKey = "";
+  var sessionConnected = false;
+  var sessionListeners = [];
 
   function compact(v) {
     return String(v == null ? "" : v).toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -99,7 +105,12 @@
       case "series": return String(g.series || "").toUpperCase();
       case "source": return String(g.source || "").toUpperCase();
       case "starrating": return +g.ur || 0;
+      case "community": return +g.community || 0;
       case "votes": return +g.votes || 0;
+      case "completed": return g.completed ? 1 : 0;
+      case "broken": return g.broken ? 1 : 0;
+      case "apppath": return String(g.appPath || "").toUpperCase();
+      case "rahash": return String(g.raHash || "").toUpperCase();
       case "status": return String(g.status || "").toUpperCase();
       case "version": return String(g.version || "").toUpperCase();
       case "manual": return g.mo == null ? 2147483647 : (+g.mo || 0);
@@ -164,6 +175,83 @@
     return out;
   }
 
+  function cleanState(state) {
+    var key = state && String(state.key || "").trim();
+    if (!key || key === "default" || key === "manual") key = "title";
+    return { key: key, dir: state && state.dir === "desc" ? "desc" : "asc" };
+  }
+
+  function embedded() {
+    return /(?:^|[#&])embedded=1(?:&|$)/.test(String(location.hash || ""));
+  }
+
+  function notifySession(state) {
+    var clean = cleanState(state);
+    sessionListeners.slice().forEach(function (fn) {
+      try { fn({ key: clean.key, dir: clean.dir }); } catch (_) {}
+    });
+  }
+
+  function readBrowserSession() {
+    if (!browserStorageKey) return { key: "title", dir: "asc" };
+    try { return cleanState(JSON.parse(localStorage.getItem(browserStorageKey) || "null")); }
+    catch (_) { return { key: "title", dir: "asc" }; }
+  }
+
+  // One global order per host execution and per browser profile. The process token
+  // prevents yesterday's sort from surviving a LiteBox restart. LB-Web and BB-Web
+  // use the same origin/key, so navigation or separate tabs in that browser agree.
+  // Embedded kiosk pages bypass browser storage and exchange the state with desktop.
+  function connectSession(processToken, listener) {
+    if (typeof listener === "function" && sessionListeners.indexOf(listener) < 0)
+      sessionListeners.push(listener);
+
+    if (!embedded()) {
+      var token = String(processToken || "tab");
+      browserStorageKey = "litebox.game-sort." + token;
+      if (!sessionConnected) {
+        window.addEventListener("storage", function (e) {
+          if (e.key === browserStorageKey && e.newValue) {
+            try { notifySession(JSON.parse(e.newValue)); } catch (_) {}
+          }
+        });
+        sessionConnected = true;
+      }
+      return readBrowserSession();
+    }
+
+    if (!sessionConnected) {
+      try {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.addEventListener("message", function (e) {
+            var msg = e && e.data;
+            if (msg && msg.type === "kiosk:sort")
+              notifySession({ key: msg.key, dir: msg.dir });
+          });
+          window.chrome.webview.postMessage("kiosk:sort:get");
+        }
+      } catch (_) {}
+      sessionConnected = true;
+    }
+    return { key: "title", dir: "asc" }; // replaced asynchronously by the host reply
+  }
+
+  function publishSession(state) {
+    var clean = cleanState(state);
+    if (embedded()) {
+      try {
+        if (window.chrome && window.chrome.webview)
+          window.chrome.webview.postMessage("kiosk:sort:set:" +
+            encodeURIComponent(clean.key) + ":" + clean.dir);
+      } catch (_) {}
+      return clean;
+    }
+    if (browserStorageKey) {
+      try { localStorage.setItem(browserStorageKey, JSON.stringify(clean)); } catch (_) {}
+    }
+    return clean;
+  }
+
   window.LBGameSort = {
     defs: defs,
     parse: parse,
@@ -172,6 +260,8 @@
     sorted: sorted,
     stateForPayload: stateForPayload,
     select: select,
-    options: options
+    options: options,
+    connectSession: connectSession,
+    publishSession: publishSession
   };
 }());

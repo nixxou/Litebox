@@ -2915,6 +2915,53 @@ internal sealed class MainWindow : Form, IMessageFilter
         DoSort(key, _ascending);
     }
 
+    /// <summary>The process-wide order exposed to the embedded LB/BB kiosk.
+    /// Playlist overrides and contextual Manual order are deliberately excluded.</summary>
+    internal (string Key, string Dir) KioskSessionSort()
+        => (_sessionSortKey, _sessionAscending ? "asc" : "desc");
+
+    /// <summary>Apply a global order chosen in an embedded web kiosk. The desktop's
+    /// current configured playlist keeps its local override, but the new session
+    /// order is ready when returning to a platform or Default playlist.</summary>
+    internal void ApplyKioskSessionSort(string key, string dir)
+    {
+        if (InvokeRequired)
+        {
+            try { BeginInvoke((Action)(() => ApplyKioskSessionSort(key, dir))); } catch { }
+            return;
+        }
+
+        key = (key ?? "").Trim();
+        var customNames = GameSortCatalog.CustomFieldNames(
+            Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>());
+        if (key.StartsWith(GameSortCatalog.CustomPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var name = key.Substring(GameSortCatalog.CustomPrefix.Length);
+            var canonical = customNames.FirstOrDefault(x =>
+                string.Equals(x, name, StringComparison.OrdinalIgnoreCase));
+            key = canonical == null ? "title" : GameSortCatalog.CustomPrefix + canonical;
+        }
+        else if (!GameSortCatalog.IsStandard(key)
+                 && key.ToLowerInvariant() is not ("community" or "votes" or "completed" or "broken" or "apppath" or "rahash"))
+        {
+            key = GameSortCatalog.Parse(key, customNames);
+            if (key is GameSortCatalog.Default or GameSortCatalog.Manual) key = "title";
+        }
+
+        _sessionSortKey = key.StartsWith(GameSortCatalog.CustomPrefix, StringComparison.OrdinalIgnoreCase)
+            ? key
+            : key.ToLowerInvariant();
+        _sessionAscending = !string.Equals(dir, "desc", StringComparison.OrdinalIgnoreCase);
+
+        // A configured playlist owns the visible order. Likewise, a contextual
+        // Manual selection remains local until the user leaves that playlist.
+        if (_nodeForcesSort || string.Equals(_curSortKey, GameSortCatalog.Manual, StringComparison.OrdinalIgnoreCase))
+            return;
+        _curSortKey = _sessionSortKey;
+        _ascending = _sessionAscending;
+        DoSort(_curSortKey, _ascending);
+    }
+
     private void RebuildArrangeMenu()
     {
         if (_arrangeBtn == null) return;

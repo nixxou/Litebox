@@ -146,7 +146,7 @@ internal static class EditCategoryWindow
             bool taken = pdoc.Root!.Elements("PlatformCategory").Any(e => string.Equals((string?)e.Element("Name"), newName, StringComparison.OrdinalIgnoreCase));
             if (taken) return false;
             foreach (var n in nodes) n.Element("Name")!.Value = newName;
-            pdoc.Save(PlatformsFile);
+            LbXml.Save(pdoc, PlatformsFile);
 
             if (File.Exists(ParentsFile))
             {
@@ -159,7 +159,7 @@ internal static class EditCategoryWindow
                     var pa = e.Element("ParentPlatformCategoryName");
                     if (pa != null && string.Equals(pa.Value, oldName, StringComparison.OrdinalIgnoreCase)) { pa.Value = newName; changed = true; }
                 }
-                if (changed) rdoc.Save(ParentsFile);
+                if (changed) LbXml.Save(rdoc, ParentsFile);
             }
 
             try

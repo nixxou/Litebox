@@ -18,6 +18,7 @@ using System.Xml.Linq;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.UiKit;
 using Unbroken.LaunchBox.Plugins.Data;
+using LbApiHost.Host.Data;
 
 namespace LbApiHost.Host.Platforms;
 
@@ -227,7 +228,7 @@ internal static class EditPlatformDocuments
                     new XElement("Name", nm),
                     new XElement("FilePath", fp),
                     new XElement("Platform", platform)));
-            doc.Save(PlatformsFile);
+            LbXml.Save(doc, PlatformsFile);
         }
         catch { }
     }

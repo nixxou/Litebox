@@ -14,6 +14,7 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using LbApiHost.Host.Media;
+using LbApiHost.Host.Data;
 
 namespace LbApiHost.Host.Platforms;
 
@@ -63,7 +64,7 @@ internal static class PlatformModelStore
                 el.Add(new XElement("GameId", ""));   // platform-level → empty GameId (LB parity)
                 root.Add(el);
             }
-            doc.Save(FilePath);
+            LbXml.Save(doc, FilePath);
             return true;
         }
         catch { return false; }
@@ -148,7 +149,7 @@ internal static class PlatformModelStore
                 el.Add(new XElement("PlatformName", ""));   // game-level → empty PlatformName (LB parity)
                 root.Add(el);
             }
-            doc.Save(file);
+            LbXml.Save(doc, file);
             return true;
         }
         catch { return false; }

@@ -164,7 +164,7 @@ internal static class NodeDeleter
         {
             if (!File.Exists(file)) return;
             var doc = XDocument.Load(file);
-            if (op(doc) > 0) doc.Save(file);
+            if (op(doc) > 0) LbXml.Save(doc, file);
         }
         catch (Exception ex) { Console.WriteLine("[delete] " + Path.GetFileName(file) + ": " + ex.Message); }
     }

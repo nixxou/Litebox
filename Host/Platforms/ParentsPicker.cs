@@ -24,6 +24,7 @@ using System.Windows.Forms;
 using System.Xml.Linq;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.UiKit;
+using LbApiHost.Host.Data;
 
 namespace LbApiHost.Host.Platforms;
 
@@ -235,7 +236,7 @@ internal static class ParentsPicker
             foreach (var k in parents.DistinctBy(k => (char.ToLowerInvariant(k.K), k.Name.ToLowerInvariant())))
                 root.Add(k.K == 'c' ? Row("", k.Name) : Row(k.Name, ""));
             if (rootChecked) root.Add(Row("", ""));   // explicit Root membership row
-            doc.Save(ParentsFile);
+            LbXml.Save(doc, ParentsFile);
         }
         catch { }
     }

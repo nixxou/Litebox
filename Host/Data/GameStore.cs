@@ -1013,7 +1013,7 @@ internal sealed class GameStore
         foreach (var kv in docs)
         {
             string tmp = kv.Key + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try { kv.Value.Save(tmp); swaps.Add((tmp, kv.Key)); }
+            try { LbXml.Save(kv.Value, tmp); swaps.Add((tmp, kv.Key)); }
             catch (Exception ex) { Console.WriteLine("[store] save tmp " + kv.Key + ": " + ex.Message); allOk = false; }
         }
         // Phase 2: swap all .tmp → real file (atomic per file). A failed swap here is the same

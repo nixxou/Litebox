@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--selftest-title-sort") || args.Contains("--selftest-game-sort") || args.Contains("--selftest-sort-parity") || args.Contains("--selftest-filter-parity") || args.Contains("--selftest-media-rename") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash") || args.Contains("--dedup-test") || args.Contains("--render-jewel") || args.Contains("--render-glb") || args.Contains("--render-oracle");
+bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--selftest-title-sort") || args.Contains("--selftest-game-sort") || args.Contains("--selftest-sort-parity") || args.Contains("--selftest-filter-parity") || args.Contains("--selftest-media-rename") || args.Contains("--selftest-lbxml") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash") || args.Contains("--dedup-test") || args.Contains("--render-jewel") || args.Contains("--render-glb") || args.Contains("--render-oracle");
 if (debugConsole)
     DebugConsole.Enable();
 
@@ -277,6 +277,13 @@ if (args.Contains("--selftest-filter-parity"))
 // Media rename / GUID-transit logic, on a real temporary tree.
 if (args.Contains("--selftest-media-rename"))
     return MediaRenameSelfTest.Run();
+
+// XML output shape vs LaunchBox's. Pass an LB root to also round-trip its real files.
+if (args.Contains("--selftest-lbxml"))
+{
+    int at = Array.IndexOf(args, "--selftest-lbxml");
+    return LbXmlSelfTest.Run(at + 1 < args.Length && !args[at + 1].StartsWith("--") ? args[at + 1] : null);
+}
 
 // Seed real write-back changes across Platform XMLs via the plugin API (for the LB-ingestion test).
 if (args.Contains("--seed-writeback"))

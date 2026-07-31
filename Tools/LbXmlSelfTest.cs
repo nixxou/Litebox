@@ -61,7 +61,73 @@ internal static class LbXmlSelfTest
         int bad = 0;
         foreach (string s in picked) bad += RoundTripOne(s);
         bad += PlaylistRoundTrip(lbRoot);
+        bad += FutureField(lbRoot, picked);
         return bad;
+    }
+
+    // The question this whole design exists to answer: if a future LaunchBox writes a field we have
+    // never heard of, does it still exist after LiteBox has edited that entry?
+    //
+    // So invent one. Inject <LiteBoxFutureField> — once with a value, once empty, since the two are
+    // handled by different branches — into every child element of a real file, force the rebuild,
+    // and count how many come back. Reading the code cannot answer this; only running it can.
+    private static int FutureField(string lbRoot, List<string> platformFiles)
+    {
+        const string Tag = "LiteBoxFutureField", Val = "survivor";
+        int bad = 0;
+
+        foreach (string src in platformFiles)
+        {
+            string work = Path.Combine(Path.GetTempPath(), "lbxml-fut-" + Guid.NewGuid().ToString("N"));
+            string plats = Path.Combine(work, "Platforms");
+            Directory.CreateDirectory(plats);
+            string copy = Path.Combine(plats, Path.GetFileName(src));
+            try
+            {
+                // Inject into the child entities only — <Game> takes a different (in-place) path.
+                string text = File.ReadAllText(src);
+                int injected = 0, injectedEmpty = 0;
+                foreach (string ent in new[] { "AdditionalApplication", "AlternateName", "Mount", "CustomField" })
+                {
+                    string open = "<" + ent + ">\r\n";
+                    injected += Count(text, open);
+                    text = text.Replace(open, open + $"    <{Tag}>{Val}</{Tag}>\r\n    <{Tag}Empty />\r\n");
+                    injectedEmpty = injected;
+                }
+                if (injected == 0) continue;
+                File.WriteAllText(copy, text, new UTF8Encoding(false));
+
+                var store = GameStore.Load(plats, Path.Combine(work, "ops.db"));
+                store.ReadOnly = false;
+                foreach (var row in store.Rows)
+                    foreach (string entity in new[] { "AdditionalApplication", "AlternateName", "Mount", "CustomField" })
+                        store.RecordChildReplace(row.Id, entity);
+                store.Flush();
+                store.CloseLog();
+
+                string after = File.ReadAllText(copy);
+                int kept = Count(after, $"<{Tag}>{Val}</{Tag}>");
+                int keptEmpty = Count(after, $"<{Tag}Empty />");
+                string name = Path.GetFileName(src);
+                if (kept == injected && keptEmpty == injectedEmpty)
+                    Console.WriteLine($"[lbxml] future field: {name}, {kept}/{injected} with a value and {keptEmpty}/{injectedEmpty} empty survived a rebuild");
+                else
+                {
+                    Console.WriteLine($"[lbxml] FAIL future field: {name}, {kept}/{injected} with a value, {keptEmpty}/{injectedEmpty} empty");
+                    bad++;
+                }
+            }
+            catch (Exception ex) { Console.WriteLine($"[lbxml] FAIL future field: {ex.Message}"); bad++; }
+            finally { try { Directory.Delete(work, true); } catch { } }
+        }
+        return bad;
+    }
+
+    private static int Count(string haystack, string needle)
+    {
+        int n = 0, i = 0;
+        while ((i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0) { n++; i += needle.Length; }
+        return n;
     }
 
     // Playlist children are rebuilt by the same replace machinery, from a different branch. Same

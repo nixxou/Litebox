@@ -120,11 +120,12 @@ internal static class MediaRenameSelfTest
         string dir = Fresh(root, "Images", "Box - Front");
         string locked = Touch(dir, $"{Old}-01.jpg");
         var moves = GameMediaRenamer.Plan(Case(root), Id, Plat, Old, New, MediaNameForm.Guid);
-        int applied;
+        GameMediaRenamer.MediaMoveResult applied;
         using (var hold = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.Read))
             applied = GameMediaRenamer.Apply(moves);   // Move fails, Copy succeeds, Delete fails
         int f = Check("a locked file still reaches its target through a copy",
-            applied == 1 && Exists(dir, $"{Old}.{Id:D}-01.jpg"));
+            applied.Reached == 1 && applied.Copied == 1 && applied.Failed == 0
+            && Exists(dir, $"{Old}.{Id:D}-01.jpg"));
         return f + Check("the locked source is left in place rather than losing the file",
             Exists(dir, $"{Old}-01.jpg"));
     }

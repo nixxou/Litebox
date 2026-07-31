@@ -98,7 +98,16 @@ internal static class GameMediaSync
     }
 
     private static int Move(string lbRoot, Guid id, string platform, string diskTitle, string targetTitle, MediaNameForm form)
-        => GameMediaRenamer.Apply(GameMediaRenamer.Plan(lbRoot, id, platform, diskTitle, targetTitle, form));
+    {
+        var plan = GameMediaRenamer.Plan(lbRoot, id, platform, diskTitle, targetTitle, form);
+        if (plan.Count == 0) return 0;
+        var result = GameMediaRenamer.Apply(plan);
+        // One line per rename that was not perfectly clean, so a half-moved collection can be
+        // explained after the fact instead of looking like the feature failing to run.
+        if (!result.AllGood)
+            Diag.LbLog.Warn("media", $"\"{targetTitle}\" [{platform}] {form}: {result} (planned {plan.Count})");
+        return result.Reached;
+    }
 
     /// <summary>Another game of the same platform already carrying this title. Compared on the
     /// SANITIZED name, since that is what ends up in a filename — two titles differing only by a

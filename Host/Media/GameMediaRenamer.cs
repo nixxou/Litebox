@@ -223,34 +223,75 @@ internal static class GameMediaRenamer
         return true;
     }
 
-    /// <summary>Runs a plan. A file that cannot be moved is COPIED instead; if the source then
-    /// cannot be deleted it is left where it is rather than failing the whole rename. Directories
-    /// are never removed. Returns how many files ended up at their target.</summary>
-    public static int Apply(IEnumerable<MediaMove> moves)
+    /// <summary>What one plan actually achieved. A rename is best-effort by design — one stubborn
+    /// file must not abort the others — but "best effort" has to be observable, or a half-moved
+    /// collection looks like the feature simply not working.</summary>
+    internal sealed class MediaMoveResult
     {
-        int done = 0;
+        public int Moved, Copied, Skipped, Failed;
+        public int Reached => Moved + Copied;
+        public bool AllGood => Failed == 0 && Copied == 0 && Skipped == 0;
+        public override string ToString()
+            => $"moved={Moved} copied={Copied} skipped={Skipped} failed={Failed}";
+    }
+
+    /// <summary>Runs a plan, never throwing. Per file:
+    ///
+    ///   1. the target already exists → SKIP. The plan was built from a listing that has since
+    ///      changed; overwriting could destroy an image that belongs to someone.
+    ///   2. File.Move — the normal path, atomic on one volume.
+    ///   3. Move failed (the file is open in a viewer, sits on another volume, is read-only…) →
+    ///      File.Copy. The association is what matters; a duplicate is recoverable, a lost link
+    ///      is not.
+    ///   4. the copy worked but the source will not delete → the copy STAYS and the source is left
+    ///      alone. A duplicate under the old title is the price of not losing the file.
+    ///   5. the copy failed too → this file is given up on, the rest of the plan continues.
+    ///
+    /// Nothing propagates: a rename half-applied is bad, a crash mid-rename is worse. Every
+    /// non-nominal outcome is logged, because silence here is indistinguishable from a bug — which
+    /// is exactly how the plain-to-plain gap went unnoticed.</summary>
+    public static MediaMoveResult Apply(IEnumerable<MediaMove> moves)
+    {
+        var result = new MediaMoveResult();
         foreach (var m in moves ?? Array.Empty<MediaMove>())
         {
-            if (string.Equals(m.From, m.To, StringComparison.OrdinalIgnoreCase)) { done++; continue; }
+            if (string.Equals(m.From, m.To, StringComparison.OrdinalIgnoreCase)) { result.Moved++; continue; }
             try
             {
-                if (File.Exists(m.To)) continue;      // planned against a stale listing — never clobber
+                if (File.Exists(m.To))
+                {
+                    result.Skipped++;
+                    Diag.LbLog.Warn("media", $"target already exists, left alone: {Path.GetFileName(m.To)}");
+                    continue;
+                }
                 File.Move(m.From, m.To);
-                done++;
+                result.Moved++;
             }
-            catch
+            catch (Exception moveEx)
             {
-                // Locked by a viewer, or across volumes: a copy still saves the association.
                 try
                 {
-                    if (File.Exists(m.To)) continue;
+                    if (File.Exists(m.To)) { result.Skipped++; continue; }
                     File.Copy(m.From, m.To, overwrite: false);
-                    done++;
-                    try { File.Delete(m.From); } catch { /* duplicate left behind, on purpose */ }
+                    result.Copied++;
+                    try
+                    {
+                        File.Delete(m.From);
+                        Diag.LbLog.Warn("media", $"copied instead of moved ({moveEx.GetType().Name}): {Path.GetFileName(m.From)}");
+                    }
+                    catch
+                    {
+                        // Deliberate: the file exists at BOTH names now. Losing it would be worse.
+                        Diag.LbLog.Warn("media", $"copied, source still locked and left behind: {Path.GetFileName(m.From)}");
+                    }
                 }
-                catch { /* give up on this file only — the others still move */ }
+                catch (Exception copyEx)
+                {
+                    result.Failed++;
+                    Diag.LbLog.Warn("media", $"could not move or copy {Path.GetFileName(m.From)}: {copyEx.Message}");
+                }
             }
         }
-        return done;
+        return result;
     }
 }

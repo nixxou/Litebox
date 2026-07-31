@@ -5,6 +5,7 @@ using System.Linq;
 using LbApiHost.Generated;
 using LbApiHost.Host;
 using LbApiHost.Host.Data;
+using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Tools;
 
@@ -119,6 +120,7 @@ internal static class GameSortSelfTest
         }
 
         failures += FilterChecks();
+        failures += MultiEditChecks();
 
         Console.WriteLine(failures == 0 ? "[game-sort-selftest] ALL PASS" : $"[game-sort-selftest] {failures} FAILURE(S)");
         return failures == 0 ? 0 : 1;
@@ -201,6 +203,94 @@ internal static class GameSortSelfTest
             "Puzzle;Action"));
         f += Check("Is Similar To ignores punctuation and case", PlaylistFilterCatalog.Compare(
             "Spider-Man 2", PlaylistFilterCatalog.FindComparison("SimilarTo", PlaylistFieldKind.Text), "spider man 2"));
+        return f;
+    }
+
+    /// <summary>Editing several playlists at once. The rule under test is the one whose failure
+    /// costs the most: what the grid does NOT show must survive the apply.</summary>
+    private static int MultiEditChecks()
+    {
+        int f = 0;
+
+        HostPlaylist Make(string id, params (string field, string cmp, string val)[] rules)
+        {
+            var pl = new HostPlaylist { PlaylistIdValue = id, NameValue = id, AutoPopulateValue = true };
+            foreach (var r in rules) pl.AddFilter(new PlaylistFilterDef(r.field, r.cmp, r.val));
+            return pl;
+        }
+
+        // Two rules shared by all three; each playlist also has one of its own.
+        var a = Make("A", ("Platform", "EqualTo", "Arcade"), ("Genre", "Contains", "Fighter"), ("Publisher", "EqualTo", "Capcom"));
+        var b = Make("B", ("Platform", "EqualTo", "Arcade"), ("Genre", "Contains", "Fighter"), ("Region", "EqualTo", "Japan"));
+        var c = Make("C", ("Genre", "Contains", "Fighter"), ("Platform", "EqualTo", "Arcade"), ("PlayCount", "GreaterThan", "5"));
+        var all = new[] { a, b, c };
+
+        var common = PlaylistMultiEdit.CommonFilters(all);
+        f += Check("Multi: only the rules every playlist has are shown",
+            common.Count == 2
+            && common.Any(x => x.FieldKey == "Platform" && x.Value == "Arcade")
+            && common.Any(x => x.FieldKey == "Genre" && x.Value == "Fighter"));
+
+        // Drop one shared rule, add a brand new one.
+        var after = new List<PlaylistFilterDef>
+        {
+            new("Genre", "Contains", "Fighter"),
+            new("Status", "EqualTo", "Playable"),
+        };
+        PlaylistMultiEdit.ApplyFilterDifference(all, common, after);
+
+        f += Check("Multi: the removed shared rule leaves every playlist",
+            all.All(p => !PlaylistMultiEdit.FiltersOf(p).Any(x => x.FieldKey == "Platform")));
+        f += Check("Multi: the added rule joins every playlist",
+            all.All(p => PlaylistMultiEdit.FiltersOf(p).Any(x => x.FieldKey == "Status" && x.Value == "Playable")));
+        f += Check("Multi: rules the grid never showed are untouched",
+            PlaylistMultiEdit.FiltersOf(a).Any(x => x.FieldKey == "Publisher")
+            && PlaylistMultiEdit.FiltersOf(b).Any(x => x.FieldKey == "Region")
+            && PlaylistMultiEdit.FiltersOf(c).Any(x => x.FieldKey == "PlayCount"));
+        f += Check("Multi: the untouched shared rule is not duplicated",
+            all.All(p => PlaylistMultiEdit.FiltersOf(p).Count(x => x.FieldKey == "Genre") == 1));
+
+        // Applying with nothing changed must not rewrite anything.
+        var before2 = PlaylistMultiEdit.CommonFilters(all);
+        PlaylistMultiEdit.ApplyFilterDifference(all, before2, before2);
+        f += Check("Multi: an apply with no edit changes nothing",
+            PlaylistMultiEdit.FiltersOf(a).Count == 3 && PlaylistMultiEdit.FiltersOf(b).Count == 3);
+
+        // Case only differs → same rule, not a duplicate.
+        var caseOnly = new List<PlaylistFilterDef> { new("genre", "contains", "fighter"), new("Status", "EqualTo", "Playable") };
+        PlaylistMultiEdit.ApplyFilterDifference(all, before2, caseOnly);
+        f += Check("Multi: a rule differing only in case is not added twice",
+            PlaylistMultiEdit.FiltersOf(a).Count(x => string.Equals(x.FieldKey, "Genre", StringComparison.OrdinalIgnoreCase)) == 1);
+
+        // ── Games: intersection, union, and removal across the set ──
+        var g1 = new DummyGame { Id = "g1", Title = "One" };
+        var g2 = new DummyGame { Id = "g2", Title = "Two" };
+        var g3 = new DummyGame { Id = "g3", Title = "Three" };
+        var byId = new Dictionary<string, IGame> { ["g1"] = g1, ["g2"] = g2, ["g3"] = g3 };
+
+        HostPlaylist Manual(string id, params string[] gameIds)
+        {
+            var pl = new HostPlaylist { PlaylistIdValue = id, NameValue = id, AutoPopulateValue = false };
+            pl.SetResolver(x => byId.TryGetValue(x, out var game) ? game : null);
+            for (int i = 0; i < gameIds.Length; i++)
+                pl.Add(new HostPlaylistGame { GameIdValue = gameIds[i], ManualOrderValue = i });
+            return pl;
+        }
+
+        var m1 = Manual("M1", "g1", "g2");
+        var m2 = Manual("M2", "g2", "g3");
+        var manuals = new[] { m1, m2 };
+
+        f += Check("Multi: only games present in every playlist are listed",
+            PlaylistMultiEdit.CommonGameIds(manuals).SequenceEqual(new[] { "g2" }));
+        f += Check("Multi: the hidden count is union minus common",
+            PlaylistMultiEdit.UnionGameCount(manuals) - PlaylistMultiEdit.CommonGameIds(manuals).Count == 2);
+
+        PlaylistMultiEdit.RemoveGames(manuals, new[] { "g2" });
+        f += Check("Multi: removing a common game removes it everywhere",
+            !PlaylistMultiEdit.CommonGameIds(manuals).Any()
+            && m1.GetAllGames(false).Select(x => x.Id).SequenceEqual(new[] { "g1" })
+            && m2.GetAllGames(false).Select(x => x.Id).SequenceEqual(new[] { "g3" }));
         return f;
     }
 

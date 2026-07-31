@@ -85,6 +85,23 @@ internal static class EditPlatformRenderProbe
         Directory.CreateDirectory(outDir);
         foreach (var (title, ctrl) in EditPlaylistWindow.BuildSectionsForRender(playlist, 1f))
             Shot(ctrl, outDir, title, null);
+
+        // Multi-selection: the two sections that exist only for a selection. Rendered over the
+        // first real playlists, which is the only way to see the merges actually land.
+        var selection = playlists.Take(3).ToList();
+        if (selection.Count >= 2)
+        {
+            Console.WriteLine("[render] multi = " + string.Join(", ", selection.Select(p => p.Name)));
+            try { Shot(EditPlaylistPopulate.BuildAutoPopulateMulti(selection, false, 1f).panel, outDir, "Multi Auto-Populate", null); }
+            catch (Exception ex) { Console.WriteLine("[render] Multi Auto-Populate: " + ex.Message); }
+            // Games over MANUAL playlists when the library has two: that is the path where Delete
+            // is live and the hidden-count label appears. Falls back to the same selection.
+            var manual = playlists.Where(p => !p.AutoPopulateValue).Take(3).ToList();
+            var forGames = manual.Count >= 2 ? manual : selection;
+            Console.WriteLine("[render] multi games = " + string.Join(", ", forGames.Select(p => p.Name)));
+            try { Shot(EditPlaylistPopulate.BuildGamesMulti(forGames, false, 1f).panel, outDir, "Multi Games", null); }
+            catch (Exception ex) { Console.WriteLine("[render] Multi Games: " + ex.Message); }
+        }
         Console.WriteLine("[render] done");
     }
 

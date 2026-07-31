@@ -169,11 +169,28 @@ internal static class MultiEditWindow
         AddText(f, "Nested Name:", CommonValue(pls.Select(pl => Safe(() => pl.NestedName) ?? "")), v => All(pl => pl.NestedName = v));
         AddText(f, "Sort Title:", CommonValue(pls.Select(pl => Safe(() => pl.SortTitle) ?? "")), v => All(pl => pl.SortTitle = v));
         AddText(f, "Video Path:", CommonValue(pls.Select(pl => Safe(() => pl.VideoPath) ?? "")), v => All(pl => pl.VideoPath = v));
-        AddCombo(f, "Sort Games By:", CommonValue(pls.Select(pl => Safe(() => pl.SortBy) ?? "")), new[] { "Default" }, v => All(pl => pl.SortBy = v));
+        // The whole Arrange By vocabulary, not just "Default" — the same list the single-playlist
+        // editor offers, so a selection is not restricted to the one value that used to be here.
+        var sortLabels = new List<string> { "Default", "Manual" };
+        sortLabels.AddRange(GameSortCatalog.Standard.Select(d => d.Label));
+        sortLabels.AddRange(GameSortCatalog.CustomFieldNames(
+            Safe(() => PluginHelper.DataManager.GetAllGames()) ?? Array.Empty<IGame>()));
+        AddCombo(f, "Sort Games By:",
+            CommonValue(pls.Select(pl => GameSortCatalog.Label(GameSortCatalog.Parse(Safe(() => pl.SortBy))))),
+            sortLabels.ToArray(),
+            v => All(pl => pl.SortBy = GameSortCatalog.ToLaunchBoxValue(GameSortCatalog.Parse(v))));
         AddTriCheck(f, "Include this Playlist with Platforms", pls.Select(pl => Safe(() => pl.IncludeWithPlatforms)), v => All(pl => pl.IncludeWithPlatforms = v));
         AddTriCheck(f, "Hide in Big Box (Does Not Hide Games)", pls.Select(pl => Safe(() => pl.HideInBigBox)), v => All(pl => pl.HideInBigBox = v));
 
         w.AddSection("Details", f.Panel, () => { if (!readOnly) RunAppliers(f); });
+
+        // Auto-Populate and Games, restricted to what the selection has in COMMON. The merge and
+        // the difference-based write-back live in PlaylistMultiEdit.
+        var (autoPanel, applyAuto) = EditPlaylistPopulate.BuildAutoPopulateMulti(pls, readOnly, s);
+        w.AddSection("Auto-Populate", autoPanel, applyAuto);
+        var (gamesPanel, applyGames) = EditPlaylistPopulate.BuildGamesMulti(pls, readOnly, s);
+        w.AddSection("Games", gamesPanel, applyGames);
+
         var ids = pls.Select(pl => Safe(() => pl.PlaylistIdValue) ?? "").Where(id => id.Length > 0).ToList();
         var (parents, applyParents) = ParentsPicker.BuildMulti(ParentChildKind.Playlist, ids, readOnly, s);
         w.AddSection("Parents", parents, applyParents);

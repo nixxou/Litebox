@@ -52,23 +52,156 @@ internal static class EditPlaylistPopulate
     // group them apart here, unlike Arrange By).
     private const string UnusedValue = "(Unused)";
 
-    public static (Control panel, Action apply) BuildAutoPopulate(
-        HostPlaylist playlist, bool readOnly, float dpiScale, PlaylistEditorState state)
+    // ── Multi-selection ──────────────────────────────────────────────────────────────────────
+    // Editing several playlists shows only what they have in COMMON and writes back as a
+    // DIFFERENCE, so each keeps whatever the grid never displayed. The merging and the write-back
+    // live in PlaylistMultiEdit — UI-free, and covered by --selftest-game-sort.
+
+    /// <summary>Auto-Populate for a selection: tri-state checkbox, and only the rules every
+    /// selected AUTO playlist has. A manual playlist has no rules to share, so intersecting with it
+    /// would always come out empty — the grid describes the auto ones.</summary>
+    public static (Control panel, Action apply) BuildAutoPopulateMulti(
+        IReadOnlyList<HostPlaylist> playlists, bool readOnly, float dpiScale)
     {
         int S(int px) => (int)Math.Round(px * dpiScale);
         var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(S(10)) };
+
         var enabled = new CheckBox
         {
-            Dock = DockStyle.Top,
-            Height = S(38),
-            Text = "Auto-Populate this Playlist",
-            Checked = state.AutoPopulate,
-            Enabled = !readOnly,
-            ForeColor = Fg,
-            BackColor = Bg,
+            Dock = DockStyle.Top, Height = S(34), Text = "Auto-Populate these Playlists",
+            ThreeState = true, Enabled = !readOnly, ForeColor = Fg, BackColor = Bg,
             Padding = new Padding(S(2), 0, 0, 0),
         };
+        var mergedAuto = PlaylistMultiEdit.Merge(playlists, p => p.AutoPopulate);
+        enabled.CheckState = mergedAuto.HasValue
+            ? (mergedAuto.Value ? CheckState.Checked : CheckState.Unchecked)
+            : CheckState.Indeterminate;
 
+        var autos = playlists.Where(p => Safe(() => p.AutoPopulate)).ToList();
+        var shownBefore = PlaylistMultiEdit.CommonFilters(autos);
+
+        var info = new Label
+        {
+            Dock = DockStyle.Top, Height = S(40), ForeColor = SubFg, BackColor = Bg,
+            Text = autos.Count == 0
+                ? "No auto-populated playlist in the selection."
+                : $"{shownBefore.Count} rule(s) shared by the {autos.Count} auto-populated playlist(s). "
+                  + "Rules belonging to a single playlist are not listed, and are left untouched.",
+        };
+
+        var (grid, readRows) = BuildRuleGrid(shownBefore, readOnly || autos.Count == 0, dpiScale);
+        grid.Dock = DockStyle.Fill;
+
+        root.Controls.Add(grid);
+        root.Controls.Add(info);
+        root.Controls.Add(enabled);
+        grid.BringToFront();
+
+        void Apply()
+        {
+            if (readOnly) return;
+            // Indeterminate means "leave each playlist as it is".
+            if (enabled.CheckState != CheckState.Indeterminate)
+                foreach (var p in playlists) try { p.AutoPopulate = enabled.Checked; } catch { }
+            if (autos.Count == 0) return;
+            PlaylistMultiEdit.ApplyFilterDifference(autos, shownBefore, readRows());
+        }
+        return (root, Apply);
+    }
+
+    /// <summary>Games for a selection: the intersection, read-only except for Delete — and Delete
+    /// only when every selected playlist is manual, since an auto one's membership comes from its
+    /// rules and would be restored the moment they are evaluated again.</summary>
+    public static (Control panel, Action apply) BuildGamesMulti(
+        IReadOnlyList<HostPlaylist> playlists, bool readOnly, float dpiScale)
+    {
+        int S(int px) => (int)Math.Round(px * dpiScale);
+        var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(S(10)) };
+
+        bool allManual = playlists.All(p => !Safe(() => p.AutoPopulate));
+        // No Up/Down/Top/Bottom on purpose: the manual order belongs to each playlist separately,
+        // so there is no shared sequence a move could act on.
+        var side = new Panel { Dock = DockStyle.Right, Width = S(92), BackColor = Bg, Padding = new Padding(S(10), 0, 0, 0) };
+        var delete = new Button
+        {
+            Text = "Delete", Location = new Point(S(10), 0), Size = new Size(S(76), S(29)),
+            FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = LiteBoxTheme.Danger,
+            FlatAppearance = { BorderSize = 0 }, Enabled = false,
+        };
+        side.Controls.Add(delete);
+
+        var grid = NewGrid(readOnly: true, allowNewRows: false);
+        grid.Dock = DockStyle.Fill;
+        grid.MultiSelect = false;
+        grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Title", HeaderText = "Title", FillWeight = 60 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Platform", HeaderText = "Platform", FillWeight = 40 });
+
+        var common = PlaylistMultiEdit.CommonGameIds(playlists);
+        int hidden = Math.Max(0, PlaylistMultiEdit.UnionGameCount(playlists) - common.Count);
+        var resolved = new Dictionary<string, IGame>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in playlists)
+            foreach (var g in Safe(() => p.GetAllGames(false)) ?? Array.Empty<IGame>())
+            {
+                var id = Safe(() => g.Id) ?? "";
+                if (id.Length > 0) resolved[id] = g;
+            }
+        foreach (var id in common)
+        {
+            resolved.TryGetValue(id, out var game);
+            int i = grid.Rows.Add(Safe(() => game.Title) ?? "", Safe(() => game.Platform) ?? "");
+            grid.Rows[i].Tag = id;
+        }
+
+        var info = new Label
+        {
+            Dock = DockStyle.Top, Height = S(40), ForeColor = SubFg, BackColor = Bg,
+            Text = $"{common.Count} game(s) present in all {playlists.Count} playlists."
+                 + (hidden > 0 ? $"   {hidden} hidden — not present in every selected playlist." : "")
+                 + (allManual ? "" : "   Delete is unavailable: the selection contains an auto-populated playlist."),
+        };
+
+        var removed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void UpdateButtons() => delete.Enabled = !readOnly && allManual && grid.SelectedRows.Count > 0;
+        grid.SelectionChanged += (_, _) => UpdateButtons();
+
+        void DeleteSelected()
+        {
+            if (!delete.Enabled || grid.SelectedRows.Count == 0) return;
+            int at = grid.SelectedRows[0].Index;
+            if (grid.Rows[at].Tag is string id) removed.Add(id);
+            grid.Rows.RemoveAt(at);
+            if (grid.Rows.Count > 0)
+            {
+                grid.ClearSelection();
+                grid.Rows[Math.Min(at, grid.Rows.Count - 1)].Selected = true;
+            }
+            UpdateButtons();
+        }
+        delete.Click += (_, _) => DeleteSelected();
+        grid.KeyDown += (_, e) => { if (e.KeyCode == Keys.Delete) { DeleteSelected(); e.Handled = true; } };
+        if (grid.Rows.Count > 0) grid.Rows[0].Selected = true;
+        UpdateButtons();
+
+        root.Controls.Add(grid);
+        root.Controls.Add(side);
+        root.Controls.Add(info);
+        grid.BringToFront();
+
+        void Apply()
+        {
+            if (readOnly || !allManual || removed.Count == 0) return;
+            PlaylistMultiEdit.RemoveGames(playlists, removed);
+        }
+        return (root, Apply);
+    }
+
+    /// <summary>The rule grid on its own — the same control for one playlist and for a selection.
+    /// Returns it with a reader that turns its rows back into rules, so the caller decides what to
+    /// do with them (replace, for one playlist; a difference, for a selection).</summary>
+    internal static (DataGridView grid, Func<List<PlaylistFilterDef>> readRows) BuildRuleGrid(
+        IEnumerable<PlaylistFilterDef> initial, bool readOnly, float dpiScale)
+    {
         var customNames = GameSortCatalog.CustomFieldNames(
             Safe(() => PluginHelper.DataManager.GetAllGames()) ?? Array.Empty<IGame>());
         var fields = PlaylistFilterCatalog.Fields(customNames);
@@ -120,7 +253,7 @@ internal static class EditPlaylistPopulate
 
         try
         {
-            foreach (var f in playlist.GetAllPlaylistFilters() ?? Array.Empty<IPlaylistFilter>())
+            foreach (var f in initial ?? Enumerable.Empty<PlaylistFilterDef>())
             {
                 string fieldKey = Safe(() => f.FieldKey) ?? "";
                 if (fieldKey.Length == 0) continue;
@@ -197,24 +330,9 @@ internal static class EditPlaylistPopulate
             menu.Show(Cursor.Position);
         };
 
-        void ShowGrid(bool on)
+
+        List<PlaylistFilterDef> ReadRows()
         {
-            grid.Visible = on;
-            state.AutoPopulate = on;
-        }
-        enabled.CheckedChanged += (_, _) => ShowGrid(enabled.Checked);
-        grid.Visible = enabled.Checked;
-
-        root.Controls.Add(grid);
-        root.Controls.Add(enabled);
-        grid.BringToFront();
-
-        void Apply()
-        {
-            if (readOnly) return;
-            state.AutoPopulate = enabled.Checked;
-            if (playlist.AutoPopulate != enabled.Checked) playlist.AutoPopulate = enabled.Checked;
-
             var defs = new List<PlaylistFilterDef>();
             foreach (DataGridViewRow row in grid.Rows)
             {
@@ -234,7 +352,50 @@ internal static class EditPlaylistPopulate
                 if (cmp != null && !cmp.UsesValue) value = "";   // never persist the "(Unused)" placeholder
                 defs.Add(new PlaylistFilterDef(fieldKey, comparisonKey, value));
             }
-            playlist.ReplaceFilters(defs);
+            return defs;
+        }
+        return (grid, ReadRows);
+    }
+
+    public static (Control panel, Action apply) BuildAutoPopulate(
+        HostPlaylist playlist, bool readOnly, float dpiScale, PlaylistEditorState state)
+    {
+        int S(int px) => (int)Math.Round(px * dpiScale);
+        var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(S(10)) };
+        var enabled = new CheckBox
+        {
+            Dock = DockStyle.Top,
+            Height = S(38),
+            Text = "Auto-Populate this Playlist",
+            Checked = state.AutoPopulate,
+            Enabled = !readOnly,
+            ForeColor = Fg,
+            BackColor = Bg,
+            Padding = new Padding(S(2), 0, 0, 0),
+        };
+
+        var (grid, readRows) = BuildRuleGrid(PlaylistMultiEdit.FiltersOf(playlist), readOnly, dpiScale);
+        grid.Dock = DockStyle.Fill;
+
+        void ShowGrid(bool on)
+        {
+            grid.Visible = on;
+            state.AutoPopulate = on;
+        }
+        enabled.CheckedChanged += (_, _) => ShowGrid(enabled.Checked);
+        grid.Visible = enabled.Checked;
+
+        root.Controls.Add(grid);
+        root.Controls.Add(enabled);
+        grid.BringToFront();
+
+        void Apply()
+        {
+            if (readOnly) return;
+            state.AutoPopulate = enabled.Checked;
+            if (playlist.AutoPopulate != enabled.Checked) playlist.AutoPopulate = enabled.Checked;
+
+            playlist.ReplaceFilters(readRows());
             state.RulesApplied(); // an already-open Games section refreshes its auto-populated preview
         }
         return (root, Apply);

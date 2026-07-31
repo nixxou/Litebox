@@ -57,36 +57,48 @@ internal static class EditPlaylistPopulate
     // DIFFERENCE, so each keeps whatever the grid never displayed. The merging and the write-back
     // live in PlaylistMultiEdit — UI-free, and covered by --selftest-game-sort.
 
-    /// <summary>Auto-Populate for a selection: tri-state checkbox, and only the rules every
-    /// selected AUTO playlist has. A manual playlist has no rules to share, so intersecting with it
-    /// would always come out empty — the grid describes the auto ones.</summary>
+    /// <summary>Auto-Populate for a selection: the state is REPORTED, never changed, and the grid
+    /// lists only the rules every selected AUTO playlist has. A manual playlist has no rules to
+    /// share, so intersecting with it would always come out empty — the grid describes the auto
+    /// ones.</summary>
     public static (Control panel, Action apply) BuildAutoPopulateMulti(
         IReadOnlyList<HostPlaylist> playlists, bool readOnly, float dpiScale)
     {
         int S(int px) => (int)Math.Round(px * dpiScale);
         var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(S(10)) };
 
+        var autos = playlists.Where(p => Safe(() => p.AutoPopulate)).ToList();
+        var shownBefore = PlaylistMultiEdit.CommonFilters(autos);
+        var mergedAuto = PlaylistMultiEdit.Merge(playlists, p => p.AutoPopulate);
+
+        // DELIBERATELY not editable. Flipping auto-populate on a whole selection rewrites what
+        // every one of those playlists contains, in one click and with nothing to undo it — far too
+        // much for a checkbox. It is shown so the state is known: all, some, or none. Changing it
+        // stays a per-playlist decision, in the single-playlist editor.
+        // AutoCheck=false rather than Enabled=false: a disabled control greys out to a colour this
+        // dark theme makes barely legible, and the point here is precisely to be readable.
         var enabled = new CheckBox
         {
-            Dock = DockStyle.Top, Height = S(34), Text = "Auto-Populate these Playlists",
-            ThreeState = true, Enabled = !readOnly, ForeColor = Fg, BackColor = Bg,
-            Padding = new Padding(S(2), 0, 0, 0),
+            Dock = DockStyle.Top, Height = S(34),
+            Text = mergedAuto.HasValue
+                ? (mergedAuto.Value ? $"Auto-Populate — all {playlists.Count} selected playlists"
+                                    : $"Auto-Populate — none of the {playlists.Count} selected playlists")
+                : $"Auto-Populate — {autos.Count} of {playlists.Count} selected playlists",
+            ThreeState = true, AutoCheck = false, TabStop = false, Cursor = Cursors.Default,
+            ForeColor = Fg, BackColor = Bg, Padding = new Padding(S(2), 0, 0, 0),
         };
-        var mergedAuto = PlaylistMultiEdit.Merge(playlists, p => p.AutoPopulate);
         enabled.CheckState = mergedAuto.HasValue
             ? (mergedAuto.Value ? CheckState.Checked : CheckState.Unchecked)
             : CheckState.Indeterminate;
 
-        var autos = playlists.Where(p => Safe(() => p.AutoPopulate)).ToList();
-        var shownBefore = PlaylistMultiEdit.CommonFilters(autos);
-
         var info = new Label
         {
             Dock = DockStyle.Top, Height = S(40), ForeColor = SubFg, BackColor = Bg,
-            Text = autos.Count == 0
-                ? "No auto-populated playlist in the selection."
-                : $"{shownBefore.Count} rule(s) shared by the {autos.Count} auto-populated playlist(s). "
-                  + "Rules belonging to a single playlist are not listed, and are left untouched.",
+            Text = "Read-only for a selection — switch a playlist between auto and manual one at a time.   "
+                + (autos.Count == 0
+                    ? "No auto-populated playlist here, so there are no rules to share."
+                    : $"{shownBefore.Count} rule(s) shared by the {autos.Count} auto-populated playlist(s); "
+                      + "rules belonging to a single playlist are not listed, and are left untouched."),
         };
 
         var (grid, readRows) = BuildRuleGrid(shownBefore, readOnly || autos.Count == 0, dpiScale);
@@ -99,11 +111,8 @@ internal static class EditPlaylistPopulate
 
         void Apply()
         {
-            if (readOnly) return;
-            // Indeterminate means "leave each playlist as it is".
-            if (enabled.CheckState != CheckState.Indeterminate)
-                foreach (var p in playlists) try { p.AutoPopulate = enabled.Checked; } catch { }
-            if (autos.Count == 0) return;
+            // AutoPopulate itself is never written from here — see the checkbox above.
+            if (readOnly || autos.Count == 0) return;
             PlaylistMultiEdit.ApplyFilterDifference(autos, shownBefore, readRows());
         }
         return (root, Apply);

@@ -1082,6 +1082,7 @@
        (before the first game render so renderGames() builds the right view). */
     initLbViewMode();
     setupLbArrangeMenu();
+    setupLbGameFilter();
 
     /* ── f. Play button + caret wiring ────────────────────────────────────── */
     /* Play button: direct launch (uses selected version + ROM from state).
@@ -2478,6 +2479,63 @@
     setupLbViewMenu();
   }
 
+  /* ── Filtre rapide sur les jeux ────────────────────────────────────────────
+     Transitoire, comme celui de BB-Web : Échap le vide, changer de nœud aussi. Il agit APRÈS le
+     tri (Arrange By possède l'ordre, le filtre ne fait que retirer des lignes), donc changer
+     l'ordre pendant qu'un filtre est posé conserve le filtre, et inversement. */
+  var lbGameFilter = "";
+
+  function lbNormFilter(s) { return String(s == null ? "" : s).toLowerCase().replace(/[^0-9a-z]/g, ""); }
+
+  function lbFilteredGames(all) {
+    var q = lbNormFilter(lbGameFilter);
+    if (!q) return all;
+    return all.filter(function (g) {
+      var key = (g && g.cn != null) ? String(g.cn) : (g && g.t) || "";
+      return lbNormFilter(key).indexOf(q) >= 0;
+    });
+  }
+
+  function lbReflectFilter() {
+    var input = document.getElementById("lb-game-filter");
+    if (input) input.classList.toggle("filtering", !!lbGameFilter);
+  }
+
+  /* Réapplique tri PUIS filtre à partir de la liste brute, en gardant le jeu sélectionné si
+     possible. Unique point d'entrée : tout ce qui change l'ordre ou la requête passe par ici. */
+  function lbRefreshGames() {
+    var selectedId = posterSel >= 0 && DATA.games[posterSel] ? DATA.games[posterSel].id : null;
+    DATA.games = lbFilteredGames(window.LBGameSort.sorted(lbRawGames, lbActiveSort));
+    renderGames();
+    if (selectedId != null) {
+      for (var i = 0; i < DATA.games.length; i++) {
+        if (String(DATA.games[i].id) === String(selectedId)) { selectCell(i); break; }
+      }
+    }
+    lbReflectFilter();
+  }
+
+  function setupLbGameFilter() {
+    var input = document.getElementById("lb-game-filter");
+    if (!input) return;
+    var debounce = null;
+    input.addEventListener("input", function () {
+      clearTimeout(debounce);
+      debounce = setTimeout(function () {
+        lbGameFilter = input.value.trim();
+        lbRefreshGames();
+      }, 60);
+    });
+    // Échap vide le filtre et rend le focus à la liste — le pendant du "B annule" de BB-Web.
+    input.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") return;
+      input.value = ""; lbGameFilter = ""; lbRefreshGames();
+      input.blur();
+      e.stopPropagation();
+    });
+    lbReflectFilter();
+  }
+
   function lbApplySortPayload(payload) {
     payload = payload || {};
     if (!lbSortSessionConnected) {
@@ -2486,7 +2544,7 @@
         // A configured playlist or a contextual Manual choice remains local.
         if (lbActiveSort.forced || lbActiveSort.key === "manual") return;
         lbActiveSort = { key: state.key, dir: state.dir, forced: false };
-        DATA.games = window.LBGameSort.sorted(lbRawGames, lbActiveSort);
+        DATA.games = lbFilteredGames(window.LBGameSort.sorted(lbRawGames, lbActiveSort));
         if (lbRawGames.length) renderGames();
         lbReflectArrange();
       });
@@ -2505,9 +2563,14 @@
     payload.customSorts = lbKnownCustomSorts.slice();
     lbSortPayload = payload;
     lbRawGames = Array.isArray(payload.games) ? payload.games.slice() : [];
+    // Nouveau noeud → le filtre rapide retombe : il est transitoire, et le laisser posé donnerait
+    // une liste tronquée sur une plateforme qu'on vient juste d'ouvrir, sans explication.
+    lbGameFilter = "";
+    var fi = document.getElementById("lb-game-filter"); if (fi) fi.value = "";
     lbActiveSort = window.LBGameSort.stateForPayload(payload, false, lbGlobalSort);
-    DATA.games = window.LBGameSort.sorted(lbRawGames, lbActiveSort);
+    DATA.games = lbFilteredGames(window.LBGameSort.sorted(lbRawGames, lbActiveSort));
     lbReflectArrange();
+    lbReflectFilter();
   }
 
   function lbChooseArrange(key) {
@@ -2517,14 +2580,7 @@
     lbGlobalSort = next.global;
     if (oldGlobal.key !== lbGlobalSort.key || oldGlobal.dir !== lbGlobalSort.dir)
       window.LBGameSort.publishSession(lbGlobalSort);
-    var selectedId = posterSel >= 0 && DATA.games[posterSel] ? DATA.games[posterSel].id : null;
-    DATA.games = window.LBGameSort.sorted(lbRawGames, lbActiveSort);
-    renderGames();
-    if (selectedId != null) {
-      for (var i = 0; i < DATA.games.length; i++) {
-        if (String(DATA.games[i].id) === String(selectedId)) { selectCell(i); break; }
-      }
-    }
+    lbRefreshGames();   // re-trie ET réapplique le filtre en cours, en gardant la sélection
     lbReflectArrange();
   }
 

@@ -96,8 +96,9 @@
       case "developer": return text(g.dev);
       case "favorite": return flag(g.fav);
       case "genre": return text(g.g);
-      // g.inst is IGame.Installed — NOT g.installed, which is the store-aware display flag.
-      case "installed": return flag(g.inst);
+      // g.inst is IGame.Installed, TRI-STATE: null = the user never said, and ranks last.
+      // NOT g.installed, which is the presence verdict the badge shows.
+      case "installed": return g.inst == null ? null : (g.inst ? 1 : 0);
       case "lastplayed": return date(g.lp);
       case "launchboxid": return num(g.dbId);
       case "mamehighscores": return flag(g.mameHs);

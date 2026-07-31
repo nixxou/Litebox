@@ -464,7 +464,7 @@ internal static class OwnedDataProvider
             // "no value" — it ranks last ascending (game-sort.js :: sorted).
             sr = SafeDoubleN(() => gm.CommunityOrLocalStarRating),
             ry = GameSortCatalog.EffectiveYear(gm),
-            inst = SafeBool(() => gm.Installed == true),
+            inst = SafeBoolN(() => gm.Installed),
             da = SafeDateMs(() => gm.DateAdded),
             dm = SafeDateMs(() => gm.DateModified),
             esrb = Safe(() => gm.Rating),
@@ -936,6 +936,8 @@ internal static class OwnedDataProvider
     private static int SafeInt(Func<int?> f) { try { return f() ?? 0; } catch { return 0; } }
     private static bool SafeBool(Func<bool> f) { try { return f(); } catch { return false; } }
     private static int? SafeIntN(Func<int?> f) { try { return f(); } catch { return null; } }
+    /// <summary>Tri-state flag: null stays null (unset is a hole, not a "false").</summary>
+    private static bool? SafeBoolN(Func<bool?> f) { try { return f(); } catch { return null; } }
     /// <summary>Sortable score: null (not 0) when there is no rating at all, so it ranks last.</summary>
     private static double? SafeDoubleN(Func<double> f) { try { var v = f(); return v > 0 ? v : (double?)null; } catch { return null; } }
 

@@ -63,6 +63,12 @@
       <button class="lb-hbar-btn" type="button">IMAGE</button>
       <button class="lb-hbar-btn" type="button">GROUP</button>
       <button class="lb-hbar-btn" type="button">BADGES</button>
+      <!-- Filtre rapide sur les JEUX — à ne pas confondre avec .lb-search-input, qui filtre l'arbre
+           des plateformes à gauche. Transitoire : Échap le vide, changer de nœud aussi. Dès qu'il
+           porte quelque chose le champ prend .filtering (fond explicite) : le champ étant toujours
+           visible, il tient lieu de bandeau, contrairement à BB-Web où la saisie se fait en modale. -->
+      <input class="lb-hbar-filter" id="lb-game-filter" type="search"
+             placeholder="Filter games…" aria-label="Filter games">
     </nav>
     <!-- Lock indicator: injected/updated by applyParentalDom() via renderLbLockIndicator().
          Class variants: .red (BigBox locked) · .green (LaunchBox locked) · .open (unlocked).

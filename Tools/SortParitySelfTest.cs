@@ -117,7 +117,7 @@ internal static class SortParitySelfTest
         ["version"] = g.Version ?? "",
         ["sr"] = g.CommunityOrLocalStarRating > 0 ? g.CommunityOrLocalStarRating : (float?)null,
         ["ry"] = GameSortCatalog.EffectiveYear(g),
-        ["inst"] = g.Installed == true,
+        ["inst"] = g.Installed,
         ["fav"] = g.Favorite,
         ["portable"] = g.Portable,
         ["mameHs"] = GameSortCatalog.MameHighScoresSupported(g),

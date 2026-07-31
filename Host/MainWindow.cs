@@ -752,7 +752,10 @@ internal sealed class MainWindow : Form, IMessageFilter
 #pragma warning restore CS0618
         Col("broken", "Broken", DpiW(55), g => Safe(() => (object)g.Broken), g => Safe(() => g.Broken) ? "✓" : "", HorizontalAlignment.Center, visible: false);
         Col("portable", "Portable", DpiW(60), g => Safe(() => (object)g.Portable), g => Safe(() => g.Portable) ? "✓" : "", HorizontalAlignment.Center, visible: false);
-        Col("installed", "Installed", DpiW(60), g => Safe(() => (object)g.Installed), g => Safe(() => g.Installed == true) ? "✓" : "", HorizontalAlignment.Center, visible: false);
+        // Three states, because Installed is a user checkbox and "never set" is not "not installed":
+        // ✓ ticked · ✕ explicitly unticked · blank = untouched. Same distinction the sort key makes.
+        Col("installed", "Installed", DpiW(60), g => Safe(() => (object)g.Installed),
+            g => Safe(() => g.Installed) is bool b ? (b ? "✓" : "✕") : "", HorizontalAlignment.Center, visible: false);
         Col("players", "Players", DpiW(60), g => N(() => g.MaxPlayers), g => N(() => g.MaxPlayers)?.ToString() ?? "", HorizontalAlignment.Right, visible: false);
         Col("plays", "Plays", DpiW(55), g => N(() => (int?)g.PlayCount), g => { var p = Safe(() => g.PlayCount); return p > 0 ? p.ToString() : ""; }, HorizontalAlignment.Right);
         Col("playtime", "Play Time", DpiW(80), g => Safe(() => (object)g.PlayTime), g => FormatPlayTime(Safe(() => g.PlayTime)), HorizontalAlignment.Right, visible: false);
@@ -2925,7 +2928,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         _ascending = true;
     }
 
-    private void SelectSort(string key, bool? ascending = null)
+    /// <param name="localOnly">The order was imposed by an action that is NOT a sort choice — a
+    /// letter jump needing alphabetical order. It applies here and now, but must not become the
+    /// session order: leaving the node restores whatever the user had actually picked.</param>
+    private void SelectSort(string key, bool? ascending = null, bool localOnly = false)
     {
         if (string.IsNullOrWhiteSpace(key)) key = "title";
         bool same = string.Equals(_curSortKey, key, StringComparison.OrdinalIgnoreCase);
@@ -2933,7 +2939,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         _curSortKey = key;
         // Manual only has meaning inside the current non-auto playlist. Selecting it from a
         // Default playlist must not replace the session sort restored on the next platform.
-        bool updatesSession = GameSortCatalog.UpdatesSession(_nodeForcesSort, key);
+        bool updatesSession = !localOnly && GameSortCatalog.UpdatesSession(_nodeForcesSort, key);
         _deferredKioskSort.DesktopSelection(
             ref _sessionSortKey,
             ref _sessionAscending,
@@ -5876,7 +5882,9 @@ internal sealed class MainWindow : Form, IMessageFilter
             {
                 try
                 {
-                    if (!IsTitleOrderForJump()) SelectSort("title", ascending: true);
+                    // localOnly: the user asked to jump, not to re-sort. The list goes alphabetical
+                    // so the jump makes sense, but their chosen order comes back on the next node.
+                    if (!IsTitleOrderForJump()) SelectSort("title", ascending: true, localOnly: true);
                     var view = _games.VisibleGames;
                     for (int i = 0; i < view.Count; i++)
                         if (CompareName(view[i]).StartsWith(needle, StringComparison.OrdinalIgnoreCase))

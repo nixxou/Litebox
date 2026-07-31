@@ -1560,6 +1560,23 @@ body.mobile .search-modal { position: fixed; }
 /* Icône ☰ du rail colorée quand un filtre avancé est actif. */
 .rail .rail-item.filtered { color: #2ea3e6; }
 
+/* ── Bandeau "filtre actif", juste au-dessus de la liste de jeux ──────────────────────────
+   Aligné sur la liste (même left/width) et posé dans la bande libre au-dessus (.list démarre
+   à 78px). Une seule ligne, ellipsée : le but est de signaler l'état, pas de le détailler. */
+.filter-banner {
+  position: absolute; top: 50px; left: 10px; width: var(--bbw-list-w, 250px);
+  display: flex; align-items: center; gap: 6px;
+  box-sizing: border-box; padding: 3px 8px; border-radius: 3px;
+  background: rgba(46, 163, 230, .14); border-left: 2px solid #2ea3e6;
+  color: #cfe8f7; font-size: 12px; line-height: 1.5; white-space: nowrap; overflow: hidden;
+}
+.filter-banner[hidden] { display: none; }
+.filter-banner .fb-icon { color: #2ea3e6; flex: none; }
+.filter-banner .fb-text { overflow: hidden; text-overflow: ellipsis; }
+.filter-banner .fb-text b { color: #fff; font-weight: 600; }
+/* Rappel "B annule" : présent seulement pour un filtre rapide — l'avancé, lui, survit au retour. */
+.filter-banner .fb-hint { margin-left: auto; flex: none; color: #7fa8bf; font-size: 11px; }
+
 .adv-modal { position: absolute; inset: 0; z-index: 50; display: none; }
 .adv-modal.open { display: block; }
 .adv-modal::before { content: ""; position: absolute; inset: 0; background: rgba(0,0,0,0.45); }

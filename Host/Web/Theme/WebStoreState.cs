@@ -78,13 +78,16 @@ internal static class WebStoreState
         _ => null,
     };
 
-    /// <summary>List/filter-friendly verdict: true = installed OR a non-store game (always "present"),
-    /// false = a store game confirmed NOT installed. Reads LiteBox's IGame.Installed (kept fresh by the
-    /// sync in <see cref="EnsureFresh"/>); a store game whose state is unknown stays conservative (present).</summary>
+    /// <summary>List/filter-friendly verdict: true = present, false = confirmed NOT installed.
+    ///
+    /// Installed is a USER checkbox (LaunchBox's game editor shows it next to Favorite / Hide /
+    /// Broken) that LaunchBox ALSO maintains automatically for store games — it is not a computed
+    /// "the file is on disk" flag. So a non-store game is not unconditionally present either: it is
+    /// present unless the user unticked it. Only an UNSET value means nobody has an opinion, and for
+    /// a local ROM that reads as present. Store state is kept fresh by <see cref="EnsureFresh"/>.</summary>
     public static bool IsInstalledOrPresent(IGame? game)
     {
         if (game == null) return true;
-        if (StoreSupport.KindOf(game) == StoreKind.None) return true;   // non-store → the ROM is local
         try { return game.Installed ?? true; } catch { return true; }
     }
 

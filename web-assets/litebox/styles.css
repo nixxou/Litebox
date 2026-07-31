@@ -1654,6 +1654,27 @@ body {
   overflow-y: auto;
 }
 
+/* Filtre rapide sur les jeux, dans la barre du haut. Discret au repos ; dès qu'il porte une
+   requête, .filtering rend l'état visible sans ajouter d'élément à l'écran. */
+.lb-hbar-filter {
+  margin-left: 10px;
+  width: 170px;
+  padding: 3px 8px;
+  border: 1px solid #3a3a42;
+  border-radius: 3px;
+  background: #232329;
+  color: #d8d8de;
+  font-size: 12px;
+  outline: none;
+}
+.lb-hbar-filter::placeholder { color: #6d6d78; }
+.lb-hbar-filter:focus { border-color: #4a7fb5; }
+.lb-hbar-filter.filtering {
+  background: rgba(46, 163, 230, .16);
+  border-color: #2ea3e6;
+  color: #fff;
+}
+
 .lb-menu-item {
   padding: 7px 16px;
   font-size: 13px;

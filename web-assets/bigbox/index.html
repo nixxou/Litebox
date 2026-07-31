@@ -74,6 +74,13 @@
            Image posée par le moteur (applyFanart) ; .has-fanart révèle l'opacité config. -->
       <div class="fanart"></div>
       <div class="topbar"><span class="title">WINDOWS</span><span class="advind" title="Filtre actif">☰</span><span class="clock">2:59 PM</span></div>
+      <!-- Bandeau "un filtre est actif", au-dessus de la liste, côté gauche. Sobre et compact :
+           une ligne, masquée tant qu'aucun filtre n'est posé. Un filtre RAPIDE (texte, favoris)
+           y affiche sur quoi il porte et rappelle que B l'annule ; le filtre AVANCÉ, lui, survit
+           au retour et n'annonce donc pas cette annulation. Rempli par updateFilterBanner(). -->
+      <div class="filter-banner" id="bbw-filter-banner" hidden>
+        <span class="fb-icon">☰</span><span class="fb-text"></span><span class="fb-hint"></span>
+      </div>
       <div class="rail-trigger"></div>
       <div class="rail"></div>
       <!-- Clear logo du jeu sélectionné : zone réservée en haut de la roue (option gameLogo).

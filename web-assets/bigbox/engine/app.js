@@ -1339,15 +1339,19 @@
     if (bbwActiveSort.key === "title" && bbwActiveSort.dir === "asc") return;
     // Sortant d'un autre champ, select() donne "asc" ; sortant de Titre décroissant, il bascule
     // en "asc". Les deux cas restants mènent donc bien en A→Z.
-    chooseArrange("title");
+    // localOnly : l'utilisateur a demandé un saut, pas un tri. La liste passe en alphabétique pour
+    // que le saut ait un sens, mais l'ordre qu'il avait choisi revient à la plateforme suivante.
+    chooseArrange("title", true);
   }
 
-  function chooseArrange(key) {
+  function chooseArrange(key, localOnly) {
     var oldGlobal = bbwGlobalSort;
     var next = window.LBGameSort.select(bbwActiveSort, key, bbwGlobalSort);
     bbwActiveSort = next.active;
-    bbwGlobalSort = next.global;
-    if (oldGlobal.key !== bbwGlobalSort.key || oldGlobal.dir !== bbwGlobalSort.dir)
+    // localOnly = ordre imposé par une action qui n'est PAS un choix de tri (saut par lettre) :
+    // il s'applique ici, sans devenir l'ordre de session ni être publié aux autres surfaces.
+    if (!localOnly) bbwGlobalSort = next.global;
+    if (!localOnly && (oldGlobal.key !== bbwGlobalSort.key || oldGlobal.dir !== bbwGlobalSort.dir))
       window.LBGameSort.publishSession(bbwGlobalSort);
     var keep = DATA.games[currentGame] && DATA.games[currentGame].id;
     DATA.gamesAll = window.LBGameSort.sorted(bbwRawGames, bbwActiveSort);
@@ -1416,6 +1420,7 @@
   // depuis gamesAll. TRANSITOIRE : levé par clearFavFilter (retour liste depuis fiche / catégories).
   function applyFavFilter(on) {
     favOnly = on;
+    updateFilterBanner();
     DATA.games = on ? DATA.gamesAll.filter(isStarred) : DATA.gamesAll;
     DATA.platformTotal = DATA.games.length;
     setupList("games", DATA.games.map(function (g) { return g.t; })); markGameStars("games");
@@ -1429,6 +1434,7 @@
     if (!favOnly) return;
     var g = keepViewedGame ? DATA.games[currentGame] : null;
     favOnly = false;
+    updateFilterBanner();
     DATA.games = DATA.gamesAll; DATA.platformTotal = DATA.platformTotalAll;
     setupList("games", DATA.games.map(function (g) { return g.t; })); markGameStars("games");
     var idx = g ? DATA.games.indexOf(g) : 0; if (idx < 0) idx = 0;
@@ -1704,6 +1710,57 @@
   function updateAdvIndicator() {
     var ind = $(".topbar .advind", screens.games); if (ind) ind.classList.toggle("on", advActive);
     var rv = screens.games.querySelector('.rail .rail-item[data-i="1"]'); if (rv) rv.classList.toggle("filtered", advActive);
+    updateFilterBanner();
+  }
+
+  // Un filtre RAPIDE est transitoire : texte saisi ou "favoris seulement". B / Échap l'annulent,
+  // et il ne survit pas au changement de plateforme. Le filtre AVANCÉ, lui, est délibéré : il reste
+  // jusqu'à ce qu'on le lève explicitement. Le bandeau dit lequel est actif et sur quoi il porte.
+  function quickFilterKind() {
+    if (searchQuery) return "text";
+    if (favOnly) return "fav";
+    return null;
+  }
+
+  function updateFilterBanner() {
+    var el = document.getElementById("bbw-filter-banner");
+    if (!el) return;
+    var txt = el.querySelector(".fb-text"), hint = el.querySelector(".fb-hint");
+    var quick = quickFilterKind();
+    if (quick === "text") {
+      // Sur quoi porte le filtre : on le dit, puisqu'il est purement textuel.
+      txt.innerHTML = "Titre contient <b></b>";
+      txt.querySelector("b").textContent = searchQuery;
+      hint.textContent = "B annule";
+    } else if (quick === "fav") {
+      txt.textContent = "Favoris seulement";
+      hint.textContent = "B annule";
+    } else if (advActive) {
+      // advApplied porte les critères réellement posés (y compris via l'historique). On réutilise
+      // le résumé de l'historique plutôt que d'inventer une seconde formulation des mêmes critères.
+      txt.textContent = "Filtre avancé : " + (advApplied ? advHistoryLabel(advApplied) : "actif");
+      hint.textContent = "";
+    } else {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+  }
+
+  /// Annule le filtre rapide s'il y en a un. Retourne true quand quelque chose a été annulé —
+  /// l'appelant s'en sert pour consommer le "retour" au lieu de quitter l'écran.
+  function clearQuickFilter() {
+    var kind = quickFilterKind();
+    if (!kind) return false;
+    if (kind === "text") {
+      searchQuery = "";
+      if (searchOpen) { paintSearch(); }
+      applySearchFilter();
+    } else {
+      clearFavFilter(true);
+    }
+    updateFilterBanner();
+    return true;
   }
   // ── Recherche avancée ROM (sous-menu Select ROM) ────────────────────────
   // Parser côté client (port simplifié de Rom.SetTags + SetFiltersVars de BBP).
@@ -2228,7 +2285,8 @@
   // Réinitialise les filtres transitoires (changement de plateforme) : recherche vidée + favoris.
   function resetSearch() {
     searchQuery = ""; favOnly = false; if (searchOpen) closeSearch();
-    advActive = false; advCrit = null; advApplied = null; if (advOpen) closeAdvanced(); updateAdvIndicator();
+    advActive = false; advCrit = null; advApplied = null; if (advOpen) closeAdvanced();
+    updateAdvIndicator();   // rafraîchit aussi le bandeau
   }
   function paintSearch() {
     if (!searchModalEl) return;
@@ -2297,6 +2355,7 @@
   }
   // Reconstruit la liste de jeux filtrée (compareName CONTIENT la requête) et sélectionne le 1er.
   function applySearchFilter() {
+    updateFilterBanner();
     var nq = normSearch(searchQuery);
     DATA.games = nq ? DATA.gamesAll.filter(function (g) { return searchKeyOf(g).indexOf(nq) >= 0; }) : DATA.gamesAll;
     DATA.platformTotal = nq ? DATA.games.length : DATA.platformTotalAll;
@@ -5303,6 +5362,10 @@
     }
   }
   function goBack() {
+    // Un filtre rapide s'annule AVANT de quitter l'écran : il est transitoire par nature, et partir
+    // en le laissant posé donnerait une liste tronquée au retour sans que rien ne l'explique.
+    // Le filtre avancé ne passe pas par là — il est délibéré et se lève depuis le rail.
+    if (current === "games" && clearQuickFilter()) return;
     if (current === "games") navTo("categories", true);
     else if (current === "details") detailBack();   // remonte d'un sous-menu, ou racine → liste de jeux
     else if (current === "system") navTo(systemReturn || "categories", true);
@@ -5576,6 +5639,16 @@
       if (e.key === " " || e.key === "Spacebar") { searchPress("{space}"); e.preventDefault(); return; }
       if (e.key.length === 1 && /[0-9a-zA-Z]/.test(e.key)) { searchPress(e.key.toUpperCase()); e.preventDefault(); return; }
       // (flèches : laissées au switch ci-dessous → searchMove)
+    }
+    // Modale fermée mais filtre texte encore posé : Backspace ÉDITE la requête, caractère par
+    // caractère, au lieu de valoir "back". Les autres touches de retour (Échap, B, gamepad)
+    // gardent leur sens et annulent le filtre d'un coup — corriger une frappe et abandonner la
+    // recherche sont deux intentions différentes, elles méritent deux touches.
+    if (!searchOpen && !anyOverlayOpen() && current === "games" && searchQuery && e.key === "Backspace") {
+      searchQuery = searchQuery.slice(0, -1);
+      applySearchFilter();
+      e.preventDefault();
+      return;
     }
     // Touche → commande via la table configurable (serveur). Espace normalisé en
     // "Spacebar". Touche inconnue → ignore.

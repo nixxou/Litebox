@@ -218,7 +218,11 @@ internal static class GameSortCatalog
             "developer"      => g => Safe(() => (object)g.Developer) ?? "",
             "favorite"       => g => Safe(() => (object)g.Favorite),
             "genre"          => g => Safe(() => (object)g.GenresString) ?? "",
-            "installed"      => g => Safe(() => (object)(g.Installed == true)),
+            // Tri-state on purpose. Installed is a user checkbox, so "unset" is a hole (it ranks
+            // last, like a missing year) and is NOT the same as an explicit "not installed".
+            // The web badge asks a different question — is the game present — and treats unset as
+            // present; see WebStoreState.IsInstalledOrPresent.
+            "installed"      => g => Safe(() => (object)g.Installed),
             "lastplayed"     => g => Date(Safe(() => g.LastPlayedDate)),
             "launchboxid"    => g => Safe(() => (object?)g.LaunchBoxDbId),
             "mamehighscores" => g => MameHighScoresSupported(g),

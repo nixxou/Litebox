@@ -1397,6 +1397,16 @@ internal sealed class GameStore
         SetOrRemove(ge, field, value);
     }
 
+    // We touch the field we were asked to touch and nothing else. LaunchBox does NOT: any <Game>
+    // row it writes comes back normalised to its full column set — 100 always, plus 10 that only
+    // appear when set — so a game it has edited carries ~37 empty elements ours leaves absent.
+    //
+    // Deliberately not reproduced (decided 2026-07-31). Empty and absent read identically, so the
+    // files differ without either losing anything; matching it would mean hardcoding that column
+    // list and keeping it in step with LaunchBox releases, which is the exact fragility the child
+    // collections were just freed from. LaunchBox restores them itself the next time it saves the
+    // game. Re-open this only with evidence that something actually reads the difference.
+    //
     // LB omits empty/default fields, so a cleared value removes the element rather than writing it empty.
     private static void SetOrRemove(XElement parent, string name, string value)
     {

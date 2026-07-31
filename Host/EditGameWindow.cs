@@ -1039,7 +1039,17 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         if (_readOnly) return;
         foreach (var g in _editGames)
         {
-            if (Writable(_title)) W(() => g.Title = _title.Text.Trim());
+            // The title drives every media FILENAME, so a rename has to drag the files with it —
+            // toward plain names, or toward the title-independent GUID form when the XML will not
+            // receive the new title yet. GameMediaSync decides; it is a no-op in read-only.
+            if (Writable(_title))
+            {
+                string oldTitle = Safe(() => g.Title) ?? "";
+                string newTitle = _title.Text.Trim();
+                W(() => g.Title = newTitle);
+                if (!string.Equals(oldTitle, newTitle, StringComparison.Ordinal))
+                    Media.GameMediaSync.OnTitleChanged(g, oldTitle, newTitle);
+            }
             if (Writable(_rating)) W(() => g.Rating = _rating.Text.Trim());
             if (Writable(_releaseType)) W(() => g.ReleaseType = _releaseType.Text.Trim());
             if (Writable(_genre)) W(() => g.GenresString = _genre.Text.Trim());

@@ -33,6 +33,7 @@ internal static class MediaRenameSelfTest
             failures += VideosAreOneUnit(root);
             failures += TakenNumberIsBumped(root);
             failures += LockedFileFallsBackToCopy(root);
+            failures += FlushNotificationSurvivesBoot();
         }
         finally { Nuke(root); }
 
@@ -124,6 +125,39 @@ internal static class MediaRenameSelfTest
             applied == 1 && Exists(dir, $"{Old}.{Id:D}-01.jpg"));
         return f + Check("the locked source is left in place rather than losing the file",
             Exists(dir, $"{Old}-01.jpg"));
+    }
+
+    /// <summary>The boot flush runs before the DataManager exists, so nobody is listening when it
+    /// lands a rename made while LaunchBox held the XMLs — the very case the transit form is for.
+    /// Those ids must be kept and handed over when a listener finally subscribes.</summary>
+    private static int FlushNotificationSurvivesBoot()
+    {
+        var store = new LbApiHost.Host.Data.GameStore();
+        var raisedBefore = new List<Guid>();
+        // Raise with no listener attached (boot order), then subscribe.
+        Invoke(store, new[] { Id });
+        int f = Check("nothing is delivered while nobody listens", raisedBefore.Count == 0);
+
+        var got = new List<Guid>();
+        store.TitlesFlushed = ids => got.AddRange(ids);
+        f += Check("subscribing later still receives the boot flush", got.Count == 1 && got[0] == Id);
+
+        var again = new List<Guid>();
+        store.TitlesFlushed = ids => again.AddRange(ids);
+        return f + Check("the backlog is delivered once, not replayed", again.Count == 0);
+    }
+
+    /// <summary>Reaches the private notifier the flush calls, so the test drives the real path.</summary>
+    private static void Invoke(LbApiHost.Host.Data.GameStore store, Guid[] ids)
+    {
+        var opType = typeof(LbApiHost.Host.Data.GameStore).Assembly.GetType("LbApiHost.Host.Data.Op");
+        var listType = typeof(List<>).MakeGenericType(opType!);
+        var list = (System.Collections.IList)Activator.CreateInstance(listType)!;
+        foreach (var id in ids)
+            list.Add(Activator.CreateInstance(opType!, 0L, "modify", "Game", id.ToString("D"), "", "Title", "x"));
+        typeof(LbApiHost.Host.Data.GameStore)
+            .GetMethod("NotifyTitlesFlushed", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(store, new object[] { list });
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────

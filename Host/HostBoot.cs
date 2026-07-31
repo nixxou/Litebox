@@ -435,6 +435,8 @@ internal static class HostBoot
 
         // Injection — PluginHelper exposes public setters for all 5 services.
         PluginHelper.DataManager = dm;
+        // Media follow a game's title: the hook fires once a flush has durably written it.
+        try { Media.GameMediaSync.Attach(store); } catch { }
         PluginHelper.StateManager = new HostStateManager();
         PluginHelper.BigBoxMainViewModel = new HostBigBoxMainViewModel();
         PluginHelper.LaunchBoxMainViewModel = new HostLaunchBoxMainViewModel();

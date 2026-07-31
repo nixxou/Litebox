@@ -1,0 +1,144 @@
+// Decides WHEN a game's media follow a title change, and drives GameMediaRenamer accordingly.
+// GameMediaRenamer knows how to move files; this decides whether to, and toward which form.
+//
+// The regime comes straight from the write-back model (see GameStore):
+//
+//   read-only            the title is never written to the XML — it reverts when LiteBox closes.
+//                        Moving files would orphan them against a title that never existed on
+//                        disk, so NOTHING is touched.
+//   LaunchBox running    the XML keeps the old title for now. Files go to the GUID form, which
+//                        LaunchBox finds under the old title and LiteBox under the new one.
+//                        ReconcileAfterFlush brings them back to plain once the title lands.
+//   otherwise            the XML is about to receive the new title → plain(old) → plain(new).
+//
+// A COLLISION — another game on the same platform already carrying the new title — pins both games
+// to the GUID form for good, because a plain name is shared by every game with that title.
+
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using LbApiHost.Host.Data;
+using Unbroken.LaunchBox.Plugins;
+using Unbroken.LaunchBox.Plugins.Data;
+
+namespace LbApiHost.Host.Media;
+
+internal static class GameMediaSync
+{
+    private static GameStore? _store;
+
+    /// <summary>Wires the flush hook: once a Title op reaches the XML, the transit GUID names can
+    /// go back to plain. Called once at boot.</summary>
+    public static void Attach(GameStore store)
+    {
+        _store = store;
+        if (store == null) return;
+        store.TitlesFlushed = ids => { try { ReconcileAfterFlush(ids); } catch { } };
+    }
+
+    /// <summary>Called right after a game's Title has been changed in memory.</summary>
+    public static void OnTitleChanged(IGame game, string oldTitle, string newTitle)
+    {
+        try
+        {
+            if (game == null) return;
+            oldTitle ??= ""; newTitle ??= "";
+            if (string.Equals(oldTitle, newTitle, StringComparison.Ordinal)) return;
+            // Read-only: the rename is a memory-only illusion, so the files must not follow it.
+            if (_store == null || _store.ReadOnly) return;
+
+            string lbRoot = MediaResolver.LbRoot;
+            string platform = Safe(() => game.Platform) ?? "";
+            if (string.IsNullOrEmpty(lbRoot) || platform.Length == 0) return;
+            if (!Guid.TryParse(Safe(() => game.Id) ?? "", out var id) || id == Guid.Empty) return;
+
+            var rival = FindRival(game, platform, newTitle);
+            bool deferred = GameStore.IsLaunchBoxRunning();
+            var target = (deferred || rival != null) ? MediaNameForm.Guid : MediaNameForm.Plain;
+
+            int moved = Move(lbRoot, id, platform, oldTitle, newTitle, target);
+
+            // The rival never asked for this, but a plain name belongs to a TITLE, not to a game:
+            // leaving it plain would make the two collections indistinguishable on disk.
+            if (rival != null && Guid.TryParse(Safe(() => rival.Id) ?? "", out var rid) && rid != Guid.Empty)
+                moved += Move(lbRoot, rid, platform, newTitle, newTitle, MediaNameForm.Guid);
+
+            if (moved > 0) RebuildCache(platform);
+        }
+        catch { }
+    }
+
+    /// <summary>Called once a flush has written Title ops: the transit form has served its purpose,
+    /// so each of those games goes back to plain names — unless a rival still holds that title.</summary>
+    public static void ReconcileAfterFlush(IReadOnlyList<Guid> gameIds)
+    {
+        if (gameIds == null || gameIds.Count == 0) return;
+        string lbRoot = MediaResolver.LbRoot;
+        if (string.IsNullOrEmpty(lbRoot)) return;
+
+        var platforms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in gameIds)
+        {
+            try
+            {
+                var game = FindGame(id);
+                if (game == null) continue;
+                string platform = Safe(() => game.Platform) ?? "";
+                string title = Safe(() => game.Title) ?? "";
+                if (platform.Length == 0 || title.Length == 0) continue;
+                // Still shared with another game → the GUID form is the destination, not a transit.
+                if (FindRival(game, platform, title) != null) continue;
+                if (Move(lbRoot, id, platform, title, title, MediaNameForm.Plain) > 0) platforms.Add(platform);
+            }
+            catch { }
+        }
+        foreach (var p in platforms) RebuildCache(p);
+    }
+
+    private static int Move(string lbRoot, Guid id, string platform, string diskTitle, string targetTitle, MediaNameForm form)
+        => GameMediaRenamer.Apply(GameMediaRenamer.Plan(lbRoot, id, platform, diskTitle, targetTitle, form));
+
+    /// <summary>Another game of the same platform already carrying this title. Compared on the
+    /// SANITIZED name, since that is what ends up in a filename — two titles differing only by a
+    /// character the sanitizer folds would still collide on disk.</summary>
+    private static IGame? FindRival(IGame game, string platform, string title)
+    {
+        string wanted = MediaResolver.Sanitize(title ?? "");
+        if (wanted.Length == 0) return null;
+        string ownId = Safe(() => game.Id) ?? "";
+        try
+        {
+            var plat = PluginHelper.DataManager?.GetPlatformByName(platform);
+            var games = plat?.GetAllGames(true, true) ?? Array.Empty<IGame>();
+            foreach (var other in games)
+            {
+                if (other == null) continue;
+                if (string.Equals(Safe(() => other.Id) ?? "", ownId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (string.Equals(MediaResolver.Sanitize(Safe(() => other.Title) ?? ""), wanted, StringComparison.OrdinalIgnoreCase))
+                    return other;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static IGame? FindGame(Guid id)
+    {
+        try { return PluginHelper.DataManager?.GetGameById(id.ToString("D")); }
+        catch { return null; }
+    }
+
+    private static void RebuildCache(string platform)
+    {
+        try
+        {
+            var plat = PluginHelper.DataManager?.GetPlatformByName(platform);
+            if (plat != null) GameCacheBridge.RebuildPlatform(plat);
+        }
+        catch { }
+    }
+
+    private static T? Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }
+}

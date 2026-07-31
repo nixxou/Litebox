@@ -196,6 +196,34 @@ internal sealed class GameStore
     /// the journal nor the Platform XMLs. Mutations update the in-memory Rows only, for this run.</summary>
     public bool ReadOnly = true;
 
+    /// <summary>Raised after a flush has DURABLY written game Title changes to the XML, with the
+    /// ids concerned. The media layer uses it to bring transit GUID filenames back to plain names
+    /// now that the XML and the title agree — see GameMediaSync. Never raised on a failed flush.
+    ///
+    /// Ids raised while nobody is listening are KEPT and delivered as soon as one subscribes. That
+    /// is not a nicety: the boot flush (RecoverJournalOnLoad) runs before the DataManager exists,
+    /// and it is precisely the flush that lands a rename made while LaunchBox was holding the XMLs
+    /// — the single most likely way for media to be sitting in the transit form.</summary>
+    public Action<IReadOnlyList<Guid>> TitlesFlushed
+    {
+        get => _titlesFlushed;
+        set
+        {
+            _titlesFlushed = value;
+            if (value == null) return;
+            List<Guid> backlog;
+            lock (_titlesFlushedPending)
+            {
+                if (_titlesFlushedPending.Count == 0) return;
+                backlog = _titlesFlushedPending.ToList();
+                _titlesFlushedPending.Clear();
+            }
+            try { value(backlog); } catch { }
+        }
+    }
+    private Action<IReadOnlyList<Guid>> _titlesFlushed;
+    private readonly List<Guid> _titlesFlushedPending = new();
+
     // Per-game accessory entities (resident — needed for launch/disc selection).
     private readonly Dictionary<Guid, List<AddApp>> _addApps = new();
     private readonly Dictionary<Guid, List<AltName>> _altNames = new();
@@ -665,6 +693,24 @@ internal sealed class GameStore
         FlushOpsToXml(op => op.Entity == "Settings" || op.Entity == "StartupAppSettings" || op.Entity == "ImageTypeSettings");
     }
 
+    /// <summary>Ids of the games whose Title this batch actually wrote. Only fired once the swaps
+    /// succeeded, so a listener can safely assume the XML now carries the new title.</summary>
+    private void NotifyTitlesFlushed(List<Op> ops)
+    {
+        if (ops == null) return;
+        var ids = new List<Guid>();
+        var seen = new HashSet<Guid>();
+        foreach (var op in ops)
+        {
+            if (op.Entity != "Game" || op.Field != "Title") continue;
+            if (Guid.TryParse(op.Id, out var g) && seen.Add(g)) ids.Add(g);
+        }
+        if (ids.Count == 0) return;
+        var hook = _titlesFlushed;
+        if (hook == null) { lock (_titlesFlushedPending) _titlesFlushedPending.AddRange(ids); return; }
+        try { hook(ids); } catch { }
+    }
+
     public static bool IsLaunchBoxRunning()
     {
         try { return Process.GetProcessesByName("LaunchBox").Length > 0 || Process.GetProcessesByName("BigBox").Length > 0; }
@@ -988,6 +1034,7 @@ internal sealed class GameStore
         if (allOk)
         {
             ClearFlushed();
+            NotifyTitlesFlushed(ops);
         }
         else
         {

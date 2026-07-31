@@ -1669,11 +1669,28 @@ body {
 }
 .lb-hbar-filter::placeholder { color: #6d6d78; }
 .lb-hbar-filter:focus { border-color: #4a7fb5; }
+/* Saisie faite dans le champ : délibérée, elle survit au changement de nœud. */
 .lb-hbar-filter.filtering {
   background: rgba(46, 163, 230, .16);
   border-color: #2ea3e6;
   color: #fff;
 }
+/* Née d'une frappe dans la liste : éphémère. Ambre + badge, comme sur le desktop. */
+.lb-hbar-filter.filtering.temp {
+  background: rgba(226, 152, 58, .18);
+  border-color: #e2983a;
+  color: #ffd9a5;
+  padding-right: 46px;            /* réserve la place du badge : le texte ne passe pas dessous */
+}
+.lb-hbar-filter-wrap { position: relative; display: inline-flex; align-items: center; }
+.lb-filter-badge {
+  position: absolute; right: 4px;
+  padding: 1px 5px; border: 0; border-radius: 2px;
+  background: #e2983a; color: #18120a;
+  font-size: 9px; font-weight: 700; letter-spacing: .5px; line-height: 1.4;
+  cursor: pointer;
+}
+.lb-filter-badge[hidden] { display: none; }
 
 .lb-menu-item {
   padding: 7px 16px;

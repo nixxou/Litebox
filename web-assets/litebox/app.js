@@ -2479,26 +2479,49 @@
     setupLbViewMenu();
   }
 
-  /* ── Filtre rapide sur les jeux ────────────────────────────────────────────
-     Transitoire, comme celui de BB-Web : Échap le vide, changer de nœud aussi. Il agit APRÈS le
-     tri (Arrange By possède l'ordre, le filtre ne fait que retirer des lignes), donc changer
-     l'ordre pendant qu'un filtre est posé conserve le filtre, et inversement. */
+  /* ── Frappe dans la liste : sauter ou filtrer ──────────────────────────────
+     Même logique que le desktop, parce que seule l'une des deux a du sens dans chaque ordre :
+
+       Titre A→Z          → SAUT vers le premier jeu dont la clé commence par ce qui est tapé.
+       n'importe quel autre → FILTRE. Sauter à « S » n'a pas de sens quand la liste est rangée
+                             par date : le premier S est à une position arbitraire.
+
+     Le filtre agit APRÈS le tri (Arrange By possède l'ordre, le filtre ne fait que retirer des
+     lignes), donc changer l'ordre conserve le filtre et inversement.
+
+     Deux régimes de filtre :
+       - né d'une frappe dans la LISTE → transitoire (ambre + badge TEMP), retombe au nœud suivant
+       - saisi dans le CHAMP à la main → persistant (bleu) : l'utilisateur l'a mis là exprès
+     Éditer le champ fait sortir du régime transitoire. */
   var lbGameFilter = "";
+  var lbGameFilterTransient = false;
 
   function lbNormFilter(s) { return String(s == null ? "" : s).toLowerCase().replace(/[^0-9a-z]/g, ""); }
+
+  function lbIsTitleOrder() {
+    return !!lbActiveSort && lbActiveSort.key === "title" && lbActiveSort.dir === "asc";
+  }
+
+  /* Clé de comparaison : cn (normalisée côté serveur, donc identique au tri) sinon le titre brut. */
+  function lbJumpKey(g) {
+    return lbNormFilter((g && g.cn != null) ? g.cn : (g && g.t) || "");
+  }
 
   function lbFilteredGames(all) {
     var q = lbNormFilter(lbGameFilter);
     if (!q) return all;
-    return all.filter(function (g) {
-      var key = (g && g.cn != null) ? String(g.cn) : (g && g.t) || "";
-      return lbNormFilter(key).indexOf(q) >= 0;
-    });
+    return all.filter(function (g) { return lbJumpKey(g).indexOf(q) >= 0; });
   }
 
   function lbReflectFilter() {
     var input = document.getElementById("lb-game-filter");
-    if (input) input.classList.toggle("filtering", !!lbGameFilter);
+    var badge = document.getElementById("lb-filter-badge");
+    var active = !!lbGameFilter, temp = active && lbGameFilterTransient;
+    if (input) {
+      input.classList.toggle("filtering", active);
+      input.classList.toggle("temp", temp);
+    }
+    if (badge) badge.hidden = !temp;
   }
 
   /* Réapplique tri PUIS filtre à partir de la liste brute, en gardant le jeu sélectionné si
@@ -2515,23 +2538,94 @@
     lbReflectFilter();
   }
 
+  function lbSetGameFilter(text, transient) {
+    var input = document.getElementById("lb-game-filter");
+    lbGameFilter = String(text || "").trim();
+    lbGameFilterTransient = !!transient && lbGameFilter.length > 0;
+    if (input && input.value !== lbGameFilter) input.value = lbGameFilter;
+    lbRefreshGames();
+  }
+
+  /* Vide le filtre s'il est transitoire. Une recherche tapée dans le champ, elle, reste :
+     changer de plateforme n'est pas une raison de jeter ce qu'on a délibérément cherché. */
+  function lbClearTransientFilter() {
+    if (!lbGameFilterTransient) { lbReflectFilter(); return; }
+    lbGameFilterTransient = false;
+    var input = document.getElementById("lb-game-filter");
+    lbGameFilter = "";
+    if (input) input.value = "";
+    lbReflectFilter();
+  }
+
+  /* Saut de type type-ahead : accumule les caractères tapés rapidement, comme le fait le
+     ListView natif du desktop, et sélectionne le premier jeu dont la clé commence ainsi. */
+  var lbJumpBuf = "", lbJumpAt = 0;
+  function lbTypeJump(ch) {
+    var now = Date.now();
+    lbJumpBuf = (now - lbJumpAt > 900) ? ch : lbJumpBuf + ch;
+    lbJumpAt = now;
+    var needle = lbNormFilter(lbJumpBuf);
+    if (!needle) return;
+    for (var i = 0; i < DATA.games.length; i++) {
+      if (lbJumpKey(DATA.games[i]).indexOf(needle) === 0) { selectCell(i); return; }
+    }
+  }
+
+  /* Le champ n'a pas le focus : la frappe appartient à la liste. */
+  function lbTypingTarget(e) {
+    // Personne d'autre ne doit revendiquer la frappe : ni le pavé PIN ou le menu Play, ni un menu
+    // déroulant ouvert. Sans cette garde, taper son code PIN alimenterait aussi le filtre de jeux.
+    if (lbPinOpen || lbPlayMenuOpen) return false;
+    if (document.querySelector(".lb-menu-dropdown.open")) return false;
+    var t = e.target;
+    if (!t) return true;
+    var tag = (t.tagName || "").toLowerCase();
+    return !(tag === "input" || tag === "textarea" || tag === "select" || t.isContentEditable);
+  }
+
   function setupLbGameFilter() {
     var input = document.getElementById("lb-game-filter");
-    if (!input) return;
-    var debounce = null;
-    input.addEventListener("input", function () {
-      clearTimeout(debounce);
-      debounce = setTimeout(function () {
-        lbGameFilter = input.value.trim();
-        lbRefreshGames();
-      }, 60);
-    });
-    // Échap vide le filtre et rend le focus à la liste — le pendant du "B annule" de BB-Web.
-    input.addEventListener("keydown", function (e) {
-      if (e.key !== "Escape") return;
-      input.value = ""; lbGameFilter = ""; lbRefreshGames();
-      input.blur();
-      e.stopPropagation();
+    var badge = document.getElementById("lb-filter-badge");
+    if (badge) badge.addEventListener("click", function () { lbSetGameFilter("", false); });
+    if (input) {
+      var debounce = null;
+      input.addEventListener("input", function () {
+        clearTimeout(debounce);
+        debounce = setTimeout(function () {
+          // Saisie manuelle → régime persistant.
+          lbSetGameFilter(input.value, false);
+        }, 60);
+      });
+      input.addEventListener("keydown", function (e) {
+        if (e.key !== "Escape") return;
+        lbSetGameFilter("", false);
+        input.blur();
+        e.stopPropagation();
+      });
+    }
+
+    /* Frappe hors champ de saisie = frappe "dans la liste". */
+    document.addEventListener("keydown", function (e) {
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      if (!lbTypingTarget(e)) return;
+      if (e.key === "Escape") {
+        if (!lbGameFilter) return;
+        lbSetGameFilter("", false);
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "Backspace") {
+        // Retour arrière retire UN caractère ; Échap abandonne tout. Corriger une frappe et
+        // renoncer à sa recherche sont deux intentions différentes.
+        if (!lbGameFilter) return;
+        lbSetGameFilter(lbGameFilter.slice(0, -1), true);
+        e.preventDefault();
+        return;
+      }
+      if (e.key.length !== 1 || !/[0-9a-zA-Z ]/.test(e.key)) return;
+      if (lbIsTitleOrder()) lbTypeJump(e.key);
+      else lbSetGameFilter(lbGameFilter + e.key, true);
+      e.preventDefault();
     });
     lbReflectFilter();
   }
@@ -2563,10 +2657,10 @@
     payload.customSorts = lbKnownCustomSorts.slice();
     lbSortPayload = payload;
     lbRawGames = Array.isArray(payload.games) ? payload.games.slice() : [];
-    // Nouveau noeud → le filtre rapide retombe : il est transitoire, et le laisser posé donnerait
-    // une liste tronquée sur une plateforme qu'on vient juste d'ouvrir, sans explication.
-    lbGameFilter = "";
-    var fi = document.getElementById("lb-game-filter"); if (fi) fi.value = "";
+    // Nouveau noeud → seul le filtre TRANSITOIRE retombe (celui né d'une frappe dans la liste) :
+    // le laisser posé donnerait une liste tronquée sur une plateforme qu'on vient d'ouvrir, sans
+    // explication. Une recherche tapée dans le champ, elle, est délibérée et survit.
+    lbClearTransientFilter();
     lbActiveSort = window.LBGameSort.stateForPayload(payload, false, lbGlobalSort);
     DATA.games = lbFilteredGames(window.LBGameSort.sorted(lbRawGames, lbActiveSort));
     lbReflectArrange();

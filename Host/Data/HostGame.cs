@@ -230,7 +230,10 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
         => _s.AddAppsFor(R.Id).Select(a => (IAdditionalApplication)new HostAdditionalApplication(_s, a, R.Id)).ToArray();
     public override IAdditionalApplication AddNewAdditionalApplication()
     {
-        var a = new AddApp { Id = Guid.NewGuid().ToString() };
+        // Seeded with the fields LaunchBox puts on every additional application it creates (all
+        // 9801 in the real data carry these three, all empty) so a new one has the same shape as
+        // theirs instead of being recognisable as ours. See ChildExtras for why they live here.
+        var a = new AddApp { Id = Guid.NewGuid().ToString(), Extra = ChildExtras.NewAdditionalApplication() };
         _s.AddAppsMutable(R.Id).Add(a);
         _s.RecordChildReplace(R.Id, "AdditionalApplication");
         return new HostAdditionalApplication(_s, a, R.Id);

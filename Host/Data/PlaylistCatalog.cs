@@ -23,6 +23,7 @@ namespace LbApiHost.Host.Data;
 internal sealed class PlaylistFilterDef : PlaylistFilterDefLike
 {
     public string FieldKey, ComparisonTypeKey, Value;
+    public Dictionary<string, string> Extra;   // fields LiteBox does not model — see ChildExtras
     public PlaylistFilterDef(string fieldKey, string comparisonTypeKey, string value)
     { FieldKey = fieldKey; ComparisonTypeKey = comparisonTypeKey; Value = value; }
 
@@ -51,6 +52,7 @@ internal sealed class HostPlaylistGame : DummyPlaylistGame
     public string GameIdValue, GameTitleValue, GamePlatformValue, GameFileNameValue, PlaylistIdValue;
     public int ManualOrderValue;
     public int? LaunchBoxDbIdValue;
+    public Dictionary<string, string> Extra;   // fields LiteBox does not model — see ChildExtras
 
     public void SetResolver(Func<string, IGame> r) => _resolve = r;
     internal void SetOwner(HostPlaylist o) => _owner = o;
@@ -108,9 +110,11 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     internal void Attach(GameStore s) => _store = s;
     private void Rec(string field, string value) => _store?.RecordPlaylistModify(PlaylistIdValue, FileValue, field, value);
 
+    private static readonly Dictionary<string, string> EmptyExtra = new(StringComparer.Ordinal);
+
     internal void RecordGames()
         => _store?.RecordPlaylistChildReplace("PlaylistGame", PlaylistIdValue, FileValue, JsonSerializer.Serialize(
-            _games.Select(g => new Dictionary<string, string>
+            _games.Select(g => new Dictionary<string, string>(g.Extra ?? EmptyExtra, StringComparer.Ordinal)
             {
                 ["GameId"] = g.GameIdValue, ["LaunchBoxDbId"] = g.LaunchBoxDbIdValue?.ToString(CultureInfo.InvariantCulture),
                 ["GameTitle"] = g.GameTitleValue, ["GameFileName"] = g.GameFileNameValue, ["GamePlatform"] = g.GamePlatformValue,
@@ -120,7 +124,8 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     {
         InvalidateFilterPlan();
         _store?.RecordPlaylistChildReplace("PlaylistFilter", PlaylistIdValue, FileValue, JsonSerializer.Serialize(
-            _filters.Select(f => new Dictionary<string, string> { ["Value"] = f.Value, ["FieldKey"] = f.FieldKey, ["ComparisonTypeKey"] = f.ComparisonTypeKey }).ToList()));
+            _filters.Select(f => new Dictionary<string, string>(f.Extra ?? EmptyExtra, StringComparer.Ordinal)
+                { ["Value"] = f.Value, ["FieldKey"] = f.FieldKey, ["ComparisonTypeKey"] = f.ComparisonTypeKey }).ToList()));
     }
 
     /// <summary>Atomically replaces the editable filter grid.  The public SDK mutators journal once per
@@ -343,12 +348,14 @@ internal static class PlaylistCatalog
                     PlaylistIdValue = pl.PlaylistIdValue,
                     ManualOrderValue = int.TryParse((string)pge.Element("ManualOrder"), out var mo) ? mo : 0,
                     LaunchBoxDbIdValue = int.TryParse((string)pge.Element("LaunchBoxDbId"), out var db) ? db : (int?)null,
+                    Extra = ChildExtras.Capture(pge, "PlaylistGame"),
                 });
             }
 
             foreach (var pfe in root.Elements("PlaylistFilter"))
                 pl.AddFilter(new PlaylistFilterDef(
-                    (string)pfe.Element("FieldKey"), (string)pfe.Element("ComparisonTypeKey"), (string)pfe.Element("Value")));
+                    (string)pfe.Element("FieldKey"), (string)pfe.Element("ComparisonTypeKey"), (string)pfe.Element("Value"))
+                { Extra = ChildExtras.Capture(pfe, "PlaylistFilter") });
 
             result.Add(pl);
         }

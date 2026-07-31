@@ -323,6 +323,7 @@ internal sealed class GameStore
                             WaitForExit = ParseBool(V("WaitForExit")), SideA = ParseBool(V("SideA")), SideB = ParseBool(V("SideB")),
                             ReleaseDate = ParseDateN(V("ReleaseDate")), LastPlayed = ParseDateN(V("LastPlayed")), Installed = ParseBoolN(V("Installed")),
                             Section = V("Section"), HasCloudSynced = ParseBoolN(V("HasCloudSynced")),
+                            Extra = ChildExtras.Capture(g, "AdditionalApplication"),
                         });
                     }
                     continue;
@@ -332,7 +333,7 @@ internal sealed class GameStore
                     if (Guid.TryParse(V("GameID"), out var ngid))
                     {
                         if (!_altNames.TryGetValue(ngid, out var nl)) _altNames[ngid] = nl = new List<AltName>();
-                        nl.Add(new AltName { Name = V("Name"), Region = V("Region") });
+                        nl.Add(new AltName { Name = V("Name"), Region = V("Region"), Extra = ChildExtras.Capture(g, "AlternateName") });
                     }
                     continue;
                 }
@@ -347,6 +348,7 @@ internal sealed class GameStore
                             DriveLetter = !string.IsNullOrEmpty(dl) ? char.ToUpperInvariant(dl[0]) : 'C',
                             Filesystem = V("Filesystem"), MountType = V("MountType"),
                             Path = V("Path"), Type = V("Type"),
+                            Extra = ChildExtras.Capture(g, "Mount"),
                         });
                     }
                     continue;
@@ -356,7 +358,7 @@ internal sealed class GameStore
                     if (Guid.TryParse(V("GameID"), out var cgid))
                     {
                         if (!_customFields.TryGetValue(cgid, out var cl)) _customFields[cgid] = cl = new List<CustomField>();
-                        cl.Add(new CustomField { Name = V("Name"), Value = V("Value") });
+                        cl.Add(new CustomField { Name = V("Name"), Value = V("Value"), Extra = ChildExtras.Capture(g, "CustomField") });
                     }
                     continue;
                 }
@@ -926,11 +928,10 @@ internal sealed class GameStore
                     }
                     else if (op.OpType == "replace")   // PlaylistGame / PlaylistFilter — one playlist per file
                     {
-                        foreach (var e in pdoc.Root.Elements(op.Entity).ToList()) e.Remove();
                         var order = op.Entity == "PlaylistGame" ? _playlistGameOrder : _playlistFilterOrder;
                         List<Dictionary<string, string>> list;
                         try { list = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(op.Value) ?? new(); } catch { list = new(); }
-                        foreach (var rec in list) pdoc.Root.Add(BuildElement(op.Entity, rec, order));
+                        SpliceCollection(pdoc, op.Entity, pdoc.Root.Elements(op.Entity).ToList(), list, order);
                     }
                 }
                 else if (op.OpType == "replace" && Guid.TryParse(op.ParentId, out var subgid))
@@ -1168,14 +1169,19 @@ internal sealed class GameStore
 
     internal static readonly Dictionary<string, string[]> ChildFieldOrder = new(StringComparer.Ordinal)
     {
-        // Element order copied off LaunchBox's own output rather than chosen. The reader is a typed
-        // DataSet and does not care, but a file that differs only where it must is far easier to
-        // diff against one LaunchBox wrote. (CommandLine and Installed never appear in the samples;
-        // they sit beside the fields they belong with.)
-        ["AdditionalApplication"] = new[] { "Id", "PlayCount", "PlayTime", "GameID", "ApplicationPath", "CommandLine", "AutoRunAfter", "AutoRunBefore", "Name", "UseDosBox", "UseEmulator", "WaitForExit", "ReleaseDate", "Developer", "Publisher", "Region", "Version", "Status", "Section", "LastPlayed", "Disc", "EmulatorId", "SideA", "SideB", "Installed", "Priority", "HasCloudSynced" },
+        // Element order read off LaunchBox's own output, not chosen: all 9801 additional
+        // applications in the real data follow this one sequence, differing only by which optional
+        // fields are absent. GogAppId / OriginAppId / OriginInstallPath lead it and are handled as
+        // extras (ChildExtras) since the model has no use for them. Installed never appears at all
+        // — it is SDK-only — so its slot here is arbitrary.
+        ["AdditionalApplication"] = new[] { "Id", "PlayCount", "PlayTime", "GameID", "ApplicationPath", "AutoRunAfter", "AutoRunBefore", "CommandLine", "Name", "UseDosBox", "UseEmulator", "WaitForExit", "ReleaseDate", "Developer", "Publisher", "Region", "Version", "Status", "Section", "LastPlayed", "Disc", "EmulatorId", "SideA", "SideB", "Installed", "Priority", "HasCloudSynced" },
         ["AlternateName"] = new[] { "GameID", "Name", "Region" },
         ["Mount"] = new[] { "GameID", "DriveLetter", "Filesystem", "MountType", "Path", "Type" },
         ["CustomField"] = new[] { "GameID", "Name", "Value" },
+        // Not game children, but rebuilt the same way and so exposed to the same loss — listed here
+        // so ChildExtras has one place to ask what "modelled" means.
+        ["PlaylistGame"] = new[] { "GameId", "LaunchBoxDbId", "GameTitle", "GameFileName", "GamePlatform", "ManualOrder" },
+        ["PlaylistFilter"] = new[] { "Value", "FieldKey", "ComparisonTypeKey" },
     };
 
     /// <summary>Records the current (already-mutated) child collection of <paramref name="entity"/> for
@@ -1199,6 +1205,11 @@ internal sealed class GameStore
         : (d.Value.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(d.Value, DateTimeKind.Local) : d.Value)
             .ToString("o", CultureInfo.InvariantCulture);
 
+    // Unmodelled fields go into the record FIRST, so they keep their place ahead of the modelled
+    // ones when the element is rebuilt (see ChildExtras).
+    private static readonly Dictionary<string, string> NoExtra = new(StringComparer.Ordinal);
+    private static Dictionary<string, string> Ex(Dictionary<string, string> e) => e ?? NoExtra;
+
     private string SerializeChildren(string entity, Guid gid)
     {
         var list = new List<Dictionary<string, string>>();
@@ -1207,7 +1218,7 @@ internal sealed class GameStore
         {
             case "AdditionalApplication":
                 foreach (var a in AddAppsFor(gid))
-                    list.Add(new Dictionary<string, string>
+                    list.Add(new Dictionary<string, string>(Ex(a.Extra), StringComparer.Ordinal)
                     {
                         ["Id"] = a.Id, ["GameID"] = g, ["ApplicationPath"] = a.ApplicationPath, ["Name"] = a.Name,
                         ["CommandLine"] = a.CommandLine, ["Developer"] = a.Developer, ["Publisher"] = a.Publisher,
@@ -1229,13 +1240,13 @@ internal sealed class GameStore
                     });
                 break;
             case "AlternateName":
-                foreach (var a in AltNamesFor(gid)) list.Add(new() { ["GameID"] = g, ["Name"] = a.Name, ["Region"] = a.Region });
+                foreach (var a in AltNamesFor(gid)) list.Add(new(Ex(a.Extra), StringComparer.Ordinal) { ["GameID"] = g, ["Name"] = a.Name, ["Region"] = a.Region });
                 break;
             case "Mount":
-                foreach (var m in MountsFor(gid)) list.Add(new() { ["GameID"] = g, ["DriveLetter"] = m.DriveLetter.ToString(), ["Filesystem"] = m.Filesystem, ["MountType"] = m.MountType, ["Path"] = m.Path, ["Type"] = m.Type });
+                foreach (var m in MountsFor(gid)) list.Add(new(Ex(m.Extra), StringComparer.Ordinal) { ["GameID"] = g, ["DriveLetter"] = m.DriveLetter.ToString(), ["Filesystem"] = m.Filesystem, ["MountType"] = m.MountType, ["Path"] = m.Path, ["Type"] = m.Type });
                 break;
             case "CustomField":
-                foreach (var c in CustomFieldsFor(gid)) list.Add(new() { ["GameID"] = g, ["Name"] = c.Name, ["Value"] = c.Value });
+                foreach (var c in CustomFieldsFor(gid)) list.Add(new(Ex(c.Extra), StringComparer.Ordinal) { ["GameID"] = g, ["Name"] = c.Name, ["Value"] = c.Value });
                 break;
         }
         return JsonSerializer.Serialize(list);
@@ -1262,16 +1273,17 @@ internal sealed class GameStore
                     SideA = ParseBool(G(r, "SideA")), SideB = ParseBool(G(r, "SideB")),
                     ReleaseDate = ParseDateN(G(r, "ReleaseDate")), LastPlayed = ParseDateN(G(r, "LastPlayed")), Installed = ParseBoolN(G(r, "Installed")),
                     Section = G(r, "Section"), HasCloudSynced = ParseBoolN(G(r, "HasCloudSynced")),
+                    Extra = ChildExtras.From(r, "AdditionalApplication"),
                 }).ToList();
                 break;
             case "AlternateName":
-                _altNames[gid] = list.Select(r => new AltName { Name = G(r, "Name"), Region = G(r, "Region") }).ToList();
+                _altNames[gid] = list.Select(r => new AltName { Name = G(r, "Name"), Region = G(r, "Region"), Extra = ChildExtras.From(r, "AlternateName") }).ToList();
                 break;
             case "Mount":
-                _mounts[gid] = list.Select(r => { var dl = G(r, "DriveLetter"); return new GameMount { DriveLetter = !string.IsNullOrEmpty(dl) ? char.ToUpperInvariant(dl[0]) : 'C', Filesystem = G(r, "Filesystem"), MountType = G(r, "MountType"), Path = G(r, "Path"), Type = G(r, "Type") }; }).ToList();
+                _mounts[gid] = list.Select(r => { var dl = G(r, "DriveLetter"); return new GameMount { DriveLetter = !string.IsNullOrEmpty(dl) ? char.ToUpperInvariant(dl[0]) : 'C', Filesystem = G(r, "Filesystem"), MountType = G(r, "MountType"), Path = G(r, "Path"), Type = G(r, "Type"), Extra = ChildExtras.From(r, "Mount") }; }).ToList();
                 break;
             case "CustomField":
-                _customFields[gid] = list.Select(r => new CustomField { Name = G(r, "Name"), Value = G(r, "Value") }).ToList();
+                _customFields[gid] = list.Select(r => new CustomField { Name = G(r, "Name"), Value = G(r, "Value"), Extra = ChildExtras.From(r, "CustomField") }).ToList();
                 break;
         }
     }
@@ -1279,18 +1291,47 @@ internal sealed class GameStore
     // Apply a child replace op onto a loaded DOM: drop existing <entity> for this GameID, re-emit.
     private static void ApplyChildReplaceToDoc(XDocument doc, string entity, string gameId, string json)
     {
-        foreach (var e in doc.Root.Elements(entity).Where(e => (string)e.Element("GameID") == gameId).ToList()) e.Remove();
+        var existing = doc.Root.Elements(entity).Where(e => (string)e.Element("GameID") == gameId).ToList();
         List<Dictionary<string, string>> list;
         try { list = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
-        var order = ChildFieldOrder[entity];
+        SpliceCollection(doc, entity, existing, list, ChildFieldOrder[entity]);
+    }
+
+    /// <summary>Rebuilds a whole collection and puts it back exactly where the old one was.
+    /// Used by every replace op, so they all preserve the same three things: unmodelled fields,
+    /// empty elements, and position in the file.</summary>
+    private static void SpliceCollection(XDocument doc, string name, List<XElement> existing,
+                                         List<Dictionary<string, string>> list, string[] order)
+    {
+        var rebuilt = new List<XElement>(list.Count);
         foreach (var rec in list)
         {
-            var el = new XElement(entity);
+            var el = new XElement(name);
+            // Unmodelled fields first, kept even when empty: LaunchBox writes them that way, and
+            // this is handing back what was taken, not re-deriving it (see ChildExtras). An empty
+            // one is added with NO content so it serializes self-closing (<X />) — XElement(n, "")
+            // would emit <X></X>.
+            foreach (var kv in rec)
+                if (Array.IndexOf(order, kv.Key) < 0)
+                    el.Add(string.IsNullOrEmpty(kv.Value) ? new XElement(kv.Key) : new XElement(kv.Key, kv.Value));
+            // null means the element was never there; "" means it was there and empty, which
+            // LaunchBox writes as <CommandLine /> rather than omitting. The loader already keeps
+            // the two apart, so honour the difference instead of flattening it to "skip if blank".
             foreach (var fld in order)
-                if (rec.TryGetValue(fld, out var v) && !string.IsNullOrEmpty(v))
-                    el.Add(new XElement(fld, v));
-            doc.Root.Add(el);
+                if (rec.TryGetValue(fld, out var v) && v != null)
+                    el.Add(v.Length == 0 ? new XElement(fld) : new XElement(fld, v));
+            rebuilt.Add(el);
         }
+
+        // Back where the old ones were, rather than at the end of the document. Appending would
+        // push these past every element written after them, turning a one-field edit into a
+        // file-wide reordering that reads as a far larger change than it is.
+        if (existing.Count > 0)
+        {
+            if (rebuilt.Count > 0) existing[0].AddBeforeSelf(rebuilt);
+            foreach (var e in existing) e.Remove();
+        }
+        else foreach (var el in rebuilt) doc.Root.Add(el);
     }
 
     // Before overwriting any XML, snapshot the pristine originals into a small timestamped zip —
@@ -1441,8 +1482,8 @@ internal sealed class GameStore
         "ImageType", "SortTitle", "LastGameId", "BigBoxView", "BigBoxTheme", "HideInBigBox",
     };
     private static readonly string[] _platformCategoryAddOrder = { "Name", "NestedName", "Notes", "VideoPath", "SortTitle", "HideInBigBox" };
-    private static readonly string[] _playlistGameOrder = { "GameId", "LaunchBoxDbId", "GameTitle", "GameFileName", "GamePlatform", "ManualOrder" };
-    private static readonly string[] _playlistFilterOrder = { "Value", "FieldKey", "ComparisonTypeKey" };
+    private static readonly string[] _playlistGameOrder = ChildFieldOrder["PlaylistGame"];
+    private static readonly string[] _playlistFilterOrder = ChildFieldOrder["PlaylistFilter"];
 
     // Playlists live one-per-file under Data\Playlists\; ops carry the source file in ParentId.
     public void RecordPlaylistModify(string playlistId, string file, string field, string value)
@@ -1643,12 +1684,14 @@ internal sealed class AddApp
     // doesn't expose it, so LiteBox must round-trip it here or an edit-save would demote documents to apps.
     public string Section;
     public bool? HasCloudSynced;   // LB cloud-sync flag; preserved verbatim (nullable → not re-added when absent).
+    public Dictionary<string, string> Extra;   // fields LiteBox does not model — see ChildExtras.
 }
 
 /// <summary>A game's alternate (regional) name, from the Platform XML.</summary>
 internal sealed class AltName
 {
     public string Name, Region;
+    public Dictionary<string, string> Extra;
 }
 
 /// <summary>A DOSBox additional mount (folder or disk image), from the Platform XML.</summary>
@@ -1656,10 +1699,12 @@ internal sealed class GameMount
 {
     public char DriveLetter;
     public string Filesystem, MountType, Path, Type;
+    public Dictionary<string, string> Extra;
 }
 
 /// <summary>A game's custom field (name/value), from the Platform XML.</summary>
 internal sealed class CustomField
 {
     public string Name, Value;
+    public Dictionary<string, string> Extra;
 }

@@ -26,8 +26,147 @@ internal static class LbXmlSelfTest
         int fail = 0;
         fail += Synthetic();
         if (!string.IsNullOrEmpty(lbRoot)) fail += Sweep(lbRoot);
+        if (!string.IsNullOrEmpty(lbRoot)) fail += ChildRoundTrip(lbRoot);
         Console.WriteLine(fail == 0 ? "[lbxml] ALL PASS" : $"[lbxml] {fail} FAILED");
         return fail == 0 ? 0 : 1;
+    }
+
+    // The one that actually guards ChildExtras. A game's child collections are rebuilt from scratch
+    // whenever any of them is edited, so this forces that rebuild for every game in a real platform
+    // file — without changing anything — and demands the bytes come back identical. A field the
+    // model does not know about (LaunchBox's GogAppId / OriginAppId / OriginInstallPath today, its
+    // next addition tomorrow) fails this the moment it stops round-tripping.
+    private static int ChildRoundTrip(string lbRoot)
+    {
+        string srcDir = Path.Combine(lbRoot, "Data", "Platforms");
+        if (!Directory.Exists(srcDir)) { Console.WriteLine("[lbxml] no Platforms dir, child round-trip skipped"); return 0; }
+
+        // One platform per child entity — the smallest that contains it, so all four rebuild paths
+        // are covered without reloading the whole library. A file serving two entities is tested once.
+        // BOM-carrying files were written by an older LiteBox, so they are not a reference for what
+        // LaunchBox emits — comparing against one would only re-measure the BOM we now drop.
+        var files = Directory.EnumerateFiles(srcDir, "*.xml")
+            .Where(f => { try { using var s = File.OpenRead(f); return !(s.ReadByte() == 0xEF && s.ReadByte() == 0xBB && s.ReadByte() == 0xBF); } catch { return false; } })
+            .OrderBy(f => new FileInfo(f).Length).ToList();
+        var picked = new List<string>();
+        foreach (string ent in new[] { "AdditionalApplication", "AlternateName", "Mount", "CustomField" })
+        {
+            string? hit = files.FirstOrDefault(f =>
+            { try { return File.ReadAllText(f).Contains("<" + ent + ">"); } catch { return false; } });
+            if (hit == null) Console.WriteLine($"[lbxml] no platform has <{ent}> — not covered");
+            else if (!picked.Contains(hit)) picked.Add(hit);
+        }
+        if (picked.Count == 0) { Console.WriteLine("[lbxml] no platform with child entities, round-trip skipped"); return 0; }
+
+        int bad = 0;
+        foreach (string s in picked) bad += RoundTripOne(s);
+        bad += PlaylistRoundTrip(lbRoot);
+        return bad;
+    }
+
+    // Playlist children are rebuilt by the same replace machinery, from a different branch. Same
+    // demand: force the rebuild, change nothing, expect the same bytes.
+    private static int PlaylistRoundTrip(string lbRoot)
+    {
+        string srcDir = Path.Combine(lbRoot, "Data", "Playlists");
+        if (!Directory.Exists(srcDir)) { Console.WriteLine("[lbxml] no Playlists dir, skipped"); return 0; }
+
+        string work = Path.Combine(Path.GetTempPath(), "lbxml-pl-" + Guid.NewGuid().ToString("N"));
+        string data = Path.Combine(work, "Data");
+        Directory.CreateDirectory(Path.Combine(data, "Playlists"));
+        Directory.CreateDirectory(Path.Combine(data, "Platforms"));
+        try
+        {
+            var originals = new Dictionary<string, byte[]>();
+            foreach (string f in Directory.EnumerateFiles(srcDir, "*.xml"))
+            {
+                string dst = Path.Combine(data, "Playlists", Path.GetFileName(f));
+                File.Copy(f, dst);
+                originals[dst] = File.ReadAllBytes(dst);
+            }
+            if (originals.Count == 0) { Console.WriteLine("[lbxml] no playlists, skipped"); return 0; }
+
+            var store = GameStore.Load(Path.Combine(data, "Platforms"), Path.Combine(work, "ops.db"));
+            store.ReadOnly = false;
+            int games = 0, filters = 0;
+            foreach (var pl in PlaylistCatalog.Load(data, Path.Combine(work, "Images")))
+            {
+                pl.Attach(store);
+                pl.RecordGames();
+                pl.RecordFilters();
+                games += pl.GetAllPlaylistGames().Length; filters += pl.GetAllPlaylistFilters().Length;
+            }
+            store.Flush();
+            store.CloseLog();
+
+            int differ = originals.Count(kv => !File.ReadAllBytes(kv.Key).SequenceEqual(kv.Value));
+            if (differ == 0)
+            {
+                Console.WriteLine($"[lbxml] playlist round-trip: {originals.Count} files, {games} games + {filters} filters rebuilt, byte-identical");
+                return 0;
+            }
+            foreach (var kv in originals.Where(kv => !File.ReadAllBytes(kv.Key).SequenceEqual(kv.Value)).Take(3))
+                Console.WriteLine($"[lbxml] FAIL playlist round-trip: {Path.GetFileName(kv.Key)} differs");
+            return differ;
+        }
+        catch (Exception ex) { Console.WriteLine($"[lbxml] FAIL playlist round-trip: {ex.Message}"); return 1; }
+        finally { try { Directory.Delete(work, true); } catch { } }
+    }
+
+    private static int RoundTripOne(string src)
+    {
+
+        string work = Path.Combine(Path.GetTempPath(), "lbxml-child-" + Guid.NewGuid().ToString("N"));
+        string plats = Path.Combine(work, "Platforms");
+        Directory.CreateDirectory(plats);
+        string copy = Path.Combine(plats, Path.GetFileName(src));
+        try
+        {
+            File.Copy(src, copy);
+            byte[] before = File.ReadAllBytes(copy);
+
+            var store = GameStore.Load(plats, Path.Combine(work, "ops.db"));
+            store.ReadOnly = false;
+            int touched = 0;
+            foreach (var row in store.Rows)
+                foreach (string entity in new[] { "AdditionalApplication", "AlternateName", "Mount", "CustomField" })
+                {
+                    int n = entity switch
+                    {
+                        "AdditionalApplication" => store.AddAppsFor(row.Id).Count,
+                        "AlternateName" => store.AltNamesFor(row.Id).Count,
+                        "Mount" => store.MountsFor(row.Id).Count,
+                        _ => store.CustomFieldsFor(row.Id).Count,
+                    };
+                    if (n == 0) continue;
+                    store.RecordChildReplace(row.Id, entity);
+                    touched += n;
+                }
+            store.Flush();
+            store.CloseLog();
+
+            byte[] after = File.ReadAllBytes(copy);
+            if (after.SequenceEqual(before))
+            {
+                Console.WriteLine($"[lbxml] child round-trip: {Path.GetFileName(src)}, {touched} children rebuilt, byte-identical");
+                return 0;
+            }
+
+            int i = 0;
+            while (i < after.Length && i < before.Length && after[i] == before[i]) i++;
+            Console.WriteLine($"[lbxml] FAIL child round-trip: {Path.GetFileName(src)} differs at byte {i}");
+            Console.WriteLine($"[lbxml]   was:  {Excerpt(before, i)}");
+            Console.WriteLine($"[lbxml]   now:  {Excerpt(after, i)}");
+            return 1;
+        }
+        catch (Exception ex) { Console.WriteLine($"[lbxml] FAIL child round-trip: {ex.Message}"); return 1; }
+        finally { try { Directory.Delete(work, true); } catch { } }
+    }
+
+    private static string Excerpt(byte[] b, int at)
+    {
+        int from = Math.Max(0, at - 40), len = Math.Min(110, b.Length - from);
+        return len <= 0 ? "<end>" : new UTF8Encoding(false).GetString(b, from, len).Replace("\r", "").Replace("\n", "⏎");
     }
 
     private static int Synthetic()

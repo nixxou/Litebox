@@ -33,6 +33,7 @@ internal static class MediaRenameSelfTest
             failures += VideosAreOneUnit(root);
             failures += TakenNumberIsBumped(root);
             failures += LockedFileFallsBackToCopy(root);
+            failures += RegionSubfolderIsPartOfTheType(root);
             failures += FlushNotificationSurvivesBoot();
         }
         finally { Nuke(root); }
@@ -103,14 +104,15 @@ internal static class MediaRenameSelfTest
         string dir = Fresh(root, "Manuals", null);
         Touch(dir, $"{Old}-01.pdf");
         Touch(dir, $"{New}-01.pdf");                 // the target number is already used
+        // -01 under the new title is already taken, so the belt has to find the next free slot
+        // rather than refuse or clobber. This namespace is the game's own: the caller never targets
+        // the plain form when another game holds that title.
         var moves = GameMediaRenamer.Plan(Case(root), Id, Plat, Old, New, MediaNameForm.Plain);
-        // Nothing to convert here (the unit is pure plain and the target IS plain), so the belt is
-        // exercised through the GUID direction instead, where the game owns the namespace.
-        var guidMoves = GameMediaRenamer.Plan(Case(root), Id, Plat, Old, New, MediaNameForm.Guid);
-        GameMediaRenamer.Apply(guidMoves);
-        int f = Check("a pure-plain unit is not touched when the target is plain", moves.Count == 0);
-        return f + Check("plain → GUID moved the game's own file",
-            Exists(dir, $"{Old}.{Id:D}-01.pdf") && Exists(dir, $"{New}-01.pdf"));
+        GameMediaRenamer.Apply(moves);
+        int f = Check("a taken number is bumped to the next free one",
+            Exists(dir, $"{New}-02.pdf") && !Exists(dir, $"{Old}-01.pdf"));
+        return f + Check("the file that already held the number is untouched",
+            Exists(dir, $"{New}-01.pdf"));
     }
 
     private static int LockedFileFallsBackToCopy(string root)
@@ -125,6 +127,26 @@ internal static class MediaRenameSelfTest
             applied == 1 && Exists(dir, $"{Old}.{Id:D}-01.jpg"));
         return f + Check("the locked source is left in place rather than losing the file",
             Exists(dir, $"{Old}-01.jpg"));
+    }
+
+    /// <summary>Reported from use: renaming Lylatwars left Lylatwars-20.png untouched under
+    /// "Box - Front\World". Images live in the type folder AND in its region sub-folders, which
+    /// MediaResolver walks through RegionOrder() — a type unit has to span both.</summary>
+    private static int RegionSubfolderIsPartOfTheType(string root)
+    {
+        string type = Fresh(root, "Images", "Box - Front");
+        string world = Path.Combine(type, "World");
+        Directory.CreateDirectory(world);
+        Touch(world, "Lylatwars-20.png");
+        Touch(type, "Lylatwars-01.png");
+
+        var moves = GameMediaRenamer.Plan(Case(root), Id, Plat, "Lylatwars", "LylatwarsAAA", MediaNameForm.Plain);
+        GameMediaRenamer.Apply(moves);
+        int f = Check("a file in a region sub-folder is renamed too",
+            Exists(world, "LylatwarsAAA-20.png") && !Exists(world, "Lylatwars-20.png"));
+        f += Check("the region file keeps its number", Exists(world, "LylatwarsAAA-20.png"));
+        return f + Check("the file at the type root is renamed as well",
+            Exists(type, "LylatwarsAAA-01.png"));
     }
 
     /// <summary>The boot flush runs before the DataManager exists, so nobody is listening when it

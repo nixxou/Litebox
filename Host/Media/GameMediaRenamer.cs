@@ -60,10 +60,17 @@ internal static class GameMediaRenamer
         if (string.IsNullOrEmpty(lbRoot) || string.IsNullOrEmpty(platform)) return units;
         string plat = MediaResolver.Sanitize(platform);
 
+        // One unit per image TYPE — and a type spans its REGION sub-folders too
+        // (Images\<plat>\Box - Front\World\…), which MediaResolver walks through RegionOrder().
+        // Missing them left files behind under the old title, which is how this was found.
         string images = Path.Combine(lbRoot, "Images", plat);
         if (Directory.Exists(images))
             foreach (var typeDir in SafeDirs(images))
-                units.Add(new List<string> { typeDir });   // one unit per image type
+            {
+                var unit = new List<string> { typeDir };
+                unit.AddRange(SafeDirs(typeDir));          // region folders, one level, as LB writes them
+                units.Add(unit);
+            }
 
         // Videos: the root plus its known subfolders form a SINGLE unit, because Freeze drops every
         // non-GUID video of a game as soon as one GUID video exists anywhere.
@@ -132,9 +139,8 @@ internal static class GameMediaRenamer
                     moves.Add(new MediaMove(path, GuidPath(path, fromSani, id, "", n)));
                 }
             }
-            else
+            else if (guid.Count > 0)
             {
-                if (plain.Count > 0 || guid.Count == 0) continue;   // already plain, or nothing to move
                 // A suffixed GUID file cannot become plain: "Title-Europe-01" would be read as the
                 // game "Title-Europe" and never found again. If any file in the unit carries one,
                 // the whole unit stays in GUID form rather than half-converting it into a mixed
@@ -142,6 +148,18 @@ internal static class GameMediaRenamer
                 if (guid.Any(g => g.Suffix.Length > 0)) continue;
                 var taken = TakenNumbers(unit, id, toSani, MediaNameForm.Plain);
                 foreach (var (path, num, _) in guid.OrderBy(g => g.Num))
+                {
+                    int n = FreeNumber(taken, num);
+                    moves.Add(new MediaMove(path, PlainPath(path, toSani, n)));
+                }
+            }
+            else if (plain.Count > 0 && !string.Equals(fromSani, toSani, StringComparison.OrdinalIgnoreCase))
+            {
+                // The ordinary rename: the title changed and the XML is about to agree, so the
+                // files simply take the new name. The caller only asks for the plain form when no
+                // other game holds that title, so this namespace is ours alone.
+                var taken = TakenNumbers(unit, id, toSani, MediaNameForm.Plain);
+                foreach (var (path, num) in plain.OrderBy(p => p.Num))
                 {
                     int n = FreeNumber(taken, num);
                     moves.Add(new MediaMove(path, PlainPath(path, toSani, n)));

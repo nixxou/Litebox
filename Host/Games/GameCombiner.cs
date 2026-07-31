@@ -65,8 +65,17 @@ internal static class GameCombiner
         var others = games.Where(g => g != null && !string.Equals(Safe(() => g.Id) ?? "", rootId, StringComparison.OrdinalIgnoreCase)).ToList();
         if (others.Count == 0) return 0;
 
-        int priority = VersionsOf(root).Select(v => v.Priority).DefaultIfEmpty(0).Max();
+        var rootVersions = VersionsOf(root);
+        int priority = rootVersions.Select(v => v.Priority).DefaultIfEmpty(0).Max();
         int absorbed = 0;
+
+        // The root becomes a version of itself the first time a game turns multi-version —
+        // otherwise its own way of launching would be the one configuration with no entry in the
+        // list. Observed on a real combine: root first, Priority 1. When the root ALREADY has
+        // versions it gets no new one (an earlier combine gave it that entry), which is what the
+        // A.IV merge showed: four versions already there, the absorbed game took 5 and nothing else
+        // appeared.
+        if (rootVersions.Count == 0) AddVersion(root, root, ++priority);
 
         foreach (var g in others)
         {
@@ -78,32 +87,57 @@ internal static class GameCombiner
                 foreach (var inner in VersionsOf(g))
                     CopyVersion(root, inner, ++priority);
 
-                var v = root.AddNewAdditionalApplication() as HostAdditionalApplication;
-                if (v != null)
-                {
-                    v.Section = VersionSection;
-                    v.UseEmulator = true;
-                    v.ApplicationPath = Safe(() => g.ApplicationPath) ?? "";
-                    v.Version = VersionLabelOf(g);
-                    v.Name = $"Play {v.Version} Version...";
-                    v.Developer = Safe(() => g.Developer) ?? "";
-                    v.Publisher = Safe(() => g.Publisher) ?? "";
-                    v.Region = Safe(() => g.Region) ?? "";
-                    v.Status = Safe(() => g.Status) ?? "";
-                    v.EmulatorId = Safe(() => g.EmulatorId) ?? "";
-                    v.ReleaseDate = Safe(() => g.ReleaseDate);
-                    v.LastPlayed = Safe(() => g.LastPlayedDate);
-                    v.PlayCount = Safe(() => g.PlayCount);
-                    v.PlayTime = Safe(() => g.PlayTime);
-                    v.Priority = ++priority;
-                }
-
+                AddVersion(root, g, ++priority);
                 dm.TryRemoveGame(g);
                 absorbed++;
             }
             catch { }
         }
         return absorbed;
+    }
+
+    /// <summary>Turns <paramref name="source"/> into a version of <paramref name="root"/>.</summary>
+    private static void AddVersion(IGame root, IGame source, int priority)
+    {
+        if (root.AddNewAdditionalApplication() is not HostAdditionalApplication v) return;
+        v.Section = VersionSection;
+        v.UseEmulator = true;
+        v.ApplicationPath = Safe(() => source.ApplicationPath) ?? "";
+        v.Version = VersionLabelOf(source);
+        v.Name = $"Play {v.Version} Version...";
+        // LaunchBox writes these empty rather than omitting them (<CommandLine />, <Region />);
+        // only the dates are left out when they have no value.
+        v.CommandLine = Safe(() => source.CommandLine) ?? "";
+        v.Developer = Safe(() => source.Developer) ?? "";
+        v.Publisher = Safe(() => source.Publisher) ?? "";
+        v.Region = Safe(() => source.Region) ?? "";
+        v.Status = Safe(() => source.Status) ?? "";
+        v.EmulatorId = Safe(() => source.EmulatorId) ?? "";
+        v.Disc = DiscOf(source);
+        v.ReleaseDate = Safe(() => source.ReleaseDate);
+        v.LastPlayed = Safe(() => source.LastPlayedDate);
+        v.PlayCount = Safe(() => source.PlayCount);
+        v.PlayTime = Safe(() => source.PlayTime);
+        v.Priority = priority;
+    }
+
+    /// <summary>The disc number LaunchBox puts on a version. A game has no Disc field of its own —
+    /// the four test games carried none and LaunchBox still filled in 1 and 2 — so it is read out
+    /// of the "(Disc N)" marker, in the version label first and the file name as a fallback.</summary>
+    private static int? DiscOf(IGame g)
+    {
+        int? n = DiscIn(VersionLabelOf(g));
+        if (n.HasValue) return n;
+        try { return DiscIn(System.IO.Path.GetFileNameWithoutExtension(Safe(() => g.ApplicationPath) ?? "")); }
+        catch { return null; }
+    }
+
+    private static int? DiscIn(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return null;
+        var m = System.Text.RegularExpressions.Regex.Match(
+            s, @"\(\s*disc\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return m.Success && int.TryParse(m.Groups[1].Value, out int d) ? d : (int?)null;
     }
 
     /// <summary>Turns every version of <paramref name="game"/> back into a game of its own.

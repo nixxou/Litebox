@@ -1168,7 +1168,11 @@ internal sealed class GameStore
 
     internal static readonly Dictionary<string, string[]> ChildFieldOrder = new(StringComparer.Ordinal)
     {
-        ["AdditionalApplication"] = new[] { "Id", "GameID", "ApplicationPath", "Name", "CommandLine", "Developer", "Publisher", "Region", "Version", "Status", "Section", "EmulatorId", "Disc", "Priority", "PlayCount", "PlayTime", "AutoRunBefore", "AutoRunAfter", "UseEmulator", "UseDosBox", "WaitForExit", "SideA", "SideB", "ReleaseDate", "LastPlayed", "Installed", "HasCloudSynced" },
+        // Element order copied off LaunchBox's own output rather than chosen. The reader is a typed
+        // DataSet and does not care, but a file that differs only where it must is far easier to
+        // diff against one LaunchBox wrote. (CommandLine and Installed never appear in the samples;
+        // they sit beside the fields they belong with.)
+        ["AdditionalApplication"] = new[] { "Id", "PlayCount", "PlayTime", "GameID", "ApplicationPath", "CommandLine", "AutoRunAfter", "AutoRunBefore", "Name", "UseDosBox", "UseEmulator", "WaitForExit", "ReleaseDate", "Developer", "Publisher", "Region", "Version", "Status", "Section", "LastPlayed", "Disc", "EmulatorId", "SideA", "SideB", "Installed", "Priority", "HasCloudSynced" },
         ["AlternateName"] = new[] { "GameID", "Name", "Region" },
         ["Mount"] = new[] { "GameID", "DriveLetter", "Filesystem", "MountType", "Path", "Type" },
         ["CustomField"] = new[] { "GameID", "Name", "Value" },
@@ -1183,6 +1187,18 @@ internal sealed class GameStore
     }
 
     private static string CB(bool v) => v ? "true" : "false";
+
+    // The two date shapes LaunchBox uses, taken from the real files rather than assumed: a release
+    // date is always a bare date (12601/12601 samples) and a timestamp always carries its offset
+    // (133/133). A DateTime that reached us through a ticks round-trip has lost its Kind, and "o"
+    // would then silently drop the offset — so an unspecified one is read back as local, which is
+    // what it was when LaunchBox wrote it.
+    private static string DateOnly(DateTime? d) => d?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    private static string Stamp(DateTime? d) =>
+        d == null ? null
+        : (d.Value.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(d.Value, DateTimeKind.Local) : d.Value)
+            .ToString("o", CultureInfo.InvariantCulture);
+
     private string SerializeChildren(string entity, Guid gid)
     {
         var list = new List<Dictionary<string, string>>();
@@ -1203,11 +1219,13 @@ internal sealed class GameStore
                         ["AutoRunBefore"] = CB(a.AutoRunBefore), ["AutoRunAfter"] = CB(a.AutoRunAfter),
                         ["UseEmulator"] = CB(a.UseEmulator), ["UseDosBox"] = CB(a.UseDosBox), ["WaitForExit"] = CB(a.WaitForExit),
                         ["SideA"] = CB(a.SideA), ["SideB"] = CB(a.SideB),
-                        ["ReleaseDate"] = a.ReleaseDate?.ToString("o", CultureInfo.InvariantCulture),
-                        ["LastPlayed"] = a.LastPlayed?.ToString("o", CultureInfo.InvariantCulture),
+                        ["ReleaseDate"] = DateOnly(a.ReleaseDate),
+                        ["LastPlayed"] = Stamp(a.LastPlayed),
                         ["Installed"] = a.Installed.HasValue ? CB(a.Installed.Value) : null,
                         ["Section"] = a.Section,
-                        ["HasCloudSynced"] = a.HasCloudSynced.HasValue ? CB(a.HasCloudSynced.Value) : null,
+                        // LaunchBox writes this on every additional application (9801/9801 in the
+                        // real data), so a missing value is emitted as false rather than omitted.
+                        ["HasCloudSynced"] = CB(a.HasCloudSynced ?? false),
                     });
                 break;
             case "AlternateName":

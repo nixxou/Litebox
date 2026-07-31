@@ -5924,16 +5924,78 @@ internal sealed class MainWindow : Form, IMessageFilter
         ReflectQuickFilter();
     }
 
-    /// <summary>Makes an active quick filter unmistakable: the Search box is tinted while it
-    /// carries anything. It is always on screen, so it needs no separate banner.</summary>
+    // A "TEMP" badge pinned inside the Search box's right edge. EM_SETMARGINS reserves the space so
+    // the caret and the text never slide under it; the badge itself is a Label child of the hosted
+    // TextBox. Fail-soft throughout: if any of it misbehaves, the tint alone still says everything
+    // the badge would have.
+    private const int EM_SETMARGINS = 0xD3;
+    private const int EC_RIGHTMARGIN = 0x2;
+    private Label _searchBadge;
+
+    private void EnsureSearchBadge()
+    {
+        if (_searchBadge != null || _search?.TextBox == null) return;
+        try
+        {
+            var host = _search.TextBox;
+            _searchBadge = new Label
+            {
+                Text = "TEMP",
+                AutoSize = false,
+                Visible = false,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI", 6.75f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(24, 18, 8),
+                BackColor = Color.FromArgb(226, 152, 58),
+                Cursor = Cursors.Default,
+            };
+            host.Controls.Add(_searchBadge);
+            host.Resize += (_, _) => LayoutSearchBadge();
+            // Clicking the badge is the obvious way to ask "get rid of this".
+            _searchBadge.Click += (_, _) => SetTypedFilter("", transient: false);
+            LayoutSearchBadge();
+        }
+        catch { _searchBadge = null; }
+    }
+
+    private void LayoutSearchBadge()
+    {
+        if (_searchBadge?.Parent is not TextBox host) return;
+        try
+        {
+            int w = 38, h = Math.Max(12, host.ClientSize.Height - 4);
+            _searchBadge.Bounds = new Rectangle(host.ClientSize.Width - w - 2, (host.ClientSize.Height - h) / 2, w, h);
+            int margin = _searchBadge.Visible ? w + 4 : 0;
+            SendMessage(host.Handle, EM_SETMARGINS, (IntPtr)EC_RIGHTMARGIN, (IntPtr)(margin << 16));
+        }
+        catch { }
+    }
+
+    /// <summary>Makes an active quick filter unmistakable, and says which KIND it is:
+    ///
+    ///   orange + TEMP badge — produced by typing in the game list. Transient: it goes away on its
+    ///                         own when you leave the node, so it is worth flagging as not durable.
+    ///   blue                — typed into the box by hand. Stays until cleared.
+    ///
+    /// The box is always on screen, so this replaces any separate banner.</summary>
     private void ReflectQuickFilter()
     {
         if (_search == null) return;
         bool active = !string.IsNullOrWhiteSpace(_search.Text);
-        var back = active ? Color.FromArgb(30, 62, 86) : Panel;
-        var fore = active ? Color.White : Fg;
+        bool temp = active && _typedFilterIsTransient;
+        var back = !active ? Panel
+                 : temp ? Color.FromArgb(74, 51, 20)     // ambre sombre — filtre éphémère
+                        : Color.FromArgb(30, 62, 86);    // bleu — recherche délibérée
+        var fore = !active ? Fg : temp ? Color.FromArgb(255, 206, 140) : Color.White;
         if (_search.BackColor != back) _search.BackColor = back;
         if (_search.ForeColor != fore) _search.ForeColor = fore;
+
+        EnsureSearchBadge();
+        if (_searchBadge != null && _searchBadge.Visible != temp)
+        {
+            _searchBadge.Visible = temp;
+            LayoutSearchBadge();
+        }
     }
 
     /// <summary>Drops a filter that typing into the list produced. A search the user typed into the

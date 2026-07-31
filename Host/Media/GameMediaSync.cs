@@ -29,6 +29,12 @@ internal static class GameMediaSync
 {
     private static GameStore? _store;
 
+    /// <summary>Options → General. Read live so toggling it takes effect without a restart.</summary>
+    private static bool Enabled
+    {
+        get { try { return LiteBoxConfig.LoadForExe().RenameMediaWithGame; } catch { return false; } }
+    }
+
     /// <summary>Wires the flush hook: once a Title op reaches the XML, the transit GUID names can
     /// go back to plain. Called once at boot.</summary>
     public static void Attach(GameStore store)
@@ -48,6 +54,8 @@ internal static class GameMediaSync
             if (string.Equals(oldTitle, newTitle, StringComparison.Ordinal)) return;
             // Read-only: the rename is a memory-only illusion, so the files must not follow it.
             if (_store == null || _store.ReadOnly) return;
+            // Opt-in: LaunchBox itself leaves media behind on a rename, so this only runs when asked.
+            if (!Enabled) return;
 
             string lbRoot = MediaResolver.LbRoot;
             string platform = Safe(() => game.Platform) ?? "";
@@ -55,14 +63,26 @@ internal static class GameMediaSync
             if (!Guid.TryParse(Safe(() => game.Id) ?? "", out var id) || id == Guid.Empty) return;
 
             var rival = FindRival(game, platform, newTitle);
+            bool merge = rival != null && SameDatabaseEntry(game, rival);
             bool deferred = GameStore.IsLaunchBoxRunning();
-            var target = (deferred || rival != null) ? MediaNameForm.Guid : MediaNameForm.Plain;
 
-            int moved = Move(lbRoot, id, platform, oldTitle, newTitle, target);
+            // A rival is NOT automatically a collision. Two entries carrying the same database id
+            // are the same game, so the user is consolidating: that is a MERGE, and the files
+            // already there are the destination — they must not move, ours join them numbered
+            // after. A genuine collision is a rival with a DIFFERENT database id, and only that
+            // pins both to the GUID form.
+            var target = (deferred || (rival != null && !merge)) ? MediaNameForm.Guid : MediaNameForm.Plain;
 
-            // The rival never asked for this, but a plain name belongs to a TITLE, not to a game:
-            // leaving it plain would make the two collections indistinguishable on disk.
-            if (rival != null && Guid.TryParse(Safe(() => rival.Id) ?? "", out var rid) && rid != Guid.Empty)
+            // Another game still answering to the OLD title means these files are its media too:
+            // copy rather than move, or renaming this game would strip that one.
+            bool sharedSource = FindRival(game, platform, oldTitle) != null;
+
+            int moved = Move(lbRoot, id, platform, oldTitle, newTitle, target, merge, sharedSource);
+
+            // Only a real collision drags the other game along: a plain name belongs to a TITLE
+            // rather than to a game, so leaving both plain would make the two indistinguishable.
+            if (rival != null && !merge && !sharedSource
+                && Guid.TryParse(Safe(() => rival.Id) ?? "", out var rid) && rid != Guid.Empty)
                 moved += Move(lbRoot, rid, platform, newTitle, newTitle, MediaNameForm.Guid);
 
             if (moved > 0) RebuildCache(platform);
@@ -74,7 +94,7 @@ internal static class GameMediaSync
     /// so each of those games goes back to plain names — unless a rival still holds that title.</summary>
     public static void ReconcileAfterFlush(IReadOnlyList<Guid> gameIds)
     {
-        if (gameIds == null || gameIds.Count == 0) return;
+        if (gameIds == null || gameIds.Count == 0 || !Enabled) return;
         string lbRoot = MediaResolver.LbRoot;
         if (string.IsNullOrEmpty(lbRoot)) return;
 
@@ -97,9 +117,10 @@ internal static class GameMediaSync
         foreach (var p in platforms) RebuildCache(p);
     }
 
-    private static int Move(string lbRoot, Guid id, string platform, string diskTitle, string targetTitle, MediaNameForm form)
+    private static int Move(string lbRoot, Guid id, string platform, string diskTitle, string targetTitle,
+        MediaNameForm form, bool merge = false, bool sharedSource = false)
     {
-        var plan = GameMediaRenamer.Plan(lbRoot, id, platform, diskTitle, targetTitle, form);
+        var plan = GameMediaRenamer.Plan(lbRoot, id, platform, diskTitle, targetTitle, form, merge, sharedSource);
         if (plan.Count == 0) return 0;
         var result = GameMediaRenamer.Apply(plan);
         // One line per rename that was not perfectly clean, so a half-moved collection can be
@@ -107,6 +128,16 @@ internal static class GameMediaSync
         if (!result.AllGood)
             Diag.LbLog.Warn("media", $"\"{targetTitle}\" [{platform}] {form}: {result} (planned {plan.Count})");
         return result.Reached;
+    }
+
+    /// <summary>Same entry in the LaunchBox database — the two rows describe ONE game, so bringing
+    /// their media together is a merge rather than a clash. An id missing on either side means we
+    /// cannot tell, and an unprovable merge is treated as a collision: pinning both to GUID is
+    /// recoverable, pouring one game's media into another's is not.</summary>
+    private static bool SameDatabaseEntry(IGame a, IGame b)
+    {
+        int? ida = Safe(() => a.LaunchBoxDbId), idb = Safe(() => b.LaunchBoxDbId);
+        return ida.HasValue && idb.HasValue && ida.Value == idb.Value;
     }
 
     /// <summary>Another game of the same platform already carrying this title. Compared on the

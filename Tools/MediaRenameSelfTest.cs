@@ -34,6 +34,8 @@ internal static class MediaRenameSelfTest
             failures += TakenNumberIsBumped(root);
             failures += LockedFileFallsBackToCopy(root);
             failures += RegionSubfolderIsPartOfTheType(root);
+            failures += MergeAppendsAfterTheDestination(root);
+            failures += SharedSourceIsCopiedNotMoved(root);
             failures += FlushNotificationSurvivesBoot();
         }
         finally { Nuke(root); }
@@ -148,6 +150,40 @@ internal static class MediaRenameSelfTest
         f += Check("the region file keeps its number", Exists(world, "LylatwarsAAA-20.png"));
         return f + Check("the file at the type root is renamed as well",
             Exists(type, "LylatwarsAAA-01.png"));
+    }
+
+    /// <summary>Renaming onto a title held by the SAME game (same database id) is a merge, not a
+    /// clash: the files already there are the destination and must not move, and ours join them
+    /// numbered AFTER the highest one present — never filling its gaps, so its order is intact.</summary>
+    private static int MergeAppendsAfterTheDestination(string root)
+    {
+        string dir = Fresh(root, "Images", "Box - Front");
+        Touch(dir, $"{New}-01.jpg");                 // destination, must not move
+        Touch(dir, $"{New}-03.jpg");                 // note the gap at 02
+        Touch(dir, $"{Old}-01.jpg");                 // source
+        Touch(dir, $"{Old}-02.jpg");
+
+        var moves = GameMediaRenamer.Plan(Case(root), Id, Plat, Old, New, MediaNameForm.Plain, append: true);
+        GameMediaRenamer.Apply(moves);
+        int f = Check("a merge leaves the destination files untouched",
+            Exists(dir, $"{New}-01.jpg") && Exists(dir, $"{New}-03.jpg"));
+        f += Check("merged files are appended after the highest number, not into the gap",
+            Exists(dir, $"{New}-04.jpg") && Exists(dir, $"{New}-05.jpg") && !Exists(dir, $"{New}-02.jpg"));
+        return f + Check("the source names are gone after a merge",
+            !Exists(dir, $"{Old}-01.jpg") && !Exists(dir, $"{Old}-02.jpg"));
+    }
+
+    /// <summary>Another game still answering to the source title shares these files, whatever the
+    /// media kind. Moving them would strip that game, so they are copied and the original stays.</summary>
+    private static int SharedSourceIsCopiedNotMoved(string root)
+    {
+        string dir = Fresh(root, "Music", null);
+        Touch(dir, $"{Old}-01.mp3");
+        var moves = GameMediaRenamer.Plan(Case(root), Id, Plat, Old, New, MediaNameForm.Plain, sharedSource: true);
+        var res = GameMediaRenamer.Apply(moves);
+        int f = Check("a shared source is copied, not moved", res.Copied == 1 && res.Moved == 0);
+        return f + Check("the other game keeps its file",
+            Exists(dir, $"{Old}-01.mp3") && Exists(dir, $"{New}-01.mp3"));
     }
 
     /// <summary>The boot flush runs before the DataManager exists, so nobody is listening when it

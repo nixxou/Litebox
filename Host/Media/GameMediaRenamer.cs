@@ -46,7 +46,11 @@ namespace LbApiHost.Host.Media;
 
 internal enum MediaNameForm { Plain, Guid }
 
-internal sealed record MediaMove(string From, string To);
+/// <param name="CopyOnly">The source is SHARED: another game still resolves to that same plain
+/// name, so moving it would strip that game of the file. It is copied and the original stays put.
+/// True for the plain form only — a GUID name belongs to one game. This covers every media kind,
+/// not just images: videos, manuals and music are named by title exactly the same way.</param>
+internal sealed record MediaMove(string From, string To, bool CopyOnly = false);
 
 internal static class GameMediaRenamer
 {
@@ -105,8 +109,15 @@ internal static class GameMediaRenamer
     /// <summary>Plans the moves for one game. <paramref name="diskTitle"/> is the title the plain
     /// files on disk are named after (the OLD one when renaming); <paramref name="targetTitle"/> is
     /// what a plain target should be called. Nothing is touched here.</summary>
+    /// <param name="append">MERGE mode: the target title already holds files that belong to the
+    /// SAME game (same database id), so they are the destination and stay untouched — ours are
+    /// numbered after the highest one already present rather than filling its gaps.</param>
+    /// <param name="sharedSource">Another game still carries the source title, so the files on disk
+    /// are ITS media too. They are copied instead of moved — LaunchBox resolves plain names by
+    /// title, so several games legitimately share one file.</param>
     public static List<MediaMove> Plan(
-        string lbRoot, Guid id, string platform, string diskTitle, string targetTitle, MediaNameForm target)
+        string lbRoot, Guid id, string platform, string diskTitle, string targetTitle, MediaNameForm target,
+        bool append = false, bool sharedSource = false)
     {
         var moves = new List<MediaMove>();
         if (id == Guid.Empty) return moves;
@@ -136,7 +147,7 @@ internal static class GameMediaRenamer
                 foreach (var (path, num) in plain.OrderBy(p => p.Num))
                 {
                     int n = FreeNumber(taken, num);
-                    moves.Add(new MediaMove(path, GuidPath(path, fromSani, id, "", n)));
+                    moves.Add(new MediaMove(path, GuidPath(path, fromSani, id, "", n), sharedSource));
                 }
             }
             else if (guid.Count > 0)
@@ -155,14 +166,16 @@ internal static class GameMediaRenamer
             }
             else if (plain.Count > 0 && !string.Equals(fromSani, toSani, StringComparison.OrdinalIgnoreCase))
             {
-                // The ordinary rename: the title changed and the XML is about to agree, so the
-                // files simply take the new name. The caller only asks for the plain form when no
-                // other game holds that title, so this namespace is ours alone.
+                // The ordinary rename, and also the MERGE: when the new title already belongs to
+                // the same game (same database id), its files are the destination and must not
+                // move — ours join them, numbered AFTER the ones already there so the destination
+                // keeps both its files and its order.
                 var taken = TakenNumbers(unit, id, toSani, MediaNameForm.Plain);
+                int next = append && taken.Count > 0 ? taken.Max() + 1 : 0;
                 foreach (var (path, num) in plain.OrderBy(p => p.Num))
                 {
-                    int n = FreeNumber(taken, num);
-                    moves.Add(new MediaMove(path, PlainPath(path, toSani, n)));
+                    int n = FreeNumber(taken, append ? next++ : num);
+                    moves.Add(new MediaMove(path, PlainPath(path, toSani, n), sharedSource));
                 }
             }
         }
@@ -262,6 +275,14 @@ internal static class GameMediaRenamer
                 {
                     result.Skipped++;
                     Diag.LbLog.Warn("media", $"target already exists, left alone: {Path.GetFileName(m.To)}");
+                    continue;
+                }
+                if (m.CopyOnly)
+                {
+                    // Shared with another game — any media kind: the original has to stay, so this
+                    // is a copy by design rather than a fallback after a failed move.
+                    File.Copy(m.From, m.To, overwrite: false);
+                    result.Copied++;
                     continue;
                 }
                 File.Move(m.From, m.To);

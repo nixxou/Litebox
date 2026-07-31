@@ -2005,6 +2005,11 @@ internal sealed class MainWindow : Form, IMessageFilter
                 () => _cfg.ReadOnly, v => _cfg.ReadOnly = v,
                 "When on, every editor that writes to the LaunchBox XMLs stays locked. LiteBox.ini itself is always writable.",
                 applyLive: () => { if (_dm is HostDataManagerXml hdm) hdm.ReadOnly = _cfg.ReadOnly; }),
+            Options.OptionItem.Toggle("General", "Rename media files when a game is renamed",
+                () => _cfg.RenameMediaWithGame, v => _cfg.RenameMediaWithGame = v,
+                "LaunchBox leaves images, videos, manuals and music behind when you rename a game — they stay "
+                + "under the old title and the game shows none. When on, LiteBox moves them with it. Two games "
+                + "sharing a file keep it (it is copied), and files are never deleted. Off while Read-only is on."),
             Options.OptionItem.Toggle("General", "Show \"game running\" screen on launch",
                 () => _cfg.ShowGameRunningScreen, v => _cfg.ShowGameRunningScreen = v),
             Options.OptionItem.Toggle("General", "Unload the game list while a game runs",

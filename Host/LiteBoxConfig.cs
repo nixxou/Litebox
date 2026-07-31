@@ -235,6 +235,10 @@ internal sealed class LiteBoxConfig
     // Store-game exit detection: false (default) = install-folder process only; true = also use the
     // window-focus fallback when no install-folder process is ever seen (older, flakier).
     public bool StoreExitFocusFallback { get => GetBool("StoreExitFocusFallback", false); set => SetBool("StoreExitFocusFallback", value); }
+    /// <summary>Move a game's media files when its title changes. OFF by default: LaunchBox itself
+    /// does NOT do this, so it is a LiteBox addition, and it writes to the user's media folders.
+    /// An opt-in is the honest default for behaviour that both deviates and touches files.</summary>
+    public bool RenameMediaWithGame   { get => GetBool("RenameMediaWithGame", false); set => SetBool("RenameMediaWithGame", value); }
     public bool UseImageCache         { get => GetBool("UseImageCache", true); set => SetBool("UseImageCache", value); }
     public bool UseGameCache          { get => GetBool("UseGameCache", true); set => SetBool("UseGameCache", value); }
     public bool UnloadGameCacheDuringGame { get => GetBool("UnloadGameCacheDuringGame", true); set => SetBool("UnloadGameCacheDuringGame", value); }

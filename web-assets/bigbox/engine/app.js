@@ -1601,11 +1601,28 @@
       list.appendChild(it); var i = advTargets.length; advTargets.push({ type: "histitem", crit: crit, el: it }); it.dataset.advi = i;
     });
   }
+  // advFocus === -1 → le focus est sur la rangée d'ONGLETS (un cran au-dessus du contenu) :
+  // Gauche/Droite changent d'onglet, Bas redescend dans les options.
   function paintAdv() {
     for (var i = 0; i < advTargets.length; i++) if (advTargets[i].el) advTargets[i].el.classList.toggle("focus", i === advFocus);
+    var tabs = advModalEl ? advModalEl.querySelectorAll(".adv-tab") : [];
+    for (var t = 0; t < tabs.length; t++) tabs[t].classList.toggle("focus", advFocus === -1 && t === advTab);
+    var body = advModalEl ? advModalEl.querySelector(".adv-body") : null;
+    if (advFocus <= 0) {
+      // Revenir au premier élément doit remonter le conteneur JUSQU'EN HAUT. scrollIntoView
+      // ({block:"nearest"}) s'arrête dès que l'élément est visible et laisse le padding du haut
+      // hors champ, d'où une barre de défilement qui ne revenait jamais tout à fait à zéro.
+      if (body) body.scrollTop = 0;
+      return;
+    }
     var f = advTargets[advFocus]; if (f && f.el && f.el.scrollIntoView) f.el.scrollIntoView({ block: "nearest" });
   }
-  function advMoveTab(dir) { advTab = (advTab + dir + ADV_TABS.length) % ADV_TABS.length; advFocus = 0; renderAdv(); }
+  function advMoveTab(dir) {
+    var onTabs = advFocus === -1;   // rester sur la rangée d'onglets pour pouvoir enchaîner
+    advTab = (advTab + dir + ADV_TABS.length) % ADV_TABS.length;
+    advFocus = onTabs ? -1 : 0;
+    renderAdv();
+  }
   function advAdjust(delta) {
     var t = advTargets[advFocus]; if (!t) return;
     if (t.type === "slider") {
@@ -5535,13 +5552,13 @@
         var up = advTargets[advFocus];
         if (up && up.type === "textfield" && advTargets.length && advTargets[advTargets.length - 1].type === "apply")
           advFocus = advTargets.length - 1;
-        else advFocus = Math.max(0, advFocus - 1);
+        else advFocus = advFocus <= 0 ? -1 : advFocus - 1;   // au-dessus du 1er élément : les onglets
         paintAdv();
       }
       else if (cmd === "down") { advFocus = Math.min(advTargets.length - 1, advFocus + 1); paintAdv(); }
-      else if (cmd === "left") advAdjust(-1);
-      else if (cmd === "right") advAdjust(1);
-      else if (cmd === "select") advActivate();
+      else if (cmd === "left") { if (advFocus === -1) advMoveTab(-1); else advAdjust(-1); }
+      else if (cmd === "right") { if (advFocus === -1) advMoveTab(1); else advAdjust(1); }
+      else if (cmd === "select") { if (advFocus === -1) { advFocus = 0; paintAdv(); } else advActivate(); }
       else if (cmd === "back") closeAdvanced();
       return;
     }

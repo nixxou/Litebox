@@ -84,10 +84,40 @@ internal static class DiscParseSelfTest
                 fail++;
             }
         }
+        fail += RunSides();
         Console.WriteLine(fail == 0
-            ? $"[disc] ALL PASS ({Cases.Length} notations, toutes relevees sur LaunchBox)"
-            : $"[disc] {fail}/{Cases.Length} FAILED");
+            ? $"[disc] ALL PASS ({Cases.Length} notations disque + {SideCases.Length} face, toutes relevees sur LaunchBox)"
+            : $"[disc] {fail} FAILED");
         return fail == 0 ? 0 : 1;
+    }
+
+    // Side markers, from the same 44-game combine: LaunchBox agreed with us on every field of every
+    // version except these two, which is how they were found at all.
+    private static readonly (string Suffix, char? Side)[] SideCases =
+    {
+        ("(Side A)", 'A'),
+        ("(Side B)", 'B'),
+        ("Side 1", null),          // bare: no delimiter, no marker
+        ("Face A", null),          // "face" is not a word it knows
+        ("Face B", null),
+        ("(Disc 9)", null),        // a disc marker is not a side marker
+        ("", null),
+    };
+
+    private static int RunSides()
+    {
+        int fail = 0;
+        foreach (var (suffix, want) in SideCases)
+        {
+            string name = ("Final Fantasy VIII [TestVersion] " + suffix).TrimEnd();
+            char? got = GameCombiner.SideIn(name);
+            if (got != want)
+            {
+                Console.WriteLine($"[disc] FAIL side {suffix,-19} attendu={want?.ToString() ?? "aucun"} obtenu={got?.ToString() ?? "aucun"}");
+                fail++;
+            }
+        }
+        return fail;
     }
 
     private static string Show(int? v) => v?.ToString() ?? "aucun";

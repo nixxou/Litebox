@@ -62,7 +62,16 @@ internal static class GameCombiner
     {
         if (games == null || root == null || dm == null) return 0;
         string rootId = Safe(() => root.Id) ?? "";
-        var others = games.Where(g => g != null && !string.Equals(Safe(() => g.Id) ?? "", rootId, StringComparison.OrdinalIgnoreCase)).ToList();
+        // Order decides the priorities, and LaunchBox's is not the caller's: measured on a combine
+        // of 44 games, it is the root first, then the rest by Title — case-insensitive, ordinal, and
+        // STABLE, so same-titled games keep the order they had. Case matters to get right: "disc 14"
+        // lands between "Disc 10" and "Disc 17", which a case-sensitive sort would not do; and
+        // ordinal matters too, since "Disc-18" comes before "Disc16" (a culture-aware compare
+        // ignores the hyphen and reverses them).
+        var others = games
+            .Where(g => g != null && !string.Equals(Safe(() => g.Id) ?? "", rootId, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(g => Safe(() => g.Title) ?? "", StringComparer.OrdinalIgnoreCase)
+            .ToList();
         if (others.Count == 0) return 0;
 
         var rootVersions = VersionsOf(root);
@@ -114,6 +123,9 @@ internal static class GameCombiner
         v.Status = Safe(() => source.Status) ?? "";
         v.EmulatorId = Safe(() => source.EmulatorId) ?? "";
         v.Disc = DiscOf(source);
+        char? side = SideOf(source);
+        v.SideA = side == 'A';
+        v.SideB = side == 'B';
         v.ReleaseDate = Safe(() => source.ReleaseDate);
         v.LastPlayed = Safe(() => source.LastPlayedDate);
         v.PlayCount = Safe(() => source.PlayCount);
@@ -128,10 +140,19 @@ internal static class GameCombiner
     private static int? DiscOf(IGame g)
     {
         int? n = null;
-        try { n = DiscIn(System.IO.Path.GetFileNameWithoutExtension(Safe(() => g.ApplicationPath) ?? "")); }
-        catch { }
+        try { n = DiscIn(NameOf(g)); } catch { }
         return n ?? DiscIn(VersionLabelOf(g));
     }
+
+    private static char? SideOf(IGame g)
+    {
+        char? c = null;
+        try { c = SideIn(NameOf(g)); } catch { }
+        return c ?? SideIn(VersionLabelOf(g));
+    }
+
+    private static string NameOf(IGame g)
+        => System.IO.Path.GetFileNameWithoutExtension(Safe(() => g.ApplicationPath) ?? "");
 
     // Read off LaunchBox's own import wizard across 40 notations (see DiscParseSelfTest, which
     // pins every one of them):
@@ -152,6 +173,20 @@ internal static class GameCombiner
         if (string.IsNullOrEmpty(s)) return null;
         var m = DiscMarker.Match(s);
         return m.Success && int.TryParse(m.Groups[1].Value, out int d) ? d : (int?)null;
+    }
+
+    // The same idea for the two side flags, and the same delimiter rule: "(Side A)" and "(Side B)"
+    // set them, a bare "Side 1", "Face A" or "Face B" sets nothing. Found because a 44-game combine
+    // agreed on every other field and disagreed on exactly these two.
+    private static readonly System.Text.RegularExpressions.Regex SideMarker =
+        new(@"[\(\[\-]\s*side\s*([ab])(?![a-z0-9])", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>'A', 'B', or null when the name carries no side marker.</summary>
+    internal static char? SideIn(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return null;
+        var m = SideMarker.Match(s);
+        return m.Success ? char.ToUpperInvariant(m.Groups[1].Value[0]) : (char?)null;
     }
 
     /// <summary>Turns every version of <paramref name="game"/> back into a game of its own.

@@ -597,6 +597,10 @@
   function railActivate() {
     var item = RAIL[railSel];
     if (item.k === "letter" || item.k === "num") {
+      // Sauter à une lettre n'a de sens qu'en ordre alphabétique : trié par date ou par genre, le
+      // « premier jeu en S » est à une position arbitraire. On repasse donc en Titre A→Z d'abord,
+      // exactement comme si l'utilisateur l'avait choisi dans Arrange By (l'ordre de session suit).
+      ensureTitleOrderForJump();
       var idx = findGameByInitial(item.k === "num" ? "#" : item.ic);
       if (idx >= 0) { exitRail(); setSelected("games", idx, { instant: true }); }
       else exitRail();
@@ -1326,6 +1330,16 @@
     if (favOnly) return all.filter(isStarred);
     var nq = normSearch(searchQuery);
     return nq ? all.filter(function (g) { return searchKeyOf(g).indexOf(nq) >= 0; }) : all;
+  }
+
+  // Remet la liste en Titre A→Z si elle est dans un autre ordre. No-op dans le cas courant.
+  // Passe par chooseArrange pour que l'ordre de session, le libellé du menu et la grille poster
+  // suivent — le saut par lettre est un choix de tri comme un autre.
+  function ensureTitleOrderForJump() {
+    if (bbwActiveSort.key === "title" && bbwActiveSort.dir === "asc") return;
+    // Sortant d'un autre champ, select() donne "asc" ; sortant de Titre décroissant, il bascule
+    // en "asc". Les deux cas restants mènent donc bien en A→Z.
+    chooseArrange("title");
   }
 
   function chooseArrange(key) {

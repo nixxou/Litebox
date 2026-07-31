@@ -5825,9 +5825,9 @@ internal sealed class MainWindow : Form, IMessageFilter
     // ── Type-to-jump (incremental search) ─────────────────────────────────────
     // Native virtual-ListView type-ahead: the control accumulates the typed keys (with its own
     // timeout) and raises SearchForVirtualItem; we answer with the index of the first game whose
-    // configured title-sort key starts with the typed text normalized through the same mode, so the
-    // jump order never disagrees with the visible Title sort. Setting e.Index makes the ListView select +
-    // scroll to it natively. Shared by the list AND the poster (both mirror _games.VisibleGames).
+    // configured title-sort key starts with the typed text normalized through the same mode.
+    // Setting e.Index makes the ListView select + scroll to it natively. Shared by the list AND the
+    // poster (both mirror _games.VisibleGames).
     private void OnTypeAheadSearch(object sender, SearchForVirtualItemEventArgs e)
     {
         try
@@ -5835,6 +5835,19 @@ internal sealed class MainWindow : Form, IMessageFilter
             if (!e.IsTextSearch) return;
             string needle = NormalizeTypeAhead(e.Text);
             if (needle.Length == 0) return;
+
+            // Jumping to a letter only means anything in alphabetical order: under Release Date or
+            // Genre the "first game starting with S" sits at an arbitrary position. So typing
+            // re-sorts by Title A→Z first — the same thing as picking Title in Arrange By, session
+            // update included.
+            //
+            // The re-sort is DEFERRED rather than done here: this runs inside the native
+            // LVN_INCREMENTALSEARCH notification, and rebuilding the virtual list (VirtualListSize,
+            // scroll geometry) from inside a control notification is asking for reentrancy. We post
+            // it instead and leave e.Index unset, so the control does not move now — the deferred
+            // pass re-sorts and selects, which is one frame later and visually a single jump.
+            if (!IsTitleOrderForJump()) { JumpAfterTitleSort(e.Text); return; }
+
             var view = _games.VisibleGames;
             int n = view.Count;
             if (n == 0) return;
@@ -5844,6 +5857,36 @@ internal sealed class MainWindow : Form, IMessageFilter
                 int i = (start + k) % n;                       // wrap so repeating a letter cycles
                 if (CompareName(view[i]).StartsWith(needle, StringComparison.OrdinalIgnoreCase)) { e.Index = i; return; }
             }
+        }
+        catch { }
+    }
+
+    private bool IsTitleOrderForJump()
+        => string.Equals(_curSortKey, "title", StringComparison.OrdinalIgnoreCase) && _ascending;
+
+    /// <summary>Re-sorts by Title A→Z, then jumps to the first game matching what was typed.
+    /// Posted, never called inline from the type-ahead notification — see OnTypeAheadSearch.</summary>
+    private void JumpAfterTitleSort(string typed)
+    {
+        string needle = NormalizeTypeAhead(typed);
+        if (needle.Length == 0) return;
+        try
+        {
+            BeginInvoke((Action)(() =>
+            {
+                try
+                {
+                    if (!IsTitleOrderForJump()) SelectSort("title", ascending: true);
+                    var view = _games.VisibleGames;
+                    for (int i = 0; i < view.Count; i++)
+                        if (CompareName(view[i]).StartsWith(needle, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _games.SelectGame(view[i], focus: true);
+                            return;
+                        }
+                }
+                catch { }
+            }));
         }
         catch { }
     }

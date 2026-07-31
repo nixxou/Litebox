@@ -327,6 +327,27 @@
     }
   }
 
+  /* Re-sélectionne le noeud d'avant le basculement parental, s'il existe toujours dans l'arbre
+     reconstruit. On déclenche le VRAI handler de la ligne (click) plutôt que de reconstruire ses
+     arguments : ça couvre du même geste une plateforme, une playlist et une catégorie.
+     Si le contrôle parental vient de masquer ce noeud, on ne recharge rien — panneau vide, plutôt
+     qu'un noeud que le serveur cache désormais. */
+  function lbRestoreNodeAfterParental(path) {
+    if (!path) return;
+    var rows = document.querySelectorAll(".lb-tree-scroll .lb-tree-node, .lb-tree-scroll .lb-tree-cat");
+    for (var i = 0; i < rows.length; i++) {
+      var node = rows[i]._lbNode;
+      if (!node || (node.path || "") !== path) continue;
+      rows[i].click();
+      return;
+    }
+    // Noeud disparu : le panneau reste vide, et son en-tête ne doit plus le nommer.
+    var titleEl = document.querySelector(".lb-grid-title");
+    var countEl = document.querySelector(".lb-grid-count");
+    if (titleEl) titleEl.textContent = "";
+    if (countEl) countEl.textContent = "";
+  }
+
   /* ── reloadLbAfterParental ──────────────────────────────────────────────────
      Called after a lock-state flip (unlock success, lockNow success, or poll
      detecting a changed state).  Re-fetches cattree.json so the server's
@@ -367,10 +388,19 @@
     if (emptyEl)   { emptyEl.style.display = ""; }
     if (contentEl) { contentEl.setAttribute("hidden", ""); }
 
-    /* Clear grid */
+    /* Le noeud courant sera rechargé après reconstruction de l'arbre : sa visibilité ET son
+       contenu viennent de changer, et rester sur l'ancienne liste est le pire des trois états.
+       lbCurrentPlatformPath couvre déjà plateforme, playlist ET catégorie. */
+    var restorePath = lbCurrentPlatformPath;
+
+    /* Vide la liste courante — les DEUX vues. Ne nettoyer que la grille poster laissait la vue
+       liste afficher les lignes d'avant le changement d'état parental. */
     DATA.games = [];
+    lbRawGames = [];
     var gridScroll = document.querySelector(".lb-grid-scroll");
     if (gridScroll) { gridScroll.innerHTML = ""; }
+    var listScroll = document.querySelector(".lb-list-scroll");
+    if (listScroll) { listScroll.innerHTML = ""; }
 
     /* Update grid header count */
     var countEl = document.querySelector(".lb-grid-count");
@@ -385,6 +415,7 @@
       .then(function (data) {
         console.log("[LBW] reloadLbAfterParental → cattree re-fetched");
         renderTree(data);
+        lbRestoreNodeAfterParental(restorePath);
       })
       .catch(function (err) {
         console.error("[LBW] reloadLbAfterParental cattree error:", err);

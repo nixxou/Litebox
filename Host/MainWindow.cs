@@ -336,7 +336,10 @@ internal sealed class MainWindow : Form, IMessageFilter
             BackColor = Panel, ForeColor = Fg,
         };
         _searchDebounce.Tick += (_, _) => { _searchDebounce.Stop(); ApplyFilter(); };
-        _search.TextChanged += (_, _) => { _searchDebounce.Stop(); _searchDebounce.Start(); };
+        _search.TextChanged += (_, _) => { _searchDebounce.Stop(); _searchDebounce.Start(); ReflectQuickFilter(); };
+        // Éditer le champ à la main sort le filtre du régime transitoire : il ne doit plus
+        // disparaître en changeant de plateforme.
+        _search.KeyDown += (_, _) => _typedFilterIsTransient = false;
         bar.Items.Add(_search);
         _filterBtn = new ToolStripButton("Filter") { ForeColor = Fg, ToolTipText = "Advanced search filter" };
         _filterBtn.Click += (_, _) => OpenFilterDialog();
@@ -775,6 +778,8 @@ internal sealed class MainWindow : Form, IMessageFilter
         lv.ColumnChooserRequested += ShowColumnChooser;
         lv.ViewChanged += OnViewChanged;
         lv.SearchForVirtualItem += OnTypeAheadSearch;   // type-to-jump (compare-name prefix)
+        lv.KeyPress += OnGameListKeyPress;              // hors tri Titre : la frappe FILTRE
+        lv.KeyDown += OnGameListKeyDown;                // Retour arrière / Échap sur ce filtre
         return lv;
     }
 
@@ -1319,6 +1324,7 @@ internal sealed class MainWindow : Form, IMessageFilter
             }
         }
         _current = union.ToArray();
+        ClearTransientTypedFilter();
         // A union is not a playlist: it must drop any order the previously selected playlist
         // imposed. Without this, leaving a Manual playlist for a multi-selection kept both the
         // "Manual" label and that playlist's ranks, so every game outside it tied at int.MaxValue
@@ -2878,6 +2884,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         }
         catch { _current = Array.Empty<IGame>(); }
 
+        ClearTransientTypedFilter();   // la frappe dans la liste ne survit pas au changement de noeud
         ActivateNodeSort(node);
         ApplySort();              // fills the centre list (no game auto-selected)
         ShowNodeDetails(node);    // node info on the right
@@ -3292,6 +3299,8 @@ internal sealed class MainWindow : Form, IMessageFilter
             lv.RetrieveVirtualItem += OnPosterRetrieveItem;   // native: each item carries its image-list slot
         }
         lv.SearchForVirtualItem += OnTypeAheadSearch;   // type-to-jump (compare-name prefix)
+        lv.KeyPress += OnGameListKeyPress;              // hors tri Titre : la frappe FILTRE
+        lv.KeyDown += OnGameListKeyDown;                // Retour arrière / Échap sur ce filtre
         lv.SelectedIndexChanged += (_, _) => OnPosterSelectionChanged();
         lv.ItemActivate += (_, _) => LaunchSelected();
         lv.MouseUp += OnPosterMouseUp;   // right-click → same game context menu as the list
@@ -5842,17 +5851,10 @@ internal sealed class MainWindow : Form, IMessageFilter
             string needle = NormalizeTypeAhead(e.Text);
             if (needle.Length == 0) return;
 
-            // Jumping to a letter only means anything in alphabetical order: under Release Date or
-            // Genre the "first game starting with S" sits at an arbitrary position. So typing
-            // re-sorts by Title A→Z first — the same thing as picking Title in Arrange By, session
-            // update included.
-            //
-            // The re-sort is DEFERRED rather than done here: this runs inside the native
-            // LVN_INCREMENTALSEARCH notification, and rebuilding the virtual list (VirtualListSize,
-            // scroll geometry) from inside a control notification is asking for reentrancy. We post
-            // it instead and leave e.Index unset, so the control does not move now — the deferred
-            // pass re-sorts and selects, which is one frame later and visually a single jump.
-            if (!IsTitleOrderForJump()) { JumpAfterTitleSort(e.Text); return; }
+            // Out of Title A→Z order, jumping is meaningless — "the first game starting with S"
+            // sits wherever that other order put it. Typing then FILTERS instead (see
+            // OnGameListKeyPress), and the characters never reach this handler.
+            if (!IsTitleOrderForJump()) return;
 
             var view = _games.VisibleGames;
             int n = view.Count;
@@ -5870,33 +5872,78 @@ internal sealed class MainWindow : Form, IMessageFilter
     private bool IsTitleOrderForJump()
         => string.Equals(_curSortKey, "title", StringComparison.OrdinalIgnoreCase) && _ascending;
 
-    /// <summary>Re-sorts by Title A→Z, then jumps to the first game matching what was typed.
-    /// Posted, never called inline from the type-ahead notification — see OnTypeAheadSearch.</summary>
-    private void JumpAfterTitleSort(string typed)
+    // ── Typing in the game list ───────────────────────────────────────────────
+    // Two behaviours, decided by the current order, because only one of them makes sense in each:
+    //
+    //   Title A→Z  → JUMP. The native type-ahead handles it (OnTypeAheadSearch).
+    //   Any other  → FILTER. The typed text goes into the toolbar Search box, which already filters
+    //                over Title/Platform/Developer and already ANDs with the advanced criteria.
+    //                Reusing it means no second filter state, no second indicator, and the text
+    //                stays visible and editable where the user expects to find it.
+    //
+    // A filter fed this way is TRANSIENT: Escape drops it and so does changing node. A search the
+    // user typed into the box themselves is left alone — they put it there deliberately.
+    private bool _typedFilterIsTransient;
+
+    private void OnGameListKeyPress(object sender, KeyPressEventArgs e)
     {
-        string needle = NormalizeTypeAhead(typed);
-        if (needle.Length == 0) return;
-        try
+        if (IsTitleOrderForJump()) return;                       // let the native jump have it
+        if (char.IsControl(e.KeyChar)) return;                   // Backspace/Escape: OnGameListKeyDown
+        AppendToTypedFilter(e.KeyChar.ToString());
+        e.Handled = true;   // swallow it, or the control ALSO runs its incremental search
+    }
+
+    private void OnGameListKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.KeyCode == Keys.Escape)
         {
-            BeginInvoke((Action)(() =>
-            {
-                try
-                {
-                    // localOnly: the user asked to jump, not to re-sort. The list goes alphabetical
-                    // so the jump makes sense, but their chosen order comes back on the next node.
-                    if (!IsTitleOrderForJump()) SelectSort("title", ascending: true, localOnly: true);
-                    var view = _games.VisibleGames;
-                    for (int i = 0; i < view.Count; i++)
-                        if (CompareName(view[i]).StartsWith(needle, StringComparison.OrdinalIgnoreCase))
-                        {
-                            _games.SelectGame(view[i], focus: true);
-                            return;
-                        }
-                }
-                catch { }
-            }));
+            if (string.IsNullOrEmpty(_search?.Text)) return;
+            SetTypedFilter("", transient: false);
+            e.Handled = e.SuppressKeyPress = true;
+            return;
         }
-        catch { }
+        if (e.KeyCode != Keys.Back || IsTitleOrderForJump()) return;
+        // Backspace edits the query one character at a time; Escape drops the whole thing. Fixing a
+        // keystroke and abandoning a search are different intentions, so they get different keys.
+        string cur = _search?.Text ?? "";
+        if (cur.Length == 0) return;
+        SetTypedFilter(cur.Substring(0, cur.Length - 1), transient: true);
+        e.Handled = e.SuppressKeyPress = true;
+    }
+
+    private void AppendToTypedFilter(string s)
+        => SetTypedFilter((_search?.Text ?? "") + s, transient: true);
+
+    private void SetTypedFilter(string text, bool transient)
+    {
+        if (_search == null) return;
+        _typedFilterIsTransient = transient && text.Length > 0;
+        if (_search.Text == text) { ReflectQuickFilter(); return; }
+        _search.Text = text;            // TextChanged → debounce → ApplyFilter
+        try { _search.SelectionStart = text.Length; } catch { }
+        ReflectQuickFilter();
+    }
+
+    /// <summary>Makes an active quick filter unmistakable: the Search box is tinted while it
+    /// carries anything. It is always on screen, so it needs no separate banner.</summary>
+    private void ReflectQuickFilter()
+    {
+        if (_search == null) return;
+        bool active = !string.IsNullOrWhiteSpace(_search.Text);
+        var back = active ? Color.FromArgb(30, 62, 86) : Panel;
+        var fore = active ? Color.White : Fg;
+        if (_search.BackColor != back) _search.BackColor = back;
+        if (_search.ForeColor != fore) _search.ForeColor = fore;
+    }
+
+    /// <summary>Drops a filter that typing into the list produced. A search the user typed into the
+    /// box stays — leaving a node is not a reason to discard what they deliberately searched for.</summary>
+    private void ClearTransientTypedFilter()
+    {
+        if (!_typedFilterIsTransient) { ReflectQuickFilter(); return; }
+        _typedFilterIsTransient = false;
+        if (_search != null && _search.Text.Length > 0) _search.Text = "";
+        ReflectQuickFilter();
     }
 
     // Reduce typed text through the configured mode as well: simple drops punctuation/spaces,

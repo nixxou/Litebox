@@ -30,6 +30,7 @@ internal static class FilterParitySelfTest
         "F-Zero",
         "Sonic & Knuckles",
         "Zed Blade",
+        "The Witcher 3: Wild Hunt",
         "",
     };
 
@@ -44,6 +45,11 @@ internal static class FilterParitySelfTest
         "f zero", "fzero", "f-zero",
         "sonic &", "sonic and", "sonic",
         "z", "s", "3", "!", "  ", "",
+        // Lettres seules : le cas du rail A-Z. "l" doit atteindre "The Legend of Zelda",
+        // "b" "A Boy and His Blob", et "t"/"a" doivent encore les atteindre par la forme brute.
+        "l", "b", "t", "a", "m", "f",
+        // Cas remonté à l'usage : "wit" doit trouver "The Witcher", article de tête ou pas.
+        "wit", "witcher", "the wit", "wild",
     };
 
     public static int Run()

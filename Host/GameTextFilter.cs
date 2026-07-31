@@ -53,6 +53,17 @@ internal static class GameTextFilter
         return Matches(title, query, prefix);
     }
 
+    /// <summary>Drops a leading English article, the way the title SORT does. Without this, picking
+    /// L in a letter rail would not list "The Legend of Zelda" even though the list files it under
+    /// L — the rail would contradict the order it sits next to.</summary>
+    public static string StripLeadingArticle(string? value)
+    {
+        string s = (value ?? "").TrimStart();
+        foreach (var article in new[] { "the ", "a ", "an " })
+            if (s.StartsWith(article, StringComparison.OrdinalIgnoreCase)) return s.Substring(article.Length);
+        return s;
+    }
+
     public static bool Matches(string? title, string? query, bool prefix)
     {
         string q = (query ?? "").Trim();
@@ -63,11 +74,18 @@ internal static class GameTextFilter
                    : t.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0) return true;
 
         // A query made only of punctuation normalizes to nothing; without this guard it would
-        // match every game through the normalized form.
+        // match every game through the normalized forms.
         string nq = Normalize(q);
         if (nq.Length == 0) return false;
-        string nt = Normalize(t);
-        return prefix ? nt.StartsWith(nq, StringComparison.Ordinal)
-                      : nt.IndexOf(nq, StringComparison.Ordinal) >= 0;
+
+        // Three forms in all: the raw title (articles and punctuation count), the normalized title,
+        // and the normalized title WITHOUT its leading article. The query itself keeps its own
+        // article — "the legend" is already served by the raw form.
+        if (Hit(Normalize(t), nq, prefix)) return true;
+        return Hit(Normalize(StripLeadingArticle(t)), nq, prefix);
     }
+
+    private static bool Hit(string haystack, string needle, bool prefix)
+        => prefix ? haystack.StartsWith(needle, StringComparison.Ordinal)
+                  : haystack.IndexOf(needle, StringComparison.Ordinal) >= 0;
 }

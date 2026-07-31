@@ -321,18 +321,35 @@
     return s.toLowerCase().replace(/[^0-9a-z]/g, "");
   }
 
+  // Retire un article anglais de tête, comme le fait le TRI. Sans ça, la lettre L d'un rail A-Z
+  // ne listerait pas « The Legend of Zelda » alors que la liste le classe sous L : le rail
+  // contredirait l'ordre affiché juste à côté.
+  function stripLeadingArticle(v) {
+    var s = String(v == null ? "" : v).replace(/^\s+/, "");
+    var arts = ["the ", "a ", "an "];
+    for (var i = 0; i < arts.length; i++) {
+      if (s.toLowerCase().lastIndexOf(arts[i], 0) === 0) return s.substring(arts[i].length);
+    }
+    return s;
+  }
+
+  function hit(haystack, needle, prefix) {
+    return prefix ? haystack.lastIndexOf(needle, 0) === 0 : haystack.indexOf(needle) >= 0;
+  }
+
   function titleMatches(title, query, prefix) {
     var q = String(query == null ? "" : query).trim();
     if (!q) return true;
     var t = String(title == null ? "" : title);
-    var tl = t.toLowerCase(), ql = q.toLowerCase();
-    if (prefix ? tl.lastIndexOf(ql, 0) === 0 : tl.indexOf(ql) >= 0) return true;
+    if (hit(t.toLowerCase(), q.toLowerCase(), prefix)) return true;
     // Une requête faite uniquement de ponctuation se normalise en chaîne vide : sans cette garde
-    // elle passerait sur tous les jeux via la forme normalisée.
+    // elle passerait sur tous les jeux via les formes normalisées.
     var nq = normalizeText(q);
     if (!nq) return false;
-    var nt = normalizeText(t);
-    return prefix ? nt.lastIndexOf(nq, 0) === 0 : nt.indexOf(nq) >= 0;
+    // Trois formes : titre brut, titre normalisé, titre normalisé SANS son article de tête. La
+    // requête garde le sien — « the legend » est déjà servi par la forme brute.
+    if (hit(normalizeText(t), nq, prefix)) return true;
+    return hit(normalizeText(stripLeadingArticle(t)), nq, prefix);
   }
 
   /* Le titre d'un jeu du payload : t (brut). cn est la clé de TRI, articles retirés — elle ne doit

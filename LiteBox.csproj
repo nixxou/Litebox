@@ -183,6 +183,25 @@
          JewelCaseSpines.resources (LiteBox.exe [dash][dash]model-export) and SHIPPED (user-approved) so the 3D
          renderer needs no LaunchBox dll at runtime. LbCaseObj reads these first, LB dll = fallback. -->
     <EmbeddedResource Include="case-assets\**"><LogicalName>case-assets/%(Filename)%(Extension)</LogicalName></EmbeddedResource>
+
+    <!-- Context-menu glyphs, 64x64 PNG rendered at 16x16 (64 covers up to 400% DPI). Drawn for
+         LiteBox, not taken from LaunchBox: the menu mirrors the host application's vocabulary
+         without shipping its art. Listed ONE BY ONE rather than globbed, so what ends up in the
+         binary stays an explicit, reviewable list and an unused file gets noticed.
+         Read through UiKit/MenuIcons. -->
+    <EmbeddedResource Include="menu-icons\add.png"><LogicalName>menu-icons/add.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\additionalapps.png"><LogicalName>menu-icons/additionalapps.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\additionaldocuments.png"><LogicalName>menu-icons/additionaldocuments.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\additionalversions.png"><LogicalName>menu-icons/additionalversions.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\combine.png"><LogicalName>menu-icons/combine.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\delete.png"><LogicalName>menu-icons/delete.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\edit.png"><LogicalName>menu-icons/edit.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\expand.png"><LogicalName>menu-icons/expand.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\playlist.png"><LogicalName>menu-icons/playlist.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\refreshall.png"><LogicalName>menu-icons/refreshall.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\resetcounts.png"><LogicalName>menu-icons/resetcounts.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\resetlastplayed.png"><LogicalName>menu-icons/resetlastplayed.png</LogicalName></EmbeddedResource>
+
   </ItemGroup>
 
   <!-- Native payload. Embedded as resources ONLY for the STANDALONE build ($(LiteBoxDist)=standalone); the

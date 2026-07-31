@@ -1316,6 +1316,11 @@ internal sealed class MainWindow : Form, IMessageFilter
             }
         }
         _current = union.ToArray();
+        // A union is not a playlist: it must drop any order the previously selected playlist
+        // imposed. Without this, leaving a Manual playlist for a multi-selection kept both the
+        // "Manual" label and that playlist's ranks, so every game outside it tied at int.MaxValue
+        // and the union came out unsorted.
+        ActivateNodeSort(_currentNode, NodeKeyForUnion(tags));
         ApplySort();
         try { ShowNodeDetails(_multiSel[_multiSel.Count - 1].Tag); } catch { }
     }
@@ -2876,7 +2881,12 @@ internal sealed class MainWindow : Form, IMessageFilter
     }
 
     // ── Sort + filter ────────────────────────────────────────────────────────
-    private void ActivateNodeSort(object node)
+    /// <summary>Distinct key for a multi-selection, so switching between two different unions
+    /// counts as navigating rather than as a refresh of the same node.</summary>
+    private static string NodeKeyForUnion(IEnumerable<object> tags)
+        => "U:" + string.Join("|", tags.Select(t => NodeKey(t) ?? "?").OrderBy(x => x, StringComparer.Ordinal));
+
+    private void ActivateNodeSort(object node, string nodeKeyOverride = null)
     {
         _nodeForcesSort = false;
         _manualOrder = null;
@@ -2886,7 +2896,7 @@ internal sealed class MainWindow : Form, IMessageFilter
         // merely rebuilt (a refresh after an edit, a return from a game, a parental reload). Those
         // rebuilds can happen while the kiosk is still on screen, and re-sorting the list behind it
         // is exactly the wasted work the deferral exists to avoid.
-        string nodeKey = NodeKey(node) ?? "*";
+        string nodeKey = nodeKeyOverride ?? NodeKey(node) ?? "*";
         if (!string.Equals(nodeKey, _sortedNodeKey, StringComparison.Ordinal))
         {
             _sortedNodeKey = nodeKey;

@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--selftest-title-sort") || args.Contains("--selftest-game-sort") || args.Contains("--selftest-sort-parity") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash") || args.Contains("--dedup-test") || args.Contains("--render-jewel") || args.Contains("--render-glb") || args.Contains("--render-oracle");
+bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--selftest-title-sort") || args.Contains("--selftest-game-sort") || args.Contains("--selftest-sort-parity") || args.Contains("--selftest-filter-parity") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash") || args.Contains("--dedup-test") || args.Contains("--render-jewel") || args.Contains("--render-glb") || args.Contains("--render-oracle");
 if (debugConsole)
     DebugConsole.Enable();
 
@@ -271,6 +271,9 @@ if (args.Contains("--selftest-game-sort"))
 // Desktop vs LB-Web/BB-Web ordering parity — runs the real vendor/game-sort.js under node.
 if (args.Contains("--selftest-sort-parity"))
     return SortParitySelfTest.Run();
+// Desktop vs LB-Web/BB-Web text-search parity — runs the real vendor/game-sort.js under node.
+if (args.Contains("--selftest-filter-parity"))
+    return FilterParitySelfTest.Run();
 
 // Seed real write-back changes across Platform XMLs via the plugin API (for the LB-ingestion test).
 if (args.Contains("--seed-writeback"))

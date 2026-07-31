@@ -1576,6 +1576,15 @@ body.mobile .search-modal { position: fixed; }
 .filter-banner .fb-text b { color: #fff; font-weight: 600; }
 /* Rappel "B annule" : présent seulement pour un filtre rapide — l'avancé, lui, survit au retour. */
 .filter-banner .fb-hint { margin-left: auto; flex: none; color: #7fa8bf; font-size: 11px; }
+/* Régime TEMPORAIRE (lettre du rail A-Z) : ambre + badge, même code couleur que desktop/LB-Web. */
+.filter-banner .fb-badge {
+  display: none; flex: none; padding: 0 4px; border-radius: 2px;
+  background: #e2983a; color: #18120a; font-size: 9px; font-weight: 700; letter-spacing: .5px;
+}
+.filter-banner.temp { background: rgba(226, 152, 58, .16); border-left-color: #e2983a; color: #f2d9b4; }
+.filter-banner.temp .fb-icon { color: #e2983a; }
+.filter-banner.temp .fb-badge { display: inline-block; }
+.filter-banner.temp .fb-hint { color: #bf9a68; }
 
 .adv-modal { position: absolute; inset: 0; z-index: 50; display: none; }
 .adv-modal.open { display: block; }

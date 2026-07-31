@@ -2538,10 +2538,10 @@
     return lbNormFilter((g && g.cn != null) ? g.cn : (g && g.t) || "");
   }
 
+  /* Temporaire → commence par ; manuel → contient. Règle et double forme (brute + normalisée)
+     partagées avec le desktop et BB-Web via LBGameSort. */
   function lbFilteredGames(all) {
-    var q = lbNormFilter(lbGameFilter);
-    if (!q) return all;
-    return all.filter(function (g) { return lbJumpKey(g).indexOf(q) >= 0; });
+    return window.LBGameSort.filterGames(all, lbGameFilter, lbGameFilterTransient);
   }
 
   function lbReflectFilter() {

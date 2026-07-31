@@ -101,7 +101,11 @@
   var pinOpen = false, pinModalEl = null, pinKeys = [], pinFocus = 0, pinValue = "";   // popup digicode (Unlock)
   var pinPurpose = "unlock", pinInstallGi = -1;   // "unlock" = global parental unlock ; "install" = one-shot install authorization (no global unlock, no reload)
   // Recherche (écran jeux) : mini-clavier QWERTY + filtre live de la liste sur le compareName.
-  var searchOpen = false, searchModalEl = null, searchKeyEls = [], searchR = 0, searchC = 0, searchQuery = "", kbMode = "quick";   // kbMode: "quick" (compareName) | "adv" (auto-complétion éditeur/dév)
+  // kbMode: "quick" (compareName) | "adv" (auto-complétion éditeur/dév)
+  var searchOpen = false, searchModalEl = null, searchKeyEls = [], searchR = 0, searchC = 0, searchQuery = "", kbMode = "quick";
+  // Régime du filtre texte : true = TEMPORAIRE (amorcé par une lettre du rail A-Z) → "commence par",
+  // ambre + badge TEMP. false = saisie délibérée dans la modale → "contient", bleu.
+  var searchTransient = false;
   var favOnly = false;   // filtre "favoris seulement" (rail ★) : transitoire (cf. clearFavFilter)
   var gameStars = {};    // paliers qualité de la plateforme courante : { databaseID: 1|2|3 } (cf. loadPlatformStars)
   // Recherche avancée (rail ☰) : modale à onglets, filtrage client transitoire (Phase 1 : Année).
@@ -597,10 +601,17 @@
   function railActivate() {
     var item = RAIL[railSel];
     if (item.k === "letter" || item.k === "num") {
-      // Sauter à une lettre n'a de sens qu'en ordre alphabétique : trié par date ou par genre, le
-      // « premier jeu en S » est à une position arbitraire. On repasse donc en Titre A→Z d'abord,
-      // exactement comme si l'utilisateur l'avait choisi dans Arrange By (l'ordre de session suit).
-      ensureTitleOrderForJump();
+      // En ordre alphabétique, sauter suffit. Dans tout AUTRE ordre, « le premier jeu en S » est à
+      // une position arbitraire : la lettre amorce alors une recherche TEMPORAIRE, qui filtre en
+      // « commence par ». C'est exactement ce que veut dire une lettre de rail, et ça préserve
+      // l'ordre choisi au lieu de le remplacer.
+      if (item.k === "letter" && !(bbwActiveSort.key === "title" && bbwActiveSort.dir === "asc")) {
+        exitRail();
+        searchQuery = item.ic;
+        searchTransient = true;
+        applySearchFilter();
+        return;
+      }
       var idx = findGameByInitial(item.k === "num" ? "#" : item.ic);
       if (idx >= 0) { exitRail(); setSelected("games", idx, { instant: true }); }
       else exitRail();
@@ -1328,8 +1339,7 @@
       }) : all;
     }
     if (favOnly) return all.filter(isStarred);
-    var nq = normSearch(searchQuery);
-    return nq ? all.filter(function (g) { return searchKeyOf(g).indexOf(nq) >= 0; }) : all;
+    return window.LBGameSort.filterGames(all, searchQuery, searchTransient);
   }
 
   // Remet la liste en Titre A→Z si elle est dans un autre ordre. No-op dans le cas courant.
@@ -1727,9 +1737,13 @@
     if (!el) return;
     var txt = el.querySelector(".fb-text"), hint = el.querySelector(".fb-hint");
     var quick = quickFilterKind();
+    // Ambre + badge TEMP quand le filtre est temporaire (lettre du rail), comme sur desktop et
+    // LB-Web ; bleu quand il vient d'une saisie délibérée.
+    el.classList.toggle("temp", quick === "text" && searchTransient);
     if (quick === "text") {
-      // Sur quoi porte le filtre : on le dit, puisqu'il est purement textuel.
-      txt.innerHTML = "Titre contient <b></b>";
+      // Sur quoi porte le filtre : on le dit, puisqu'il est purement textuel. Et on dit LEQUEL des
+      // deux régimes, parce qu'ils ne cherchent pas la même chose.
+      txt.innerHTML = (searchTransient ? "Titre commence par " : "Titre contient ") + "<b></b>";
       txt.querySelector("b").textContent = searchQuery;
       hint.textContent = "B annule";
     } else if (quick === "fav") {
@@ -1753,7 +1767,7 @@
     var kind = quickFilterKind();
     if (!kind) return false;
     if (kind === "text") {
-      searchQuery = "";
+      searchQuery = ""; searchTransient = false;
       if (searchOpen) { paintSearch(); }
       applySearchFilter();
     } else {
@@ -2211,8 +2225,7 @@
   // ── Recherche (écran jeux) : mini-clavier QWERTY + filtre LIVE sur le compareName ──────
   // Clé de recherche = compareName COMPACT (sans espace), mémoïsée par jeu (g._sk). La requête
   // est normalisée pareil ([A-Z0-9]) ; un jeu matche si sa clé CONTIENT la requête.
-  function searchKeyOf(g) { if (g && g._sk == null) g._sk = gameCN(g).replace(/[^0-9A-Z]/g, ""); return (g && g._sk) || ""; }
-  function normSearch(q) { return (q || "").toUpperCase().replace(/[^0-9A-Z]/g, ""); }
+  // (searchKeyOf / normSearch retirés : la règle de recherche est partagée — LBGameSort.filterGames.)
 
   // Choix de la disposition : config.search.layout ("qwerty"/"azerty" force, "auto"=langue).
   // En "auto" : langue LB (window.BBW.lang, depuis Settings.xml) → AZERTY si "fr", sinon QWERTY.
@@ -2284,7 +2297,7 @@
   }
   // Réinitialise les filtres transitoires (changement de plateforme) : recherche vidée + favoris.
   function resetSearch() {
-    searchQuery = ""; favOnly = false; if (searchOpen) closeSearch();
+    searchQuery = ""; searchTransient = false; favOnly = false; if (searchOpen) closeSearch();
     advActive = false; advCrit = null; advApplied = null; if (advOpen) closeAdvanced();
     updateAdvIndicator();   // rafraîchit aussi le bandeau
   }
@@ -2337,6 +2350,7 @@
       return;
     }
     if (k === "{ok}") { closeSearch(); return; }
+    searchTransient = false;   // taper dans la modale, c'est une recherche voulue
     if (k === "{bksp}") searchQuery = searchQuery.slice(0, -1);
     else if (k === "{clr}") searchQuery = "";
     else if (k === "{space}") searchQuery += " ";   // espace VISIBLE (ignoré par la comparaison, qui se fait sur le compareName compact)
@@ -2356,9 +2370,8 @@
   // Reconstruit la liste de jeux filtrée (compareName CONTIENT la requête) et sélectionne le 1er.
   function applySearchFilter() {
     updateFilterBanner();
-    var nq = normSearch(searchQuery);
-    DATA.games = nq ? DATA.gamesAll.filter(function (g) { return searchKeyOf(g).indexOf(nq) >= 0; }) : DATA.gamesAll;
-    DATA.platformTotal = nq ? DATA.games.length : DATA.platformTotalAll;
+    DATA.games = window.LBGameSort.filterGames(DATA.gamesAll, searchQuery, searchTransient);
+    DATA.platformTotal = searchQuery ? DATA.games.length : DATA.platformTotalAll;
     setupList("games", DATA.games.map(function (g) { return g.t; })); markGameStars("games");
     shownGame = -1; setSelected("games", 0, { instant: true });
     // BUG #1 FIX: poster side panel only refreshes via posterSelect(); setSelected alone is not enough.

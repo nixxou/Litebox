@@ -3094,12 +3094,16 @@ internal sealed class MainWindow : Form, IMessageFilter
         bool hasTxt = !string.IsNullOrWhiteSpace(txt);
         bool parental = ParentalBridge.Active;   // hide restricted games (kept in memory, just not shown)
         var filt = _filter;                       // advanced dialog criteria (null = none)
+        // A TRANSIENT filter (typing in the list, or a letter picked from a rail) narrows to titles
+        // BEGINNING with what was typed; a deliberate search in the box finds it anywhere. Same
+        // rule and same two title forms as both web clients — see GameTextFilter.
+        bool prefix = _typedFilterIsTransient;
         _games.FilterPredicate = (!hasTxt && !parental && filt == null)
             ? (Func<IGame, bool>)null
             : g =>
             {
                 if (parental && ParentalHidesGame(g)) return false;
-                if (hasTxt && !(Contains(S(Safe(() => g.Title)), txt) || Contains(S(Safe(() => g.Platform)), txt) || Contains(S(Safe(() => g.Developer)), txt))) return false;
+                if (hasTxt && !GameTextFilter.Matches(g, txt, prefix)) return false;
                 if (filt != null && !filt.Matches(g)) return false;   // AND the advanced criteria
                 return true;
             };

@@ -310,8 +310,48 @@
     return clean;
   }
 
+  // ── Recherche texte ───────────────────────────────────────────────────────────────────────
+  // Miroir exact de Host/GameTextFilter.cs — voir ce fichier pour le raisonnement. Titre seul,
+  // testé sous DEUX formes (brute et normalisée) ; deux modes (contient / commence par).
+  // --selftest-filter-parity compare les deux implémentations sur le même échantillon.
+  function normalizeText(v) {
+    var s = String(v == null ? "" : v);
+    // NFD sépare la lettre de son accent, \p{M} retire l'accent : "Pokémon" → "pokemon".
+    try { s = s.normalize("NFD").replace(/\p{M}/gu, ""); } catch (_) {}
+    return s.toLowerCase().replace(/[^0-9a-z]/g, "");
+  }
+
+  function titleMatches(title, query, prefix) {
+    var q = String(query == null ? "" : query).trim();
+    if (!q) return true;
+    var t = String(title == null ? "" : title);
+    var tl = t.toLowerCase(), ql = q.toLowerCase();
+    if (prefix ? tl.lastIndexOf(ql, 0) === 0 : tl.indexOf(ql) >= 0) return true;
+    // Une requête faite uniquement de ponctuation se normalise en chaîne vide : sans cette garde
+    // elle passerait sur tous les jeux via la forme normalisée.
+    var nq = normalizeText(q);
+    if (!nq) return false;
+    var nt = normalizeText(t);
+    return prefix ? nt.lastIndexOf(nq, 0) === 0 : nt.indexOf(nq) >= 0;
+  }
+
+  /* Le titre d'un jeu du payload : t (brut). cn est la clé de TRI, articles retirés — elle ne doit
+     pas servir ici, sinon "the legend" ne trouverait plus rien. */
+  function gameMatches(g, query, prefix) {
+    return titleMatches(g && g.t, query, prefix);
+  }
+
+  function filterGames(games, query, prefix) {
+    if (!String(query == null ? "" : query).trim()) return games || [];
+    return (games || []).filter(function (g) { return gameMatches(g, query, prefix); });
+  }
+
   window.LBGameSort = {
     defs: defs,
+    normalizeText: normalizeText,
+    titleMatches: titleMatches,
+    gameMatches: gameMatches,
+    filterGames: filterGames,
     parse: parse,
     label: label,
     value: value,

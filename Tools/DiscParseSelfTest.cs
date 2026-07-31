@@ -71,6 +71,22 @@ internal static class DiscParseSelfTest
         ("", null),
     };
 
+    /// <summary>Prints what the parser makes of each name in a file — one per line. Used to record a
+    /// prediction BEFORE looking at LaunchBox's answer, so a wrong rule cannot be quietly fitted to
+    /// the result afterwards.</summary>
+    public static int Predict(string listPath)
+    {
+        foreach (string raw in System.IO.File.ReadAllLines(listPath))
+        {
+            string name = raw.Trim();
+            if (name.Length == 0) continue;
+            int? d = GameCombiner.DiscIn(name);
+            char? s = GameCombiner.SideIn(name);
+            Console.WriteLine($"{d?.ToString() ?? "",-4}|{s?.ToString() ?? "",-2}|{name}");
+        }
+        return 0;
+    }
+
     public static int Run()
     {
         int fail = 0;

@@ -137,18 +137,20 @@ internal static class GameCombiner
     /// forty test roms covering every notation imported with the field empty every time — so it is
     /// read out of the name. The file name is what the import wizard shows its own Disc column
     /// beside, so that is what is read here, with the version label as a fallback.</summary>
+    // The file name and nothing else. LaunchBox's own entry point is
+    // NamingHelper.ParseDiscNumberFromFileName(string path, out bool sideA, out bool sideB) — one
+    // function, taking a path, handing back the disc and both side flags together. An earlier
+    // version of this fell back to the Version label when the name had no marker, which every
+    // sample we had was blind to (both carried it) and which would invent a disc number LaunchBox
+    // would not give.
     private static int? DiscOf(IGame g)
     {
-        int? n = null;
-        try { n = DiscIn(NameOf(g)); } catch { }
-        return n ?? DiscIn(VersionLabelOf(g));
+        try { return DiscIn(NameOf(g)); } catch { return null; }
     }
 
     private static char? SideOf(IGame g)
     {
-        char? c = null;
-        try { c = SideIn(NameOf(g)); } catch { }
-        return c ?? SideIn(VersionLabelOf(g));
+        try { return SideIn(NameOf(g)); } catch { return null; }
     }
 
     private static string NameOf(IGame g)

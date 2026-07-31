@@ -121,22 +121,36 @@ internal static class GameCombiner
         v.Priority = priority;
     }
 
-    /// <summary>The disc number LaunchBox puts on a version. A game has no Disc field of its own —
-    /// the four test games carried none and LaunchBox still filled in 1 and 2 — so it is read out
-    /// of the "(Disc N)" marker, in the version label first and the file name as a fallback.</summary>
+    /// <summary>The disc number LaunchBox derives for a version. A game carries no Disc of its own —
+    /// forty test roms covering every notation imported with the field empty every time — so it is
+    /// read out of the name. The file name is what the import wizard shows its own Disc column
+    /// beside, so that is what is read here, with the version label as a fallback.</summary>
     private static int? DiscOf(IGame g)
     {
-        int? n = DiscIn(VersionLabelOf(g));
-        if (n.HasValue) return n;
-        try { return DiscIn(System.IO.Path.GetFileNameWithoutExtension(Safe(() => g.ApplicationPath) ?? "")); }
-        catch { return null; }
+        int? n = null;
+        try { n = DiscIn(System.IO.Path.GetFileNameWithoutExtension(Safe(() => g.ApplicationPath) ?? "")); }
+        catch { }
+        return n ?? DiscIn(VersionLabelOf(g));
     }
 
-    private static int? DiscIn(string s)
+    // Read off LaunchBox's own import wizard across 40 notations (see DiscParseSelfTest, which
+    // pins every one of them):
+    //
+    //   • the token must be introduced by '(', '[' or '-'. A bare "Disc 10" is NOT a disc marker,
+    //     while "- Disc 19" is — so it is the delimiter that matters, not the brackets.
+    //   • "disc" or "disk", any case. "Disque" is not a spelling it knows.
+    //   • digits follow, optional space between. Nothing else counts: "(Disc IV)", "(Disc Two)"
+    //     and "(Disc A)" all come back empty.
+    //   • first DISC token wins, not the first token — "(Disc 29)(CD 30)" gives 29, and every one
+    //     of the test names opens with an unrelated "[TestVersion]" that is skipped.
+    //   • no sanity check at all: "(Disc 37 of 2)" gives 37, and the "of N" part is ignored.
+    private static readonly System.Text.RegularExpressions.Regex DiscMarker =
+        new(@"[\(\[\-]\s*dis[ck]\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    internal static int? DiscIn(string s)
     {
         if (string.IsNullOrEmpty(s)) return null;
-        var m = System.Text.RegularExpressions.Regex.Match(
-            s, @"\(\s*disc\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var m = DiscMarker.Match(s);
         return m.Success && int.TryParse(m.Groups[1].Value, out int d) ? d : (int?)null;
     }
 

@@ -90,6 +90,37 @@ internal static class GameMediaSync
         catch { }
     }
 
+    /// <summary>Pools one game's media into another's, for a COMBINE of two entries that are the
+    /// same database game. The destination keeps its files and their order — the source's are
+    /// appended after the highest number already present. Only ever called when the two share a
+    /// DatabaseID: for anything else the merge cannot be undone by an expand, so the files stay.</summary>
+    public static void MergeInto(IGame source, IGame destination)
+    {
+        try
+        {
+            if (source == null || destination == null || !Enabled) return;
+            if (_store == null || _store.ReadOnly) return;
+
+            string lbRoot = MediaResolver.LbRoot;
+            string platform = Safe(() => source.Platform) ?? "";
+            string from = Safe(() => source.Title) ?? "";
+            string to = Safe(() => destination.Title) ?? "";
+            if (string.IsNullOrEmpty(lbRoot) || platform.Length == 0 || from.Length == 0 || to.Length == 0) return;
+            if (!Guid.TryParse(Safe(() => source.Id) ?? "", out var id) || id == Guid.Empty) return;
+
+            // A THIRD game still answering to the source title means these files are its media too,
+            // so copy rather than move — exactly as on a rename. The destination itself does not
+            // count: it is the one we are pooling into.
+            var rival = FindRival(source, platform, from);
+            bool shared = rival != null && !string.Equals(
+                Safe(() => rival.Id) ?? "", Safe(() => destination.Id) ?? "", StringComparison.OrdinalIgnoreCase);
+
+            if (Move(lbRoot, id, platform, from, to, MediaNameForm.Plain, merge: true, sharedSource: shared) > 0)
+                RebuildCache(platform);
+        }
+        catch { }
+    }
+
     /// <summary>Called once a flush has written Title ops: the transit form has served its purpose,
     /// so each of those games goes back to plain names — unless a rival still holds that title.</summary>
     public static void ReconcileAfterFlush(IReadOnlyList<Guid> gameIds)

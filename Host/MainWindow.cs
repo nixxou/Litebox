@@ -5620,6 +5620,109 @@ internal sealed class MainWindow : Form, IMessageFilter
         Safe(() => PluginHelper.LaunchBoxMainViewModel.PlayGame(g, null, emu, null));
     }
 
+    /// <summary>Rebuilds the tree and the current list after a change that added or removed GAMES —
+    /// combining and expanding both do. Mirrors the local RefreshAfterEdit used by the tree menu,
+    /// which is a local function and therefore out of reach from here.</summary>
+    private void ReloadAfterGameChange()
+    {
+        try
+        {
+            (_dm as HostDataManagerXml)?.ReloadHierarchy();
+            object keep = _currentNode ?? AllNode.Instance;
+            PopulateSources();
+            _currentNode = null;                 // force the re-fill: LoadNode skips a same-node call
+            LoadNode(keep);
+        }
+        catch (Exception ex) { Console.WriteLine("[gamemenu] refresh: " + ex.Message); }
+    }
+
+    // The actions LaunchBox offers on a game selection, ADDED to what LiteBox already had — nothing
+    // that was in this menu before has moved or gone. Icons come from UiKit.MenuIcons and are
+    // decorative: a null one simply renders the entry without a glyph.
+    private void AddGameActionItems(ContextMenuStrip menu, IGame[] games)
+    {
+        if (games == null || games.Length == 0) return;
+        bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? true;
+
+        ToolStripMenuItem Item(string text, string icon, Action run, bool enabled = true)
+        {
+            var it = new ToolStripMenuItem(text) { Image = UiKit.MenuIcons.Get(icon), Enabled = enabled };
+            it.Click += (_, _) => { try { run(); } catch (Exception ex) { Console.WriteLine("[gamemenu] " + ex.Message); } };
+            return it;
+        }
+
+        void Refresh()
+        {
+            try { (_dm as HostDataManagerXml)?.FlushIfSafe(); } catch { }
+            ReloadAfterGameChange();
+        }
+
+        menu.Items.Add(new ToolStripSeparator());
+
+        menu.Items.Add(Item("Reset Play Count & Time", UiKit.MenuIcons.ResetCounts, () =>
+        {
+            foreach (var g in games) { Safe(() => g.PlayCount = 0); Safe(() => g.PlayTime = 0); }
+            Refresh();
+        }, !ro));
+
+        menu.Items.Add(Item("Reset Last Played", UiKit.MenuIcons.ResetLastPlayed, () =>
+        {
+            foreach (var g in games) Safe(() => g.LastPlayedDate = null);
+            Refresh();
+        }, !ro));
+
+        // Combine needs at least two games and a root to fold them into; Expand needs a game that
+        // actually carries versions. Both are hidden rather than shown dead when meaningless.
+        if (games.Length > 1)
+            menu.Items.Add(Item($"Combine {games.Length} Selected Games…", UiKit.MenuIcons.Combine,
+                () => CombineSelectedGames(games), !ro));
+
+        var expandable = games.Where(Games.GameCombiner.CanExpand).ToArray();
+        if (expandable.Length > 0)
+            menu.Items.Add(Item(expandable.Length > 1 ? $"Expand {expandable.Length} Selected Games…" : "Expand Selected Game…",
+                UiKit.MenuIcons.Expand, () => ExpandSelectedGames(expandable), !ro));
+
+        menu.Items.Add(Item("Refresh Selected Images", UiKit.MenuIcons.RefreshImages, () =>
+        {
+            foreach (var p in games.Select(g => S(Safe(() => g.Platform))).Where(p => p.Length > 0)
+                                   .Distinct(StringComparer.OrdinalIgnoreCase))
+                Safe(() => Media.GameCacheBridge.RebuildPlatform(PluginHelper.DataManager?.GetPlatformByName(p)));
+            ReloadAfterGameChange();
+        }));
+    }
+
+    /// <summary>Asks which game the others fold into, then combines. Destructive — the absorbed
+    /// games stop existing as games — so the outcome is reported once it is done.</summary>
+    private void CombineSelectedGames(IGame[] games)
+    {
+        if (_dm is not HostDataManagerXml dm || games.Length < 2) return;
+        var root = Platforms.RootGamePicker.Ask(this, games);
+        if (root == null) return;
+        int n = Games.GameCombiner.Combine(games, root, dm);
+        if (n <= 0) return;
+        try { dm.FlushIfSafe(); } catch { }
+        ReloadAfterGameChange();
+        MessageBox.Show(this, $"{n} game(s) combined into \"{S(Safe(() => root.Title))}\".",
+            "Combine", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void ExpandSelectedGames(IGame[] games)
+    {
+        if (_dm is not HostDataManagerXml dm) return;
+        // Worth spelling out before it happens: expanding does NOT undo a combine. The database id
+        // is gone and the titles come back derived from the version labels.
+        if (MessageBox.Show(this,
+                "Each additional version becomes a game again.\n\n"
+                + "The database ID is not restored, and titles come back from the version labels — "
+                + "LaunchBox loses them the same way.\n\nContinue?",
+                "Expand", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+
+        int n = games.Sum(g => Games.GameCombiner.Expand(g, dm));
+        if (n <= 0) return;
+        try { dm.FlushIfSafe(); } catch { }
+        ReloadAfterGameChange();
+    }
+
     private ContextMenuStrip BuildGameContextMenu(IGame[] games)
     {
         var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
@@ -5681,11 +5784,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         // that isn't single-only). ◄► walk the visible list when a single game is selected.
         {
             var gs = games;
-            var edit = new ToolStripMenuItem(gs.Length > 1 ? $"Edit {gs.Length} Games…" : "Edit…");
+            var edit = new ToolStripMenuItem(gs.Length > 1 ? $"Edit {gs.Length} Games…" : "Edit…")
+            { Image = UiKit.MenuIcons.Get(UiKit.MenuIcons.Edit) };
             edit.Click += (_, _) => OpenEditGame(gs);
             menu.Items.Add(edit);
         }
 
+        AddGameActionItems(menu, games);
         menu.Items.Add(new ToolStripSeparator());
 
         foreach (var gm in _reg.GameMenus)

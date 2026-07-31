@@ -134,9 +134,8 @@ internal static class GameCombiner
     }
 
     /// <summary>The disc number LaunchBox derives for a version. A game carries no Disc of its own —
-    /// forty test roms covering every notation imported with the field empty every time — so it is
-    /// read out of the name. The file name is what the import wizard shows its own Disc column
-    /// beside, so that is what is read here, with the version label as a fallback.</summary>
+    /// 170 test roms covering every notation imported with the field empty every time — so it is
+    /// read out of the file name.</summary>
     // The file name and nothing else. LaunchBox's own entry point is
     // NamingHelper.ParseDiscNumberFromFileName(string path, out bool sideA, out bool sideB) — one
     // function, taking a path, handing back the disc and both side flags together. An earlier
@@ -156,19 +155,26 @@ internal static class GameCombiner
     private static string NameOf(IGame g)
         => System.IO.Path.GetFileNameWithoutExtension(Safe(() => g.ApplicationPath) ?? "");
 
-    // Read off LaunchBox's own import wizard across 40 notations (see DiscParseSelfTest, which
-    // pins every one of them):
+    // Measured on 170 names across two experiments (DiscParseSelfTest pins every one). The disc and
+    // the side do NOT follow the same rule, which is the part no amount of reading would suggest.
     //
-    //   • the token must be introduced by '(', '[' or '-'. A bare "Disc 10" is NOT a disc marker,
-    //     while "- Disc 19" is — so it is the delimiter that matters, not the brackets.
-    //   • "disc" or "disk", any case. "Disque" is not a spelling it knows.
-    //   • digits follow, optional space between. Nothing else counts: "(Disc IV)", "(Disc Two)"
-    //     and "(Disc A)" all come back empty.
-    //   • first DISC token wins, not the first token — "(Disc 29)(CD 30)" gives 29, and every one
-    //     of the test names opens with an unrelated "[TestVersion]" that is skipped.
-    //   • no sanity check at all: "(Disc 37 of 2)" gives 37, and the "of N" part is ignored.
+    // DISC — the marker has to be a tag of its own:
+    //   • introduced by " (", " [" or " - ". The bracket must come after whitespace, so a name
+    //     STARTING with "(Disc 3)" yields nothing, and it must be followed immediately by the
+    //     keyword — "( Disc 3 )" yields nothing either.
+    //   • "disc", "disk", optionally plural: "(Discs 3)" works. "Disque", "Dis", "D", "DVD" and
+    //     "CD" do not — CD is never a disc marker, in any form.
+    //   • a separator is REQUIRED between keyword and number, and may be space, '-', '.' or '_':
+    //     "(Disc-3)", "(Disc.3)", "(Disc_3)" all give 3, while "(Disc3)" gives nothing.
+    //   • the number must not run into a letter: "(Disc 3a)" gives nothing.
+    //   • the keyword must open the tag — "(SuperDisc 3)", "(The Disc 3)" and "(Rev A Disc 3)"
+    //     give nothing.
+    //   • first disc tag wins, not first tag: "(CD 3) (Disc 7)" gives 7.
+    //   • no sanity check whatsoever: "(Disc 37 of 2)" gives 37, "of N" is ignored, and
+    //     "(Disc 03)" is 3.
     private static readonly System.Text.RegularExpressions.Regex DiscMarker =
-        new(@"[\(\[\-]\s*dis[ck]\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        new(@"(?:\s[\(\[]|\s-\s)dis[ck]s?[\s\-._]+(\d+)(?![0-9a-z])",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     internal static int? DiscIn(string s)
     {
@@ -177,11 +183,18 @@ internal static class GameCombiner
         return m.Success && int.TryParse(m.Groups[1].Value, out int d) ? d : (int?)null;
     }
 
-    // The same idea for the two side flags, and the same delimiter rule: "(Side A)" and "(Side B)"
-    // set them, a bare "Side 1", "Face A" or "Face B" sets nothing. Found because a 44-game combine
-    // agreed on every other field and disagreed on exactly these two.
+    // SIDE — looser than the disc in one way, stricter in three others:
+    //   • NO delimiter is required. A bare "Final Fantasy X Side A" sets the flag, where a bare
+    //     "Disc 3" sets nothing at all. The asymmetry is real, not a misreading.
+    //   • the separator must be whitespace: "(Side-A)", "(Side.A)", "(Side_A)" and "(SideA)" set
+    //     nothing, where the disc happily takes '-', '.' and '_'.
+    //   • no plural — "(Sides A)" sets nothing, though "(Discs 3)" is a disc.
+    //   • only A and B: "(Side C)", "(Side 1)", "(Side 2)" set nothing.
+    //   • what follows the letter is ignored: "(Side A1)" and "(Side AB)" are both side A.
+    //   • it need not be a tag of its own: "(Disc 3 Side B)" is disc 3 AND side B.
+    //   • "Face" is not a word it knows, in any form.
     private static readonly System.Text.RegularExpressions.Regex SideMarker =
-        new(@"[\(\[\-]\s*side\s*([ab])(?![a-z0-9])", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        new(@"\bside\s([ab])", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>'A', 'B', or null when the name carries no side marker.</summary>
     internal static char? SideIn(string s)

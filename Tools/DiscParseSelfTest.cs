@@ -101,8 +101,9 @@ internal static class DiscParseSelfTest
             }
         }
         fail += RunSides();
+        fail += RunFfx();
         Console.WriteLine(fail == 0
-            ? $"[disc] ALL PASS ({Cases.Length} notations disque + {SideCases.Length} face, toutes relevees sur LaunchBox)"
+            ? $"[disc] ALL PASS ({Cases.Length + SideCases.Length + FfxCases.Length} notations, toutes relevees sur LaunchBox)"
             : $"[disc] {fail} FAILED");
         return fail == 0 ? 0 : 1;
     }
@@ -130,6 +131,161 @@ internal static class DiscParseSelfTest
             if (got != want)
             {
                 Console.WriteLine($"[disc] FAIL side {suffix,-19} attendu={want?.ToString() ?? "aucun"} obtenu={got?.ToString() ?? "aucun"}");
+                fail++;
+            }
+        }
+        return fail;
+    }
+
+    // The second experiment: 130 names combined in one go, covering keyword x separator x delimiter
+    // x position for both markers. Full names this time, because position turned out to matter — a
+    // name that OPENS with "(Disc 3)" yields nothing. Disc and side are checked together since
+    // LaunchBox derives them in one pass.
+    private static readonly (string Name, int? Disc, char? Side)[] FfxCases =
+    {
+        ("(Disc 3) Final Fantasy X", null, null),
+        ("Final Fantasy X ( Disc 3 )", null, null),
+        ("Final Fantasy X (CD 3)", null, null),
+        ("Final Fantasy X (CD 3) (Disc 7)", 7, null),
+        ("Final Fantasy X (CD-3)", null, null),
+        ("Final Fantasy X (CD.3)", null, null),
+        ("Final Fantasy X (CD3)", null, null),
+        ("Final Fantasy X (CD_3)", null, null),
+        ("Final Fantasy X (D 3)", null, null),
+        ("Final Fantasy X (DVD 3)", null, null),
+        ("Final Fantasy X (Dis 3)", null, null),
+        ("Final Fantasy X (Disc  3)", 3, null),
+        ("Final Fantasy X (Disc 03)", 3, null),
+        ("Final Fantasy X (Disc 3 Side B)", 3, 'B'),
+        ("Final Fantasy X (Disc 3 of 5) (Disc 8)", 3, null),
+        ("Final Fantasy X (Disc 3)", 3, null),
+        ("Final Fantasy X (Disc 3) (Disc 7)", 3, null),
+        ("Final Fantasy X (Disc 3) (Side B)", 3, 'B'),
+        ("Final Fantasy X (Disc 3) [Rev A]", 3, null),
+        ("Final Fantasy X (Disc 3a)", null, null),
+        ("Final Fantasy X (Disc-3)", 3, null),
+        ("Final Fantasy X (Disc.3)", 3, null),
+        ("Final Fantasy X (Disc3)", null, null),
+        ("Final Fantasy X (Disc3a)", null, null),
+        ("Final Fantasy X (Disc_3)", 3, null),
+        ("Final Fantasy X (Discs 3)", 3, null),
+        ("Final Fantasy X (Disk 3)", 3, null),
+        ("Final Fantasy X (Disk-3)", 3, null),
+        ("Final Fantasy X (Disk.3)", 3, null),
+        ("Final Fantasy X (Disk3)", null, null),
+        ("Final Fantasy X (Disk_3)", 3, null),
+        ("Final Fantasy X (Disque 3)", null, null),
+        ("Final Fantasy X (Face A)", null, null),
+        ("Final Fantasy X (Face B)", null, null),
+        ("Final Fantasy X (Face-A)", null, null),
+        ("Final Fantasy X (Face-B)", null, null),
+        ("Final Fantasy X (Face.A)", null, null),
+        ("Final Fantasy X (Face.B)", null, null),
+        ("Final Fantasy X (FaceA)", null, null),
+        ("Final Fantasy X (FaceB)", null, null),
+        ("Final Fantasy X (Face_A)", null, null),
+        ("Final Fantasy X (Face_B)", null, null),
+        ("Final Fantasy X (Rev A Disc 3)", null, null),
+        ("Final Fantasy X (Rev A) (Disc 3)", 3, null),
+        ("Final Fantasy X (Side 1)", null, null),
+        ("Final Fantasy X (Side 2)", null, null),
+        ("Final Fantasy X (Side A)", null, 'A'),
+        ("Final Fantasy X (Side A1)", null, 'A'),
+        ("Final Fantasy X (Side AB)", null, 'A'),
+        ("Final Fantasy X (Side B)", null, 'B'),
+        ("Final Fantasy X (Side B) (Disc 3)", 3, 'B'),
+        ("Final Fantasy X (Side C)", null, null),
+        ("Final Fantasy X (Side-A)", null, null),
+        ("Final Fantasy X (Side-B)", null, null),
+        ("Final Fantasy X (Side.A)", null, null),
+        ("Final Fantasy X (Side.B)", null, null),
+        ("Final Fantasy X (SideA)", null, null),
+        ("Final Fantasy X (SideB)", null, null),
+        ("Final Fantasy X (Side_A)", null, null),
+        ("Final Fantasy X (Side_B)", null, null),
+        ("Final Fantasy X (Sides A)", null, null),
+        ("Final Fantasy X (SuperDisc 3)", null, null),
+        ("Final Fantasy X (The Disc 3)", null, null),
+        ("Final Fantasy X - Disc 3", 3, null),
+        ("Final Fantasy X - Disc-3", 3, null),
+        ("Final Fantasy X - Disc.3", 3, null),
+        ("Final Fantasy X - Disc3", null, null),
+        ("Final Fantasy X - Disc_3", 3, null),
+        ("Final Fantasy X - Side A", null, 'A'),
+        ("Final Fantasy X - Side B", null, 'B'),
+        ("Final Fantasy X - Side-A", null, null),
+        ("Final Fantasy X - Side-B", null, null),
+        ("Final Fantasy X - Side.A", null, null),
+        ("Final Fantasy X - Side.B", null, null),
+        ("Final Fantasy X - SideA", null, null),
+        ("Final Fantasy X - SideB", null, null),
+        ("Final Fantasy X - Side_A", null, null),
+        ("Final Fantasy X - Side_B", null, null),
+        ("Final Fantasy X Disc 3", null, null),
+        ("Final Fantasy X Disc-3", null, null),
+        ("Final Fantasy X Disc.3", null, null),
+        ("Final Fantasy X Disc3", null, null),
+        ("Final Fantasy X Disc_3", null, null),
+        ("Final Fantasy X Side A", null, 'A'),
+        ("Final Fantasy X Side B", null, 'B'),
+        ("Final Fantasy X Side-A", null, null),
+        ("Final Fantasy X Side-B", null, null),
+        ("Final Fantasy X Side.A", null, null),
+        ("Final Fantasy X Side.B", null, null),
+        ("Final Fantasy X SideA", null, null),
+        ("Final Fantasy X SideB", null, null),
+        ("Final Fantasy X Side_A", null, null),
+        ("Final Fantasy X Side_B", null, null),
+        ("Final Fantasy X [CD 3]", null, null),
+        ("Final Fantasy X [CD-3]", null, null),
+        ("Final Fantasy X [CD.3]", null, null),
+        ("Final Fantasy X [CD3]", null, null),
+        ("Final Fantasy X [CD_3]", null, null),
+        ("Final Fantasy X [Disc 3]", 3, null),
+        ("Final Fantasy X [Disc-3]", 3, null),
+        ("Final Fantasy X [Disc.3]", 3, null),
+        ("Final Fantasy X [Disc3]", null, null),
+        ("Final Fantasy X [Disc_3]", 3, null),
+        ("Final Fantasy X [Disk 3]", 3, null),
+        ("Final Fantasy X [Disk-3]", 3, null),
+        ("Final Fantasy X [Disk.3]", 3, null),
+        ("Final Fantasy X [Disk3]", null, null),
+        ("Final Fantasy X [Disk_3]", 3, null),
+        ("Final Fantasy X [Face A]", null, null),
+        ("Final Fantasy X [Face B]", null, null),
+        ("Final Fantasy X [Face-A]", null, null),
+        ("Final Fantasy X [Face-B]", null, null),
+        ("Final Fantasy X [Face.A]", null, null),
+        ("Final Fantasy X [Face.B]", null, null),
+        ("Final Fantasy X [FaceA]", null, null),
+        ("Final Fantasy X [FaceB]", null, null),
+        ("Final Fantasy X [Face_A]", null, null),
+        ("Final Fantasy X [Face_B]", null, null),
+        ("Final Fantasy X [Rev A] (Disc 3)", 3, null),
+        ("Final Fantasy X [Side A]", null, 'A'),
+        ("Final Fantasy X [Side B]", null, 'B'),
+        ("Final Fantasy X [Side-A]", null, null),
+        ("Final Fantasy X [Side-B]", null, null),
+        ("Final Fantasy X [Side.A]", null, null),
+        ("Final Fantasy X [Side.B]", null, null),
+        ("Final Fantasy X [SideA]", null, null),
+        ("Final Fantasy X [SideB]", null, null),
+        ("Final Fantasy X [Side_A]", null, null),
+        ("Final Fantasy X [Side_B]", null, null),
+        ("[Disc 3] Final Fantasy X", null, null),
+    };
+
+    private static int RunFfx()
+    {
+        int fail = 0;
+        foreach (var (name, disc, side) in FfxCases)
+        {
+            int? d = GameCombiner.DiscIn(name);
+            char? c = GameCombiner.SideIn(name);
+            if (d != disc || c != side)
+            {
+                Console.WriteLine($"[disc] FAIL {name,-46} attendu=disc {Show(disc)}/side {side?.ToString() ?? "aucun"}"
+                                  + $" obtenu=disc {Show(d)}/side {c?.ToString() ?? "aucun"}");
                 fail++;
             }
         }

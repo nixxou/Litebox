@@ -28,6 +28,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using LbApiHost.Host.Data;
 using System.Windows.Forms;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
@@ -259,11 +260,13 @@ internal sealed partial class EditGameWindow
             bool twinExists = apps.Any(x => x != null && !ReferenceEquals(x, a)
                                             && !string.Equals(Safe(() => x.Id), Safe(() => a.Id), StringComparison.OrdinalIgnoreCase)
                                             && AppPathEq(Safe(() => x.ApplicationPath) ?? "", gPath));
+            Data.HostAdditionalApplication demoted = null;
             if (!twinExists && gPath.Length > 0)
             {
                 var d = g.AddNewAdditionalApplication();
                 if (d != null)
                 {
+                    demoted = d as Data.HostAdditionalApplication;
                     d.Name = gVer.Length > 0 ? $"Play {gVer} version…" : "Play previous version…";
                     d.ApplicationPath = gPath;
                     d.CommandLine = gCmd;
@@ -275,6 +278,16 @@ internal sealed partial class EditGameWindow
                     d.Priority = NextPriority(g);
                 }
             }
+
+            // 1b. The game's own saves were made on the rom it is handing over, so they follow it
+            //     onto the row that now holds it — the one just created, or the twin that already
+            //     did. A <GameSave> names a game, never a rom, so without this they silently become
+            //     the saves of the rom the game is about to take instead. See GameSaveMover.
+            demoted ??= apps.FirstOrDefault(x => x != null
+                                                 && AppPathEq(Safe(() => x.ApplicationPath) ?? "", gPath))
+                            as Data.HostAdditionalApplication;
+            if (demoted != null && PluginHelper.DataManager is Data.HostDataManagerXml sdm)
+                Games.GameSaveMover.FollowDemotedRom(g, demoted, sdm);
 
             // 2. The selected version becomes the game's launch target; its row is left untouched.
             g.ApplicationPath = Safe(() => a.ApplicationPath) ?? "";

@@ -103,7 +103,7 @@ internal static class GameCombiner
                     CopyAddApp(root, inner, ++priority);
 
                 var version = AddVersion(root, g, ++priority);
-                MoveSaves(g, root, version, dm);
+                GameSaveMover.ToVersion(g, root, version, dm);
                 dm.TryRemoveGame(g);
                 absorbed++;
             }
@@ -144,52 +144,6 @@ internal static class GameCombiner
         v.Priority = priority;
         return v;
     }
-
-    /// <summary>Carries an absorbed game's save games and save states over to the root, tied to the
-    /// version it became.
-    ///
-    /// This is a DELIBERATE DIVERGENCE from LaunchBox, the only one in the combine. Measured: it
-    /// deletes them outright — 10 of 12 <GameSave> records vanished from a real combine — while
-    /// leaving every file on disk, so the saves survive with nothing left pointing at them. Nobody
-    /// is warned and nothing can be recovered without knowing the file names.
-    ///
-    /// Re-pointing costs nothing and invents nothing: AdditionalApplicationId is LaunchBox's own
-    /// field for a save belonging to a version, and 7 of the 15 saves already in this library use
-    /// it. The result is a file LaunchBox reads as it stands — it simply would not have written
-    /// it.</summary>
-    private static void MoveSaves(IGame source, IGame root, HostAdditionalApplication version, HostDataManagerXml dm)
-    {
-        if (version == null) return;
-        if (!Guid.TryParse(Safe(() => source.Id) ?? "", out var sgid)) return;
-        if (!Guid.TryParse(Safe(() => root.Id) ?? "", out var rgid)) return;
-
-        var store = dm.Store;
-        var moving = store.GetSubEntities(sgid, SaveEntity);
-        if (moving.Count == 0) return;
-
-        var kept = store.GetSubEntities(rgid, SaveEntity)
-            .Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
-
-        foreach (var row in moving)
-        {
-            // Rebuilt rather than edited in place so GameId and AdditionalApplicationId lead the
-            // element, which is where LaunchBox puts them on the saves that already have one.
-            var moved = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["GameId"] = rgid.ToString(),
-                ["AdditionalApplicationId"] = version.Id,
-            };
-            foreach (var kv in row)
-                if (kv.Key != "GameId" && kv.Key != "AdditionalApplicationId")
-                    moved[kv.Key] = kv.Value;
-            kept.Add(moved);
-        }
-
-        store.SetSubEntities(rgid, SaveEntity, kept);
-        store.SetSubEntities(sgid, SaveEntity, Array.Empty<IReadOnlyDictionary<string, string>>());
-    }
-
-    private const string SaveEntity = "GameSave";
 
     /// <summary>The disc number LaunchBox derives for a version. A game carries no Disc of its own —
     /// 170 test roms covering every notation imported with the field empty every time — so it is
@@ -289,7 +243,7 @@ internal static class GameCombiner
                     // stop naming a version that is about to disappear, or they point at nothing.
                     // Found by counting rather than by reading: five did exactly that on the first
                     // run of this.
-                    DetachSaves(game, v, dm);
+                    GameSaveMover.Detach(game, v, dm);
                     game.TryRemoveAdditionalApplication(v);
                     continue;
                 }
@@ -316,7 +270,7 @@ internal static class GameCombiner
                 // folds the disc into the title instead, which TitleFromFileName reproduces.
                 // The DatabaseID and the GUID are gone, as they are for LaunchBox.
 
-                ReturnSaves(game, v, g, dm);
+                GameSaveMover.ToGame(game, v, g, dm);
 
                 game.TryRemoveAdditionalApplication(v);
                 restored++;
@@ -324,34 +278,6 @@ internal static class GameCombiner
             catch { }
         }
         return restored;
-    }
-
-    /// <summary>Drops the version link from the root's own saves when that version goes away,
-    /// leaving them as plain game saves where they already were.</summary>
-    private static void DetachSaves(IGame root, HostAdditionalApplication version, HostDataManagerXml dm)
-    {
-        if (!Guid.TryParse(Safe(() => root.Id) ?? "", out var rgid)) return;
-        string vid = version.Id ?? "";
-        if (vid.Length == 0) return;
-
-        var store = dm.Store;
-        var rows = store.GetSubEntities(rgid, SaveEntity);
-        if (rows.Count == 0) return;
-
-        bool touched = false;
-        var kept = new List<Dictionary<string, string>>(rows.Count);
-        foreach (var row in rows)
-        {
-            row.TryGetValue("AdditionalApplicationId", out var owner);
-            if (!string.Equals(owner ?? "", vid, StringComparison.OrdinalIgnoreCase))
-            { kept.Add(new Dictionary<string, string>(row, StringComparer.Ordinal)); continue; }
-            touched = true;
-            var flat = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = rgid.ToString() };
-            foreach (var kv in row)
-                if (kv.Key != "GameId" && kv.Key != "AdditionalApplicationId") flat[kv.Key] = kv.Value;
-            kept.Add(flat);
-        }
-        if (touched) store.SetSubEntities(rgid, SaveEntity, kept);
     }
 
     /// <summary>The title LaunchBox gives a restored game. Not the version label — the file name,
@@ -390,41 +316,6 @@ internal static class GameCombiner
         try { s = System.IO.Path.GetFileNameWithoutExtension(path ?? ""); } catch { s = path ?? ""; }
         int i = s.IndexOfAny(new[] { '(', '[' });
         return i >= 0 ? s.Substring(i) : s;
-    }
-
-    /// <summary>Hands a version's saves back to the game it becomes. LaunchBox deletes them —
-    /// measured: 11 of 13 records gone after one expand, every file left on disk — which is the
-    /// same loss as the combine, in the other direction. Keeping them is what makes the round trip
-    /// actually round.</summary>
-    private static void ReturnSaves(IGame root, HostAdditionalApplication version, IGame restored, HostDataManagerXml dm)
-    {
-        if (!Guid.TryParse(Safe(() => root.Id) ?? "", out var rgid)) return;
-        if (!Guid.TryParse(Safe(() => restored.Id) ?? "", out var ngid)) return;
-        string vid = version.Id ?? "";
-        if (vid.Length == 0) return;
-
-        var store = dm.Store;
-        var all = store.GetSubEntities(rgid, SaveEntity);
-        if (all.Count == 0) return;
-
-        var stay = new List<Dictionary<string, string>>();
-        var move = new List<Dictionary<string, string>>();
-        foreach (var row in all)
-        {
-            row.TryGetValue("AdditionalApplicationId", out var owner);
-            if (!string.Equals(owner ?? "", vid, StringComparison.OrdinalIgnoreCase))
-            { stay.Add(new Dictionary<string, string>(row, StringComparer.Ordinal)); continue; }
-
-            // Back to a plain game save: the version it belonged to is about to stop existing.
-            var back = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = ngid.ToString() };
-            foreach (var kv in row)
-                if (kv.Key != "GameId" && kv.Key != "AdditionalApplicationId") back[kv.Key] = kv.Value;
-            move.Add(back);
-        }
-        if (move.Count == 0) return;
-
-        store.SetSubEntities(rgid, SaveEntity, stay);
-        store.SetSubEntities(ngid, SaveEntity, move);
     }
 
     /// <summary>Every additional application a game carries, whatever its section.</summary>

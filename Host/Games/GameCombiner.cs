@@ -7,14 +7,19 @@
 // kept on the version rather than folded into the root. Priority continues after the versions
 // already there.
 //
-// WHAT EXPANDING LOSES — the same as LaunchBox, on purpose for now. The games come back, but:
-//   • the DatabaseID is gone,
-//   • the GUID is new, so nothing links the restored game to the one that was absorbed,
-//   • the title is re-derived and can come back altered — an observed "A.IV - Evolution Global"
-//     returned as "A.IV: Evolution Global".
-// Carrying those across would mean stashing them ON the version, and an additional application has
-// no free-field channel in the model (unlike a game or a playlist). Adding one is a change of its
-// own; until then, matching LaunchBox exactly beats inventing a half-scheme.
+// WHAT EXPANDING COSTS. LaunchBox loses three things: the absorbed game's DatabaseID, its GUID,
+// and its title, which comes back re-derived from the file name and can differ from the original.
+// It also deletes every save belonging to a version — 11 of 13 records gone in a measured expand,
+// with all the files left on disk.
+//
+// We give two of the three back. A combine performed HERE stashes the DatabaseID and the real title
+// against the version's own GUID in LiteBox's options database (scope "version"), and the expand
+// hands them over and clears the entry. The saves come back either way, re-pointed at the restored
+// game. The game GUID is the one thing still lost: restoring it would mean creating a game with a
+// chosen id, which the store does not offer, and it buys nothing on its own.
+//
+// A combine done in LAUNCHBOX records nothing, so expanding its work falls back to LaunchBox's own
+// behaviour — a title re-derived from the file name, with the disc folded back in.
 //
 // MEDIA. Combining only merges media when the two entries share a DatabaseID — same database entry
 // means the same game, so pooling their images is what the user asked for. Anything else keeps its
@@ -99,6 +104,7 @@ internal static class GameCombiner
                     CopyVersion(root, inner, ++priority);
 
                 var version = AddVersion(root, g, ++priority);
+                RememberForExpand(g, version);
                 MoveSaves(g, root, version, dm);
                 dm.TryRemoveGame(g);
                 absorbed++;
@@ -187,6 +193,24 @@ internal static class GameCombiner
 
     private const string SaveEntity = "GameSave";
 
+    /// <summary>Keeps beside the version the two things a combine destroys and an expand can never
+    /// work out again: the absorbed game's DatabaseID, and the title it actually had. The version's
+    /// own GUID is the key — LaunchBox keeps it as the row key, so it survives its saves too.
+    ///
+    /// The game's GUID is not kept: restoring it would mean creating a game with a chosen id, which
+    /// the store does not offer, and it buys nothing on its own.</summary>
+    private static void RememberForExpand(IGame source, HostAdditionalApplication version)
+    {
+        string vid = version?.Id ?? "";
+        if (vid.Length == 0) return;
+        int? db = Safe(() => source.LaunchBoxDbId);
+        string title = Safe(() => source.Title) ?? "";
+        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.DatabaseID",
+            db.HasValue ? db.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : null);
+        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.Title",
+            title.Length > 0 ? title : null);
+    }
+
     /// <summary>The disc number LaunchBox derives for a version. A game carries no Disc of its own —
     /// 170 test roms covering every notation imported with the field empty every time — so it is
     /// read out of the file name.</summary>
@@ -259,7 +283,11 @@ internal static class GameCombiner
     }
 
     /// <summary>Turns every version of <paramref name="game"/> back into a game of its own.
-    /// Returns how many were restored.</summary>
+    /// Returns how many were restored.
+    ///
+    /// The version that points at the root's own rom does NOT become a game: it IS the root, which
+    /// keeps its identity and simply loses the entry. Measured — three versions expanded into two
+    /// games plus the untouched root.</summary>
     public static int Expand(IGame game, HostDataManagerXml dm)
     {
         if (game == null || dm == null) return 0;
@@ -267,15 +295,32 @@ internal static class GameCombiner
         if (versions.Count == 0) return 0;
 
         string platform = Safe(() => game.Platform) ?? "";
+        string rootPath = Safe(() => game.ApplicationPath) ?? "";
         int restored = 0;
         foreach (var v in versions)
         {
             try
             {
-                // The Version label is what distinguished the absorbed game, so it is the closest
-                // thing to its original title still on record — but it can be empty (a game whose
-                // name carried no recognised tag), and then only the root's title is left.
-                string title = string.IsNullOrWhiteSpace(v.Version) ? Safe(() => game.Title) ?? "" : v.Version;
+                if (string.Equals(v.ApplicationPath ?? "", rootPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    // The root keeps this rom, so its saves stay with the root — but they have to
+                    // stop naming a version that is about to disappear, or they point at nothing.
+                    // Found by counting rather than by reading: five did exactly that on the first
+                    // run of this.
+                    DetachSaves(game, v, dm);
+                    game.TryRemoveAdditionalApplication(v);
+                    continue;
+                }
+
+                // What the combine stashed against this version, if it was OUR combine. LaunchBox
+                // records nothing, so an expand of its work falls back to re-deriving the title.
+                string vid = v.Id ?? "";
+                string kept = vid.Length > 0
+                    ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, vid, "Combine.Title") : null;
+                string dbid = vid.Length > 0
+                    ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, vid, "Combine.DatabaseID") : null;
+
+                string title = !string.IsNullOrEmpty(kept) ? kept : TitleFromFileName(v.ApplicationPath, v.Disc);
 
                 var g = dm.AddNewGame(title);
                 if (g == null) continue;
@@ -291,13 +336,110 @@ internal static class GameCombiner
                 Set(() => g.LastPlayedDate = v.LastPlayed);
                 Set(() => g.PlayCount = v.PlayCount);
                 Set(() => g.PlayTime = v.PlayTime);
+                // Disc and the side flags are NOT carried: a <Game> never holds them. LaunchBox
+                // folds the disc into the title instead, which TitleFromFileName reproduces.
+                if (!string.IsNullOrEmpty(dbid) && int.TryParse(dbid, out int id))
+                    Set(() => g.LaunchBoxDbId = id);
 
+                ReturnSaves(game, v, g, dm);
+                if (vid.Length > 0)
+                {
+                    LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.Title", null);
+                    LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.DatabaseID", null);
+                }
                 game.TryRemoveAdditionalApplication(v);
                 restored++;
             }
             catch { }
         }
         return restored;
+    }
+
+    /// <summary>Drops the version link from the root's own saves when that version goes away,
+    /// leaving them as plain game saves where they already were.</summary>
+    private static void DetachSaves(IGame root, HostAdditionalApplication version, HostDataManagerXml dm)
+    {
+        if (!Guid.TryParse(Safe(() => root.Id) ?? "", out var rgid)) return;
+        string vid = version.Id ?? "";
+        if (vid.Length == 0) return;
+
+        var store = dm.Store;
+        var rows = store.GetSubEntities(rgid, SaveEntity);
+        if (rows.Count == 0) return;
+
+        bool touched = false;
+        var kept = new List<Dictionary<string, string>>(rows.Count);
+        foreach (var row in rows)
+        {
+            row.TryGetValue("AdditionalApplicationId", out var owner);
+            if (!string.Equals(owner ?? "", vid, StringComparison.OrdinalIgnoreCase))
+            { kept.Add(new Dictionary<string, string>(row, StringComparer.Ordinal)); continue; }
+            touched = true;
+            var flat = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = rgid.ToString() };
+            foreach (var kv in row)
+                if (kv.Key != "GameId" && kv.Key != "AdditionalApplicationId") flat[kv.Key] = kv.Value;
+            kept.Add(flat);
+        }
+        if (touched) store.SetSubEntities(rgid, SaveEntity, kept);
+    }
+
+    /// <summary>The title LaunchBox gives a restored game. Not the version label — the file name,
+    /// cleaned the way its importer cleans one, with the disc folded back in.
+    ///
+    /// The cleaning rule was checked against 186 real file-name/title pairs from three separate
+    /// imports and got all of them: bracketed and parenthesised groups removed, underscores turned
+    /// into spaces, runs of whitespace collapsed, " - " turned into ": ".
+    ///
+    /// The disc suffix is what makes this differ from the importer, which leaves it off: the same
+    /// "Final Fantasy X [Disk.3].txt" imports as "Final Fantasy X" and expands as
+    /// "Final Fantasy X (Disc 3)". LaunchBox's own entry point takes the disc as a parameter
+    /// (NamingHelper.GetTitleFromFileName(path, int? disc, …)), which is the same story from the
+    /// other side.</summary>
+    internal static string TitleFromFileName(string path, int? disc)
+    {
+        string s;
+        try { s = System.IO.Path.GetFileNameWithoutExtension(path ?? ""); } catch { s = path ?? ""; }
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\([^)]*\)", " ");
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\[[^\]]*\]", " ");
+        s = s.Replace('_', ' ');
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+-\s+", ": ").Trim();
+        return disc.HasValue ? $"{s} (Disc {disc.Value})" : s;
+    }
+
+    /// <summary>Hands a version's saves back to the game it becomes. LaunchBox deletes them —
+    /// measured: 11 of 13 records gone after one expand, every file left on disk — which is the
+    /// same loss as the combine, in the other direction. Keeping them is what makes the round trip
+    /// actually round.</summary>
+    private static void ReturnSaves(IGame root, HostAdditionalApplication version, IGame restored, HostDataManagerXml dm)
+    {
+        if (!Guid.TryParse(Safe(() => root.Id) ?? "", out var rgid)) return;
+        if (!Guid.TryParse(Safe(() => restored.Id) ?? "", out var ngid)) return;
+        string vid = version.Id ?? "";
+        if (vid.Length == 0) return;
+
+        var store = dm.Store;
+        var all = store.GetSubEntities(rgid, SaveEntity);
+        if (all.Count == 0) return;
+
+        var stay = new List<Dictionary<string, string>>();
+        var move = new List<Dictionary<string, string>>();
+        foreach (var row in all)
+        {
+            row.TryGetValue("AdditionalApplicationId", out var owner);
+            if (!string.Equals(owner ?? "", vid, StringComparison.OrdinalIgnoreCase))
+            { stay.Add(new Dictionary<string, string>(row, StringComparer.Ordinal)); continue; }
+
+            // Back to a plain game save: the version it belonged to is about to stop existing.
+            var back = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = ngid.ToString() };
+            foreach (var kv in row)
+                if (kv.Key != "GameId" && kv.Key != "AdditionalApplicationId") back[kv.Key] = kv.Value;
+            move.Add(back);
+        }
+        if (move.Count == 0) return;
+
+        store.SetSubEntities(rgid, SaveEntity, stay);
+        store.SetSubEntities(ngid, SaveEntity, move);
     }
 
     /// <summary>Media follow only when the two entries are the SAME database game. Otherwise they

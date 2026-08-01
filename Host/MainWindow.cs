@@ -5709,13 +5709,14 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void ExpandSelectedGames(IGame[] games)
     {
         if (_dm is not HostDataManagerXml dm) return;
-        // Worth spelling out before it happens: expanding does NOT undo a combine. The database id
-        // is gone and the titles come back derived from the version labels.
+        // LaunchBox's own wording, verbatim, so the same action is not described in two different
+        // voices depending on which program you are in. The warning it used to carry about what is
+        // lost no longer applies: the database ID and the original title come back when the combine
+        // was ours, and the saves come back either way (see GameCombiner.Expand).
         if (MessageBox.Show(this,
-                "Each additional version becomes a game again.\n\n"
-                + "The database ID is not restored, and titles come back from the version labels — "
-                + "LaunchBox loses them the same way.\n\nContinue?",
-                "Expand", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+                "Additional application ROMs in the selected games will be expanded out into "
+                + "separate games. Are you sure you want to continue?",
+                "LiteBox", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
 
         int n = games.Sum(g => Games.GameCombiner.Expand(g, dm));
         if (n <= 0) return;

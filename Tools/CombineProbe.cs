@@ -52,5 +52,25 @@ internal static class CombineProbe
         return 0;
     }
 
+    /// <summary>Same idea in the other direction: expand a game's versions on a throwaway copy.</summary>
+    public static int RunExpand(string lbRoot, string gameId)
+    {
+        string dataDir = Path.Combine(lbRoot, "Data");
+        var store = GameStore.Load(Path.Combine(dataDir, "Platforms"), Path.Combine(dataDir, "probe.pending.db"));
+        store.ReadOnly = false;
+        var dm = new HostDataManagerXml(store, dataDir, Path.Combine(lbRoot, "Images")) { ReadOnly = false };
+        PluginHelper.DataManager = dm;
+
+        var game = dm.GetAllGames().FirstOrDefault(g =>
+            string.Equals(Safe(() => g.Id) ?? "", gameId, StringComparison.OrdinalIgnoreCase));
+        if (game == null) { Console.WriteLine($"[probe] game {gameId} not found"); return 1; }
+
+        int n = GameCombiner.Expand(game, dm);
+        dm.Save(true);
+        store.CloseLog();
+        Console.WriteLine($"[probe] restored {n}, {dm.GetAllGames().Length} games");
+        return 0;
+    }
+
     private static T? Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }
 }

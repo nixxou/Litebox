@@ -46,6 +46,7 @@ internal static class OptionKeys
     private static readonly string[] GameEmuGlob = { LiteBoxOption.ScopeGame, LiteBoxOption.ScopeEmulator, G };
     private static readonly string[] Game = { LiteBoxOption.ScopeGame };
     private static readonly string[] Platform = { LiteBoxOption.ScopePlatform };
+    private static readonly string[] Version = { LiteBoxOption.ScopeVersion };
 
     public static readonly OptionKeyDef[] All =
     {
@@ -55,6 +56,15 @@ internal static class OptionKeys
         new("ShutdownScreenPostReadyDisplayTime", GameEmuGlob, OptionType.String, OptionCache.Hot, "Gameplay/ProblemKeys"),
         new("ForceFrontendFocusOnShutdown",       GameEmuGlob, OptionType.Bool,   OptionCache.Hot, "Gameplay/ProblemKeys"),
         new("MonitorStartupShutdownWithProcess",  GameEmuGlob, OptionType.Bool,   OptionCache.Hot, "Gameplay/ProblemKeys"),
+
+        // ── What a Combine would otherwise destroy, kept beside the version it created ──
+        //    LaunchBox drops the absorbed game's DatabaseID and re-derives its title from the file
+        //    name, so expanding never gives either back. Stashed here against the version's own
+        //    GUID and handed back on expand. Only combines performed IN LiteBox record anything;
+        //    one done in LaunchBox leaves nothing to restore, and the expand falls back to
+        //    LaunchBox's own behaviour.
+        new("Combine.DatabaseID", Version, OptionType.String, OptionCache.Cold, "Combine"),
+        new("Combine.Title",      Version, OptionType.String, OptionCache.Cold, "Combine"),
 
         // ── Module master switches (LbModules; row absent = module default) ──
         new("Module.base",             Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
@@ -135,5 +145,5 @@ internal static class OptionKeys
     }
 
     public static readonly string[] AllScopes =
-    { LiteBoxOptionsDb.Global, LiteBoxOption.ScopeGame, LiteBoxOption.ScopeEmulator, LiteBoxOption.ScopePlatform, "playlist" };
+    { LiteBoxOptionsDb.Global, LiteBoxOption.ScopeGame, LiteBoxOption.ScopeEmulator, LiteBoxOption.ScopePlatform, "playlist", LiteBoxOption.ScopeVersion };
 }

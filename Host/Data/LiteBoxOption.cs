@@ -18,6 +18,9 @@ internal static class LiteBoxOption
     public const string ScopeEmulator = "emulator";
     public const string ScopeGame     = "game";
     public const string ScopePlatform = "platform";
+    /// <summary>An additional application (a game's "version"). Keyed by its own GUID, which is
+    /// stable across saves — LaunchBox keeps it as the row key.</summary>
+    public const string ScopeVersion  = "version";
 
     /// <summary>The raw per-entity override, or null = inherit (no row). Drives the tri-state UI.</summary>
     public static string? GetOverride(string scope, string entityId, string key)

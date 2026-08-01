@@ -112,8 +112,11 @@ internal static class GameCombiner
         v.Section = VersionSection;
         v.UseEmulator = true;
         v.ApplicationPath = Safe(() => source.ApplicationPath) ?? "";
-        v.Version = VersionLabelOf(source);
-        v.Name = $"Play {v.Version} Version...";
+        // Copied verbatim, empty included. There is no fall back to the title: a game whose name
+        // carried no recognised tag has an empty Version, and LaunchBox leaves the version's empty
+        // too rather than inventing a label from the title.
+        v.Version = Safe(() => source.Version) ?? "";
+        v.Name = VersionName(v.Version);
         // LaunchBox writes these empty rather than omitting them (<CommandLine />, <Region />);
         // only the dates are left out when they have no value.
         v.CommandLine = Safe(() => source.CommandLine) ?? "";
@@ -218,8 +221,9 @@ internal static class GameCombiner
         {
             try
             {
-                // The Version label is what the absorbed game was called (see VersionLabelOf), so
-                // it is the closest thing to its original title still on record.
+                // The Version label is what distinguished the absorbed game, so it is the closest
+                // thing to its original title still on record — but it can be empty (a game whose
+                // name carried no recognised tag), and then only the root's title is left.
                 string title = string.IsNullOrWhiteSpace(v.Version) ? Safe(() => game.Title) ?? "" : v.Version;
 
                 var g = dm.AddNewGame(title);
@@ -275,13 +279,12 @@ internal static class GameCombiner
         v.Priority = priority;
     }
 
-    /// <summary>What to call the version: the game's own Version field when it has one, else its
-    /// title — which is what makes an absorbed game recognisable in the root's version list.</summary>
-    private static string VersionLabelOf(IGame g)
-    {
-        string v = Safe(() => g.Version) ?? "";
-        return v.Trim().Length > 0 ? v.Trim() : (Safe(() => g.Title) ?? "");
-    }
+    /// <summary>The label shown in the versions list: "Play {version} Version...", with runs of
+    /// whitespace squeezed to one. Both halves of that were measured, not styled — a version of
+    /// "(Disc  3)" is named "Play (Disc 3) Version...", and an empty one gives "Play Version..."
+    /// rather than the double space a plain concatenation leaves behind.</summary>
+    private static string VersionName(string version) =>
+        System.Text.RegularExpressions.Regex.Replace($"Play {version} Version...", @"\s+", " ");
 
     private static void Set(Action a) { try { a(); } catch { } }
     private static T? Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }

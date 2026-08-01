@@ -238,7 +238,14 @@ internal sealed class LiteBoxConfig
     /// <summary>Move a game's media files when its title changes. OFF by default: LaunchBox itself
     /// does NOT do this, so it is a LiteBox addition, and it writes to the user's media folders.
     /// An opt-in is the honest default for behaviour that both deviates and touches files.</summary>
-    public bool RenameMediaWithGame   { get => GetBool("RenameMediaWithGame", false); set => SetBool("RenameMediaWithGame", value); }
+    /// <summary>Media follow a game's title. LaunchBox does NOT do this — it leaves them behind —
+    /// which is why it started as opt-in and off. It is now always on: leaving a renamed game with
+    /// no art is not a behaviour worth reproducing, and every path that moves media has since grown
+    /// the guards that made it risky (shared titles are copied, nothing is overwritten, orphans are
+    /// swept). The setting is kept as a constant rather than deleted so the choice can be handed
+    /// back without unpicking the call sites.</summary>
+    public const bool RenameMediaWithGameDefault = true;
+    public bool RenameMediaWithGame   { get => RenameMediaWithGameDefault; set { } }
     public bool UseImageCache         { get => GetBool("UseImageCache", true); set => SetBool("UseImageCache", value); }
     public bool UseGameCache          { get => GetBool("UseGameCache", true); set => SetBool("UseGameCache", value); }
     public bool UnloadGameCacheDuringGame { get => GetBool("UnloadGameCacheDuringGame", true); set => SetBool("UnloadGameCacheDuringGame", value); }

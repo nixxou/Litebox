@@ -33,6 +33,7 @@ internal static class MediaMergeSelfTest
         fail += Case("meme titre : les fichiers GUID sont bien deplaces", SameTitleGuidFiles);
         fail += Case("meme titre : les fichiers nominatifs sont laisses", SameTitlePlainUntouched);
         fail += Case("la forme de la destination est respectee", DestFormWins);
+        fail += Case("meme numero dans deux regions : les deux sont conserves", NumbersArePerFolder);
         Console.WriteLine(fail == 0 ? "[mediamerge] ALL PASS" : $"[mediamerge] {fail} FAILED");
         return fail == 0 ? 0 : 1;
     }
@@ -251,6 +252,28 @@ internal static class MediaMergeSelfTest
         if (item.To.Contains(DstId.ToString("D")))
             return "converti au format GUID alors que la destination est nominative";
         if (!Path.GetFileName(item.To).StartsWith(B)) return $"cible inattendue : {Path.GetFileName(item.To)}";
+        return null;
+    }
+
+    private static string NumbersArePerFolder(string root)
+    {
+        // Le motif le plus courant de la vraie bibliotheque : 625 jeux sur 652 presents dans
+        // plusieurs regions d'un meme type y reutilisent le meme numero. Un renommage ordinaire ne
+        // doit en decaler aucun — le plus petit -NN designe le media principal.
+        string world = Dir(root, "Images", Plat, "Box - Front", "World");
+        string na = Dir(root, "Images", Plat, "Box - Front", "North America");
+        Noise(Path.Combine(world, A + "-20.png"), 31);
+        Noise(Path.Combine(na, A + "-20.png"), 32);
+
+        var moves = GameMediaRenamer.Plan(root, SrcId, Plat, A, B, MediaNameForm.Plain).ToList();
+        if (moves.Count != 2) return $"{moves.Count} deplacements au lieu de 2";
+        foreach (var m in moves)
+            if (!Path.GetFileName(m.To).Equals(B + "-20.png", StringComparison.OrdinalIgnoreCase))
+                return $"numero decale : {Path.GetFileName(m.From)} -> {Path.GetFileName(m.To)}";
+        var res = GameMediaRenamer.Apply(moves);
+        if (res.Reached != 2) return $"{res.Reached} fichiers arrives au lieu de 2";
+        if (!File.Exists(Path.Combine(world, B + "-20.png"))) return "World n'a pas garde son -20";
+        if (!File.Exists(Path.Combine(na, B + "-20.png"))) return "North America n'a pas garde son -20";
         return null;
     }
 

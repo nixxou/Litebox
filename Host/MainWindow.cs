@@ -2005,11 +2005,6 @@ internal sealed class MainWindow : Form, IMessageFilter
                 () => _cfg.ReadOnly, v => _cfg.ReadOnly = v,
                 "When on, every editor that writes to the LaunchBox XMLs stays locked. LiteBox.ini itself is always writable.",
                 applyLive: () => { if (_dm is HostDataManagerXml hdm) hdm.ReadOnly = _cfg.ReadOnly; }),
-            Options.OptionItem.Toggle("General", "Rename media files when a game is renamed",
-                () => _cfg.RenameMediaWithGame, v => _cfg.RenameMediaWithGame = v,
-                "LaunchBox leaves images, videos, manuals and music behind when you rename a game — they stay "
-                + "under the old title and the game shows none. When on, LiteBox moves them with it. Two games "
-                + "sharing a file keep it (it is copied), and files are never deleted. Off while Read-only is on."),
             Options.OptionItem.Toggle("General", "Show \"game running\" screen on launch",
                 () => _cfg.ShowGameRunningScreen, v => _cfg.ShowGameRunningScreen = v),
             Options.OptionItem.Toggle("General", "Unload the game list while a game runs",
@@ -5702,8 +5697,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (MessageBox.Show(this,
                 $"Combine {games.Length} games into \"{S(Safe(() => root.Title))}\"?\n\n"
                 + "The absorbed games stop existing: their ID, database ID, title and manuals are "
-                + "lost, and so is any field a version cannot hold (genre, notes, rating…). "
-                + "Save games and save states are kept, and media are not touched.",
+                + "lost, and so is any field a version cannot hold (genre, notes, rating…).\n\n"
+                + "Media are pooled when the games are the same database entry; anything left with "
+                + "nothing pointing at it is deleted. Save games and save states are kept.",
                 "Combine", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
         // Documents have to be picked BEFORE the combine: the games that own them are about to stop
         // existing. Only the ones the destination does not already have are worth a question.
@@ -5718,40 +5714,17 @@ internal sealed class MainWindow : Form, IMessageFilter
         try { dm.FlushIfSafe(); } catch { }
         ReloadAfterGameChange();
 
-        // Media of games that were NOT the same database entry are still on disk with nothing
-        // pointing at them. Deleting is offered, never done: they may be the only copy.
-        if (outcome.OrphanedMedia.Count > 0) OfferToDeleteOrphanedMedia(outcome.OrphanedMedia);
+        // Media of games that were NOT the same database entry, plus whatever the filters turned
+        // down: nothing resolves them once the game is gone. They are removed rather than left —
+        // see MediaCleanup for why offering them turned out to be the worse of the two.
+        var swept = Media.MediaCleanup.Delete(outcome.OrphanedMedia, "combine");
 
-        string media = outcome.MediaMoved > 0 || outcome.MediaSkipped > 0
-            ? $"\n\n{outcome.MediaMoved} media file(s) pooled, {outcome.MediaSkipped} already present or too similar."
+        string media = outcome.MediaMoved > 0 || outcome.MediaSkipped > 0 || swept.Deleted > 0
+            ? $"\n\n{outcome.MediaMoved} media file(s) pooled, {outcome.MediaSkipped} already present or too "
+              + $"similar, {swept.Deleted} orphan(s) deleted."
             : "";
         MessageBox.Show(this, $"{outcome.Absorbed} game(s) combined into \"{S(Safe(() => root.Title))}\".{media}",
             "Combine", MessageBoxButtons.OK, MessageBoxIcon.Information);
-    }
-
-    /// <summary>Offers to delete media left behind by a combine between two DIFFERENT database
-    /// entries. Nothing references them any more, but "unreferenced" is not "unwanted" — they may
-    /// be the only copy of art someone spent time on, so the default is to keep them and the count
-    /// is spelled out before anything is removed.</summary>
-    private void OfferToDeleteOrphanedMedia(IReadOnlyList<string> files)
-    {
-        if (MessageBox.Show(this,
-                $"{files.Count} media file(s) belonged to the absorbed game(s) and were not pooled, "
-                + "because they are not the same database entry.\n\n"
-                + "Nothing points at them any more. Delete them?\n\n"
-                + "They stay on disk if you decline, and can be deleted by hand later.",
-                "Combine", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
-                MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-
-        int gone = 0, failed = 0;
-        foreach (var f in files)
-        {
-            try { if (System.IO.File.Exists(f)) { System.IO.File.Delete(f); gone++; } }
-            catch { failed++; }
-        }
-        if (failed > 0)
-            MessageBox.Show(this, $"{gone} deleted, {failed} could not be (in use or read-only).",
-                "Combine", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     private void ExpandSelectedGames(IGame[] games)

@@ -77,7 +77,9 @@ internal static class GameMediaSync
             // copy rather than move, or renaming this game would strip that one.
             bool sharedSource = FindRival(game, platform, oldTitle) != null;
 
-            int moved = Move(lbRoot, id, platform, oldTitle, newTitle, target, merge, sharedSource);
+            Guid.TryParse(Safe(() => rival?.Id) ?? "", out var destGuid);
+            int moved = Move(lbRoot, id, platform, oldTitle, newTitle, target, merge, sharedSource,
+                             merge ? destGuid : default);
 
             // Only a real collision drags the other game along: a plain name belongs to a TITLE
             // rather than to a game, so leaving both plain would make the two indistinguishable.
@@ -149,10 +151,27 @@ internal static class GameMediaSync
     }
 
     private static int Move(string lbRoot, Guid id, string platform, string diskTitle, string targetTitle,
-        MediaNameForm form, bool merge = false, bool sharedSource = false)
+        MediaNameForm form, bool merge = false, bool sharedSource = false, Guid destId = default)
     {
         var plan = GameMediaRenamer.Plan(lbRoot, id, platform, diskTitle, targetTitle, form, merge, sharedSource);
         if (plan.Count == 0) return 0;
+
+        // A MERGE goes through the same filters a combine uses. Two ways of putting one game's media
+        // on another's title were giving two different results: the combine dropped exact duplicates
+        // and near-identical pictures, the rename piled everything up. Same destination, same
+        // question, so the same answer.
+        if (merge)
+        {
+            var decided = GameMediaMerge.Plan(lbRoot, platform, id, diskTitle, destId, targetTitle,
+                                              Dedup.DupEngineMode.DHash,
+                                              Dedup.DedupEngine.DefaultThreshold(Dedup.DupEngineMode.DHash));
+            var keep = new HashSet<string>(decided.Moves.Select(i => i.From), StringComparer.OrdinalIgnoreCase);
+            var left = plan.Where(m => !keep.Contains(m.From)).Select(m => m.From).ToList();
+            plan = plan.Where(m => keep.Contains(m.From)).ToList();
+            // What the filters turned down has nobody left to belong to once the rename lands.
+            MediaCleanup.Delete(left, "merge par renommage");
+            if (plan.Count == 0) return 0;
+        }
         var result = GameMediaRenamer.Apply(plan);
         // One line per rename that was not perfectly clean, so a half-moved collection can be
         // explained after the fact instead of looking like the feature failing to run.

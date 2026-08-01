@@ -40,7 +40,7 @@ internal static class GlobalDefaults
         ("TwoLineRows",                     "true"),
         ("PosterOwnerDraw",                 "false"),
         ("TitleSortNormalization",          "simple"),      // without | simple | advanced
-        ("RenameMediaWithGame",             "false"),       // LaunchBox does not do this — opt-in
+        ("RenameMediaWithGame",             "true"),        // always on; see LiteBoxConfig
         // Automatic cache cleaning (Options → Caches)
         ("CleanThumbsImages",               "true"),
         ("CleanThumbsVideo",                "true"),

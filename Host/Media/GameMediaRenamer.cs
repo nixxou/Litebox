@@ -140,13 +140,32 @@ internal static class GameMediaRenamer
             // Mixed: already safe, and converting would un-hide files and force a renumbering.
             if (plain.Count > 0 && guid.Count > 0) continue;
 
+            // NUMBERING IS PER FOLDER, not per unit. LaunchBox numbers that way and the real data
+            // settles it: 625 of 652 games present in several regions of one image type reuse the
+            // same number across them — "Box - Front/World/X-20.png" and
+            // "Box - Front/North America/X-20.png" both exist. Scoping to the unit made the second
+            // region's file get bumped to a free number on an ordinary rename, and the number is
+            // not decorative: the lowest -NN is the one shown.
+            //
+            // Everything ELSE stays unit-wide — which form to use, whether the unit is mixed —
+            // because that is what the display cache filters on.
+            var takenByDir = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+            var nextByDir = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            HashSet<int> Taken(string file, string sani, MediaNameForm form)
+            {
+                string dir = Path.GetDirectoryName(file) ?? "";
+                if (!takenByDir.TryGetValue(dir, out var t))
+                    takenByDir[dir] = t = TakenNumbers(new List<string> { dir }, id, sani, form);
+                return t;
+            }
+
             if (target == MediaNameForm.Guid)
             {
                 if (guid.Count > 0 || plain.Count == 0) continue;   // already there, or nothing to move
-                var taken = TakenNumbers(unit, id, toSani.Length > 0 ? toSani : fromSani, MediaNameForm.Guid);
+                string sani = toSani.Length > 0 ? toSani : fromSani;
                 foreach (var (path, num) in plain.OrderBy(p => p.Num))
                 {
-                    int n = FreeNumber(taken, num);
+                    int n = FreeNumber(Taken(path, sani, MediaNameForm.Guid), num);
                     moves.Add(new MediaMove(path, GuidPath(path, fromSani, id, "", n), sharedSource));
                 }
             }
@@ -157,10 +176,9 @@ internal static class GameMediaRenamer
                 // the whole unit stays in GUID form rather than half-converting it into a mixed
                 // state, which would hide whatever we did convert.
                 if (guid.Any(g => g.Suffix.Length > 0)) continue;
-                var taken = TakenNumbers(unit, id, toSani, MediaNameForm.Plain);
                 foreach (var (path, num, _) in guid.OrderBy(g => g.Num))
                 {
-                    int n = FreeNumber(taken, num);
+                    int n = FreeNumber(Taken(path, toSani, MediaNameForm.Plain), num);
                     moves.Add(new MediaMove(path, PlainPath(path, toSani, n)));
                 }
             }
@@ -170,11 +188,14 @@ internal static class GameMediaRenamer
                 // the same game (same database id), its files are the destination and must not
                 // move — ours join them, numbered AFTER the ones already there so the destination
                 // keeps both its files and its order.
-                var taken = TakenNumbers(unit, id, toSani, MediaNameForm.Plain);
-                int next = append && taken.Count > 0 ? taken.Max() + 1 : 0;
                 foreach (var (path, num) in plain.OrderBy(p => p.Num))
                 {
-                    int n = FreeNumber(taken, append ? next++ : num);
+                    var taken = Taken(path, toSani, MediaNameForm.Plain);
+                    string dir = Path.GetDirectoryName(path) ?? "";
+                    if (!nextByDir.TryGetValue(dir, out int next))
+                        nextByDir[dir] = next = taken.Count > 0 ? taken.Max() + 1 : 0;
+                    int n = FreeNumber(taken, append ? next : num);
+                    if (append) nextByDir[dir] = next + 1;
                     moves.Add(new MediaMove(path, PlainPath(path, toSani, n), sharedSource));
                 }
             }

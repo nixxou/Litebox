@@ -1397,15 +1397,25 @@ internal sealed class GameStore
         SetOrRemove(ge, field, value);
     }
 
-    // We touch the field we were asked to touch and nothing else. LaunchBox does NOT: any <Game>
-    // row it writes comes back normalised to its full column set — 100 always, plus 10 that only
-    // appear when set — so a game it has edited carries ~37 empty elements ours leaves absent.
+    // We touch the field we were asked to touch and nothing else. LaunchBox does NOT: it rewrites
+    // the whole row from its typed DataSet, so a game it has saved carries every column of its
+    // schema, empty ones included — ~37 more elements than the same row after we edit it.
     //
-    // Deliberately not reproduced (decided 2026-07-31). Empty and absent read identically, so the
-    // files differ without either losing anything; matching it would mean hardcoding that column
-    // list and keeping it in step with LaunchBox releases, which is the exact fragility the child
-    // collections were just freed from. LaunchBox restores them itself the next time it saves the
-    // game. Re-open this only with evidence that something actually reads the difference.
+    // DELIBERATELY NOT REPRODUCED. Reopened once, measured properly, and closed again for a better
+    // reason than the first time:
+    //
+    //   • LaunchBox has no single shape to match. Its importer writes 54 columns; its save path
+    //     writes 98, plus 5 that appear only when set. Normalising to the save shape would leave us
+    //     MORE normalised than LaunchBox on any freshly imported game — moving away from it while
+    //     trying to match it.
+    //   • Empty and absent read identically, so neither side loses anything.
+    //   • It would mean hardcoding a 103-column list tied to this LaunchBox version — the exact
+    //     fragility the child collections were just freed from.
+    //   • And it would turn every one-field edit into a 40-line rewrite, which is precisely what
+    //     makes it hard to see what LiteBox actually changed.
+    //
+    // LaunchBox restores the columns itself the next time it saves the game. Re-open this only with
+    // evidence that something actually reads the difference.
     //
     // LB omits empty/default fields, so a cleared value removes the element rather than writing it empty.
     private static void SetOrRemove(XElement parent, string name, string value)

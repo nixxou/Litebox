@@ -108,7 +108,17 @@ internal static class GameCombiner
                 // anything while we find out. If it turns out to drop them, that is a difference
                 // worth keeping.
                 foreach (var inner in AddAppsOf(g))
-                    CopyAddApp(root, inner, IsVersion(inner) ? ++priority : (int?)null);
+                {
+                    var moved = CopyAddApp(root, inner, IsVersion(inner) ? ++priority : (int?)null);
+                    // Remember whose child it was, so the expand can give it back instead of
+                    // promoting it into a game of its own.
+                    if (moved?.Id is string mid && mid.Length > 0 && (Safe(() => g.Id) ?? "").Length > 0)
+                    {
+                        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, mid, "Combine.OwnerId", Safe(() => g.Id));
+                        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, mid, "Combine.Priority",
+                            inner.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                }
 
                 var version = AddVersion(root, g, ++priority);
                 RememberForExpand(g, version);
@@ -311,9 +321,27 @@ internal static class GameCombiner
 
         string platform = Safe(() => game.Platform) ?? "";
         string rootPath = Safe(() => game.ApplicationPath) ?? "";
+
+        // Children the combine hoisted here from an absorbed game, grouped by who owned them. They
+        // must NOT be expanded into games of their own — they were never games. They go back onto
+        // the game they belonged to, once it has been restored.
+        var owned = new Dictionary<string, List<HostAdditionalApplication>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var a in AddAppsOf(game))
+        {
+            string aid = a.Id ?? "";
+            string owner = aid.Length > 0
+                ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, aid, "Combine.OwnerId") : null;
+            if (string.IsNullOrEmpty(owner)) continue;
+            if (!owned.TryGetValue(owner, out var l)) owned[owner] = l = new List<HostAdditionalApplication>();
+            l.Add(a);
+        }
+
         int restored = 0;
         foreach (var v in versions)
         {
+            // Handled with its owner, not on its own.
+            if (owned.Values.Any(l => l.Contains(v))) continue;
+
             try
             {
                 if (string.Equals(v.ApplicationPath ?? "", rootPath, StringComparison.OrdinalIgnoreCase))
@@ -364,6 +392,22 @@ internal static class GameCombiner
                     Set(() => g.LaunchBoxDbId = id);
 
                 ReturnSaves(game, v, g, dm);
+
+                // Give the restored game back the children it owned before the combine.
+                if (!string.IsNullOrEmpty(oldId) && owned.TryGetValue(oldId, out var kids))
+                    foreach (var kid in kids)
+                    {
+                        string kid0 = (kid.Id ?? "").Length > 0
+                            ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, kid.Id, "Combine.Priority") : null;
+                        var moved = CopyAddApp(g, kid,
+                            int.TryParse(kid0 ?? "", out int p0) ? p0 : (int?)null);
+                        if (moved != null && (kid.Id ?? "").Length > 0)
+                        {
+                            LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, kid.Id, "Combine.OwnerId", null);
+                            LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, kid.Id, "Combine.Priority", null);
+                        }
+                        game.TryRemoveAdditionalApplication(kid);
+                    }
                 if (vid.Length > 0)
                 {
                     LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.Title", null);
@@ -507,9 +551,9 @@ internal static class GameCombiner
     /// <summary>Moves one additional application onto the root. Versions are renumbered into the
     /// root's sequence; anything else keeps the priority it had, which for a document is its
     /// position in the manuals list and means nothing to the version ordering.</summary>
-    private static void CopyAddApp(IGame root, HostAdditionalApplication src, int? priority)
+    private static HostAdditionalApplication CopyAddApp(IGame root, HostAdditionalApplication src, int? priority)
     {
-        if (root.AddNewAdditionalApplication() is not HostAdditionalApplication v) return;
+        if (root.AddNewAdditionalApplication() is not HostAdditionalApplication v) return null;
         v.Section = src.Section;
         v.UseEmulator = src.UseEmulator;
         v.ApplicationPath = src.ApplicationPath;
@@ -529,6 +573,7 @@ internal static class GameCombiner
         v.SideA = src.SideA;
         v.SideB = src.SideB;
         v.Priority = priority ?? src.Priority;
+        return v;
     }
 
     /// <summary>The label shown in the versions list: "Play {version} Version...", with runs of

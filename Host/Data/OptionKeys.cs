@@ -66,6 +66,12 @@ internal static class OptionKeys
         new("Combine.DatabaseID", Version, OptionType.String, OptionCache.Cold, "Combine"),
         new("Combine.Title",      Version, OptionType.String, OptionCache.Cold, "Combine"),
         new("Combine.GameId",     Version, OptionType.String, OptionCache.Cold, "Combine"),
+        // Whose child this additional application was before the combine hoisted it onto the root.
+        // Without it an expand promotes an absorbed game's own versions into standalone games and
+        // strands its manuals on the root: 134 games went to 184 on one measured round trip.
+        new("Combine.OwnerId",    Version, OptionType.String, OptionCache.Cold, "Combine"),
+        // And the place it had in its owner's list, since hoisting renumbers it into the root's.
+        new("Combine.Priority",   Version, OptionType.String, OptionCache.Cold, "Combine"),
 
         // ── Module master switches (LbModules; row absent = module default) ──
         new("Module.base",             Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),

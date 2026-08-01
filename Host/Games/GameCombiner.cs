@@ -337,13 +337,11 @@ internal static class GameCombiner
                 if (g == null) continue;
                 Set(() => g.Platform = platform);
                 Set(() => g.ApplicationPath = v.ApplicationPath);
-                // A version with no label leaves the restored game's Version to be derived.
-                // LaunchBox writes the file name without its extension there — which on every one
-                // of the twelve observed cases is also exactly the title, so the two cannot be told
-                // apart from this data; the raw name is used as the less processed of the two.
-                Set(() => g.Version = !string.IsNullOrEmpty(v.Version)
-                    ? v.Version
-                    : System.IO.Path.GetFileNameWithoutExtension(v.ApplicationPath ?? ""));
+                // NOT copied from the version — re-derived from the file name, always. Every
+                // earlier experiment was blind to this because the label happened to equal what the
+                // name would give; feeding 130 versions a deliberately wrong label ("ALTERED-004"
+                // on a file called "… [Side A].txt") showed the label being ignored outright.
+                Set(() => g.Version = VersionFromFileName(v.ApplicationPath));
                 Set(() => g.Developer = v.Developer);
                 Set(() => g.Publisher = v.Publisher);
                 Set(() => g.Region = v.Region);
@@ -423,6 +421,20 @@ internal static class GameCombiner
         s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
         s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+-\s+", ": ").Trim();
         return disc.HasValue ? $"{s} (Disc {disc.Value})" : s;
+    }
+
+    /// <summary>The Version a restored game gets: the file name from its first bracket or
+    /// parenthesis to the end, or the whole name when it has neither.
+    ///
+    /// Measured on 129 restored games, all of them. 99 also matched the label the version carried,
+    /// which is exactly why copying the label passed every experiment until one was run with the
+    /// labels deliberately falsified.</summary>
+    internal static string VersionFromFileName(string path)
+    {
+        string s;
+        try { s = System.IO.Path.GetFileNameWithoutExtension(path ?? ""); } catch { s = path ?? ""; }
+        int i = s.IndexOfAny(new[] { '(', '[' });
+        return i >= 0 ? s.Substring(i) : s;
     }
 
     /// <summary>Hands a version's saves back to the game it becomes. LaunchBox deletes them —

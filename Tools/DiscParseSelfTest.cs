@@ -103,8 +103,9 @@ internal static class DiscParseSelfTest
         fail += RunSides();
         fail += RunFfx();
         fail += RunTitles();
+        fail += RunVersions();
         Console.WriteLine(fail == 0
-            ? $"[disc] ALL PASS ({Cases.Length + SideCases.Length + FfxCases.Length} notations + {TitleCases.Length} titres, toutes relevees sur LaunchBox)"
+            ? $"[disc] ALL PASS ({Cases.Length + SideCases.Length + FfxCases.Length} notations + {TitleCases.Length} titres + {VersionCases.Length} versions, toutes relevees sur LaunchBox)"
             : $"[disc] {fail} FAILED");
         return fail == 0 ? 0 : 1;
     }
@@ -490,6 +491,159 @@ internal static class DiscParseSelfTest
             if (got != want)
             {
                 Console.WriteLine($"[disc] FAIL title {name,-44} attendu=\"{want}\" obtenu=\"{got}\"");
+                fail++;
+            }
+        }
+        return fail;
+    }
+
+    // The Version a restored game gets. NOT the label the version carried — every pair below came
+    // from an expand where 30 of the labels had been deliberately falsified ("ALTERED-004" on a file
+    // called "… [Side A].txt") and LaunchBox ignored them outright, deriving from the file name
+    // instead. 99 of the other cases agree with the label, which is exactly why copying it survived
+    // three experiments before this one.
+    private static readonly (string Name, string Version)[] VersionCases =
+    {
+        (@"(Disc 3) Final Fantasy X", @"(Disc 3) Final Fantasy X"),
+        (@"Final Fantasy X ( Disc 3 )", @"( Disc 3 )"),
+        (@"Final Fantasy X (CD 3)", @"(CD 3)"),
+        (@"Final Fantasy X (CD 3) (Disc 7)", @"(CD 3) (Disc 7)"),
+        (@"Final Fantasy X (CD-3)", @"(CD-3)"),
+        (@"Final Fantasy X (CD.3)", @"(CD.3)"),
+        (@"Final Fantasy X (CD3)", @"(CD3)"),
+        (@"Final Fantasy X (CD_3)", @"(CD_3)"),
+        (@"Final Fantasy X (D 3)", @"(D 3)"),
+        (@"Final Fantasy X (DVD 3)", @"(DVD 3)"),
+        (@"Final Fantasy X (Dis 3)", @"(Dis 3)"),
+        (@"Final Fantasy X (Disc  3)", @"(Disc  3)"),
+        (@"Final Fantasy X (Disc 03)", @"(Disc 03)"),
+        (@"Final Fantasy X (Disc 3 Side B)", @"(Disc 3 Side B)"),
+        (@"Final Fantasy X (Disc 3 of 5) (Disc 8)", @"(Disc 3 of 5) (Disc 8)"),
+        (@"Final Fantasy X (Disc 3)", @"(Disc 3)"),
+        (@"Final Fantasy X (Disc 3) (Disc 7)", @"(Disc 3) (Disc 7)"),
+        (@"Final Fantasy X (Disc 3) (Side B)", @"(Disc 3) (Side B)"),
+        (@"Final Fantasy X (Disc 3) [Rev A]", @"(Disc 3) [Rev A]"),
+        (@"Final Fantasy X (Disc 3a)", @"(Disc 3a)"),
+        (@"Final Fantasy X (Disc-3)", @"(Disc-3)"),
+        (@"Final Fantasy X (Disc.3)", @"(Disc.3)"),
+        (@"Final Fantasy X (Disc3)", @"(Disc3)"),
+        (@"Final Fantasy X (Disc3a)", @"(Disc3a)"),
+        (@"Final Fantasy X (Disc_3)", @"(Disc_3)"),
+        (@"Final Fantasy X (Discs 3)", @"(Discs 3)"),
+        (@"Final Fantasy X (Disk 3)", @"(Disk 3)"),
+        (@"Final Fantasy X (Disk-3)", @"(Disk-3)"),
+        (@"Final Fantasy X (Disk.3)", @"(Disk.3)"),
+        (@"Final Fantasy X (Disk3)", @"(Disk3)"),
+        (@"Final Fantasy X (Disk_3)", @"(Disk_3)"),
+        (@"Final Fantasy X (Disque 3)", @"(Disque 3)"),
+        (@"Final Fantasy X (Face A)", @"(Face A)"),
+        (@"Final Fantasy X (Face B)", @"(Face B)"),
+        (@"Final Fantasy X (Face-A)", @"(Face-A)"),
+        (@"Final Fantasy X (Face-B)", @"(Face-B)"),
+        (@"Final Fantasy X (Face.A)", @"(Face.A)"),
+        (@"Final Fantasy X (Face.B)", @"(Face.B)"),
+        (@"Final Fantasy X (FaceA)", @"(FaceA)"),
+        (@"Final Fantasy X (FaceB)", @"(FaceB)"),
+        (@"Final Fantasy X (Face_A)", @"(Face_A)"),
+        (@"Final Fantasy X (Face_B)", @"(Face_B)"),
+        (@"Final Fantasy X (Rev A Disc 3)", @"(Rev A Disc 3)"),
+        (@"Final Fantasy X (Rev A) (Disc 3)", @"(Rev A) (Disc 3)"),
+        (@"Final Fantasy X (Side 1)", @"(Side 1)"),
+        (@"Final Fantasy X (Side 2)", @"(Side 2)"),
+        (@"Final Fantasy X (Side A)", @"(Side A)"),
+        (@"Final Fantasy X (Side A1)", @"(Side A1)"),
+        (@"Final Fantasy X (Side B)", @"(Side B)"),
+        (@"Final Fantasy X (Side B) (Disc 3)", @"(Side B) (Disc 3)"),
+        (@"Final Fantasy X (Side C)", @"(Side C)"),
+        (@"Final Fantasy X (Side-A)", @"(Side-A)"),
+        (@"Final Fantasy X (Side-B)", @"(Side-B)"),
+        (@"Final Fantasy X (Side.A)", @"(Side.A)"),
+        (@"Final Fantasy X (Side.B)", @"(Side.B)"),
+        (@"Final Fantasy X (SideA)", @"(SideA)"),
+        (@"Final Fantasy X (SideB)", @"(SideB)"),
+        (@"Final Fantasy X (Side_A)", @"(Side_A)"),
+        (@"Final Fantasy X (Side_B)", @"(Side_B)"),
+        (@"Final Fantasy X (Sides A)", @"(Sides A)"),
+        (@"Final Fantasy X (SuperDisc 3)", @"(SuperDisc 3)"),
+        (@"Final Fantasy X (The Disc 3)", @"(The Disc 3)"),
+        (@"Final Fantasy X - Disc 3", @"Final Fantasy X - Disc 3"),
+        (@"Final Fantasy X - Disc-3", @"Final Fantasy X - Disc-3"),
+        (@"Final Fantasy X - Disc.3", @"Final Fantasy X - Disc.3"),
+        (@"Final Fantasy X - Disc3", @"Final Fantasy X - Disc3"),
+        (@"Final Fantasy X - Disc_3", @"Final Fantasy X - Disc_3"),
+        (@"Final Fantasy X - Side A", @"Final Fantasy X - Side A"),
+        (@"Final Fantasy X - Side B", @"Final Fantasy X - Side B"),
+        (@"Final Fantasy X - Side-A", @"Final Fantasy X - Side-A"),
+        (@"Final Fantasy X - Side-B", @"Final Fantasy X - Side-B"),
+        (@"Final Fantasy X - Side.A", @"Final Fantasy X - Side.A"),
+        (@"Final Fantasy X - Side.B", @"Final Fantasy X - Side.B"),
+        (@"Final Fantasy X - SideA", @"Final Fantasy X - SideA"),
+        (@"Final Fantasy X - SideB", @"Final Fantasy X - SideB"),
+        (@"Final Fantasy X - Side_A", @"Final Fantasy X - Side_A"),
+        (@"Final Fantasy X - Side_B", @"Final Fantasy X - Side_B"),
+        (@"Final Fantasy X Disc 3", @"Final Fantasy X Disc 3"),
+        (@"Final Fantasy X Disc-3", @"Final Fantasy X Disc-3"),
+        (@"Final Fantasy X Disc.3", @"Final Fantasy X Disc.3"),
+        (@"Final Fantasy X Disc3", @"Final Fantasy X Disc3"),
+        (@"Final Fantasy X Disc_3", @"Final Fantasy X Disc_3"),
+        (@"Final Fantasy X Side A", @"Final Fantasy X Side A"),
+        (@"Final Fantasy X Side B", @"Final Fantasy X Side B"),
+        (@"Final Fantasy X Side-A", @"Final Fantasy X Side-A"),
+        (@"Final Fantasy X Side-B", @"Final Fantasy X Side-B"),
+        (@"Final Fantasy X Side.A", @"Final Fantasy X Side.A"),
+        (@"Final Fantasy X Side.B", @"Final Fantasy X Side.B"),
+        (@"Final Fantasy X SideA", @"Final Fantasy X SideA"),
+        (@"Final Fantasy X SideB", @"Final Fantasy X SideB"),
+        (@"Final Fantasy X Side_A", @"Final Fantasy X Side_A"),
+        (@"Final Fantasy X Side_B", @"Final Fantasy X Side_B"),
+        (@"Final Fantasy X [CD 3]", @"[CD 3]"),
+        (@"Final Fantasy X [CD-3]", @"[CD-3]"),
+        (@"Final Fantasy X [CD.3]", @"[CD.3]"),
+        (@"Final Fantasy X [CD3]", @"[CD3]"),
+        (@"Final Fantasy X [CD_3]", @"[CD_3]"),
+        (@"Final Fantasy X [Disc 3]", @"[Disc 3]"),
+        (@"Final Fantasy X [Disc-3]", @"[Disc-3]"),
+        (@"Final Fantasy X [Disc.3]", @"[Disc.3]"),
+        (@"Final Fantasy X [Disc3]", @"[Disc3]"),
+        (@"Final Fantasy X [Disc_3]", @"[Disc_3]"),
+        (@"Final Fantasy X [Disk 3]", @"[Disk 3]"),
+        (@"Final Fantasy X [Disk-3]", @"[Disk-3]"),
+        (@"Final Fantasy X [Disk.3]", @"[Disk.3]"),
+        (@"Final Fantasy X [Disk3]", @"[Disk3]"),
+        (@"Final Fantasy X [Disk_3]", @"[Disk_3]"),
+        (@"Final Fantasy X [Face A]", @"[Face A]"),
+        (@"Final Fantasy X [Face B]", @"[Face B]"),
+        (@"Final Fantasy X [Face-A]", @"[Face-A]"),
+        (@"Final Fantasy X [Face-B]", @"[Face-B]"),
+        (@"Final Fantasy X [Face.A]", @"[Face.A]"),
+        (@"Final Fantasy X [Face.B]", @"[Face.B]"),
+        (@"Final Fantasy X [FaceA]", @"[FaceA]"),
+        (@"Final Fantasy X [FaceB]", @"[FaceB]"),
+        (@"Final Fantasy X [Face_A]", @"[Face_A]"),
+        (@"Final Fantasy X [Face_B]", @"[Face_B]"),
+        (@"Final Fantasy X [Rev A] (Disc 3)", @"[Rev A] (Disc 3)"),
+        (@"Final Fantasy X [Side A]", @"[Side A]"),
+        (@"Final Fantasy X [Side B]", @"[Side B]"),
+        (@"Final Fantasy X [Side-A]", @"[Side-A]"),
+        (@"Final Fantasy X [Side-B]", @"[Side-B]"),
+        (@"Final Fantasy X [Side.A]", @"[Side.A]"),
+        (@"Final Fantasy X [Side.B]", @"[Side.B]"),
+        (@"Final Fantasy X [SideA]", @"[SideA]"),
+        (@"Final Fantasy X [SideB]", @"[SideB]"),
+        (@"Final Fantasy X [Side_A]", @"[Side_A]"),
+        (@"Final Fantasy X [Side_B]", @"[Side_B]"),
+        (@"[Disc 3] Final Fantasy X", @"[Disc 3] Final Fantasy X"),
+    };
+
+    private static int RunVersions()
+    {
+        int fail = 0;
+        foreach (var (name, want) in VersionCases)
+        {
+            string got = GameCombiner.VersionFromFileName(name + ".txt");
+            if (got != want)
+            {
+                Console.WriteLine($"[disc] FAIL version {name,-42} attendu=<{want}> obtenu=<{got}>");
                 fail++;
             }
         }

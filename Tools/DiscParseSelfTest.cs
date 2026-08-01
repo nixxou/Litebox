@@ -104,8 +104,9 @@ internal static class DiscParseSelfTest
         fail += RunFfx();
         fail += RunTitles();
         fail += RunVersions();
+        fail += RunEdges();
         Console.WriteLine(fail == 0
-            ? $"[disc] ALL PASS ({Cases.Length + SideCases.Length + FfxCases.Length} notations + {TitleCases.Length} titres + {VersionCases.Length} versions, toutes relevees sur LaunchBox)"
+            ? $"[disc] ALL PASS ({Cases.Length + SideCases.Length + FfxCases.Length} notations + {TitleCases.Length} titres + {VersionCases.Length} versions + limites, toutes relevees sur LaunchBox)"
             : $"[disc] {fail} FAILED");
         return fail == 0 ? 0 : 1;
     }
@@ -647,6 +648,37 @@ internal static class DiscParseSelfTest
                 fail++;
             }
         }
+        return fail;
+    }
+
+    // Entrees limites : rien de tout cela n'a ete observe sur LaunchBox, mais un nom vide, nul ou
+    // absurde arrive des qu'un ApplicationPath est vide — et le combine tourne alors sur des donnees
+    // que personne n'a choisies. Le contrat teste ici est simplement : pas d'exception, pas de
+    // valeur inventee.
+    private static int RunEdges()
+    {
+        int fail = 0;
+        void Check(string what, Func<object> f, object want)
+        {
+            object got;
+            try { got = f(); }
+            catch (Exception ex) { Console.WriteLine($"[disc] FAIL edge {what}: {ex.GetType().Name}"); fail++; return; }
+            if (!Equals(got, want)) { Console.WriteLine($"[disc] FAIL edge {what}: attendu <{want}> obtenu <{got}>"); fail++; }
+        }
+        Check("DiscIn(null)",            () => GameCombiner.DiscIn(null), null);
+        Check("DiscIn(vide)",            () => GameCombiner.DiscIn(""), null);
+        Check("SideIn(null)",            () => GameCombiner.SideIn(null), null);
+        Check("SideIn(vide)",            () => GameCombiner.SideIn(""), null);
+        Check("Titre(null)",             () => GameCombiner.TitleFromFileName(null, null), "");
+        Check("Titre(vide)",             () => GameCombiner.TitleFromFileName("", null), "");
+        Check("Titre(que des tags)",     () => GameCombiner.TitleFromFileName("(a) [b].txt", null), "");
+        Check("Titre(disque sans nom)",  () => GameCombiner.TitleFromFileName("(a).txt", 3), " (Disc 3)");
+        Check("Version(null)",           () => GameCombiner.VersionFromFileName(null), "");
+        Check("Version(vide)",           () => GameCombiner.VersionFromFileName(""), "");
+        Check("Version(crochet en tete)", () => GameCombiner.VersionFromFileName("[a] jeu.txt"), "[a] jeu");
+        // Un tres grand nombre de disque ne doit pas deborder en silence.
+        Check("Disc(2147483648)",        () => GameCombiner.DiscIn("jeu (Disc 2147483648)"), null);
+        Check("Disc(2147483647)",        () => GameCombiner.DiscIn("jeu (Disc 2147483647)"), 2147483647);
         return fail;
     }
 

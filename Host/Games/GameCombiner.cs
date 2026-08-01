@@ -99,9 +99,16 @@ internal static class GameCombiner
             {
                 MergeMediaIfSameEntry(g, root);
 
-                // The absorbed game's OWN versions come along, or they would vanish with it.
-                foreach (var inner in VersionsOf(g))
-                    CopyVersion(root, inner, ++priority);
+                // EVERYTHING the absorbed game carried comes along, not just its versions: its
+                // manuals (Section=Document) and any plain additional applications too. They used
+                // to be left behind, which meant destroyed once deletion started taking the whole
+                // subtree — two manuals silently gone on the first game that had any.
+                //
+                // LaunchBox's behaviour here is NOT known; this is the choice that does not lose
+                // anything while we find out. If it turns out to drop them, that is a difference
+                // worth keeping.
+                foreach (var inner in AddAppsOf(g))
+                    CopyAddApp(root, inner, IsVersion(inner) ? ++priority : (int?)null);
 
                 var version = AddVersion(root, g, ++priority);
                 RememberForExpand(g, version);
@@ -481,10 +488,29 @@ internal static class GameCombiner
         GameMediaSync.MergeInto(source, root);
     }
 
-    private static void CopyVersion(IGame root, HostAdditionalApplication src, int priority)
+    /// <summary>Every additional application a game carries, whatever its section.</summary>
+    private static List<HostAdditionalApplication> AddAppsOf(IGame game)
+    {
+        var result = new List<HostAdditionalApplication>();
+        try
+        {
+            foreach (var a in game?.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>())
+                if (a is HostAdditionalApplication h) result.Add(h);
+        }
+        catch { }
+        return result;
+    }
+
+    private static bool IsVersion(HostAdditionalApplication a)
+        => string.Equals(a.Section, VersionSection, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Moves one additional application onto the root. Versions are renumbered into the
+    /// root's sequence; anything else keeps the priority it had, which for a document is its
+    /// position in the manuals list and means nothing to the version ordering.</summary>
+    private static void CopyAddApp(IGame root, HostAdditionalApplication src, int? priority)
     {
         if (root.AddNewAdditionalApplication() is not HostAdditionalApplication v) return;
-        v.Section = VersionSection;
+        v.Section = src.Section;
         v.UseEmulator = src.UseEmulator;
         v.ApplicationPath = src.ApplicationPath;
         v.Version = src.Version;
@@ -499,7 +525,10 @@ internal static class GameCombiner
         v.LastPlayed = src.LastPlayed;
         v.PlayCount = src.PlayCount;
         v.PlayTime = src.PlayTime;
-        v.Priority = priority;
+        v.CommandLine = src.CommandLine;
+        v.SideA = src.SideA;
+        v.SideB = src.SideB;
+        v.Priority = priority ?? src.Priority;
     }
 
     /// <summary>The label shown in the versions list: "Play {version} Version...", with runs of

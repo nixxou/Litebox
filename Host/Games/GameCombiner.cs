@@ -209,6 +209,14 @@ internal static class GameCombiner
             db.HasValue ? db.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : null);
         LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.Title",
             title.Length > 0 ? title : null);
+        // The identity itself. Everything that refers to a game refers to this: the 917 playlist
+        // entries in a real library, media named "<title>.<guid>-NN.ext" (1149 files over 73 games
+        // there), launch history, per-game options. A combine orphans all of it the moment the game
+        // stops existing — LaunchBox included — and without this the expand can never reattach any
+        // of it, because the game comes back as someone else.
+        string gid = Safe(() => source.Id) ?? "";
+        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.GameId",
+            gid.Length > 0 ? gid : null);
     }
 
     /// <summary>The disc number LaunchBox derives for a version. A game carries no Disc of its own —
@@ -319,10 +327,13 @@ internal static class GameCombiner
                     ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, vid, "Combine.Title") : null;
                 string dbid = vid.Length > 0
                     ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, vid, "Combine.DatabaseID") : null;
+                string oldId = vid.Length > 0
+                    ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, vid, "Combine.GameId") : null;
 
                 string title = !string.IsNullOrEmpty(kept) ? kept : TitleFromFileName(v.ApplicationPath, v.Disc);
 
-                var g = dm.AddNewGame(title);
+                var g = dm.AddNewGame(title,
+                    Guid.TryParse(oldId ?? "", out var back) ? back : (Guid?)null);
                 if (g == null) continue;
                 Set(() => g.Platform = platform);
                 Set(() => g.ApplicationPath = v.ApplicationPath);
@@ -352,6 +363,7 @@ internal static class GameCombiner
                 {
                     LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.Title", null);
                     LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.DatabaseID", null);
+                    LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.GameId", null);
                 }
                 game.TryRemoveAdditionalApplication(v);
                 restored++;

@@ -65,6 +65,7 @@ internal static class OptionKeys
         //    LaunchBox's own behaviour.
         new("Combine.DatabaseID", Version, OptionType.String, OptionCache.Cold, "Combine"),
         new("Combine.Title",      Version, OptionType.String, OptionCache.Cold, "Combine"),
+        new("Combine.GameId",     Version, OptionType.String, OptionCache.Cold, "Combine"),
 
         // ── Module master switches (LbModules; row absent = module default) ──
         new("Module.base",             Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),

@@ -274,9 +274,12 @@ internal sealed class HostDataManagerXml : DummyDataManager
     public override IGame GetGameById(string id)
         => (Guid.TryParse(id, out var g) && _store.ById.TryGetValue(g, out var i)) ? _allGames[i] : null;
 
-    public override IGame AddNewGame(string title)
+    public override IGame AddNewGame(string title) => AddNewGame(title, null);
+
+    /// <summary>Same, with an identity to reuse when one is known (see GameStore.AddGameRow).</summary>
+    internal IGame AddNewGame(string title, Guid? id)
     {
-        int idx = _store.AddGameRow(title ?? "", out _);   // grows the store + logs an "add" op
+        int idx = _store.AddGameRow(title ?? "", id, out _);   // grows the store + logs an "add" op
         var g = new HostGame(_store, idx);
         _allGames.Add(g);                                  // stays index-aligned (idx == old count)
         return g;

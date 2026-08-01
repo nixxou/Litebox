@@ -207,16 +207,26 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
     public override string MarqueeImagePath { get => MediaResolver.Image(_plat, R.Id, _title, MediaResolver.Marquee) ?? ""; set { } }
     public override string BackgroundImagePath { get => MediaResolver.Image(_plat, R.Id, _title, MediaResolver.Background) ?? ""; set { } }
 
+    // The stored override comes FIRST and the folder scan is the fallback — see
+    // MediaResolver.Override. These read the other way round for a long time, which meant a game
+    // naming its own manual was answered with whatever the folder happened to hold under its title,
+    // and with nothing at all when the folder held nothing. Only the pause overlay ever consulted
+    // the field, so an override set in the editor was visible there and nowhere else.
     public override string GetVideoPath(bool prioritizeThemeVideos)
-        => MediaResolver.Video(_plat, R.Id, _title, prioritizeThemeVideos) ?? "";
+        => (prioritizeThemeVideos ? MediaResolver.Override(ThemeVideoPath) : null)
+           ?? MediaResolver.Override(VideoPath)
+           ?? MediaResolver.Video(_plat, R.Id, _title, prioritizeThemeVideos) ?? "";
     public override string GetVideoPath(string videoType)
         => MediaResolver.VideoIn(_plat, R.Id, _title, NormalizeVideoSubDir(videoType)) ?? "";
     public override string GetThemeVideoPath()
-        => MediaResolver.VideoIn(_plat, R.Id, _title, "Theme") ?? "";
+        => MediaResolver.Override(ThemeVideoPath)
+           ?? MediaResolver.VideoIn(_plat, R.Id, _title, "Theme") ?? "";
     public override string GetManualPath()
-        => MediaResolver.Manual(_plat, R.Id, _title) ?? "";
+        => MediaResolver.Override(ManualPath)
+           ?? MediaResolver.Manual(_plat, R.Id, _title) ?? "";
     public override string GetMusicPath()
-        => MediaResolver.Music(_plat, R.Id, _title) ?? "";
+        => MediaResolver.Override(MusicPath)
+           ?? MediaResolver.Music(_plat, R.Id, _title) ?? "";
 
     private static string NormalizeVideoSubDir(string videoType)
     {

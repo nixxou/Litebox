@@ -37,6 +37,7 @@ internal static class MediaRenameSelfTest
             failures += MergeAppendsAfterTheDestination(root);
             failures += SharedSourceIsCopiedNotMoved(root);
             failures += PinnedFileIsNotRenamed(root);
+            failures += OverrideBeatsTheConvention(root);
             failures += FlushNotificationSurvivesBoot();
         }
         finally { Nuke(root); }
@@ -248,6 +249,30 @@ internal static class MediaRenameSelfTest
             && !Exists(dir, $"{New}-01.pdf")
             && Exists(dir, $"{New}-02.pdf")         // the conventional one moved
             && !Exists(dir, $"{Old}-02.pdf"));
+    }
+
+    /// <summary>A stored &lt;ManualPath&gt; names the file outright, so it wins over whatever the folder
+    /// holds under the game's title. And an override pointing at nothing must NOT hide a perfectly
+    /// good conventional file — a stale field is not a reason to report the game as having no
+    /// manual.</summary>
+    private static int OverrideBeatsTheConvention(string root)
+    {
+        string dir = Fresh(root, "Manuals", null);
+        Touch(dir, $"{Old}-01.pdf");                       // conventional
+        string chosen = Touch(dir, "Something Else.pdf");  // only reachable through the override
+        string was = MediaResolver.SwapRootForTest(Case(root));
+        try
+        {
+            int f = 0;
+            f += Check("a stored override wins over the conventional file",
+                MediaResolver.Override(Path.Combine("Manuals", MediaResolver.Sanitize(Plat), "Something Else.pdf"))
+                    == Path.GetFullPath(chosen));
+            f += Check("an override pointing at nothing falls back instead of hiding the file",
+                MediaResolver.Override(Path.Combine("Manuals", MediaResolver.Sanitize(Plat), "Gone.pdf")) == null
+                && MediaResolver.Manual(Plat, Id, Old) != null);
+            return f;
+        }
+        finally { MediaResolver.SwapRootForTest(was); }
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────

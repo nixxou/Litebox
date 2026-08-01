@@ -103,7 +103,11 @@ internal sealed class LaunchedGame
                 lg.FanartPath = FirstOrNull(MediaResolver.AllOfType(plat, id, lg.Title, "Fanart - Background"));
                 lg.ClearLogoPath = MediaResolver.Image(plat, id, lg.Title, MediaResolver.ClearLogo);
                 lg.BoxFrontPath = MediaResolver.Image(plat, id, lg.Title, MediaResolver.Front);
-                lg.ManualPath = MediaResolver.Manual(plat, id, lg.Title);
+                // The override first, the folder scan second — the same order as
+                // IGame.GetManualPath. This line used to hold the only fallback to <ManualPath> in
+                // the whole application, and it applied it the wrong way round.
+                lg.ManualPath = MediaResolver.Override(Safe(() => game.ManualPath))
+                                ?? MediaResolver.Manual(plat, id, lg.Title);
             }
             // IGame property fallbacks (also cover non-GUID ids).
             lg.FanartPath ??= NonEmpty(Safe(() => game.BackgroundImagePath)) ?? NonEmpty(Safe(() => game.ScreenshotImagePath));

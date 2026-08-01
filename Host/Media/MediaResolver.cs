@@ -74,6 +74,32 @@ internal static class MediaResolver
     /// <summary>The LaunchBox root (parent of Data/Images), or null before Init.</summary>
     public static string LbRoot => _lbRoot;
 
+    /// <summary>A stored media-path override, turned into a usable absolute path — or null when
+    /// there is none, or when it names a file that is not there.
+    ///
+    /// &lt;ManualPath&gt;, &lt;MusicPath&gt;, &lt;VideoPath&gt; and &lt;ThemeVideoPath&gt; are the four fields where
+    /// LaunchBox lets a game name its media OUTRIGHT instead of deriving the name from the title.
+    /// When one is set it wins: that is the whole point of an override, and LaunchBox mirrors the
+    /// pair everywhere — ManualPath alongside GetDefaultManualPath(), and the same for the other
+    /// three. A "default" only means something if something else can displace it.
+    ///
+    /// A path is stored relative to the LB root when it sits under it and absolute otherwise, so
+    /// both shapes are accepted. One that points at nothing falls back to the convention rather
+    /// than showing the game as having no manual at all: a stale override should not hide a file
+    /// that is sitting right there under the expected name.</summary>
+    internal static string Override(string stored)
+    {
+        if (string.IsNullOrWhiteSpace(stored)) return null;
+        try
+        {
+            string abs = Path.IsPathRooted(stored)
+                ? Path.GetFullPath(stored)
+                : (string.IsNullOrEmpty(_lbRoot) ? null : Path.GetFullPath(Path.Combine(_lbRoot, stored)));
+            return abs != null && File.Exists(abs) ? abs : null;
+        }
+        catch { return null; }
+    }
+
     /// <summary>Points the resolver at another tree, for tests and audits only. Returns the previous
     /// root so the caller can put it back — nothing else here is designed to be re-pointed.</summary>
     internal static string SwapRootForTest(string root)

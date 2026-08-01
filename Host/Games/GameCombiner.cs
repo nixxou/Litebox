@@ -165,28 +165,35 @@ internal static class GameCombiner
             string platform = Safe(() => source.Platform) ?? "";
             string from = Safe(() => source.Title) ?? "", to = Safe(() => root.Title) ?? "";
             if (lbRoot.Length == 0 || platform.Length == 0 || from.Length == 0 || to.Length == 0) return;
-            if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return;   // one collection already
+            if (!Guid.TryParse(Safe(() => source.Id) ?? "", out var sid) || sid == Guid.Empty) return;
+            Guid.TryParse(Safe(() => root.Id) ?? "", out var rid);
 
             int? a = Safe(() => source.LaunchBoxDbId), b = Safe(() => root.LaunchBoxDbId);
             bool sameEntry = a.HasValue && b.HasValue && a.Value == b.Value;
 
-            // A THIRD game still answering to the source title means these files are its media too.
-            // That changes both halves of what follows: what we take we must COPY rather than move,
-            // or the other game loses its art; and what we leave is not orphaned at all, so there is
-            // nothing to offer deleting.
-            bool shared = GameMediaSync.FindRival(source, platform, from) != null;
+            // A THIRD game still answering to the source title means the PLAIN files are its media
+            // too. The destination does not count — it is the one we are pooling into, and when the
+            // two share a title it would otherwise flag itself. Getting that wrong turns every
+            // same-title combine into a copy that never cleans up.
+            var rival = GameMediaSync.FindRival(source, platform, from);
+            bool shared = rival != null && !string.Equals(Safe(() => rival.Id) ?? "",
+                                                          Safe(() => root.Id) ?? "", StringComparison.OrdinalIgnoreCase);
 
-            var plan = GameMediaMerge.Plan(lbRoot, platform, from, to,
+            var plan = GameMediaMerge.Plan(lbRoot, platform, sid, from, rid, to,
                                            DupEngineMode.DHash,
                                            DedupEngine.DefaultThreshold(DupEngineMode.DHash));
             if (!sameEntry)
             {
-                if (!shared) foreach (var item in plan.Items) outcome.OrphanedMedia.Add(item.From);
+                // What is left behind is orphaned only if nothing else answers to that name. A GUID
+                // file always is — it named this game alone.
+                foreach (var item in plan.Items)
+                    if (!shared || !GameMediaRenamer.TryPlain(
+                            System.IO.Path.GetFileNameWithoutExtension(item.From), MediaResolver.Sanitize(from), out _))
+                        outcome.OrphanedMedia.Add(item.From);
                 return;
             }
             if (plan.Moving == 0) { outcome.MediaSkipped += plan.Skipped; return; }
 
-            if (!Guid.TryParse(Safe(() => source.Id) ?? "", out var sid) || sid == Guid.Empty) return;
             var res = GameMediaMerge.Apply(plan, lbRoot, sid, platform, from, to, shared);
             outcome.MediaMoved += res.Reached;
             outcome.MediaSkipped += plan.Skipped;

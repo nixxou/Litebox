@@ -30,6 +30,9 @@ internal static class MediaMergeSelfTest
         fail += Case("le reste est bien deplace, numerotation continuee", MovesTheRest);
         fail += Case("la ressemblance ne franchit PAS les categories", SimilarityStaysInItsFolder);
         fail += Case("un media partage est copie, pas deplace", SharedSourceCopies);
+        fail += Case("meme titre : les fichiers GUID sont bien deplaces", SameTitleGuidFiles);
+        fail += Case("meme titre : les fichiers nominatifs sont laisses", SameTitlePlainUntouched);
+        fail += Case("la forme de la destination est respectee", DestFormWins);
         Console.WriteLine(fail == 0 ? "[mediamerge] ALL PASS" : $"[mediamerge] {fail} FAILED");
         return fail == 0 ? 0 : 1;
     }
@@ -99,7 +102,8 @@ internal static class MediaMergeSelfTest
         // as already there. What must NOT happen is a move.
         var item = plan.Items.FirstOrDefault(i => i.From.EndsWith(A + "-01.png"));
         if (item == null) return "le fichier source n'a pas ete examine";
-        if (item.Moves) return $"deplace alors qu'il est deja present (verdict {item.Verdict})";
+        if (item.Verdict != MergeVerdict.AlreadyThere)
+            return $"attendu AlreadyThere (memes octets, chemins differents), obtenu {item.Verdict}";
         return null;
     }
 
@@ -187,6 +191,66 @@ internal static class MediaMergeSelfTest
         if (res.Copied != 1) return $"copie={res.Copied} au lieu de 1 ({res})";
         if (!File.Exists(Path.Combine(front, A + "-01.png"))) return "la source a ete supprimee malgre le partage";
         if (!File.Exists(Path.Combine(front, B + "-01.png"))) return "la destination n'a pas recu le fichier";
+        return null;
+    }
+
+    private static readonly Guid SrcId = new("aaaaaaaa-1111-2222-3333-444444444444");
+    private static readonly Guid DstId = new("bbbbbbbb-1111-2222-3333-444444444444");
+
+    private static MergePlan PlanIds(string root, string srcTitle, string dstTitle) =>
+        GameMediaMerge.Plan(root, Plat, SrcId, srcTitle, DstId, dstTitle,
+                            DupEngineMode.DHash, DedupEngine.DefaultThreshold(DupEngineMode.DHash));
+
+    private static string SameTitleGuidFiles(string root)
+    {
+        // Deux jeux du MEME titre : c'est precisement pourquoi le format GUID existe. Les fichiers
+        // GUID de la source lui appartiennent en propre et doivent suivre.
+        string front = Dir(root, "Images", Plat, "Box - Front");
+        Noise(Path.Combine(front, $"{A}.{SrcId:D}-01.png"), 11);
+        Noise(Path.Combine(front, $"{A}.{DstId:D}-01.png"), 12);
+
+        var plan = PlanIds(root, A, A);
+        var item = plan.Items.FirstOrDefault(i => i.From.Contains(SrcId.ToString("D")));
+        if (item == null) return "le fichier GUID de la source n'a pas ete examine";
+        if (!item.Moves) return $"non deplace (verdict {item.Verdict})";
+        if (!item.To.Contains(DstId.ToString("D")))
+            return $"cible {Path.GetFileName(item.To)} : ne porte pas le GUID de la destination";
+        return null;
+    }
+
+    private static string SameTitlePlainUntouched(string root)
+    {
+        // Meme titre : les fichiers NOMINATIFS sont deja communs aux deux jeux. Les renommer
+        // reviendrait a renommer ceux de la destination.
+        string front = Dir(root, "Images", Plat, "Box - Front");
+        Noise(Path.Combine(front, A + "-01.png"), 13);
+
+        var plan = PlanIds(root, A, A);
+        var item = plan.Items.FirstOrDefault(i => i.From.EndsWith(A + "-01.png"));
+        if (item == null) return "le fichier nominatif n'a pas ete examine";
+        // Le verdict est verifie, pas seulement l'absence de deplacement : trois regles peuvent
+        // aboutir au meme "non deplace", et un test qui ne les distingue pas laisserait passer
+        // du code qui les a interverties.
+        if (item.Verdict != MergeVerdict.SameFile)
+            return $"attendu SameFile (c'est litteralement le meme fichier), obtenu {item.Verdict}";
+        return null;
+    }
+
+    private static string DestFormWins(string root)
+    {
+        // La destination n'utilise QUE le format nominatif ici : un fichier GUID qui arrive doit
+        // devenir nominatif, sinon sa presence masquerait les fichiers nominatifs de la destination.
+        string front = Dir(root, "Images", Plat, "Box - Front");
+        Noise(Path.Combine(front, $"{A}.{SrcId:D}-01.png"), 21);
+        Noise(Path.Combine(front, B + "-01.png"), 22);
+
+        var plan = PlanIds(root, A, B);
+        var item = plan.Items.FirstOrDefault(i => i.From.Contains(SrcId.ToString("D")));
+        if (item == null) return "le fichier GUID n'a pas ete examine";
+        if (!item.Moves) return $"non deplace (verdict {item.Verdict})";
+        if (item.To.Contains(DstId.ToString("D")))
+            return "converti au format GUID alors que la destination est nominative";
+        if (!Path.GetFileName(item.To).StartsWith(B)) return $"cible inattendue : {Path.GetFileName(item.To)}";
         return null;
     }
 

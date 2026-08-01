@@ -184,7 +184,8 @@ internal static class GameMediaRenamer
 
     /// <summary>Numbers already used in the target form for this game, so the plan never proposes a
     /// name that exists. The set is fed as moves are planned, so two sources cannot claim one slot.</summary>
-    private static HashSet<int> TakenNumbers(List<string> unit, Guid id, string sani, MediaNameForm form)
+    /// <summary>Numbers already used in one form for one game, across a whole unit.</summary>
+    internal static HashSet<int> TakenNumbers(List<string> unit, Guid id, string sani, MediaNameForm form)
     {
         var taken = new HashSet<int>();
         foreach (var dir in unit)
@@ -201,18 +202,24 @@ internal static class GameMediaRenamer
     /// only ever runs inside THIS game's namespace — the caller never targets the plain form when
     /// another game owns that title, precisely so that bumping can never drop a file into someone
     /// else's collection.</summary>
-    private static int FreeNumber(HashSet<int> taken, int wanted)
+    /// <summary>The next free index at or after <paramref name="wanted"/>, reserved as it is handed
+    /// out so two sources cannot claim one slot. Numbering starts at 1, never 0. Internal because
+    /// the merge planner has to number exactly the way this does — a second implementation of it
+    /// produced "-00" names nothing would ever find.</summary>
+    internal static int FreeNumber(HashSet<int> taken, int wanted)
     {
         int n = Math.Max(1, wanted);
         while (n <= MaxIndex && !taken.Add(n)) n++;
         return n;
     }
 
-    private static string GuidPath(string source, string sani, Guid id, string suffix, int num)
+    /// <summary>The GUID-form path a file takes for a given game.</summary>
+    internal static string GuidPath(string source, string sani, Guid id, string suffix, int num)
         => Path.Combine(Path.GetDirectoryName(source)!,
             $"{sani}.{id:D}{suffix}-{num:D2}{Path.GetExtension(source)}");
 
-    private static string PlainPath(string source, string sani, int num)
+    /// <summary>The plain-form path a file takes for a given title.</summary>
+    internal static string PlainPath(string source, string sani, int num)
         => Path.Combine(Path.GetDirectoryName(source)!, $"{sani}-{num:D2}{Path.GetExtension(source)}");
 
     /// <summary>The plain naming form: "&lt;title&gt;-NN". Internal because the merge planner has to
@@ -228,7 +235,10 @@ internal static class GameMediaRenamer
         return int.TryParse(nameNoExt.Substring(dash + 1), out num);
     }
 
-    private static bool TryGuid(string nameNoExt, Guid id, out int num, out string suffix)
+    /// <summary>The GUID naming form: "&lt;title&gt;.&lt;guid&gt;[-suffix]-NN". The title part is ignored —
+    /// the GUID alone identifies the game. Internal for the same reason as TryPlain: the merge
+    /// planner has to recognise exactly what this recognises.</summary>
+    internal static bool TryGuid(string nameNoExt, Guid id, out int num, out string suffix)
     {
         num = 0; suffix = "";
         int dot = nameNoExt.IndexOf('.' + id.ToString("D"), StringComparison.OrdinalIgnoreCase);

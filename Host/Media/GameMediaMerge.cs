@@ -17,6 +17,18 @@
 //                  manual or a music track has no meaningful "looks alike", and comparing them by
 //                  eye-hash would be nonsense.
 //
+// BOTH NAMING FORMS. A game's files are either "<title>-NN.ext" (plain, shared by every game
+// answering to that title) or "<title>.<guid>-NN.ext" (GUID, belonging to exactly one game). The
+// GUID form exists precisely BECAUSE two games can share a title, so the same-title case — the one
+// it was tempting to dismiss as "nothing to do, one collection already" — is exactly where it turns
+// up. Skipping it meant the absorbed game's GUID files stayed named after a game that no longer
+// exists: invisible, unreferenced, and not even offered for deletion. A real library here has 1149
+// of them, and nine shared titles on one platform alone.
+//
+// What comes over takes the form the DESTINATION already uses in that folder. Mixing the two in one
+// folder is not neutral: a GUID file present hides the plain ones for that game, so converting half
+// a folder would make the other half disappear.
+//
 // Similarity uses the CPU engines (dhash / phash) the media list already ships, never the CNN one:
 // a combine is an interactive action and nobody should wait on a neural net for it. The engine is
 // tri-state and a "cannot tell" answer keeps the file — failing open, since dropping art we were
@@ -28,6 +40,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using LbApiHost.Host.Media.Dedup;
 
 namespace LbApiHost.Host.Media;
 
@@ -67,14 +80,20 @@ internal static class GameMediaMerge
     /// <summary>Decides, file by file, what comes over. Reads nothing but the disk — no store, no
     /// data manager — so it can be planned, shown, and applied separately.</summary>
     public static MergePlan Plan(string lbRoot, string platform, string sourceTitle, string destTitle,
-                                 Dedup.DupEngineMode mode, double threshold)
+                                 DupEngineMode mode, double threshold)
+        => Plan(lbRoot, platform, Guid.Empty, sourceTitle, Guid.Empty, destTitle, mode, threshold);
+
+    public static MergePlan Plan(string lbRoot, string platform, Guid sourceId, string sourceTitle,
+                                 Guid destId, string destTitle, DupEngineMode mode, double threshold)
     {
         var plan = new MergePlan();
         if (string.IsNullOrEmpty(lbRoot) || string.IsNullOrEmpty(platform)) return plan;
         if (string.IsNullOrEmpty(sourceTitle) || string.IsNullOrEmpty(destTitle)) return plan;
 
         string from = MediaResolver.Sanitize(sourceTitle), to = MediaResolver.Sanitize(destTitle);
-        if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return plan;   // same title: nothing is separate
+        // Same title does NOT mean one collection: each game may still have GUID-named files of its
+        // own. What it does mean is that the PLAIN files are literally the same files for both, so
+        // only the GUID ones are separate and worth moving.
 
         // Two different reaches, on purpose.
         //
@@ -90,7 +109,7 @@ internal static class GameMediaMerge
         foreach (var unit in GameMediaRenamer.Units(lbRoot, platform))
             foreach (var dir in unit)
             {
-                var here = FilesOf(dir, to).ToList();
+                var here = FilesOf(dir, to, destId).ToList();
                 destByDir[dir] = here;
                 destFiles.AddRange(here);
             }
@@ -99,11 +118,27 @@ internal static class GameMediaMerge
         foreach (var f in destFiles) { uint? c = Crc(f); if (c.HasValue) destCrc.Add(c.Value); }
 
         foreach (var unit in GameMediaRenamer.Units(lbRoot, platform))
-            foreach (var dir in unit)
-                foreach (var file in FilesOf(dir, from))
-                {
-                    string target = Path.Combine(dir, to + Path.GetExtension(file));
+        {
+            // The form the destination already uses HERE decides the form of what arrives, so a
+            // folder never ends up holding both for the same game.
+            bool destUsesGuid = destId != Guid.Empty && unit.SelectMany(d => Safe(d))
+                .Any(f => GameMediaRenamer.TryGuid(Path.GetFileNameWithoutExtension(f), destId, out _, out _));
+            var taken = GameMediaRenamer.TakenNumbers(unit, destId, to,
+                destUsesGuid ? MediaNameForm.Guid : MediaNameForm.Plain);
+            int next = taken.Count > 0 ? taken.Max() + 1 : 0;   // FreeNumber clamps 0 up to 1
 
+            foreach (var dir in unit)
+                foreach (var file in FilesOf(dir, from, sourceId))
+                {
+                    int n = GameMediaRenamer.FreeNumber(taken, next++);
+                    string target = destUsesGuid
+                        ? GameMediaRenamer.GuidPath(file, to, destId, "", n)
+                        : GameMediaRenamer.PlainPath(file, to, n);
+
+                    // Also what protects the plain files when the two games share a title: they are
+                    // literally in the destination's own list, so they are caught here. A guard for
+                    // that case was written and removed — it could never run, and a mutation test
+                    // showed it: disabling it changed nothing.
                     if (destFiles.Any(d => string.Equals(d, file, StringComparison.OrdinalIgnoreCase)))
                     { plan.Items.Add(new MergeItem(file, target, MergeVerdict.SameFile)); continue; }
 
@@ -122,36 +157,47 @@ internal static class GameMediaMerge
 
                     plan.Items.Add(new MergeItem(file, target, MergeVerdict.Move));
                 }
+        }
 
         return plan;
     }
 
-    /// <summary>Carries the plan out. Numbering, collisions and the move→copy→leave escalation are
-    /// GameMediaRenamer's, unchanged: a merge is a rename that appends rather than replaces.</summary>
+    /// <summary>Carries the plan out. The targets are the plan's own — the renamer cannot help
+    /// here, because it retags ONE game's files and a merge retags one game's files with another
+    /// game's identity.
+    ///
+    /// <paramref name="sharedSource"/> only ever applies to PLAIN files: those are named after a
+    /// title, so a third game answering to it owns them too and they must be copied rather than
+    /// moved. A GUID file names one game and no other, so it always moves.</summary>
     public static GameMediaRenamer.MediaMoveResult Apply(MergePlan plan, string lbRoot, Guid sourceId,
                                                         string platform, string sourceTitle, string destTitle,
                                                         bool sharedSource)
     {
         if (plan == null || plan.Moving == 0) return new GameMediaRenamer.MediaMoveResult();
-        // Re-planned through the renamer so the destination numbering continues after what is
-        // already there, then filtered down to the files this plan decided to bring.
-        var keep = new HashSet<string>(plan.Moves.Select(i => i.From), StringComparer.OrdinalIgnoreCase);
-        var moves = GameMediaRenamer.Plan(lbRoot, sourceId, platform, sourceTitle, destTitle,
-                                          MediaNameForm.Plain, append: true, sharedSource: sharedSource)
-                                    .Where(m => keep.Contains(m.From));
+        string from = MediaResolver.Sanitize(sourceTitle ?? "");
+        var moves = plan.Moves.Select(i =>
+        {
+            bool plain = GameMediaRenamer.TryPlain(Path.GetFileNameWithoutExtension(i.From), from, out _);
+            return new MediaMove(i.From, i.To, sharedSource && plain);
+        });
         return GameMediaRenamer.Apply(moves);
     }
 
     /// <summary>Every file of that game in one folder. The rule is GameMediaRenamer's, not a copy
     /// of it: a plan that recognises files the mover does not would promise moves that never
     /// happen, which is exactly what a looser copy here did.</summary>
-    private static IEnumerable<string> FilesOf(string dir, string sanitizedTitle)
+    private static IEnumerable<string> FilesOf(string dir, string sanitizedTitle, Guid id)
+        => Safe(dir).Where(f =>
+        {
+            string n = Path.GetFileNameWithoutExtension(f);
+            if (id != Guid.Empty && GameMediaRenamer.TryGuid(n, id, out _, out _)) return true;
+            return GameMediaRenamer.TryPlain(n, sanitizedTitle, out _);
+        }).ToList();
+
+    private static List<string> Safe(string dir)
     {
-        List<string> files;
-        try { files = Directory.EnumerateFiles(dir).ToList(); }
-        catch { return Array.Empty<string>(); }
-        return files.Where(f => GameMediaRenamer.TryPlain(Path.GetFileNameWithoutExtension(f),
-                                                          sanitizedTitle, out _)).ToList();
+        try { return Directory.EnumerateFiles(dir).ToList(); }
+        catch { return new List<string>(); }
     }
 
     private static bool IsPicture(string path)
@@ -167,14 +213,14 @@ internal static class GameMediaMerge
     /// <summary>True when the destination already holds a picture close enough to this one. Null from
     /// the engine means "could not tell", and that keeps the file.</summary>
     private static (bool? dup, double? score) NearestPicture(string file, IReadOnlyList<string> candidates,
-                                                            Dedup.DupEngineMode mode, double threshold)
+                                                            DupEngineMode mode, double threshold)
     {
         if (candidates.Count == 0) return (false, null);
-        if (mode == Dedup.DupEngineMode.Cnn) mode = Dedup.DupEngineMode.PHash;   // never on an interactive path
-        if (!Dedup.DedupEngine.IsAvailable(mode)) return (null, null);
+        if (mode == DupEngineMode.Cnn) mode = DupEngineMode.PHash;   // never on an interactive path
+        if (!DedupEngine.IsAvailable(mode)) return (null, null);
         // The engine compares against the whole reference set in one call and memoises each
         // fingerprint for the session, so one picture is decoded once however many it is checked
         // against.
-        return Dedup.DedupEngine.Evaluate(mode, threshold, gpu: false, file, candidates);
+        return DedupEngine.Evaluate(mode, threshold, gpu: false, file, candidates);
     }
 }

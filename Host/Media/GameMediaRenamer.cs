@@ -125,6 +125,12 @@ internal static class GameMediaRenamer
         string toSani = MediaResolver.Sanitize(targetTitle ?? "");
         if (target == MediaNameForm.Plain && toSani.Length == 0) return moves;
 
+        // A file something points at BY PATH is not convention-managed: its name IS the reference,
+        // so renaming it breaks that reference instead of following it. It is skipped wherever it
+        // sits — including the root of Manuals\<Platform>\, where the document editor likes to put
+        // files and where a pinned "Foo-01.pdf" is indistinguishable from a conventional one.
+        var pinned = PinnedMedia.For(lbRoot, platform);
+
         foreach (var unit in Units(lbRoot, platform))
         {
             var plain = new List<(string Path, int Num)>();
@@ -132,6 +138,7 @@ internal static class GameMediaRenamer
             foreach (var dir in unit)
                 foreach (var file in SafeFiles(dir))
                 {
+                    if (PinnedMedia.IsPinned(pinned, file)) continue;
                     string name = Path.GetFileNameWithoutExtension(file);
                     if (TryGuid(name, id, out int gnum, out string suffix)) guid.Add((file, gnum, suffix));
                     else if (fromSani.Length > 0 && TryPlain(name, fromSani, out int pnum)) plain.Add((file, pnum));

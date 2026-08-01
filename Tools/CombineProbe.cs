@@ -29,6 +29,11 @@ internal static class CombineProbe
         // ligne toute la branche media sort immediatement et les verifications passent A VIDE —
         // exactement ce qui s'etait deja produit avec la base d'options.
         LbApiHost.Host.Media.MediaResolver.Init(lbRoot);
+        // The probe is handed an explicit root and told to mutate it; that root is a scratch copy,
+        // never the library LaunchBox has open. Without this the flush gate silently keeps every
+        // change in the op-log, the XML on disk never moves, and the simulation that reads it back
+        // checks its invariants against an UNCHANGED file — passing while proving nothing.
+        LbApiHost.Host.Data.GameStore.PretendLaunchBoxIsClosed = true;
         string dataDir = Path.Combine(lbRoot, "Data");
         var store = GameStore.Load(Path.Combine(dataDir, "Platforms"), Path.Combine(dataDir, "probe.pending.db"));
         store.ReadOnly = false;
@@ -63,6 +68,11 @@ internal static class CombineProbe
         // ligne toute la branche media sort immediatement et les verifications passent A VIDE —
         // exactement ce qui s'etait deja produit avec la base d'options.
         LbApiHost.Host.Media.MediaResolver.Init(lbRoot);
+        // The probe is handed an explicit root and told to mutate it; that root is a scratch copy,
+        // never the library LaunchBox has open. Without this the flush gate silently keeps every
+        // change in the op-log, the XML on disk never moves, and the simulation that reads it back
+        // checks its invariants against an UNCHANGED file — passing while proving nothing.
+        LbApiHost.Host.Data.GameStore.PretendLaunchBoxIsClosed = true;
         string dataDir = Path.Combine(lbRoot, "Data");
         var store = GameStore.Load(Path.Combine(dataDir, "Platforms"), Path.Combine(dataDir, "probe.pending.db"));
         store.ReadOnly = false;

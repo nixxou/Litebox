@@ -28,6 +28,15 @@ internal static class WriteBackSelfTest
             string platformsDir = Path.Combine(temp, "Data", "Platforms");
             Directory.CreateDirectory(platformsDir);
 
+            // This suite is about what lands on disk, in a temp tree of its own making. The real
+            // gate — LiteBox never writes while LaunchBox owns the XMLs — has nothing to arbitrate
+            // here, and leaving it in place made every write test fail whenever LaunchBox was open.
+            bool lbOpen = GameStore.IsLaunchBoxRunning();
+            GameStore.PretendLaunchBoxIsClosed = true;
+            if (lbOpen)
+                Console.WriteLine("[selftest] LaunchBox tourne : la garde de vidage est neutralisee "
+                                  + "POUR CE TEST (arbre temporaire, jamais la vraie bibliotheque).");
+
             fails += TestOpLog(temp);
             fails += TestRoundTrip(platformsDir);
             fails += TestChildEntities(platformsDir);
@@ -41,7 +50,7 @@ internal static class WriteBackSelfTest
             fails += TestTier2DropReloadAddMove(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
-        finally { try { Directory.Delete(temp, true); } catch { } }
+        finally { GameStore.PretendLaunchBoxIsClosed = false; try { Directory.Delete(temp, true); } catch { } }
 
         Console.WriteLine(fails == 0 ? "[selftest] ALL PASS" : $"[selftest] {fails} FAILURE(S)");
         return fails == 0 ? 0 : 1;

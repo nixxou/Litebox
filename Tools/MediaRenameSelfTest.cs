@@ -36,6 +36,7 @@ internal static class MediaRenameSelfTest
             failures += RegionSubfolderIsPartOfTheType(root);
             failures += MergeAppendsAfterTheDestination(root);
             failures += SharedSourceIsCopiedNotMoved(root);
+            failures += PinnedFileIsNotRenamed(root);
             failures += FlushNotificationSurvivesBoot();
         }
         finally { Nuke(root); }
@@ -217,6 +218,36 @@ internal static class MediaRenameSelfTest
         typeof(LbApiHost.Host.Data.GameStore)
             .GetMethod("NotifyTitlesFlushed", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
             .Invoke(store, new object[] { list });
+    }
+
+    /// <summary>A manual reached through &lt;ManualPath&gt; is named BY that path: renaming the file
+    /// breaks the reference instead of following it. Its conventional neighbour, in the same folder
+    /// and matching the same pattern, must still move — otherwise the fix would strand the 1375
+    /// conventional manuals the real library actually holds.</summary>
+    private static int PinnedFileIsNotRenamed(string root)
+    {
+        string dir = Fresh(root, "Manuals", null);
+        Touch(dir, $"{Old}-01.pdf");                      // pinned by ManualPath below
+        Touch(dir, $"{Old}-02.pdf");                      // conventional, must follow the title
+
+        // The platform XML is the source of truth PinnedMedia reads, precisely so that it needs
+        // nothing initialised — a probe that skips the boot must not silently protect nothing.
+        string data = Path.Combine(Case(root), "Data", "Platforms");
+        Directory.CreateDirectory(data);
+        string rel = Path.Combine("Manuals", MediaResolver.Sanitize(Plat), $"{Old}-01.pdf");
+        File.WriteAllText(Path.Combine(data, Plat + ".xml"),
+            "<?xml version=\"1.0\" standalone=\"yes\"?>\r\n<LaunchBox>\r\n"
+            + $"  <Game><ID>{Id:D}</ID><Title>{Old}</Title><Platform>{Plat}</Platform>"
+            + $"<ManualPath>{rel}</ManualPath></Game>\r\n</LaunchBox>\r\n");
+
+        var moves = GameMediaRenamer.Plan(Case(root), Id, Plat, Old, New, MediaNameForm.Plain);
+        GameMediaRenamer.Apply(moves);
+
+        return Check("a path-pinned manual stays put while its conventional neighbour follows",
+            Exists(dir, $"{Old}-01.pdf")            // the reference still resolves
+            && !Exists(dir, $"{New}-01.pdf")
+            && Exists(dir, $"{New}-02.pdf")         // the conventional one moved
+            && !Exists(dir, $"{Old}-02.pdf"));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────

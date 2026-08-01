@@ -713,8 +713,16 @@ internal sealed class GameStore
         try { hook(ids); } catch { }
     }
 
+    /// <summary>Set ONLY by the write-back self-test, which works in a throw-away temp tree that
+    /// LaunchBox has never heard of. Without it the whole suite silently depends on whether the user
+    /// happens to have LaunchBox open — twelve failures that look like regressions and are not.
+    /// Never set outside a test: the gate below is what stops LiteBox writing XMLs that LaunchBox
+    /// currently owns.</summary>
+    internal static bool PretendLaunchBoxIsClosed;
+
     public static bool IsLaunchBoxRunning()
     {
+        if (PretendLaunchBoxIsClosed) return false;
         try { return Process.GetProcessesByName("LaunchBox").Length > 0 || Process.GetProcessesByName("BigBox").Length > 0; }
         catch { return false; }
     }

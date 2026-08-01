@@ -1452,12 +1452,87 @@ internal sealed class GameStore
         "DisableShutdownScreen", "AggressiveWindowHiding",
     };
 
+    // What LaunchBox puts on a game it creates, beyond whatever the caller set. Read off 129 games
+    // it restored in one expand: every one carried these 41 fields with these exact values, which
+    // are its defaults rather than anything to do with the games themselves.
+    //
+    // This is NOT the <Game> normalisation that was measured and declined — that was about empty
+    // columns on a row being edited. These carry values, and without them a game LiteBox creates
+    // comes out with eight elements where LaunchBox writes sixty: no DateAdded, no star rating, no
+    // startup-screen settings. Absent reads as false for most of them, but DateAdded absent means a
+    // game that sorts as though it had never been added.
+    private static readonly (string Field, string Value)[] _gameAddDefaults =
+    {
+        ("Completed", "false"),
+        ("Favorite", "false"),
+        ("ScummVMAspectCorrection", "false"),
+        ("ScummVMFullscreen", "false"),
+        ("StarRatingFloat", "0"),
+        ("StarRating", "0"),
+        ("CommunityStarRating", "0"),
+        ("CommunityStarRatingTotalVotes", "0"),
+        ("UseDosBox", "false"),
+        ("UseScummVM", "false"),
+        ("Portable", "false"),
+        ("Hide", "false"),
+        ("Broken", "false"),
+        ("MissingVideo", "false"),
+        ("MissingBoxFrontImage", "false"),
+        ("MissingScreenshotImage", "false"),
+        ("MissingMarqueeImage", "false"),
+        ("MissingClearLogoImage", "false"),
+        ("MissingBackgroundImage", "false"),
+        ("MissingBox3dImage", "false"),
+        ("MissingCartImage", "false"),
+        ("MissingCart3dImage", "false"),
+        ("MissingManual", "false"),
+        ("MissingBannerImage", "false"),
+        ("MissingMusic", "false"),
+        ("UseStartupScreen", "false"),
+        ("HideAllNonExclusiveFullscreenWindows", "false"),
+        ("StartupLoadDelay", "0"),
+        ("StartupScreenPostLaunchDisplayTime", "2000"),
+        ("MonitorStartupShutdownWithProcess", "false"),
+        ("HideMouseCursorInGame", "false"),
+        ("DisableShutdownScreen", "false"),
+        ("AggressiveWindowHiding", "false"),
+        ("OverrideDefaultStartupScreenSettings", "false"),
+        ("UsePauseScreen", "false"),
+        ("OverrideDefaultPauseScreenSettings", "false"),
+        ("SuspendProcessOnPause", "false"),
+        ("ForcefulPauseScreenActivation", "false"),
+        ("RetroAchievementsBeatenSoftcore", "false"),
+        ("RetroAchievementsBeatenHardcore", "false"),
+        ("HasCloudSynced", "false"),
+    };
+
+    // Written even when they have nothing in them, because LaunchBox writes them on every game it
+    // creates — all 129 of the measured expand carried these eight as empty elements. Unlike the
+    // <Game> normalisation that was declined, this is a node we are creating, LaunchBox has exactly
+    // one shape for it, and no existing row is being rewritten.
+    private static readonly string[] _gameAddAlwaysEmit =
+    { "CommandLine", "Developer", "Genre", "PlayMode", "Publisher", "Rating", "Region", "Series" };
+
     // Builds a fresh <Game> element from an added game's accumulated field map, in canonical order.
     private static XElement BuildGameElement(Dictionary<string, string> fld)
     {
+        foreach (var f in _gameAddAlwaysEmit)
+            if (!fld.ContainsKey(f)) fld[f] = "";
+        foreach (var (f, v) in _gameAddDefaults)
+            if (!fld.ContainsKey(f)) fld[f] = v;
+        // Stamped at flush, not at creation: an added game that never reaches the disk has no date
+        // to record, and re-running a flush must not keep moving it.
+        string now = new DateTime(DateTime.Now.Ticks, DateTimeKind.Local).ToString("o", CultureInfo.InvariantCulture);
+        if (!fld.ContainsKey("DateAdded")) fld["DateAdded"] = now;
+        if (!fld.ContainsKey("DateModified")) fld["DateModified"] = now;
+
         if (fld.TryGetValue("StarRatingFloat", out var srf) && !string.IsNullOrEmpty(srf) && !fld.ContainsKey("StarRating"))
             fld["StarRating"] = ((int)Math.Round(ParseFloat(srf))).ToString(CultureInfo.InvariantCulture);
-        return BuildElement("Game", fld, _gameAddOrder);
+        var el = BuildElement("Game", fld, _gameAddOrder);
+        // BuildElement drops empty values; put the always-written ones back, self-closing.
+        foreach (var f in _gameAddAlwaysEmit)
+            if (el.Element(f) == null) el.Add(new XElement(f));
+        return el;
     }
 
     // ── Top-level non-game entity write-back (Emulator, later Platform/Category/Playlist) ─────

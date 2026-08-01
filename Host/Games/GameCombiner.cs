@@ -326,7 +326,13 @@ internal static class GameCombiner
                 if (g == null) continue;
                 Set(() => g.Platform = platform);
                 Set(() => g.ApplicationPath = v.ApplicationPath);
-                Set(() => g.Version = v.Version);
+                // A version with no label leaves the restored game's Version to be derived.
+                // LaunchBox writes the file name without its extension there — which on every one
+                // of the twelve observed cases is also exactly the title, so the two cannot be told
+                // apart from this data; the raw name is used as the less processed of the two.
+                Set(() => g.Version = !string.IsNullOrEmpty(v.Version)
+                    ? v.Version
+                    : System.IO.Path.GetFileNameWithoutExtension(v.ApplicationPath ?? ""));
                 Set(() => g.Developer = v.Developer);
                 Set(() => g.Publisher = v.Publisher);
                 Set(() => g.Region = v.Region);

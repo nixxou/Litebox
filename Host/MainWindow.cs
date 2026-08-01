@@ -5705,12 +5705,53 @@ internal sealed class MainWindow : Form, IMessageFilter
                 + "lost, and so is any field a version cannot hold (genre, notes, rating…). "
                 + "Save games and save states are kept, and media are not touched.",
                 "Combine", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-        int n = Games.GameCombiner.Combine(games, root, dm);
-        if (n <= 0) return;
+        // Documents have to be picked BEFORE the combine: the games that own them are about to stop
+        // existing. Only the ones the destination does not already have are worth a question.
+        var others = games.Where(g => !ReferenceEquals(g, root)).ToArray();
+        var offer = Platforms.CombineDocumentPicker.Distinct(
+            others.Select(g => Games.GameCombiner.DocumentsOf(g)).ToList(),
+            Games.GameCombiner.DocumentsOf(root));
+        var keep = Platforms.CombineDocumentPicker.Ask(this, offer);
+
+        var outcome = Games.GameCombiner.Run(games, root, dm, keep);
+        if (outcome.Absorbed <= 0) return;
         try { dm.FlushIfSafe(); } catch { }
         ReloadAfterGameChange();
-        MessageBox.Show(this, $"{n} game(s) combined into \"{S(Safe(() => root.Title))}\".",
+
+        // Media of games that were NOT the same database entry are still on disk with nothing
+        // pointing at them. Deleting is offered, never done: they may be the only copy.
+        if (outcome.OrphanedMedia.Count > 0) OfferToDeleteOrphanedMedia(outcome.OrphanedMedia);
+
+        string media = outcome.MediaMoved > 0 || outcome.MediaSkipped > 0
+            ? $"\n\n{outcome.MediaMoved} media file(s) pooled, {outcome.MediaSkipped} already present or too similar."
+            : "";
+        MessageBox.Show(this, $"{outcome.Absorbed} game(s) combined into \"{S(Safe(() => root.Title))}\".{media}",
             "Combine", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    /// <summary>Offers to delete media left behind by a combine between two DIFFERENT database
+    /// entries. Nothing references them any more, but "unreferenced" is not "unwanted" — they may
+    /// be the only copy of art someone spent time on, so the default is to keep them and the count
+    /// is spelled out before anything is removed.</summary>
+    private void OfferToDeleteOrphanedMedia(IReadOnlyList<string> files)
+    {
+        if (MessageBox.Show(this,
+                $"{files.Count} media file(s) belonged to the absorbed game(s) and were not pooled, "
+                + "because they are not the same database entry.\n\n"
+                + "Nothing points at them any more. Delete them?\n\n"
+                + "They stay on disk if you decline, and can be deleted by hand later.",
+                "Combine", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+
+        int gone = 0, failed = 0;
+        foreach (var f in files)
+        {
+            try { if (System.IO.File.Exists(f)) { System.IO.File.Delete(f); gone++; } }
+            catch { failed++; }
+        }
+        if (failed > 0)
+            MessageBox.Show(this, $"{gone} deleted, {failed} could not be (in use or read-only).",
+                "Combine", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     private void ExpandSelectedGames(IGame[] games)

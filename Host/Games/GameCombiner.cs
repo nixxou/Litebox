@@ -33,6 +33,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using LbApiHost.Host.Data;
+using LbApiHost.Host.Media;
+using LbApiHost.Host.Media.Dedup;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -60,11 +62,35 @@ internal static class GameCombiner
 
     public static bool CanExpand(IGame game) => VersionsOf(game).Count > 0;
 
+    /// <summary>A game's documents — the additional applications the Manuals tab owns.</summary>
+    public static List<HostAdditionalApplication> DocumentsOf(IGame game)
+        => AddAppsOf(game).Where(a => !IsVersion(a)).ToList();
+
+    /// <summary>What a combine did, beyond the count — what the caller has to offer a decision
+    /// about once it is done.</summary>
+    internal sealed class CombineResult
+    {
+        public int Absorbed;
+        /// <summary>Media files of absorbed games that were NOT pooled, because the two were not the
+        /// same database entry. Nothing references them any more; deleting them is the caller's
+        /// question to ask, never this code's to decide.</summary>
+        public readonly List<string> OrphanedMedia = new();
+        /// <summary>What the media merge did decide to do, for reporting.</summary>
+        public int MediaMoved, MediaSkipped;
+    }
+
     /// <summary>Folds every game but <paramref name="root"/> into it as a version. Returns how many
     /// were absorbed.</summary>
     public static int Combine(IReadOnlyList<IGame> games, IGame root, HostDataManagerXml dm)
+        => Run(games, root, dm, null).Absorbed;
+
+    /// <summary>The full form. <paramref name="keepDocuments"/> holds the ids of the absorbed games'
+    /// documents the caller chose to carry over; everything else about them goes with the game.</summary>
+    internal static CombineResult Run(IReadOnlyList<IGame> games, IGame root, HostDataManagerXml dm,
+                                      ISet<string> keepDocuments)
     {
-        if (games == null || root == null || dm == null) return 0;
+        var outcome = new CombineResult();
+        if (games == null || root == null || dm == null) return outcome;
         string rootId = Safe(() => root.Id) ?? "";
         // Order decides the priorities, and LaunchBox's is not the caller's: measured on a combine
         // of 44 games, it is the root first, then the rest by Title — case-insensitive, ordinal, and
@@ -76,7 +102,7 @@ internal static class GameCombiner
             .Where(g => g != null && !string.Equals(Safe(() => g.Id) ?? "", rootId, StringComparison.OrdinalIgnoreCase))
             .OrderBy(g => Safe(() => g.Title) ?? "", StringComparer.OrdinalIgnoreCase)
             .ToList();
-        if (others.Count == 0) return 0;
+        if (others.Count == 0) return outcome;
 
         var rootVersions = VersionsOf(root);
         int priority = rootVersions.Select(v => v.Priority).DefaultIfEmpty(0).Max();
@@ -96,6 +122,8 @@ internal static class GameCombiner
         {
             try
             {
+                MergeOrOrphanMedia(g, root, outcome);
+
                 // Only its versions. The absorbed game's manuals go with it — matching
                 // LaunchBox, which does not carry them either. The FILES stay on disk under
                 // Manuals\<platform>\, recoverable by hand but not by either program.
@@ -104,12 +132,60 @@ internal static class GameCombiner
 
                 var version = AddVersion(root, g, ++priority);
                 GameSaveMover.ToVersion(g, root, version, dm);
+                // Documents the caller chose to keep are carried; the rest go with the game.
+                if (keepDocuments != null && keepDocuments.Count > 0)
+                    foreach (var doc in AddAppsOf(g))
+                        if (!IsVersion(doc) && keepDocuments.Contains(doc.Id ?? ""))
+                            CopyAddApp(root, doc, null);
+
                 dm.TryRemoveGame(g);
                 absorbed++;
             }
             catch { }
         }
-        return absorbed;
+        outcome.Absorbed = absorbed;
+        return outcome;
+    }
+
+    /// <summary>Pools the absorbed game's media into the root's — but ONLY when the two are the same
+    /// database entry, meaning both carry a DatabaseID and the two are equal.
+    ///
+    /// Two games with NO DatabaseID are not the same entry. They are two unidentified games, and
+    /// treating "both unknown" as "both the same" would pool the art of games that have nothing to
+    /// do with each other on the strength of a missing field.
+    ///
+    /// When they are not the same entry the files stay exactly where they are. Nothing references
+    /// them once the game is gone, so they are reported rather than touched: whether to delete them
+    /// is a question for whoever asked for the combine.</summary>
+    private static void MergeOrOrphanMedia(IGame source, IGame root, CombineResult outcome)
+    {
+        try
+        {
+            string lbRoot = MediaResolver.LbRoot;
+            string platform = Safe(() => source.Platform) ?? "";
+            string from = Safe(() => source.Title) ?? "", to = Safe(() => root.Title) ?? "";
+            if (lbRoot.Length == 0 || platform.Length == 0 || from.Length == 0 || to.Length == 0) return;
+            if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return;   // one collection already
+
+            int? a = Safe(() => source.LaunchBoxDbId), b = Safe(() => root.LaunchBoxDbId);
+            bool sameEntry = a.HasValue && b.HasValue && a.Value == b.Value;
+
+            var plan = GameMediaMerge.Plan(lbRoot, platform, from, to,
+                                           DupEngineMode.DHash,
+                                           DedupEngine.DefaultThreshold(DupEngineMode.DHash));
+            if (!sameEntry)
+            {
+                foreach (var item in plan.Items) outcome.OrphanedMedia.Add(item.From);
+                return;
+            }
+            if (plan.Moving == 0) { outcome.MediaSkipped += plan.Skipped; return; }
+
+            if (!Guid.TryParse(Safe(() => source.Id) ?? "", out var sid) || sid == Guid.Empty) return;
+            var res = GameMediaMerge.Apply(plan, lbRoot, sid, platform, from, to, sharedSource: false);
+            outcome.MediaMoved += res.Reached;
+            outcome.MediaSkipped += plan.Skipped;
+        }
+        catch { }
     }
 
     /// <summary>Turns <paramref name="source"/> into a version of <paramref name="root"/>, and

@@ -76,16 +76,27 @@ internal static class GameMediaMerge
         string from = MediaResolver.Sanitize(sourceTitle), to = MediaResolver.Sanitize(destTitle);
         if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return plan;   // same title: nothing is separate
 
-        // The destination's whole media collection, once, flattened across every type and region —
-        // "already there" deliberately ignores where a file is filed.
+        // Two different reaches, on purpose.
+        //
+        // BYTE-IDENTICAL is judged against the destination's WHOLE collection: the same bytes filed
+        // as a box front and as a screenshot are one file however they are labelled, and a second
+        // copy is noise wherever it lands.
+        //
+        // LOOKS-ALIKE is judged only against the SAME type and region — the same folder. Across
+        // types it would be nonsense: a box front that happens to resemble a screenshot is not a
+        // duplicate of it, and skipping on that would throw away the only art of a category.
+        var destByDir = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         var destFiles = new List<string>();
         foreach (var unit in GameMediaRenamer.Units(lbRoot, platform))
             foreach (var dir in unit)
-                destFiles.AddRange(FilesOf(dir, to));
+            {
+                var here = FilesOf(dir, to).ToList();
+                destByDir[dir] = here;
+                destFiles.AddRange(here);
+            }
 
         var destCrc = new HashSet<uint>();
         foreach (var f in destFiles) { uint? c = Crc(f); if (c.HasValue) destCrc.Add(c.Value); }
-        var destPictures = destFiles.Where(IsPicture).ToList();
 
         foreach (var unit in GameMediaRenamer.Units(lbRoot, platform))
             foreach (var dir in unit)
@@ -102,7 +113,9 @@ internal static class GameMediaMerge
 
                     if (IsPicture(file))
                     {
-                        var (dup, score) = NearestPicture(file, destPictures, mode, threshold);
+                        var here = destByDir.TryGetValue(dir, out var l)
+                            ? l.Where(IsPicture).ToList() : new List<string>();
+                        var (dup, score) = NearestPicture(file, here, mode, threshold);
                         if (dup == true)
                         { plan.Items.Add(new MergeItem(file, target, MergeVerdict.TooSimilar, score)); continue; }
                     }

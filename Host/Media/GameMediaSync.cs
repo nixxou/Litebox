@@ -174,7 +174,10 @@ internal static class GameMediaSync
     /// <summary>Another game of the same platform already carrying this title. Compared on the
     /// SANITIZED name, since that is what ends up in a filename — two titles differing only by a
     /// character the sanitizer folds would still collide on disk.</summary>
-    private static IGame? FindRival(IGame game, string platform, string title)
+    /// <summary>Another game of the same platform answering to that title — so the files named
+    /// after it are its media too. Internal because a combine has to ask the same question before
+    /// it moves or deletes anything.</summary>
+    internal static IGame? FindRival(IGame game, string platform, string title)
     {
         string wanted = MediaResolver.Sanitize(title ?? "");
         if (wanted.Length == 0) return null;

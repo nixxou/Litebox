@@ -170,18 +170,24 @@ internal static class GameCombiner
             int? a = Safe(() => source.LaunchBoxDbId), b = Safe(() => root.LaunchBoxDbId);
             bool sameEntry = a.HasValue && b.HasValue && a.Value == b.Value;
 
+            // A THIRD game still answering to the source title means these files are its media too.
+            // That changes both halves of what follows: what we take we must COPY rather than move,
+            // or the other game loses its art; and what we leave is not orphaned at all, so there is
+            // nothing to offer deleting.
+            bool shared = GameMediaSync.FindRival(source, platform, from) != null;
+
             var plan = GameMediaMerge.Plan(lbRoot, platform, from, to,
                                            DupEngineMode.DHash,
                                            DedupEngine.DefaultThreshold(DupEngineMode.DHash));
             if (!sameEntry)
             {
-                foreach (var item in plan.Items) outcome.OrphanedMedia.Add(item.From);
+                if (!shared) foreach (var item in plan.Items) outcome.OrphanedMedia.Add(item.From);
                 return;
             }
             if (plan.Moving == 0) { outcome.MediaSkipped += plan.Skipped; return; }
 
             if (!Guid.TryParse(Safe(() => source.Id) ?? "", out var sid) || sid == Guid.Empty) return;
-            var res = GameMediaMerge.Apply(plan, lbRoot, sid, platform, from, to, sharedSource: false);
+            var res = GameMediaMerge.Apply(plan, lbRoot, sid, platform, from, to, shared);
             outcome.MediaMoved += res.Reached;
             outcome.MediaSkipped += plan.Skipped;
         }

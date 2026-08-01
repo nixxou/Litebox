@@ -28,6 +28,8 @@ internal static class MediaMergeSelfTest
         fail += Case("une image trop ressemblante n'est pas deplacee", TooSimilar);
         fail += Case("une video ressemblante EST deplacee (pas de test visuel)", VideoIgnoresSimilarity);
         fail += Case("le reste est bien deplace, numerotation continuee", MovesTheRest);
+        fail += Case("la ressemblance ne franchit PAS les categories", SimilarityStaysInItsFolder);
+        fail += Case("un media partage est copie, pas deplace", SharedSourceCopies);
         Console.WriteLine(fail == 0 ? "[mediamerge] ALL PASS" : $"[mediamerge] {fail} FAILED");
         return fail == 0 ? 0 : 1;
     }
@@ -147,6 +149,44 @@ internal static class MediaMergeSelfTest
         var item = plan.Items.FirstOrDefault(i => i.From.EndsWith(A + "-01.mp4"));
         if (item == null) return "la video source n'a pas ete examinee";
         if (!item.Moves) return $"la video n'est pas deplacee (verdict {item.Verdict})";
+        return null;
+    }
+
+    private static string SimilarityStaysInItsFolder(string root)
+    {
+        if (!DedupEngine.IsAvailable(DupEngineMode.DHash))
+        { Console.WriteLine("[mediamerge]      (moteur dhash indisponible — cas non couvert)"); return null; }
+
+        // La meme image, mais rangee sous un AUTRE type chez la destination. Elle ne doit pas
+        // servir de reference : une jaquette qui ressemble a une capture n'en est pas un doublon.
+        // Deux tailles differentes pour que le CRC ne tranche pas a la place du test visuel.
+        string front = Dir(root, "Images", Plat, "Box - Front");
+        string shot = Dir(root, "Images", Plat, "Screenshot");
+        Picture(Path.Combine(front, A + "-01.png"), Color.FromArgb(200, 60, 30), 64);
+        Picture(Path.Combine(shot, B + "-01.png"), Color.FromArgb(200, 60, 30), 128);
+
+        var plan = Plan(root);
+        var item = plan.Items.FirstOrDefault(i => i.From.EndsWith(A + "-01.png"));
+        if (item == null) return "le fichier source n'a pas ete examine";
+        if (item.Verdict == MergeVerdict.TooSimilar)
+            return "ecarte a cause d'une image d'une AUTRE categorie";
+        if (!item.Moves) return $"non deplace (verdict {item.Verdict})";
+        return null;
+    }
+
+    private static string SharedSourceCopies(string root)
+    {
+        // Un troisieme jeu porte le meme titre que la source : ses medias sont aussi les siens,
+        // donc on copie au lieu de deplacer.
+        string front = Dir(root, "Images", Plat, "Box - Front");
+        Noise(Path.Combine(front, A + "-01.png"), 7);
+
+        var plan = Plan(root);
+        if (plan.Moving != 1) return $"{plan.Moving} fichier a deplacer au lieu de 1";
+        var res = GameMediaMerge.Apply(plan, root, Guid.NewGuid(), Plat, A, B, sharedSource: true);
+        if (res.Copied != 1) return $"copie={res.Copied} au lieu de 1 ({res})";
+        if (!File.Exists(Path.Combine(front, A + "-01.png"))) return "la source a ete supprimee malgre le partage";
+        if (!File.Exists(Path.Combine(front, B + "-01.png"))) return "la destination n'a pas recu le fichier";
         return null;
     }
 

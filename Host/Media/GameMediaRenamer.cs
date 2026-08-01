@@ -215,7 +215,11 @@ internal static class GameMediaRenamer
     private static string PlainPath(string source, string sani, int num)
         => Path.Combine(Path.GetDirectoryName(source)!, $"{sani}-{num:D2}{Path.GetExtension(source)}");
 
-    private static bool TryPlain(string nameNoExt, string sani, out int num)
+    /// <summary>The plain naming form: "&lt;title&gt;-NN". Internal because the merge planner has to
+    /// agree with it exactly — it used to carry its own, looser copy that also accepted a bare
+    /// "&lt;title&gt;", so it promised to move files this never planned. LaunchBox always numbers:
+    /// 49 of 49 sampled files in a real library carry the suffix.</summary>
+    internal static bool TryPlain(string nameNoExt, string sani, out int num)
     {
         num = 0;
         int dash = nameNoExt.LastIndexOf('-');

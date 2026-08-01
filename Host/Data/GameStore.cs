@@ -1068,17 +1068,9 @@ internal sealed class GameStore
     /// <summary>Creates a new in-memory game row (grows the compact store) and logs an "add" op.
     /// The &lt;Game&gt; node itself is created at flush time from the accumulated field ops. Returns
     /// the new row index; <paramref name="id"/> is the minted GUID (reused on replay → idempotent).</summary>
-    public int AddGameRow(string title, out Guid id) => AddGameRow(title, null, out id);
-
-    /// <summary>Creates a game, optionally with an identity chosen by the caller rather than a
-    /// fresh one. Used to give a game back the GUID it had before a combine absorbed it, which is
-    /// what every reference to it — playlist entries, GUID-named media, launch history, per-game
-    /// options — is keyed on. A requested id already in use is refused and a new one taken
-    /// instead: two games sharing an id is a far worse outcome than a lost reference.</summary>
-    public int AddGameRow(string title, Guid? requested, out Guid id)
+    public int AddGameRow(string title, out Guid id)
     {
-        id = requested.HasValue && requested.Value != Guid.Empty && !_byId.ContainsKey(requested.Value)
-            ? requested.Value : Guid.NewGuid();
+        id = Guid.NewGuid();
         int idx = GrowRow(id);
         Rows[idx].TitleIdx = InternRuntime(title);
         if (!ReadOnly && _oplog != null)

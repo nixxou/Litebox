@@ -7,25 +7,25 @@
 // kept on the version rather than folded into the root. Priority continues after the versions
 // already there.
 //
-// WHAT EXPANDING COSTS. LaunchBox loses three things: the absorbed game's DatabaseID, its GUID,
-// and its title, which comes back re-derived from the file name and can differ from the original.
-// It also deletes every save belonging to a version — 11 of 13 records gone in a measured expand,
-// with all the files left on disk.
+// WHAT IT COSTS, and we cost the same. Combining destroys the absorbed game's identity (GUID and
+// DatabaseID), its title — the expand re-derives one from the file name — its manuals, and every
+// field a version row has no room for: a version holds 29 fields where a game holds 103, so Genre,
+// Notes, Rating, StarRating, MaxPlayers, SortTitle and about fifteen others simply go.
 //
-// We give two of the three back. A combine performed HERE stashes the DatabaseID and the real title
-// against the version's own GUID in LiteBox's options database (scope "version"), and the expand
-// hands them over and clears the entry. The saves come back either way, re-pointed at the restored
-// game. The game GUID is the one thing still lost: restoring it would mean creating a game with a
-// chosen id, which the store does not offer, and it buys nothing on its own.
+// All of that is reproduced deliberately. Preserving it was built and measured, and it only ever
+// worked when LiteBox had performed BOTH halves — a combine done in LaunchBox left nothing to
+// restore from. Behaviour that changes depending on which program did the previous step is worse
+// than behaviour that is merely lossy, because nobody can predict it. So the one thing kept is the
+// one that needs no memory of its own.
 //
-// A combine done in LAUNCHBOX records nothing, so expanding its work falls back to LaunchBox's own
-// behaviour — a title re-derived from the file name, with the disc folded back in.
+// THE ONE DIVERGENCE: save games and save states survive, in both directions, on any file. They
+// are re-pointed, never re-created, so it works on a game LaunchBox combined and LiteBox expands
+// or the other way round. LaunchBox destroys them — 10 records of 12 on a measured combine, 11 of
+// 13 on a measured expand — while leaving every file on disk with nothing pointing at it.
 //
-// MEDIA. Combining only merges media when the two entries share a DatabaseID — same database entry
-// means the same game, so pooling their images is what the user asked for. Anything else keeps its
-// files where they are, because the merge is NOT reversible for media: after an expand the game
-// comes back with a new GUID and possibly a different title, so files moved into the root's
-// collection could never be handed back.
+// MEDIA are not touched at all, by either operation. Pooling two games' images was tried and
+// removed: it is one-way, since an expand returns a game with a new GUID and possibly a different
+// title, so nothing could ever be handed back.
 
 #nullable enable
 
@@ -33,7 +33,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using LbApiHost.Host.Data;
-using LbApiHost.Host.Media;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -97,31 +96,13 @@ internal static class GameCombiner
         {
             try
             {
-                MergeMediaIfSameEntry(g, root);
-
-                // EVERYTHING the absorbed game carried comes along, not just its versions: its
-                // manuals (Section=Document) and any plain additional applications too. They used
-                // to be left behind, which meant destroyed once deletion started taking the whole
-                // subtree — two manuals silently gone on the first game that had any.
-                //
-                // LaunchBox's behaviour here is NOT known; this is the choice that does not lose
-                // anything while we find out. If it turns out to drop them, that is a difference
-                // worth keeping.
-                foreach (var inner in AddAppsOf(g))
-                {
-                    var moved = CopyAddApp(root, inner, IsVersion(inner) ? ++priority : (int?)null);
-                    // Remember whose child it was, so the expand can give it back instead of
-                    // promoting it into a game of its own.
-                    if (moved?.Id is string mid && mid.Length > 0 && (Safe(() => g.Id) ?? "").Length > 0)
-                    {
-                        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, mid, "Combine.OwnerId", Safe(() => g.Id));
-                        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, mid, "Combine.Priority",
-                            inner.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    }
-                }
+                // Only its versions. The absorbed game's manuals go with it — matching
+                // LaunchBox, which does not carry them either. The FILES stay on disk under
+                // Manuals\<platform>\, recoverable by hand but not by either program.
+                foreach (var inner in VersionsOf(g))
+                    CopyAddApp(root, inner, ++priority);
 
                 var version = AddVersion(root, g, ++priority);
-                RememberForExpand(g, version);
                 MoveSaves(g, root, version, dm);
                 dm.TryRemoveGame(g);
                 absorbed++;
@@ -210,32 +191,6 @@ internal static class GameCombiner
 
     private const string SaveEntity = "GameSave";
 
-    /// <summary>Keeps beside the version the two things a combine destroys and an expand can never
-    /// work out again: the absorbed game's DatabaseID, and the title it actually had. The version's
-    /// own GUID is the key — LaunchBox keeps it as the row key, so it survives its saves too.
-    ///
-    /// The game's GUID is not kept: restoring it would mean creating a game with a chosen id, which
-    /// the store does not offer, and it buys nothing on its own.</summary>
-    private static void RememberForExpand(IGame source, HostAdditionalApplication version)
-    {
-        string vid = version?.Id ?? "";
-        if (vid.Length == 0) return;
-        int? db = Safe(() => source.LaunchBoxDbId);
-        string title = Safe(() => source.Title) ?? "";
-        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.DatabaseID",
-            db.HasValue ? db.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : null);
-        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.Title",
-            title.Length > 0 ? title : null);
-        // The identity itself. Everything that refers to a game refers to this: the 917 playlist
-        // entries in a real library, media named "<title>.<guid>-NN.ext" (1149 files over 73 games
-        // there), launch history, per-game options. A combine orphans all of it the moment the game
-        // stops existing — LaunchBox included — and without this the expand can never reattach any
-        // of it, because the game comes back as someone else.
-        string gid = Safe(() => source.Id) ?? "";
-        LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.GameId",
-            gid.Length > 0 ? gid : null);
-    }
-
     /// <summary>The disc number LaunchBox derives for a version. A game carries no Disc of its own —
     /// 170 test roms covering every notation imported with the field empty every time — so it is
     /// read out of the file name.</summary>
@@ -322,25 +277,9 @@ internal static class GameCombiner
         string platform = Safe(() => game.Platform) ?? "";
         string rootPath = Safe(() => game.ApplicationPath) ?? "";
 
-        // Children the combine hoisted here from an absorbed game, grouped by who owned them. They
-        // must NOT be expanded into games of their own — they were never games. They go back onto
-        // the game they belonged to, once it has been restored.
-        var owned = new Dictionary<string, List<HostAdditionalApplication>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var a in AddAppsOf(game))
-        {
-            string aid = a.Id ?? "";
-            string owner = aid.Length > 0
-                ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, aid, "Combine.OwnerId") : null;
-            if (string.IsNullOrEmpty(owner)) continue;
-            if (!owned.TryGetValue(owner, out var l)) owned[owner] = l = new List<HostAdditionalApplication>();
-            l.Add(a);
-        }
-
         int restored = 0;
         foreach (var v in versions)
         {
-            // Handled with its owner, not on its own.
-            if (owned.Values.Any(l => l.Contains(v))) continue;
 
             try
             {
@@ -355,20 +294,7 @@ internal static class GameCombiner
                     continue;
                 }
 
-                // What the combine stashed against this version, if it was OUR combine. LaunchBox
-                // records nothing, so an expand of its work falls back to re-deriving the title.
-                string vid = v.Id ?? "";
-                string kept = vid.Length > 0
-                    ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, vid, "Combine.Title") : null;
-                string dbid = vid.Length > 0
-                    ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, vid, "Combine.DatabaseID") : null;
-                string oldId = vid.Length > 0
-                    ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, vid, "Combine.GameId") : null;
-
-                string title = !string.IsNullOrEmpty(kept) ? kept : TitleFromFileName(v.ApplicationPath, v.Disc);
-
-                var g = dm.AddNewGame(title,
-                    Guid.TryParse(oldId ?? "", out var back) ? back : (Guid?)null);
+                var g = dm.AddNewGame(TitleFromFileName(v.ApplicationPath, v.Disc));
                 if (g == null) continue;
                 Set(() => g.Platform = platform);
                 Set(() => g.ApplicationPath = v.ApplicationPath);
@@ -388,32 +314,10 @@ internal static class GameCombiner
                 Set(() => g.PlayTime = v.PlayTime);
                 // Disc and the side flags are NOT carried: a <Game> never holds them. LaunchBox
                 // folds the disc into the title instead, which TitleFromFileName reproduces.
-                if (!string.IsNullOrEmpty(dbid) && int.TryParse(dbid, out int id))
-                    Set(() => g.LaunchBoxDbId = id);
+                // The DatabaseID and the GUID are gone, as they are for LaunchBox.
 
                 ReturnSaves(game, v, g, dm);
 
-                // Give the restored game back the children it owned before the combine.
-                if (!string.IsNullOrEmpty(oldId) && owned.TryGetValue(oldId, out var kids))
-                    foreach (var kid in kids)
-                    {
-                        string kid0 = (kid.Id ?? "").Length > 0
-                            ? LiteBoxOptionsDb.Get(LiteBoxOption.ScopeVersion, kid.Id, "Combine.Priority") : null;
-                        var moved = CopyAddApp(g, kid,
-                            int.TryParse(kid0 ?? "", out int p0) ? p0 : (int?)null);
-                        if (moved != null && (kid.Id ?? "").Length > 0)
-                        {
-                            LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, kid.Id, "Combine.OwnerId", null);
-                            LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, kid.Id, "Combine.Priority", null);
-                        }
-                        game.TryRemoveAdditionalApplication(kid);
-                    }
-                if (vid.Length > 0)
-                {
-                    LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.Title", null);
-                    LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.DatabaseID", null);
-                    LiteBoxOptionsDb.Set(LiteBoxOption.ScopeVersion, vid, "Combine.GameId", null);
-                }
                 game.TryRemoveAdditionalApplication(v);
                 restored++;
             }
@@ -521,15 +425,6 @@ internal static class GameCombiner
 
         store.SetSubEntities(rgid, SaveEntity, stay);
         store.SetSubEntities(ngid, SaveEntity, move);
-    }
-
-    /// <summary>Media follow only when the two entries are the SAME database game. Otherwise they
-    /// stay put: an expand cannot give them back, so moving them would be one-way.</summary>
-    private static void MergeMediaIfSameEntry(IGame source, IGame root)
-    {
-        int? a = Safe(() => source.LaunchBoxDbId), b = Safe(() => root.LaunchBoxDbId);
-        if (!a.HasValue || !b.HasValue || a.Value != b.Value) return;
-        GameMediaSync.MergeInto(source, root);
     }
 
     /// <summary>Every additional application a game carries, whatever its section.</summary>

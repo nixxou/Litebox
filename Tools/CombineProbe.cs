@@ -25,9 +25,6 @@ internal static class CombineProbe
 {
     public static int Run(string lbRoot, string rootId, string otherIds)
     {
-        // The options DB is opened at boot, which a probe does not go through — without this every
-        // Set/Get here returns silently and the side-band looks broken when it is not.
-        LiteBoxOptionsDb.Open();
         string dataDir = Path.Combine(lbRoot, "Data");
         var store = GameStore.Load(Path.Combine(dataDir, "Platforms"), Path.Combine(dataDir, "probe.pending.db"));
         store.ReadOnly = false;
@@ -58,9 +55,6 @@ internal static class CombineProbe
     /// <summary>Same idea in the other direction: expand a game's versions on a throwaway copy.</summary>
     public static int RunExpand(string lbRoot, string gameId)
     {
-        // The options DB is opened at boot, which a probe does not go through — without this every
-        // Set/Get here returns silently and the side-band looks broken when it is not.
-        LiteBoxOptionsDb.Open();
         string dataDir = Path.Combine(lbRoot, "Data");
         var store = GameStore.Load(Path.Combine(dataDir, "Platforms"), Path.Combine(dataDir, "probe.pending.db"));
         store.ReadOnly = false;

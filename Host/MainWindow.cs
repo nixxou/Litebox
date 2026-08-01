@@ -5698,6 +5698,13 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (_dm is not HostDataManagerXml dm || games.Length < 2) return;
         var root = Platforms.RootGamePicker.Ask(this, games);
         if (root == null) return;
+        // Same reasoning as Expand: the loss is LaunchBox's, but it is not going to be silent here.
+        if (MessageBox.Show(this,
+                $"Combine {games.Length} games into \"{S(Safe(() => root.Title))}\"?\n\n"
+                + "The absorbed games stop existing: their ID, database ID, title and manuals are "
+                + "lost, and so is any field a version cannot hold (genre, notes, rating…). "
+                + "Save games and save states are kept, and media are not touched.",
+                "Combine", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
         int n = Games.GameCombiner.Combine(games, root, dm);
         if (n <= 0) return;
         try { dm.FlushIfSafe(); } catch { }
@@ -5709,13 +5716,13 @@ internal sealed class MainWindow : Form, IMessageFilter
     private void ExpandSelectedGames(IGame[] games)
     {
         if (_dm is not HostDataManagerXml dm) return;
-        // LaunchBox's own wording, verbatim, so the same action is not described in two different
-        // voices depending on which program you are in. The warning it used to carry about what is
-        // lost no longer applies: the database ID and the original title come back when the combine
-        // was ours, and the saves come back either way (see GameCombiner.Expand).
+        // LaunchBox's wording, plus a line it does not have. Reproducing a data loss is a defensible
+        // choice; reproducing it in silence is not.
         if (MessageBox.Show(this,
                 "Additional application ROMs in the selected games will be expanded out into "
-                + "separate games. Are you sure you want to continue?",
+                + "separate games. Are you sure you want to continue?\n\n"
+                + "The restored games get a new ID and a title derived from their file name; their "
+                + "database ID is not recovered. Save games and save states are kept.",
                 "LiteBox", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
 
         int n = games.Sum(g => Games.GameCombiner.Expand(g, dm));

@@ -5714,14 +5714,10 @@ internal sealed class MainWindow : Form, IMessageFilter
         try { dm.FlushIfSafe(); } catch { }
         ReloadAfterGameChange();
 
-        // Media of games that were NOT the same database entry, plus whatever the filters turned
-        // down: nothing resolves them once the game is gone. They are removed rather than left —
-        // see MediaCleanup for why offering them turned out to be the worse of the two.
-        var swept = Media.MediaCleanup.Delete(outcome.OrphanedMedia, "combine");
 
-        string media = outcome.MediaMoved > 0 || outcome.MediaSkipped > 0 || swept.Deleted > 0
+        string media = outcome.MediaMoved > 0 || outcome.MediaSkipped > 0 || outcome.MediaDeleted > 0
             ? $"\n\n{outcome.MediaMoved} media file(s) pooled, {outcome.MediaSkipped} already present or too "
-              + $"similar, {swept.Deleted} orphan(s) deleted."
+              + $"similar, {outcome.MediaDeleted} orphan(s) deleted."
             : "";
         MessageBox.Show(this, $"{outcome.Absorbed} game(s) combined into \"{S(Safe(() => root.Title))}\".{media}",
             "Combine", MessageBoxButtons.OK, MessageBoxIcon.Information);

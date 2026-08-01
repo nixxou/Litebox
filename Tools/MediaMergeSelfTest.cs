@@ -34,6 +34,7 @@ internal static class MediaMergeSelfTest
         fail += Case("meme titre : les fichiers nominatifs sont laisses", SameTitlePlainUntouched);
         fail += Case("la forme de la destination est respectee", DestFormWins);
         fail += Case("meme numero dans deux regions : les deux sont conserves", NumbersArePerFolder);
+        fail += Case("un media GUID reste visible apres un renommage differe", GuidSurvivesDeferredRename);
         Console.WriteLine(fail == 0 ? "[mediamerge] ALL PASS" : $"[mediamerge] {fail} FAILED");
         return fail == 0 ? 0 : 1;
     }
@@ -274,6 +275,30 @@ internal static class MediaMergeSelfTest
         if (res.Reached != 2) return $"{res.Reached} fichiers arrives au lieu de 2";
         if (!File.Exists(Path.Combine(world, B + "-20.png"))) return "World n'a pas garde son -20";
         if (!File.Exists(Path.Combine(na, B + "-20.png"))) return "North America n'a pas garde son -20";
+        return null;
+    }
+
+    private static string GuidSurvivesDeferredRename(string root)
+    {
+        // Le renommage differe ecrit "<ANCIEN titre>.<guid>-01.ext" pour un jeu deja renomme. Toute
+        // la mecanique repose sur le fait qu'un nom GUID se reconnait au GUID SEUL. Un filtrage
+        // prealable sur le titre l'annulait en silence : le manuel disparaissait entre le renommage
+        // et l'ecriture. Les images survivaient par le cache indexe par id ; rien d'autre.
+        var id = Guid.NewGuid();
+        foreach (var (kind, ext) in new[] { ("Manuals", ".pdf"), ("Music", ".mp3") })
+        {
+            string dir = Dir(root, kind, Plat);
+            File.WriteAllText(Path.Combine(dir, $"Ancien Titre.{id:D}-01{ext}"), "x");
+        }
+        string was = MediaResolver.SwapRootForTest(root);
+        try
+        {
+            if (MediaResolver.Manual(Plat, id, "Nouveau Titre") == null)
+                return "le manuel au format GUID est invisible sous le nouveau titre";
+            if (MediaResolver.Music(Plat, id, "Nouveau Titre") == null)
+                return "la musique au format GUID est invisible sous le nouveau titre";
+        }
+        finally { MediaResolver.SwapRootForTest(was); }
         return null;
     }
 

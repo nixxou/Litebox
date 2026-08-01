@@ -76,7 +76,7 @@ internal static class GameCombiner
         /// question to ask, never this code's to decide.</summary>
         public readonly List<string> OrphanedMedia = new();
         /// <summary>What the media merge did decide to do, for reporting.</summary>
-        public int MediaMoved, MediaSkipped;
+        public int MediaMoved, MediaSkipped, MediaDeleted;
     }
 
     /// <summary>Folds every game but <paramref name="root"/> into it as a version. Returns how many
@@ -142,6 +142,15 @@ internal static class GameCombiner
                 absorbed++;
             }
             catch { }
+        }
+        // L'effacement fait partie de l'operation, pas de l'interface : un appelant qui n'est pas
+        // la fenetre principale — une sonde, un traitement par lot, un plugin — doit obtenir le
+        // meme resultat. C'est une simulation sur donnees reelles qui l'a montre : elle validait
+        // des invariants sur un nettoyage qui n'avait jamais lieu.
+        if (outcome.OrphanedMedia.Count > 0)
+        {
+            var swept = MediaCleanup.Delete(outcome.OrphanedMedia, "combine");
+            outcome.MediaDeleted = swept.Deleted;
         }
         outcome.Absorbed = absorbed;
         return outcome;

@@ -74,6 +74,15 @@ internal static class MediaResolver
     /// <summary>The LaunchBox root (parent of Data/Images), or null before Init.</summary>
     public static string LbRoot => _lbRoot;
 
+    /// <summary>Points the resolver at another tree, for tests and audits only. Returns the previous
+    /// root so the caller can put it back — nothing else here is designed to be re-pointed.</summary>
+    internal static string SwapRootForTest(string root)
+    {
+        string was = _lbRoot;
+        _lbRoot = root;
+        return was;
+    }
+
     /// <summary>
     /// A node icon from the "Nostalgic Platform Icons" media pack (as launchbox-web uses):
     /// Images\Media Packs\Platform Icons\Nostalgic Platform Icons\&lt;subFolder&gt;\&lt;name&gt;.png.
@@ -565,8 +574,20 @@ internal static class MediaResolver
         long bestNum = long.MaxValue;
         string glob = sani.Length > 0 ? sani + "*" : "*";
 
+        // TWO globs, and the second is not an optimisation — it is the whole point of the GUID form.
+        // TryMatch ignores the title part of a GUID name so a file follows its game whatever the
+        // title becomes; narrowing on the title first quietly undid that. The deferred rename writes
+        // exactly the offending shape — "<OLD title>.<guid>-01.pdf" for a game already renamed — so
+        // with the title glob alone a manual or a music track went INVISIBLE between the rename and
+        // the flush. Images survive it through the id-keyed cache; nothing else does.
         IEnumerable<string> files;
-        try { files = Directory.EnumerateFiles(dir, glob, SearchOption.TopDirectoryOnly); }
+        try
+        {
+            files = Directory.EnumerateFiles(dir, glob, SearchOption.TopDirectoryOnly);
+            if (id != Guid.Empty)
+                files = files.Concat(Directory.EnumerateFiles(dir, "*." + id.ToString("D") + "*",
+                                                              SearchOption.TopDirectoryOnly));
+        }
         catch { return null; }
 
         foreach (var f in files)
@@ -582,6 +603,11 @@ internal static class MediaResolver
     }
 
     /// <summary>Matches a filename (no ext) to the game by GUID form or legacy form; out = the -NNN value.</summary>
+    /// <summary>Does this file name designate that game? Exposed so the code that MOVES media can
+    /// be audited against the code that FINDS it — two independent notions of ownership that nothing
+    /// forces to agree.</summary>
+    internal static bool BelongsTo(string nameNoExt, Guid id, string sani) => TryMatch(nameNoExt, id, sani, out _);
+
     private static bool TryMatch(string nameNoExt, Guid id, string sani, out long num)
     {
         num = 0;

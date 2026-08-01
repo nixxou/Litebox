@@ -25,6 +25,10 @@ internal static class CombineProbe
 {
     public static int Run(string lbRoot, string rootId, string otherIds)
     {
+        // Le boot initialise le resolveur de medias ; une sonde ne le traverse pas. Sans cette
+        // ligne toute la branche media sort immediatement et les verifications passent A VIDE —
+        // exactement ce qui s'etait deja produit avec la base d'options.
+        LbApiHost.Host.Media.MediaResolver.Init(lbRoot);
         string dataDir = Path.Combine(lbRoot, "Data");
         var store = GameStore.Load(Path.Combine(dataDir, "Platforms"), Path.Combine(dataDir, "probe.pending.db"));
         store.ReadOnly = false;
@@ -55,6 +59,10 @@ internal static class CombineProbe
     /// <summary>Same idea in the other direction: expand a game's versions on a throwaway copy.</summary>
     public static int RunExpand(string lbRoot, string gameId)
     {
+        // Le boot initialise le resolveur de medias ; une sonde ne le traverse pas. Sans cette
+        // ligne toute la branche media sort immediatement et les verifications passent A VIDE —
+        // exactement ce qui s'etait deja produit avec la base d'options.
+        LbApiHost.Host.Media.MediaResolver.Init(lbRoot);
         string dataDir = Path.Combine(lbRoot, "Data");
         var store = GameStore.Load(Path.Combine(dataDir, "Platforms"), Path.Combine(dataDir, "probe.pending.db"));
         store.ReadOnly = false;

@@ -407,19 +407,25 @@ internal static class WriteBackSelfTest
         string xml = Path.Combine(platformsDir, "ExtraPlat.xml");
         File.WriteAllText(xml, "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
             $"  <Game><ID>{gid}</ID><Title>Extra</Title><Platform>ExtraPlat</Platform>" +
-            "<GogAppId>oldgog</GogAppId><MissingVideo>true</MissingVideo></Game>\n" +
+            "<GogAppId>oldgog</GogAppId><AndroidAppId>oldandroid</AndroidAppId>" +
+            "<MissingVideo>true</MissingVideo></Game>\n" +
             "</LaunchBox>\n");
 
         var store = GameStore.Load(platformsDir, Path.Combine(platformsDir, "..", "extra.pending.db"));
         store.ReadOnly = false;
         if (!store.ById.TryGetValue(gid, out var i)) { Check("extra: game found", false); store.CloseLog(); return 1; }
         var lg = (ILiteBoxGame)new HostGame(store, i);
-        f += Check("extra: read non-IGame field loaded from XML", lg.GetField("GogAppId") == "oldgog");
-        f += Check("extra: ExtraFieldNames lists non-IGame fields", lg.ExtraFieldNames.Contains("GogAppId") && lg.ExtraFieldNames.Contains("MissingVideo"));
+        f += Check("extra: read non-IGame field loaded from XML", lg.GetField("AndroidAppId") == "oldandroid");
+        // GogAppId a une colonne dediee depuis le support GOG/Steam/Epic : il est MODELISE, donc
+        // ni "extra" ni droppable. Ce test l'affirmait pourtant des deux — il etait rouge, en
+        // silence, depuis ce commit-la. Un champ que le modele ignore vraiment le remplace.
+        f += Check("extra: modeled field is NOT listed as extra", !lg.ExtraFieldNames.Contains("GogAppId"));
+        f += Check("extra: ExtraFieldNames lists non-IGame fields", lg.ExtraFieldNames.Contains("AndroidAppId") && lg.ExtraFieldNames.Contains("MissingVideo"));
         store.DropOptional();
-        f += Check("extra: dropped at launch (Tier-2)", lg.GetField("GogAppId") == "" && lg.ExtraFieldNames.Count == 0);
+        f += Check("extra: dropped at launch (Tier-2)", lg.GetField("AndroidAppId") == "" && lg.ExtraFieldNames.Count == 0);
+        f += Check("extra: modeled field survives the drop", lg.GetField("GogAppId") == "oldgog");
         store.ReloadOptional();
-        f += Check("extra: reloaded after exit", lg.GetField("GogAppId") == "oldgog");
+        f += Check("extra: reloaded after exit", lg.GetField("AndroidAppId") == "oldandroid");
         // An UN-FLUSHED todo edit (only in the op-log, not yet on disk) must survive drop/reload:
         // ReloadOptional re-reads pristine XML, then re-overlays the pending ops for the dropped tier.
         lg.SetField("OriginAppId", "pending-123");

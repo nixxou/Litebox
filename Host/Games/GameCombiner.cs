@@ -84,6 +84,8 @@ internal static class GameCombiner
         // versions it gets no new one (an earlier combine gave it that entry), which is what the
         // A.IV merge showed: four versions already there, the absorbed game took 5 and nothing else
         // appeared.
+        // The root's own saves are NOT re-pointed at that version: LaunchBox leaves them at game
+        // level even after the root becomes a version of itself, and there is no reason to differ.
         if (rootVersions.Count == 0) AddVersion(root, root, ++priority);
 
         foreach (var g in others)
@@ -96,7 +98,8 @@ internal static class GameCombiner
                 foreach (var inner in VersionsOf(g))
                     CopyVersion(root, inner, ++priority);
 
-                AddVersion(root, g, ++priority);
+                var version = AddVersion(root, g, ++priority);
+                MoveSaves(g, root, version, dm);
                 dm.TryRemoveGame(g);
                 absorbed++;
             }
@@ -105,10 +108,11 @@ internal static class GameCombiner
         return absorbed;
     }
 
-    /// <summary>Turns <paramref name="source"/> into a version of <paramref name="root"/>.</summary>
-    private static void AddVersion(IGame root, IGame source, int priority)
+    /// <summary>Turns <paramref name="source"/> into a version of <paramref name="root"/>, and
+    /// hands the version back so its saves can be re-pointed at it.</summary>
+    private static HostAdditionalApplication AddVersion(IGame root, IGame source, int priority)
     {
-        if (root.AddNewAdditionalApplication() is not HostAdditionalApplication v) return;
+        if (root.AddNewAdditionalApplication() is not HostAdditionalApplication v) return null;
         v.Section = VersionSection;
         v.UseEmulator = true;
         v.ApplicationPath = Safe(() => source.ApplicationPath) ?? "";
@@ -134,7 +138,54 @@ internal static class GameCombiner
         v.PlayCount = Safe(() => source.PlayCount);
         v.PlayTime = Safe(() => source.PlayTime);
         v.Priority = priority;
+        return v;
     }
+
+    /// <summary>Carries an absorbed game's save games and save states over to the root, tied to the
+    /// version it became.
+    ///
+    /// This is a DELIBERATE DIVERGENCE from LaunchBox, the only one in the combine. Measured: it
+    /// deletes them outright — 10 of 12 <GameSave> records vanished from a real combine — while
+    /// leaving every file on disk, so the saves survive with nothing left pointing at them. Nobody
+    /// is warned and nothing can be recovered without knowing the file names.
+    ///
+    /// Re-pointing costs nothing and invents nothing: AdditionalApplicationId is LaunchBox's own
+    /// field for a save belonging to a version, and 7 of the 15 saves already in this library use
+    /// it. The result is a file LaunchBox reads as it stands — it simply would not have written
+    /// it.</summary>
+    private static void MoveSaves(IGame source, IGame root, HostAdditionalApplication version, HostDataManagerXml dm)
+    {
+        if (version == null) return;
+        if (!Guid.TryParse(Safe(() => source.Id) ?? "", out var sgid)) return;
+        if (!Guid.TryParse(Safe(() => root.Id) ?? "", out var rgid)) return;
+
+        var store = dm.Store;
+        var moving = store.GetSubEntities(sgid, SaveEntity);
+        if (moving.Count == 0) return;
+
+        var kept = store.GetSubEntities(rgid, SaveEntity)
+            .Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+
+        foreach (var row in moving)
+        {
+            // Rebuilt rather than edited in place so GameId and AdditionalApplicationId lead the
+            // element, which is where LaunchBox puts them on the saves that already have one.
+            var moved = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["GameId"] = rgid.ToString(),
+                ["AdditionalApplicationId"] = version.Id,
+            };
+            foreach (var kv in row)
+                if (kv.Key != "GameId" && kv.Key != "AdditionalApplicationId")
+                    moved[kv.Key] = kv.Value;
+            kept.Add(moved);
+        }
+
+        store.SetSubEntities(rgid, SaveEntity, kept);
+        store.SetSubEntities(sgid, SaveEntity, Array.Empty<IReadOnlyDictionary<string, string>>());
+    }
+
+    private const string SaveEntity = "GameSave";
 
     /// <summary>The disc number LaunchBox derives for a version. A game carries no Disc of its own —
     /// 170 test roms covering every notation imported with the field empty every time — so it is

@@ -15,6 +15,9 @@ namespace LbApiHost.Host.Data;
 internal sealed class HostDataManagerXml : DummyDataManager
 {
     private readonly GameStore _store;
+    /// <summary>The backing store, for the few callers that need what the SDK does not expose —
+    /// per-game sub-entities such as &lt;GameSave&gt;.</summary>
+    internal GameStore Store => _store;
     private readonly string _imagesRoot;
     private readonly List<IGame> _allGames;   // index-aligned with store.Rows; AddNewGame appends
     private readonly List<IPlatform> _platforms;

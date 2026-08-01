@@ -974,6 +974,17 @@ internal sealed class GameStore
                 if (file == null || !File.Exists(file)) continue;
                 EnsureDoc(file);
                 if (index[file].TryGetValue(gid, out var ge)) { ge.Remove(); index[file].Remove(gid); touched.Add(gid); }
+                // Everything that hung off that game goes with it. Removing only the <Game> left
+                // its additional applications, alternate names, mounts, custom fields and saves in
+                // the file pointing at an id nothing resolves any more — invisible in both
+                // programs, and carried forward for good. Anything meant to survive a deletion has
+                // to be moved BEFORE this point (see GameCombiner.MoveSaves).
+                string id = gid.ToString();
+                foreach (var e in docs[file].Root.Elements().ToList())
+                {
+                    string owner = (string)(e.Element("GameID") ?? e.Element("GameId"));
+                    if (string.Equals(owner, id, StringComparison.OrdinalIgnoreCase)) e.Remove();
+                }
             }
             catch (Exception ex) { Console.WriteLine("[store] delete game " + gid + ": " + ex.Message); }
         }

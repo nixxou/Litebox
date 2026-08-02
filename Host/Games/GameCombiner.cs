@@ -370,6 +370,14 @@ internal static class GameCombiner
                 // name would give; feeding 130 versions a deliberately wrong label ("ALTERED-004"
                 // on a file called "… [Side A].txt") showed the label being ignored outright.
                 Set(() => g.Version = VersionFromFileName(v.ApplicationPath));
+                // Herites du PARENT — mesure sur le LaunchBox actuel, et c est un CHANGEMENT de
+                // leur part : l ancienne campagne prouvait l inverse (racine pleine, enfants
+                // vides). Ils copient meme sur un jeu sans rapport (A.IV recree avec le Genre de
+                // FF7). Notes et DatabaseID ne suivent pas ; Progress suit parfois, motif non
+                // elucide — non copie tant qu il n est pas compris.
+                Set(() => g.GenresString = game.GenresString);
+                Set(() => g.PlayMode = game.PlayMode);
+                Set(() => g.Rating = game.Rating);
                 Set(() => g.Developer = v.Developer);
                 Set(() => g.Publisher = v.Publisher);
                 Set(() => g.Region = v.Region);
@@ -479,8 +487,19 @@ internal static class GameCombiner
     /// whitespace squeezed to one. Both halves of that were measured, not styled — a version of
     /// "(Disc  3)" is named "Play (Disc 3) Version...", and an empty one gives "Play Version..."
     /// rather than the double space a plain concatenation leaves behind.</summary>
-    private static string VersionName(string version) =>
-        System.Text.RegularExpressions.Regex.Replace($"Play {version} Version...", @"\s+", " ");
+    private static string VersionName(string version)
+    {
+        // LaunchBox genere ce libelle dans SA langue — et pas celle de Settings.xml, qui disait
+        // en-US pendant qu il ecrivait « Jouer la version... » : il suit la culture Windows.
+        // Nous aussi, donc. Seuls le francais et l anglais sont MESURES ; toute autre langue
+        // retombe sur l anglais. Personne ne PARSE ces libelles (campagne des libelles
+        // falsifies, et l expand LB a digere notre libelle anglais sans broncher) : l enjeu est
+        // l homogeneite de la liste, rien d autre.
+        bool fr = System.Globalization.CultureInfo.CurrentUICulture
+            .TwoLetterISOLanguageName.Equals("fr", StringComparison.OrdinalIgnoreCase);
+        string raw = fr ? $"Jouer la version {version}..." : $"Play {version} Version...";
+        return System.Text.RegularExpressions.Regex.Replace(raw, @"\s+", " ");
+    }
 
     private static void Set(Action a) { try { a(); } catch { } }
     private static T? Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }

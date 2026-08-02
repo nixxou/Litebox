@@ -1449,20 +1449,38 @@ internal sealed class GameStore
         if (e == null) parent.Add(new XElement(name, value)); else e.Value = value;
     }
 
-    // Canonical-ish field order for a newly created <Game> (modelled fields; LB tolerates order).
+    // L ordre EXACT de LaunchBox, releve sur 12601 jeux lors de la campagne de mesure et verifie
+    // depuis sur deux versions de LB : l enfant cree par leur expand (61 champs) comme la racine
+    // ecrite par leur import en sont des sous-suites ordonnees. C est l ordre de declaration de
+    // leur classe Game, en append-only — il ne bouge pas entre versions. L ancien ordre d ici
+    // etait invente ("canonical-ish... LB tolerates order") : vrai, LB le tolere, mais un jeu
+    // cree par LiteBox se reconnaissait au premier coup d oeil. Ce n est plus le cas.
     private static readonly string[] _gameAddOrder =
     {
-        "ID", "Title", "SortTitle", "Platform", "ApplicationPath", "Emulator", "Developer", "Publisher",
-        "Genre", "Region", "Rating", "Status", "PlayMode", "Version", "Series", "Source", "ReleaseType",
-        "RootFolder", "CloneOf", "Progress", "WikipediaURL", "VideoUrl", "Notes", "CommandLine",
-        "ConfigurationCommandLine", "ConfigurationPath", "DosBoxConfigurationPath", "CustomDosBoxVersionPath",
-        "ScummVMGameDataFolderPath", "ScummVMGameType", "VideoPath", "ThemeVideoPath", "ManualPath", "MusicPath",
-        "RetroAchievementsHash", "DateAdded", "DateModified", "ReleaseDate", "LastPlayedDate", "StarRatingFloat",
-        "StarRating", "CommunityStarRating", "CommunityStarRatingTotalVotes", "DatabaseID", "MaxPlayers",
-        "StartupLoadDelay", "PlayCount", "PlayTime", "Favorite", "Hide", "Broken", "Completed", "Installed",
-        "Portable", "UseDosBox", "UseScummVM", "ScummVMAspectCorrection", "ScummVMFullscreen", "UseStartupScreen",
-        "OverrideDefaultStartupScreenSettings", "HideAllNonExclusiveFullscreenWindows", "HideMouseCursorInGame",
-        "DisableShutdownScreen", "AggressiveWindowHiding",
+        "GogAppId", "OriginAppId", "OriginInstallPath", "VideoPath", "ThemeVideoPath", "ApplicationPath",
+        "CommandLine", "Completed", "ConfigurationCommandLine", "ConfigurationPath", "DateAdded",
+        "DateModified", "Developer", "DosBoxConfigurationPath", "Emulator", "Favorite", "ID",
+        "LastPlayedDate", "ManualPath", "MusicPath", "Notes", "Platform", "Publisher", "Rating",
+        "ReleaseDate", "RootFolder", "ScummVMAspectCorrection", "ScummVMFullscreen",
+        "ScummVMGameDataFolderPath", "ScummVMGameType", "SortTitle", "Source", "StarRatingFloat",
+        "StarRating", "CommunityStarRating", "CommunityStarRatingTotalVotes", "Status", "DatabaseID",
+        "WikipediaURL", "Title", "UseDosBox", "UseScummVM", "Version", "Series", "PlayMode", "Region",
+        "PlayCount", "PlayTime", "Portable", "Hide", "Broken", "CloneOf", "Genre", "MissingVideo",
+        "MissingBoxFrontImage", "MissingScreenshotImage", "MissingMarqueeImage", "MissingClearLogoImage",
+        "MissingBackgroundImage", "MissingBox3dImage", "MissingCartImage", "MissingCart3dImage",
+        "MissingManual", "MissingBannerImage", "MissingMusic", "UseStartupScreen",
+        "HideAllNonExclusiveFullscreenWindows", "StartupLoadDelay", "StartupScreenPostLaunchDisplayTime",
+        "MonitorStartupShutdownWithProcess", "HideMouseCursorInGame", "DisableShutdownScreen",
+        "AggressiveWindowHiding", "OverrideDefaultStartupScreenSettings", "UsePauseScreen",
+        "PauseAutoHotkeyScript", "ResumeAutoHotkeyScript", "OverrideDefaultPauseScreenSettings",
+        "SuspendProcessOnPause", "ForcefulPauseScreenActivation", "LoadStateAutoHotkeyScript",
+        "SaveStateAutoHotkeyScript", "ResetAutoHotkeyScript", "SwapDiscsAutoHotkeyScript",
+        "CustomDosBoxVersionPath", "ReleaseType", "MaxPlayers", "VideoUrl", "AndroidBoxFrontThumbPath",
+        "AndroidBoxFrontFullPath", "AndroidClearLogoThumbPath", "AndroidClearLogoFullPath",
+        "AndroidBackgroundPath", "AndroidBackgroundThumbPath", "AndroidGameTitleScreenshotThumbPath",
+        "AndroidGameplayScreenshotThumbPath", "AndroidGameTitleScreenshotPath",
+        "AndroidGameplayScreenshotPath", "AndroidVideoPath", "RetroAchievementsBeatenSoftcore",
+        "RetroAchievementsBeatenHardcore", "HasCloudSynced", "Progress"
     };
 
     // What LaunchBox puts on a game it creates, beyond whatever the caller set. Read off 129 games
@@ -1541,10 +1559,27 @@ internal sealed class GameStore
 
         if (fld.TryGetValue("StarRatingFloat", out var srf) && !string.IsNullOrEmpty(srf) && !fld.ContainsKey("StarRating"))
             fld["StarRating"] = ((int)Math.Round(ParseFloat(srf))).ToString(CultureInfo.InvariantCulture);
-        var el = BuildElement("Game", fld, _gameAddOrder);
-        // BuildElement drops empty values; put the always-written ones back, self-closing.
-        foreach (var f in _gameAddAlwaysEmit)
-            if (el.Element(f) == null) el.Add(new XElement(f));
+        // LaunchBox ecrit ReleaseDate en date courte ("1997-01-31") — mesure sur ses propres
+        // lignes, parent et enfants d expand. Le format long passait inapercu tant que les
+        // parents des campagnes n avaient pas de date a transmettre.
+        if (fld.TryGetValue("ReleaseDate", out var rd) && rd.Length > 10 && rd[10] == 'T'
+            && rd.EndsWith("T00:00:00.0000000"))
+            fld["ReleaseDate"] = rd.Substring(0, 10);
+
+        // Construction ORDONNEE, vides compris : les huit champs toujours-ecrits doivent occuper
+        // leur position du gabarit, pas la fin de l element. Les re-ajouter apres coup (l ancienne
+        // methode) mettait CommandLine, Region et Series en queue — la seule chose qui separait
+        // encore nos jeux crees de ceux de LaunchBox, champ pour champ.
+        var el = new XElement("Game");
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var f in _gameAddOrder)
+        {
+            bool always = Array.IndexOf(_gameAddAlwaysEmit, f) >= 0;
+            if (fld.TryGetValue(f, out var v) && (always || !string.IsNullOrEmpty(v)))
+            { el.Add(string.IsNullOrEmpty(v) ? new XElement(f) : new XElement(f, v)); emitted.Add(f); }
+        }
+        foreach (var kv in fld)
+            if (!emitted.Contains(kv.Key) && !string.IsNullOrEmpty(kv.Value)) el.Add(new XElement(kv.Key, kv.Value));
         return el;
     }
 

@@ -325,6 +325,17 @@ internal static class MediaResolver
     public static string Manual(string platformName, Guid id, string title)
         => BestInDir(MediaFolder("Manuals", platformName), id, Sanitize(title), ManualExts, flat: true);
 
+    /// <summary>TOUTES les musiques du jeu, dans l ordre du parcours (meme regle que les manuels :
+    /// appartenance au nom de fichier, toute profondeur) — le premier est celui que Music() rend.</summary>
+    public static List<string> MusicsAll(string platformName, Guid id, string title)
+    {
+        var into = new List<string>();
+        string dir = MediaFolder("Music", platformName);
+        if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+            WalkFlatAll(dir, id, Sanitize(title), into);
+        return into;
+    }
+
     /// <summary>Music/theme-music file path (always IO). Null if none.</summary>
     public static string Music(string platformName, Guid id, string title)
         // Musique : meme forme que les manuels dans Platforms.xml (un MediaType, un FolderPath par

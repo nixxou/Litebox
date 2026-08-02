@@ -177,14 +177,24 @@ internal static class MetadataDb
         return list;
     }
 
-    // ── Manuals ─────────────────────────────────────────────────────────────────
-    // Manuals live in the SAME GameImages table under Type 'Manual' (screenscraper / emumovies; no launchbox).
-    // Same DB rule as every other tab (WebDbPath): extended only when ExtendDB is genuinely in play, else base
-    // LaunchBox. Download reuses the image path (a manual row is just a WebImage) — and since there are no
-    // launchbox rows, without ExtendDB's credentialed fetcher none are downloadable (the editor notes that).
-    public static List<WebImage> ManualsForGame(int databaseId) => ManualsForGame(WebDbPath(), databaseId);
+    // ── Documents (manuals / maps / press kits) ─────────────────────────────────
+    // Document rows live in the SAME GameImages table under Type 'Manual' / 'Map' / 'Press'
+    // (screenscraper / emumovies; no launchbox). Same DB rule as every other tab (WebDbPath): extended only
+    // when ExtendDB is genuinely in play, else base LaunchBox. Download reuses the image path (a document row
+    // is just a WebImage) — and since there are no launchbox rows, without ExtendDB's credentialed fetcher
+    // none are downloadable (the editor notes that). The row's Type distinguishes a manual (joins the manual
+    // collection) from a map / press kit (additional documents only).
+    public static List<WebImage> ManualsForGame(int databaseId)
+        => DocumentsForGame(WebDbPath(), databaseId).Where(w => string.Equals(w.Type, "Manual", StringComparison.OrdinalIgnoreCase)).ToList();
 
-    internal static List<WebImage> ManualsForGame(string? db, int databaseId)
+    /// <summary>Music rows (Type 'Music') — same table, same download path, same ExtendDB-fetcher caveat.</summary>
+    internal static List<WebImage> MusicForGame(string? db, int databaseId)
+        => RowsOfTypes(db, databaseId, "'Music'");
+
+    internal static List<WebImage> DocumentsForGame(string? db, int databaseId)
+        => RowsOfTypes(db, databaseId, "'Manual','Map','Press'");
+
+    private static List<WebImage> RowsOfTypes(string? db, int databaseId, string typesSql)
     {
         var list = new List<WebImage>();
         if (db == null || databaseId <= 0) return list;
@@ -208,7 +218,7 @@ internal static class MetadataDb
             cmd.CommandText =
                 $"SELECT \"FileName\", \"Type\", {Col("Region", "''")}, {Col("CRC32", "0")}, " +
                 $"{Col("Origin", "'launchbox'")}, {Col("duplicate", "0")}, {Col("FileSize", "0")} " +
-                "FROM \"GameImages\" WHERE \"DatabaseId\" = $id AND \"Type\" = 'Manual'";
+                $"FROM \"GameImages\" WHERE \"DatabaseId\" = $id AND \"Type\" IN ({typesSql})";
             cmd.Parameters.Add(new SqliteParameter("$id", databaseId));
             using var r = cmd.ExecuteReader();
             while (r.Read())

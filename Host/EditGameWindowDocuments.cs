@@ -40,7 +40,8 @@ internal sealed partial class EditGameWindow
     private IGame DocGame => _editGames[0];
 
     // Extensions LaunchBox recognises as manuals/documents (mirrors ExtendDB's manual set).
-    private static readonly HashSet<string> DocExts = new(StringComparer.OrdinalIgnoreCase)
+    // Internal: the thumb GC filters the Manuals tree with the SAME set when marking valid thumbs.
+    internal static readonly HashSet<string> DocExts = new(StringComparer.OrdinalIgnoreCase)
     { ".pdf", ".cbz", ".cbr", ".zip", ".txt", ".htm", ".html", ".doc", ".docx" };
     private static readonly HashSet<string> DocImageExts = new(StringComparer.OrdinalIgnoreCase)
     { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp" };
@@ -52,6 +53,8 @@ internal sealed partial class EditGameWindow
     private int DocCellW => S(150);
     private int DocCellH => S(196);
     private int DocThumbH => DocCellH - S(52);
+    // Additional tiles carry a third caption line (the LABEL when it differs from the file name).
+    private int DocCellHA => DocCellH + S(16);
 
     private Panel? _docHost;
 
@@ -103,6 +106,23 @@ internal sealed partial class EditGameWindow
         host.Controls.Add(inner);
         int y = S(10);
 
+        // ManualPath readout — the RAW stored field, always visible. La designation est un CHAMP ;
+        // la page le dit telle quelle (valeur relative/absolue du XML), sans ouvrir Info. Rebati a
+        // chaque DocRefresh, donc a jour apres chaque action. Vide = selection auto.
+        string mpStored = Safe(() => DocGame.ManualPath) ?? "";
+        bool mpSet = !string.IsNullOrWhiteSpace(mpStored);
+        bool mpMissing = mpSet && !File.Exists(DocResolve(mpStored));
+        var mpLbl = new Label
+        {
+            Text = "ManualPath :  " + (!mpSet ? "(not set — auto selection)" : mpStored + (mpMissing ? "   (missing)" : "")),
+            ForeColor = !mpSet ? SubFg : mpMissing ? Color.FromArgb(200, 110, 100) : DocManualAccent,
+            BackColor = Bg, Font = new Font("Segoe UI", 8.5f, mpSet ? FontStyle.Regular : FontStyle.Italic),
+            AutoSize = false, AutoEllipsis = true,
+        };
+        mpLbl.SetBounds(S(12), y, DocAvailWidth(host), S(20));
+        if (mpSet) new ToolTip().SetToolTip(mpLbl, DocResolve(mpStored));   // resolved absolute path on hover
+        inner.Controls.Add(mpLbl); y += S(26);
+
         // Missing-file warning strip + one-click "unlink all missing".
         int missing = DocMissingCount();
         if (missing > 0 && !_readOnly)
@@ -115,44 +135,58 @@ internal sealed partial class EditGameWindow
             y += S(32);
         }
 
-        // ── Manual (single slot) ──
-        var mh = new Label { Text = "━━  Manual", ForeColor = Fg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg };
-        mh.SetBounds(S(12), y, S(400), S(26)); inner.Controls.Add(mh); y += S(30);
+        // ── Manuals — the whole COLLECTION, like the image thumbs ──
+        // L ordre est celui du parcours de resolution (ManualsAll : priorite de region puis
+        // alphabet) — l element 0 est le choix AUTO, exactement ce que l ecran de pause ouvrira.
+        // La designation (<ManualPath>) se pose PAR-DESSUS : sa tuile est en or PLEIN ; le choix
+        // auto est en or POINTILLE — la difference auto/designe se lit a la bordure et au badge.
+        var manuals = DocManualsAll();
+        string pinnedAbs = MediaResolver.Override(Safe(() => DocGame.ManualPath)) ?? "";
+        string storedAbs = DocManualAbs();                       // resolved stored path, even when the file is gone
+        string selectedManual = pinnedAbs.Length > 0 ? pinnedAbs : (manuals.Count > 0 ? manuals[0] : "");
+        bool manualDesignated = pinnedAbs.Length > 0;
 
-        // Le champ d abord (designation explicite), la CONVENTION ensuite — la meme resolution
-        // que le reste de l application. Avant cela la tuile ne montrait que ManualPath : un
-        // manuel telecharge, qui ne pose plus ce champ, devenait invisible ICI alors que le jeu
-        // l affichait partout ailleurs.
-        string manual = DocManualAbs();
-        bool manualAuto = false;
-        if (string.IsNullOrEmpty(manual))
+        var mh = new Label
         {
-            Guid.TryParse(Safe(() => DocGame.Id) ?? "", out var mid);
-            manual = MediaResolver.Manual(Safe(() => DocGame.Platform) ?? "", mid,
-                                          Safe(() => DocGame.Title) ?? "") ?? "";
-            manualAuto = manual.Length > 0;
-        }
-        if (!string.IsNullOrEmpty(manual))
+            Text = "━━  Manuals" + (selectedManual.Length == 0 ? ""
+                   : manualDesignated ? "   ·   designated" : "   ·   auto — region priority picks (right-click one to set it)"),
+            ForeColor = Fg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg,
+        };
+        mh.SetBounds(S(12), y, S(700), S(26)); inner.Controls.Add(mh); y += S(30);
+
+        int mcols = Math.Max(1, DocAvailWidth(host) / DocCellW);
+        int mx = S(16), mcol = 0; bool anyManual = false;
+        void PlaceManual(Panel cell)
         {
-            var cell = DocTile(manual, null, isManual: true, manualAuto);
-            cell.Location = new Point(S(16), y); inner.Controls.Add(cell);
+            if (mcol == mcols) { mcol = 0; mx = S(16); y += DocCellH; }
+            cell.Location = new Point(mx, y); inner.Controls.Add(cell);
+            mx += DocCellW; mcol++; anyManual = true;
         }
-        else
+        if (manualDesignated && !manuals.Any(p => DocPathEq(p, pinnedAbs)))
+            PlaceManual(DocManualTile(pinnedAbs, selected: true, designated: true));      // designe hors collection (externe)
+        else if (!manualDesignated && storedAbs.Length > 0)
+            PlaceManual(DocManualTile(storedAbs, selected: false, designated: true));     // designe mais INTROUVABLE
+        foreach (var p in manuals)
+            PlaceManual(DocManualTile(p, DocPathEq(p, selectedManual), manualDesignated && DocPathEq(p, pinnedAbs)));
+        if (!anyManual)
         {
             var none = new Label
             {
-                Text = "No manual set — use “＋ Add Document…” and choose “Set as Manual”.", AutoSize = false,
+                Text = "No manual — use “＋ Add Document…” or download one below.", AutoSize = false,
                 ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 10f, FontStyle.Italic),
             };
             none.SetBounds(S(16), y + S(4), S(560), S(26)); inner.Controls.Add(none);
+            y += S(34);
         }
-        y += DocCellH + S(12);
+        else y += DocCellH + S(12);
 
-        // ── Additional documents (grid) ──
+        // ── Additional documents (grid) ── — INTEGRALE, dans l ordre LaunchBox. Les entrees des
+        // manuels telecharges y figurent donc aussi (le meme fichier apparait dans les deux
+        // grilles) : c est la liste reelle du XML, sans filtrage d affichage.
+        var docs = DocAdditional();
         var ah = new Label { Text = "━━  Additional documents", ForeColor = Fg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg };
         ah.SetBounds(S(12), y, S(400), S(26)); inner.Controls.Add(ah); y += S(30);
 
-        var docs = DocAdditional();
         if (docs.Count == 0)
         {
             var none = new Label
@@ -169,12 +203,12 @@ internal sealed partial class EditGameWindow
             int x = S(16), col = 0;
             foreach (var (app, abs) in docs)
             {
-                if (col == cols) { col = 0; x = S(16); y += DocCellH; }
-                var cell = DocTile(abs, app, isManual: false);
+                if (col == cols) { col = 0; x = S(16); y += DocCellHA; }
+                var cell = DocTile(abs, app);
                 cell.Location = new Point(x, y); inner.Controls.Add(cell);
                 x += DocCellW; col++;
             }
-            y += DocCellH + S(8);
+            y += DocCellHA + S(8);
         }
 
         DocAppendWeb(inner, host, ref y);
@@ -184,20 +218,80 @@ internal sealed partial class EditGameWindow
 
     private void DocRefresh() { if (_docHost != null) DocPopulate(_docHost); }
 
-    // ── Tile ──────────────────────────────────────────────────────────────────
-    private Panel DocTile(string absPath, HostAdditionalApplication? app, bool isManual, bool autoResolved = false)
+    // ── Tiles ─────────────────────────────────────────────────────────────────
+    /// <summary>Additional-document tile. Ligne 1 = nom de FICHIER, ligne 2 = etat ; le LABEL de
+    /// l entree (app.Name) s affiche en ligne 3 quand il differe du nom de fichier — c est lui que
+    /// LaunchBox montre dans ses listes, il merite d etre visible sans ouvrir le menu.</summary>
+    private Panel DocTile(string absPath, HostAdditionalApplication? app)
+    {
+        var cell = new Panel { Size = new Size(DocCellW, DocCellHA), BackColor = Bg };
+        bool exists = !string.IsNullOrEmpty(absPath) && File.Exists(absPath);
+        bool managed = exists && DocIsManaged(absPath);
+        // Border: DOTTED and coloured by the download source (blue = EmuMovies, purple = database)
+        // when the file carries an :info origin; else the managed(green)/external(grey) style.
+        Color? src = exists ? DocSourceColor(DocAdsOrigin(absPath)) : null;
+        Color border = src ?? (managed ? DocManagedColor : DocExternalColor);
+        DashStyle style = !exists ? DashStyle.Dash
+                        : src != null ? DashStyle.Dot
+                        : managed ? DashStyle.Solid : DashStyle.Dash;
+        DocTileChrome(cell, absPath, border, style, exists, pt => DocMenu(absPath, app, exists, managed).Show(cell.Controls[0], pt));
+
+        string fileName = string.IsNullOrEmpty(absPath) ? "(unset)" : Path.GetFileName(absPath);
+        // La region d un document, quand on la connait (nom de dossier de la convention, sinon
+        // l ADS), figure dans la ligne d etat — c est elle que l utilisateur cherche.
+        string region = exists ? DocManualRegion(absPath) : "";
+        string loc = !exists ? "missing" : (managed ? "managed" : "external");
+        DocTileCaptions(cell, fileName,
+            "Doc" + (region.Length > 0 ? "  ·  " + region : "") + $"  ·  {DocExtLabel(absPath)}  ·  {loc}",
+            exists ? (managed ? DocManagedColor : DocExternalColor) : Color.FromArgb(200, 110, 100));
+
+        string label = (app?.Name ?? "").Trim();
+        bool labelDiff = label.Length > 0
+            && !label.Equals(fileName, StringComparison.OrdinalIgnoreCase)
+            && !label.Equals(Path.GetFileNameWithoutExtension(fileName), StringComparison.OrdinalIgnoreCase);
+        if (labelDiff)
+        {
+            var lb = new Label { Text = label, ForeColor = Color.FromArgb(190, 195, 205), BackColor = Bg, Font = new Font("Segoe UI", 7.5f, FontStyle.Italic), AutoSize = false, AutoEllipsis = true };
+            lb.SetBounds(S(4), DocThumbH + S(42), DocCellW - S(8), S(16));
+            cell.Controls.Add(lb);
+            new ToolTip().SetToolTip(lb, "Label:  " + label);
+        }
+        return cell;
+    }
+
+    /// <summary>Manual-collection tile. The border tells the mode apart at a glance: SOLID gold =
+    /// designated (&lt;ManualPath&gt;), DOTTED gold = the auto pick (region priority); the badge repeats
+    /// it ("Manual · main" / "Manual · auto"). Others keep the managed/external/source styles.</summary>
+    private Panel DocManualTile(string absPath, bool selected, bool designated)
     {
         var cell = new Panel { Size = new Size(DocCellW, DocCellH), BackColor = Bg };
         bool exists = !string.IsNullOrEmpty(absPath) && File.Exists(absPath);
         bool managed = exists && DocIsManaged(absPath);
-        // Border: gold for the manual slot; else DOTTED and coloured by the download source (blue = EmuMovies,
-        // purple = database) when the file carries an :info origin; else the managed(green)/external(grey) style.
-        Color? src = exists && !isManual ? DocSourceColor(DocAdsOrigin(absPath)) : null;
-        Color border = isManual ? DocManualAccent : (src ?? (managed ? DocManagedColor : DocExternalColor));
+        var app = DocAppFor(absPath);   // l entree additionnelle du meme fichier — elle suit les operations
+
+        Color? src = exists && !selected ? DocSourceColor(DocAdsOrigin(absPath)) : null;
+        Color border = selected || designated ? DocManualAccent : (src ?? (managed ? DocManagedColor : DocExternalColor));
         DashStyle style = !exists ? DashStyle.Dash
+                        : selected ? (designated ? DashStyle.Solid : DashStyle.Dot)
                         : src != null ? DashStyle.Dot
                         : managed ? DashStyle.Solid : DashStyle.Dash;
+        DocTileChrome(cell, absPath, border, style, exists,
+            pt => DocManualMenu(absPath, exists, managed, designated, app).Show(cell.Controls[0], pt));
 
+        string tag = "Manual" + (designated ? " · main" : selected ? " · auto" : "");
+        string region = DocManualRegion(absPath);
+        string loc = !exists ? "missing" : (managed ? "managed" : "external");
+        DocTileCaptions(cell, Path.GetFileName(absPath),
+            tag + (region.Length > 0 ? "  ·  " + region : "") + $"  ·  {DocExtLabel(absPath)}  ·  {loc}",
+            !exists ? Color.FromArgb(200, 110, 100) : selected || designated ? DocManualAccent : managed ? DocManagedColor : DocExternalColor);
+        return cell;
+    }
+
+    private static string DocExtLabel(string absPath) => Path.GetExtension(absPath).TrimStart('.').ToUpperInvariant();
+
+    /// <summary>Shared tile plumbing: border paint, thumbnail, left-open / right-menu wiring.</summary>
+    private void DocTileChrome(Panel cell, string absPath, Color border, DashStyle style, bool exists, Action<Point> menu)
+    {
         // Border on the CELL, AROUND the thumbnail — not on a panel the (fill-docked) PictureBox would cover.
         cell.Paint += (_, e) =>
         {
@@ -207,60 +301,40 @@ internal sealed partial class EditGameWindow
         var pic = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 18, 24), Cursor = Cursors.Hand };
         pic.SetBounds(S(6), S(6), DocCellW - S(12), DocThumbH - S(4));
         cell.Controls.Add(pic);
+        cell.Controls.SetChildIndex(pic, 0);   // the menus anchor on Controls[0]
 
         if (exists) DocLoadThumb(pic, absPath);
         else { var o = pic.Image; pic.Image = DocBadge(".missing", DocCellW - S(16), DocThumbH - S(8)); o?.Dispose(); }
 
-        void OpenIt() { if (exists) DocOpen(absPath); }
-        void Menu(Point pt) => DocMenu(absPath, app, isManual, exists, managed, autoResolved).Show(pic, pt);
         // LEFT opens the document; RIGHT opens the menu. (Control.Click fires for right-click too on some
         // controls, which was opening the file on right-click — gate on the button explicitly.)
-        pic.MouseUp += (_, e) => { if (e.Button == MouseButtons.Left) OpenIt(); else if (e.Button == MouseButtons.Right) Menu(e.Location); };
+        pic.MouseUp += (_, e) => { if (e.Button == MouseButtons.Left) { if (exists) DocOpen(absPath); } else if (e.Button == MouseButtons.Right) menu(e.Location); };
+    }
 
-        string fileName = string.IsNullOrEmpty(absPath) ? "(unset)" : Path.GetFileName(absPath);
-        string display = isManual ? fileName : (app != null && !string.IsNullOrWhiteSpace(app.Name) ? app.Name : fileName);
+    private void DocTileCaptions(Panel cell, string display, string infoText, Color infoColor)
+    {
         var name = new Label { Text = display, ForeColor = Fg, BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
         name.SetBounds(S(4), DocThumbH + S(6), DocCellW - S(8), S(16));
         cell.Controls.Add(name);
-
-        string ext = Path.GetExtension(absPath).TrimStart('.').ToUpperInvariant();
-        string tag = isManual ? (autoResolved ? "Manual · auto" : "Manual") : "Doc";
-        string loc = !exists ? "missing" : (managed ? "managed" : "external");
-        var info = new Label { Text = $"{tag}  ·  {ext}  ·  {loc}", ForeColor = exists ? (managed ? DocManagedColor : DocExternalColor) : Color.FromArgb(200, 110, 100), BackColor = Bg, Font = new Font("Segoe UI", 7.5f), AutoSize = false, AutoEllipsis = true };
+        var info = new Label { Text = infoText, ForeColor = infoColor, BackColor = Bg, Font = new Font("Segoe UI", 7.5f), AutoSize = false, AutoEllipsis = true };
         info.SetBounds(S(4), DocThumbH + S(24), DocCellW - S(8), S(16));
         cell.Controls.Add(info);
-
-        return cell;
+        new ToolTip().SetToolTip(info, infoText);   // the line often ellipsizes at this cell width
     }
 
-    private ContextMenuStrip DocMenu(string absPath, HostAdditionalApplication? app, bool isManual, bool exists, bool managed, bool autoResolved = false)
+    private ContextMenuStrip DocMenu(string absPath, HostAdditionalApplication? app, bool exists, bool managed)
     {
         var m = ThemedMenu();
         if (exists)
         {
             m.Items.Add(new ToolStripMenuItem("Open").WithClick(() => DocOpen(absPath)));
             m.Items.Add(new ToolStripMenuItem("Show in Explorer").WithClick(() => DocReveal(absPath)));
-            m.Items.Add(new ToolStripMenuItem("Info…").WithClick(() => DocShowInfo(absPath, isManual)));
+            m.Items.Add(new ToolStripMenuItem("Info…").WithClick(() => DocShowInfo(absPath, isManual: false)));
         }
 
         if (!_readOnly)
         {
-            if (isManual)
-            {
-                m.Items.Add(new ToolStripSeparator());
-                m.Items.Add(new ToolStripMenuItem("Replace…").WithClick(() => DocReplaceManual()));
-                if (exists && !managed && DocManualsDir().Length > 0)
-                {
-                    m.Items.Add(new ToolStripMenuItem("Move into Manuals folder").WithClick(() => DocRelocateManual(absPath, move: true)));
-                    m.Items.Add(new ToolStripMenuItem("Copy into Manuals folder").WithClick(() => DocRelocateManual(absPath, move: false)));
-                }
-                // Rien a effacer quand la tuile vient de la convention : aucun champ n est pose,
-                // et "Clear" laisserait croire qu on peut retirer un manuel qui reviendrait au
-                // prochain rafraichissement.
-                if (!autoResolved)
-                    m.Items.Add(new ToolStripMenuItem(exists ? "Clear manual" : "Unlink missing manual").WithClick(() => { DocSetManual(""); DocRefresh(); }));
-            }
-            else if (app != null)
+            if (app != null)
             {
                 m.Items.Add(new ToolStripSeparator());
                 // Reorder — the additional-document order is the LaunchBox list order; swap with the adjacent one.
@@ -270,8 +344,8 @@ internal sealed partial class EditGameWindow
                 if (idx >= 0 && idx < docs.Count - 1) m.Items.Add(new ToolStripMenuItem("Move down").WithClick(() => { app.SwapPositionWith(docs[idx + 1].app); DocRefresh(); }));
 
                 m.Items.Add(new ToolStripSeparator());
-                m.Items.Add(new ToolStripMenuItem("Promote to Manual").WithClick(() => { DocPromote(app); DocRefresh(); }));
-                m.Items.Add(new ToolStripMenuItem("Rename…").WithClick(() => { if (DocRename(app)) DocRefresh(); }));
+                m.Items.Add(new ToolStripMenuItem("Set as manual").WithClick(() => { DocPromote(app); DocRefresh(); }));
+                m.Items.Add(new ToolStripMenuItem("Change label…").WithClick(() => { if (DocRename(app)) DocRefresh(); }));
                 if (exists && !managed && DocManualsDir().Length > 0)
                 {
                     m.Items.Add(new ToolStripMenuItem("Move into Manuals folder").WithClick(() => DocRelocateApp(app, absPath, move: true)));
@@ -285,11 +359,189 @@ internal sealed partial class EditGameWindow
         return m;
     }
 
+    /// <summary>Right-click menu of a manual-collection tile. Region and number live in the PATH
+    /// (folder / -NN), so changing them is moving/renaming the file — the additional-document entry
+    /// and the designation follow it.</summary>
+    private ContextMenuStrip DocManualMenu(string absPath, bool exists, bool managed, bool designated, HostAdditionalApplication? app)
+    {
+        var m = ThemedMenu();
+        if (exists)
+        {
+            m.Items.Add(new ToolStripMenuItem("Open").WithClick(() => DocOpen(absPath)));
+            m.Items.Add(new ToolStripMenuItem("Show in Explorer").WithClick(() => DocReveal(absPath)));
+            m.Items.Add(new ToolStripMenuItem("Info…").WithClick(() => DocShowInfo(absPath, isManual: true)));
+        }
+        if (_readOnly) return m;
+
+        m.Items.Add(new ToolStripSeparator());
+        if (designated)
+            m.Items.Add(new ToolStripMenuItem(exists ? "Clear designation (back to auto)" : "Unlink missing manual")
+                .WithClick(() => { DocSetManual(""); DocRefresh(); }));
+        else if (exists)
+            m.Items.Add(new ToolStripMenuItem("Set as manual").WithClick(() => { DocDesignateManual(absPath); DocRefresh(); }));
+
+        if (exists && managed)
+        {
+            // La region d un manuel EST son dossier : en changer, c est deplacer le fichier, sous
+            // le nom conventionnel (numero libre du dossier cible).
+            var mv = new ToolStripMenuItem("Move to region");
+            string cur = DocManualRegion(absPath);
+            foreach (var r in LbRegions.Fallback)
+            {
+                string rr = r;
+                mv.DropDownItems.Add(new ToolStripMenuItem(rr) { Checked = string.Equals(rr, cur, StringComparison.OrdinalIgnoreCase) }
+                    .WithClick(() => DocMoveManualToRegion(absPath, rr, app)));
+            }
+            m.Items.Add(mv);
+
+            string sani = MediaResolver.Sanitize(Safe(() => DocGame.Title) ?? "");
+            if (GameMediaRenamer.TryPlain(Path.GetFileNameWithoutExtension(absPath), sani, out int curNum, allowUnnumbered: true))
+                m.Items.Add(new ToolStripMenuItem("Change number…").WithClick(() => DocChangeManualNumber(absPath, sani, curNum, app)));
+        }
+
+        if (exists && !managed && DocManualsDir().Length > 0)
+        {
+            m.Items.Add(new ToolStripMenuItem("Move into Manuals folder").WithClick(() => DocRelocateManual(absPath, move: true)));
+            m.Items.Add(new ToolStripMenuItem("Copy into Manuals folder").WithClick(() => DocRelocateManual(absPath, move: false)));
+        }
+
+        if (exists && managed)
+        {
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add(new ToolStripMenuItem("Delete file").WithClick(() => DocDeleteManualFile(absPath, app)));
+        }
+        return m;
+    }
+
+    /// <summary>TOUS les manuels du jeu, dans l ordre de resolution (element 0 = choix auto).</summary>
+    private List<string> DocManualsAll()
+    {
+        string plat = Safe(() => DocGame.Platform) ?? "", title = Safe(() => DocGame.Title) ?? "";
+        Guid.TryParse(Safe(() => DocGame.Id) ?? "", out var gid);
+        if (plat.Length == 0 || title.Length == 0) return new();
+        try { return MediaResolver.ManualsAll(plat, gid, title); } catch { return new(); }
+    }
+
+    /// <summary>L entree additionnelle qui pointe sur ce fichier, s il y en a une.</summary>
+    private HostAdditionalApplication? DocAppFor(string absPath)
+        => DocAdditional().FirstOrDefault(d => DocPathEq(d.abs, absPath)).app;
+
+    private static bool DocPathEq(string? a, string? b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+        try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+        catch { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
+    }
+
+    /// <summary>La region affichable d un document : le nom du dossier ou il vit quand il est sous
+    /// Manuals\&lt;plat&gt;\ (la convention la met la — un rangement libre s affiche verbatim, c est
+    /// honnete), sinon la region native de l ADS. "" quand on ne sait pas.</summary>
+    private string DocManualRegion(string absPath)
+    {
+        try
+        {
+            string dir = DocManualsDir();
+            string? parent = Path.GetDirectoryName(absPath);
+            if (dir.Length > 0 && parent != null
+                && Path.GetFullPath(absPath).StartsWith(Path.GetFullPath(dir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(Path.GetFullPath(parent), Path.GetFullPath(dir), StringComparison.OrdinalIgnoreCase))
+                return Path.GetFileName(parent) ?? "";
+        }
+        catch { }
+        try { return ImageInfoBridge.ReadAny(absPath) is ImageInfo i ? (i.NativeRegion ?? "") : ""; }
+        catch { return ""; }
+    }
+
+    /// <summary>Pose &lt;ManualPath&gt;. L ANCIEN manuel designe, quand il disparaitrait de la page
+    /// (hors de la collection, pas deja un document additionnel), est conserve en document
+    /// additionnel — remplacer le manuel ne cache jamais l ancien fichier.</summary>
+    private void DocDesignateManual(string abs)
+    {
+        string old = DocManualAbs();
+        if (!string.IsNullOrEmpty(old) && !DocPathEq(old, abs) && File.Exists(old)
+            && !DocManualsAll().Any(p => DocPathEq(p, old))
+            && !DocAdditional().Any(d => DocPathEq(d.abs, old)))
+            DocAddAdditional(old, Path.GetFileNameWithoutExtension(old));
+        DocSetManual(abs);
+    }
+
+    private void DocMoveManualToRegion(string absPath, string region, HostAdditionalApplication? app)
+    {
+        string root = DocLbRoot(), plat = Safe(() => DocGame.Platform) ?? "", title = Safe(() => DocGame.Title) ?? "";
+        if (root.Length == 0 || plat.Length == 0 || title.Length == 0) return;
+        try
+        {
+            if (string.Equals(Path.GetFullPath(Media.ManualLibrary.RegionDir(root, plat, region)),
+                              Path.GetFullPath(Path.GetDirectoryName(absPath) ?? ""), StringComparison.OrdinalIgnoreCase))
+                return;   // deja dans cette region
+        }
+        catch { }
+        string dest = Media.ManualLibrary.FreeDestination(root, plat, title, region, Path.GetExtension(absPath));
+        try { Directory.CreateDirectory(Path.GetDirectoryName(dest)!); File.Move(absPath, dest); }
+        catch (Exception ex) { MessageBox.Show(this, "Move failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        DocManualFollow(absPath, dest, app, region);
+        DocRefresh();
+    }
+
+    private void DocChangeManualNumber(string absPath, string sani, int curNum, HostAdditionalApplication? app)
+    {
+        string cur = curNum == GameMediaRenamer.Unnumbered ? "" : curNum.ToString();
+        if (!DocPrompt("Change number", "Number (1–99, empty = bare name):", cur, out string v)) return;
+        v = v.Trim();
+        int n = GameMediaRenamer.Unnumbered;
+        if (v.Length > 0 && (!int.TryParse(v, out n) || n < 1 || n > 99))
+        { MessageBox.Show(this, "Enter a number between 1 and 99, or leave empty for the bare name.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        if (n == curNum) return;
+        string dest = Path.Combine(Path.GetDirectoryName(absPath) ?? "",
+            (n == GameMediaRenamer.Unnumbered ? sani : $"{sani}-{n:D2}") + Path.GetExtension(absPath));
+        if (File.Exists(dest))
+        { MessageBox.Show(this, "That name is taken in this folder:\n" + Path.GetFileName(dest), "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        try { File.Move(absPath, dest); }
+        catch (Exception ex) { MessageBox.Show(this, "Rename failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        DocManualFollow(absPath, dest, app, null);
+        DocRefresh();
+    }
+
+    /// <summary>Apres un deplacement/renommage de manuel : l entree additionnelle et la designation
+    /// suivent le fichier — un chemin stocke qui pointe dans le vide n aide personne.</summary>
+    private void DocManualFollow(string oldAbs, string dest, HostAdditionalApplication? app, string? regionForName)
+    {
+        if (app != null)
+        {
+            try
+            {
+                app.ApplicationPath = DocStore(dest);
+                // Seuls les libelles generes ("Manual (Region)…") sont recalcules — un nom saisi
+                // par l utilisateur lui appartient.
+                if ((app.Name ?? "").StartsWith("Manual (", StringComparison.Ordinal))
+                    app.Name = DocRegionalName(dest, regionForName ?? DocManualRegion(dest));
+            }
+            catch { }
+        }
+        if (DocPathEq(DocManualAbs(), oldAbs)) DocSetManual(dest);
+    }
+
+    private void DocDeleteManualFile(string absPath, HostAdditionalApplication? app)
+    {
+        var res = MessageBox.Show(this,
+            $"Delete this manual from disk?\n\n{Path.GetFileName(absPath)}"
+            + (app != null ? "\n\nIts additional-document entry is removed too." : ""),
+            "Delete manual", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+        if (res != DialogResult.OK) return;
+        try { File.Delete(absPath); } catch { }
+        if (app != null) { try { DocGame.TryRemoveAdditionalApplication(app); } catch { } }
+        if (DocPathEq(DocManualAbs(), absPath)) DocSetManual("");
+        DocRefresh();
+    }
+
     /// <summary>ADS provenance (:info origin / native region · :crc32 · file size) + path — mirrors the image/video Info.</summary>
-    private void DocShowInfo(string absPath, bool isManual)
+    private void DocShowInfo(string absPath, bool isManual) => DocShowInfo(absPath, isManual ? "Manual" : "Additional document");
+
+    /// <summary>Same dialog with a free kind label — the Music page reuses it ("Music").</summary>
+    internal void DocShowInfo(string absPath, string kind)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(isManual ? "Manual" : "Additional document");
+        sb.AppendLine(kind);
         sb.AppendLine(absPath);
         sb.AppendLine();
         try { sb.AppendLine($"Size:  {new FileInfo(absPath).Length / 1024.0:0.#} KB"); } catch { }
@@ -401,12 +653,15 @@ internal sealed partial class EditGameWindow
         DocRefresh();
     }
 
-    // Every managed/local doc this game already has, for owned-dedup of the web candidates.
+    // Every managed/local doc this game already has (the whole manual collection, the designation,
+    // the additional documents), for owned-dedup of the web candidates.
     private IEnumerable<string> DocOwnedPaths()
     {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string m = DocManualAbs();
-        if (!string.IsNullOrEmpty(m) && File.Exists(m)) yield return m;
-        foreach (var (_, abs) in DocAdditional()) if (!string.IsNullOrEmpty(abs) && File.Exists(abs)) yield return abs;
+        if (!string.IsNullOrEmpty(m) && File.Exists(m) && seen.Add(m)) yield return m;
+        foreach (var p in DocManualsAll()) if (File.Exists(p) && seen.Add(p)) yield return p;
+        foreach (var (_, abs) in DocAdditional()) if (!string.IsNullOrEmpty(abs) && File.Exists(abs) && seen.Add(abs)) yield return abs;
     }
 
     // The ADS :info origin of a downloaded doc (null when never stamped — hand-added / external, which get no ADS).
@@ -427,15 +682,10 @@ internal sealed partial class EditGameWindow
 
     private void DocPromote(HostAdditionalApplication app)
     {
-        string newAbs = DocResolve(app.ApplicationPath);
-        string oldManual = Safe(() => DocGame.ManualPath) ?? "";
-        try { DocGame.TryRemoveAdditionalApplication(app); } catch { }
-        if (!string.IsNullOrWhiteSpace(oldManual))   // demote the previous manual to an additional document
-        {
-            string oldAbs = DocResolve(oldManual);
-            DocAddAdditional(oldAbs, Path.GetFileNameWithoutExtension(oldAbs));
-        }
-        DocSetManual(newAbs);
+        // L entree additionnelle RESTE (elle rend le document atteignable chez LaunchBox, et la
+        // grille Manuals la masque deja quand le fichier y figure) ; l ancien manuel designe est
+        // conserve par DocDesignateManual quand il disparaitrait de la page.
+        DocDesignateManual(DocResolve(app.ApplicationPath));
     }
 
     private void DocDeleteApp(HostAdditionalApplication app)
@@ -456,7 +706,7 @@ internal sealed partial class EditGameWindow
     private bool DocRename(HostAdditionalApplication app)
     {
         string cur = app.Name ?? "";
-        if (!DocPrompt("Rename document", "Name:", cur, out string name)) return false;
+        if (!DocPrompt("Change label", "Label:", cur, out string name)) return false;
         try { app.Name = name; } catch { }
         return true;
     }
@@ -480,8 +730,15 @@ internal sealed partial class EditGameWindow
         {
             string dest = DocApplyPlacement(src, place, firstIsManual);
             if (string.IsNullOrEmpty(dest)) continue;
-            if (firstIsManual) { DocSetManual(dest); firstIsManual = false; }   // only the first picked becomes the manual
-            else DocAddAdditional(dest, null);
+            if (firstIsManual) { DocDesignateManual(dest); firstIsManual = false; }   // only the first picked becomes the manual
+            else
+            {
+                // Chaque entree additionnelle porte un LABEL — demande a l ajout, nom de fichier
+                // par defaut ; Annuler garde le defaut plutot que d abandonner l ajout.
+                string label = Path.GetFileNameWithoutExtension(dest);
+                DocPrompt("Document label", $"Label for {Path.GetFileName(dest)}:", label, out label);
+                DocAddAdditional(dest, label);
+            }
         }
         DocRefresh();
     }
@@ -523,8 +780,18 @@ internal sealed partial class EditGameWindow
         return Media.ManualLibrary.FreeDestination(root, plat, title, null, Path.GetExtension(src));
     }
 
+    /// <summary>Un document additionnel copié/déplacé dans la bibliothèque va À PLAT dans
+    /// Manuals\&lt;plat&gt;\, au nom conventionnel &lt;titre&gt;-NN (numéro libre suivant) — pas de région
+    /// pour les documents additionnels. Ainsi nommé il est aussi vu par la détection des manuels,
+    /// c'est le choix : un document qu'on range là EST de la famille des manuels. L'ancien
+    /// sous-dossier par-jeu ne sert plus qu'en repli quand la convention est impossible.</summary>
     private string DocAdditionalDest(string dir, string src)
     {
+        string root = DocLbRoot(), plat = Safe(() => DocGame.Platform) ?? "";
+        string title = Safe(() => DocGame.Title) ?? "";
+        if (root.Length > 0 && plat.Length > 0 && title.Length > 0)
+            return Media.ManualLibrary.FreeDestinationFlat(root, plat, title, Path.GetExtension(src));
+
         string folder = Path.Combine(dir, DocBaseName());
         string name = Path.GetFileName(src);
         string dest = Path.Combine(folder, name);
@@ -569,7 +836,9 @@ internal sealed partial class EditGameWindow
         catch { return sani; }
     }
 
-    // ── Region codes (kept in the managed file name, e.g. Final Fantasy 7.FR.pdf) ──
+    // ── LEGACY region codes ("<titre>.FR.pdf" at the platform root) — READ-ONLY support. Nothing
+    // writes this shape anymore (the convention is the region FOLDER); DocBaseName still strips it
+    // so the few existing files keep answering for their game.
     private static readonly Dictionary<string, string> DocRegionCodes = new(StringComparer.OrdinalIgnoreCase)
     {
         ["France"] = "FR", ["Japan"] = "JP", ["United States"] = "US", ["USA"] = "US", ["Spain"] = "ES",
@@ -582,34 +851,10 @@ internal sealed partial class EditGameWindow
     private static readonly HashSet<string> DocRegionCodeSet =
         new(DocRegionCodes.Values.Where(v => v.Length > 0), StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Short region code for a manual filename, or "" when none/World. Falls back to the first two letters.</summary>
-    private static string DocRegionCode(string? region)
-    {
-        if (string.IsNullOrWhiteSpace(region)) return "";
-        if (DocRegionCodes.TryGetValue(region.Trim(), out var c)) return c;
-        var letters = new string(region.Where(char.IsLetter).ToArray());
-        return letters.Length >= 2 ? letters.Substring(0, 2).ToUpperInvariant() : letters.ToUpperInvariant();
-    }
-
     private static string DocStripRegion(string fileNameNoExt)
     {
         int dot = fileNameNoExt.LastIndexOf('.');
         return (dot > 0 && DocRegionCodeSet.Contains(fileNameNoExt.Substring(dot + 1))) ? fileNameNoExt.Substring(0, dot) : fileNameNoExt;
-    }
-
-    private void DocReplaceManual()
-    {
-        if (_readOnly) return;
-        using var ofd = new OpenFileDialog
-        {
-            Title = "Set manual", CheckFileExists = true,
-            Filter = "Documents (*.pdf;*.cbz;*.cbr;*.zip;*.txt;*.htm;*.html;*.doc;*.docx)|*.pdf;*.cbz;*.cbr;*.zip;*.txt;*.htm;*.html;*.doc;*.docx|All files (*.*)|*.*",
-        };
-        if (ofd.ShowDialog(this) != DialogResult.OK) return;
-        if (!DocAskAddOptions(1, false, out _, out int place)) return;
-        string dest = DocApplyPlacement(ofd.FileName, place, asManual: true);
-        DocSetManual(dest);
-        DocRefresh();
     }
 
     private void DocRelocateManual(string abs, bool move)
@@ -633,20 +878,26 @@ internal sealed partial class EditGameWindow
 
         var lblRole = new Label { Text = "Add as:", Location = new Point(S(16), S(16)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
         f.Controls.Add(lblRole);
-        var rbAdd = new RadioButton { Text = count > 1 ? "Additional documents" : "Additional document", Location = new Point(S(120), S(14)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = true };
-        var rbMan = new RadioButton { Text = manualSet ? "Manual (replaces the current one)" : "Manual (main)", Location = new Point(S(120), S(40)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
-        f.Controls.Add(rbAdd); f.Controls.Add(rbMan);
-        if (count > 1) { var hint = new Label { Text = "(the first file becomes the manual, the rest additional)", Location = new Point(S(120), S(64)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8f) }; f.Controls.Add(hint); }
+        // Chaque groupe de radios vit dans SON conteneur : poses a plat sur la fenetre, les cinq
+        // boutons formeraient un seul groupe WinForms et se decocheraient mutuellement.
+        var roleGrp = new Panel { Location = new Point(S(120), S(14)), Size = new Size(S(320), S(52)), BackColor = Bg };
+        var rbAdd = new RadioButton { Text = count > 1 ? "Additional documents" : "Additional document", Location = new Point(0, 0), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = true };
+        var rbMan = new RadioButton { Text = manualSet ? "Manual (replaces the current designation)" : "Manual (main)", Location = new Point(0, S(26)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+        roleGrp.Controls.Add(rbAdd); roleGrp.Controls.Add(rbMan);
+        f.Controls.Add(roleGrp);
+        if (count > 1) { var hint = new Label { Text = "(the first file becomes the manual, the rest additional)", Location = new Point(S(120), S(68)), AutoSize = true, ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 8f) }; f.Controls.Add(hint); }
 
         RadioButton rbHere = null!, rbMove = null!, rbCopy = null!;
         if (canManage)
         {
             var lblP = new Label { Text = "Location:", Location = new Point(S(16), S(104)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
             f.Controls.Add(lblP);
-            rbHere = new RadioButton { Text = "Use the file where it is (external)", Location = new Point(S(120), S(102)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
-            rbCopy = new RadioButton { Text = "Copy into Manuals\\" + (Safe(() => DocGame.Platform) ?? ""), Location = new Point(S(120), S(128)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = true };
-            rbMove = new RadioButton { Text = "Move into Manuals\\" + (Safe(() => DocGame.Platform) ?? ""), Location = new Point(S(120), S(154)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
-            f.Controls.Add(rbHere); f.Controls.Add(rbCopy); f.Controls.Add(rbMove);
+            var locGrp = new Panel { Location = new Point(S(120), S(102)), Size = new Size(S(320), S(78)), BackColor = Bg };
+            rbHere = new RadioButton { Text = "Use the file where it is (external)", Location = new Point(0, 0), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+            rbCopy = new RadioButton { Text = "Copy into Manuals\\" + (Safe(() => DocGame.Platform) ?? ""), Location = new Point(0, S(26)), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = true };
+            rbMove = new RadioButton { Text = "Move into Manuals\\" + (Safe(() => DocGame.Platform) ?? ""), Location = new Point(0, S(52)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
+            locGrp.Controls.Add(rbHere); locGrp.Controls.Add(rbCopy); locGrp.Controls.Add(rbMove);
+            f.Controls.Add(locGrp);
         }
 
         bool ok = false;
@@ -900,11 +1151,13 @@ internal sealed partial class EditGameWindow
                 // Explicitly the EXTENDED DB — the "ExtendDB" source's label must stay true even when
                 // [Base] UseAsMainDb is off (WebDbPath() would then answer with LaunchBox's own DB,
                 // which has no manual rows anyway).
-                var rows = MetadataDb.ManualsForGame(MetadataDb.ExtendedDbPath, dbId);
+                // Manual rows join the manual collection; Map / Press rows download as ADDITIONAL
+                // documents only (they are not manuals — and must not look like one on disk).
+                var rows = MetadataDb.DocumentsForGame(MetadataDb.ExtendedDbPath, dbId);
                 int total = rows.Count;
-                // EVERY manual row is screenscraper / emumovies (there are no launchbox ones), and those need
+                // EVERY document row is screenscraper / emumovies (there are no launchbox ones), and those need
                 // ExtendDB's per-origin fetcher (screenscraper needs API credentials). Without it, only launchbox
-                // rows are CDN-fetchable — so for manuals that means NONE. Mirror the image editor: drop the
+                // rows are CDN-fetchable — so for documents that means NONE. Mirror the image editor: drop the
                 // un-fetchable rows and flag that ExtendDB is required. EmuMovies (below) stays ExtendDB-free.
                 if (!MediaApiBridge.Available) rows = rows.Where(r => r.IsLaunchbox).ToList();
                 foreach (var w in rows) if (!EmuOwns(owned, w.Crc32, w.FileSize)) cands.Add((w, "web"));
@@ -927,12 +1180,12 @@ internal sealed partial class EditGameWindow
         if (cands.Count == 0 && !loading && !dbNeedsExtend) return;
 
         y += S(6);
-        var hdr = new Label { Text = "⬇  Download a manual — left-click = as manual · right-click for options", ForeColor = SubFg, Font = new Font("Segoe UI", 9f, FontStyle.Italic), AutoSize = false, BackColor = Bg };
-        hdr.SetBounds(S(12), y, S(700), S(24)); inner.Controls.Add(hdr); y += S(30);
+        var hdr = new Label { Text = "⬇  Download documents — a manual joins the collection above · a map/press kit becomes an additional document · right-click for options", ForeColor = SubFg, Font = new Font("Segoe UI", 9f, FontStyle.Italic), AutoSize = false, BackColor = Bg };
+        hdr.SetBounds(S(12), y, DocAvailWidth(host), S(24)); inner.Controls.Add(hdr); y += S(30);
 
         if (dbNeedsExtend)
         {
-            inner.Controls.Add(new Label { Text = "This game's database manuals are ScreenScraper/EmuMovies — downloading them needs the ExtendDB plugin loaded (API credentials). Use the EmuMovies source, or load ExtendDB.", AutoSize = false, ForeColor = Color.FromArgb(220, 170, 90), BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Bounds = new Rectangle(S(16), y, DocAvailWidth(host), S(34)) });
+            inner.Controls.Add(new Label { Text = "This game's database documents are ScreenScraper/EmuMovies — downloading them needs the ExtendDB plugin loaded (API credentials). Use the EmuMovies source, or load ExtendDB.", AutoSize = false, ForeColor = Color.FromArgb(220, 170, 90), BackColor = Bg, Font = new Font("Segoe UI", 8.5f), Bounds = new Rectangle(S(16), y, DocAvailWidth(host), S(34)) });
             y += S(38);
         }
 
@@ -966,20 +1219,27 @@ internal sealed partial class EditGameWindow
         pic.Image = DocBadge(ext, DocCellW - S(16), DocThumbH - S(8));
         frame.Controls.Add(pic); cell.Controls.Add(frame);
 
-        bool asManualDefault = string.IsNullOrEmpty(DocManualAbs());
+        // Une ligne Manual rejoint la collection (et peut EN PLUS etre designee) ; une ligne
+        // Map / Press ne peut devenir qu un document additionnel.
+        bool isManualRow = string.Equals(w.Type, "Manual", StringComparison.OrdinalIgnoreCase);
         void Menu(Point pt)
         {
             var m = ThemedMenu();
-            m.Items.Add(new ToolStripMenuItem("Download as Manual").WithClick(() => DocDownloadWeb(w, true)));
-            m.Items.Add(new ToolStripMenuItem("Download as additional document").WithClick(() => DocDownloadWeb(w, false)));
+            if (isManualRow)
+            {
+                m.Items.Add(new ToolStripMenuItem("Download").WithClick(() => DocDownloadWeb(w, false)));
+                m.Items.Add(new ToolStripMenuItem("Download and set as manual").WithClick(() => DocDownloadWeb(w, true)));
+            }
+            else
+                m.Items.Add(new ToolStripMenuItem("Download as additional document").WithClick(() => DocDownloadWeb(w, false)));
             if (w.IsLaunchbox) m.Items.Add(new ToolStripMenuItem("Open in browser").WithClick(() => DocOpenUrl(w.Url)));
             m.Show(pic, pt);
         }
-        pic.MouseUp += (_, e) => { if (_readOnly) return; if (e.Button == MouseButtons.Left) DocDownloadWeb(w, asManualDefault); else if (e.Button == MouseButtons.Right) Menu(e.Location); };
+        pic.MouseUp += (_, e) => { if (_readOnly) return; if (e.Button == MouseButtons.Left) DocDownloadWeb(w, false); else if (e.Button == MouseButtons.Right) Menu(e.Location); };
 
-        var cap = new Label { Text = (source == "emu" ? "EmuMovies" : "ExtendDB") + (string.IsNullOrEmpty(w.Region) ? "" : "  ·  " + w.Region), ForeColor = border, BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, AutoEllipsis = true };
+        var cap = new Label { Text = (source == "emu" ? "EmuMovies" : "ExtendDB") + (isManualRow ? "" : "  ·  " + w.Type) + (string.IsNullOrEmpty(w.Region) ? "" : "  ·  " + w.Region), ForeColor = border, BackColor = Bg, Font = new Font("Segoe UI", 8f), AutoSize = false, AutoEllipsis = true };
         cap.SetBounds(S(4), DocThumbH + S(6), DocCellW - S(8), S(16)); cell.Controls.Add(cap);
-        var info = new Label { Text = "download  ·  " + ext.TrimStart('.').ToUpperInvariant(), ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 7.5f), AutoSize = false };
+        var info = new Label { Text = "download  ·  " + (isManualRow ? "Manual" : w.Type) + "  ·  " + ext.TrimStart('.').ToUpperInvariant(), ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 7.5f), AutoSize = false, AutoEllipsis = true };
         info.SetBounds(S(4), DocThumbH + S(24), DocCellW - S(8), S(16)); cell.Controls.Add(info);
         return cell;
     }
@@ -1013,16 +1273,13 @@ internal sealed partial class EditGameWindow
         try { bytes = ImgFetchWebBytes(w); } catch { bytes = null; } finally { UseWaitCursor = false; }
         if (bytes == null || bytes.Length == 0) { MessageBox.Show(this, "Download failed.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
 
-        // Clean name: <base>[.<REGION>]<ext>, never derived from the (URL) FileName. The additional variant goes
-        // into the per-game sub-folder. Region kept when available (e.g. Final Fantasy 7.FR.pdf).
         string ext = DocWebExt(w);
-        string rc = DocRegionCode(w.Region);
-        string suffix = rc.Length > 0 ? "." + rc : "";
         string bn = DocBaseName();
+        bool isManualRow = string.Equals(w.Type, "Manual", StringComparison.OrdinalIgnoreCase);
         string dest;
         try
         {
-            if (asManual)
+            if (isManualRow)
             {
                 // Le manuel telecharge suit la convention : Manuals\<plat>\<Region>\<NomJeu>-NN.<ext>,
                 // la region venant du scraper. L ancien nommage « <titre>[.<REGION>] » a la racine
@@ -1033,18 +1290,22 @@ internal sealed partial class EditGameWindow
                 string mtitle = Safe(() => g.Title) ?? "";
                 dest = plat.Length > 0 && mtitle.Length > 0 && DocLbRoot().Length > 0
                     ? Media.ManualLibrary.FreeDestination(DocLbRoot(), plat, mtitle, w.Region, ext)
-                    : Path.Combine(dir, bn + suffix + ext);
+                    : Path.Combine(dir, bn + ext);
             }
             else
             {
-                // Meme destination que le manuel principal : le dossier de REGION, au nom
-                // conventionnel. L ancien rangement — sous-dossier au nom du jeu, nom libre —
-                // n etait atteignable que par le chemin stocke ; celui-ci est aussi vu par la
-                // detection automatique des deux programmes.
-                string atitle = Safe(() => g.Title) ?? "";
-                dest = plat.Length > 0 && atitle.Length > 0 && DocLbRoot().Length > 0
-                    ? Media.ManualLibrary.FreeDestination(DocLbRoot(), plat, atitle, w.Region, ext)
-                    : Path.Combine(dir, bn + suffix + ext);
+                // Un plan / press kit n est PAS un manuel : la detection (nom de fichier, tous
+                // dossiers confondus) prendrait un fichier au nom conventionnel pour le manuel du
+                // jeu — chez LaunchBox comme chez nous. Donc sous-dossier par jeu et nom PARLANT,
+                // jamais le nom du jeu nu.
+                string sani = MediaResolver.Sanitize(Safe(() => g.Title) ?? "");
+                string? pref = DocPreferredName(w);
+                if (pref != null && sani.Length > 0 && GameMediaRenamer.TryPlain(pref, sani, out _, allowUnnumbered: true))
+                    pref = null;   // ce nom serait vu comme un manuel — le nom type prend le relais
+                string fileBase = pref ?? $"{bn} ({w.Type}, {Media.ManualLibrary.NormalizeRegion(w.Region)})";
+                string folder = Path.Combine(dir, bn);
+                dest = Path.Combine(folder, fileBase + ext);
+                int k = 1; while (File.Exists(dest)) dest = Path.Combine(folder, $"{fileBase}-{k++:D2}{ext}");
             }
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.WriteAllBytes(dest, bytes);
@@ -1052,12 +1313,14 @@ internal sealed partial class EditGameWindow
         }
         catch (Exception ex) { MessageBox.Show(this, "Save failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
 
-        // TOUT manuel telecharge devient un document additionnel, region dans le nom : la
+        // TOUT document telecharge devient un document additionnel, region dans le libelle : la
         // detection automatique n expose qu UN manuel (mesure sur LaunchBox), les autres regions
-        // ne sont atteignables chez lui que par une entree explicite. "As Manual" pose EN PLUS
-        // ManualPath — designation de l utilisateur, jamais un calcul de notre part.
-        DocAddAdditional(dest, DocRegionalName(dest, w.Region));
-        if (asManual) DocSetManual(dest);
+        // — et les plans / press kits, qu elle ignore — ne sont atteignables chez lui que par une
+        // entree explicite. "Set as manual" pose EN PLUS ManualPath — designation de l utilisateur,
+        // jamais un calcul de notre part.
+        DocAddAdditional(dest, isManualRow ? DocRegionalName(dest, w.Region)
+                                           : $"{w.Type} ({Media.ManualLibrary.NormalizeRegion(w.Region)})");
+        if (asManual && isManualRow) DocDesignateManual(dest);
         DocRefresh();
     }
 

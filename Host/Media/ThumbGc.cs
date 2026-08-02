@@ -213,39 +213,60 @@ internal static class ThumbGc
         try
         {
             // Everything prefetch: path(lower) → (size, mtime ticks). Scoped to this sweep, cleared below.
+            // Without Everything, ONE recursive enumeration of <LB>\Manuals\ fills the same map (the tree
+            // must be walked anyway — see the mark below).
             var pre = new Dictionary<string, (long Size, long Ticks)>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 string root = MediaResolver.LbRoot ?? "";
                 string manuals = root.Length > 0 ? Path.Combine(root, "Manuals") : "";
-                if (manuals.Length > 0 && Directory.Exists(manuals) && Gc.EverythingBridge.IsEverythingAvailable())
-                    foreach (var f in Gc.EverythingBridge.GetFilesWithInfoExtended(manuals))
-                        pre[f.FullPath] = (f.FileSize, f.DateModified.Ticks);
+                if (manuals.Length > 0 && Directory.Exists(manuals))
+                {
+                    if (Gc.EverythingBridge.IsEverythingAvailable())
+                        foreach (var f in Gc.EverythingBridge.GetFilesWithInfoExtended(manuals))
+                            pre[f.FullPath] = (f.FileSize, f.DateModified.Ticks);
+                    else
+                        foreach (var f in Directory.EnumerateFiles(manuals, "*", SearchOption.AllDirectories))
+                        {
+                            if (!EditGameWindow.DocExts.Contains(Path.GetExtension(f))) continue;
+                            try { var fi = new FileInfo(f); pre[f] = (fi.Length, fi.LastWriteTimeUtc.Ticks); } catch { }
+                        }
+                }
             }
             catch { }
 
             var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            int stats = 0, docs = 0;
+
+            // EVERY document file under <LB>\Manuals\ is thumb-eligible: the Documents editor shows a
+            // game's WHOLE manual collection (every region), not just the referenced paths — an unmarked
+            // manual would be swept and re-rendered on every editor open.
+            foreach (var kv in pre)
+                if (EditGameWindow.DocExts.Contains(Path.GetExtension(kv.Key)))
+                    valid.Add(EditGameWindow.DocThumbFileName(kv.Key, kv.Value.Size, kv.Value.Ticks));
+
+            int stats = 0, docs = valid.Count;
+            void Mark(string stored)
+            {
+                string abs = EditGameWindow.DocResolve(stored);
+                if (string.IsNullOrEmpty(abs)) return;
+                docs++;
+                long size, ticks;
+                if (pre.TryGetValue(abs, out var m)) { size = m.Size; ticks = m.Ticks; }
+                else
+                {
+                    stats++;
+                    try { var fi = new FileInfo(abs); if (!fi.Exists) return; size = fi.Length; ticks = fi.LastWriteTimeUtc.Ticks; }
+                    catch { return; }
+                }
+                valid.Add(EditGameWindow.DocThumbFileName(abs, size, ticks));
+            }
             foreach (var g in games)
             {
+                try { var mp = g.ManualPath; if (!string.IsNullOrEmpty(mp)) Mark(mp); } catch { }   // designated (may live outside Manuals\)
                 var apps = SafeApps(g);
                 if (apps == null) continue;
                 foreach (var a in apps)
-                {
-                    if (a is not Data.HostAdditionalApplication { IsDocument: true } h) continue;
-                    string abs = EditGameWindow.DocResolve(h.ApplicationPath);
-                    if (string.IsNullOrEmpty(abs)) continue;
-                    docs++;
-                    long size, ticks;
-                    if (pre.TryGetValue(abs, out var m)) { size = m.Size; ticks = m.Ticks; }
-                    else
-                    {
-                        stats++;
-                        try { var fi = new FileInfo(abs); if (!fi.Exists) continue; size = fi.Length; ticks = fi.LastWriteTimeUtc.Ticks; }
-                        catch { continue; }
-                    }
-                    valid.Add(EditGameWindow.DocThumbFileName(abs, size, ticks));
-                }
+                    if (a is Data.HostAdditionalApplication { IsDocument: true } h) Mark(h.ApplicationPath);
             }
             pre.Clear();   // prefetch no longer needed once the mark is built
 

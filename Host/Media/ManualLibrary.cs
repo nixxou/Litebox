@@ -53,8 +53,24 @@ internal static class ManualLibrary
     /// <summary>Le chemin libre pour un nouveau manuel. La numérotation est PAR DOSSIER et part de 1 —
     /// un "-00" ne serait jamais retrouvé.</summary>
     public static string FreeDestination(string lbRoot, string platform, string title, string? region, string ext)
+        => FreeIn(RegionDir(lbRoot, platform, region), title, ext);
+
+    /// <summary>Le chemin libre pour un document ADDITIONNEL entrant dans la bibliothèque : à PLAT
+    /// dans Manuals\&lt;plat&gt;\ — les documents additionnels ne portent pas de région, ils s'ajoutent
+    /// à la suite de la numérotation du dossier racine.</summary>
+    public static string FreeDestinationFlat(string lbRoot, string platform, string title, string ext)
+        => FreeIn(PlatformDir(lbRoot, platform), title, ext);
+
+    public static string MusicDir(string lbRoot, string platform)
+        => Path.Combine(lbRoot, "Music", MediaResolver.Sanitize(platform));
+
+    /// <summary>Le chemin libre pour une musique : à PLAT dans Music\&lt;plat&gt;\, &lt;NomJeu&gt;-NN.&lt;ext&gt; —
+    /// la musique n'a ni région ni sous-dossier, on ajoute à la suite.</summary>
+    public static string FreeMusicDestination(string lbRoot, string platform, string title, string ext)
+        => FreeIn(MusicDir(lbRoot, platform), title, ext);
+
+    private static string FreeIn(string dir, string title, string ext)
     {
-        string dir = RegionDir(lbRoot, platform, region);
         string sani = MediaResolver.Sanitize(title);
         var taken = new HashSet<int>();
         try

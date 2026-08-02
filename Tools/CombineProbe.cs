@@ -88,6 +88,10 @@ internal static class CombineProbe
         store.CloseLog();
 
         Console.WriteLine($"[probe] absorbed {n}, {dm.GetAllGames().Length} games left");
+        dm.ReloadHierarchy();
+        string cplat = Safe(() => root.Platform) ?? "";
+        var bucketC = dm.GetPlatformByName(cplat)?.GetAllGames(true, true) ?? Array.Empty<IGame>();
+        Console.WriteLine($"[probe] platform-node shows {bucketC.Length} game(s)");
         return 0;
     }
 
@@ -113,10 +117,17 @@ internal static class CombineProbe
             string.Equals(Safe(() => g.Id) ?? "", gameId, StringComparison.OrdinalIgnoreCase));
         if (game == null) { Console.WriteLine($"[probe] game {gameId} not found"); return 1; }
 
+        string plat = Safe(() => game.Platform) ?? "";
         int n = GameCombiner.Expand(game, dm);
         dm.Save(true);
         store.CloseLog();
         Console.WriteLine($"[probe] restored {n}, {dm.GetAllGames().Length} games");
+        // Le panier plateforme apres ReloadHierarchy : c est LUI que le nœud affiche. La liste
+        // globale etait juste alors que l ecran ne montrait rien — verifier la globale seulement,
+        // c est verifier ce que l utilisateur ne regarde pas.
+        dm.ReloadHierarchy();
+        var bucketE = dm.GetPlatformByName(plat)?.GetAllGames(true, true) ?? Array.Empty<IGame>();
+        Console.WriteLine($"[probe] platform-node shows {bucketE.Length} game(s)");
         return 0;
     }
 

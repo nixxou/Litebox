@@ -277,6 +277,9 @@ if (args.Contains("--selftest-filter-parity"))
 // Media rename / GUID-transit logic, on a real temporary tree.
 if (args.Contains("--selftest-media-rename"))
     return MediaRenameSelfTest.Run();
+// Playlist copy/paste: source-platform deduction + platform-name substitution.
+if (args.Contains("--selftest-playlist-copy"))
+    return PlaylistCopySelfTest.Run();
 
 if (args.Contains("--disc-predict"))
 { int di = Array.IndexOf(args, "--disc-predict"); return DiscParseSelfTest.Predict(args[di+1]); }

@@ -1446,6 +1446,10 @@ internal sealed class MainWindow : Form, IMessageFilter
                     var it = new ToolStripMenuItem($"Edit {list.Count} Playlists…");
                     it.Click += (_, _) => { try { Platforms.MultiEditWindow.OpenPlaylists(list, ro, this); } catch (Exception ex) { Console.WriteLine("[multiedit] " + ex.Message); } RefreshAfterEdit(tags[0]); };
                     menu.Items.Add(it);
+                    // Copier n'écrit rien : proposé même en lecture seule.
+                    var cp = new ToolStripMenuItem($"Copy {list.Count} Playlists");
+                    cp.Click += (_, _) => { try { Platforms.PlaylistCopier.Copy(list, _dm as HostDataManagerXml, this); } catch (Exception ex) { Console.WriteLine("[plcopy] " + ex.Message); } };
+                    menu.Items.Add(cp);
                     if (!ro)
                     {
                         var del = new ToolStripMenuItem($"Delete {list.Count} Playlists…");
@@ -1455,6 +1459,29 @@ internal sealed class MainWindow : Form, IMessageFilter
                 }
                 if (menu.Items.Count > 0) menu.Show(tv, e.Location);
                 return;
+            }
+
+            // "Paste" n'apparaît que si on sait où atterrir : la plateforme la plus proche EN REMONTANT
+            // depuis le nœud cliqué (lui-même s'il en est une). Une catégorie hors de toute plateforme
+            // n'en propose pas — une entrée grisée sans explication serait pire que pas d'entrée.
+            void AddPasteItem(object destNode)
+            {
+                if (ro || Platforms.PlaylistCopier.ClipboardCount == 0) return;
+                var destPlat = Platforms.PlaylistCopier.ResolveDestPlatform(e.Node);
+                if (destPlat == null) return;
+                int n = Platforms.PlaylistCopier.ClipboardCount;
+                var it = new ToolStripMenuItem(n == 1 ? "Paste Playlist" : $"Paste {n} Playlists");
+                it.Click += (_, _) =>
+                {
+                    try
+                    {
+                        var made = Platforms.PlaylistCopier.Paste(destNode, destPlat, _dm as HostDataManagerXml, this);
+                        if (made.Count > 0) RefreshAfterEdit(made[0]);
+                    }
+                    catch (Exception ex) { Console.WriteLine("[plcopy] paste: " + ex.Message); }
+                };
+                menu.Items.Add(new ToolStripSeparator());
+                menu.Items.Add(it);
             }
 
             if (tag is IPlatform plat)
@@ -1496,6 +1523,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                     del.Click += (_, _) => { try { if (Platforms.NodeDeleter.DeletePlatforms(new List<IPlatform> { plat }, _dm as HostDataManagerXml, this)) { _currentNode = null; RefreshAfterEdit(AllNode.Instance); } } catch (Exception ex) { Console.WriteLine("[delete] " + ex.Message); } };
                     menu.Items.Add(del);
                 }
+                AddPasteItem(plat);
             }
             else if (tag is HostPlatformCategory cat)
             {
@@ -1513,6 +1541,7 @@ internal sealed class MainWindow : Form, IMessageFilter
                     del.Click += (_, _) => { try { if (Platforms.NodeDeleter.DeleteCategories(new List<HostPlatformCategory> { cat }, _dm as HostDataManagerXml, this)) { _currentNode = null; RefreshAfterEdit(AllNode.Instance); } } catch (Exception ex) { Console.WriteLine("[delete] " + ex.Message); } };
                     menu.Items.Add(del);
                 }
+                AddPasteItem(cat);
             }
             else if (tag is Data.HostPlaylist pl)
             {
@@ -1524,6 +1553,9 @@ internal sealed class MainWindow : Form, IMessageFilter
                     RefreshAfterEdit(pl);
                 };
                 menu.Items.Add(edit);
+                var cpOne = new ToolStripMenuItem("Copy Playlist");
+                cpOne.Click += (_, _) => { try { Platforms.PlaylistCopier.Copy(new List<Data.HostPlaylist> { pl }, _dm as HostDataManagerXml, this); } catch (Exception ex) { Console.WriteLine("[plcopy] " + ex.Message); } };
+                menu.Items.Add(cpOne);
                 if (!ro)
                 {
                     var del = new ToolStripMenuItem("Delete Playlist…");

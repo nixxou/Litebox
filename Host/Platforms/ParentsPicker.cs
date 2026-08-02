@@ -211,12 +211,29 @@ internal static class ParentsPicker
         return (p, Apply);
     }
 
+    /// <summary>Donne à un enfant UN SEUL parent (le cas du collage de playlist : la copie est neuve,
+    /// elle n'a aucune ligne). Passe par <see cref="WriteParents"/> pour que la forme des lignes
+    /// &lt;Parent&gt; reste écrite à un seul endroit.</summary>
+    internal static void SetSingleParent(ParentChildKind kind, string childKey, bool parentIsCategory, string parentName)
+    {
+        if (string.IsNullOrWhiteSpace(childKey) || string.IsNullOrWhiteSpace(parentName)) return;
+        WriteParents(kind, childKey, rootChecked: false,
+                     new List<Key> { new(parentIsCategory ? 'c' : 'p', parentName) });
+    }
+
     // ── Parents.xml write: replace ALL of this child's rows with the chosen set (other children untouched) ──
     private static void WriteParents(ParentChildKind kind, string childKey, bool rootChecked, List<Key> parents)
     {
         try
         {
-            if (!File.Exists(ParentsFile)) return;
+            // Une install sans aucun parent explicite n'a pas de Parents.xml : sortir ici ferait
+            // silencieusement retomber la playlist collée à Root au prochain démarrage.
+            if (!File.Exists(ParentsFile))
+            {
+                var dir = Path.GetDirectoryName(ParentsFile);
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+                LbXml.Save(new XDocument(new XElement("LaunchBox")), ParentsFile);
+            }
             var doc = XDocument.Load(ParentsFile);
             var root = doc.Root; if (root == null) return;
             string childField = kind switch { ParentChildKind.Platform => "PlatformName", ParentChildKind.Category => "PlatformCategoryName", _ => "PlaylistId" };

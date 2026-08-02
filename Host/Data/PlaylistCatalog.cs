@@ -107,6 +107,13 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
 
     public void Add(HostPlaylistGame g) { g.SetOwner(this); _games.Add(g); }
     public void AddFilter(PlaylistFilterDef f) { _filters.Add(f); InvalidateFilterPlan(); }
+
+    /// <summary>Les règles et les jeux TELS QU'ILS SONT STOCKÉS, pour qui doit les recopier fidèlement :
+    /// GetAllPlaylistFilters/GetAllPlaylistGames emballent dans des wrappers SDK qui n'exposent pas le
+    /// dictionnaire Extra (les champs que LiteBox ne modélise pas), et ReplaceFilters le perd. Lecture
+    /// seule : muter ces instances muterait la playlist.</summary>
+    internal IReadOnlyList<PlaylistFilterDef> FiltersRaw => _filters;
+    internal IReadOnlyList<HostPlaylistGame> GamesRaw => _games;
     internal void Attach(GameStore s) => _store = s;
     private void Rec(string field, string value) => _store?.RecordPlaylistModify(PlaylistIdValue, FileValue, field, value);
 

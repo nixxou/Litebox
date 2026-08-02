@@ -60,9 +60,9 @@ internal static class MediaRenameSelfTest
         Touch(dir, $"{Old}-02.jpg");
         var moves = GameMediaRenamer.Plan(Case(root), Id, Plat, Old, New, MediaNameForm.Guid);
         GameMediaRenamer.Apply(moves);
-        return Check("plain → GUID keeps each number",
-            Exists(dir, $"{Old}.{Id:D}-01.jpg") && Exists(dir, $"{Old}.{Id:D}-02.jpg")
-            && !Exists(dir, $"{Old}-01.jpg"));
+        return Check("plain → GUID keeps each number, under the FINAL title",
+            Exists(dir, $"{New}.{Id:D}-01.jpg") && Exists(dir, $"{New}.{Id:D}-02.jpg")
+            && !Exists(dir, $"{Old}-01.jpg") && !Exists(dir, $"{Old}.{Id:D}-01.jpg"));
     }
 
     private static int MixedUnitIsLeftAlone(string root)
@@ -135,7 +135,7 @@ internal static class MediaRenameSelfTest
             applied = GameMediaRenamer.Apply(moves);   // Move fails, Copy succeeds, Delete fails
         int f = Check("a locked file still reaches its target through a copy",
             applied.Reached == 1 && applied.Copied == 1 && applied.Failed == 0
-            && Exists(dir, $"{Old}.{Id:D}-01.jpg"));
+            && Exists(dir, $"{New}.{Id:D}-01.jpg"));
         return f + Check("the locked source is left in place rather than losing the file",
             Exists(dir, $"{Old}-01.jpg"));
     }
@@ -444,6 +444,9 @@ internal static class MediaRenameSelfTest
             // ne doit apparaitre — c'est elle que le garde-fou evite quand LaunchBox tourne.
             LbApiHost.Host.Media.GameMediaSync.OnTitleChanged(game, "Disney's Aladdin", "Disney_s Aladdin");
             var after = Directory.GetFiles(dir).Select(Path.GetFileName).ToList();
+            // Ce controle porte sur le RESULTAT, pas sur le garde-fou : deux mecanismes le
+            // garantissent — la sortie anticipee, et le refus de Plan de renommer vers le meme
+            // nom. Retirer le premier ne fait donc pas tomber ce test, et c'est attendu.
             f += Check("porte d'entree : un renommage qui vise le meme fichier ne touche a rien",
                 after.Count == 1 && after[0] == "Disney_s Aladdin-01.pdf");
 
@@ -452,19 +455,17 @@ internal static class MediaRenameSelfTest
             f += Check("porte d'entree : un vrai renommage deplace toujours le fichier",
                 Exists(dir, "Cool Spot-01.pdf") && !Exists(dir, "Disney_s Aladdin-01.pdf"));
 
-            // LAUNCHBOX OUVERT : le seul regime ou le garde-fou sert. Sans lui, un renommage
-            // purement cosmetique bascule tous les medias du jeu en forme GUID — un transit
-            // inutile, qui les rend invisibles a LaunchBox jusqu'au prochain vidage.
-            LbApiHost.Host.Data.GameStore.ForceLaunchBoxRunning = true;
-            LbApiHost.Host.Media.GameMediaSync.OnTitleChanged(game, "Cool Spot", "Cool Spot ");
-            var names = Directory.GetFiles(dir).Select(Path.GetFileName).ToList();
-            f += Check("LaunchBox ouvert : le meme nom de fichier ne declenche AUCUN transit GUID",
-                names.Count == 1 && names[0] == "Cool Spot-01.pdf");
-
-            // Controle dans le meme regime : un vrai renommage doit, lui, bien passer en GUID.
-            LbApiHost.Host.Media.GameMediaSync.OnTitleChanged(game, "Cool Spot", "Zool");
-            f += Check("LaunchBox ouvert : un vrai renommage passe bien par la forme GUID",
-                Directory.GetFiles(dir).Any(x => Path.GetFileName(x).Contains(gid.ToString("D"))));
+            // LAUNCHBOX OUVERT : les fichiers suivent le titre TOUT DE SUITE. Le transit par la
+            // forme GUID a ete supprime — il n'existait que pour que LaunchBox continue de voir les
+            // medias pendant sa session, et LaunchBox seul abandonne de toute facon ceux d'un jeu
+            // renomme. Aucune forme GUID ne doit donc apparaitre, quel que soit l'etat de LaunchBox.
+            LbApiHost.Host.Data.GameStore.ForceLaunchBoxRunning = true;
+            LbApiHost.Host.Media.GameMediaSync.OnTitleChanged(game, "Cool Spot", "Zool");
+            var names = Directory.GetFiles(dir).Select(Path.GetFileName).ToList();
+            f += Check("LaunchBox ouvert : le fichier prend directement le nouveau nom nominatif",
+                names.Count == 1 && names[0] == "Zool-01.pdf");
+            f += Check("LaunchBox ouvert : aucune forme GUID n'est produite",
+                !names.Any(x => x.Contains(gid.ToString("D"))));
             return f;
         }
         finally

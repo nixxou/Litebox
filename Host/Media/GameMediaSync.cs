@@ -52,8 +52,11 @@ internal static class GameMediaSync
             if (game == null) return;
             oldTitle ??= ""; newTitle ??= "";
             if (string.Equals(oldTitle, newTitle, StringComparison.Ordinal)) return;
-            // Le titre a change, le NOM DE FICHIER pas forcement : c'est la seule chose qui compte
-            // ici. Rien a deplacer, rien a convertir, aucun transit a mettre en place.
+            // Le titre a change, le NOM DE FICHIER pas forcement. C'est desormais une OPTIMISATION
+            // et non une correction : depuis la suppression du transit GUID, Plan ecarte deja de
+            // lui-meme un renommage nominatif vers le meme nom, et retirer cette ligne ne change
+            // rien d'observable. Ce qu'elle evite, c'est le parcours de toutes les unites — types
+            // d'images, regions, videos, manuels, musiques — pour n'y rien trouver a faire.
             if (GameMediaRenamer.SameTargetName(oldTitle, newTitle)) return;
             // Read-only: the rename is a memory-only illusion, so the files must not follow it.
             if (_store == null || _store.ReadOnly) return;
@@ -67,7 +70,15 @@ internal static class GameMediaSync
 
             var rival = FindRival(game, platform, newTitle);
             bool merge = rival != null && SameDatabaseEntry(game, rival);
-            bool deferred = GameStore.IsLaunchBoxRunning();
+            // Les fichiers suivent le titre TOUT DE SUITE, que LaunchBox tourne ou non. Il existait
+            // ici un transit par la forme GUID, le temps que le titre atteigne le XML : LaunchBox,
+            // qui lit encore l'ancien titre, continuait ainsi de voir les medias. Le prix etait deux
+            // chemins a maintenir et un etat intermediaire sur le disque, pour un confort pendant une
+            // session — et LaunchBox seul abandonne de toute facon les medias d'un jeu renomme.
+            //
+            // Ce que cela coute : tant que LaunchBox n'est pas ferme, il cherche les medias sous
+            // l'ancien titre et ne les trouve plus. Tout redevient coherent au vidage, quand le titre
+            // rejoint les fichiers.
 
             // A rival is NOT automatically a collision. Two entries carrying the same database id
             // are the same game, so the user is consolidating: that is a MERGE, and the files
@@ -81,7 +92,7 @@ internal static class GameMediaSync
             bool collision = MediaCollision.NeedsGuidForm(
                 platform, Safe(() => game.Id) ?? "", MediaResolver.Sanitize(newTitle),
                 Safe(() => game.LaunchBoxDbId), MediaCollision.From(PlatformGames(platform)));
-            var target = (deferred || collision) ? MediaNameForm.Guid : MediaNameForm.Plain;
+            var target = collision ? MediaNameForm.Guid : MediaNameForm.Plain;
 
             // Another game still answering to the OLD title means these files are its media too:
             // copy rather than move, or renaming this game would strip that one.

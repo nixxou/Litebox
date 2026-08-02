@@ -201,7 +201,13 @@ internal static class GameMediaRenamer
                 foreach (var (path, num) in plain.OrderBy(p => p.Num))
                 {
                     int n = FreeNumber(Taken(path, sani, MediaNameForm.Guid), num == Unnumbered ? 1 : num);
-                    moves.Add(new MediaMove(path, GuidPath(path, fromSani, id, "", n), sharedSource));
+                    // Le nom FINAL, pas l'ancien. La partie titre d'un nom GUID est decorative :
+                    // ni TryGuid ni la GameCache ne la regardent, ils resolvent par le GUID seul.
+                    // La conserver avait deux couts : au vidage, le retour au nominatif devenait un
+                    // vrai renommage au lieu d'un simple retrait de suffixe ; et si ce retour
+                    // n'avait jamais lieu — plantage, ou rival gardant le titre — le fichier restait
+                    // indefiniment sur un titre mort, invisible a tout ce qui cherche par nom.
+                    moves.Add(new MediaMove(path, GuidPath(path, sani, id, "", n), sharedSource));
                 }
             }
             else if (guid.Count > 0)

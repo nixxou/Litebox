@@ -93,6 +93,30 @@ internal static class GameMediaSync
                 platform, Safe(() => game.Id) ?? "", MediaResolver.Sanitize(newTitle),
                 Safe(() => game.LaunchBoxDbId), MediaCollision.From(PlatformGames(platform)));
             var target = collision ? MediaNameForm.Guid : MediaNameForm.Plain;
+
+            // DES ORPHELINS AU CHEMIN DE DESTINATION. Personne ne repond au nouveau titre (pas de
+            // rival), mais des fichiers le portent deja : rien ne les resout, et ils decaleraient
+            // la numerotation de ce qui arrive — l orphelin en -01 pousse le vrai fichier en -02,
+            // et le -01 affiche serait le cadavre. La spec les fait disparaitre EN AMONT. Un
+            // fichier reference par un chemin stocke n est pas orphelin : quelqu un le nomme.
+            if (rival == null)
+            {
+                string toSani = MediaResolver.Sanitize(newTitle);
+                var pinnedPaths = PinnedMedia.For(lbRoot, platform);
+                var strays = new List<string>();
+                foreach (var unit in GameMediaRenamer.Units(lbRoot, platform))
+                    foreach (var dir in unit)
+                    {
+                        string[] files;
+                        try { files = System.IO.Directory.GetFiles(dir); } catch { continue; }
+                        foreach (var f in files)
+                            if (GameMediaRenamer.TryPlain(System.IO.Path.GetFileNameWithoutExtension(f),
+                                                          toSani, out _, unit.Flat)
+                                && !PinnedMedia.IsPinned(pinnedPaths, f))
+                                strays.Add(f);
+                    }
+                MediaCleanup.Delete(strays, "orphelins au chemin de destination");
+            }
 
             // Another game still answering to the OLD title means these files are its media too:
             // copy rather than move, or renaming this game would strip that one.

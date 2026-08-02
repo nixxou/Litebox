@@ -170,13 +170,13 @@ internal sealed partial class EditGameWindow
         // the "Apps" bucket below — exclude them here so they're managed exclusively by the dedicated Documents
         // page instead of ALSO being editable/deletable/launchable from this generic one.
         apps = apps.Where(a => a is not Data.HostAdditionalApplication { IsDocument: true }).ToArray();
-        // The CURRENT DEFAULT (the row twinning the game's own ROM) sorts first and is tagged, so a
-        // Make Default is immediately readable; the rest keeps the Priority order.
+        // ORDRE DU FICHIER, comme LaunchBox : son dialogue presente les versions dans l ordre du
+        // XML, sans tri — mesure sur capture, apres que deux lectures successives ont pris NOTRE
+        // page triee pour la leur. Le tri « defaut d abord puis priorite » ajoute en juillet est
+        // retire ; l etoile verte reste, marqueur sans reordonnancement.
         string gPath = Safe(() => AppsGame.ApplicationPath) ?? "";
         FillAppList(_verList,
-            apps.Where(a => a != null && IsLikelyVersion(a))
-                .OrderByDescending(a => AppPathEq(Safe(() => a.ApplicationPath) ?? "", gPath))
-                .ThenBy(a => Safe(() => a.Priority)),
+            apps.Where(a => a != null && IsLikelyVersion(a)),
             defaultPath: gPath);
         FillAppList(_appList, apps.Where(a => a != null && !IsLikelyVersion(a)));
         UpdateAddAppButtons();

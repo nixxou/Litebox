@@ -5769,9 +5769,6 @@ internal sealed class MainWindow : Form, IMessageFilter
             }
 
             var apps = SafeAddApps(g);
-            // LaunchBox presente les versions triees par Priority (mesure : P1 puis P2 puis P3,
-            // stables a egalite). Nous montrions l ordre brut du XML.
-            apps = apps.OrderBy(a => { try { return a.Priority; } catch { return int.MaxValue; } }).ToArray();
             if (apps.Length > 0)
             {
                 var pv = new ToolStripMenuItem("Play Version");

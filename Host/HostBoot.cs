@@ -282,9 +282,14 @@ internal static class HostBoot
             {
                 try
                 {
-                    var facet = new[] { "Action", "RPG", "Puzzle" };
+                    var facets = new Search.FilterFacets();
+                    foreach (var v in new[] { "Action", "RPG", "Puzzle" }) { facets.Genres.Add(v); facets.Publishers.Add(v); facets.Developers.Add(v); }
+                    foreach (var v in new[] { "Physical", "Digital" }) facets.ReleaseTypes.Add(v);
+                    facets.Platforms.Add("Arcade"); facets.Regions.Add("Japan"); facets.PlayModes.Add("Cooperative");
+                    facets.Statuses.Add("Playable"); facets.Progresses.Add("Not Started"); facets.Esrb.Add("E");
+                    facets.Controllers.Add("Generic Controller"); facets.MaxPlayers.Add(2);
                     var hist = new System.Collections.Generic.List<Search.FilterCriteria> { new() { Fav = true, Genres = { "Action" } } };
-                    using var dlg = new Search.FilterDialog(new Search.FilterCriteria(), facet, facet, facet, new[] { "Physical", "Digital" }, hist);
+                    using var dlg = new Search.FilterDialog(new Search.FilterCriteria(), facets, hist);
                     dlg.CreateControl();
                     int n = 0;
                     void Walk(System.Windows.Forms.Control c) { var _ = c.Handle; n++; foreach (System.Windows.Forms.Control ch in c.Controls) Walk(ch); }

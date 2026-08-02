@@ -27,7 +27,7 @@ internal sealed class FilterDialog : Form
     private int S(int px) => (int)Math.Round(px * _s);
 
     private readonly FilterCriteria _c;                 // working copy
-    private readonly string[] _genres, _publishers, _developers, _releaseTypes;
+    private readonly FilterFacets _f;
 
     /// <summary>Set on Apply (the edited criteria) or Clear (a fresh default = inactive). Null on Cancel.</summary>
     public FilterCriteria? Result;
@@ -36,8 +36,8 @@ internal sealed class FilterDialog : Form
     private readonly List<Button> _tabButtons = new();
 
     private RangeSlider _year = null!, _rating = null!;
-    private ComboBox _type = null!, _sort = null!;
-    private CheckBox _fav = null!, _inst = null!;
+    private ComboBox _type = null!, _sort = null!, _ach = null!, _saves = null!, _players = null!;
+    private CheckBox _fav = null!, _inst = null!, _hiscore = null!;
     private Button _genreMode = null!;
     private CheckedListBox _genreList = null!;
     private TextBox _pubText = null!, _devText = null!;
@@ -45,17 +45,32 @@ internal sealed class FilterDialog : Form
     private readonly List<FilterCriteria> _history;
     private Button _apply = null!;
 
+    // Les listes multi-sélection, par clé de dimension : construites et relues par le même code, pour
+    // qu'ajouter une dimension reste une ligne de table (voir Facets ci-dessous).
+    private readonly Dictionary<string, CheckedListBox> _facetLists = new();
+
     private static readonly (string key, string label)[] Sorts =
     {
         ("alpha", "Alphabetical"), ("year", "Release date"), ("rating", "Rating"), ("lastplayed", "Recently played"),
     };
 
-    public FilterDialog(FilterCriteria current, IEnumerable<string> genres, IEnumerable<string> publishers,
-                        IEnumerable<string> developers, IEnumerable<string> releaseTypes, List<FilterCriteria> history)
+    /// <summary>Les dimensions multi-sélection, chacune un onglet. Une ligne ici = un onglet complet :
+    /// la construction et la relecture passent par la même table, donc rien à câbler ailleurs.</summary>
+    private (string key, string label, Func<List<string>> values, Func<List<string>> selected)[] Facets => new[]
+    {
+        ("platform", "Platform", (Func<List<string>>)(() => FilterFacets.Sorted(_f.Platforms)), (Func<List<string>>)(() => _c.Platforms)),
+        ("region",   "Region",   () => FilterFacets.Sorted(_f.Regions),    () => _c.Regions),
+        ("playmode", "Play mode",() => FilterFacets.Sorted(_f.PlayModes),  () => _c.PlayModes),
+        ("status",   "Status",   () => FilterFacets.Sorted(_f.Statuses),   () => _c.Statuses),
+        ("progress", "Progress", () => FilterFacets.Sorted(_f.Progresses), () => _c.Progresses),
+        ("esrb",     "ESRB",     () => FilterFacets.Sorted(_f.Esrb),       () => _c.Esrb),
+        ("pad",      "Controller",() => FilterFacets.Sorted(_f.Controllers),() => _c.Controllers),
+    };
+
+    public FilterDialog(FilterCriteria current, FilterFacets facets, List<FilterCriteria> history)
     {
         _c = current.Clone();
-        _genres = genres.ToArray(); _publishers = publishers.ToArray();
-        _developers = developers.ToArray(); _releaseTypes = releaseTypes.ToArray();
+        _f = facets;
         _history = history;
         _s = DeviceDpi / 96f;
 
@@ -64,7 +79,9 @@ internal sealed class FilterDialog : Form
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         BackColor = Bg; ForeColor = Fg; Font = new Font("Segoe UI", 9f);
-        ClientSize = new Size(S(560), S(460));
+        // Plus large qu'avant : le bandeau d'onglets s'enroule désormais sur deux rangs, et les listes
+        // de valeurs ont besoin de la place.
+        ClientSize = new Size(S(720), S(520));
 
         BuildTabs();
         BuildFooter();
@@ -79,7 +96,9 @@ internal sealed class FilterDialog : Form
         var content = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(S(16), S(14), S(16), S(8)) };
         Controls.Add(content);
 
-        var strip = new FlowLayoutPanel { Dock = DockStyle.Top, Height = S(40), BackColor = Panel, Padding = new Padding(S(6), S(6), 0, 0), WrapContents = false };
+        // WrapContents : il y a maintenant treize onglets, ils tiennent sur deux rangs plutôt que de
+        // déborder hors de la fenêtre (l'ancien strip coupait déjà « History » à six onglets).
+        var strip = new FlowLayoutPanel { Dock = DockStyle.Top, Height = S(72), BackColor = Panel, Padding = new Padding(S(6), S(6), 0, 0), WrapContents = true };
         Controls.Add(strip);
 
         void Tab(string key, string label, Control body)
@@ -103,6 +122,7 @@ internal sealed class FilterDialog : Form
 
         Tab("general", "General", BuildGeneral());
         Tab("genre", "Genre", BuildGenre());
+        foreach (var (key, label, values, selected) in Facets) Tab(key, label, BuildFacet(key, values(), selected()));
         Tab("publisher", "Publisher", BuildText(isPub: true));
         Tab("developer", "Developer", BuildText(isPub: false));
         Tab("orderby", "Order by", BuildOrderBy());
@@ -144,20 +164,80 @@ internal sealed class FilterDialog : Form
         p.Controls.Add(_rating);
         y += 70;
 
-        Head("Release type", y);
-        _type = new ComboBox { Location = new Point(S(160), S(y - 2)), Size = new Size(S(300), S(24)), DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg };
-        _type.Items.Add("(Any)");
-        foreach (var rt in _releaseTypes) _type.Items.Add(rt);
+        // Les listes déroulantes « (Any) + valeurs », posées en colonne à droite du libellé.
+        ComboBox Combo(string head, int yy, params string[] items)
+        {
+            Head(head, yy);
+            var cb = new ComboBox
+            {
+                Location = new Point(S(160), S(yy - 2)), Size = new Size(S(300), S(24)),
+                DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg,
+            };
+            cb.Items.Add("(Any)");
+            foreach (var i in items) cb.Items.Add(i);
+            cb.SelectedIndex = 0;
+            p.Controls.Add(cb);
+            return cb;
+        }
+
+        _type = Combo("Release type", y, FilterFacets.Sorted(_f.ReleaseTypes).ToArray());
         _type.SelectedIndex = string.IsNullOrEmpty(_c.ReleaseType) ? 0 : Math.Max(0, _type.Items.IndexOf(_c.ReleaseType));
-        p.Controls.Add(_type);
-        y += 34;
+        y += 32;
+
+        _players = Combo("Max players", y, _f.SortedPlayers().Select(n => n.ToString()).ToArray());
+        if (_c.MaxPlayers > 0) { int ix = _players.Items.IndexOf(_c.MaxPlayers.ToString()); if (ix > 0) _players.SelectedIndex = ix; }
+        y += 32;
+
+        _ach = Combo("Achievements", y, "Yes", "No");
+        _ach.SelectedIndex = _c.Achievements == "yes" ? 1 : _c.Achievements == "no" ? 2 : 0;
+        y += 32;
+
+        _saves = Combo("Game saves", y, "Has any saved game", "Has any save state");
+        _saves.SelectedIndex = _c.Saves == "game" ? 1 : _c.Saves == "state" ? 2 : 0;
+        y += 38;
 
         _fav = new CheckBox { Text = "Favorite only", AutoSize = true, ForeColor = Fg, Location = new Point(0, S(y)), Checked = _c.Fav };
         p.Controls.Add(_fav);
         y += 26;
         _inst = new CheckBox { Text = "Installed only", AutoSize = true, ForeColor = Fg, Location = new Point(0, S(y)), Checked = _c.Installed };
         p.Controls.Add(_inst);
+        y += 26;
+        _hiscore = new CheckBox { Text = "High scores only", AutoSize = true, ForeColor = Fg, Location = new Point(0, S(y)), Checked = _c.HighScores };
+        _tips.SetToolTip(_hiscore, "Only games an installed hiscore.dat says can produce a high score (MAME / FBNeo).");
+        p.Controls.Add(_hiscore);
 
+        return p;
+    }
+
+    private readonly ToolTip _tips = new();
+
+    // ── Une dimension multi-sélection (Platform, Region, Play mode, …) ────────
+    private Control BuildFacet(string key, List<string> values, List<string> selected)
+    {
+        var p = new Panel { BackColor = Bg };
+        var list = new CheckedListBox
+        {
+            Location = new Point(0, S(28)), Size = new Size(S(660), S(346)), BackColor = Panel2, ForeColor = Fg,
+            BorderStyle = BorderStyle.FixedSingle, CheckOnClick = true, IntegralHeight = false,
+        };
+        foreach (var v in values) list.Items.Add(v, selected.Contains(v, StringComparer.OrdinalIgnoreCase));
+        _facetLists[key] = list;
+
+        var note = new Label
+        {
+            Text = values.Count == 0
+                ? "No value found in the library for this field."
+                : $"{values.Count} value(s) — a game matches when it has ANY of the ticked ones.",
+            AutoSize = false, Size = new Size(S(500), S(22)), ForeColor = SubFg, Location = new Point(0, 0),
+        };
+        var clear = new Button
+        {
+            Text = "Untick all", Size = new Size(S(90), S(22)), Location = new Point(S(570), S(-1)),
+            FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 },
+        };
+        clear.Click += (_, _) => { for (int i = 0; i < list.Items.Count; i++) list.SetItemChecked(i, false); };
+
+        p.Controls.Add(note); p.Controls.Add(clear); p.Controls.Add(list);
         return p;
     }
 
@@ -180,7 +260,7 @@ internal sealed class FilterDialog : Form
             Location = new Point(0, S(34)), Size = new Size(S(500), S(320)), BackColor = Panel2, ForeColor = Fg,
             BorderStyle = BorderStyle.FixedSingle, CheckOnClick = true, IntegralHeight = false,
         };
-        foreach (var gname in _genres) _genreList.Items.Add(gname, _c.Genres.Contains(gname, StringComparer.OrdinalIgnoreCase));
+        foreach (var gname in FilterFacets.Sorted(_f.Genres)) _genreList.Items.Add(gname, _c.Genres.Contains(gname, StringComparer.OrdinalIgnoreCase));
         p.Controls.Add(_genreList);
         return p;
     }
@@ -198,7 +278,7 @@ internal sealed class FilterDialog : Form
         var sug = new ListBox { Location = new Point(0, S(70)), Size = new Size(S(500), S(280)), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false };
         p.Controls.Add(sug);
 
-        var all = isPub ? _publishers : _developers;
+        var all = (isPub ? FilterFacets.Sorted(_f.Publishers) : FilterFacets.Sorted(_f.Developers)).ToArray();
         void Refresh()
         {
             string q = tb.Text.Trim();
@@ -249,8 +329,9 @@ internal sealed class FilterDialog : Form
     private void BuildFooter()
     {
         var footer = new Panel { Dock = DockStyle.Bottom, Height = S(48), BackColor = Panel };
-        _apply = new Button { Text = "Apply", Size = new Size(S(90), S(28)), Location = new Point(S(560 - 100), S(10)), FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
-        var clear = new Button { Text = "Clear", Size = new Size(S(90), S(28)), Location = new Point(S(560 - 198), S(10)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 } };
+        int w = ClientSize.Width;   // le pied suit la largeur réelle du dialogue, plus une constante figée
+        _apply = new Button { Text = "Apply", Size = new Size(S(90), S(28)), Location = new Point(w - S(100), S(10)), FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
+        var clear = new Button { Text = "Clear", Size = new Size(S(90), S(28)), Location = new Point(w - S(198), S(10)), FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 } };
         var cancel = new Button { Text = "Cancel", Size = new Size(S(90), S(28)), Location = new Point(S(12), S(10)), FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.CancelBtn, ForeColor = Color.White, FlatAppearance = { BorderSize = 0 } };
         _apply.Click += (_, _) => { ReadInto(_c); Result = _c; DialogResult = DialogResult.OK; Close(); };
         clear.Click += (_, _) => { Result = new FilterCriteria(); DialogResult = DialogResult.OK; Close(); };
@@ -266,9 +347,20 @@ internal sealed class FilterDialog : Form
         c.YearMin = (int)Math.Round(_year.Low); c.YearMax = (int)Math.Round(_year.High);
         c.RatingMin = _rating.Low; c.RatingMax = _rating.High;
         c.ReleaseType = _type.SelectedIndex <= 0 ? "" : (string)_type.SelectedItem!;
-        c.Fav = _fav.Checked; c.Installed = _inst.Checked;
+        c.Fav = _fav.Checked; c.Installed = _inst.Checked; c.HighScores = _hiscore.Checked;
         c.Genres = _genreList.CheckedItems.Cast<string>().ToList();
         c.Publisher = _pubText.Text.Trim(); c.Developer = _devText.Text.Trim();
         c.SortBy = _sort.SelectedIndex >= 0 ? Sorts[_sort.SelectedIndex].key : "alpha";
+
+        c.MaxPlayers = _players.SelectedIndex <= 0 ? 0 : int.TryParse((string)_players.SelectedItem!, out var n) ? n : 0;
+        c.Achievements = _ach.SelectedIndex switch { 1 => "yes", 2 => "no", _ => "" };
+        c.Saves = _saves.SelectedIndex switch { 1 => "game", 2 => "state", _ => "" };
+
+        // Les dimensions multi-sélection se relisent par la même table qui les a construites.
+        List<string> Checked(string key) => _facetLists.TryGetValue(key, out var l)
+            ? l.CheckedItems.Cast<string>().ToList() : new List<string>();
+        c.Platforms = Checked("platform"); c.Regions = Checked("region"); c.PlayModes = Checked("playmode");
+        c.Statuses = Checked("status"); c.Progresses = Checked("progress"); c.Esrb = Checked("esrb");
+        c.Controllers = Checked("pad");
     }
 }

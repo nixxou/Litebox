@@ -3148,8 +3148,8 @@ internal sealed class MainWindow : Form, IMessageFilter
     // ── Advanced search filter (dialog + indicator) ───────────────────────────
     private void OpenFilterDialog()
     {
-        var (genres, pubs, devs, types) = ComputeFacets();
-        using var dlg = new Search.FilterDialog(_filter ?? new Search.FilterCriteria(), genres, pubs, devs, types, Search.SearchHistory.Load());
+        Search.FilterCriteria.ResetCaches();   // le catalogue de manettes a pu changer depuis la dernière ouverture
+        using var dlg = new Search.FilterDialog(_filter ?? new Search.FilterCriteria(), ComputeFacets(), Search.SearchHistory.Load());
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Result == null) return;
         var c = dlg.Result;
         _filter = (c.IsActive || c.SortBy != "alpha") ? c : null;   // keep only if it does something
@@ -3183,23 +3183,32 @@ internal sealed class MainWindow : Form, IMessageFilter
         _filterBtn.ToolTipText = active ? "Filter active — click to edit, right-click to clear" : "Advanced search filter";
     }
 
-    // Facet value lists (genres split on ';', single-valued pub/dev/releaseType) from the current node's games.
-    private (System.Collections.Generic.List<string> genres, System.Collections.Generic.List<string> pubs,
-             System.Collections.Generic.List<string> devs, System.Collections.Generic.List<string> types) ComputeFacets()
+    // Les valeurs proposées par le dialogue de filtre.
+    //
+    // Elles viennent de TOUTE la bibliothèque, pas du nœud affiché. LaunchBox, lui, ne propose que les
+    // valeurs du nœud courant — il peut se le permettre, son filtre meurt quand on change de nœud. Le
+    // nôtre survit, c'est même sa raison d'être : borner les choix au nœud courant rendrait « tous mes
+    // jeux japonais, toutes plateformes confondues » impossible à exprimer.
+    private Search.FilterFacets ComputeFacets()
     {
-        var gs = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var pb = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var dv = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var rt = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var g in _current ?? Array.Empty<IGame>())
+        var f = new Search.FilterFacets();
+        var games = Safe(() => _dm?.GetAllGames()) ?? _current ?? Array.Empty<IGame>();
+        foreach (var g in games)
         {
-            foreach (var x in S(Safe(() => g.GenresString)).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) gs.Add(x);
-            var p = S(Safe(() => g.Publisher)).Trim(); if (p.Length > 0) pb.Add(p);
-            var d = S(Safe(() => g.Developer)).Trim(); if (d.Length > 0) dv.Add(d);
-            var t = S(Safe(() => g.ReleaseType)).Trim(); if (t.Length > 0) rt.Add(t);
+            foreach (var x in S(Safe(() => g.GenresString)).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) f.Genres.Add(x);
+            f.Add(f.Publishers, Safe(() => g.Publisher));
+            f.Add(f.Developers, Safe(() => g.Developer));
+            f.Add(f.ReleaseTypes, Safe(() => g.ReleaseType));
+            f.Add(f.Platforms, Safe(() => g.Platform));
+            f.Add(f.Statuses, Safe(() => g.Status));
+            f.Add(f.Progresses, Safe(() => g.Progress));
+            f.Add(f.Esrb, Safe(() => g.Rating));
+            f.AddTokens(f.Regions, Safe(() => g.Region));
+            f.AddTokens(f.PlayModes, Safe(() => g.PlayMode));
+            int? mp = Safe(() => g.MaxPlayers); if (mp is > 0 and <= 32) f.MaxPlayers.Add(mp.Value);
         }
-        System.Collections.Generic.List<string> Sorted(System.Collections.Generic.HashSet<string> h) => h.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
-        return (Sorted(gs), Sorted(pb), Sorted(dv), Sorted(rt));
+        try { foreach (var r in ControllerCatalogStore.All()) f.Add(f.Controllers, r.Name); } catch { }
+        return f;
     }
 
     // ── Poster (grid) view ────────────────────────────────────────────────────

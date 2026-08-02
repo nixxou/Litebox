@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LbApiHost;
 using Unbroken.LaunchBox.Plugins.Data;
 
 namespace LbApiHost.Host.Search;
@@ -43,6 +44,27 @@ internal sealed class FilterCriteria
     public string Developer { get; set; } = "";
     public string SortBy { get; set; } = "alpha";         // alpha | year | rating | lastplayed
 
+    // ── Dimensions reprises du menu de filtre de LaunchBox ────────────────────
+    // Multi-sélection : OU à l'intérieur d'une dimension, ET entre dimensions — la sémantique de
+    // LaunchBox, et déjà celle des genres en mode "or".
+    //
+    // UNE DIFFÉRENCE ASSUMÉE AVEC LAUNCHBOX : il n'offre que les valeurs présentes dans la
+    // plateforme/playlist affichée, parce que son filtre meurt en changeant de nœud. Le nôtre SURVIT au
+    // changement de nœud (c'est tout son intérêt), donc restreindre les choix au nœud courant rendrait
+    // impossible « les jeux japonais, partout ». Les listes viennent donc de TOUTE la bibliothèque.
+    public List<string> Platforms { get; set; } = new();
+    public List<string> Regions { get; set; } = new();
+    public List<string> PlayModes { get; set; } = new();
+    public List<string> Statuses { get; set; } = new();
+    public List<string> Progresses { get; set; } = new();
+    public List<string> Esrb { get; set; } = new();       // le champ « Rating » de LaunchBox (ESRB/PEGI)
+    public List<string> Controllers { get; set; } = new();
+
+    public bool HighScores { get; set; }                  // le jeu peut produire un high score (hiscore.dat)
+    public string Achievements { get; set; } = "";        // "" | "yes" | "no"
+    public string Saves { get; set; } = "";               // "" | "game" (sauvegarde) | "state" (save state)
+    public int MaxPlayers { get; set; }                   // 0 = indifférent, sinon le nombre exact
+
     [JsonIgnore] public bool HasYearMin => YearMin > YearLo;
     [JsonIgnore] public bool HasYearMax => YearMax < YearHi;
     [JsonIgnore] public bool HasRatingMin => RatingMin > RatingLo;
@@ -53,7 +75,10 @@ internal sealed class FilterCriteria
     public bool IsActive =>
         HasYearMin || HasYearMax || HasRatingMin || HasRatingMax
         || !string.IsNullOrEmpty(ReleaseType) || Fav || Installed
-        || Genres.Count > 0 || !string.IsNullOrWhiteSpace(Publisher) || !string.IsNullOrWhiteSpace(Developer);
+        || Genres.Count > 0 || !string.IsNullOrWhiteSpace(Publisher) || !string.IsNullOrWhiteSpace(Developer)
+        || Platforms.Count > 0 || Regions.Count > 0 || PlayModes.Count > 0 || Statuses.Count > 0
+        || Progresses.Count > 0 || Esrb.Count > 0 || Controllers.Count > 0
+        || HighScores || Achievements.Length > 0 || Saves.Length > 0 || MaxPlayers > 0;
 
     public FilterCriteria Clone()
     {
@@ -63,6 +88,11 @@ internal sealed class FilterCriteria
             ReleaseType = ReleaseType, Fav = Fav, Installed = Installed,
             Genres = new List<string>(Genres), GenreMode = GenreMode,
             Publisher = Publisher, Developer = Developer, SortBy = SortBy,
+            Platforms = new List<string>(Platforms), Regions = new List<string>(Regions),
+            PlayModes = new List<string>(PlayModes), Statuses = new List<string>(Statuses),
+            Progresses = new List<string>(Progresses), Esrb = new List<string>(Esrb),
+            Controllers = new List<string>(Controllers),
+            HighScores = HighScores, Achievements = Achievements, Saves = Saves, MaxPlayers = MaxPlayers,
         };
     }
 
@@ -103,10 +133,109 @@ internal sealed class FilterCriteria
             if (!string.IsNullOrWhiteSpace(Developer) &&
                 Str(() => g.Developer).IndexOf(Developer.Trim(), StringComparison.OrdinalIgnoreCase) < 0)
                 return false;
+
+            // ── Dimensions multi-valeurs. Chaque test est gardé par « la dimension est-elle active ? » :
+            // le filtre passe sur chaque jeu à chaque frappe, et certaines lectures (sous-entités) allouent.
+            if (Platforms.Count > 0 && !Platforms.Contains(Str(() => g.Platform), Ci)) return false;
+            if (Statuses.Count > 0 && !Statuses.Contains(Str(() => g.Status), Ci)) return false;
+            if (Progresses.Count > 0 && !Progresses.Contains(Str(() => g.Progress), Ci)) return false;
+            if (Esrb.Count > 0 && !Esrb.Contains(Str(() => g.Rating), Ci)) return false;
+            // Région et mode de jeu sont MULTI-VALUÉS chez LaunchBox (« Europe; France »), d'où le
+            // découpage en jetons plutôt qu'une égalité sur la chaîne entière.
+            if (Regions.Count > 0 && !AnyToken(Str(() => g.Region), Regions)) return false;
+            if (PlayModes.Count > 0 && !AnyToken(Str(() => g.PlayMode), PlayModes)) return false;
+
+            if (MaxPlayers > 0 && Try<int?>(() => g.MaxPlayers) != MaxPlayers) return false;
+
+            if (Achievements.Length > 0)
+            {
+                // LiteBox ne connaît que RetroAchievements, via le hash que LaunchBox pose sur le jeu —
+                // même source que le champ « Any Achievements » du filtre de playlist.
+                bool has = g is Data.HostGame hg && !string.IsNullOrWhiteSpace(Try(() => hg.RetroAchievementsHash, ""));
+                if (has != (Achievements == "yes")) return false;
+            }
+
+            if (HighScores && !Try(() => Mame.MameLeaderboards.HasHiscoreSupport(g), false)) return false;
+
+            if (Saves.Length > 0 && !HasSave(g, wantState: Saves == "state")) return false;
+
+            if (Controllers.Count > 0 && !UsesController(g)) return false;
+
             return true;
         }
         catch { return false; }
     }
+
+    private static readonly StringComparer Ci = StringComparer.OrdinalIgnoreCase;
+
+    /// <summary>Vrai quand l'un des jetons de <paramref name="value"/> (séparés par ';' ou ',') figure dans
+    /// la sélection. Comparaison sur la valeur ENTIÈRE du jeton : « Europe » ne doit pas répondre pour
+    /// « Eastern Europe ».</summary>
+    private static bool AnyToken(string value, List<string> wanted)
+    {
+        if (value.Length == 0) return false;
+        foreach (var tok in value.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries))
+            if (wanted.Contains(tok.Trim(), Ci)) return true;
+        return false;
+    }
+
+    /// <summary>Sauvegardes : LaunchBox écrit une ligne &lt;GameSave&gt; par fichier, et c'est
+    /// SaveGroupName qui distingue une sauvegarde (« My Save File ») d'un save state (« My Save State »).</summary>
+    private static bool HasSave(IGame g, bool wantState)
+    {
+        if (g is not ILiteBoxGame lb) return false;
+        try
+        {
+            foreach (var row in lb.GetSubEntities("GameSave"))
+            {
+                row.TryGetValue("SaveGroupName", out var name);
+                bool isState = (name ?? "").IndexOf("state", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (isState == wantState) return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    /// <summary>Manettes : le jeu porte des &lt;GameControllerSupport&gt; qui ne référencent qu'un
+    /// ControllerId ; le nom lisible vient du catalogue Data\GameControllers.xml.</summary>
+    private bool UsesController(IGame g)
+    {
+        if (g is not ILiteBoxGame lb) return false;
+        try
+        {
+            var byId = ControllerNames;
+            foreach (var row in lb.GetSubEntities("GameControllerSupport"))
+            {
+                if (!row.TryGetValue("ControllerId", out var id) || string.IsNullOrEmpty(id)) continue;
+                if (byId.TryGetValue(id, out var name) && Controllers.Contains(name, Ci)) return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    // Le catalogue de manettes change rarement et le filtre le lit par jeu : résolu une fois, remis à zéro
+    // à l'ouverture du dialogue (ResetCaches) pour qu'un ajout de manette soit pris en compte.
+    private static Dictionary<string, string>? _ctrlNames;
+    private static Dictionary<string, string> ControllerNames
+    {
+        get
+        {
+            if (_ctrlNames != null) return _ctrlNames;
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (var r in Host.ControllerCatalogStore.All())
+                    if (!string.IsNullOrEmpty(r.Id) && !string.IsNullOrEmpty(r.Name)) map[r.Id] = r.Name;
+            }
+            catch { }
+            return _ctrlNames = map;
+        }
+    }
+
+    /// <summary>À appeler quand le catalogue de manettes a pu changer (ouverture du dialogue de filtre).</summary>
+    public static void ResetCaches() => _ctrlNames = null;
 
     private static T Try<T>(Func<T> f, T fallback = default) { try { return f(); } catch { return fallback; } }
     private static string Str(Func<string> f) { try { return f() ?? ""; } catch { return ""; } }
@@ -138,6 +267,17 @@ internal sealed class FilterCriteria
         if (Genres.Count > 0) parts.Add((GenreMode == "and" ? "& " : "") + string.Join(", ", Genres));
         if (!string.IsNullOrWhiteSpace(Publisher)) parts.Add("Pub: " + Publisher.Trim());
         if (!string.IsNullOrWhiteSpace(Developer)) parts.Add("Dev: " + Developer.Trim());
+        if (Platforms.Count > 0) parts.Add(string.Join(", ", Platforms));
+        if (Regions.Count > 0) parts.Add(string.Join(", ", Regions));
+        if (PlayModes.Count > 0) parts.Add(string.Join(", ", PlayModes));
+        if (Statuses.Count > 0) parts.Add("Status: " + string.Join(", ", Statuses));
+        if (Progresses.Count > 0) parts.Add("Progress: " + string.Join(", ", Progresses));
+        if (Esrb.Count > 0) parts.Add("ESRB: " + string.Join(", ", Esrb));
+        if (Controllers.Count > 0) parts.Add("Controller: " + string.Join(", ", Controllers));
+        if (MaxPlayers > 0) parts.Add(MaxPlayers + " player" + (MaxPlayers > 1 ? "s" : ""));
+        if (HighScores) parts.Add("High scores");
+        if (Achievements.Length > 0) parts.Add(Achievements == "yes" ? "Achievements" : "No achievements");
+        if (Saves.Length > 0) parts.Add(Saves == "state" ? "Has save state" : "Has saved game");
         if (SortBy != "alpha") parts.Add("↕ " + SortLabel(SortBy));
         return parts.Count == 0 ? "(all games)" : string.Join("  ·  ", parts);
     }
@@ -153,7 +293,12 @@ internal sealed class FilterCriteria
     {
         // Normalise: an inactive-bound field is written at its extreme, so two equivalent criteria match.
         var norm = Clone();
-        norm.Genres = norm.Genres.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        static List<string> Sorted(List<string> l) => l.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        norm.Genres = Sorted(norm.Genres);
+        norm.Platforms = Sorted(norm.Platforms); norm.Regions = Sorted(norm.Regions);
+        norm.PlayModes = Sorted(norm.PlayModes); norm.Statuses = Sorted(norm.Statuses);
+        norm.Progresses = Sorted(norm.Progresses); norm.Esrb = Sorted(norm.Esrb);
+        norm.Controllers = Sorted(norm.Controllers);
         norm.Publisher = (norm.Publisher ?? "").Trim();
         norm.Developer = (norm.Developer ?? "").Trim();
         return JsonSerializer.Serialize(norm, Json);

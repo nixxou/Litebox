@@ -23,6 +23,34 @@ namespace LbApiHost.Tools;
 
 internal static class CombineProbe
 {
+    /// <summary>Rejoue un RENOMMAGE par la vraie porte d entree — le meme ordre exact que
+    /// EditGameWindow : le titre d abord, puis GameMediaSync.OnTitleChanged. C est la seule facon
+    /// de verifier la spec de bout en bout ; les tests unitaires ne traversent ni le store ni le
+    /// DataManager, et on sait ce que valent les verifications qui ne traversent rien.</summary>
+    public static int RunRename(string lbRoot, string gameId, string newTitle)
+    {
+        LbApiHost.Host.Media.MediaResolver.Init(lbRoot);
+        LbApiHost.Host.Data.GameStore.ForceLaunchBoxRunning = false;
+        string dataDir = Path.Combine(lbRoot, "Data");
+        var store = GameStore.Load(Path.Combine(dataDir, "Platforms"), Path.Combine(dataDir, "probe.pending.db"));
+        store.ReadOnly = false;
+        var dm = new HostDataManagerXml(store, dataDir, Path.Combine(lbRoot, "Images")) { ReadOnly = false };
+        PluginHelper.DataManager = dm;
+        LbApiHost.Host.Media.GameMediaSync.Attach(store);
+
+        var game = dm.GetAllGames().FirstOrDefault(g =>
+            string.Equals(Safe(() => g.Id) ?? "", gameId, StringComparison.OrdinalIgnoreCase));
+        if (game == null) { Console.WriteLine($"[probe] game {gameId} not found"); return 1; }
+
+        string oldTitle = Safe(() => game.Title) ?? "";
+        game.Title = newTitle;
+        LbApiHost.Host.Media.GameMediaSync.OnTitleChanged(game, oldTitle, newTitle);
+        dm.Save(true);
+        store.CloseLog();
+        Console.WriteLine($"[probe] renamed \"{oldTitle}\" -> \"{newTitle}\"");
+        return 0;
+    }
+
     public static int Run(string lbRoot, string rootId, string otherIds)
     {
         // Le boot initialise le resolveur de medias ; une sonde ne le traverse pas. Sans cette

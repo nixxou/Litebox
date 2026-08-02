@@ -3193,6 +3193,10 @@ internal sealed class MainWindow : Form, IMessageFilter
     {
         var f = new Search.FilterFacets();
         var games = Safe(() => _dm?.GetAllGames()) ?? _current ?? Array.Empty<IGame>();
+        // Manettes : seules celles qu'au moins UN jeu référence avec un vrai support (niveau ≠ 0 =
+        // « Not Supported »). Le catalogue entier proposerait des options qui garantissent zéro
+        // résultat — exactement ce que la règle « valeurs présentes dans la bibliothèque » interdit.
+        var usedControllerIds = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var g in games)
         {
             foreach (var x in S(Safe(() => g.GenresString)).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) f.Genres.Add(x);
@@ -3206,8 +3210,22 @@ internal sealed class MainWindow : Form, IMessageFilter
             f.AddTokens(f.Regions, Safe(() => g.Region));
             f.AddTokens(f.PlayModes, Safe(() => g.PlayMode));
             int? mp = Safe(() => g.MaxPlayers); if (mp is > 0 and <= 32) f.MaxPlayers.Add(mp.Value);
+            if (g is LbApiHost.ILiteBoxGame lb)
+                try
+                {
+                    foreach (var row in lb.GetSubEntities("GameControllerSupport"))
+                        if (Search.FilterCriteria.RowSupportsController(row)
+                            && row.TryGetValue("ControllerId", out var cid) && !string.IsNullOrEmpty(cid))
+                            usedControllerIds.Add(cid);
+                }
+                catch { }
         }
-        try { foreach (var r in ControllerCatalogStore.All()) f.Add(f.Controllers, r.Name); } catch { }
+        try
+        {
+            foreach (var r in ControllerCatalogStore.All())
+                if (usedControllerIds.Contains(r.Id ?? "")) f.Add(f.Controllers, r.Name);
+        }
+        catch { }
         return f;
     }
 

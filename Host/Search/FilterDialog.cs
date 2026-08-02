@@ -180,11 +180,15 @@ internal sealed class FilterDialog : Form
             return cb;
         }
 
-        _type = Combo("Release type", y, FilterFacets.Sorted(_f.ReleaseTypes).ToArray());
+        // Une valeur DÉJÀ sélectionnée qui n'existe plus dans la bibliothèque (historique, jeu modifié
+        // entre-temps) reste proposée : sinon « Apply » sur un autre onglet l'effacerait en silence.
+        _type = Combo("Release type", y, WithSelected(FilterFacets.Sorted(_f.ReleaseTypes), _c.ReleaseType));
         _type.SelectedIndex = string.IsNullOrEmpty(_c.ReleaseType) ? 0 : Math.Max(0, _type.Items.IndexOf(_c.ReleaseType));
         y += 32;
 
-        _players = Combo("Max players", y, _f.SortedPlayers().Select(n => n.ToString()).ToArray());
+        var playerItems = _f.SortedPlayers().Select(n => n.ToString()).ToList();
+        if (_c.MaxPlayers > 0 && !playerItems.Contains(_c.MaxPlayers.ToString())) playerItems.Add(_c.MaxPlayers.ToString());
+        _players = Combo("Max players", y, playerItems.ToArray());
         if (_c.MaxPlayers > 0) { int ix = _players.Items.IndexOf(_c.MaxPlayers.ToString()); if (ix > 0) _players.SelectedIndex = ix; }
         y += 32;
 
@@ -209,7 +213,14 @@ internal sealed class FilterDialog : Form
         return p;
     }
 
+    // Un ToolTip est un Component, pas un Control : hors IContainer, Form.Dispose ne le libère pas —
+    // d'où la libération explicite à la fermeture (sinon un handle natif fuit par ouverture).
     private readonly ToolTip _tips = new();
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _tips.Dispose();
+        base.Dispose(disposing);
+    }
 
     // ── Une dimension multi-sélection (Platform, Region, Play mode, …) ────────
     private Control BuildFacet(string key, List<string> values, List<string> selected)
@@ -220,14 +231,15 @@ internal sealed class FilterDialog : Form
             Location = new Point(0, S(28)), Size = new Size(S(660), S(346)), BackColor = Panel2, ForeColor = Fg,
             BorderStyle = BorderStyle.FixedSingle, CheckOnClick = true, IntegralHeight = false,
         };
-        foreach (var v in values) list.Items.Add(v, selected.Contains(v, StringComparer.OrdinalIgnoreCase));
+        var shown = Union(values, selected);
+        foreach (var v in shown) list.Items.Add(v, selected.Contains(v, StringComparer.OrdinalIgnoreCase));
         _facetLists[key] = list;
 
         var note = new Label
         {
-            Text = values.Count == 0
+            Text = shown.Count == 0
                 ? "No value found in the library for this field."
-                : $"{values.Count} value(s) — a game matches when it has ANY of the ticked ones.",
+                : $"{shown.Count} value(s) — a game matches when it has ANY of the ticked ones.",
             AutoSize = false, Size = new Size(S(500), S(22)), ForeColor = SubFg, Location = new Point(0, 0),
         };
         var clear = new Button
@@ -260,10 +272,25 @@ internal sealed class FilterDialog : Form
             Location = new Point(0, S(34)), Size = new Size(S(500), S(320)), BackColor = Panel2, ForeColor = Fg,
             BorderStyle = BorderStyle.FixedSingle, CheckOnClick = true, IntegralHeight = false,
         };
-        foreach (var gname in FilterFacets.Sorted(_f.Genres)) _genreList.Items.Add(gname, _c.Genres.Contains(gname, StringComparer.OrdinalIgnoreCase));
+        foreach (var gname in Union(FilterFacets.Sorted(_f.Genres), _c.Genres))
+            _genreList.Items.Add(gname, _c.Genres.Contains(gname, StringComparer.OrdinalIgnoreCase));
         p.Controls.Add(_genreList);
         return p;
     }
+
+    /// <summary>values ∪ selected, trié — une sélection devenue orpheline reste visible ET cochable,
+    /// au lieu d'être silencieusement perdue au prochain Apply.</summary>
+    private static List<string> Union(List<string> values, List<string> selected)
+    {
+        var set = new HashSet<string>(values, StringComparer.OrdinalIgnoreCase);
+        foreach (var s in selected) if (!string.IsNullOrWhiteSpace(s)) set.Add(s);
+        return set.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static string[] WithSelected(List<string> values, string selected)
+        => string.IsNullOrEmpty(selected) || values.Contains(selected, StringComparer.OrdinalIgnoreCase)
+            ? values.ToArray()
+            : values.Append(selected).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
 
     // ── Publisher / Developer (text substring + autocomplete list) ────────────
     private Control BuildText(bool isPub)

@@ -155,7 +155,9 @@ internal sealed class FilterCriteria
                 if (has != (Achievements == "yes")) return false;
             }
 
-            if (HighScores && !Try(() => Mame.MameLeaderboards.HasHiscoreSupport(g), false)) return false;
+            // La version CACHÉE — Matches tourne sur chaque jeu à chaque frappe, et la question nue
+            // referait le tour des émulateurs par jeu. Le cache est invalidé avec les hiscore.dat.
+            if (HighScores && !Try(() => GameSortCatalog.MameHighScoresSupported(g), false)) return false;
 
             if (Saves.Length > 0 && !HasSave(g, wantState: Saves == "state")) return false;
 
@@ -179,23 +181,31 @@ internal sealed class FilterCriteria
         return false;
     }
 
-    /// <summary>Sauvegardes : LaunchBox écrit une ligne &lt;GameSave&gt; par fichier, et c'est
-    /// SaveGroupName qui distingue une sauvegarde (« My Save File ») d'un save state (« My Save State »).</summary>
+    /// <summary>Une ligne &lt;GameSave&gt; est un SAVE STATE quand elle porte un Slot numérique — le
+    /// discriminant du gestionnaire de sauvegardes (SaveManager.SlotOf), PAS le libellé du groupe :
+    /// « My Save State » n'est qu'un nom par défaut, renommable, et un state rebaptisé « Quick
+    /// Backup » doit rester un state.</summary>
+    internal static bool RowIsState(IReadOnlyDictionary<string, string> row)
+        => int.TryParse(row.TryGetValue("Slot", out var s) ? s : null, out _);
+
     private static bool HasSave(IGame g, bool wantState)
     {
         if (g is not ILiteBoxGame lb) return false;
         try
         {
             foreach (var row in lb.GetSubEntities("GameSave"))
-            {
-                row.TryGetValue("SaveGroupName", out var name);
-                bool isState = (name ?? "").IndexOf("state", StringComparison.OrdinalIgnoreCase) >= 0;
-                if (isState == wantState) return true;
-            }
+                if (RowIsState(row) == wantState) return true;
         }
         catch { }
         return false;
     }
+
+    /// <summary>Une ligne &lt;GameControllerSupport&gt; VAUT support sauf si son SupportLevel est
+    /// l'explicite « 0 = Not Supported » (contrat relevé sur LB 13.28 : absent = cellule vide,
+    /// 1 = partiel, 2 = complet, 3 = requis). Sans ce test, un jeu déclaré incompatible avec une
+    /// manette répondait présent pour elle.</summary>
+    internal static bool RowSupportsController(IReadOnlyDictionary<string, string> row)
+        => !(row.TryGetValue("SupportLevel", out var lvl) && lvl?.Trim() == "0");
 
     /// <summary>Manettes : le jeu porte des &lt;GameControllerSupport&gt; qui ne référencent qu'un
     /// ControllerId ; le nom lisible vient du catalogue Data\GameControllers.xml.</summary>
@@ -207,6 +217,7 @@ internal sealed class FilterCriteria
             var byId = ControllerNames;
             foreach (var row in lb.GetSubEntities("GameControllerSupport"))
             {
+                if (!RowSupportsController(row)) continue;
                 if (!row.TryGetValue("ControllerId", out var id) || string.IsNullOrEmpty(id)) continue;
                 if (byId.TryGetValue(id, out var name) && Controllers.Contains(name, Ci)) return true;
             }

@@ -73,6 +73,27 @@ internal static class FilterMatchSelfTest
         fail += Check("IsActive sees the high-score flag", true, new FilterCriteria { HighScores = true }.IsActive);
         fail += Check("IsActive stays false on a fresh criteria", false, new FilterCriteria().IsActive);
 
+        // ── Le discriminant des save states est le Slot, pas le libellé du groupe ──
+        // (SaveManager.SlotOf : un state renommé « Quick Backup » reste un state, et une sauvegarde
+        // baptisée « Game State Backup » reste une sauvegarde.)
+        static System.Collections.Generic.Dictionary<string, string> Row(params (string k, string v)[] kv)
+        {
+            var d = new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (k, v) in kv) d[k] = v;
+            return d;
+        }
+        fail += Check("a numeric Slot makes a save state, whatever the name", true,
+                      FilterCriteria.RowIsState(Row(("Slot", "3"), ("SaveGroupName", "Quick Backup"))));
+        fail += Check("no Slot = a save FILE, even named 'Game State Backup'", false,
+                      FilterCriteria.RowIsState(Row(("SaveGroupName", "Game State Backup"))));
+        fail += Check("a non-numeric Slot is not a state", false,
+                      FilterCriteria.RowIsState(Row(("Slot", ""), ("SaveGroupName", "My Save State"))));
+
+        // ── SupportLevel : 0 = « Not Supported » explicite, tout le reste vaut support ──
+        fail += Check("SupportLevel 0 is NOT support", false, FilterCriteria.RowSupportsController(Row(("SupportLevel", "0"))));
+        fail += Check("an absent SupportLevel counts (empty cell = associated)", true, FilterCriteria.RowSupportsController(Row()));
+        fail += Check("SupportLevel 3 counts", true, FilterCriteria.RowSupportsController(Row(("SupportLevel", "3"))));
+
         // ── Clone : une dimension ajoutée doit voyager (sinon Apply perd la sélection) ──
         var src = new FilterCriteria { Regions = { "Japan" }, Controllers = { "Generic Controller" }, MaxPlayers = 4, Saves = "state" };
         var cl = src.Clone();

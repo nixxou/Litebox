@@ -119,10 +119,22 @@ internal sealed partial class EditGameWindow
         var mh = new Label { Text = "━━  Manual", ForeColor = Fg, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), AutoSize = false, BackColor = Bg };
         mh.SetBounds(S(12), y, S(400), S(26)); inner.Controls.Add(mh); y += S(30);
 
-        string manual = DocManualAbs();
+        // Le champ d abord (designation explicite), la CONVENTION ensuite — la meme resolution
+        // que le reste de l application. Avant cela la tuile ne montrait que ManualPath : un
+        // manuel telecharge, qui ne pose plus ce champ, devenait invisible ICI alors que le jeu
+        // l affichait partout ailleurs.
+        string manual = DocManualAbs();
+        bool manualAuto = false;
+        if (string.IsNullOrEmpty(manual))
+        {
+            Guid.TryParse(Safe(() => DocGame.Id) ?? "", out var mid);
+            manual = MediaResolver.Manual(Safe(() => DocGame.Platform) ?? "", mid,
+                                          Safe(() => DocGame.Title) ?? "") ?? "";
+            manualAuto = manual.Length > 0;
+        }
         if (!string.IsNullOrEmpty(manual))
         {
-            var cell = DocTile(manual, null, isManual: true);
+            var cell = DocTile(manual, null, isManual: true, manualAuto);
             cell.Location = new Point(S(16), y); inner.Controls.Add(cell);
         }
         else
@@ -173,7 +185,7 @@ internal sealed partial class EditGameWindow
     private void DocRefresh() { if (_docHost != null) DocPopulate(_docHost); }
 
     // ── Tile ──────────────────────────────────────────────────────────────────
-    private Panel DocTile(string absPath, HostAdditionalApplication? app, bool isManual)
+    private Panel DocTile(string absPath, HostAdditionalApplication? app, bool isManual, bool autoResolved = false)
     {
         var cell = new Panel { Size = new Size(DocCellW, DocCellH), BackColor = Bg };
         bool exists = !string.IsNullOrEmpty(absPath) && File.Exists(absPath);
@@ -200,7 +212,7 @@ internal sealed partial class EditGameWindow
         else { var o = pic.Image; pic.Image = DocBadge(".missing", DocCellW - S(16), DocThumbH - S(8)); o?.Dispose(); }
 
         void OpenIt() { if (exists) DocOpen(absPath); }
-        void Menu(Point pt) => DocMenu(absPath, app, isManual, exists, managed).Show(pic, pt);
+        void Menu(Point pt) => DocMenu(absPath, app, isManual, exists, managed, autoResolved).Show(pic, pt);
         // LEFT opens the document; RIGHT opens the menu. (Control.Click fires for right-click too on some
         // controls, which was opening the file on right-click — gate on the button explicitly.)
         pic.MouseUp += (_, e) => { if (e.Button == MouseButtons.Left) OpenIt(); else if (e.Button == MouseButtons.Right) Menu(e.Location); };
@@ -212,7 +224,7 @@ internal sealed partial class EditGameWindow
         cell.Controls.Add(name);
 
         string ext = Path.GetExtension(absPath).TrimStart('.').ToUpperInvariant();
-        string tag = isManual ? "Manual" : "Doc";
+        string tag = isManual ? (autoResolved ? "Manual · auto" : "Manual") : "Doc";
         string loc = !exists ? "missing" : (managed ? "managed" : "external");
         var info = new Label { Text = $"{tag}  ·  {ext}  ·  {loc}", ForeColor = exists ? (managed ? DocManagedColor : DocExternalColor) : Color.FromArgb(200, 110, 100), BackColor = Bg, Font = new Font("Segoe UI", 7.5f), AutoSize = false, AutoEllipsis = true };
         info.SetBounds(S(4), DocThumbH + S(24), DocCellW - S(8), S(16));
@@ -221,7 +233,7 @@ internal sealed partial class EditGameWindow
         return cell;
     }
 
-    private ContextMenuStrip DocMenu(string absPath, HostAdditionalApplication? app, bool isManual, bool exists, bool managed)
+    private ContextMenuStrip DocMenu(string absPath, HostAdditionalApplication? app, bool isManual, bool exists, bool managed, bool autoResolved = false)
     {
         var m = ThemedMenu();
         if (exists)
@@ -242,7 +254,11 @@ internal sealed partial class EditGameWindow
                     m.Items.Add(new ToolStripMenuItem("Move into Manuals folder").WithClick(() => DocRelocateManual(absPath, move: true)));
                     m.Items.Add(new ToolStripMenuItem("Copy into Manuals folder").WithClick(() => DocRelocateManual(absPath, move: false)));
                 }
-                m.Items.Add(new ToolStripMenuItem(exists ? "Clear manual" : "Unlink missing manual").WithClick(() => { DocSetManual(""); DocRefresh(); }));
+                // Rien a effacer quand la tuile vient de la convention : aucun champ n est pose,
+                // et "Clear" laisserait croire qu on peut retirer un manuel qui reviendrait au
+                // prochain rafraichissement.
+                if (!autoResolved)
+                    m.Items.Add(new ToolStripMenuItem(exists ? "Clear manual" : "Unlink missing manual").WithClick(() => { DocSetManual(""); DocRefresh(); }));
             }
             else if (app != null)
             {
@@ -1021,13 +1037,14 @@ internal sealed partial class EditGameWindow
             }
             else
             {
-                // EmuMovies rows carry a real filename in the URL — KEEP it (URL-decoded, e.g.
-                // "Earthworm%20Jim%20%28USA%29.pdf" → "Earthworm Jim (USA)"). ScreenScraper rows are a
-                // query-string API call with no real name → fall back to <base>[.<REGION>]. Numbered on a clash.
-                string folder = Path.Combine(dir, bn);
-                string fileBase = DocPreferredName(w) ?? (bn + suffix);
-                dest = Path.Combine(folder, fileBase + ext);
-                int n = 1; while (File.Exists(dest)) dest = Path.Combine(folder, $"{fileBase}-{n++:D2}{ext}");
+                // Meme destination que le manuel principal : le dossier de REGION, au nom
+                // conventionnel. L ancien rangement — sous-dossier au nom du jeu, nom libre —
+                // n etait atteignable que par le chemin stocke ; celui-ci est aussi vu par la
+                // detection automatique des deux programmes.
+                string atitle = Safe(() => g.Title) ?? "";
+                dest = plat.Length > 0 && atitle.Length > 0 && DocLbRoot().Length > 0
+                    ? Media.ManualLibrary.FreeDestination(DocLbRoot(), plat, atitle, w.Region, ext)
+                    : Path.Combine(dir, bn + suffix + ext);
             }
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.WriteAllBytes(dest, bytes);
@@ -1035,13 +1052,29 @@ internal sealed partial class EditGameWindow
         }
         catch (Exception ex) { MessageBox.Show(this, "Save failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
 
-        if (asManual) DocSetManual(dest);
-        else DocAddAdditional(dest, Path.GetFileNameWithoutExtension(dest));   // the clean file name, not the URL
+        // TOUT manuel telecharge devient un document additionnel, region dans le nom : la
+        // detection automatique n expose qu UN manuel (mesure sur LaunchBox), les autres regions
+        // ne sont atteignables chez lui que par une entree explicite. "As Manual" pose EN PLUS
+        // ManualPath — designation de l utilisateur, jamais un calcul de notre part.
+        DocAddAdditional(dest, DocRegionalName(dest, w.Region));
+        if (asManual) DocSetManual(dest);
         DocRefresh();
     }
 
     /// <summary>Keep a web row's real filename when it has one (URL-decoded + made filesystem-safe), else null
     /// for a query-string API URL. Extension stripped — the caller adds the resolved one.</summary>
+    /// <summary>Le nom d un document additionnel cree par telechargement : la region y figure,
+    /// c est elle que l utilisateur cherche dans la liste. Le -NN du fichier distingue les
+    /// doublons d une meme region.</summary>
+    private static string DocRegionalName(string dest, string? region)
+    {
+        string r = Media.ManualLibrary.NormalizeRegion(region);
+        string n = Path.GetFileNameWithoutExtension(dest);
+        int dash = n.LastIndexOf('-');
+        int num = dash > 0 && int.TryParse(n.Substring(dash + 1), out var k2) ? k2 : 1;
+        return num > 1 ? $"Manual ({r}) #{num}" : $"Manual ({r})";
+    }
+
     private static string? DocPreferredName(MetadataDb.WebImage w)
     {
         string fn = w.FileName ?? "";

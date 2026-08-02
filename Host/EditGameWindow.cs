@@ -1046,9 +1046,17 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             {
                 string oldTitle = Safe(() => g.Title) ?? "";
                 string newTitle = _title.Text.Trim();
-                W(() => g.Title = newTitle);
-                if (!string.Equals(oldTitle, newTitle, StringComparison.Ordinal))
-                    Media.GameMediaSync.OnTitleChanged(g, oldTitle, newTitle);
+                // La question AVANT le titre : un titre deja pose ne peut plus etre repris,
+                // et « Annuler le renommage » fait partie des reponses possibles.
+                var choice = string.Equals(oldTitle, newTitle, StringComparison.Ordinal)
+                    ? Media.CollisionChoice.Auto
+                    : Media.MediaCollisionDialog.AskIfNeeded(this, g, oldTitle, newTitle);
+                if (choice != Media.CollisionChoice.CancelRename)
+                {
+                    W(() => g.Title = newTitle);
+                    if (!string.Equals(oldTitle, newTitle, StringComparison.Ordinal))
+                        Media.GameMediaSync.OnTitleChanged(g, oldTitle, newTitle, choice);
+                }
             }
             if (Writable(_rating)) W(() => g.Rating = _rating.Text.Trim());
             if (Writable(_releaseType)) W(() => g.ReleaseType = _releaseType.Text.Trim());

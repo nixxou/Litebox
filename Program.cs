@@ -294,7 +294,7 @@ if (args.Contains("--expand-probe"))
 
 // Replay a Combine on a copy, to diff against LaunchBox's own output.
 if (args.Contains("--rename-probe"))
-{ int ri = Array.IndexOf(args, "--rename-probe"); return CombineProbe.RunRename(args[ri+1], args[ri+2], args[ri+3]); }
+{ int ri = Array.IndexOf(args, "--rename-probe"); return CombineProbe.RunRename(args[ri+1], args[ri+2], args[ri+3], args.Length > ri + 4 ? args[ri+4] : "Auto"); }
 
 if (args.Contains("--combine-probe"))
 { int ci = Array.IndexOf(args, "--combine-probe"); return CombineProbe.Run(args[ci+1], args[ci+2], args[ci+3]); }

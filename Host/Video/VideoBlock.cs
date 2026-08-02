@@ -46,7 +46,7 @@ internal sealed class VideoBlock : Panel
     private string? _path;
     private int _token;
     private bool _seeking, _hasContent, _muted = true, _playRequested, _ended;
-    private bool _pauseWhenReady, _markEndedWhenReady;
+    private bool _pauseWhenReady, _markEndedWhenReady, _fullscreenMode;
     private long _durMs, _pauseAtMs;
 
     /// <summary>The block has a video to show — drives its visibility in the media box.</summary>
@@ -66,6 +66,23 @@ internal sealed class VideoBlock : Panel
     /// controls explicitly so an idle pointer does not leave the overlays on screen forever.</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public bool ControlsOnHover { get; set; } = true;
+
+    /// <summary>The block IS the fullscreen player: the bar's chip becomes ⤡ ("leave fullscreen") instead of
+    /// ⤢, so it — and the double-click on the video, which goes through the same
+    /// <see cref="FullscreenRequested"/> — mean "go back" rather than pointing at a fullscreen we are
+    /// already in. The host wires FullscreenRequested to its own Close.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool FullscreenMode
+    {
+        get => _fullscreenMode;
+        set
+        {
+            if (_fullscreenMode == value) return;
+            _fullscreenMode = value;
+            _fsBtn.Text = value ? "⤡" : "⤢";
+            _fsBtn.AccessibleName = value ? "Leave fullscreen" : "Fullscreen";
+        }
+    }
 
     /// <summary>Start playing as soon as a video is shown (Options → Display → Right panel).</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]

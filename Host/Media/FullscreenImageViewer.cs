@@ -35,17 +35,12 @@ internal sealed class FullscreenImageViewer : Form
         StartPosition = FormStartPosition.Manual;
         BackColor = Color.Black;
         ShowInTaskbar = false;
-        KeyPreview = true;
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                | ControlStyles.StandardClick | ControlStyles.StandardDoubleClick | ControlStyles.ResizeRedraw, true);
 
-        KeyDown += (_, e) =>
-        {
-            if (e.KeyCode == Keys.Escape) Close();
-            else if (e.KeyCode == Keys.Left) Nav(-1);
-            else if (e.KeyCode == Keys.Right) Nav(+1);
-        };
+        // NOTE: keyboard handling lives in ProcessCmdKey (see below), never in KeyDown — ProcessCmdKey runs
+        // first and consumes the key, so a KeyDown handler for Esc / ←/→ here would never fire at all.
         MouseDoubleClick += (_, _) => Close();
         MouseWheel += (_, e) => Nav(e.Delta < 0 ? +1 : -1);
         MouseClick += (_, e) =>
@@ -84,8 +79,10 @@ internal sealed class FullscreenImageViewer : Form
     // Arrow keys are normally treated as WinForms dialog-navigation keys before KeyDown reaches
     // the form (notably since the close control was added). Catch them at command-key level so
     // image navigation keeps working regardless of which child currently owns the focus.
+    // Alt/Ctrl combinations are left alone — only the bare keys navigate.
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if ((keyData & (Keys.Alt | Keys.Control)) != Keys.None) return base.ProcessCmdKey(ref msg, keyData);
         switch (keyData & Keys.KeyCode)
         {
             case Keys.Left:

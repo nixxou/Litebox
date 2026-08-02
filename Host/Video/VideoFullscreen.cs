@@ -6,7 +6,7 @@
 //
 // Behaviour (decided with the user):
 //   • Space toggles play/pause, ←/→ jump by SeekStep of the whole video, Esc leaves — the same Esc as the
-//     image and 3D viewers;
+//     image and 3D viewers; so do the top-right X, the bar's ⤡ chip and a double-click on the video;
 //   • NO navigation between videos: this is one video, fullscreen. (The image viewer pages through the
 //     game's images; a video is a destination, not a slide.)
 //   • the inline player is PAUSED while this is up, so two decoders never run — and never talk — at once,
@@ -55,7 +55,11 @@ internal sealed class VideoFullscreen : Form
             Autoplay = true,
             AutoplaySound = sound,
             ControlsOnHover = false,
+            FullscreenMode = true,
         };
+        // The bar's chip now reads ⤡ ("leave fullscreen"), and a double-click on the video raises the same
+        // event — both land here rather than on a dead handler pointing at the fullscreen we are already in.
+        _block.FullscreenRequested = Close;
         Controls.Add(_block);
 
         // Same top-right close button as the image and 3D fullscreen viewers.

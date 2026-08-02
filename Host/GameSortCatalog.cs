@@ -56,6 +56,10 @@ internal static class GameSortCatalog
     public const string CustomPrefix = "custom:";
     private static readonly ConcurrentDictionary<string, bool> MameSupportCache = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Vide le cache de support high-score. Appelé quand les hiscore.dat installés changent
+    /// (émulateur installé, dat déployé) — sinon un jeu resterait « non supporté » pour la session.</summary>
+    internal static void ClearMameSupportCache() => MameSupportCache.Clear();
+
     public static readonly GameSortDefinition[] Standard =
     {
         new("dateadded",       "Date Added",                  "DateAdded"),
@@ -283,9 +287,10 @@ internal static class GameSortCatalog
         if (probe?.PropertyType == typeof(bool) && Safe(() => probe.GetValue(game)) is bool value)
             supported = value;
         else
-            // LiteBox's XML-backed HostGame cannot call that concrete property. Its closest faithful
-            // local equivalent is a game that can run through the supported MAME/FBNeo integration.
-            supported = Safe(() => Mame.MameLeaderboards.IsMameGame(game));
+            // LiteBox's XML-backed HostGame cannot call that concrete property. La réponse locale fidèle est
+            // le hiscore.dat installé : il liste exactement les machines dont on sait lire le score, ce que
+            // « tourne sur MAME » ne disait qu'approximativement.
+            supported = Safe(() => Mame.MameLeaderboards.HasHiscoreSupport(game));
 
         if (id.Length > 0) MameSupportCache[id] = supported;
         return supported;

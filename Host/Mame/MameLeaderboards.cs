@@ -120,6 +120,15 @@ internal static class MameLeaderboards
         return false;
     }
 
+    /// <summary>Ce jeu peut-il RÉELLEMENT avoir un high score ? Deux conditions, et la seconde est la vraie :
+    ///   • il tourne sur l'intégration MAME/FBNeo — c'est ce qui fait de lui un jeu d'arcade ici, et cela
+    ///     couvre autant la plateforme Arcade que FBNeo, dont le dat est déployé exprès pour elle ;
+    ///   • le nom de sa rom est déclaré par un hiscore.dat INSTALLÉ. Sans cette ligne, l'émulateur n'écrira
+    ///     jamais de .hi pour ce jeu : il n'y a pas de score à afficher, ni à soumettre.
+    /// Aucun dat installé ⇒ faux pour tout le monde, ce qui est la vérité et non une dégradation.</summary>
+    public static bool HasHiscoreSupport(IGame? game)
+        => IsMameGame(game) && HiscoreDat.Supports(RomName(game));
+
     /// <summary>The MAME short rom name LB sends as romFile — the ApplicationPath file name without extension.</summary>
     public static string? RomName(IGame? game)
     {

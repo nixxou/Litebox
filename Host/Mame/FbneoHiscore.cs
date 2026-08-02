@@ -29,20 +29,34 @@ internal static class FbneoHiscore
             if (MameLeaderboards.IsFbneoRetroArch(e)) EnsureDeployed(e);
     }
 
+    /// <summary>Where this RetroArch reads (or would read) the FBNeo hiscore.dat — resolved from its cfg.
+    /// "" when the emulator has no usable path. Le lecteur du dat (HiscoreDat) s'en sert pour savoir quels
+    /// jeux sont supportés : c'est le MÊME fichier, il ne doit pas y avoir deux idées de son emplacement.</summary>
+    public static string DeployedPath(IEmulator? retroarch)
+    {
+        try
+        {
+            var ap = Safe(() => retroarch?.ApplicationPath);
+            if (string.IsNullOrWhiteSpace(ap)) return "";
+            string dir = Path.GetDirectoryName(Path.GetFullPath(ap!)) ?? "";
+            return dir.Length == 0 ? "" : Path.Combine(ResolveSystemDir(dir), "fbneo", "hiscore.dat");
+        }
+        catch { return ""; }
+    }
+
     /// <summary>Deploy the DB into this RetroArch emulator's system\fbneo dir if it isn't already there. Returns
     /// true when the file ends up present (already there or written). Never throws.</summary>
     public static bool EnsureDeployed(IEmulator? retroarch)
     {
         try
         {
-            var ap = Safe(() => retroarch?.ApplicationPath);
-            if (string.IsNullOrWhiteSpace(ap)) return false;
-            string dir = Path.GetDirectoryName(Path.GetFullPath(ap!)) ?? "";
-            if (dir.Length == 0) return false;
-
-            string dest = Path.Combine(ResolveSystemDir(dir), "fbneo", "hiscore.dat");
+            string dest = DeployedPath(retroarch);
+            if (dest.Length == 0) return false;
             if (File.Exists(dest)) return true;   // user already has one → leave it
-            return WriteTo(dest);
+            bool ok = WriteTo(dest);
+            // Un dat de plus sur le disque = des jeux de plus qui savent produire un score.
+            if (ok) HiscoreDat.Invalidate();
+            return ok;
         }
         catch (Exception ex) { Console.WriteLine("[fbneo] hiscore.dat deploy failed: " + ex.Message); return false; }
     }

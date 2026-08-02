@@ -184,6 +184,10 @@ internal static class EmuInstall
         foreach (var g in r.GamesToAssign) { TrySet(() => g.EmulatorId = host.Id); ng++; }
         foreach (var a in r.AppsToAssign) { TrySet(() => a.EmulatorId = host.Id); na++; }
         L($"[emuinstall] applied assignment to {ng} game(s) + {na} add-app(s)");
+
+        // Un émulateur de plus, donc peut-être un hiscore.dat de plus (MAME installé en cours de session
+        // apporte le sien) : la liste des jeux à high score doit être relue.
+        try { Mame.HiscoreDat.Invalidate(); } catch { }
     }
 
     /// <summary>Full headless install: run the plugin (mirrored), create a HostEmulator, translate, apply, Save.</summary>

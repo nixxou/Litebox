@@ -332,6 +332,16 @@ internal static class HostBoot
             Console.WriteLine("[thumb-gen] result = " + (outPath ?? "NULL (generation failed — Magick missing from Core, or unreadable source)"));
             return outPath != null ? 0 : 1;
         }
+        // --hiscore-dat <file>: parse a hiscore.dat and report how many roms it declares (the support list).
+        if (args.Contains("--hiscore-dat"))
+        {
+            int i = Array.IndexOf(args, "--hiscore-dat");
+            if (i + 1 >= args.Length) { Console.WriteLine("[hiscore] usage: --hiscore-dat <file>"); return 1; }
+            var hsRoms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool read = Mame.HiscoreDat.ParseInto(args[i + 1], hsRoms);
+            Console.WriteLine($"[hiscore] {(read ? "OK" : "FAILED")} — {hsRoms.Count} rom(s) declared in {args[i + 1]}");
+            return read ? 0 : 1;
+        }
         // --fbneo-hiscore <destFile>: extract the embedded FBNeo hiscore.dat to a path (test the embed/extract).
         if (args.Contains("--fbneo-hiscore"))
         {

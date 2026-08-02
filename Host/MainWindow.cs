@@ -228,6 +228,9 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (_dm is HostDataManagerXml hdmLed) LedBlinky.Bind(hdmLed.LbSettings);
         // MAME leaderboard toggles (download gates the HIGH SCORES tab; upload gates the auto-submit) read live too.
         if (_dm is HostDataManagerXml hdmMame) Mame.MameOptions.Bind(hdmMame.LbSettings);
+        // Quels jeux savent produire un high score : lu une fois des hiscore.dat installés (MAME et FBNeo).
+        // En tâche de fond — c'est de l'E/S pure, et personne ne pose la question avant qu'un jeu soit sélectionné.
+        System.Threading.Tasks.Task.Run(() => { try { _ = Mame.HiscoreDat.Count; } catch { } });
         _cfg = LiteBoxConfig.LoadForExe();
         _titleSortNormalization = _cfg.TitleSortNormalizationMode;
         // The 3D snapshot reads OUR live config: an option applied in the Options window is then visible to
@@ -4197,9 +4200,11 @@ internal sealed class MainWindow : Form, IMessageFilter
         _related?.ShowFor(g, _detailTabSel == 1);   // Related tab: recompute now if visible, else lazily on flip
         // HIGH SCORES tab: present only for MAME games. Rebuild the strip when its presence flips, clamping the
         // active tab if it vanished. ShowFor recomputes now only when HIGH SCORES is the visible tab, else lazily.
-        // HIGH SCORES tab shows only for MAME games AND only when the download option is enabled (LB parity:
-        // leaderboards are fetched only when the user opted in on the MAME Integrations tab).
-        bool mame = Mame.MameLeaderboards.IsMameGame(g) && Mame.MameOptions.DownloadEnabled;
+        // HIGH SCORES tab shows only when the download option is enabled (LB parity: leaderboards are fetched
+        // only when the user opted in on the MAME Integrations tab) ET quand le jeu peut vraiment produire un
+        // score — sa rom doit être déclarée par un hiscore.dat installé, sans quoi l'onglet promettrait un
+        // classement pour un jeu dont l'émulateur n'écrira jamais de .hi.
+        bool mame = Mame.MameLeaderboards.HasHiscoreSupport(g) && Mame.MameOptions.DownloadEnabled;
         if (mame != _hsTabShown)
         {
             _hsTabShown = mame;

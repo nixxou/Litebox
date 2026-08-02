@@ -36,7 +36,8 @@ internal static class MediaRenameSelfTest
             failures += RegionSubfolderIsPartOfTheType(root);
             failures += MergeAppendsAfterTheDestination(root);
             failures += SharedSourceIsCopiedNotMoved(root);
-            failures += PinnedFileIsNotRenamed(root);
+            failures += PinnedManualMovesLikeTheRest(root);
+            failures += MovedPathsAreRewritten(root);
             failures += OverrideBeatsTheConvention(root);
             failures += LaunchBoxWalkOrder(root);
             failures += LaunchBoxOnlyFoldersAreInvisible(root);
@@ -228,35 +229,75 @@ internal static class MediaRenameSelfTest
             .Invoke(store, new object[] { list });
     }
 
-    /// <summary>A manual reached through &lt;ManualPath&gt; is named BY that path: renaming the file
-    /// breaks the reference instead of following it. Its conventional neighbour, in the same folder
-    /// and matching the same pattern, must still move — otherwise the fix would strand the 1375
-    /// conventional manuals the real library actually holds.</summary>
-    private static int PinnedFileIsNotRenamed(string root)
-    {
-        string dir = Fresh(root, "Manuals", null);
-        Touch(dir, $"{Old}-01.pdf");                      // pinned by ManualPath below
-        Touch(dir, $"{Old}-02.pdf");                      // conventional, must follow the title
-
-        // The platform XML is the source of truth PinnedMedia reads, precisely so that it needs
-        // nothing initialised — a probe that skips the boot must not silently protect nothing.
-        string data = Path.Combine(Case(root), "Data", "Platforms");
-        Directory.CreateDirectory(data);
-        string rel = Path.Combine("Manuals", MediaResolver.Sanitize(Plat), $"{Old}-01.pdf");
-        File.WriteAllText(Path.Combine(data, Plat + ".xml"),
-            "<?xml version=\"1.0\" standalone=\"yes\"?>\r\n<LaunchBox>\r\n"
-            + $"  <Game><ID>{Id:D}</ID><Title>{Old}</Title><Platform>{Plat}</Platform>"
-            + $"<ManualPath>{rel}</ManualPath></Game>\r\n</LaunchBox>\r\n");
-
-        var moves = GameMediaRenamer.Plan(Case(root), Id, Plat, Old, New, MediaNameForm.Plain);
-        GameMediaRenamer.Apply(moves);
-
-        return Check("a path-pinned manual stays put while its conventional neighbour follows",
-            Exists(dir, $"{Old}-01.pdf")            // the reference still resolves
-            && !Exists(dir, $"{New}-01.pdf")
-            && Exists(dir, $"{New}-02.pdf")         // the conventional one moved
-            && !Exists(dir, $"{Old}-02.pdf"));
-    }
+    /// <summary>Un manuel designe par ManualPath bouge COMME LES AUTRES — c est la specification :
+    /// les fichiers suivent le titre, et MediaPathRewrite reecrit le champ derriere. L ancien
+    /// comportement, teste ici en sens inverse, figeait le fichier sous le titre mort.</summary>
+    private static int PinnedManualMovesLikeTheRest(string root)
+    {
+        string dir = Fresh(root, "Manuals", null);
+        Touch(dir, $"{Old}-01.pdf");                      // designe par ManualPath ci-dessous
+        Touch(dir, $"{Old}-02.pdf");                      // conventionnel
+        string data = Path.Combine(Case(root), "Data", "Platforms");
+        Directory.CreateDirectory(data);
+        string rel = Path.Combine("Manuals", MediaResolver.Sanitize(Plat), $"{Old}-01.pdf");
+        File.WriteAllText(Path.Combine(data, Plat + ".xml"),
+            "<?xml version=\"1.0\" standalone=\"yes\"?>\r\n<LaunchBox>\r\n"
+            + $"  <Game><ID>{Id:D}</ID><Title>{Old}</Title><Platform>{Plat}</Platform>"
+            + $"<ManualPath>{rel}</ManualPath></Game>\r\n</LaunchBox>\r\n");
+
+        var moves = GameMediaRenamer.Plan(Case(root), Id, Plat, Old, New, MediaNameForm.Plain);
+        GameMediaRenamer.Apply(moves);
+        return Check("un manuel designe par chemin est deplace comme les autres",
+            Exists(dir, $"{New}-01.pdf") && Exists(dir, $"{New}-02.pdf")
+            && !Exists(dir, $"{Old}-01.pdf") && !Exists(dir, $"{Old}-02.pdf"));
+    }
+
+    /// <summary>La reecriture elle-meme : ManualPath ET l ApplicationPath d un document
+    /// additionnel suivent un fichier deplace, en conservant la forme relative de LaunchBox.
+    /// Unite directe sur MediaPathRewrite — l integration passe par PlatformGames, qui exige un
+    /// DataManager qu un auto-test n a pas ; tester au travers aurait passe A VIDE.</summary>
+    private static int MovedPathsAreRewritten(string root)
+    {
+        string dir = Fresh(root, "Manuals", null);
+        string lb = Case(root);
+        string data = Path.Combine(lb, "Data", "Platforms");
+        Directory.CreateDirectory(data);
+        var gid = Guid.NewGuid();
+        string rel = Path.Combine("Manuals", MediaResolver.Sanitize(Plat), $"{Old}-01.pdf");
+        File.WriteAllText(Path.Combine(data, Plat + ".xml"),
+            "<?xml version=\"1.0\" standalone=\"yes\"?>\r\n<LaunchBox>\r\n"
+            + $"  <Game><ID>{gid:D}</ID><Title>{Old}</Title><Platform>{Plat}</Platform>"
+            + $"<ManualPath>{rel}</ManualPath></Game>\r\n</LaunchBox>\r\n");
+
+        var store = LbApiHost.Host.Data.GameStore.Load(data, Path.Combine(lb, "rw.pending.db"));
+        try
+        {
+            store.ReadOnly = false;
+            if (!store.ById.TryGetValue(gid, out var idx)) return Check("rewrite: jeu trouve", false);
+            var game = new LbApiHost.Host.Data.HostGame(store, idx);
+            if (game.AddNewAdditionalApplication() is LbApiHost.Host.Data.HostAdditionalApplication h)
+            {
+                h.ApplicationPath = rel;
+                h.Section = LbApiHost.Host.Data.HostAdditionalApplication.DocumentSection;
+            }
+
+            string oldAbs = Path.Combine(lb, rel);
+            string newAbs = Path.Combine(dir, $"{New}-01.pdf");
+            int n = MediaPathRewrite.Apply(lb, new Unbroken.LaunchBox.Plugins.Data.IGame[] { game },
+                                           new[] { (oldAbs, newAbs) });
+
+            string wantRel = Path.Combine("Manuals", MediaResolver.Sanitize(Plat), $"{New}-01.pdf");
+            int f = 0;
+            f += Check("rewrite: deux champs corriges", n == 2);
+            f += Check("rewrite: ManualPath suit le fichier, en forme relative",
+                string.Equals(game.ManualPath, wantRel, StringComparison.OrdinalIgnoreCase));
+            var app = game.GetAllAdditionalApplications().OfType<LbApiHost.Host.Data.HostAdditionalApplication>().FirstOrDefault();
+            f += Check("rewrite: le document additionnel suit aussi",
+                app != null && string.Equals(app.ApplicationPath, wantRel, StringComparison.OrdinalIgnoreCase));
+            return f;
+        }
+        finally { try { store.CloseLog(); } catch { } }
+    }
 
     /// <summary>A stored &lt;ManualPath&gt; names the file outright, so it wins over whatever the folder
     /// holds under the game's title. And an override pointing at nothing must NOT hide a perfectly

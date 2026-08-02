@@ -114,12 +114,6 @@ internal static class GameMediaMerge
                 destFiles.AddRange(here);
             }
 
-        // Pinned only matters on the SOURCE side. A pinned file already at the destination is a
-        // legitimate resident: comparing against it is exactly right, and skipping a source file
-        // because it duplicates one is the outcome we want. What must never happen is the source's
-        // own pinned file being moved out from under the path that names it.
-        var pinned = PinnedMedia.For(lbRoot, platform);
-
         var destCrc = new HashSet<uint>();
         foreach (var f in destFiles) { uint? c = Crc(f); if (c.HasValue) destCrc.Add(c.Value); }
 
@@ -138,10 +132,6 @@ internal static class GameMediaMerge
                 // collection, et la file d'attente le place apres ce que la destination possede.
                 foreach (var file in FilesOf(dir, from, sourceId, unit.Flat))
                 {
-                    // Not moved, and not orphaned either: the caller builds its orphan list from
-                    // these items, so leaving it out here is what keeps a combine from deleting a
-                    // document that a surviving game still points at.
-                    if (PinnedMedia.IsPinned(pinned, file)) continue;
                     int n = GameMediaRenamer.FreeNumber(taken, next++);
                     string target = destUsesGuid
                         ? GameMediaRenamer.GuidPath(file, to, destId, "", n)

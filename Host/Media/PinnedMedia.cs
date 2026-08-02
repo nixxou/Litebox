@@ -63,8 +63,9 @@ internal static class PinnedMedia
         return set;
     }
 
-    /// <summary>True when this file is referenced by path and must not be renamed, moved or deleted
-    /// by anything that works by convention.</summary>
+    /// <summary>True when this file is referenced by a stored path. Since MediaPathRewrite, this
+    /// no longer blocks MOVES — the field follows the file. It only protects against DELETION,
+    /// in the combine orphan sweep: a rewrite can repair a move, nothing repairs an erasure.</summary>
     public static bool IsPinned(IReadOnlyCollection<string>? pinned, string file)
         => pinned != null && pinned.Count > 0 && pinned.Contains(Full(file));
 

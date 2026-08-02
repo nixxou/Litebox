@@ -195,10 +195,19 @@ internal static class GameCombiner
             {
                 // What is left behind is orphaned only if nothing else answers to that name. A GUID
                 // file always is — it named this game alone.
+                // La protection des chemins stockes vit ICI, et plus au deplacement : un fichier
+                // qu un jeu SURVIVANT designe par chemin ne meurt pas avec l absorbe. Deplacer se
+                // repare en reecrivant le champ ; effacer ne se repare pas. Conservatisme connu :
+                // le XML sur disque liste encore l absorbe, donc SES propres chemins protegent
+                // aussi — ces fichiers-la restent au lieu de mourir, ils etaient references.
+                var pinnedPaths = Media.PinnedMedia.For(lbRoot, platform);
                 foreach (var item in plan.Items)
+                {
+                    if (Media.PinnedMedia.IsPinned(pinnedPaths, item.From)) continue;
                     if (!shared || !GameMediaRenamer.TryPlain(
                             System.IO.Path.GetFileNameWithoutExtension(item.From), MediaResolver.Sanitize(from), out _))
                         outcome.OrphanedMedia.Add(item.From);
+                }
                 return;
             }
             if (plan.Moving == 0) { outcome.MediaSkipped += plan.Skipped; return; }
@@ -206,6 +215,12 @@ internal static class GameCombiner
             var res = GameMediaMerge.Apply(plan, lbRoot, sid, platform, from, to, shared);
             outcome.MediaMoved += res.Reached;
             outcome.MediaSkipped += plan.Skipped;
+            // Les chemins stockes suivent les fichiers fusionnes. Copie partagee exclue : la
+            // source reste en place, les references restent valides.
+            if (!shared && res.Reached > 0)
+                Media.MediaPathRewrite.Apply(lbRoot, Media.GameMediaSync.PlatformGames(platform),
+                    plan.Items.Where(x => x.Moves && System.IO.File.Exists(x.To))
+                              .Select(x => (x.From, x.To)).ToList());
         }
         catch { }
     }

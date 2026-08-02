@@ -194,6 +194,12 @@ internal static class GameMediaSync
             if (plan.Count == 0) return 0;
         }
         var result = GameMediaRenamer.Apply(plan);
+        // Les references par chemin SUIVENT les fichiers — ManualPath, MusicPath, VideoPath,
+        // ThemeVideoPath et les documents additionnels de TOUS les jeux de la plateforme. En
+        // copie (source partagee), la source reste : rien a reecrire.
+        if (!sharedSource && result.Reached > 0)
+            MediaPathRewrite.Apply(lbRoot, PlatformGames(platform),
+                plan.Where(m => System.IO.File.Exists(m.To)).Select(m => (m.From, m.To)).ToList());
         // One line per rename that was not perfectly clean, so a half-moved collection can be
         // explained after the fact instead of looking like the feature failing to run.
         if (!result.AllGood)

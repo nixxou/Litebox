@@ -311,6 +311,17 @@ internal static class MediaResolver
     public static IReadOnlyCollection<string> VideoExtensions => VideoExts;
 
     /// <summary>Manual file path (always IO — the GameCache does not index manuals). Null if none.</summary>
+    /// <summary>TOUS les manuels du jeu, dans l ordre du parcours — priorite de region puis
+    /// alphabet, sous-dossiers avant fichiers : le premier est celui que Manual() rend.</summary>
+    public static List<string> ManualsAll(string platformName, Guid id, string title)
+    {
+        var into = new List<string>();
+        string dir = MediaFolder("Manuals", platformName);
+        if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+            WalkFlatAll(dir, id, Sanitize(title), into);
+        return into;
+    }
+
     public static string Manual(string platformName, Guid id, string title)
         => BestInDir(MediaFolder("Manuals", platformName), id, Sanitize(title), ManualExts, flat: true);
 
@@ -765,61 +776,70 @@ internal static class MediaResolver
     /// alphabetique — NI preference pour le fichier numerote — "titre-01.pdf" precede "titre.pdf"
     /// parce que '-' (0x2D) precede '.' (0x2E). La date des fichiers n'intervient pas non plus :
     /// onze ans d'ecart, dans les deux sens, n'ont rien change.</summary>
-    private static string WalkFlat(string dir, Guid id, string sani, HashSet<string> exts)
-    {
-        string[] subs, files;
-        try
-        {
-            subs = Directory.GetDirectories(dir);
-            files = Directory.GetFiles(dir);
-        }
-        catch { return null; }
-
-        // ICI, et ici seulement, LiteBox s'ecarte de LaunchBox. La regle d'APPARTENANCE reste la
-        // sienne — nom de fichier, toute profondeur, nom de dossier indifferent — mais l'ORDRE de
-        // descente suit NOS priorites de region au lieu de l'alphabet. LaunchBox ne sait ordonner
-        // que par nom de dossier : avec "Europe" et "North America" il prendra Europe, nous celui
-        // que la priorite designe. Les deux peuvent donc afficher un manuel different pour un meme
-        // jeu, et c'est un choix assume : LaunchBox applique ses priorites, nous les notres.
-        //
-        // Un dossier dont le nom n'est pas une region connue n'a pas de rang : il passe apres
-        // toutes les regions, et se departage alphabetiquement.
-        var order = RegionOrder();
-        int Rank(string d)
-        {
-            string n = Path.GetFileName(d) ?? "";
-            for (int k = 0; k < order.Count; k++)
-                if (string.Equals(order[k], n, StringComparison.OrdinalIgnoreCase)) return k;
-            return int.MaxValue;
-        }
-        Array.Sort(subs, (a, b) =>
-        {
-            int ra = Rank(a), rb = Rank(b);
-            return ra != rb ? ra.CompareTo(rb)
-                            : string.Compare(Path.GetFileName(a), Path.GetFileName(b),
-                                             StringComparison.OrdinalIgnoreCase);
-        });
-        foreach (var sub in subs)
-        {
-            var hit = WalkFlat(sub, id, sani, exts);
-            if (hit != null) return hit;
-        }
-
-        Array.Sort(files, (a, b) => string.Compare(Path.GetFileName(a), Path.GetFileName(b),
-                                                   StringComparison.OrdinalIgnoreCase));
-        foreach (var f in files)
-        {
-            // exts n'est plus un filtre ici, volontairement : LaunchBox ne regarde pas l'extension.
-            // Mesure — un raccourci ".lnk" pose au bon nom a bien ete retenu comme LE manuel du jeu,
-            // et c'est l'OUVERTURE qui a echoue ensuite. Filtrer nous ferait diverger sur le choix
-            // du fichier, ce qui est plus grave que de designer un format qu'on ne sait pas rendre :
-            // l'appelant peut constater qu'il ne sait pas l'afficher, il ne peut pas deviner qu'il
-            // regarde un autre fichier que LaunchBox.
-            if (TryMatch(Path.GetFileNameWithoutExtension(f), id, sani, out _, allowUnnumbered: true))
-                return f;
-        }
-        return null;
-    }
+    private static string WalkFlat(string dir, Guid id, string sani, HashSet<string> exts)
+    {
+        var into = new List<string>(4);
+        WalkFlatAll(dir, id, sani, into, stopAtFirst: true);
+        return into.Count > 0 ? into[0] : null;
+    }
+
+    /// <summary>Le meme parcours, mais collectant TOUTES les correspondances : la fenetre
+    /// Documents montre la collection de manuels comme elle montre les images, et elle doit voir
+    /// exactement ce que la resolution voit — une deuxieme implementation aurait derive.</summary>
+    private static void WalkFlatAll(string dir, Guid id, string sani, List<string> into, bool stopAtFirst = false)
+    {
+        string[] subs, files;
+        try
+        {
+            subs = Directory.GetDirectories(dir);
+            files = Directory.GetFiles(dir);
+        }
+        catch { return; }
+
+        // ICI, et ici seulement, LiteBox s'ecarte de LaunchBox. La regle d'APPARTENANCE reste la
+        // sienne — nom de fichier, toute profondeur, nom de dossier indifferent — mais l'ORDRE de
+        // descente suit NOS priorites de region au lieu de l'alphabet. LaunchBox ne sait ordonner
+        // que par nom de dossier : avec "Europe" et "North America" il prendra Europe, nous celui
+        // que la priorite designe. Les deux peuvent donc afficher un manuel different pour un meme
+        // jeu, et c'est un choix assume : LaunchBox applique ses priorites, nous les notres.
+        //
+        // Un dossier dont le nom n'est pas une region connue n'a pas de rang : il passe apres
+        // toutes les regions, et se departage alphabetiquement.
+        var order = RegionOrder();
+        int Rank(string d)
+        {
+            string n = Path.GetFileName(d) ?? "";
+            for (int k = 0; k < order.Count; k++)
+                if (string.Equals(order[k], n, StringComparison.OrdinalIgnoreCase)) return k;
+            return int.MaxValue;
+        }
+        Array.Sort(subs, (a, b) =>
+        {
+            int ra = Rank(a), rb = Rank(b);
+            return ra != rb ? ra.CompareTo(rb)
+                            : string.Compare(Path.GetFileName(a), Path.GetFileName(b),
+                                             StringComparison.OrdinalIgnoreCase);
+        });
+        foreach (var sub in subs)
+        {
+            WalkFlatAll(sub, id, sani, into, stopAtFirst);
+            if (stopAtFirst && into.Count > 0) return;
+        }
+
+        Array.Sort(files, (a, b) => string.Compare(Path.GetFileName(a), Path.GetFileName(b),
+                                                   StringComparison.OrdinalIgnoreCase));
+        foreach (var f in files)
+        {
+            // exts n'est plus un filtre ici, volontairement : LaunchBox ne regarde pas l'extension.
+            // Mesure — un raccourci ".lnk" pose au bon nom a bien ete retenu comme LE manuel du jeu,
+            // et c'est l'OUVERTURE qui a echoue ensuite. Filtrer nous ferait diverger sur le choix
+            // du fichier, ce qui est plus grave que de designer un format qu'on ne sait pas rendre :
+            // l'appelant peut constater qu'il ne sait pas l'afficher, il ne peut pas deviner qu'il
+            // regarde un autre fichier que LaunchBox.
+            if (TryMatch(Path.GetFileNameWithoutExtension(f), id, sani, out _, allowUnnumbered: true))
+            { into.Add(f); if (stopAtFirst) return; }
+        }
+    }
 
     private static string[] ReadRegionPriorities(string lbRoot)
     {

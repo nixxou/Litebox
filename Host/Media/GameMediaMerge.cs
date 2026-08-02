@@ -164,6 +164,28 @@ internal static class GameMediaMerge
         return plan;
     }
 
+    /// <summary>Ce qui devient ORPHELIN quand l'absorbé d'un combine n'est PAS la même entrée que le
+    /// root : tout ce que le plan liste, SAUF les fichiers nominatifs d'un titre auquel quelqu'un
+    /// répond encore — un TIERS, ou le ROOT lui-même quand les deux jeux partagent le titre. La forme
+    /// NUE compte comme nominative : un fichier entré dans le plan en forme plain (nu ou numéroté)
+    /// appartient au titre — seuls les fichiers GUID nomment le seul absorbé. Un chemin épinglé ne
+    /// meurt jamais. Fonction pure, parce que la version en ligne avait déjà eu deux trous que seule
+    /// une table de vérité attrape : le root exclu du rival, et le nom nu pris pour un GUID.</summary>
+    public static List<string> OrphanCandidates(IEnumerable<MergeItem> items, string sanitizedFrom,
+                                                bool titleStillAnswered, IReadOnlyCollection<string> pinnedPaths)
+    {
+        var orphans = new List<string>();
+        foreach (var item in items ?? Enumerable.Empty<MergeItem>())
+        {
+            if (PinnedMedia.IsPinned(pinnedPaths, item.From)) continue;
+            if (!titleStillAnswered
+                || !GameMediaRenamer.TryPlain(Path.GetFileNameWithoutExtension(item.From), sanitizedFrom, out _,
+                                              allowUnnumbered: true))
+                orphans.Add(item.From);
+        }
+        return orphans;
+    }
+
     /// <summary>Carries the plan out. The targets are the plan's own — the renamer cannot help
     /// here, because it retags ONE game's files and a merge retags one game's files with another
     /// game's identity.

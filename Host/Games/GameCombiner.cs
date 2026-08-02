@@ -72,8 +72,9 @@ internal static class GameCombiner
     {
         public int Absorbed;
         /// <summary>Media files of absorbed games that were NOT pooled, because the two were not the
-        /// same database entry. Nothing references them any more; deleting them is the caller's
-        /// question to ask, never this code's to decide.</summary>
+        /// same database entry. Nothing references them any more — and Run DELETES them before
+        /// returning (l'effacement fait partie de l'operation, voir le commentaire sur place) ;
+        /// la liste reste ici pour le compte-rendu.</summary>
         public readonly List<string> OrphanedMedia = new();
         /// <summary>What the media merge did decide to do, for reporting.</summary>
         public int MediaMoved, MediaSkipped, MediaDeleted;
@@ -200,14 +201,17 @@ internal static class GameCombiner
                 // repare en reecrivant le champ ; effacer ne se repare pas. Conservatisme connu :
                 // le XML sur disque liste encore l absorbe, donc SES propres chemins protegent
                 // aussi — ces fichiers-la restent au lieu de mourir, ils etaient references.
+                //
+                // « Quelqu'un repond encore au titre » = un TIERS (shared), ou le ROOT lui-meme quand
+                // les deux jeux le partagent : le rival l'exclut — a raison pour la fusion, ou il
+                // deciderait copie-vs-deplacement contre lui-meme — mais pour l'ORPHELINAGE un
+                // nominatif d'un titre que le survivant porte est SON media. L'oublier effacait
+                // jaquettes, manuels et musiques du jeu qu'on venait de choisir comme survivant.
+                bool titleStillAnswered = shared
+                    || string.Equals(MediaResolver.Sanitize(from), MediaResolver.Sanitize(to), StringComparison.OrdinalIgnoreCase);
                 var pinnedPaths = Media.PinnedMedia.For(lbRoot, platform);
-                foreach (var item in plan.Items)
-                {
-                    if (Media.PinnedMedia.IsPinned(pinnedPaths, item.From)) continue;
-                    if (!shared || !GameMediaRenamer.TryPlain(
-                            System.IO.Path.GetFileNameWithoutExtension(item.From), MediaResolver.Sanitize(from), out _))
-                        outcome.OrphanedMedia.Add(item.From);
-                }
+                outcome.OrphanedMedia.AddRange(GameMediaMerge.OrphanCandidates(
+                    plan.Items, MediaResolver.Sanitize(from), titleStillAnswered, pinnedPaths));
                 return;
             }
             if (plan.Moving == 0) { outcome.MediaSkipped += plan.Skipped; return; }

@@ -59,6 +59,7 @@ internal static class PlaylistCopySelfTest
             failures += NoPlatformNoCopy(idx, plats);
             failures += SubstitutionCases();
             failures += PlatformAncestorsWalkCategories(idx);
+            failures += RuleTranspositionCases();
         }
         catch (Exception ex) { Console.WriteLine("[plcopy-test] FATAL " + ex); failures++; }
         finally
@@ -138,6 +139,24 @@ internal static class PlaylistCopySelfTest
     {
         var got = idx.PlatformAncestorsOf(new ParentKey('l', "PL-B"));
         return Check("PlatformAncestorsOf climbs through categories", "Nintendo 64", string.Join(",", got));
+    }
+
+    // La transposition des regles au collage : toute regle sur le champ Platform dont la VALEUR est la
+    // plateforme source passe a la destination, quel que soit le comparateur — sans quoi un
+    // « Contains Arcade » colle sur FBNeo continue de lister les jeux d'Arcade en ayant l'air reussi.
+    // Les listes et les regles visant une AUTRE plateforme restent telles quelles (a editer a la main).
+    private static int RuleTranspositionCases()
+    {
+        static string T(string field, string cmp, string value)
+            => PlaylistCopier.TransposedRuleValue(new PlaylistFilterDef(field, cmp, value), "Arcade", "FBNeo");
+        int bad = 0;
+        bad += Check("EqualTo on the source platform is transposed", "FBNeo", T("Platform", "EqualTo", "Arcade"));
+        bad += Check("Contains on the source platform is transposed too", "FBNeo", T("Platform", "Contains", "Arcade"));
+        bad += Check("value matching is case-insensitive", "FBNeo", T("Platform", "StartsWith", "arcade"));
+        bad += Check("a rule aimed at ANOTHER platform is kept verbatim", "Nintendo 64", T("Platform", "EqualTo", "Nintendo 64"));
+        bad += Check("a value LIST is kept verbatim (manual edit)", "Arcade;Daphne", T("Platform", "HasAtLeastOneOf", "Arcade;Daphne"));
+        bad += Check("a non-Platform field is never touched", "Arcade", T("Genre", "Contains", "Arcade"));
+        return bad;
     }
 
     // ── outillage ─────────────────────────────────────────────────────────────

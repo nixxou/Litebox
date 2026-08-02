@@ -37,6 +37,7 @@ internal static class MediaMergeSelfTest
         fail += Case("un media GUID reste visible apres un renommage differe", GuidSurvivesDeferredRename);
         fail += Case("un manuel au nom NU est fusionne comme les autres", BareManualIsMerged);
         fail += Case("un manuel nu de la destination compte dans l'inventaire CRC", BareDestFeedsTheCrcSet);
+        fail += Case("orphelinage : les nominatifs d'un titre encore porte survivent", OrphansSpareTheAnsweredTitle);
         Console.WriteLine(fail == 0 ? "[mediamerge] ALL PASS" : $"[mediamerge] {fail} FAILED");
         return fail == 0 ? 0 : 1;
     }
@@ -358,6 +359,39 @@ internal static class MediaMergeSelfTest
         var beta = Directory.EnumerateFiles(front).Select(Path.GetFileName).OrderBy(x => x).ToList();
         if (beta.Count != 3) return "numerotation : " + string.Join(", ", beta);
         if (!File.Exists(Path.Combine(man, B + "-01.pdf"))) return "le manuel n'a pas suivi";
+        return null;
+    }
+
+    // Le combine de deux jeux de MEME TITRE qui ne sont pas la meme entree DB : les nominatifs sont
+    // aussi les fichiers du SURVIVANT, ils ne doivent jamais partir en orphelins — nom nu compris.
+    // Les GUID de l'absorbe, eux, ne nomment que lui : ils partent. Et un chemin epingle survit a tout.
+    private static string OrphansSpareTheAnsweredTitle(string root)
+    {
+        string sani = MediaResolver.Sanitize(A);
+        string plain = Path.Combine(root, sani + "-01.png");
+        string bare = Path.Combine(root, sani + ".pdf");
+        string guid = Path.Combine(root, sani + "." + Guid.NewGuid().ToString("D") + "-01.png");
+        var items = new[]
+        {
+            new MergeItem(plain, plain, MergeVerdict.SameFile),
+            new MergeItem(bare, bare, MergeVerdict.SameFile),
+            new MergeItem(guid, guid, MergeVerdict.Move),
+        };
+        var none = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Titre encore porte (par le root ou un tiers) : seuls les GUID sont orphelins.
+        var kept = GameMediaMerge.OrphanCandidates(items, sani, titleStillAnswered: true, none);
+        if (kept.Count != 1 || kept[0] != guid)
+            return "titre porte : orphelins = " + string.Join(", ", kept.Select(Path.GetFileName));
+
+        // Plus personne ne repond au titre : tout part.
+        var all = GameMediaMerge.OrphanCandidates(items, sani, titleStillAnswered: false, none);
+        if (all.Count != 3) return $"titre abandonne : {all.Count} orphelins au lieu de 3";
+
+        // Un chemin epingle ne meurt jamais, meme titre abandonne.
+        var pinned = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { bare };
+        var spared = GameMediaMerge.OrphanCandidates(items, sani, titleStillAnswered: false, pinned);
+        if (spared.Contains(bare)) return "un chemin epingle est parti en orphelin";
         return null;
     }
 }

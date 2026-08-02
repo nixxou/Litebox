@@ -276,7 +276,7 @@ internal static class PlaylistCopier
             foreach (var f in src.FiltersRaw)
             {
                 if (f == null || string.IsNullOrWhiteSpace(f.FieldKey)) continue;
-                string value = IsPlatformEqualRule(f) && Norm(f.Value) == Norm(p.SrcPlatform) ? destPlatform : (f.Value ?? "");
+                string value = TransposedRuleValue(f, p.SrcPlatform, destPlatform);
                 dst.AddFilter(new PlaylistFilterDef(f.FieldKey, f.ComparisonTypeKey, value)
                 {
                     Extra = f.Extra == null ? null : new Dictionary<string, string>(f.Extra, StringComparer.Ordinal),
@@ -358,6 +358,20 @@ internal static class PlaylistCopier
     }
 
     private static string ImageKey(string name) => string.IsNullOrWhiteSpace(name) ? "" : MediaResolver.Sanitize(name);
+
+    /// <summary>La valeur d'une règle une fois transposée. Toute règle sur le champ Platform dont la
+    /// valeur EST la plateforme source (valeur entière, casse ignorée) passe à la destination, quel
+    /// que soit le comparateur — un « Contains Arcade » collé sur FBNeo doit viser FBNeo, sans quoi
+    /// la copie continue de lister les jeux de la source en ayant l'air réussie. Le périmètre
+    /// s'arrête là, à dessein : une liste (« Arcade;Daphne ») ou une règle visant une AUTRE
+    /// plateforme restent telles quelles — un choix qu'on ne peut pas transposer à la place de
+    /// l'utilisateur, qui éditera la copie.</summary>
+    internal static string TransposedRuleValue(PlaylistFilterDef f, string srcPlatform, string destPlatform)
+        => !string.IsNullOrWhiteSpace(srcPlatform)
+           && PlaylistFilterCatalog.Find(f.FieldKey)?.Key == "Platform"
+           && Norm(f.Value) == Norm(srcPlatform)
+            ? destPlatform
+            : (f.Value ?? "");
 
     // ── Plateforme source ─────────────────────────────────────────────────────
     private static bool IsPlatformEqualRule(PlaylistFilterDef f)

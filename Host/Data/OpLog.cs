@@ -42,6 +42,14 @@ internal sealed class OpLog : IDisposable
     private SqliteCommand _insert;
     public bool Enabled { get; private set; }
 
+    /// <summary>Le journal a PERDU quelque chose : ouverture impossible au boot, ou un append qui a
+    /// échoué. La dégradation silencieuse reste le comportement voulu pour l'édition ordinaire — mais
+    /// une opération IRRÉVERSIBLE (supprimer les fichiers médias d'un jeu supprimé) doit pouvoir
+    /// demander d'abord si sa trace a bien été retenue : sans trace durable, le jeu reviendrait au
+    /// redémarrage, ses fichiers non.</summary>
+    public bool Faulted { get; private set; }
+    public string FaultReason { get; private set; }
+
     private OpLog() { }
 
     /// <summary>Opens (creates) the log DB. Never throws — returns a disabled log on any failure.</summary>
@@ -86,6 +94,7 @@ internal sealed class OpLog : IDisposable
         {
             Console.WriteLine("[oplog] disabled (open failed): " + ex.Message);
             log.Enabled = false;
+            log.Faulted = true; log.FaultReason = "open failed: " + ex.Message;
             try { log._conn?.Dispose(); } catch { }
             log._conn = null;
         }
@@ -109,7 +118,11 @@ internal sealed class OpLog : IDisposable
                 _insert.Parameters["$v"].Value = (object)value ?? DBNull.Value;
                 _insert.ExecuteNonQuery();
             }
-            catch (Exception ex) { Console.WriteLine("[oplog] append failed: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[oplog] append failed: " + ex.Message);
+                Faulted = true; FaultReason ??= "append failed: " + ex.Message;
+            }
         }
     }
 

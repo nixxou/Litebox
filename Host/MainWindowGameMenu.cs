@@ -482,15 +482,29 @@ internal sealed partial class MainWindow
         // a live game, and a live game keeps its media — the plan assumed every selected game was
         // going, so a partial removal invalidates it wholesale rather than per game.
         int failed = 0, done = 0;
+        bool journalFaulted = false;
         try
         {
             Cursor = Cursors.WaitCursor;
             foreach (var g in games) if (Safe(() => dm.TryRemoveGame(g))) done++;
             if (done > 0) { try { dm.FlushIfSafe(); } catch { } }
-            if (files.Count > 0 && done == games.Length)
+            // La suppression des FICHIERS exige que la suppression des jeux ait une trace durable :
+            // le journal (rejoué au prochain boot) suffit, le flush XML n'est qu'un rattrapage. Mais
+            // un journal en panne (ouverture ou append raté — disque plein, DB corrompue) laisserait
+            // les jeux revenir au redémarrage, leurs médias en moins. Effacer ne se répare pas :
+            // dans ce cas les fichiers restent, et on le dit.
+            journalFaulted = Safe(() => dm.Store?.JournalFaulted) ?? false;
+            if (files.Count > 0 && done == games.Length && !journalFaulted)
                 (_, failed) = Games.GameMediaDeleter.Delete(files);
         }
         finally { Cursor = Cursors.Default; }
+        if (journalFaulted && files.Count > 0)
+            MessageBox.Show(this,
+                "The games were removed from this session, but the change journal could not record the "
+                + "deletion (Core\\LiteBox.pending.db — disk full or damaged?).\n\n"
+                + "The media files were NOT deleted: without a durable record, the games would come back "
+                + "on the next start while their files would be gone.",
+                "Delete", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         if (done > 0) ReloadAfterGameChange();
 
         // The game cache indexes files AND games, and both just changed under it: one de-duplicated

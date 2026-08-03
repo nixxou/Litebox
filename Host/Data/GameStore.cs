@@ -189,6 +189,12 @@ internal sealed class GameStore
     // Write-back operation log (WAL): every mutation (user-state OR plugin) is appended as an
     // ordered event and flushed to the XMLs at a safe time. See OpLog. Opened in Load().
     private OpLog _oplog;
+
+    /// <summary>Le journal d'ops a perdu au moins une écriture (ouverture ou append en échec). Les
+    /// opérations irréversibles — supprimer des fichiers médias sur la foi d'une suppression de jeu —
+    /// consultent ce flag avant d'effacer quoi que ce soit.</summary>
+    public bool JournalFaulted => _oplog != null && _oplog.Faulted;
+    public string JournalFaultReason => _oplog?.FaultReason;
     private string _opDbOverride;   // set only by the self-test, to isolate from the real log
     private string OpDbPath => _opDbOverride ?? LiteBoxPaths.File("LiteBox.pending.db");
 

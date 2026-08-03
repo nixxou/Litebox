@@ -118,13 +118,12 @@ internal sealed class FilterCriteria
                 !string.Equals(Str(() => g.ReleaseType), ReleaseType, StringComparison.OrdinalIgnoreCase))
                 return false;
             if (Fav && !Try(() => g.Favorite, false)) return false;
-            // « Installed only » exclut ce qui est CONFIRMÉ non installé — la case décochée. Une case
-            // jamais renseignée (la ROM locale typique) compte comme présente : c'est la sémantique
-            // du champ `installed` des payloads web (Installed ?? true, WebStoreState), fiable pour
-            // les jeux de store parce que StoreInstallStateSync maintient la case dans les deux sens.
-            // L'ancien `!= true` excluait le null : sur une bibliothèque de ROMs, le filtre vidait la
-            // liste — et divergeait de BB-web dont ce critère est le port.
-            if (Installed && Try<bool?>(() => g.Installed) == false) return false;
+            // « Installed only » = la case Installed COCHÉE, strictement — décision produit : le
+            // filtre dit ce que la case dit, ni plus ni moins. Une case jamais renseignée est donc
+            // exclue (l'alternative « null = présent », sémantique du champ web `installed`, a été
+            // considérée puis écartée). Les jeux de store restent justes : StoreInstallStateSync
+            // coche/décoche la case d'après l'état réel des clients GOG/Steam/Epic/Uplay/EA.
+            if (Installed && Try<bool?>(() => g.Installed) != true) return false;
             if (Genres.Count > 0)
             {
                 string gg = Str(() => g.GenresString);

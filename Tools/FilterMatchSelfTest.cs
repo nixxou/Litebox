@@ -65,13 +65,13 @@ internal static class FilterMatchSelfTest
         fail += Check("max players: unknown count is out when the bound is set", false,
                       new FilterCriteria { MaxPlayers = 2 }.Matches(new FakeGame { Mp = null }));
 
-        // ── « Installed only » : la sémantique du champ web `installed` (Installed ?? true) sur les
-        // trois surfaces — seule la case EXPLICITEMENT décochée exclut ; jamais renseignée = présente
-        // (la ROM locale typique ; les jeux de store sont maintenus par StoreInstallStateSync). ──
+        // ── « Installed only » = la case COCHÉE, strictement (décision produit — l'alternative
+        // « jamais renseignée = présente » a été considérée puis écartée : le filtre dit ce que la
+        // case dit). Les jeux de store restent justes via StoreInstallStateSync. ──
         var instOnly = new FilterCriteria { Installed = true };
-        fail += Check("Installed only: an unset checkbox counts as present", true, instOnly.Matches(new FakeGame { Inst = null }));
+        fail += Check("Installed only: an unset checkbox is out", false, instOnly.Matches(new FakeGame { Inst = null }));
         fail += Check("Installed only: explicitly unticked is out", false, instOnly.Matches(new FakeGame { Inst = false }));
-        fail += Check("Installed only: ticked is in", true, instOnly.Matches(new FakeGame { Inst = true }));
+        fail += Check("Installed only: only the ticked box is in", true, instOnly.Matches(new FakeGame { Inst = true }));
 
         // ── Une dimension vide ne contraint rien ──
         fail += Check("an empty criteria matches everything", true, new FilterCriteria().Matches(new FakeGame()));

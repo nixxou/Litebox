@@ -410,10 +410,11 @@
     }
     if (c.releaseType && lc(g.rt) !== lc(c.releaseType)) return false;
     if (c.flagFav && !g.fav) return false;
-    // g.installed = Installed ?? true (WebStoreState) : exclut le CONFIRMÉ non installé, une case
-    // jamais renseignée compte comme présente. PAS g.inst (le champ nullable brut) — le desktop
-    // applique la même règle « == false exclut » de son côté, les trois surfaces sont d'accord.
-    if (c.flagInstalled && !g.installed) return false;
+    // « Installed only » = la case Installed COCHÉE, strictement (décision produit). g.inst est le
+    // tri-état brut de la case ; g.installed (Installed ?? true) est un champ d'AFFICHAGE — le lire
+    // ici inclurait les cases jamais renseignées. Le test de parité sert les deux clés avec des
+    // valeurs divergentes exprès : lire la mauvaise fait éclater la parité desktop/web.
+    if (c.flagInstalled && g.inst !== true) return false;
     if (activeList(c.genres)) {
       var gg = lc(g.g);
       var all = true, any = false;

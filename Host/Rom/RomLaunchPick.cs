@@ -73,6 +73,17 @@ internal static class RomLaunchPick
         }
     }
 
+    /// <summary>Non-consuming check used before automatic M3U generation. An explicit archive entry means
+    /// the user requested that one ROM, so a disc/side playlist must not replace it.</summary>
+    public static bool HasExplicitEntry(IGame game)
+    {
+        string? gid = null; try { gid = game?.Id; } catch { }
+        lock (_lock)
+            return _armed && !string.IsNullOrEmpty(gid)
+                && string.Equals(_gameId, gid, StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(_entry);
+    }
+
     /// <summary>Drop any armed pick without consuming it (e.g. a launch that never reaches ResolveLaunch).</summary>
     public static void Clear()
     {

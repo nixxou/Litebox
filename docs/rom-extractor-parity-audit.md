@@ -91,8 +91,8 @@ Modes flat(7z e)/preserve(7z x) with selective picked+companions (CompanionExten
 double-duty rule), mode-switch hygiene (drop other mode's subdir), cache-hit fast-path with
 companion validation, Title rename (flat only, launched file only), band `[CacheMinMb,
 CacheMaxMb]` → `\tmp` ephemeral, LRU per-<SIG> under CacheMaxGb, tmp purge + RAM-disk unmount
-on exit, listing fast-hit (skipped on ForcePriority/ConvertAfterExtract/textures), m3u rewrite
-(M3uInput) via per-line ProcessFileForM3u, disc Convert/Copy branch, ConvertAfterExtract
+on exit, listing fast-hit (skipped on ForcePriority/ConvertAfterExtract/textures), version-anchored
+m3u disc/side selection plus rewrite (M3uInput) via per-line ProcessFileForM3u, disc Convert/Copy branch, ConvertAfterExtract
 descriptor switch (.cue/.gdi over raw .bin), scoring/sort/pick chain (favourites display-only),
 per-archive history (5 MRU + favourites on short content sig), profile version gates,
 GoodSet/HackSet presets, filter/sort/keyboard in the picker.

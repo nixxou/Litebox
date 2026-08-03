@@ -80,11 +80,13 @@ Target root: `c:\Users\mehdi\source\repos\scrapper-project\project\ExtendDB\LbAp
 `GameLaunchHook.cs` (arming half), `HostRomBridge.cs`, `LaunchOverrideRegistry.cs` (version-override
 registry — LiteBox already resolves versions natively via `LaunchButtons` appId).
 
-`M3uBuilder.cs` (234) is the **version-override multi-disc m3u builder** (keyed off `LaunchOverride`
+`M3uBuilder.cs` (234) is the **version-override multi-disc m3u selector** (keyed off `LaunchOverride`
 + `IAdditionalApplication.Disc`) — *not* the launch-time m3u rewrite (that lives inline in
-`ProcessStartLogPatch`). LiteBox already has `TryBuildM3u` / `M3uDiscLoadEnabled` handling in
-`ResolveLaunchRomPath`. **Do not port M3uBuilder**; the per-archive m3u *rewrite* (running each listed
-file through the pipeline) is re-implemented small in R4.
+`ProcessStartLogPatch`). Its important semantic is now native in `M3uPlaylistPlanner`: the version
+actually launched anchors the set, Region/Version prioritise one winner per disc (or side / combined
+disc+side bucket), and the selected bucket is placed first. Harmony/registry/path-substitution plumbing
+is still dropped. The per-archive m3u *rewrite* (running each selected file through the pipeline) remains
+the small R4 implementation.
 
 **Net-to-port (after drops): ≈ 4,200 lines** — ≈ 2,750 engine (R2/R3) + ≈ 460 R4 (convert + ramdisk +
 m3u rewrite) + ≈ 250 native `RomExtractor` facade + ≈ 400 config UI + ≈ 350 for the web routes (R5).

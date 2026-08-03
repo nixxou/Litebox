@@ -14,6 +14,7 @@ using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Generated;
 using LbApiHost.Host.Data;
+using LbApiHost.Host.Games;
 
 namespace LbApiHost.Host;
 
@@ -478,7 +479,7 @@ internal static class HostLaunch
                     // Startup screen ("NOW LOADING…"). SmartCapture on → cover held to a generous
                     // backstop; the coordinator closes it at render-start + displayTime.
                     if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null, scEta, aggressive);
-                    RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main", onSpawned);
+                    RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main", onSpawned, app);
                 }
                 else if (!DryRun)
                     System.Windows.Forms.MessageBox.Show(
@@ -590,7 +591,8 @@ internal static class HostLaunch
     }
 
     /// <summary>Resolves the command, spawns (or logs in DryRun), waits for exit.</summary>
-    private static void RunProcess(string targetPath, string cmd, IEmulator emulator, IGame game, bool useEmu, string label, Action<Process> onSpawned = null)
+    private static void RunProcess(string targetPath, string cmd, IEmulator emulator, IGame game, bool useEmu, string label,
+        Action<Process> onSpawned = null, IAdditionalApplication selectedApp = null)
     {
         if (string.IsNullOrEmpty(targetPath)) return;
 
@@ -606,7 +608,7 @@ internal static class HostLaunch
             emuCmd = EmuPlugins.NormalizeCommandLine(emulator, emuCmd ?? "", fileName);
             // ROM to pass: m3u (multi-disc) → auto-extracted file (archive) → the rom itself.
             string romAbs = ResolvePath(targetPath);
-            string rom = ResolveLaunchRomPath(game, emulator, ep, romAbs, label);
+            string rom = ResolveLaunchRomPath(game, selectedApp, emulator, ep, romAbs, label);
             // When the command line ALREADY places the ROM itself via %romfile% (ScummVM's "-p %romfile%",
             // DOSBox, …), LB substitutes it IN PLACE and does NOT also append the ROM at the end — appending
             // would pass the ROM twice and the emulator chokes (ScummVM never launches). %romlocation% & co.
@@ -740,14 +742,25 @@ internal static class HostLaunch
 
     /// <summary>Resolves the ROM path actually passed to the emulator: an auto-generated .m3u for a
     /// multi-disc game (M3uDiscLoadEnabled), an extracted file for an archive (AutoExtract), else the ROM.</summary>
-    private static string ResolveLaunchRomPath(IGame game, IEmulator emulator, IEmulatorPlatform ep, string romAbs, string label)
+    private static string ResolveLaunchRomPath(IGame game, IAdditionalApplication selectedApp,
+        IEmulator emulator, IEmulatorPlatform ep, string romAbs, string label)
     {
         try
         {
-            if (ep != null && ep.M3uDiscLoadEnabled)
+            // An explicit in-archive ROM selection means "launch this exact file", not a media set.
+            // Otherwise only the MAIN launch may generate a playlist: autorun helper apps can use the
+            // emulator too, but must never be replaced by the game's M3U.
+            if (label == "main" && ep != null && ep.M3uDiscLoadEnabled
+                && !Rom.RomLaunchPick.HasExplicitEntry(game))
             {
-                var m3u = TryBuildM3u(game);
-                if (!string.IsNullOrEmpty(m3u)) { Console.WriteLine($"[launch] {label}: m3u disc-load → \"{m3u}\""); return m3u; }
+                var m3u = TryBuildM3u(game, selectedApp, romAbs);
+                if (!string.IsNullOrEmpty(m3u))
+                {
+                    Console.WriteLine($"[launch] {label}: m3u media-set → \"{m3u}\"");
+                    // Do not return yet: when the ROM module is active this generated playlist must pass
+                    // through its per-line archive/disc conversion pipeline before the emulator sees it.
+                    romAbs = m3u;
+                }
             }
         }
         catch (Exception ex) { Console.WriteLine($"[launch] {label}: m3u build error: {ex.Message}"); }
@@ -902,54 +915,16 @@ internal static class HostLaunch
         return files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).First();
     }
 
-    /// <summary>Builds an .m3u listing the game's disc files (one absolute path per line, in disc order)
-    /// for a multi-disc game. Written under &lt;LB&gt;\Metadata\Temp\&lt;Title&gt;\&lt;GUID&gt;\ (so ExtendDB's
-    /// interception recognises it as the LB-native m3u and can reformulate it), else %TEMP%. Null if the
-    /// game isn't multi-disc.
-    ///
-    /// Disc set = the game's own ROM (disc 1) + every additional application that has an ApplicationPath
-    /// and isn't a setup/utility auto-run app. LB-native does NOT require the numeric &lt;Disc&gt; field —
-    /// most real multi-disc games only carry the disc number in the add-app name ("CD 1", "Disc 2"). So
-    /// ordering uses &lt;Disc&gt; when present, else the first integer in the name, else enumeration order.</summary>
-    private static string TryBuildM3u(IGame game)
+    /// <summary>Builds the media set anchored on the version actually launched. A disc launch produces
+    /// one prioritised winner per disc, a side launch one per side, and a combined launch one per
+    /// (disc, side). Region/Version score candidates but never remove fallbacks. Disc/side identity
+    /// comes from the version FIELDS only (the combine parsed the filenames once, root included via
+    /// its self-version); ordinary versions and single-entry sets generate no M3U.</summary>
+    private static string TryBuildM3u(IGame game, IAdditionalApplication selectedApp, string launchedPath)
     {
-        // (discKey, nameNum, name, idx, path) — idx preserves enumeration order as the final tiebreaker.
-        var apps = new List<(int discKey, int nameNum, string name, int idx, string path)>();
-        try
-        {
-            int idx = 0;
-            foreach (var a in SafeAddApps(game))
-            {
-                int i = idx++;
-                // auto-run-before / -after apps are setup/utility steps, not discs
-                if (SafeBool(() => a.AutoRunBefore) || SafeBool(() => a.AutoRunAfter)) continue;
-                string p = ResolvePath(SafeStr(() => a.ApplicationPath));
-                if (string.IsNullOrEmpty(p)) continue;
-                int discKey = SafeNullableInt(() => a.Disc) ?? int.MaxValue;
-                string nm = SafeStr(() => a.Name);
-                apps.Add((discKey, FirstInt(nm), nm, i, p));
-            }
-        }
-        catch { }
-
-        var orderedApps = apps
-            .OrderBy(e => e.discKey)
-            .ThenBy(e => e.nameNum)
-            .ThenBy(e => e.name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(e => e.idx)
-            .Select(e => e.path);
-
-        // The game's own ROM is disc 1 by convention → first; dedup keeps the first occurrence so a
-        // disc-1 add-app pointing at the same file doesn't double it.
-        var all = new List<string>();
-        string mainPath = ResolvePath(SafeStr(() => game.ApplicationPath));
-        if (!string.IsNullOrEmpty(mainPath)) all.Add(mainPath);
-        all.AddRange(orderedApps);
-
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var ordered = new List<string>();
-        foreach (var p in all) if (seen.Add(p)) ordered.Add(p);
-        if (ordered.Count < 2) return null;   // single disc → no m3u
+        var ordered = M3uPlaylistPlanner.Plan(game, selectedApp, launchedPath, SafeAddApps(game), ResolvePath,
+            detail => Console.WriteLine("[launch] m3u select: " + detail));
+        if (ordered == null || ordered.Count == 0) return null;
 
         string title = Sanitize(SafeStr(() => game.Title) is { Length: > 0 } t ? t : "game");
         string gid = SafeStr(() => game.Id) is { Length: > 0 } g2 ? g2 : Guid.NewGuid().ToString("N");
@@ -967,15 +942,6 @@ internal static class HostLaunch
         if (string.IsNullOrEmpty(s)) return "_";
         foreach (var c in Path.GetInvalidFileNameChars()) s = s.Replace(c, '_');
         return s.Trim().Length == 0 ? "_" : s.Trim();
-    }
-
-    /// <summary>First run of digits in <paramref name="s"/> as an int ("CD 1" → 1, "Disc 2" → 2),
-    /// or int.MaxValue when there's none (sorts such entries last).</summary>
-    private static int FirstInt(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return int.MaxValue;
-        var m = System.Text.RegularExpressions.Regex.Match(s, @"\d+");
-        return m.Success && int.TryParse(m.Value, out var n) ? n : int.MaxValue;
     }
 
     /// <summary>

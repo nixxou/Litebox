@@ -1,0 +1,534 @@
+// The top menu bar, shaped like LaunchBox's desktop menu.
+//
+//   MENU  TOOLS  VIEW  ARRANGE BY  IMAGE GROUP  BADGES  |  Displaying 29 of 5075 total games.
+//
+// The tree, the labels, the check marks and the icons are LaunchBox's. Entries go live one at a
+// time (MENU's Big Box / Achievements / Quit are wired; the rest is still inert), and the shortcuts
+// LaunchBox shows are left out entirely (they would advertise keys that do nothing). The existing
+// toolbar keeps driving the features it already owns (Arrange By, Image Group, Emulators, Options…);
+// this bar will take them over one at a time.
+//
+// Labels are LaunchBox's own, read out of its localized string table (Label*Menu keys) so the
+// wording matches exactly — minus the '_' mnemonics, which WinForms would turn into '&' accelerators.
+//
+// Icons are decoration: MenuIcons.Get returns null for a name whose PNG has not been drawn yet, and
+// a ToolStripMenuItem with a null Image simply renders without one.
+
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Windows.Forms;
+using LbApiHost.Host.Media;
+using LbApiHost.Host.Modules;
+using LbApiHost.Host.UiKit;
+using LbApiHost.Host.Web;
+using LbApiHost.Host.Web.Kiosk;
+using Unbroken.LaunchBox.Plugins.Data;
+
+namespace LbApiHost.Host;
+
+internal sealed partial class MainWindow
+{
+    // "Displaying N of M total games." — LaunchBox puts the count in the menu bar, not the toolbar.
+    private ToolStripLabel _menuStatus;
+
+    private MenuStrip BuildMainMenu()
+    {
+        var menu = new MenuStrip
+        {
+            Dock = DockStyle.Top, BackColor = Panel2, ForeColor = Fg,
+            Renderer = new DarkRenderer(), Padding = new Padding(6, 2, 6, 2),
+        };
+
+        var bigBox = M("Big Box...", MenuIcons.BigBox);
+        bigBox.Click += (_, _) => Safe(OpenBigBoxKiosk);
+        var achievements = M("View Achievements Profile...", MenuIcons.Trophy);
+        achievements.Click += (_, _) => MessageBox.Show(this, "Not implemented yet.",
+            "Achievements", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        var quit = M("Quit LiteBox", MenuIcons.Exit);
+        quit.Click += (_, _) => Close();   // the FormClosing chain saves layout/selection and flushes
+
+        menu.Items.Add(Top("Menu",
+            bigBox,
+            achievements,
+            ViewMenu("View"),
+            ToolsMenu("Tools"),
+            HelpMenu("Help"),
+            Sep(),
+            quit));
+
+        // The bar repeats the submenus LaunchBox considers worth one click.
+        menu.Items.Add(Top("Tools", Children(ToolsMenu("Tools"))));
+        menu.Items.Add(Top("View", Children(ViewMenu("View"))));
+        menu.Items.Add(Top("Arrange By", Children(ArrangeByMenu("Arrange By"))));
+        menu.Items.Add(Top("Image Group", Children(ImageGroupMenu("Image Group"))));
+        menu.Items.Add(Top("Badges", Children(BadgesMenu("Badges"))));
+
+        menu.Items.Add(new ToolStripSeparator());
+        _menuStatus = new ToolStripLabel("") { ForeColor = SubFg, Margin = new Padding(6, 0, 0, 0) };
+        menu.Items.Add(_menuStatus);
+        UpdateMenuStatus();
+
+        return menu;
+    }
+
+    /// <summary>"Big Box..." — the fullscreen BigBox Web kiosk. With ExtendDB loaded its own kiosk wins
+    /// (same rule as the F11 hotkey); otherwise the host kiosk runs on the embedded web server, which
+    /// lives behind the Web frontends module — so an OFF module asks to be enabled first (yes/no), and
+    /// the server is started on demand exactly like ModulesOptions.ReconcileRuntime does.</summary>
+    private void OpenBigBoxKiosk()
+    {
+        if (KioskBridge.Available) { KioskBridge.ToggleBigBox(); return; }
+
+        if (!LbModules.On(LbModule.Web))
+        {
+            var r = MessageBox.Show(this,
+                "Big Box runs on the embedded web server, and the Web frontends module is currently disabled.\n\n" +
+                "Enable the Web frontends module now?",
+                "Big Box", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (r != DialogResult.Yes) return;
+            LbModules.SetOn(LbModule.Web, true);
+        }
+
+        if (!EmbeddedWebServer.IsRunning)
+        {
+            try { WebAssets.EnsureDeployed(); } catch { }
+            int port = int.TryParse(LiteBoxConfig.LoadForExe().GetSec("Web", "Port"), out var p) ? p : 8080;
+            EmbeddedWebServer.Start(port);
+        }
+        if (!EmbeddedWebServer.IsRunning)
+        {
+            MessageBox.Show(this, "The embedded web server failed to start — see the log for details.",
+                "Big Box", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (!WebKioskWindow.IsAvailable())
+        {
+            MessageBox.Show(this, "The WebView2 runtime is not available on this system, so the kiosk window cannot open.",
+                "Big Box", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        WebKioskWindow.ToggleBigBox();
+    }
+
+    /// <summary>The count LaunchBox shows in its menu bar. Called whenever the visible set changes.</summary>
+    private void UpdateMenuStatus()
+    {
+        if (_menuStatus == null) return;
+        try { _menuStatus.Text = $"Displaying {_games.VisibleGames.Count} of {_games.TotalCount} total games."; }
+        catch { _menuStatus.Text = ""; }
+    }
+
+    // ── The submenus ─────────────────────────────────────────────────────────
+
+    // Every built instance of the view-switch pair (the tree exists twice: MENU ▸ View and the bar's
+    // VIEW) — SyncViewSwitchChecks stamps the active mode on all of them at once.
+    private readonly List<ToolStripMenuItem> _miImagesView = new();
+    private readonly List<ToolStripMenuItem> _miListView = new();
+
+    /// <summary>Route a menu view switch through the toolbar's List/Poster toggle when it exists, so
+    /// the button's checked state (and its "view you'd switch TO" label) stays truthful. The button's
+    /// CheckedChanged then drives SetPosterMode; a same-value write fires nothing, matching the
+    /// SetPosterMode no-op guard.</summary>
+    private void SwitchView(bool poster)
+    {
+        if (_posterBtn != null) _posterBtn.Checked = poster;
+        else SetPosterMode(poster);
+    }
+
+    /// <summary>Reflect the active view on every Images View / List View menu entry (called by
+    /// SetPosterMode, and safe before the menu exists).</summary>
+    private void SyncViewSwitchChecks()
+    {
+        foreach (var it in _miImagesView) it.Checked = _posterMode;
+        foreach (var it in _miListView) it.Checked = !_posterMode;
+    }
+
+    // ── Hide Games — LaunchBox's Settings.xml rules, shared both ways ────────
+    // The 7 entries map onto the exact keys LaunchBox persists, so a box ticked here is a box
+    // ticked in LaunchBox and vice-versa. The two marked-* keys are stored INVERTED (LB models
+    // them as Show*), the five missing-media keys are stored as-is.
+    private static readonly (string Label, string Key, bool Inverted)[] HideGamesRules =
+    {
+        ("Marked Hidden", "ShowHiddenGames", true),
+        ("Marked Broken", "ShowBrokenGames", true),
+        ("Missing Videos", "HideGamesMissingVideos", false),
+        ("Missing Box Front Image", "HideGamesMissingBoxFrontImage", false),
+        ("Missing Screenshot Image", "HideGamesMissingScreenshotImage", false),
+        ("Missing Clear Logo Image", "HideGamesMissingClearLogoImage", false),
+        ("Missing Background Image", "HideGamesMissingBackgroundImage", false),
+    };
+
+    private readonly List<(ToolStripMenuItem Item, string Key, bool Inverted)> _miHideGames = new();
+
+    private LbApiHost.Host.Data.LbSettingsStore LbSettings => (_dm as Data.HostDataManagerXml)?.LbSettings;
+
+    /// <summary>True when the RULE is active (those games are hidden). LB defaults: marked
+    /// hidden/broken games hidden, missing-media rules off.</summary>
+    private bool HideGameRuleOn(string key, bool inverted)
+    {
+        bool v = LbSettings?.GetBool(key, false) ?? false;
+        return inverted ? !v : v;
+    }
+
+    private void ToggleHideGameRule(string key, bool inverted)
+    {
+        var s = LbSettings;
+        if (s == null || !s.Loaded) return;
+        if ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) return;   // options are locked in read-only mode
+        bool newOn = !HideGameRuleOn(key, inverted);
+        s.SetBool(key, inverted ? !newOn : newOn);
+        foreach (var (it, k, inv) in _miHideGames) if (k == key) it.Checked = HideGameRuleOn(k, inv);
+        ApplyFilter();                                            // the list reflects the rule immediately
+        (_dm as Data.HostDataManagerXml)?.FlushLbSettingsIfSafe();   // → Settings.xml now (when LB/BB closed)
+    }
+
+    /// <summary>The predicate ApplyFilter ANDs into the view, or null when every rule is off.
+    /// Flag reads are cheap; the media probes only run for rules that are actually on.</summary>
+    private Func<IGame, bool> HideGamesFilterOrNull()
+    {
+        var s = LbSettings;
+        if (s == null || !s.Loaded) return null;
+        bool hideHidden = !s.GetBool("ShowHiddenGames", false);
+        bool hideBroken = !s.GetBool("ShowBrokenGames", false);
+        bool exVideo = s.GetBool("HideGamesMissingVideos", false);
+        bool exFront = s.GetBool("HideGamesMissingBoxFrontImage", false);
+        bool exShot  = s.GetBool("HideGamesMissingScreenshotImage", false);
+        bool exLogo  = s.GetBool("HideGamesMissingClearLogoImage", false);
+        bool exBg    = s.GetBool("HideGamesMissingBackgroundImage", false);
+        if (!hideHidden && !hideBroken && !exVideo && !exFront && !exShot && !exLogo && !exBg) return null;
+        return g =>
+        {
+            if (hideHidden && Safe(() => g.Hide)) return false;
+            if (hideBroken && Safe(() => g.Broken)) return false;
+            if (exVideo && string.IsNullOrEmpty(Safe(() => g.GetVideoPath(false)))) return false;
+            if (exFront && string.IsNullOrEmpty(Safe(() => g.FrontImagePath))) return false;
+            if (exShot && string.IsNullOrEmpty(Safe(() => g.ScreenshotImagePath))) return false;
+            if (exLogo && string.IsNullOrEmpty(Safe(() => g.ClearLogoImagePath))) return false;
+            if (exBg && string.IsNullOrEmpty(Safe(() => g.BackgroundImagePath))) return false;
+            return true;
+        };
+    }
+
+    private ToolStripMenuItem HideGamesMenu()
+    {
+        var sub = new ToolStripMenuItem("Hide Games") { Image = MenuIcons.Get(MenuIcons.HideGames) };
+        foreach (var (label, key, inverted) in HideGamesRules)
+        {
+            if (key == "HideGamesMissingVideos") sub.DropDownItems.Add(Sep());   // LB's gap: marked-* | missing-*
+            var it = new ToolStripMenuItem(label) { Checked = HideGameRuleOn(key, inverted) };
+            it.Click += (_, _) => Safe(() => ToggleHideGameRule(key, inverted));
+            _miHideGames.Add((it, key, inverted));
+            sub.DropDownItems.Add(it);
+        }
+        return sub;
+    }
+
+    // ── Media — autoplay toggles + cache refreshes ───────────────────────────
+    // Auto-Play Videos is the SAME option as Options ▸ Right panel ▸ "Videos: play automatically
+    // when selected" (LiteBox.ini VideoAutoplay) — one flag, two surfaces. The two music toggles are
+    // LaunchBox's AutoPlayMusic / ShuffleMusic Settings.xml keys (shared both ways, like Hide Games).
+    // Check marks are re-read when the submenu opens, so a change made in the options window (or in
+    // LaunchBox) is always reflected.
+    private readonly List<(ToolStripMenuItem Item, string Key)> _miMedia = new();
+
+    private bool MediaToggleOn(string key) => key switch
+    {
+        "autovideo" => _cfg.VideoAutoplay,
+        "automusic" => LbSettings?.GetBool("AutoPlayMusic", true) ?? true,
+        "shuffle"   => LbSettings?.GetBool("ShuffleMusic", true) ?? true,
+        _ => false,
+    };
+
+    private void RefreshMediaChecks()
+    {
+        foreach (var (it, k) in _miMedia) it.Checked = MediaToggleOn(k);
+    }
+
+    private void ToggleMediaOption(string key)
+    {
+        if ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) return;   // options are locked in read-only mode
+        bool on = !MediaToggleOn(key);
+        switch (key)
+        {
+            case "autovideo":
+                _cfg.VideoAutoplay = on;
+                try { _cfg.Save(); } catch { }
+                if (_mediaVideo != null) _mediaVideo.Autoplay = on;       // live, like the option's applyLive
+                break;
+            case "automusic":
+                LbSettings?.SetBool("AutoPlayMusic", on);
+                (_dm as Data.HostDataManagerXml)?.FlushLbSettingsIfSafe();
+                if (on) UpdateGameMusic(_detailsShown as IGame); else Media.GameMusicPlayer.Stop();
+                break;
+            case "shuffle":
+                LbSettings?.SetBool("ShuffleMusic", on);
+                (_dm as Data.HostDataManagerXml)?.FlushLbSettingsIfSafe();
+                UpdateGameMusic(_detailsShown as IGame);                  // re-hand the list with the new flag
+                break;
+        }
+        RefreshMediaChecks();
+    }
+
+    private ToolStripMenuItem MediaMenu()
+    {
+        var sub = new ToolStripMenuItem("Media") { Image = MenuIcons.Get(MenuIcons.Media) };
+        ToolStripMenuItem Toggle(string label, string key)
+        {
+            var it = new ToolStripMenuItem(label) { Checked = MediaToggleOn(key) };
+            it.Click += (_, _) => Safe(() => ToggleMediaOption(key));
+            _miMedia.Add((it, key));
+            return it;
+        }
+        sub.DropDownItems.Add(Toggle("Auto-Play Videos", "autovideo"));
+        sub.DropDownItems.Add(Toggle("Auto-Play Music", "automusic"));
+        sub.DropDownItems.Add(Toggle("Shuffle Music", "shuffle"));
+        sub.DropDownItems.Add(Sep());
+
+        // Named for what they actually DO here (LaunchBox says "Refresh …", but our action is the
+        // thumbnail-cache generation run): the same flow as the toolbar's Generate Image Cache,
+        // scoped to the selection or the whole library.
+        var refreshSel = new ToolStripMenuItem("Generate Image Cache (Selected Games)...") { Image = MenuIcons.Get(MenuIcons.Refresh) };
+        refreshSel.Click += (_, _) => Safe(() => GenerateCachedImages(_games?.SelectedGames));
+        sub.DropDownItems.Add(refreshSel);
+        var refreshAll = new ToolStripMenuItem("Generate Image Cache (All Games)...") { Image = MenuIcons.Get(MenuIcons.RefreshImages) };
+        refreshAll.Click += (_, _) => Safe(GenerateAllCachedImages);
+        sub.DropDownItems.Add(refreshAll);
+
+        sub.DropDownOpening += (_, _) =>
+        {
+            RefreshMediaChecks();
+            refreshSel.Enabled = (_games?.SelectedGames?.Length ?? 0) > 0;
+        };
+        return sub;
+    }
+
+    // ── Game music (Auto-Play Music / Shuffle Music) ─────────────────────────
+
+    /// <summary>Selection landed on <paramref name="g"/> (null = a node / nothing): stop the previous
+    /// game's music and start this one's when Auto-Play Music is on. The same game keeps its track
+    /// running. A video that autoplays WITH SOUND silences music at ITS start (VideoBlock.SetMuted),
+    /// not here — at settle the main media is the box, not the video.
+    ///
+    /// The work runs OFF the UI thread, alongside the other post-load actions: resolving the tracks
+    /// walks the platform's Music folder (IO) and the first Play may pay the lazy libvlc init — the
+    /// details pane must not wait on either. The load token gates a stale start (selection moved on
+    /// while the walk was in flight — the newer call already owns the player).</summary>
+    private void UpdateGameMusic(IGame g)
+    {
+        try
+        {
+            if (g == null) { Media.GameMusicPlayer.Stop(); return; }
+            var s = LbSettings;
+            if (s == null || !s.GetBool("AutoPlayMusic", true)) { Media.GameMusicPlayer.Stop(); return; }
+            bool shuffle = s.GetBool("ShuffleMusic", true);
+            string id = Safe(() => g.Id) ?? "";
+            var captured = g;
+            int token = _detailsLoadToken;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    var tracks = MusicTracksFor(captured);
+                    if (token != _detailsLoadToken || _closing) return;   // selection moved on mid-walk
+                    Media.GameMusicPlayer.Play(id, tracks, shuffle);
+                }
+                catch { }
+            });
+        }
+        catch { }
+    }
+
+    /// <summary>The game's music files: a pinned MusicPath designates ONE track; otherwise every
+    /// matched file (same walk as GetMusicPath's auto pick) — shuffle draws from all of them.</summary>
+    private List<string> MusicTracksFor(IGame g)
+    {
+        var pinned = Safe(() => Media.MediaResolver.Override(g.MusicPath));
+        if (!string.IsNullOrEmpty(pinned)) return new List<string> { pinned };
+        Guid id = Guid.TryParse(Safe(() => g.Id) ?? "", out var x) ? x : Guid.Empty;
+        return Safe(() => Media.MediaResolver.MusicsAll(Safe(() => g.Platform) ?? "", id, Safe(() => g.Title) ?? ""))
+               ?? new List<string>();
+    }
+
+    private ToolStripMenuItem ViewMenu(string text)
+    {
+        // Both entries keep their glyph; the ACTIVE one is Checked, which with an Image renders as
+        // the highlight frame around the icon (not a check mark) — the LaunchBox look.
+        var images = M("Images View", MenuIcons.ViewImages);
+        images.Checked = _posterMode;
+        images.Click += (_, _) => Safe(() => SwitchView(poster: true));
+        _miImagesView.Add(images);
+
+        var list = M("List View", MenuIcons.ListView);
+        list.Checked = !_posterMode;
+        list.Click += (_, _) => Safe(() => SwitchView(poster: false));
+        _miListView.Add(list);
+
+        return Sub(text, MenuIcons.View,
+            images, list,
+            HideGamesMenu(),
+            MediaMenu(),
+            BadgesMenu("Badges"),
+            ImageGroupMenu("Image Group"),
+            ArrangeByMenu("Arrange By"));
+    }
+
+    private static ToolStripMenuItem ToolsMenu(string text) => Sub(text, MenuIcons.Tools,
+        Sub("Import", MenuIcons.Import,
+            M("MS-DOS Games...", null),
+            M("Steam Games...", null),
+            M("Epic Games...", null),
+            M("GOG...", null),
+            M("EA...", null),
+            M("Amazon Games...", null),
+            M("Uplay/Ubisoft Connect Games...", null),
+            M("Xbox/Microsoft Store Games...", null),
+            M("Windows Games...", null),
+            Sep(),
+            M("ROM Files...", null),
+            M("MAME Arcade Full Set...", null),
+            M("Install DOS Game...", null)),
+        Sub("Manage", MenuIcons.Manage,
+            M("Manage Emulators...", null),
+            M("Manage Platforms...", null),
+            M("Manage Game Controllers...", null),
+            Sep(),
+            M("Open Bulk Edit Wizard...", MenuIcons.Edit)),
+        Sub("Download", MenuIcons.Download,
+            M("Download Metadata and Media...", null),
+            M("Download Platform/Playlist Theme Videos...", null),
+            M("Download Updated Community Star Ratings...", null),
+            Sep(),
+            M("Force Update Games Database Metadata...", null)),
+        Sub("Image Packs", MenuIcons.ImagePacks,
+            M("Import Image Pack...", null),
+            M("Export Image Pack...", null)),
+        Sub("Audit", MenuIcons.Audit,
+            M("Audit Current Platform...", null),
+            M("For All Platforms...", null)),
+        Sub("Scan", MenuIcons.Scan,
+            M("Scan for Added ROMs", null),
+            M("Scan for Removed ROMs", null)),
+        Sub("Achievements", MenuIcons.Trophy,
+            M("Scan for All Games...", null),
+            M("Scan for Current Platform...", null),
+            M("View Achievements Profile...", null)),
+        Sub("Clean Up Media", MenuIcons.CleanUpMedia,
+            M("Clean Up Current Platform Media...", null),
+            M("Clean Up Media for All Platforms...", null)),
+        Sub("File Management", MenuIcons.FileManagement,
+            M("Consolidate ROMs for Current Platform...", null),
+            M("Change ROMs Folder Path for Selected Games...", null)),
+        Sub("Cloud", MenuIcons.Cloud,
+            M("Sync to My Collection...", null),
+            M("Browse My Collection...", null),
+            Sep(),
+            M("Connect to the LaunchBox Games Database...", null),
+            M("Disconnect from the LaunchBox Games Database...", null)),
+        Sep(),
+        M("Select Random Game...", MenuIcons.SelectRandomGame),
+        M("Export to Android...", MenuIcons.ExportAndroid),
+        M("Options...", MenuIcons.Options));
+
+    private static ToolStripMenuItem HelpMenu(string text) => Sub(text, MenuIcons.Help,
+        M("Welcome...", MenuIcons.Welcome),
+        M("Tutorials...", MenuIcons.Tutorials),
+        M("Forums...", MenuIcons.Forums),
+        Sep(),
+        M("Changelog...", MenuIcons.Changelog),
+        M("Report Issue...", MenuIcons.ReportIssue),
+        M("Send Feedback...", MenuIcons.SendFeedback),
+        Sep(),
+        M("Get Premium...", MenuIcons.GetPremium),
+        M("License Registration...", MenuIcons.LicenseRegistration),
+        M("Check for Updates...", MenuIcons.CheckUpdates),
+        M("About...", MenuIcons.About));
+
+    // The image groups LaunchBox offers for the tiles, in its order. Ours are a subset (the toolbar's
+    // Image Group button lists the regroupements LiteBox actually caches) — this bar shows the full
+    // LaunchBox set for now, and will be reconciled when the entries start doing something.
+    private static ToolStripMenuItem ImageGroupMenu(string text) => Sub(text, MenuIcons.ImageGroup,
+        Check("Use Default (Boxes)", null, true),
+        Sep(),
+        Check("Backgrounds", null, false),
+        Check("Boxes", null, false),
+        Check("3D Boxes", null, false),
+        Check("Carts", null, false),
+        Check("3D Carts", null, false),
+        Check("Clear Logos", null, false),
+        Check("Marquees", null, false),
+        Check("Screenshots", null, false),
+        Check("Steam Banners", null, false));
+
+    // LaunchBox's badge set (BadgeXxx resources), plus the entry that opens the badge image folder.
+    private static ToolStripMenuItem BadgesMenu(string text) => Sub(text, MenuIcons.Badges,
+        Check("Show Badges", null, true),
+        Sep(),
+        Check("Achievements", null, false),
+        Check("Broken", null, false),
+        Check("Completed", null, false),
+        Check("Documents", null, false),
+        Check("Favorite", null, true),
+        Check("Game Save", null, false),
+        Check("Hidden", null, false),
+        Check("Installed", null, true),
+        Check("MAME High Scores", null, false),
+        Check("Multiple Discs", null, false),
+        Check("Multiple Versions", null, false),
+        Check("Portable", null, false),
+        Check("Progress", null, false),
+        Sep(),
+        M("Change Badge Images...", null));
+
+    private static readonly string[] ArrangeFields =
+    {
+        "Date Added", "Date Modified", "Developer", "Favorite", "Genre", "Installed", "Last Played",
+        "LaunchBox Database ID", "MAME High Scores Supported", "Max Players", "Platform", "Play Count",
+        "Play Mode", "Play Time", "Portable", "Progress", "Publisher", "Rating", "Region", "Release Date",
+        "Release Date Year", "Release Type", "Series", "Source", "Star Rating", "Status", "Title", "Version",
+    };
+
+    private static ToolStripMenuItem ArrangeByMenu(string text)
+    {
+        var items = new List<ToolStripItem>();
+        foreach (var f in ArrangeFields) items.Add(Check(f, null, f == "Title"));
+        return Sub(text, MenuIcons.ArrangeBy, items.ToArray());
+    }
+
+    // ── Plumbing ─────────────────────────────────────────────────────────────
+    // Every entry is inert for now: no Click handler, no shortcut. Enabled stays true so the bar reads
+    // the way LaunchBox's does (only entries LaunchBox itself greys out are disabled here).
+
+    private static ToolStripMenuItem Top(string text, params ToolStripItem[] children)
+    {
+        // LaunchBox renders the bar in capitals; the submenu entries keep their normal casing.
+        var top = new ToolStripMenuItem(text.ToUpperInvariant());
+        foreach (var c in children) top.DropDownItems.Add(c);
+        return top;
+    }
+
+    /// <summary>Steals a submenu's children so the same tree can hang off a top-level bar entry.</summary>
+    private static ToolStripItem[] Children(ToolStripMenuItem built)
+    {
+        var kids = new ToolStripItem[built.DropDownItems.Count];
+        built.DropDownItems.CopyTo(kids, 0);
+        built.DropDownItems.Clear();
+        return kids;
+    }
+
+    private static ToolStripMenuItem Sub(string text, string icon, params ToolStripItem[] children)
+    {
+        var m = new ToolStripMenuItem(text) { Image = MenuIcons.Get(icon) };
+        foreach (var c in children) m.DropDownItems.Add(c);
+        return m;
+    }
+
+    private static ToolStripMenuItem M(string text, string icon, bool enabled = true)
+        => new(text) { Image = MenuIcons.Get(icon), Enabled = enabled };
+
+    private static ToolStripMenuItem Check(string text, string icon, bool @checked)
+        => new(text) { Image = MenuIcons.Get(icon), Checked = @checked, CheckOnClick = false };
+
+    private static ToolStripSeparator Sep() => new();
+}

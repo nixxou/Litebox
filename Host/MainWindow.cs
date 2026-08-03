@@ -437,6 +437,24 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         };
         bar.Items.Add(emusBtn);
 
+        // Plugins (system-menu plugins) — lives on the toolbar, right of Emulators;
+        // the top MenuStrip is reserved for the upcoming LaunchBox-style menu.
+        var pluginsBtn = new ToolStripDropDownButton("Plugins") { ForeColor = Fg };
+        foreach (var m in _reg.SystemMenus)
+        {
+            string cap; bool show;
+            try { cap = m.Caption ?? m.GetType().Name; show = m.ShowInLaunchBox; }
+            catch { cap = m.GetType().Name; show = true; }
+            if (!show) continue;
+            var captured = m;
+            var it = new ToolStripMenuItem(cap);
+            it.Click += (_, _) => Safe(() => captured.OnSelected());
+            pluginsBtn.DropDownItems.Add(it);
+        }
+        if (pluginsBtn.DropDownItems.Count == 0)
+            pluginsBtn.DropDownItems.Add(new ToolStripMenuItem("(no plugin menu items)") { Enabled = false });
+        bar.Items.Add(pluginsBtn);
+
         _count = new ToolStripLabel("") { ForeColor = SubFg, Alignment = ToolStripItemAlignment.Right };
         bar.Items.Add(_count);
 
@@ -459,7 +477,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
         // Persist layout / window / selection once, at close (not per change).
         // _closing lets the serialized detail loader bail before its blocking Invoke once the pump ends.
-        FormClosing += (_, _) => { _closing = true; try { Application.RemoveMessageFilter(this); } catch { } LedBlinky.FrontendQuit(); try { SaveAll(); } catch { } };
+        FormClosing += (_, _) => { _closing = true; try { Application.RemoveMessageFilter(this); } catch { } try { Media.GameMusicPlayer.Stop(); } catch { } LedBlinky.FrontendQuit(); try { SaveAll(); } catch { } };
 
         // Bring the window back on-screen if a monitor is unplugged while running.
         try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged; } catch { }
@@ -494,23 +512,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             catch { return Array.Empty<IGame>(); }
         };
 
-        // ── Top menu: system-menu plugins ────────────────────────────────────
-        var menu = new MenuStrip { Dock = DockStyle.Top, BackColor = Panel2, ForeColor = Fg, Renderer = new DarkRenderer() };
-        var pluginsMenu = new ToolStripMenuItem("Plugins");
-        foreach (var m in _reg.SystemMenus)
-        {
-            string cap; bool show;
-            try { cap = m.Caption ?? m.GetType().Name; show = m.ShowInLaunchBox; }
-            catch { cap = m.GetType().Name; show = true; }
-            if (!show) continue;
-            var captured = m;
-            var it = new ToolStripMenuItem(cap);
-            it.Click += (_, _) => Safe(() => captured.OnSelected());
-            pluginsMenu.DropDownItems.Add(it);
-        }
-        if (pluginsMenu.DropDownItems.Count == 0)
-            pluginsMenu.DropDownItems.Add(new ToolStripMenuItem("(no plugin menu items)") { Enabled = false });
-        menu.Items.Add(pluginsMenu);
+        // ── Top menu: the LaunchBox-shaped bar (see MainWindowMainMenu.cs) ───
+        var menu = BuildMainMenu();
 
         Controls.Add(bar);
         Controls.Add(menu);
@@ -789,6 +792,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private void OnViewChanged()
     {
         if (_count != null) _count.Text = $"{_games.VisibleGames.Count} / {_games.TotalCount} games";
+        UpdateMenuStatus();
         if (_posterMode) RefreshPoster();
     }
 
@@ -3133,10 +3137,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // BEGINNING with what was typed; a deliberate search in the box finds it anywhere. Same
         // rule and same two title forms as both web clients — see GameTextFilter.
         bool prefix = _typedFilterIsTransient;
-        _games.FilterPredicate = (!hasTxt && !parental && filt == null)
+        var hide = HideGamesFilterOrNull();       // View ▸ Hide Games — LB's Settings.xml rules
+        _games.FilterPredicate = (!hasTxt && !parental && filt == null && hide == null)
             ? (Func<IGame, bool>)null
             : g =>
             {
+                if (hide != null && !hide(g)) return false;
                 if (parental && ParentalHidesGame(g)) return false;
                 if (hasTxt && !GameTextFilter.Matches(g, txt, prefix)) return false;
                 if (filt != null && !filt.Matches(g)) return false;   // AND the advanced criteria
@@ -3567,6 +3573,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (_posterMode == on || _poster == null) return;
         _posterMode = on;
         if (_posterBtn != null) _posterBtn.Text = on ? "List View" : "Poster View";   // label = the view you'd switch TO
+        try { SyncViewSwitchChecks(); } catch { }   // menu bar: Images View / List View check marks
         _cfg.SetBool("PosterMode", on); _cfg.Save();
         if (on)
         {
@@ -4122,6 +4129,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             _meta.Clear(); _vndb.Clear(); _raCard?.HidePanel(); _notes.Text = ""; _related?.ClearAll(); _highScores?.ClearAll(); RelayoutDetail();
             _launchButtons?.HideGame();
             SetStorePoll(false);
+            UpdateGameMusic(null);
             return;
         }
 
@@ -4135,6 +4143,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         HideVideoOverlay();   // …and a video must never keep playing over the next game
         LoadImagesAsync(logoSrc, artSrc);
         PopulateDetailMeta(g);
+        UpdateGameMusic(g);   // direct path (thumb click / restore) — same music rules as the settle
 
         // Automatic Progress Tracking, "on select" flavor (option): re-evaluate this game while its
         // detail data is being composed — off the UI thread, and cheap (RAM + at most one cached-RA
@@ -4331,6 +4340,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         HideVideoOverlay();         // idem for a playing video (it would also keep decoding)
         _media.SetImage(art, art3d);
         PopulateDetailMeta(g);
+        UpdateGameMusic(g);         // the selection settled here → its music (View ▸ Media rules)
     }
 
     // Transit: a game merely scrolled past. Update only the base thumb + title/logo (cheap) so images
@@ -4354,6 +4364,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _heroGame = null;
         Hide3dOverlay();              // 3D media overlay is game-only
         HideVideoOverlay();           // video too
+        UpdateGameMusic(null);        // music too — a tree node has none
         _launchButtons?.HideGame();   // launch group is game-only
         _related?.ClearAll();         // tab strip + related list are game-only
         _highScores?.ClearAll();      // MAME leaderboards are game-only too
@@ -5286,10 +5297,15 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     private GenerateCacheProgressForm? _genCacheLive;   // restore the running generation instead of double-launching
 
-    private void GenerateAllCachedImages()
+    private void GenerateAllCachedImages() => GenerateCachedImages(null);
+
+    /// <summary>The Generate Image Cache flow (options dialog → phased progress run).
+    /// <paramref name="only"/> restricts the run to those games (the menu's selected-games entry);
+    /// null = the whole library (toolbar button / all-games entry).</summary>
+    private void GenerateCachedImages(IGame[] only)
     {
         if (_genCacheLive is { IsDisposed: false } live) { try { live.RestoreFromMinimized(); } catch { } return; }
-        var games = Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>();
+        var games = only ?? Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>();
         if (games.Length == 0) return;
 
         // The previous run's selection is re-proposed (GenCacheSelection csv in LiteBox.ini).

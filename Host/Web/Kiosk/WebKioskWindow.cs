@@ -164,6 +164,7 @@ internal sealed class WebKioskWindow : Form
     private static void Toggle(string surface)
     {
         if (!IsAvailable()) return;
+        try { LbApiHost.Host.Media.GameMusicPlayer.Stop(); } catch { }   // the kiosk owns the audio from here
         try
         {
             if (_instance != null && !_instance.IsDisposed)

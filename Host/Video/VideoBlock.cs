@@ -515,6 +515,10 @@ internal sealed class VideoBlock : Panel
         _muted = on;
         _muteBtn.Text = on ? "🔇" : "🔊";
         try { if (_mp != null) _mp.Mute = on; } catch { }
+        // A video with sound owns the audio: ambient game music goes quiet. Every sound-on path funnels
+        // here (autoplay-with-sound, the explicit ▶, the hover-bar unmute) — fullscreen included, it is
+        // this same control.
+        if (!on) try { LbApiHost.Host.Media.GameMusicPlayer.Stop(); } catch { }
     }
 
     private void UpdateProgress()

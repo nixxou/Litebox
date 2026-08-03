@@ -615,13 +615,12 @@ internal sealed partial class MainWindow
         }
     }
 
-    private ToolStripItem RefreshImagesItem(IGame[] games) => Item("Refresh Selected Images", MenuIcons.RefreshImages, () =>
-    {
-        foreach (var p in games.Select(g => S(Safe(() => g.Platform))).Where(p => p.Length > 0)
-                               .Distinct(StringComparer.OrdinalIgnoreCase))
-            Safe(() => GameCacheBridge.RebuildPlatform(PluginHelper.DataManager?.GetPlatformByName(p)));
-        ReloadAfterGameChange();
-    });
+    // Same flow as View ▸ Media ▸ "Generate Image Cache (Selected Games)..." — the options dialog +
+    // phased run, scoped to this menu's games. (It replaced the old whole-platform data-cache rebuild;
+    // the label follows this menu's count convention, like "Edit N Games…".)
+    private ToolStripItem RefreshImagesItem(IGame[] games) => Item(
+        games.Length > 1 ? $"Generate Image Cache ({games.Length} Games)..." : "Generate Image Cache...",
+        MenuIcons.RefreshImages, () => GenerateCachedImages(games));
 
     // ── File management ──────────────────────────────────────────────────────
     private static string ResolveGamePath(string path)

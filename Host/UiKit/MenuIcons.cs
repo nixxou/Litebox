@@ -49,6 +49,44 @@ internal static class MenuIcons
     public const string OpenGameFolder = "opengamefolder";
     public const string OpenImagesFolder = "openimagesfolder";
 
+    // Third batch — the LaunchBox-shaped top menu bar (Menu / Tools / View / Help). Names are wired
+    // ahead of the art: until each PNG lands in menu-icons\, Get returns null and the entry shows
+    // its text alone.
+    public const string BigBox = "bigbox";                           // launch the fullscreen frontend
+    public const string Trophy = "trophy";                           // achievements
+    public const string View = "view";                               // View submenu header
+    public const string Tools = "tools";                             // Tools submenu header
+    public const string Help = "help";                               // Help submenu header
+    public const string Exit = "exit";                               // quit the application
+    public const string ListView = "listview";                       // the games as a detail table
+    public const string ShowHide = "showhide";                       // which panels are visible
+    public const string HideGames = "hidegames";                     // which games are filtered out
+    public const string Badges = "badges";                           // the badge overlays on tiles
+    public const string ImageGroup = "imagegroup";                   // which image type the tiles show
+    public const string ArrangeBy = "arrangeby";                     // the sort field
+    public const string Refresh = "refresh";                         // refresh the selection only
+    public const string Import = "import";
+    public const string Manage = "manage";
+    public const string Download = "download";
+    public const string ImagePacks = "imagepacks";
+    public const string Audit = "audit";                             // report what a platform is missing
+    public const string Scan = "scan";                               // scan the ROM folders
+    public const string CleanUpMedia = "cleanupmedia";
+    public const string Cloud = "cloud";
+    public const string SelectRandomGame = "selectrandomgame";
+    public const string ExportAndroid = "exportandroid";
+    public const string Options = "options";
+    public const string Welcome = "welcome";
+    public const string Tutorials = "tutorials";
+    public const string Forums = "forums";
+    public const string Changelog = "changelog";
+    public const string ReportIssue = "reportissue";
+    public const string SendFeedback = "sendfeedback";
+    public const string GetPremium = "getpremium";
+    public const string LicenseRegistration = "licenseregistration";
+    public const string CheckUpdates = "checkupdates";
+    public const string About = "about";
+
     private static readonly ConcurrentDictionary<string, Image?> Cache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The glyph at the requested edge size, or null if it cannot be loaded.</summary>

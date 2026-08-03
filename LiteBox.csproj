@@ -213,6 +213,41 @@
     <EmbeddedResource Include="menu-icons\saveimageas.png"><LogicalName>menu-icons/saveimageas.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="menu-icons\opengamefolder.png"><LogicalName>menu-icons/opengamefolder.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="menu-icons\openimagesfolder.png"><LogicalName>menu-icons/openimagesfolder.png</LogicalName></EmbeddedResource>
+    <!-- Batch 3 — the LaunchBox-shaped top menu bar (MainWindowMainMenu). -->
+    <EmbeddedResource Include="menu-icons\bigbox.png"><LogicalName>menu-icons/bigbox.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\trophy.png"><LogicalName>menu-icons/trophy.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\view.png"><LogicalName>menu-icons/view.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\tools.png"><LogicalName>menu-icons/tools.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\help.png"><LogicalName>menu-icons/help.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\exit.png"><LogicalName>menu-icons/exit.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\listview.png"><LogicalName>menu-icons/listview.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\showhide.png"><LogicalName>menu-icons/showhide.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\hidegames.png"><LogicalName>menu-icons/hidegames.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\badges.png"><LogicalName>menu-icons/badges.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\imagegroup.png"><LogicalName>menu-icons/imagegroup.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\arrangeby.png"><LogicalName>menu-icons/arrangeby.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\refresh.png"><LogicalName>menu-icons/refresh.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\import.png"><LogicalName>menu-icons/import.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\manage.png"><LogicalName>menu-icons/manage.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\download.png"><LogicalName>menu-icons/download.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\imagepacks.png"><LogicalName>menu-icons/imagepacks.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\audit.png"><LogicalName>menu-icons/audit.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\scan.png"><LogicalName>menu-icons/scan.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\cleanupmedia.png"><LogicalName>menu-icons/cleanupmedia.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\cloud.png"><LogicalName>menu-icons/cloud.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\selectrandomgame.png"><LogicalName>menu-icons/selectrandomgame.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\exportandroid.png"><LogicalName>menu-icons/exportandroid.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\options.png"><LogicalName>menu-icons/options.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\welcome.png"><LogicalName>menu-icons/welcome.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\tutorials.png"><LogicalName>menu-icons/tutorials.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\forums.png"><LogicalName>menu-icons/forums.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\changelog.png"><LogicalName>menu-icons/changelog.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\reportissue.png"><LogicalName>menu-icons/reportissue.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\sendfeedback.png"><LogicalName>menu-icons/sendfeedback.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\getpremium.png"><LogicalName>menu-icons/getpremium.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\licenseregistration.png"><LogicalName>menu-icons/licenseregistration.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\checkupdates.png"><LogicalName>menu-icons/checkupdates.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\about.png"><LogicalName>menu-icons/about.png</LogicalName></EmbeddedResource>
 
   </ItemGroup>
 

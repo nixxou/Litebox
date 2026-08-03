@@ -49,8 +49,8 @@ internal static class KioskBridge
     /// <summary>True iff the plugin supports the deferred (behind-GAME-OVER) reopen path.</summary>
     public static bool SupportsDeferredReopen { get { Probe(); return _prepareDefer != null && _revealDefer != null; } }
 
-    public static void ToggleBigBox() { Probe(); _toggle?.Invoke(null, null); }
-    public static void ToggleLaunchBox() { Probe(); _toggleLb?.Invoke(null, null); }
+    public static void ToggleBigBox() { Probe(); try { GameMusicPlayer.Stop(); } catch { } _toggle?.Invoke(null, null); }
+    public static void ToggleLaunchBox() { Probe(); try { GameMusicPlayer.Stop(); } catch { } _toggleLb?.Invoke(null, null); }
     public static void ShowDevTools() { Probe(); _devTools?.Invoke(null, null); }
 
     /// <summary>Ask ExtendDB to reopen the kiosk HIDDEN (non-topmost, un-activated) on the next

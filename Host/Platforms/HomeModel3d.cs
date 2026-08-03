@@ -226,10 +226,10 @@ internal sealed class HomeModel3d : IDisposable
     private static Model3D? BuildBox(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
                                      System.Collections.Generic.Dictionary<string, string>? ov = null)
     {
-        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front);
+        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain());
         string? logoPath = ResolveSlot(ov, "logo", platform, gameTitle, Media.MediaResolver.ClearLogo);
         string? spinePath = ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" });
-        string? backPath = ResolveSlot(ov, "back", platform, gameTitle, new[] { "Box - Back" });
+        string? backPath = ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain());
         // Missing front → LB's NoImage placeholder (shipped): texture, dims and corner colour all follow.
         var front = LoadBitmap(frontPath) ?? LbCaseObj.SpineImage("NoImage");
         var logo = LoadBitmap(logoPath);
@@ -474,14 +474,14 @@ internal sealed class HomeModel3d : IDisposable
         var plastic = LbCaseObj.Load(spineClear ? "ClearSpineJewelCase" : "JewelCase") ?? LbCaseObj.Load("JewelCase");
         if (plastic == null) return null;   // no embedded model → keep LB's clone (comparison still works)
 
-        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front);
+        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain());
         string? region = LbCaseObj.RegionOfImagePath(frontPath);   // drives the Auto-Detect spine version
         var front = LoadBitmap(frontPath);
         var logo = LoadBitmap(ResolveSlot(ov, "logo", platform, gameTitle, Media.MediaResolver.ClearLogo));
 
         var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
         var clear = System.Windows.Media.Colors.Transparent;
-        var backScan = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, new[] { "Box - Back" }));
+        var backScan = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain()));
         string? scanPath = ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" });
         string? scanRegion = LbCaseObj.RegionOfImagePath(scanPath);
         var scan = LoadBitmap(scanPath);
@@ -665,10 +665,10 @@ internal sealed class HomeModel3d : IDisposable
     private static Model3D? BuildDoubleJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
                                              System.Collections.Generic.Dictionary<string, string>? ov = null)
     {
-        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front);
+        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain());
         string? region = LbCaseObj.RegionOfImagePath(frontPath);   // drives the Auto-Detect spine version
         var front = LoadBitmap(frontPath);
-        var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, new[] { "Box - Back" }));
+        var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain()));
 
         // Spine strips: the game's OWN Box - Spine scan first (ov-aware — an Image Selection pick flows
         // through ResolveSlot), the FrontSpineImage preset/custom only as the NO-SCAN fallback. Same
@@ -764,8 +764,8 @@ internal sealed class HomeModel3d : IDisposable
         var plastic = LbCaseObj.Load("LongJewelCase");
         if (plastic == null) return null;
 
-        var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front));
-        var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, new[] { "Box - Back" }));
+        var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain()));
+        var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain()));
         var spineImg = LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }));
 
         var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
@@ -825,8 +825,8 @@ internal sealed class HomeModel3d : IDisposable
         // Colours: forced options else derived. A missing front falls back to LB's NoImage placeholder
         // (shipped, 245×319 ≈ aspect 0.766) — LB uses it as the front TEXTURE and every derived value
         // (dims, corner colour) follows from it naturally (probe case F).
-        var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.Front)) ?? LbCaseObj.SpineImage("NoImage");
-        var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, new[] { "Box - Back" }));
+        var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain())) ?? LbCaseObj.SpineImage("NoImage");
+        var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain()));
         var spineImg = LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }));
 
         var caseColor = System.Windows.Media.Color.FromRgb(0x1D, 0x1D, 0x1D);

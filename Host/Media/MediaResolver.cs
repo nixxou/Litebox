@@ -30,6 +30,25 @@ internal static class MediaResolver
     // ── Property → ordered LB image-type fallback chains (native-ish) ─────────
     public static readonly string[] Front = { "Box - Front", "Box - Front - Reconstructed", "Fanart - Box - Front" };
     public static readonly string[] Back = { "Box - Back", "Box - Back - Reconstructed", "Fanart - Box - Back" };
+
+    /// <summary>The Box Front / Box Back families AS THE USER CONFIGURED THEM (Options → LB · Media
+    /// Priorities; Settings.xml Front/BackImageTypePriorities — the same regroupements the GameCache
+    /// serves). The 3D model textures follow these, not the fixed chains above: a box whose only back
+    /// is a "Box - Back - Reconstructed" must still get a textured back, and the user's order decides
+    /// between competing types. Empty/absent field → the fixed chain (fresh install, no LB settings).</summary>
+    public static string[] FrontChain() => UserChain("Front", Front);
+    public static string[] BackChain() => UserChain("Back", Back);
+
+    private static string[] UserChain(string regroupement, string[] fallback)
+    {
+        try
+        {
+            if (Gc.SettingsWatcher.GetImageRegroupementPriorities().TryGetValue(regroupement, out var t) && t.Count > 0)
+                return t.ToArray();
+        }
+        catch { }
+        return fallback;
+    }
     public static readonly string[] Box3D = { "Box - 3D" };
     public static readonly string[] CartFront = { "Cart - Front", "Fanart - Cart - Front" };
     public static readonly string[] CartBack = { "Cart - Back", "Fanart - Cart - Back" };

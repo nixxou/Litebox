@@ -74,8 +74,8 @@ internal sealed class Model3dImagesPanel : Panel
             {
                 var chains = new (string slot, string[] types)[]
                 {
-                    ("front", Media.MediaResolver.Front),
-                    ("back", Media.MediaResolver.Back),
+                    ("front", Media.MediaResolver.FrontChain()),
+                    ("back", Media.MediaResolver.BackChain()),
                     ("spine", new[] { "Box - Spine" }),
                     ("logo", Media.MediaResolver.ClearLogo),
                     ("full", new[] { "Box - Full" }),

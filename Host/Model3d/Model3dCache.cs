@@ -143,10 +143,10 @@ internal static class Model3dCache
         // the per-game image override (custom fields 3D.Image*, Edit Game → Image Selection; Effective =
         // null when any pick is missing on disk → the whole override is ignored, back to full auto).
         var ov = Model3dImageStore.Effective(g);
-        Slot("front", Platforms.HomeModel3d.ResolveSlot(ov, "front", platform, title, Media.MediaResolver.Front));
+        Slot("front", Platforms.HomeModel3d.ResolveSlot(ov, "front", platform, title, Media.MediaResolver.FrontChain()));
         Slot("logo", Platforms.HomeModel3d.ResolveSlot(ov, "logo", platform, title, Media.MediaResolver.ClearLogo));
         Slot("spine", Platforms.HomeModel3d.ResolveSlot(ov, "spine", platform, title, new[] { "Box - Spine" }));
-        Slot("back", Platforms.HomeModel3d.ResolveSlot(ov, "back", platform, title, new[] { "Box - Back" }));
+        Slot("back", Platforms.HomeModel3d.ResolveSlot(ov, "back", platform, title, Media.MediaResolver.BackChain()));
         bool fullScan = (map != null && map.TryGetValue("UseFullScanImages", out var ufs)
                          && ufs.Equals("true", StringComparison.OrdinalIgnoreCase))
                         || Platforms.HomeModel3d.FullForced(ov);

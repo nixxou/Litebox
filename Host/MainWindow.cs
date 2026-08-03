@@ -1,4 +1,4 @@
-// The host GUI — a LaunchBox-like 3-pane layout (dark themed):
+﻿// The host GUI — a LaunchBox-like 3-pane layout (dark themed):
 //   LEFT   : source tree (All Games / Platforms / Playlists, incl. auto-playlists).
 //   CENTER : sortable, searchable game LIST (native GameListView, columns). Default
 //            order = CompareName (normalized title); a Sort combo + direction toggle
@@ -26,7 +26,7 @@ using LbApiHost.Host.UiKit;
 
 namespace LbApiHost.Host;
 
-internal sealed class MainWindow : Form, IMessageFilter
+internal sealed partial class MainWindow : Form, IMessageFilter
 {
     // ── Theme ────────────────────────────────────────────────────────────────
     // Bg/Panel/Panel2/Fg/SubFg/Accent are byte-for-byte the same palette as Host.UiKit.LiteBoxTheme -
@@ -5695,61 +5695,6 @@ internal sealed class MainWindow : Form, IMessageFilter
         catch (Exception ex) { Console.WriteLine("[gamemenu] refresh: " + ex.Message); }
     }
 
-    // The actions LaunchBox offers on a game selection, ADDED to what LiteBox already had — nothing
-    // that was in this menu before has moved or gone. Icons come from UiKit.MenuIcons and are
-    // decorative: a null one simply renders the entry without a glyph.
-    private void AddGameActionItems(ContextMenuStrip menu, IGame[] games)
-    {
-        if (games == null || games.Length == 0) return;
-        bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? true;
-
-        ToolStripMenuItem Item(string text, string icon, Action run, bool enabled = true)
-        {
-            var it = new ToolStripMenuItem(text) { Image = UiKit.MenuIcons.Get(icon), Enabled = enabled };
-            it.Click += (_, _) => { try { run(); } catch (Exception ex) { Console.WriteLine("[gamemenu] " + ex.Message); } };
-            return it;
-        }
-
-        void Refresh()
-        {
-            try { (_dm as HostDataManagerXml)?.FlushIfSafe(); } catch { }
-            ReloadAfterGameChange();
-        }
-
-        menu.Items.Add(new ToolStripSeparator());
-
-        menu.Items.Add(Item("Reset Play Count & Time", UiKit.MenuIcons.ResetCounts, () =>
-        {
-            foreach (var g in games) { Safe(() => g.PlayCount = 0); Safe(() => g.PlayTime = 0); }
-            Refresh();
-        }, !ro));
-
-        menu.Items.Add(Item("Reset Last Played", UiKit.MenuIcons.ResetLastPlayed, () =>
-        {
-            foreach (var g in games) Safe(() => g.LastPlayedDate = null);
-            Refresh();
-        }, !ro));
-
-        // Combine needs at least two games and a root to fold them into; Expand needs a game that
-        // actually carries versions. Both are hidden rather than shown dead when meaningless.
-        if (games.Length > 1)
-            menu.Items.Add(Item($"Combine {games.Length} Selected Games…", UiKit.MenuIcons.Combine,
-                () => CombineSelectedGames(games), !ro));
-
-        var expandable = games.Where(Games.GameCombiner.CanExpand).ToArray();
-        if (expandable.Length > 0)
-            menu.Items.Add(Item(expandable.Length > 1 ? $"Expand {expandable.Length} Selected Games…" : "Expand Selected Game…",
-                UiKit.MenuIcons.Expand, () => ExpandSelectedGames(expandable), !ro));
-
-        menu.Items.Add(Item("Refresh Selected Images", UiKit.MenuIcons.RefreshImages, () =>
-        {
-            foreach (var p in games.Select(g => S(Safe(() => g.Platform))).Where(p => p.Length > 0)
-                                   .Distinct(StringComparer.OrdinalIgnoreCase))
-                Safe(() => Media.GameCacheBridge.RebuildPlatform(PluginHelper.DataManager?.GetPlatformByName(p)));
-            ReloadAfterGameChange();
-        }));
-    }
-
     /// <summary>Asks which game the others fold into, then combines. Destructive — the absorbed
     /// games stop existing as games — so the outcome is reported once it is done.</summary>
     private void CombineSelectedGames(IGame[] games)
@@ -5803,108 +5748,6 @@ internal sealed class MainWindow : Form, IMessageFilter
         if (n <= 0) return;
         try { dm.FlushIfSafe(); } catch { }
         ReloadAfterGameChange();
-    }
-
-    private ContextMenuStrip BuildGameContextMenu(IGame[] games)
-    {
-        var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
-
-        // Single-game items (Play / Play With / Play Version / Configure). Everything except Edit is single-only.
-        if (games.Length == 1)
-        {
-            var g = games[0];
-
-            var play = new ToolStripMenuItem("Play") { Font = new Font(Font, FontStyle.Bold) };
-            play.Click += (_, _) => LaunchSelected();
-            menu.Items.Add(play);
-
-            var emus = SafeEmulatorsForPlatform(S(g.Platform), g);
-            if (emus.Count > 0)
-            {
-                var pw = new ToolStripMenuItem("Play With");
-                foreach (var e in emus)
-                {
-                    var ce = e;
-                    var it = new ToolStripMenuItem(S(Safe(() => e.Title)));
-                    it.Click += (_, _) => Safe(() => PluginHelper.LaunchBoxMainViewModel.PlayGame(g, null, ce, null));
-                    pw.DropDownItems.Add(it);
-                }
-                menu.Items.Add(pw);
-            }
-
-            var apps = SafeAddApps(g);
-            if (apps.Length > 0)
-            {
-                var pv = new ToolStripMenuItem("Play Version");
-                foreach (var a in apps)
-                {
-                    var ca = a;
-                    string cap = S(Safe(() => a.Name));
-                    var it = new ToolStripMenuItem(cap.Length > 0 ? cap : "(version)");
-                    it.Click += (_, _) => Safe(() =>
-                    {
-                        string emuId = !string.IsNullOrEmpty(Safe(() => ca.EmulatorId)) ? ca.EmulatorId : g.EmulatorId;
-                        var emu = _dm.GetEmulatorById(emuId);
-                        PluginHelper.LaunchBoxMainViewModel.PlayGame(g, ca, emu, null);
-                    });
-                    pv.DropDownItems.Add(it);
-                }
-                menu.Items.Add(pv);
-            }
-
-            // Configure (only if the game has a Configuration Application Path) —
-            // works for emulated, DOSBox and plain PC games (Configure() is DOSBox-aware).
-            if (!string.IsNullOrEmpty(S(Safe(() => g.ConfigurationPath))))
-            {
-                var cfg = new ToolStripMenuItem("Configure");
-                cfg.Click += (_, _) => Safe(() => g.Configure());
-                menu.Items.Add(cfg);
-            }
-        }
-
-        // Edit — single OR multiple: opens the metadata editor for every selected game (the only item
-        // that isn't single-only). ◄► walk the visible list when a single game is selected.
-        {
-            var gs = games;
-            var edit = new ToolStripMenuItem(gs.Length > 1 ? $"Edit {gs.Length} Games…" : "Edit…")
-            { Image = UiKit.MenuIcons.Get(UiKit.MenuIcons.Edit) };
-            edit.Click += (_, _) => OpenEditGame(gs);
-            menu.Items.Add(edit);
-        }
-
-        AddGameActionItems(menu, games);
-        menu.Items.Add(new ToolStripSeparator());
-
-        foreach (var gm in _reg.GameMenus)
-        {
-            bool valid, show; string cap;
-            try
-            {
-                cap = gm.Caption;
-                show = gm.ShowInLaunchBox;
-                valid = games.Length == 1 ? gm.GetIsValidForGame(games[0])
-                                          : (gm.SupportsMultipleGames && gm.GetIsValidForGames(games));
-            }
-            catch { continue; }
-            if (!show || !valid) continue;
-
-            var captured = gm; var gs = games;
-            var it = new ToolStripMenuItem(cap);
-            it.Click += (_, _) => Safe(() =>
-            {
-                if (gs.Length == 1) captured.OnSelected(gs[0]); else captured.OnSelected(gs);
-            });
-            menu.Items.Add(it);
-        }
-
-        foreach (var gmm in _reg.GameMultiMenus)
-        {
-            IEnumerable<IGameMenuItem> items;
-            try { items = gmm.GetMenuItems(games); } catch { continue; }
-            if (items == null) continue;
-            foreach (var mi in items) menu.Items.Add(BuildGameMenuItem(mi, games));
-        }
-        return menu;
     }
 
     // Opens the metadata editor (EditGameWindow) for the selected game(s) — single or multiple. The

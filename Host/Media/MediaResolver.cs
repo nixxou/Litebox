@@ -309,6 +309,8 @@ internal static class MediaResolver
 
     /// <summary>The extensions LiteBox recognises as a video (used by the Add Video picker).</summary>
     public static IReadOnlyCollection<string> VideoExtensions => VideoExts;
+    public static IReadOnlyCollection<string> ManualExtensions => ManualExts;
+    public static IReadOnlyCollection<string> MusicExtensions => MusicExts;
 
     /// <summary>Manual file path (always IO — the GameCache does not index manuals). Null if none.</summary>
     /// <summary>TOUS les manuels du jeu, dans l ordre du parcours — priorite de region puis

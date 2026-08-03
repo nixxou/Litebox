@@ -35,6 +35,20 @@ internal static class MenuIcons
     public const string ResetCounts = "resetcounts";                 // play count and play time
     public const string ResetLastPlayed = "resetlastplayed";
 
+    // Second batch — the LaunchBox-shaped game menu (play row, Media ▸, File Management ▸).
+    public const string Play = "play";                               // launch the game
+    public const string LaunchWith = "launchwith";                   // pick the emulator that runs it
+    public const string Media = "media";                             // Media submenu header
+    public const string FileManagement = "filemanagement";           // File Management submenu header
+    public const string ViewImages = "viewimages";
+    public const string View3dBox = "view3dbox";
+    public const string ViewManual = "viewmanual";
+    public const string PlayMusic = "playmusic";
+    public const string FlipBox = "flipbox";                         // front box art ↔ back
+    public const string SaveImageAs = "saveimageas";
+    public const string OpenGameFolder = "opengamefolder";
+    public const string OpenImagesFolder = "openimagesfolder";
+
     private static readonly ConcurrentDictionary<string, Image?> Cache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The glyph at the requested edge size, or null if it cannot be loaded.</summary>

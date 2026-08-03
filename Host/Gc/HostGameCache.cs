@@ -55,6 +55,11 @@ namespace LbApiHost.Host.Gc
             return res;
         }
 
+        /// <summary>Every image file the cache knows for the game, all types and regions — the list a
+        /// delete or an audit works from. Empty when the platform isn't cached.</summary>
+        public static List<string> AllImagePaths(string plat, Guid id)
+        { try { return Game(plat, id)?.AllImagePaths() ?? new List<string>(); } catch { return new List<string>(); } }
+
         public static string Video(string plat, Guid id, string subDir)
         {
             try

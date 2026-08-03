@@ -711,7 +711,7 @@ internal sealed class LaunchButtons : Panel
     /// nullable override when set, else the emulator's own flag — mirrors HostServices.ResolveLaunchRomPath
     /// (<c>ep?.AutoExtract ?? emulator.AutoExtract</c>) and the plugin's ResolveEffectiveAutoExtract. The
     /// platform is matched by name, else the emulator's default platform (same as ResolveEmulatorPlatform).</summary>
-    private static bool ResolveEffectiveAutoExtract(IEmulator emulator, string platform)
+    internal static bool ResolveEffectiveAutoExtract(IEmulator emulator, string platform)
     {
         try
         {

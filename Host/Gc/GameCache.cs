@@ -944,6 +944,22 @@ namespace LbApiHost.Host.Gc
             return _data.Videos.Length > 0;
         }
 
+        /// <summary>Every image the game has, whatever its type or region, as resolved paths. The
+        /// per-type accessors answer "which one should I show"; this one answers "which files are
+        /// there" — what a delete or an audit needs. Post-freeze the array already has the legacy
+        /// non-GUID duplicates filtered out, so this is the cache's view, not a disk listing.</summary>
+        public List<string> AllImagePaths()
+        {
+            var data = _data;
+            var res = new List<string>(data.Images.Length);
+            for (int i = 0; i < data.Images.Length; i++)
+            {
+                string p = Platform.ResolveImagePath(this, data.Images[i]);
+                if (!string.IsNullOrEmpty(p)) res.Add(p);
+            }
+            return res;
+        }
+
         /// <summary>Resolves the absolute path of an image.</summary>
         public string ResolveImagePath(GameCacheImage img)
             => Platform.ResolveImagePath(this, img);

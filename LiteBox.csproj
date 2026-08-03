@@ -201,6 +201,18 @@
     <EmbeddedResource Include="menu-icons\refreshall.png"><LogicalName>menu-icons/refreshall.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="menu-icons\resetcounts.png"><LogicalName>menu-icons/resetcounts.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="menu-icons\resetlastplayed.png"><LogicalName>menu-icons/resetlastplayed.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\play.png"><LogicalName>menu-icons/play.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\launchwith.png"><LogicalName>menu-icons/launchwith.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\media.png"><LogicalName>menu-icons/media.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\filemanagement.png"><LogicalName>menu-icons/filemanagement.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\viewimages.png"><LogicalName>menu-icons/viewimages.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\view3dbox.png"><LogicalName>menu-icons/view3dbox.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\viewmanual.png"><LogicalName>menu-icons/viewmanual.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\playmusic.png"><LogicalName>menu-icons/playmusic.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\flipbox.png"><LogicalName>menu-icons/flipbox.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\saveimageas.png"><LogicalName>menu-icons/saveimageas.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\opengamefolder.png"><LogicalName>menu-icons/opengamefolder.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\openimagesfolder.png"><LogicalName>menu-icons/openimagesfolder.png</LogicalName></EmbeddedResource>
 
   </ItemGroup>
 

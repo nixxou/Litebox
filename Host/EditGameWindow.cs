@@ -83,8 +83,19 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
     private readonly TreeView _tree;
     private readonly Panel _host;
     private readonly Label _titleBar;
-    private readonly Button _prev, _next;
+    private readonly Button _prev, _next, _apply;
+    private readonly Label _hint;
     private readonly Dictionary<string, Control> _pages = new(StringComparer.Ordinal);
+
+    // ── Add mode ─────────────────────────────────────────────────────────────
+    // The game does not exist yet: _editGames[0] is a DraftGame (memory only, see Data/DraftGame.cs)
+    // and _commitDraft is the caller's door to the data layer. While in this mode the tree is cut
+    // down to the pages that make sense without a game on disk, and Apply is the only way out that
+    // creates anything — after it, this IS a normal edit session on the real game.
+    private Func<Data.DraftGame, IGame>? _commitDraft;
+    private bool IsDraft => _commitDraft != null && _editGames.Count == 1 && _editGames[0] is Data.DraftGame;
+    /// <summary>The game Apply created, or null when the user never validated.</summary>
+    private IGame? _committed;
 
     // Metadata controls (kept so navigation just reloads values).
     private TextBox _title = null!, _releaseDate = null!, _lastPlayed = null!, _videoUrl = null!, _wikiUrl = null!, _version = null!, _notes = null!, _sortTitle = null!;
@@ -98,11 +109,14 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
     private Label _dateAdded = null!, _dateModified = null!, _playCount = null!;
     private StarBar _starBar = null!;
 
-    public static void Open(IReadOnlyList<IGame> games, IReadOnlyList<IGame> visible, bool readOnly, IWin32Window? owner,
-        string? initialPage = null)
+    /// <summary>Opens the editor on an existing game (or several). Returns the game Apply created
+    /// when opened on a draft — null in every other case.</summary>
+    public static IGame? Open(IReadOnlyList<IGame> games, IReadOnlyList<IGame> visible, bool readOnly, IWin32Window? owner,
+        string? initialPage = null, Func<Data.DraftGame, IGame>? commitDraft = null)
     {
-        if (games == null || games.Count == 0) return;
-        using var w = new EditGameWindow(games, visible, readOnly);
+        if (games == null || games.Count == 0) return null;
+        using var w = new EditGameWindow(games, visible, readOnly) { _commitDraft = commitDraft };
+        if (w.IsDraft) w.EnterDraftMode();
         if (initialPage != null)
         {
             // Fuzzy: match the node TAG or its LABEL, ignoring case/spaces/punctuation — so
@@ -112,6 +126,77 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             else Console.WriteLine($"[editgame] page not found: \"{initialPage}\"");
         }
         w.ShowDialog(owner);
+        return w._committed;
+    }
+
+    // ── Add mode ─────────────────────────────────────────────────────────────
+    /// <summary>Cuts the tree down to the pages a nameless game can answer for, puts the caret in
+    /// the Title field and arms Apply. Called once, right after construction, when the subject is a
+    /// draft.</summary>
+    private void EnterDraftMode()
+    {
+        Text = "New Game";
+        RebuildTree();
+        _apply.Visible = true;
+        _apply.Enabled = _title.Text.Trim().Length > 0;
+        _title.TextChanged += (_, _) => { if (IsDraft) _apply.Enabled = _title.Text.Trim().Length > 0; };
+        // ◄► walk the visible list — from a draft that would silently discard it.
+        _prev.Enabled = _next.Enabled = false;
+        _hint.Text = "Nothing is created until Apply";
+        BeginInvoke(new Action(() => { try { _title.Focus(); _title.SelectAll(); } catch { } }));
+    }
+
+    /// <summary>Replaces the tree with the page set the current mode allows, keeping the selection
+    /// on Metadata. Draft mode drops everything that needs a game on disk.</summary>
+    private void RebuildTree()
+    {
+        _tree.BeginUpdate();
+        _tree.Nodes.Clear();
+        BuildTree();
+        _tree.SelectedNode = _tree.Nodes.Count > 0 ? _tree.Nodes[0] : null;
+        _tree.EndUpdate();
+    }
+
+    /// <summary>Turns the draft into a real game and stays open on it. Everything typed so far is
+    /// written to the draft first, so the materialised game carries it; the window then rebinds and
+    /// continues as an ordinary edit session with the full page set.</summary>
+    private bool ApplyDraft()
+    {
+        if (!IsDraft) return true;
+        if (_title.Text.Trim().Length == 0)
+        {
+            MessageBox.Show(this, "A game needs a title before it can be created.",
+                "New Game", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            try { _tree.SelectedNode = _tree.Nodes[0]; _title.Focus(); } catch { }
+            return false;
+        }
+
+        var draft = (Data.DraftGame)_editGames[0];
+        // Pose the title on the draft FIRST: SaveCurrent treats a changed title as a rename and
+        // would drag the (non-existent) media of a nameless game around. Same value in, no rename.
+        try { draft.Title = _title.Text.Trim(); } catch { }
+        SaveCurrent();                       // controls → draft
+        IGame? real = null;
+        try { real = _commitDraft!(draft); } catch (Exception ex) { Console.WriteLine("[editgame] commit: " + ex); }
+        if (real == null)
+        {
+            MessageBox.Show(this, "The game could not be created.", "New Game",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        // Rebind to the real game — same sequence Navigate uses to swap subjects.
+        _committed = real;
+        _commitDraft = null;                 // IsDraft goes false: full tree, no Apply
+        _editGames = new[] { real };
+        _index = IndexOf(real);
+        RebuildTree();                       // the cached pages are reused as-is — same controls, new subject
+        LoadMetadata();
+        if (_cfGrid != null) LoadCustomFields();
+        _apply.Visible = false;
+        _prev.Enabled = _next.Enabled = true;
+        _hint.Text = "Navigating will save immediately";
+        return true;
     }
 
     private static TreeNode? FindNode(TreeNodeCollection nodes, string key, bool exact)
@@ -183,12 +268,24 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = S(46), BackColor = PanelC };
         var ok = FooterBtn("OK", Color.FromArgb(50, 110, 65));
         var cancel = FooterBtn("Cancel", Color.FromArgb(70, 70, 82));
+        _apply = FooterBtn("Apply", Color.FromArgb(50, 110, 65));
         ok.Location = new Point(S(12), S(9));
         cancel.Location = new Point(S(112), S(9));
-        ok.Click += (_, _) => { SaveCurrent(); SaveLocks(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching(); try { _applyModelSettings?.Invoke(); } catch { } DialogResult = DialogResult.OK; Close(); };
+        _apply.Location = new Point(S(212), S(9));
+        _apply.Visible = false;   // add mode only (EnterDraftMode)
+        // Apply CREATES the game and hands the window back in normal edit mode. In add mode OK is
+        // "Apply, then close" — and neither can run on a game with no title.
+        _apply.Click += (_, _) => ApplyDraft();
+        ok.Click += (_, _) =>
+        {
+            if (!ApplyDraft()) return;
+            SaveCurrent(); SaveLocks(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching();
+            try { _applyModelSettings?.Invoke(); } catch { }
+            DialogResult = DialogResult.OK; Close();
+        };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
 
-        var hint = new Label
+        var hint = _hint = new Label
         {
             AutoSize = true, ForeColor = SubFg, BackColor = PanelC,
             Text = _readOnly ? "Read-only — changes are not saved"
@@ -199,7 +296,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         _prev = NavBtn("◄"); _next = NavBtn("►");
         _prev.Click += (_, _) => Navigate(-1);
         _next.Click += (_, _) => Navigate(+1);
-        bottom.Controls.AddRange(new Control[] { ok, cancel, hint, _prev, _next });
+        bottom.Controls.AddRange(new Control[] { ok, cancel, _apply, hint, _prev, _next });
         bottom.Resize += (_, _) =>
         {
             int r = bottom.ClientSize.Width - S(12);
@@ -250,6 +347,10 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
 
         var metadata = N("Metadata", "Metadata");
         metadata.Nodes.Add(N("Notes", "Notes"));
+        // A draft has no identity on disk yet: no images to place, no ROM to point at, no saves to
+        // scan. Metadata / Notes / Sort Title is everything a nameless game can answer for; Apply
+        // brings the rest back.
+        if (IsDraft) { metadata.Nodes.Add(N("Sort Title", "SortTitle")); _tree.Nodes.Add(metadata); _tree.ExpandAll(); return; }
         metadata.Nodes.Add(N("Custom Fields", "CustomFields"));
         if (!IsMulti) metadata.Nodes.Add(N("Sort Title", "SortTitle"));   // single-game only — hidden in multi
         if (!IsMulti)   // per-game structural pages — meaningless across a multi-selection

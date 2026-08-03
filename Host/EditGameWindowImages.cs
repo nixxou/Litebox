@@ -1148,13 +1148,9 @@ internal sealed partial class EditGameWindow
         catch { return null; }
     }
 
+    // Same async latest-wins path as the web tiles (see ImgViewFullscreenAsync).
     private void ImgViewEmuFullscreen(EmuMoviesCatalog.EmuMedia m)
-    {
-        byte[]? bytes = null;
-        UseWaitCursor = true;
-        try { bytes = EmuFetchBytes(m.Url); } catch { } finally { UseWaitCursor = false; }
-        ShowImageFullscreenBytes(bytes);
-    }
+        => ImgViewFullscreenAsync(() => EmuFetchBytes(m.Url));
 
     private void ImgLoadThumbEmu(PictureBox pic, EmuMoviesCatalog.EmuMedia m)
     {
@@ -1489,12 +1485,36 @@ internal sealed partial class EditGameWindow
     }
 
     // ── Fullscreen viewer for a web image ─────────────────────────────────────
+    // The full-size fetch can take seconds (the CDN only serves the original file; wizard fetcher, 60 s
+    // worst case). Done synchronously it froze the UI thread, and every click made during the freeze sat
+    // in the Windows message queue — each queued click then opened ITS OWN viewer, one after another,
+    // when the pump resumed. So: fetch on a worker, and serialize by CLICK GENERATION — only the latest
+    // click's result opens a viewer, a superseded fetch is discarded when it lands. (Discarding is what
+    // "cancelling" can mean here: the wizard fetcher offers no cancellation token.)
+    private int _imgFsGen;
+
     private void ShowImageFullscreenWeb(MetadataDb.WebImage w)
+        => ImgViewFullscreenAsync(() => ImgFetchWebBytes(w));
+
+    private void ImgViewFullscreenAsync(Func<byte[]?> fetch)
     {
-        byte[]? bytes = null;
+        int gen = ++_imgFsGen;
         UseWaitCursor = true;
-        try { bytes = ImgFetchWebBytes(w); } catch { } finally { UseWaitCursor = false; }
-        ShowImageFullscreenBytes(bytes);
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            byte[]? bytes = null;
+            try { bytes = fetch(); } catch { }
+            try
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    if (IsDisposed || gen != _imgFsGen) return;   // a newer click superseded this one
+                    UseWaitCursor = false;
+                    ShowImageFullscreenBytes(bytes);
+                }));
+            }
+            catch { }
+        });
     }
 
     private void ShowImageFullscreenBytes(byte[]? bytes)

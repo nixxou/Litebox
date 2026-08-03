@@ -363,12 +363,111 @@
     return (games || []).filter(function (g) { return gameMatches(g, query, prefix); });
   }
 
+  // ── Filtre avancé ─────────────────────────────────────────────────────────────────────────
+  // Miroir exact de Host/Search/FilterCriteria.Matches — LB-web et BB-web appellent CE matcher,
+  // comme ils appellent déjà sorted() : une seule implémentation, les trois surfaces d'accord.
+  // Règles : ET entre dimensions, OU à l'intérieur d'une dimension. Région et mode de jeu sont
+  // MULTI-VALUÉS chez LaunchBox (« Europe; France ») : découpage en jetons sur ';' et ',', et un
+  // jeton doit correspondre EN ENTIER — « Europe » ne répond pas pour « Eastern Europe ».
+  //
+  // La forme du critère (tout champ optionnel ; absent/vide = dimension inactive) :
+  //   yearMin/yearMax (int), ratingMin/ratingMax (double, note ÉTOILES 0-5),
+  //   releaseType (string exact), flagFav, flagInstalled (bool),
+  //   genres[] + genreMode ("or"|"and"), publisher, developer (sous-chaîne),
+  //   platforms[], regions[], playModes[], statuses[], progresses[], esrb[], pads[] (noms),
+  //   highScores (bool), achievements ("yes"|"no"|""), saves ("game"|"state"|""),
+  //   maxPlayers (int, 0 = indifférent — égalité EXACTE, pas un seuil).
+  function lc(v) { return String(v == null ? "" : v).trim().toLowerCase(); }
+  function listHas(list, value) {
+    var w = lc(value);
+    for (var i = 0; i < list.length; i++) if (lc(list[i]) === w) return true;
+    return false;
+  }
+  function anyToken(value, wanted) {
+    var toks = String(value == null ? "" : value).split(/[;,]/);
+    for (var i = 0; i < toks.length; i++) {
+      var t = toks[i].trim();
+      if (t && listHas(wanted, t)) return true;
+    }
+    return false;
+  }
+  function activeList(l) { return l && l.length > 0; }
+
+  function matchesAdvanced(g, c) {
+    if (!g || !c) return true;
+    // Année : borne posée + pas d'année lisible → exclu (même règle que le desktop).
+    var hasYMin = c.yearMin != null, hasYMax = c.yearMax != null;
+    if (hasYMin || hasYMax) {
+      var y = g.ry != null ? g.ry : parseInt(g.y, 10);
+      if (!(y > 0)) return false;
+      if (hasYMin && y < c.yearMin) return false;
+      if (hasYMax && y > c.yearMax) return false;
+    }
+    if (c.ratingMin != null || c.ratingMax != null) {
+      var r = g.sr != null ? g.sr : 0;   // CommunityOrLocalStarRating du payload (null = 0)
+      if (c.ratingMin != null && r < c.ratingMin) return false;
+      if (c.ratingMax != null && r > c.ratingMax) return false;
+    }
+    if (c.releaseType && lc(g.rt) !== lc(c.releaseType)) return false;
+    if (c.flagFav && !g.fav) return false;
+    if (c.flagInstalled && !g.installed) return false;
+    if (activeList(c.genres)) {
+      var gg = lc(g.g);
+      var all = true, any = false;
+      for (var i = 0; i < c.genres.length; i++) {
+        var hitG = gg.indexOf(lc(c.genres[i])) >= 0;
+        all = all && hitG; any = any || hitG;
+      }
+      if (c.genreMode === "and" ? !all : !any) return false;
+    }
+    if (c.publisher && lc(g.pub).indexOf(lc(c.publisher)) < 0) return false;
+    if (c.developer && lc(g.dev).indexOf(lc(c.developer)) < 0) return false;
+
+    if (activeList(c.platforms) && !listHas(c.platforms, g.platform)) return false;
+    if (activeList(c.statuses) && !listHas(c.statuses, g.status)) return false;
+    if (activeList(c.progresses) && !listHas(c.progresses, g.progress)) return false;
+    if (activeList(c.esrb) && !listHas(c.esrb, g.esrb)) return false;
+    if (activeList(c.regions) && !anyToken(g.region, c.regions)) return false;
+    if (activeList(c.playModes) && !anyToken(g.playMode, c.playModes)) return false;
+
+    if (c.maxPlayers > 0 && g.maxPlayers !== c.maxPlayers) return false;
+    if (c.achievements === "yes" || c.achievements === "no") {
+      var has = !!(g.raHash && String(g.raHash).length > 0);
+      if (has !== (c.achievements === "yes")) return false;
+    }
+    if (c.highScores && !g.mameHs) return false;
+    if (c.saves === "game" && !g.hasSave) return false;
+    if (c.saves === "state" && !g.hasState) return false;
+    if (activeList(c.pads)) {
+      var mine = g.pads || [];
+      var padHit = false;
+      for (var p = 0; p < mine.length && !padHit; p++) padHit = listHas(c.pads, mine[p]);
+      if (!padHit) return false;
+    }
+    return true;
+  }
+
+  /* Vrai quand au moins une dimension contraint quelque chose — l'indicateur « filtre actif ». */
+  function advancedActive(c) {
+    if (!c) return false;
+    return c.yearMin != null || c.yearMax != null || c.ratingMin != null || c.ratingMax != null
+        || !!c.releaseType || !!c.flagFav || !!c.flagInstalled
+        || activeList(c.genres) || !!c.publisher || !!c.developer
+        || activeList(c.platforms) || activeList(c.regions) || activeList(c.playModes)
+        || activeList(c.statuses) || activeList(c.progresses) || activeList(c.esrb)
+        || activeList(c.pads) || c.maxPlayers > 0 || !!c.highScores
+        || c.achievements === "yes" || c.achievements === "no"
+        || c.saves === "game" || c.saves === "state";
+  }
+
   window.LBGameSort = {
     defs: defs,
     normalizeText: normalizeText,
     titleMatches: titleMatches,
     gameMatches: gameMatches,
     filterGames: filterGames,
+    matchesAdvanced: matchesAdvanced,
+    advancedActive: advancedActive,
     parse: parse,
     label: label,
     value: value,

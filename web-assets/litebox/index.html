@@ -67,6 +67,10 @@
            des plateformes à gauche. Deux régimes, comme sur le desktop : bleu = saisi ici à la main,
            persistant ; ambre + badge TEMP = né d'une frappe dans la liste, il retombe au changement
            de nœud. Le champ étant toujours visible, il tient lieu de bandeau. -->
+      <!-- Filtre AVANCÉ (dialogue à onglets, mêmes dimensions que le desktop). Le bouton porte
+           l'indicateur : « ● FILTER » + .filtering quand des critères sont appliqués. -->
+      <button class="lb-hbar-btn" id="lb-adv-btn" type="button"
+              title="Advanced search filter">FILTER</button>
       <span class="lb-hbar-filter-wrap">
         <input class="lb-hbar-filter" id="lb-game-filter" type="search"
                placeholder="Filter games…" aria-label="Filter games">
@@ -309,6 +313,28 @@
        Changes committed live (no buffering) via commitLbCfgValue().
        Reset: #lb-cfg-reset calls lbCfgReset() to restore all defaults.
        (ref: BBW engine/index.html :: .config-modal ~line 328) -->
+  <!-- Filtre de recherche avancé — coquille vide, le contenu (onglets + corps) est généré par
+       app.js :: renderLbAdv(), comme la modale Settings. Mêmes dimensions que le desktop
+       (Host/Search/FilterDialog) ; le matching vit dans vendor/game-sort.js (matchesAdvanced),
+       partagé avec BB-web. -->
+  <div class="lb-cfg-modal lb-adv-modal" id="lb-adv-modal" hidden>
+    <div class="lb-cfg-overlay" id="lb-adv-overlay"></div>
+    <div class="lb-cfg-panel lb-adv-panel" role="dialog" aria-modal="true" aria-labelledby="lb-adv-title">
+      <header class="lb-cfg-header">
+        <h2 id="lb-adv-title">Search filter</h2>
+        <button class="lb-cfg-close" id="lb-adv-close" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div class="lb-adv-tabs" id="lb-adv-tabs" role="tablist"></div>
+      <div class="lb-cfg-body lb-adv-body" id="lb-adv-body"></div>
+      <footer class="lb-adv-foot">
+        <button class="lb-adv-cancel" id="lb-adv-cancel" type="button">Cancel</button>
+        <span class="lb-adv-foot-gap"></span>
+        <button class="lb-adv-clear" id="lb-adv-clear" type="button">Clear</button>
+        <button class="lb-adv-apply" id="lb-adv-apply" type="button">Apply</button>
+      </footer>
+    </div>
+  </div>
+
   <div class="lb-cfg-modal" id="lb-cfg-modal" hidden>
     <div class="lb-cfg-overlay" id="lb-cfg-overlay"></div>
     <div class="lb-cfg-panel" role="dialog" aria-modal="true" aria-labelledby="lb-cfg-title">

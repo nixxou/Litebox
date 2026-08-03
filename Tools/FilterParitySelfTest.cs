@@ -13,6 +13,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using LbApiHost.Host;
+using LbApiHost.Generated;
 
 namespace LbApiHost.Tools;
 
@@ -81,10 +82,150 @@ internal static class FilterParitySelfTest
                     failures++;
                 }
 
+        failures += AdvancedParity(script);
+
         Console.WriteLine(failures == 0
-            ? $"[filter-parity] ALL PASS ({checks} combinations)"
+            ? $"[filter-parity] ALL PASS ({checks} combinations + advanced)"
             : $"[filter-parity] {failures} FAILURE(S)");
         return failures == 0 ? 0 : 1;
+    }
+
+    // ── Phase 2 : le filtre AVANCÉ — FilterCriteria.Matches (C#) vs LBGameSort.matchesAdvanced
+    // (le vrai vendor sous node), sur les mêmes jeux et les mêmes critères. Les dimensions à
+    // discriminant externe (achievements/hiscore/saves/manettes : cast HostGame, hiscore.dat,
+    // sous-entités) sont couvertes par leurs tests unitaires respectifs ; ici on prouve les
+    // SÉMANTIQUES pures — jetons entiers, ET/OU, égalité exacte, casse. ─────────────────────────
+    private sealed class FakeAdvGame : DummyGame
+    {
+        public string P = "", Reg = "", Pm = "", St = "", Pr = "", Es = "", Rt = "", Gen = "", Pub = "", Dev = "";
+        public int? Mp, Year;
+        public double Sr;
+        public bool FavV, InstV;
+        public override string Platform { get => P; set { } }
+        public override string Region { get => Reg; set { } }
+        public override string PlayMode { get => Pm; set { } }
+        public override string Status { get => St; set { } }
+        public override string Progress { get => Pr; set { } }
+        public override string Rating { get => Es; set { } }
+        public override string ReleaseType { get => Rt; set { } }
+        public override string GenresString { get => Gen; set { } }
+        public override string Publisher { get => Pub; set { } }
+        public override string Developer { get => Dev; set { } }
+        public override int? MaxPlayers { get => Mp; set { } }
+        public override int? ReleaseYear { get => Year; set { } }
+        public override float CommunityOrLocalStarRating { get => (float)Sr; set { } }
+        public override bool Favorite { get => FavV; set { } }
+        public override bool? Installed { get => InstV; set { } }
+    }
+
+    // Un seul littéral JSON par critère, consommé par LES DEUX côtés : désérialisé en
+    // FilterCriteria (camelCase) pour le desktop, passé verbatim au vendor pour le web.
+    // Toute divergence de sémantique éclate ici avec le jeu et le critère qui l'exposent.
+    private static readonly string[] AdvCriteria =
+    {
+        "{}",
+        "{\"platforms\":[\"Arcade\",\"FBNeo\"]}",
+        "{\"regions\":[\"France\"]}",
+        "{\"regions\":[\"Europe\"]}",
+        "{\"playModes\":[\"Cooperative\"]}",
+        "{\"statuses\":[\"playable\"]}",
+        "{\"progresses\":[\"Not Started\"]}",
+        "{\"esrb\":[\"E\"]}",
+        "{\"maxPlayers\":2}",
+        "{\"maxPlayers\":4}",
+        "{\"yearMin\":2000}",
+        "{\"yearMax\":1999}",
+        "{\"ratingMin\":3.0}",
+        "{\"releaseType\":\"physical\"}",
+        // Deux clés pour la même dimension : le C# la nomme fav/installed, la forme web (l'historique
+        // de BB-web préexiste à ce travail) flagFav/flagInstalled. Chaque côté lit la sienne.
+        "{\"fav\":true,\"flagFav\":true}",
+        "{\"installed\":true,\"flagInstalled\":true}",
+        "{\"genres\":[\"Action\"],\"genreMode\":\"or\"}",
+        "{\"genres\":[\"Action\",\"RPG\"],\"genreMode\":\"and\"}",
+        "{\"publisher\":\"cap\"}",
+        "{\"developer\":\"soft\"}",
+        "{\"platforms\":[\"Arcade\"],\"regions\":[\"Japan\"]}",
+    };
+
+    private static int AdvancedParity(string script)
+    {
+        var games = new[]
+        {
+            new FakeAdvGame { P = "Arcade", Reg = "Europe; France", Pm = "Cooperative", St = "Playable",
+                              Pr = "Not Started", Es = "E", Rt = "Physical", Gen = "Action; Platform",
+                              Pub = "Capcom", Dev = "Capcom", Mp = 2, Year = 1995, Sr = 4.0, FavV = true, InstV = true },
+            new FakeAdvGame { P = "FBNeo", Reg = "Eastern Europe", Pm = "Single Player", Es = "M" },
+            new FakeAdvGame { P = "Sony Playstation", Reg = "Japan", Pm = "Multiplayer; Cooperative",
+                              Rt = "Digital", Gen = "RPG", Pub = "Square", Dev = "SquareSoft",
+                              Mp = 4, Year = 2001, Sr = 2.5 },
+        };
+        // La forme PAYLOAD de chacun — les clés que LightItem sert et que le vendor lit.
+        var payload = games.Select(g => new Dictionary<string, object>
+        {
+            ["platform"] = g.P, ["region"] = g.Reg, ["playMode"] = g.Pm, ["status"] = g.St,
+            ["progress"] = g.Pr, ["esrb"] = g.Es, ["rt"] = g.Rt, ["g"] = g.Gen,
+            ["pub"] = g.Pub, ["dev"] = g.Dev, ["maxPlayers"] = g.Mp, ["ry"] = g.Year,
+            ["sr"] = g.Sr > 0 ? g.Sr : (double?)null, ["fav"] = g.FavV, ["installed"] = g.InstV,
+        }).ToArray();
+
+        var camel = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        var web = RunNodeAdvanced(script, JsonSerializer.Serialize(payload), "[" + string.Join(",", AdvCriteria) + "]");
+        if (web == null) { Console.WriteLine("[filter-parity] FAIL advanced node driver produced no output"); return 1; }
+
+        int failures = 0, checks = 0;
+        for (int ci = 0; ci < AdvCriteria.Length; ci++)
+        {
+            var crit = JsonSerializer.Deserialize<Host.Search.FilterCriteria>(AdvCriteria[ci], camel);
+            for (int gi = 0; gi < games.Length; gi++)
+            {
+                bool desktop = crit.Matches(games[gi]);
+                if (!web.TryGetValue(ci + "|" + gi, out bool js))
+                { Console.WriteLine($"[filter-parity] FAIL advanced: no web result for crit#{ci} game#{gi}"); failures++; continue; }
+                checks++;
+                if (desktop == js) continue;
+                Console.WriteLine($"[filter-parity] FAIL advanced crit={AdvCriteria[ci]} game#{gi} desktop={desktop} web={js}");
+                failures++;
+            }
+        }
+        if (failures == 0) Console.WriteLine($"[filter-parity] advanced: {checks} combinations agree");
+        return failures;
+    }
+
+    private static Dictionary<string, bool> RunNodeAdvanced(string scriptPath, string gamesJson, string critsJson)
+    {
+        string work = Path.Combine(Path.GetTempPath(), "LiteBoxAdvParity_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(work);
+        try
+        {
+            var utf8 = new UTF8Encoding(false);
+            File.WriteAllText(Path.Combine(work, "games.json"), gamesJson, utf8);
+            File.WriteAllText(Path.Combine(work, "crits.json"), critsJson, utf8);
+            string driver = Path.Combine(work, "driver.js");
+            File.WriteAllText(driver,
+                "const fs=require('fs'),vm=require('vm');\n" +
+                "const s={window:{},location:{hash:''},console};s.globalThis=s;vm.createContext(s);\n" +
+                "vm.runInContext(fs.readFileSync(" + Js(scriptPath) + ",'utf8'),s);\n" +
+                "const S=s.window.LBGameSort;\n" +
+                "const games=JSON.parse(fs.readFileSync(" + Js(Path.Combine(work, "games.json")) + ",'utf8'));\n" +
+                "const crits=JSON.parse(fs.readFileSync(" + Js(Path.Combine(work, "crits.json")) + ",'utf8'));\n" +
+                "const out={};\n" +
+                "crits.forEach((c,ci)=>games.forEach((g,gi)=>{ out[ci+'|'+gi]=S.matchesAdvanced(g,c); }));\n" +
+                "process.stdout.write(JSON.stringify(out));\n", utf8);
+
+            using var p = Process.Start(new ProcessStartInfo("node", "\"" + driver + "\"")
+            {
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+                StandardOutputEncoding = utf8,
+            });
+            string stdout = p.StandardOutput.ReadToEnd();
+            string stderr = p.StandardError.ReadToEnd();
+            p.WaitForExit(60000);
+            if (p.ExitCode != 0) { Console.WriteLine("[filter-parity] advanced node exited " + p.ExitCode + ": " + stderr.Trim()); return null; }
+            return JsonSerializer.Deserialize<Dictionary<string, bool>>(stdout);
+        }
+        catch (Exception ex) { Console.WriteLine("[filter-parity] advanced node driver error: " + ex.Message); return null; }
+        finally { try { Directory.Delete(work, true); } catch { } }
     }
 
     private static string Key(string title, string query, bool prefix)

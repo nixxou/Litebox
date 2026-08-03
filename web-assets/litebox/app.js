@@ -1114,6 +1114,7 @@
     initLbViewMode();
     setupLbArrangeMenu();
     setupLbGameFilter();
+    setupLbAdvFilter();
 
     /* ── f. Play button + caret wiring ────────────────────────────────────── */
     /* Play button: direct launch (uses selected version + ROM from state).
@@ -2539,9 +2540,13 @@
   }
 
   /* Temporaire → commence par ; manuel → contient. Règle et double forme (brute + normalisée)
-     partagées avec le desktop et BB-Web via LBGameSort. */
+     partagées avec le desktop et BB-Web via LBGameSort. Le filtre AVANCÉ (lbAdvApplied) s'applique
+     EN PLUS (ET) — même matcher partagé que BB-web (matchesAdvanced), et comme sur le desktop il
+     survit au changement de nœud : c'est sa raison d'être. */
   function lbFilteredGames(all) {
-    return window.LBGameSort.filterGames(all, lbGameFilter, lbGameFilterTransient);
+    var list = window.LBGameSort.filterGames(all, lbGameFilter, lbGameFilterTransient);
+    if (lbAdvApplied) list = list.filter(function (g) { return window.LBGameSort.matchesAdvanced(g, lbAdvApplied); });
+    return list;
   }
 
   function lbReflectFilter() {
@@ -2608,6 +2613,10 @@
     // déroulant ouvert. Sans cette garde, taper son code PIN alimenterait aussi le filtre de jeux.
     if (lbPinOpen || lbPlayMenuOpen) return false;
     if (document.querySelector(".lb-menu-dropdown.open")) return false;
+    // Dialogue de filtre avancé ouvert : la frappe lui appartient (ses champs texte, ses listes) —
+    // elle ne doit pas alimenter en plus le filtre rapide de la liste derrière.
+    var adv = document.getElementById("lb-adv-modal");
+    if (adv && !adv.hidden) return false;
     var t = e.target;
     if (!t) return true;
     var tag = (t.tagName || "").toLowerCase();
@@ -2659,6 +2668,389 @@
       e.preventDefault();
     });
     lbReflectFilter();
+  }
+
+  /* ── Filtre de recherche AVANCÉ ────────────────────────────────────────────
+     Le dialogue à onglets du desktop (Host/Search/FilterDialog), en DOM natif : les mêmes treize
+     onglets, le même footer Apply/Clear/Cancel, le même historique. Le MATCHING ne vit pas ici :
+     LBGameSort.matchesAdvanced (vendor partagé) est le miroir de FilterCriteria.Matches, le même
+     que BB-web appelle — trois surfaces, une sémantique.
+
+     Les listes de valeurs viennent des jeux du nœud CHARGÉ (le client n'a pas toute la
+     bibliothèque en mémoire, contrairement au desktop) ∪ les valeurs déjà cochées : une sélection
+     posée sur une autre plateforme reste visible et décochable, jamais silencieusement perdue. */
+  var lbAdvCrit = null;      // état d'édition du dialogue (null tant que jamais ouvert)
+  var lbAdvApplied = null;   // critères normalisés réellement appliqués (null = aucun filtre)
+  var LB_ADV_HIST_KEY = "lbw.advHistory", LB_ADV_HIST_MAX = 10;
+  var LB_ADV_YEAR_LO = 1949, LB_ADV_YEAR_HI = new Date().getFullYear() + 2;
+  var LB_ADV_TABS = [
+    ["general", "General"], ["genre", "Genre"],
+    ["platform", "Platform"], ["region", "Region"], ["playmode", "Play mode"], ["status", "Status"],
+    ["progress", "Progress"], ["esrb", "ESRB"], ["pad", "Controller"],
+    ["publisher", "Publisher"], ["developer", "Developer"], ["orderby", "Order by"], ["history", "History"],
+  ];
+  // onglet facette → { list: champ du critère, read: valeur(s) d'un jeu, tokens: multi-valué }
+  var LB_ADV_FACETS = {
+    platform: { list: "platforms",  read: function (g) { return g.platform; } },
+    region:   { list: "regions",    read: function (g) { return g.region; }, tokens: true },
+    playmode: { list: "playModes",  read: function (g) { return g.playMode; }, tokens: true },
+    status:   { list: "statuses",   read: function (g) { return g.status; } },
+    progress: { list: "progresses", read: function (g) { return g.progress; } },
+    esrb:     { list: "esrb",       read: function (g) { return g.esrb; } },
+    pad:      { list: "pads",       read: function (g) { return g.pads; }, array: true },
+  };
+  var lbAdvTab = "general";
+
+  function lbAdvDefault() {
+    return { yearMin: LB_ADV_YEAR_LO, yearMax: LB_ADV_YEAR_HI, ratingMin: -0.5, ratingMax: 5.5,
+             releaseType: "", flagFav: false, flagInstalled: false, genres: [], genreMode: "or",
+             publisher: "", developer: "",
+             platforms: [], regions: [], playModes: [], statuses: [], progresses: [], esrb: [], pads: [],
+             maxPlayers: 0, achievements: "", saves: "", highScores: false, sortBy: "alpha" };
+  }
+
+  /* Les valeurs proposées, par dimension — un passage sur les jeux chargés. */
+  function lbAdvFacetValues(spec) {
+    var set = {};
+    function add(v) { v = String(v == null ? "" : v).trim(); if (v) set[v] = 1; }
+    (lbRawGames || []).forEach(function (g) {
+      if (!g) return;
+      var v = spec.read(g);
+      if (spec.array) (v || []).forEach(add);
+      else if (spec.tokens) String(v == null ? "" : v).split(/[;,]/).forEach(add);
+      else add(v);
+    });
+    (lbAdvCrit[spec.list] || []).forEach(add);   // sélection orpheline : reste visible
+    return Object.keys(set).sort(function (a, b) { a = a.toLowerCase(); b = b.toLowerCase(); return a < b ? -1 : a > b ? 1 : 0; });
+  }
+  function lbAdvSimpleFacet(read, numeric) {
+    var set = {};
+    (lbRawGames || []).forEach(function (g) {
+      if (!g) return;
+      var v = read(g);
+      if (v == null || v === "") return;
+      set[String(v).trim()] = 1;
+    });
+    var keys = Object.keys(set);
+    return numeric
+      ? keys.map(Number).filter(function (n) { return n > 0 && n <= 32; }).sort(function (a, b) { return a - b; })
+      : keys.sort(function (a, b) { a = a.toLowerCase(); b = b.toLowerCase(); return a < b ? -1 : a > b ? 1 : 0; });
+  }
+
+  /* Critères NORMALISÉS (seules les dimensions réglées) — la forme que matchesAdvanced consomme,
+     et la clé de l'historique. */
+  function lbAdvNormalized(c) {
+    var n = {};
+    if (c.yearMin > LB_ADV_YEAR_LO) n.yearMin = c.yearMin;
+    if (c.yearMax < LB_ADV_YEAR_HI) n.yearMax = c.yearMax;
+    if (c.ratingMin > -0.5) n.ratingMin = c.ratingMin;
+    if (c.ratingMax < 5.5) n.ratingMax = c.ratingMax;
+    if (c.releaseType) n.releaseType = c.releaseType;
+    if (c.flagFav) n.flagFav = true;
+    if (c.flagInstalled) n.flagInstalled = true;
+    if (c.genres.length) { n.genres = c.genres.slice(); n.genreMode = c.genreMode; }
+    if (c.publisher.trim()) n.publisher = c.publisher.trim();
+    if (c.developer.trim()) n.developer = c.developer.trim();
+    ["platforms", "regions", "playModes", "statuses", "progresses", "esrb", "pads"].forEach(function (k) {
+      if (c[k] && c[k].length) n[k] = c[k].slice();
+    });
+    if (c.maxPlayers > 0) n.maxPlayers = c.maxPlayers;
+    if (c.achievements) n.achievements = c.achievements;
+    if (c.saves) n.saves = c.saves;
+    if (c.highScores) n.highScores = true;
+    return n;
+  }
+
+  function lbAdvSummary(n) {
+    var p = [];
+    if (n.yearMin != null || n.yearMax != null) p.push("Year " + (n.yearMin != null ? n.yearMin : "∞") + "–" + (n.yearMax != null ? n.yearMax : "∞"));
+    if (n.ratingMin != null || n.ratingMax != null) p.push("Rating " + (n.ratingMin != null ? n.ratingMin : "∞") + "–" + (n.ratingMax != null ? n.ratingMax : "∞"));
+    if (n.releaseType) p.push(n.releaseType);
+    if (n.flagFav) p.push("★ Favorite");
+    if (n.flagInstalled) p.push("Installed");
+    if (n.genres && n.genres.length) p.push((n.genreMode === "and" ? "& " : "") + n.genres.join(", "));
+    if (n.publisher) p.push("Pub: " + n.publisher);
+    if (n.developer) p.push("Dev: " + n.developer);
+    ["platforms", "regions", "playModes", "statuses", "progresses", "esrb", "pads"].forEach(function (k) {
+      if (n[k] && n[k].length) p.push(n[k].join(", "));
+    });
+    if (n.maxPlayers > 0) p.push(n.maxPlayers + " player" + (n.maxPlayers > 1 ? "s" : ""));
+    if (n.achievements) p.push(n.achievements === "yes" ? "Achievements" : "No achievements");
+    if (n.saves === "game") p.push("Has saved game");
+    if (n.saves === "state") p.push("Has save state");
+    if (n.highScores) p.push("High scores");
+    return p.join("  ·  ") || "(all games)";
+  }
+
+  function lbAdvHistory() { try { return JSON.parse(localStorage.getItem(LB_ADV_HIST_KEY) || "[]") || []; } catch (e) { return []; } }
+  function lbAdvSaveHistory(n) {
+    try {
+      var key = JSON.stringify(n);
+      var h = lbAdvHistory().filter(function (c) { return JSON.stringify(c) !== key; });
+      h.unshift(n);
+      localStorage.setItem(LB_ADV_HIST_KEY, JSON.stringify(h.slice(0, LB_ADV_HIST_MAX)));
+    } catch (e) {}
+  }
+
+  function lbAdvReflect() {
+    var btn = document.getElementById("lb-adv-btn");
+    if (!btn) return;
+    var on = !!lbAdvApplied;
+    btn.classList.toggle("filtering", on);
+    btn.textContent = on ? "● FILTER" : "FILTER";
+    btn.title = on ? "Filter active — " + lbAdvSummary(lbAdvApplied) : "Advanced search filter";
+  }
+
+  /* Appliquer des critères normalisés (depuis Apply ou l'Historique). L'onglet Order by est un
+     one-shot vers ARRANGE BY, comme sur le desktop : l'utilisateur peut re-trier après. */
+  function lbAdvApply(n, sortKey) {
+    lbAdvApplied = window.LBGameSort.advancedActive(n) ? n : null;
+    if (lbAdvApplied) lbAdvSaveHistory(n);
+    if (sortKey) lbChooseArrange(sortKey);   // lbChooseArrange fait déjà lbRefreshGames()
+    else lbRefreshGames();
+    lbAdvReflect();
+    lbAdvClose();
+  }
+
+  function lbAdvClose() { var m = document.getElementById("lb-adv-modal"); if (m) m.hidden = true; }
+  function lbAdvOpen() {
+    var m = document.getElementById("lb-adv-modal");
+    if (!m) return;
+    // Repartir des critères APPLIQUÉS (pas du brouillon d'une édition annulée), fusionnés sur les
+    // défauts pour que toute dimension ait sa valeur.
+    lbAdvCrit = Object.assign(lbAdvDefault(), lbAdvApplied || {});
+    lbAdvTab = "general";
+    renderLbAdv();
+    m.hidden = false;
+  }
+
+  function renderLbAdv() {
+    var tabs = document.getElementById("lb-adv-tabs"), body = document.getElementById("lb-adv-body");
+    if (!tabs || !body) return;
+    tabs.innerHTML = "";
+    LB_ADV_TABS.forEach(function (t) {
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "lb-adv-tab" + (t[0] === lbAdvTab ? " active" : "");
+      b.textContent = t[1]; b.setAttribute("role", "tab");
+      b.addEventListener("click", function () { lbAdvTab = t[0]; renderLbAdv(); });
+      tabs.appendChild(b);
+    });
+    body.innerHTML = "";
+    var apply = document.getElementById("lb-adv-apply");
+    if (apply) apply.style.visibility = lbAdvTab === "history" ? "hidden" : "visible";
+    if (lbAdvTab === "general") renderLbAdvGeneral(body);
+    else if (lbAdvTab === "genre") renderLbAdvGenre(body);
+    else if (LB_ADV_FACETS[lbAdvTab]) renderLbAdvFacet(body, LB_ADV_FACETS[lbAdvTab]);
+    else if (lbAdvTab === "publisher" || lbAdvTab === "developer") renderLbAdvText(body, lbAdvTab);
+    else if (lbAdvTab === "orderby") renderLbAdvOrderBy(body);
+    else renderLbAdvHistory(body);
+  }
+
+  /* Une rangée libellé + contrôle. */
+  function lbAdvRow(body, label, control) {
+    var row = document.createElement("div"); row.className = "lb-adv-row";
+    var l = document.createElement("span"); l.className = "lb-adv-row-label"; l.textContent = label;
+    row.appendChild(l); row.appendChild(control); body.appendChild(row);
+    return row;
+  }
+  function lbAdvSelect(options, value, onChange) {
+    var s = document.createElement("select");
+    options.forEach(function (o) {
+      var op = document.createElement("option");
+      op.value = o[0]; op.textContent = o[1];
+      s.appendChild(op);
+    });
+    s.value = value;
+    s.addEventListener("change", function () { onChange(s.value); });
+    return s;
+  }
+  function lbAdvCheck(body, label, checked, onChange) {
+    var lab = document.createElement("label"); lab.className = "lb-adv-check";
+    var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = checked;
+    cb.addEventListener("change", function () { onChange(cb.checked); });
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(label));
+    body.appendChild(lab);
+    return lab;
+  }
+  /* Double slider (deux <input type=range> superposés). fmt rend "∞" aux extrêmes. */
+  function lbAdvRange(body, label, min, max, step, loVal, hiVal, fmt, onChange) {
+    var wrap = document.createElement("div"); wrap.className = "lb-adv-range-wrap";
+    var track = document.createElement("div"); track.className = "lb-adv-range-track";
+    var fill = document.createElement("div"); fill.className = "lb-adv-range-fill";
+    var lo = document.createElement("input"), hi = document.createElement("input");
+    [lo, hi].forEach(function (r) { r.type = "range"; r.min = min; r.max = max; r.step = step; });
+    lo.value = loVal; hi.value = hiVal;
+    wrap.appendChild(track); wrap.appendChild(fill); wrap.appendChild(lo); wrap.appendChild(hi);
+    var val = document.createElement("span"); val.className = "lb-adv-range-val";
+    function paint() {
+      var a = parseFloat(lo.value), b = parseFloat(hi.value);
+      var span = max - min;
+      fill.style.left = ((a - min) / span * 100) + "%";
+      fill.style.width = (Math.max(0, b - a) / span * 100) + "%";
+      val.textContent = fmt(a) + " – " + fmt(b);
+    }
+    lo.addEventListener("input", function () {
+      if (parseFloat(lo.value) > parseFloat(hi.value)) lo.value = hi.value;
+      paint(); onChange(parseFloat(lo.value), parseFloat(hi.value));
+    });
+    hi.addEventListener("input", function () {
+      if (parseFloat(hi.value) < parseFloat(lo.value)) hi.value = lo.value;
+      paint(); onChange(parseFloat(lo.value), parseFloat(hi.value));
+    });
+    paint();
+    var row = lbAdvRow(body, label, wrap);
+    row.appendChild(val);
+  }
+
+  function renderLbAdvGeneral(body) {
+    var c = lbAdvCrit;
+    lbAdvRange(body, "Release year", LB_ADV_YEAR_LO, LB_ADV_YEAR_HI, 1, c.yearMin, c.yearMax,
+      function (v) { return (v <= LB_ADV_YEAR_LO || v >= LB_ADV_YEAR_HI) ? "∞" : String(v); },
+      function (a, b) { c.yearMin = a; c.yearMax = b; });
+    lbAdvRange(body, "Rating", -0.5, 5.5, 0.5, c.ratingMin, c.ratingMax,
+      function (v) { return (v <= -0.5 || v >= 5.5) ? "∞" : v.toFixed(1); },
+      function (a, b) { c.ratingMin = a; c.ratingMax = b; });
+
+    var types = [["", "(Any)"]].concat(lbAdvSimpleFacet(function (g) { return g.rt; }).map(function (v) { return [v, v]; }));
+    if (c.releaseType && !types.some(function (o) { return o[0] === c.releaseType; })) types.push([c.releaseType, c.releaseType]);
+    lbAdvRow(body, "Release type", lbAdvSelect(types, c.releaseType, function (v) { c.releaseType = v; }));
+
+    var players = [["", "(Any)"]].concat(lbAdvSimpleFacet(function (g) { return g.maxPlayers; }, true).map(function (n) { return [String(n), String(n)]; }));
+    if (c.maxPlayers > 0 && !players.some(function (o) { return o[0] === String(c.maxPlayers); })) players.push([String(c.maxPlayers), String(c.maxPlayers)]);
+    lbAdvRow(body, "Max players", lbAdvSelect(players, c.maxPlayers > 0 ? String(c.maxPlayers) : "",
+      function (v) { c.maxPlayers = parseInt(v, 10) || 0; }));
+
+    lbAdvRow(body, "Achievements", lbAdvSelect([["", "(Any)"], ["yes", "Yes"], ["no", "No"]],
+      c.achievements, function (v) { c.achievements = v; }));
+    lbAdvRow(body, "Game saves", lbAdvSelect([["", "(Any)"], ["game", "Has any saved game"], ["state", "Has any save state"]],
+      c.saves, function (v) { c.saves = v; }));
+
+    lbAdvCheck(body, "Favorite only", c.flagFav, function (v) { c.flagFav = v; });
+    lbAdvCheck(body, "Installed only", c.flagInstalled, function (v) { c.flagInstalled = v; });
+    var hs = lbAdvCheck(body, "High scores only", c.highScores, function (v) { c.highScores = v; });
+    hs.title = "Only games an installed hiscore.dat says can produce a high score (MAME / FBNeo).";
+  }
+
+  function lbAdvCheckList(body, values, selected, note) {
+    var n = document.createElement("div"); n.className = "lb-adv-note";
+    n.textContent = note || (values.length + " value(s) — a game matches when it has ANY of the ticked ones.");
+    body.appendChild(n);
+    var list = document.createElement("div"); list.className = "lb-adv-list";
+    values.forEach(function (name) {
+      var lab = document.createElement("label"); lab.className = "lb-adv-item";
+      var cb = document.createElement("input"); cb.type = "checkbox";
+      cb.checked = selected.some(function (s) { return s.toLowerCase() === name.toLowerCase(); });
+      cb.addEventListener("change", function () {
+        var i = -1;
+        selected.some(function (s, k) { if (s.toLowerCase() === name.toLowerCase()) { i = k; return true; } return false; });
+        if (cb.checked && i < 0) selected.push(name);
+        else if (!cb.checked && i >= 0) selected.splice(i, 1);
+      });
+      lab.appendChild(cb); lab.appendChild(document.createTextNode(name));
+      list.appendChild(lab);
+    });
+    body.appendChild(list);
+  }
+
+  function renderLbAdvGenre(body) {
+    var c = lbAdvCrit;
+    lbAdvRow(body, "Match", lbAdvSelect([["or", "ANY selected"], ["and", "ALL selected"]],
+      c.genreMode, function (v) { c.genreMode = v; }));
+    var set = {};
+    (lbRawGames || []).forEach(function (g) {
+      if (g && g.g) g.g.split(";").forEach(function (x) { x = x.trim(); if (x) set[x] = 1; });
+    });
+    c.genres.forEach(function (v) { set[v] = 1; });
+    lbAdvCheckList(body, Object.keys(set).sort(function (a, b) { a = a.toLowerCase(); b = b.toLowerCase(); return a < b ? -1 : a > b ? 1 : 0; }), c.genres);
+  }
+
+  function renderLbAdvFacet(body, spec) {
+    var selected = lbAdvCrit[spec.list];
+    var values = lbAdvFacetValues(spec);
+    if (!values.length) {
+      var p = document.createElement("div"); p.className = "lb-adv-note";
+      p.textContent = "No value found in the loaded games for this field.";
+      body.appendChild(p);
+      return;
+    }
+    lbAdvCheckList(body, values, selected);
+  }
+
+  function renderLbAdvText(body, kind) {
+    var c = lbAdvCrit;
+    var note = document.createElement("div"); note.className = "lb-adv-note";
+    note.textContent = "Type to filter (matches when the " + kind + " contains the text). The list below is autocomplete.";
+    body.appendChild(note);
+    var input = document.createElement("input"); input.type = "text"; input.value = c[kind];
+    input.style.width = "100%"; input.className = "";
+    var row = document.createElement("div"); row.className = "lb-adv-row"; row.appendChild(input); body.appendChild(row);
+    var sug = document.createElement("div"); sug.className = "lb-adv-list lb-adv-suggest"; body.appendChild(sug);
+    var pool = lbAdvSimpleFacet(function (g) { return kind === "publisher" ? g.pub : g.dev; });
+    function refresh() {
+      var q = input.value.trim().toLowerCase();
+      sug.innerHTML = "";
+      pool.filter(function (v) { return !q || v.toLowerCase().indexOf(q) >= 0; }).slice(0, 40).forEach(function (v) {
+        var it = document.createElement("div"); it.className = "lb-adv-item"; it.textContent = v;
+        it.addEventListener("click", function () { input.value = v; c[kind] = v; refresh(); });
+        sug.appendChild(it);
+      });
+    }
+    input.addEventListener("input", function () { c[kind] = input.value; refresh(); });
+    refresh();
+  }
+
+  function renderLbAdvOrderBy(body) {
+    var c = lbAdvCrit;
+    lbAdvRow(body, "Sort the results by", lbAdvSelect(
+      [["alpha", "Alphabetical"], ["year", "Release date"], ["rating", "Rating"], ["lastplayed", "Recently played"]],
+      c.sortBy, function (v) { c.sortBy = v; }));
+    var n = document.createElement("div"); n.className = "lb-adv-note";
+    n.textContent = "Alphabetical keeps the list's own sort; the others drive ARRANGE BY once — you can re-sort after.";
+    body.appendChild(n);
+  }
+
+  function renderLbAdvHistory(body) {
+    var hist = lbAdvHistory();
+    if (!hist.length) {
+      var p = document.createElement("div"); p.className = "lb-adv-note"; p.textContent = "(no recent searches)";
+      body.appendChild(p);
+      return;
+    }
+    var n = document.createElement("div"); n.className = "lb-adv-note"; n.textContent = "Click a past search to apply it.";
+    body.appendChild(n);
+    var list = document.createElement("div"); list.className = "lb-adv-list";
+    hist.forEach(function (crit) {
+      var it = document.createElement("div"); it.className = "lb-adv-hist-item"; it.textContent = lbAdvSummary(crit);
+      it.addEventListener("click", function () { lbAdvApply(crit, null); });
+      list.appendChild(it);
+    });
+    body.appendChild(list);
+  }
+
+  function setupLbAdvFilter() {
+    var btn = document.getElementById("lb-adv-btn");
+    if (btn) btn.addEventListener("click", function () { lbAdvOpen(); });
+    var m = document.getElementById("lb-adv-modal");
+    if (!m) return;
+    document.getElementById("lb-adv-overlay").addEventListener("click", lbAdvClose);
+    document.getElementById("lb-adv-close").addEventListener("click", lbAdvClose);
+    document.getElementById("lb-adv-cancel").addEventListener("click", lbAdvClose);
+    document.getElementById("lb-adv-clear").addEventListener("click", function () {
+      lbAdvApplied = null; lbAdvCrit = null;
+      lbRefreshGames(); lbAdvReflect(); lbAdvClose();
+    });
+    document.getElementById("lb-adv-apply").addEventListener("click", function () {
+      var n = lbAdvNormalized(lbAdvCrit);
+      var sortKey = lbAdvCrit.sortBy === "year" ? "releaseyear"
+                  : lbAdvCrit.sortBy === "rating" ? "starrating"
+                  : lbAdvCrit.sortBy === "lastplayed" ? "lastplayed" : null;
+      lbAdvApply(n, sortKey);
+    });
+    // Échap ferme le dialogue AVANT que le handler global du filtre texte ne voie la touche.
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !m.hidden) { lbAdvClose(); e.stopPropagation(); e.preventDefault(); }
+    }, true);
+    lbAdvReflect();
   }
 
   function lbApplySortPayload(payload) {

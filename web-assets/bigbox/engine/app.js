@@ -116,7 +116,19 @@
   // pour reconstruire le même filtre quand on change l'ordre.
   var advApplied = null;
   var advTextKind = "publisher";   // champ texte courant pour le clavier adv ("publisher" | "developer")
-  var ADV_TABS = ["general", "genre", "publisher", "developer", "history"];
+  // Les 7 onglets de facettes (platform → pad) portent les dimensions du menu de filtre de
+  // LaunchBox, comme sur desktop. La rangée wrappe en CSS quand ils ne tiennent pas sur une ligne.
+  var ADV_TABS = ["general", "genre", "platform", "region", "playmode", "status", "progress", "esrb", "pad", "publisher", "developer", "history"];
+  // clé d'onglet → { list: champ de advCrit, facet: champ de advFacets }
+  var ADV_FACET_TABS = {
+    platform: { list: "platforms",  facet: "platforms" },
+    region:   { list: "regions",    facet: "regions" },
+    playmode: { list: "playModes",  facet: "playModes" },
+    status:   { list: "statuses",   facet: "statuses" },
+    progress: { list: "progresses", facet: "progresses" },
+    esrb:     { list: "esrb",       facet: "esrbs" },
+    pad:      { list: "pads",       facet: "pads" },
+  };
   // Dispositions de touches (lettres + chiffres) ; la rangée du bas est commune. Choix
   // QWERTY/AZERTY selon la langue LB (cf. chooseLayout). KB est (re)construit dans setupSearch.
   var KB_LAYOUTS = {
@@ -1464,24 +1476,42 @@
   // Note : 0..5 réels, ∞ à -0.5 / 5.5. Par défaut les deux poignées sont sur ∞ → aucun filtre.
   var YEAR_B = (function () { var hi = new Date().getFullYear() + 1; return { min: 1949, max: hi + 1, step: 1, fmt: function (v) { return (v <= 1949 || v >= hi + 1) ? "∞" : ("" + v); } }; })();
   var RATING_B = { min: -0.5, max: 5.5, step: 0.5, fmt: function (v) { return (v <= -0.5 || v >= 5.5) ? "∞" : v.toFixed(1); } };
-  var advFacets = { genres: [], publishers: [], developers: [], releaseTypes: [] };
+  var advFacets = { genres: [], publishers: [], developers: [], releaseTypes: [], platforms: [], regions: [], playModes: [], statuses: [], progresses: [], esrbs: [], pads: [], players: [] };
   var ADV_HIST_KEY = "bbw.advHistory", ADV_HIST_MAX = 10;
   function tA(k) { return window.BBW.t(k); }
 
   function computeAdvFacets() {
-    var gs = {}, dp = {}, dv = {}, rt = {};   // dp=éditeurs(publishers), dv=développeurs
+    // Un sac { nom de facette → set }. Région et mode de jeu sont MULTI-VALUÉS chez LaunchBox
+    // (« Europe; France ») : découpés en jetons, sans quoi la liste proposerait la combinaison au
+    // lieu de chacune des régions. Portée = DATA.gamesAll (le nœud courant) — c'est le modèle
+    // BB-web : contrairement au desktop, le client n'a pas toute la bibliothèque en mémoire, et le
+    // filtre avancé meurt de toute façon en quittant l'univers jeux. Les valeurs DÉJÀ cochées sont
+    // réinjectées au rendu (renderAdvFacet), donc une sélection venue d'une autre plateforme reste
+    // visible et décochable.
+    var sets = { genres: {}, publishers: {}, developers: {}, releaseTypes: {}, platforms: {}, regions: {}, playModes: {}, statuses: {}, progresses: {}, esrbs: {}, pads: {} };
+    var players = {};
+    function add(set, v) { v = String(v == null ? "" : v).trim(); if (v) set[v] = 1; }
+    function addTokens(set, v) { String(v == null ? "" : v).split(/[;,]/).forEach(function (x) { add(set, x); }); }
     DATA.gamesAll.forEach(function (g) {
-      if (g && g.g) g.g.split(";").forEach(function (x) { x = x.trim(); if (x) gs[x] = 1; });
-      if (g && g.pub) dp[g.pub.trim()] = 1;
-      if (g && g.dev) dv[g.dev.trim()] = 1;
-      if (g && g.rt) rt[g.rt.trim()] = 1;
+      if (!g) return;
+      if (g.g) g.g.split(";").forEach(function (x) { add(sets.genres, x); });
+      add(sets.publishers, g.pub); add(sets.developers, g.dev); add(sets.releaseTypes, g.rt);
+      add(sets.platforms, g.platform); add(sets.statuses, g.status); add(sets.progresses, g.progress);
+      add(sets.esrbs, g.esrb);
+      addTokens(sets.regions, g.region); addTokens(sets.playModes, g.playMode);
+      (g.pads || []).forEach(function (p) { add(sets.pads, p); });
+      if (g.maxPlayers > 0 && g.maxPlayers <= 32) players[g.maxPlayers] = 1;
     });
     var ci = function (a, b) { a = a.toLowerCase(); b = b.toLowerCase(); return a < b ? -1 : a > b ? 1 : 0; };
-    advFacets = { genres: Object.keys(gs).sort(ci), publishers: Object.keys(dp).sort(ci), developers: Object.keys(dv).sort(ci), releaseTypes: Object.keys(rt).sort(ci) };
+    advFacets = {};
+    for (var k in sets) advFacets[k] = Object.keys(sets[k]).sort(ci);
+    advFacets.players = Object.keys(players).map(Number).sort(function (a, b) { return a - b; });
   }
   function defaultCrit() {
     return { yearMin: YEAR_B.min, yearMax: YEAR_B.max, ratingMin: RATING_B.min, ratingMax: RATING_B.max,
-             releaseType: "", flagFav: false, flagInstalled: false, genres: [], genreMode: "or", publisher: "", developer: "" };
+             releaseType: "", flagFav: false, flagInstalled: false, genres: [], genreMode: "or", publisher: "", developer: "",
+             platforms: [], regions: [], playModes: [], statuses: [], progresses: [], esrb: [], pads: [],
+             maxPlayers: 0, achievements: "", saves: "", highScores: false };
   }
 
   function setupAdvanced() {
@@ -1498,7 +1528,9 @@
   function openAdvanced() {
     if (!advModalEl || current !== "games") return;
     computeAdvFacets();
-    if (!advCrit) advCrit = defaultCrit();
+    // Fusion sur les défauts : un advCrit né avant l'ajout d'une dimension (session en cours) doit
+    // recevoir ses nouveaux champs, sinon le rendu lirait des listes absentes.
+    advCrit = Object.assign(defaultCrit(), advCrit || {});
     advOpen = true; advTab = 0; advFocus = 0;
     renderAdv();
     advModalEl.classList.add("open");
@@ -1516,6 +1548,7 @@
     var id = ADV_TABS[advTab];
     if (id === "general") renderAdvGeneral(body);
     else if (id === "genre") renderAdvGenre(body);
+    else if (ADV_FACET_TABS[id]) renderAdvFacet(body, ADV_FACET_TABS[id]);
     else if (id === "publisher" || id === "developer") renderAdvText(body, id);
     else if (id === "history") renderAdvHistory(body);
     var applyEl = $(".adv-apply", advModalEl);
@@ -1552,18 +1585,62 @@
     var v = document.createElement("span"); v.className = cls;
     wrap.appendChild(l); wrap.appendChild(v); body.appendChild(wrap); return v;
   }
+  // Un select générique « ‹ valeur › » : opts() rend la liste (l'entrée 0 = « (Any) »), get/set
+  // lisent-écrivent advCrit, lbl affiche la valeur. L'ancien select était câblé en dur sur
+  // releaseType ; Max players / Achievements / Saves en font maintenant autant sans dupliquer le
+  // cycle ←/→.
+  function addSelect(body, label, opts, get, set, lbl) {
+    var sv = addInline(body, "adv-select", label); sv.innerHTML = '‹ <span class="adv-sval"></span> ›';
+    var i = advTargets.length;
+    advTargets.push({ type: "select", el: sv, wrap: sv, opts: opts, get: get, set: set, lbl: lbl });
+    sv.dataset.advi = i; paintSelect(advTargets[i]);
+  }
   function renderAdvGeneral(body) {
     addSlider(body, "year", tA("adv.year"), YEAR_B);
     addSlider(body, "rating", tA("adv.rating"), RATING_B);
-    var rv = addInline(body, "adv-select", tA("adv.releaseType")); rv.innerHTML = '‹ <span class="adv-sval"></span> ›';
-    var ri = advTargets.length; advTargets.push({ type: "select", kind: "rt", el: rv, wrap: rv }); rv.dataset.advi = ri; paintSelect(advTargets[ri]);
-    [["flagFav", "adv.fav"], ["flagInstalled", "adv.installed"]].forEach(function (f) {
+    addSelect(body, tA("adv.releaseType"),
+      function () { return [""].concat(advFacets.releaseTypes); },
+      function () { return advCrit.releaseType; }, function (v) { advCrit.releaseType = v; },
+      function (v) { return v || tA("adv.any"); });
+    addSelect(body, tA("adv.maxplayers"),
+      function () { return [0].concat(advFacets.players); },
+      function () { return advCrit.maxPlayers; }, function (v) { advCrit.maxPlayers = v; },
+      function (v) { return v > 0 ? String(v) : tA("adv.any"); });
+    addSelect(body, tA("adv.achievements"),
+      function () { return ["", "yes", "no"]; },
+      function () { return advCrit.achievements; }, function (v) { advCrit.achievements = v; },
+      function (v) { return v === "yes" ? tA("adv.on") : v === "no" ? tA("adv.no") : tA("adv.any"); });
+    addSelect(body, tA("adv.saves"),
+      function () { return ["", "game", "state"]; },
+      function () { return advCrit.saves; }, function (v) { advCrit.saves = v; },
+      function (v) { return v === "game" ? tA("adv.saveGame") : v === "state" ? tA("adv.saveState") : tA("adv.any"); });
+    [["flagFav", "adv.fav"], ["flagInstalled", "adv.installed"], ["highScores", "adv.highscores"]].forEach(function (f) {
       var tv = addInline(body, "adv-toggle", tA(f[1]));
       var i = advTargets.length; advTargets.push({ type: "toggle", key: f[0], el: tv, wrap: tv }); tv.dataset.advi = i; paintToggle(advTargets[i]);
     });
   }
-  function paintSelect(t) { $(".adv-sval", t.el).textContent = advCrit.releaseType || tA("adv.any"); }
+  function paintSelect(t) { $(".adv-sval", t.el).textContent = t.lbl(t.get()); }
   function paintToggle(t) { var on = !!advCrit[t.key]; t.el.textContent = on ? tA("adv.on") : "—"; t.el.classList.toggle("on", on); }
+
+  // ── Une dimension à facettes (Platform, Region, …) : la liste cochable du modèle Genre, sans
+  // le bouton de mode — OU à l'intérieur de la dimension, comme LaunchBox. Les valeurs DÉJÀ
+  // cochées mais absentes du nœud courant sont réinjectées : cochées ailleurs, elles doivent
+  // rester visibles et décochables ici (la leçon du desktop sur les sélections orphelines).
+  function renderAdvFacet(body, spec) {
+    var sel = advCrit[spec.list] || [];
+    var values = advFacets[spec.facet] ? advFacets[spec.facet].slice() : [];
+    var lower = {};
+    values.forEach(function (v) { lower[v.toLowerCase()] = 1; });
+    sel.forEach(function (v) { if (!lower[v.toLowerCase()]) values.push(v); });
+    values.sort(function (a, b) { a = a.toLowerCase(); b = b.toLowerCase(); return a < b ? -1 : a > b ? 1 : 0; });
+    if (!values.length) { var p = document.createElement("div"); p.className = "adv-soon"; p.textContent = tA("adv.noValues"); body.appendChild(p); return; }
+    var list = document.createElement("div"); list.className = "adv-list"; body.appendChild(list);
+    values.forEach(function (name) {
+      var on = sel.some(function (s) { return s.toLowerCase() === name.toLowerCase(); });
+      var it = document.createElement("div"); it.className = "adv-item" + (on ? " on" : ""); it.textContent = (on ? "✓ " : "") + name;
+      list.appendChild(it); var i = advTargets.length; advTargets.push({ type: "facet", list: spec.list, name: name, el: it }); it.dataset.advi = i;
+    });
+  }
 
   function renderAdvGenre(body) {
     var mv = addInline(body, "adv-select", tA("adv.match")); mv.innerHTML = '‹ <span class="adv-mode"></span> ›';
@@ -1631,8 +1708,8 @@
       else v = Math.max(advCrit[t.kind + "Min"], Math.min(b.max, v));
       advCrit[key] = Math.round(v / b.step) * b.step; paintSlider(t);
     } else if (t.type === "select") {
-      var arr = [""].concat(advFacets.releaseTypes), idx = arr.indexOf(advCrit.releaseType); if (idx < 0) idx = 0;
-      advCrit.releaseType = arr[(idx + delta + arr.length) % arr.length]; paintSelect(t);
+      var arr = t.opts(), idx = arr.indexOf(t.get()); if (idx < 0) idx = 0;
+      t.set(arr[(idx + delta + arr.length) % arr.length]); paintSelect(t);
     } else if (t.type === "genremode") { advCrit.genreMode = advCrit.genreMode === "and" ? "or" : "and"; paintGenreMode(t); }
     else if (t.type === "toggle") { advCrit[t.key] = !advCrit[t.key]; paintToggle(t); }
   }
@@ -1643,6 +1720,11 @@
     else if (t.type === "select") advAdjust(1);
     else if (t.type === "genremode") { advCrit.genreMode = advCrit.genreMode === "and" ? "or" : "and"; paintGenreMode(t); }
     else if (t.type === "genre") { var gi = advCrit.genres.indexOf(t.name); if (gi >= 0) advCrit.genres.splice(gi, 1); else advCrit.genres.push(t.name); renderAdv(); }
+    else if (t.type === "facet") {
+      var fl = advCrit[t.list] || (advCrit[t.list] = []);
+      var fi2 = fl.indexOf(t.name); if (fi2 >= 0) fl.splice(fi2, 1); else fl.push(t.name);
+      renderAdv();
+    }
     else if (t.type === "textfield") openAdvKeyboard(t.kind);
     else if (t.type === "textitem") { advCrit[t.kind] = t.name; renderAdv(); }   // remplit le champ (toujours filtré en « contient »)
     else if (t.type === "histitem") applyAdvCrit(t.crit, true);
@@ -1661,30 +1743,24 @@
     if (advCrit.genres.length) { n.genres = advCrit.genres.slice(); n.genreMode = advCrit.genreMode; }
     if (advCrit.publisher && advCrit.publisher.trim()) n.publisher = advCrit.publisher.trim();
     if (advCrit.developer && advCrit.developer.trim()) n.developer = advCrit.developer.trim();
+    ["platforms", "regions", "playModes", "statuses", "progresses", "esrb", "pads"].forEach(function (k) {
+      if (advCrit[k] && advCrit[k].length) n[k] = advCrit[k].slice();
+    });
+    if (advCrit.maxPlayers > 0) n.maxPlayers = advCrit.maxPlayers;
+    if (advCrit.achievements === "yes" || advCrit.achievements === "no") n.achievements = advCrit.achievements;
+    if (advCrit.saves === "game" || advCrit.saves === "state") n.saves = advCrit.saves;
+    if (advCrit.highScores) n.highScores = true;
     return n;
   }
+  // Le MATCHING vit dans le vendor partagé (LBGameSort.matchesAdvanced), le même que LB-web —
+  // et le miroir de Host/Search/FilterCriteria.Matches. L'implémentation locale qu'il remplace
+  // divergeait déjà du desktop sur trois points : releaseType sensible à la casse, genres
+  // sensibles à la casse, et la note reconstruite depuis ur/r au lieu de la clé sr
+  // (CommunityOrLocalStarRating) que le tri utilise. Une seule implémentation, trois surfaces.
   function buildAdvPredicate(n) {
-    var fns = [];
-    if (n.yearMin != null) fns.push(function (g) { var y = parseInt(g && g.y, 10); return y >= n.yearMin; });
-    if (n.yearMax != null) fns.push(function (g) { var y = parseInt(g && g.y, 10); return y <= n.yearMax; });
-    // Note effective : note user (g.ur > 0) sinon note communauté (g.r).
-    // g.ur est désormais user-only (SafeEffRating C# ne fallback plus sur CommunityStarRating) ;
-    // le filtre doit reconstruire la sémantique "effective" lui-même pour ne pas exclure tous
-    // les jeux avec note communauté mais sans note perso quand le slider est déplacé.
-    if (n.ratingMin != null) fns.push(function (g) { var eff = (g && g.ur > 0) ? g.ur : (parseFloat(g && g.r) || 0); return eff >= n.ratingMin; });
-    if (n.ratingMax != null) fns.push(function (g) { var eff = (g && g.ur > 0) ? g.ur : (parseFloat(g && g.r) || 0); return eff <= n.ratingMax; });
-    if (n.releaseType) fns.push(function (g) { return (g && g.rt) === n.releaseType; });
-    if (n.flagFav) fns.push(function (g) { return !!(g && g.fav); });
-    if (n.flagInstalled) fns.push(function (g) { return !!(g && g.installed); });
-    if (n.genres && n.genres.length) fns.push(function (g) {
-      var gg = (g && g.g) || ""; return n.genreMode === "and"
-        ? n.genres.every(function (x) { return gg.indexOf(x) >= 0; })
-        : n.genres.some(function (x) { return gg.indexOf(x) >= 0; });
-    });
-    // Éditeur / développeur : SOUS-CHAÎNE insensible à la casse (« Capc » → Capcom, etc.).
-    if (n.publisher) { var qp = n.publisher.toUpperCase(); fns.push(function (g) { return ((g && g.pub) || "").toUpperCase().indexOf(qp) >= 0; }); }
-    if (n.developer) { var qd = n.developer.toUpperCase(); fns.push(function (g) { return ((g && g.dev) || "").toUpperCase().indexOf(qd) >= 0; }); }
-    return fns;
+    return window.LBGameSort.advancedActive(n)
+      ? [function (g) { return window.LBGameSort.matchesAdvanced(g, n); }]
+      : [];
   }
   function advHistoryLabel(n) {
     var p = [];
@@ -1696,6 +1772,14 @@
     if (n.developer) p.push(n.developer);
     if (n.flagFav) p.push(tA("adv.fav"));
     if (n.flagInstalled) p.push(tA("adv.installed"));
+    ["platforms", "regions", "playModes", "statuses", "progresses", "esrb", "pads"].forEach(function (k) {
+      if (n[k] && n[k].length) p.push(n[k].join(", "));
+    });
+    if (n.maxPlayers > 0) p.push(n.maxPlayers + " " + tA("adv.players"));
+    if (n.achievements) p.push(tA("adv.achievements") + " : " + (n.achievements === "yes" ? tA("adv.on") : tA("adv.no")));
+    if (n.saves === "game") p.push(tA("adv.saveGame"));
+    if (n.saves === "state") p.push(tA("adv.saveState"));
+    if (n.highScores) p.push(tA("adv.highscores"));
     return p.join(" · ") || "—";
   }
   function loadAdvHistory() { try { return JSON.parse(localStorage.getItem(ADV_HIST_KEY) || "[]") || []; } catch (e) { return []; } }

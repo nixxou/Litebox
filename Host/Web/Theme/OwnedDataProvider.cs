@@ -369,6 +369,7 @@ internal static class OwnedDataProvider
     private static object GamesPayload(IPlatform plat, IEnumerable<IGame> games, WebParentalState st, IPlaylist playlist)
     {
         WebStoreState.EnsureFresh();
+        ResetPadNames();   // le catalogue de manettes est relu une fois par payload, pas par jeu
         var titleSortMode = TitleSortNormalizer.ConfiguredMode();
         var gameArray = games.Where(g => g != null && Allowed(g, st)).ToArray();
         // DENSE ranks, not the raw ManualOrder: LaunchBox writes <ManualOrder>0</ManualOrder> on
@@ -481,6 +482,12 @@ internal static class OwnedDataProvider
             status = Safe(() => gm.Status),
             version = Safe(() => gm.Version),
             mameHs = SafeBool(() => GameSortCatalog.MameHighScoresSupported(gm)),
+            // Advanced-filter dimensions the SDK surface does not carry: controller support and saves
+            // live in per-game sub-entities. Same discriminators as the desktop filter — SupportLevel 0
+            // is "Not Supported", a numeric Slot means a save STATE (see FilterCriteria's predicates).
+            pads = SafePads(gm),
+            hasSave = SafeHasSave(gm, wantState: false),
+            hasState = SafeHasSave(gm, wantState: true),
             mo = manualOrder,
             cf = SafeCustomFields(gm),
             file = SafeFileName(gm),
@@ -923,6 +930,59 @@ internal static class OwnedDataProvider
         var d = SafeLastPlayed(g);
         if (d == null) return 0;
         try { return (d.Value.ToUniversalTime() - _epoch).TotalMilliseconds; } catch { return 0; }
+    }
+
+    // ── Advanced-filter sub-entity reads (same predicates as the desktop filter) ──
+
+    // Id → nom du catalogue Data\GameControllers.xml : résolu une fois par PAYLOAD (le champ statique
+    // est remis à null à chaque construction de liste via ResetPadNames) — jamais par jeu, le catalogue
+    // ne change pas au milieu d'une sérialisation.
+    private static Dictionary<string, string> _padNames;
+    internal static void ResetPadNames() => _padNames = null;
+    private static Dictionary<string, string> PadNames()
+    {
+        var map = _padNames;
+        if (map != null) return map;
+        map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var r in Host.ControllerCatalogStore.All())
+                if (!string.IsNullOrEmpty(r.Id) && !string.IsNullOrEmpty(r.Name)) map[r.Id] = r.Name;
+        }
+        catch { }
+        return _padNames = map;
+    }
+
+    /// <summary>Les NOMS de manettes que ce jeu supporte (SupportLevel ≠ 0). Null quand aucune —
+    /// le JSON reste léger, et le client teste la présence.</summary>
+    private static List<string> SafePads(IGame g)
+    {
+        if (g is not ILiteBoxGame lb) return null;
+        try
+        {
+            List<string> pads = null;
+            var byId = PadNames();
+            foreach (var row in lb.GetSubEntities("GameControllerSupport"))
+            {
+                if (!Search.FilterCriteria.RowSupportsController(row)) continue;
+                if (!row.TryGetValue("ControllerId", out var id) || string.IsNullOrEmpty(id)) continue;
+                if (byId.TryGetValue(id, out var name)) (pads ??= new List<string>()).Add(name);
+            }
+            return pads;
+        }
+        catch { return null; }
+    }
+
+    private static bool SafeHasSave(IGame g, bool wantState)
+    {
+        if (g is not ILiteBoxGame lb) return false;
+        try
+        {
+            foreach (var row in lb.GetSubEntities("GameSave"))
+                if (Search.FilterCriteria.RowIsState(row) == wantState) return true;
+        }
+        catch { }
+        return false;
     }
 
     private static string SafeFileName(IGame g)

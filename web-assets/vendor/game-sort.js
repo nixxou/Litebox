@@ -410,6 +410,9 @@
     }
     if (c.releaseType && lc(g.rt) !== lc(c.releaseType)) return false;
     if (c.flagFav && !g.fav) return false;
+    // g.installed = Installed ?? true (WebStoreState) : exclut le CONFIRMÉ non installé, une case
+    // jamais renseignée compte comme présente. PAS g.inst (le champ nullable brut) — le desktop
+    // applique la même règle « == false exclut » de son côté, les trois surfaces sont d'accord.
     if (c.flagInstalled && !g.installed) return false;
     if (activeList(c.genres)) {
       var gg = lc(g.g);

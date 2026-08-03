@@ -100,7 +100,8 @@ internal static class FilterParitySelfTest
         public string P = "", Reg = "", Pm = "", St = "", Pr = "", Es = "", Rt = "", Gen = "", Pub = "", Dev = "";
         public int? Mp, Year;
         public double Sr;
-        public bool FavV, InstV;
+        public bool FavV;
+        public bool? InstV;   // tri-état, comme la case Installed réelle : null = jamais renseignée
         public override string Platform { get => P; set { } }
         public override string Region { get => Reg; set { } }
         public override string PlayMode { get => Pm; set { } }
@@ -117,6 +118,10 @@ internal static class FilterParitySelfTest
         public override bool Favorite { get => FavV; set { } }
         public override bool? Installed { get => InstV; set { } }
     }
+
+    // La sémantique « Installed only » sur les TROIS états de la case — le point qu'un fixture ne
+    // servant que `installed` masquait : null (jamais renseignée) = présente, false = exclue.
+    // `installed` est servi comme le vrai payload le sert : Installed ?? true (WebStoreState).
 
     // Un seul littéral JSON par critère, consommé par LES DEUX côtés : désérialisé en
     // FilterCriteria (camelCase) pour le desktop, passé verbatim au vendor pour le web.
@@ -155,18 +160,21 @@ internal static class FilterParitySelfTest
             new FakeAdvGame { P = "Arcade", Reg = "Europe; France", Pm = "Cooperative", St = "Playable",
                               Pr = "Not Started", Es = "E", Rt = "Physical", Gen = "Action; Platform",
                               Pub = "Capcom", Dev = "Capcom", Mp = 2, Year = 1995, Sr = 4.0, FavV = true, InstV = true },
-            new FakeAdvGame { P = "FBNeo", Reg = "Eastern Europe", Pm = "Single Player", Es = "M" },
+            new FakeAdvGame { P = "FBNeo", Reg = "Eastern Europe", Pm = "Single Player", Es = "M", InstV = false },
             new FakeAdvGame { P = "Sony Playstation", Reg = "Japan", Pm = "Multiplayer; Cooperative",
                               Rt = "Digital", Gen = "RPG", Pub = "Square", Dev = "SquareSoft",
-                              Mp = 4, Year = 2001, Sr = 2.5 },
+                              Mp = 4, Year = 2001, Sr = 2.5, InstV = null },
         };
-        // La forme PAYLOAD de chacun — les clés que LightItem sert et que le vendor lit.
+        // La forme PAYLOAD de chacun — les clés que LightItem sert et que le vendor lit. `inst` (le
+        // tri-état brut) et `installed` (Installed ?? true) divergent VOLONTAIREMENT sur le jeu 3 :
+        // si le vendor lisait le mauvais champ, la parité éclaterait ici.
         var payload = games.Select(g => new Dictionary<string, object>
         {
             ["platform"] = g.P, ["region"] = g.Reg, ["playMode"] = g.Pm, ["status"] = g.St,
             ["progress"] = g.Pr, ["esrb"] = g.Es, ["rt"] = g.Rt, ["g"] = g.Gen,
             ["pub"] = g.Pub, ["dev"] = g.Dev, ["maxPlayers"] = g.Mp, ["ry"] = g.Year,
-            ["sr"] = g.Sr > 0 ? g.Sr : (double?)null, ["fav"] = g.FavV, ["installed"] = g.InstV,
+            ["sr"] = g.Sr > 0 ? g.Sr : (double?)null, ["fav"] = g.FavV,
+            ["inst"] = g.InstV, ["installed"] = g.InstV ?? true,
         }).ToArray();
 
         var camel = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };

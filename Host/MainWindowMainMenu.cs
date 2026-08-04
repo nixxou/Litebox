@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.Modules;
@@ -60,7 +61,10 @@ internal sealed partial class MainWindow
         // The bar repeats the submenus LaunchBox considers worth one click.
         menu.Items.Add(Top("Tools", Children(ToolsMenu("Tools"))));
         menu.Items.Add(Top("View", Children(ViewMenu("View"))));
-        menu.Items.Add(Top("Arrange By", Children(ArrangeByMenu("Arrange By"))));
+        // Arrange By fills itself on open (live catalog), so the bar entry is wired, not cloned.
+        var arrangeTop = Top("Arrange By");
+        WireArrangeDropDown(arrangeTop);
+        menu.Items.Add(arrangeTop);
         menu.Items.Add(Top("Image Group", Children(ImageGroupMenu("Image Group"))));
         menu.Items.Add(Top("Badges", Children(BadgesMenu("Badges"))));
 
@@ -295,13 +299,82 @@ internal sealed partial class MainWindow
         var refreshAll = new ToolStripMenuItem("Generate Image Cache (All Games)...") { Image = MenuIcons.Get(MenuIcons.RefreshImages) };
         refreshAll.Click += (_, _) => Safe(GenerateAllCachedImages);
         sub.DropDownItems.Add(refreshAll);
+        sub.DropDownItems.Add(Sep());
+
+        // The GAME IMAGE CACHE (Host/Gc — the media-file index, not the thumbnails above): inspect
+        // it, or re-scan it when files changed behind LiteBox's back.
+        var gcViewer = new ToolStripMenuItem("Game Image Cache Viewer...") { Image = MenuIcons.Get(MenuIcons.Audit) };
+        gcViewer.Click += (_, _) => Safe(OpenGameImageCacheViewer);
+        sub.DropDownItems.Add(gcViewer);
+        var gcCur = new ToolStripMenuItem("Rebuild Game Image Cache (Current Platform)")
+        { Image = MenuIcons.Get(MenuIcons.Refresh), ToolTipText = "Re-scan the media index of the selected games' platforms (or the selected platform node)" };
+        gcCur.Click += (_, _) => Safe(() => RebuildGameImageCache(all: false));
+        sub.DropDownItems.Add(gcCur);
+        var gcAll = new ToolStripMenuItem("Rebuild Game Image Cache (All Platforms)")
+        { Image = MenuIcons.Get(MenuIcons.RefreshImages), ToolTipText = "Re-scan the media index of every platform" };
+        gcAll.Click += (_, _) => Safe(() => RebuildGameImageCache(all: true));
+        sub.DropDownItems.Add(gcAll);
 
         sub.DropDownOpening += (_, _) =>
         {
             RefreshMediaChecks();
             refreshSel.Enabled = (_games?.SelectedGames?.Length ?? 0) > 0;
+            bool gcOn = Gc.HostGameCache.Enabled;
+            gcCur.Enabled = gcOn && CachePlatformTargets().Count > 0;
+            gcAll.Enabled = gcOn;   // the viewer stays enabled — its status line explains an OFF cache
         };
         return sub;
+    }
+
+    // ── Game Image Cache (the Gc media-file index) ───────────────────────────
+
+    private Gc.GameImageCacheViewer _gcViewerLive;
+
+    /// <summary>Open (or re-focus) the non-modal cache viewer — single live instance.</summary>
+    private void OpenGameImageCacheViewer()
+    {
+        if (_gcViewerLive is { IsDisposed: false } live) { try { live.Activate(); } catch { } return; }
+        var v = new Gc.GameImageCacheViewer();
+        _gcViewerLive = v;
+        v.FormClosed += (_, _) => _gcViewerLive = null;
+        v.Show(this);
+    }
+
+    /// <summary>The platforms a "Current Platform" rebuild targets: the selected games' platforms
+    /// when there is a selection, else the platform node the tree is on (a category/playlist/All
+    /// node without a selection targets nothing — the entry greys out).</summary>
+    private List<string> CachePlatformTargets()
+    {
+        var res = (_games?.SelectedGames ?? Array.Empty<IGame>())
+            .Select(g => Safe(() => g.Platform) ?? "").Where(p => p.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (res.Count == 0 && _currentNode is IPlatform p)
+        {
+            var n = Safe(() => p.Name) ?? "";
+            if (n.Length > 0) res.Add(n);
+        }
+        return res;
+    }
+
+    /// <summary>Re-scan the Gc media index — every platform, or the CachePlatformTargets ones. The
+    /// build is async (per-platform jobs); once done the view reloads so resolutions pick the fresh
+    /// index up.</summary>
+    private void RebuildGameImageCache(bool all)
+    {
+        if (!Gc.HostGameCache.Enabled) return;
+        System.Threading.Tasks.Task task;
+        if (all) task = Safe(() => Gc.GameCache.RebuildAll());
+        else
+        {
+            var tasks = CachePlatformTargets()
+                .Select(n => Safe(() => Gc.GameCache.RebuildPlatform(Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetPlatformByName(n))))
+                .Where(t => t != null).ToArray();
+            task = tasks.Length == 0 ? null : System.Threading.Tasks.Task.WhenAll(tasks);
+        }
+        task?.ContinueWith(_ =>
+        {
+            try { if (!IsDisposed && !_closing) BeginInvoke((Action)ReloadAfterGameChange); } catch { }
+        });
     }
 
     // ── Game music (Auto-Play Music / Shuffle Music) ─────────────────────────
@@ -314,14 +387,25 @@ internal sealed partial class MainWindow
     /// The work runs OFF the UI thread, alongside the other post-load actions: resolving the tracks
     /// walks the platform's Music folder (IO) and the first Play may pay the lazy libvlc init — the
     /// details pane must not wait on either. The load token gates a stale start (selection moved on
-    /// while the walk was in flight — the newer call already owns the player).</summary>
-    private void UpdateGameMusic(IGame g)
+    /// while the walk was in flight — the newer call already owns the player).
+    ///
+    /// <paramref name="mainIsVideo"/> is null while the media list is still being built (the settle
+    /// call), and the answer once it lands (ScheduleMedia). The main media only becomes a video half
+    /// a second later, so with autoplay-WITH-SOUND on we would otherwise start a burst of music just
+    /// to have the video silence it — hence: hold the music back until the media list says whether a
+    /// sounded video is taking the audio.</summary>
+    private void UpdateGameMusic(IGame g, bool? mainIsVideo = null)
     {
         try
         {
             if (g == null) { Media.GameMusicPlayer.Stop(); return; }
             var s = LbSettings;
             if (s == null || !s.GetBool("AutoPlayMusic", true)) { Media.GameMusicPlayer.Stop(); return; }
+            // A video only claims the audio when it autoplays WITH SOUND — muted, or waiting behind
+            // its ▶, it leaves the music alone. So stay silent while that is possible: confirmed
+            // (mainIsVideo true) or not yet known (null).
+            if (_cfg.VideoAutoplay && _cfg.VideoAutoplaySound && mainIsVideo != false)
+            { Media.GameMusicPlayer.Stop(); return; }
             bool shuffle = s.GetBool("ShuffleMusic", true);
             string id = Safe(() => g.Id) ?? "";
             var captured = g;
@@ -374,7 +458,9 @@ internal sealed partial class MainWindow
             ArrangeByMenu("Arrange By"));
     }
 
-    private static ToolStripMenuItem ToolsMenu(string text) => Sub(text, MenuIcons.Tools,
+    private ToolStripMenuItem ToolsMenu(string text)
+    {
+        var sub = Sub(text, MenuIcons.Tools,
         Sub("Import", MenuIcons.Import,
             M("MS-DOS Games...", null),
             M("Steam Games...", null),
@@ -431,6 +517,14 @@ internal sealed partial class MainWindow
         M("Export to Android...", MenuIcons.ExportAndroid),
         M("Options...", MenuIcons.Options));
 
+        // LiteBox-only diagnostics (no LaunchBox counterpart) — below its tree, behind a separator.
+        sub.DropDownItems.Add(Sep());
+        var viewer = new ToolStripMenuItem("Game Image Cache Viewer...") { Image = MenuIcons.Get(MenuIcons.Audit) };
+        viewer.Click += (_, _) => Safe(OpenGameImageCacheViewer);
+        sub.DropDownItems.Add(viewer);
+        return sub;
+    }
+
     private static ToolStripMenuItem HelpMenu(string text) => Sub(text, MenuIcons.Help,
         M("Welcome...", MenuIcons.Welcome),
         M("Tutorials...", MenuIcons.Tutorials),
@@ -448,18 +542,37 @@ internal sealed partial class MainWindow
     // The image groups LaunchBox offers for the tiles, in its order. Ours are a subset (the toolbar's
     // Image Group button lists the regroupements LiteBox actually caches) — this bar shows the full
     // LaunchBox set for now, and will be reconciled when the entries start doing something.
-    private static ToolStripMenuItem ImageGroupMenu(string text) => Sub(text, MenuIcons.ImageGroup,
-        Check("Use Default (Boxes)", null, true),
-        Sep(),
-        Check("Backgrounds", null, false),
-        Check("Boxes", null, false),
-        Check("3D Boxes", null, false),
-        Check("Carts", null, false),
-        Check("3D Carts", null, false),
-        Check("Clear Logos", null, false),
-        Check("Marquees", null, false),
-        Check("Screenshots", null, false),
-        Check("Steam Banners", null, false));
+    // ── Image Group — the poster tiles' image type ───────────────────────────
+    // The toolbar dropdown's own list, not LaunchBox's: ours is limited to the regroupements LiteBox
+    // manages and caches (CacheRegroupements). The menu drives the SAME state through
+    // SelectPosterGroup, which re-stamps every surface — this tree exists twice (MENU ▸ View ▸ Image
+    // Group and the bar's IMAGE GROUP) plus the toolbar button.
+    private readonly List<ToolStripMenuItem> _miImageGroup = new();
+
+    /// <summary>Reflect the active image group on every menu entry (called by SelectPosterGroup).</summary>
+    private void SyncImageGroupChecks()
+    {
+        foreach (var it in _miImageGroup)
+            if (it.Tag is string k) it.Checked = string.Equals(k, _posterGroup, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private ToolStripMenuItem ImageGroupMenu(string text)
+    {
+        var sub = new ToolStripMenuItem(text) { Image = MenuIcons.Get(MenuIcons.ImageGroup) };
+        ToolStripMenuItem GroupItem(string key, string label)
+        {
+            var mi = new ToolStripMenuItem(label)
+            { Tag = key, Checked = string.Equals(_posterGroup, key, StringComparison.OrdinalIgnoreCase) };
+            mi.Click += (_, _) => Safe(() => SelectPosterGroup(key));
+            _miImageGroup.Add(mi);
+            return mi;
+        }
+        sub.DropDownItems.Add(GroupItem("Front", "Use Default (Box fronts)"));
+        sub.DropDownItems.Add(Sep());
+        foreach (var (key, title) in CacheRegroupements)
+            if (key != "Front") sub.DropDownItems.Add(GroupItem(key, title));
+        return sub;
+    }
 
     // LaunchBox's badge set (BadgeXxx resources), plus the entry that opens the badge image folder.
     private static ToolStripMenuItem BadgesMenu(string text) => Sub(text, MenuIcons.Badges,
@@ -481,19 +594,25 @@ internal sealed partial class MainWindow
         Sep(),
         M("Change Badge Images...", null));
 
-    private static readonly string[] ArrangeFields =
+    private ToolStripMenuItem ArrangeByMenu(string text)
     {
-        "Date Added", "Date Modified", "Developer", "Favorite", "Genre", "Installed", "Last Played",
-        "LaunchBox Database ID", "MAME High Scores Supported", "Max Players", "Platform", "Play Count",
-        "Play Mode", "Play Time", "Portable", "Progress", "Publisher", "Rating", "Region", "Release Date",
-        "Release Date Year", "Release Type", "Series", "Source", "Star Rating", "Status", "Title", "Version",
-    };
+        var sub = new ToolStripMenuItem(text) { Image = MenuIcons.Get(MenuIcons.ArrangeBy) };
+        WireArrangeDropDown(sub);
+        return sub;
+    }
 
-    private static ToolStripMenuItem ArrangeByMenu(string text)
+    /// <summary>Hang the live sort catalog off a drop-down (the toolbar button's own list, via
+    /// PopulateArrangeItems). Rebuilt on every open — the entries depend on the current node, the
+    /// active column and the library's custom fields, none of which hold still. The placeholder is
+    /// what makes the ► show before the first open (an empty drop-down never opens).</summary>
+    private void WireArrangeDropDown(ToolStripMenuItem host)
     {
-        var items = new List<ToolStripItem>();
-        foreach (var f in ArrangeFields) items.Add(Check(f, null, f == "Title"));
-        return Sub(text, MenuIcons.ArrangeBy, items.ToArray());
+        host.DropDownItems.Add(new ToolStripMenuItem("…") { Enabled = false });
+        host.DropDownOpening += (_, _) =>
+        {
+            host.DropDownItems.Clear();
+            Safe(() => PopulateArrangeItems(host.DropDownItems));
+        };
     }
 
     // ── Plumbing ─────────────────────────────────────────────────────────────

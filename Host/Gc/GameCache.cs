@@ -100,7 +100,8 @@
 //     FindImages, FindVideos, GetBestImageRegionFirst, etc.
 //   • Watchers/GameCacheWatcher — calls RebuildPlatform / RebuildAll
 //     when LaunchBox emits relevant events.
-//   • Forms/GameCacheDebugForm — reads the cache state for diagnostics.
+//   • Gc/GameImageCacheViewer — reads the cache state for diagnostics (native
+//     port of the plugin's GameCacheDebugForm).
 //
 // External dependencies in this file
 //   • EverythingBridge       (Utility/Everything.cs) — fast file search

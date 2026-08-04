@@ -74,6 +74,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // order; owner-drawn box-art tiles. Toggled from the toolbar (list ⇄ poster).
     private ListView _poster;
     private ToolStripButton _posterBtn;
+    private ToolStripDropDownButton _posterGroupBtn;   // toolbar "Image Group" (twin of View ▸ Image Group)
     private bool _posterMode;
     private readonly Dictionary<Guid, Image> _posterBmp = new();   // decoded box thumbs (visible-ish)
     private readonly Queue<Guid> _posterBmpOrder = new();          // FIFO eviction order
@@ -370,19 +371,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // the regroupements we manage/cache. Persisted; switching flushes the tile caches (zoom pattern).
         _posterGroup = _cfg.Get("PosterImageGroup", null) ?? "Front";
         var grpBtn = new ToolStripDropDownButton("Image Group") { ForeColor = Fg, ToolTipText = "Poster view: which image type the tiles show" };
-        void SelectGroup(string key)
-        {
-            _posterGroup = key;
-            try { _cfg.Set("PosterImageGroup", key); _cfg.Save(); } catch { }
-            foreach (ToolStripItem it in grpBtn.DropDownItems)
-                if (it is ToolStripMenuItem mi && mi.Tag is string k) mi.Checked = string.Equals(k, key, StringComparison.OrdinalIgnoreCase);
-            try { RebuildPosterGeometry(); } catch { }
-            if (_posterMode) { try { RefreshPoster(); LayoutPoster(); } catch { } }
-        }
+        _posterGroupBtn = grpBtn;   // SelectPosterGroup re-stamps its items (the menu bar shares the state)
         ToolStripMenuItem GroupItem(string key, string label)
         {
             var mi = new ToolStripMenuItem(label) { Tag = key, Checked = string.Equals(_posterGroup, key, StringComparison.OrdinalIgnoreCase) };
-            mi.Click += (_, _) => SelectGroup(key);
+            mi.Click += (_, _) => SelectPosterGroup(key);
             return mi;
         }
         grpBtn.DropDownItems.Add(GroupItem("Front", "Use Default (Box fronts)"));
@@ -3044,25 +3037,34 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     {
         if (_arrangeBtn == null) return;
         _arrangeBtn.DropDownItems.Clear();
+        PopulateArrangeItems(_arrangeBtn.DropDownItems);
+    }
 
+    /// <summary>Fills a drop-down with the sort catalog — shared by the toolbar's Arrange By button
+    /// and the menu bar's two Arrange By entries. Always rebuilt rather than cached: the entries
+    /// depend on the current node (a manual playlist adds "Manual"), on the active extra column, and
+    /// on the custom fields the library actually uses.</summary>
+    private void PopulateArrangeItems(ToolStripItemCollection into)
+    {
         void Add(string key, string label)
         {
             bool active = string.Equals(_curSortKey, key, StringComparison.OrdinalIgnoreCase);
-            // LaunchBox marks the active field with a tick; we show the direction arrow instead
-            // (re-picking the active field reverses it), so a tick on top would be redundant.
-            var item = new ToolStripMenuItem(label + (active ? (_ascending ? "  ▲" : "  ▼") : ""))
+            // LaunchBox ticks the active field; we put the DIRECTION arrow in that same icon margin
+            // instead (re-picking the active field reverses it) — it says strictly more than a tick.
+            var item = new ToolStripMenuItem(label)
             {
                 Tag = key,
                 ForeColor = Fg,
+                Image = active ? SortArrowImage(_ascending) : null,
             };
             item.Click += (_, _) => SelectSort(key);
-            _arrangeBtn.DropDownItems.Add(item);
+            into.Add(item);
         }
 
         if (_currentNode is IPlaylist pl && !Safe(() => pl.AutoPopulate))
         {
             Add(GameSortCatalog.Manual, "Manual");
-            _arrangeBtn.DropDownItems.Add(new ToolStripSeparator());
+            into.Add(new ToolStripSeparator());
         }
 
         bool activeIsExtraColumn = !GameSortCatalog.IsStandard(_curSortKey)
@@ -3075,7 +3077,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             if (activeColumn != null)
             {
                 Add(_curSortKey, activeColumn.Title);
-                _arrangeBtn.DropDownItems.Add(new ToolStripSeparator());
+                into.Add(new ToolStripSeparator());
             }
         }
         foreach (var d in GameSortCatalog.Standard) Add(d.Key, d.Label);
@@ -3085,8 +3087,33 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         var custom = GameSortCatalog.CustomFieldNames(Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>());
         if (custom.Length > 0)
         {
-            _arrangeBtn.DropDownItems.Add(new ToolStripSeparator());
+            into.Add(new ToolStripSeparator());
             foreach (var name in custom) Add(GameSortCatalog.CustomPrefix + name, name);
+        }
+    }
+
+    // The active sort's direction, drawn in the item's ICON margin (where a tick would sit). Two
+    // cached 16px bitmaps — a filled triangle reads cleaner at that size than the ▲/▼ text glyphs
+    // the toolbar button's own label uses.
+    private static readonly Dictionary<bool, Image> _sortArrowCache = new();
+
+    private static Image SortArrowImage(bool ascending)
+    {
+        lock (_sortArrowCache)
+        {
+            if (_sortArrowCache.TryGetValue(ascending, out var cached)) return cached;
+            var bmp = new Bitmap(16, 16);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                var pts = ascending
+                    ? new[] { new Point(8, 4), new Point(13, 11), new Point(3, 11) }
+                    : new[] { new Point(3, 5), new Point(13, 5), new Point(8, 12) };
+                using var brush = new SolidBrush(Accent);
+                g.FillPolygon(brush, pts);
+            }
+            _sortArrowCache[ascending] = bmp;
+            return bmp;
         }
     }
 
@@ -3590,6 +3617,21 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             _poster.Visible = false; _games.Visible = true; _games.BringToFront();
             try { ActiveControl = _games; _games.Focus(); } catch { }
         }
+    }
+
+    /// <summary>Pick the image type the poster tiles show. One state, three surfaces: the toolbar
+    /// dropdown and both Image Group menus are re-stamped, then the tile caches are rebuilt (the
+    /// zoom pattern) and the poster repainted when it is the live view.</summary>
+    private void SelectPosterGroup(string key)
+    {
+        _posterGroup = key;
+        try { _cfg.Set("PosterImageGroup", key); _cfg.Save(); } catch { }
+        if (_posterGroupBtn != null)
+            foreach (ToolStripItem it in _posterGroupBtn.DropDownItems)
+                if (it is ToolStripMenuItem mi && mi.Tag is string k) mi.Checked = string.Equals(k, key, StringComparison.OrdinalIgnoreCase);
+        try { SyncImageGroupChecks(); } catch { }
+        try { RebuildPosterGeometry(); } catch { }
+        if (_posterMode) { try { RefreshPoster(); LayoutPoster(); } catch { } }
     }
 
     private bool _posterSyncPending;
@@ -4603,6 +4645,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                         if (IsDisposed || token != _detailsLoadToken) return;
                         _mediaItems = items; _mediaItemsGame = g; _mediaSel = items.Count > 0 ? 0 : -1;
                         if (items.Count > 0) SetMainMedia(items[0], full: true, token);   // upgrade box: degraded → full
+                        // The main media is settled: music now knows whether a sounded video took the audio.
+                        UpdateGameMusic(g, mainIsVideo: items.Count > 0 && Media.MediaVideoItem.Is(items[0]));
                         PopulateStrip(items, token);
                         try { Kick3dBake(g, items, token); } catch { }   // GLB missing → bake at settle, then refresh the 3D tile
                         try { KickVideoThumbs(items, token); } catch { } // extract missing video frames, one by one, cancellable

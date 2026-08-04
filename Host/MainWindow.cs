@@ -488,6 +488,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             catch { return Array.Empty<IGame>(); }
         };
 
+        // Notifications get somewhere to draw: popups in this monitor's bottom-right corner + the bell in
+        // the menu bar. Before BuildMainMenu, which creates the bell itself. (Detached on FormClosed.)
+        Notifications.NotificationUi.Attach(this);
+
         // ── Top menu: the LaunchBox-shaped bar (see MainWindowMainMenu.cs) ───
         var menu = BuildMainMenu();
 
@@ -601,6 +605,27 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                         (_dm as HostDataManagerXml)?.FlushLbSettingsIfSafe();
                     }
                     catch (Exception ex) { Console.WriteLine("[options] " + ex.Message); }
+                }));
+            }
+            else if (HostBoot.NotifyDemo)
+            {
+                // --notify-demo: one of each shape, so the popup stack, the wrapping, the action buttons
+                // and the bell badge can be eyeballed without hunting for something that notifies.
+                BeginInvoke((Action)(() =>
+                {
+                    LiteBox.Notifications.NotificationCenter.Info("This is a LiteBox notification.");
+                    LiteBox.Notifications.NotificationCenter.Error(
+                        "Something went wrong, and this message is long enough to prove that the card grows "
+                        + "to fit its text instead of cropping it.");
+                    LiteBox.Notifications.NotificationCenter.Input("Notification with actions.", new[]
+                    {
+                        new KeyValuePair<string, Action>("Say hi",
+                            () => LiteBox.Notifications.NotificationCenter.Info("Hi.")),
+                        new KeyValuePair<string, Action>("Raise an error",
+                            () => LiteBox.Notifications.NotificationCenter.Error("This is an error notification.")),
+                    });
+                    // …and the LaunchBox-compatibility layer, reached exactly as a plugin reaches it.
+                    Notifications.LaunchBoxShim.SelfTest();
                 }));
             }
             else if (!string.IsNullOrEmpty(HostBoot.AutoPlay))
@@ -2053,6 +2078,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 + "LB · Game Progress Automation."),
         });
 
+        Notifications.NotificationOptions.Add(w, _cfg);
+
         var (pluginsPanel, applyPlugins) = BuildPluginsSection();
         w.AddSection("Plugins", pluginsPanel, applyPlugins);
 
@@ -2331,6 +2358,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                         try { BeginInvoke(new Action(() => { if (!dupLbl.IsDisposed) dupLbl.Text = $"{d}/{games.Length} games — {k} key(s) removed"; })); } catch { }
                     }
                 }
+                // BEFORE the UI update, deliberately: the label below lives in the Options window, so the
+                // IsDisposed guard silently drops the result when that window was closed — which is exactly
+                // when you most need to be told. Manual button only; nothing automatic runs this pass.
+                LiteBox.Notifications.NotificationCenter.Info(dupCancel
+                    ? $"Dup-check cleanup stopped at {done}/{games.Length} games — {removed} key(s) removed."
+                    : $"Dup-check keys cleaned — {removed} key(s) removed across {games.Length} games.");
                 try
                 {
                     BeginInvoke(new Action(() =>
@@ -2371,6 +2404,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                         try { BeginInvoke(new Action(() => { if (!dupLbl.IsDisposed) dupLbl.Text = $"{d}/{games.Length} games"; })); } catch { }
                     }
                 }
+                // Same reasoning as the cleanup pass above: notify off the UI thread first, so closing the
+                // Options window can't swallow the one signal that this long pass is over.
+                LiteBox.Notifications.NotificationCenter.Info(dupCancel
+                    ? $"Duplicate detection stopped at {done}/{games.Length} games."
+                    : $"Duplicate detection finished — {games.Length} games.");
                 try
                 {
                     BeginInvoke(new Action(() =>
@@ -5355,7 +5393,23 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
         var dlg = new GenerateCacheProgressForm(phases, games);
         _genCacheLive = dlg;
-        dlg.FormClosed += (_, _) => _genCacheLive = null;
+        int total = games.Length;
+        dlg.FormClosed += (_, _) =>
+        {
+            _genCacheLive = null;
+            // Completion notification, wired HERE rather than inside the form: --gencache drives the very
+            // same form headlessly (GenCacheSelfTest) and exits the app when it closes — that run must stay
+            // silent. This call site is the menu one, i.e. the only manual trigger.
+            // Worth notifying even though the dialog was on screen: it can be MINIMIZED while it works,
+            // and on success it simply closes without ever stating a result.
+            if (dlg.WasCancelled)
+                LiteBox.Notifications.NotificationCenter.Info("Media cache generation stopped.");
+            else if (dlg.FailedCount > 0)
+                LiteBox.Notifications.NotificationCenter.Error(
+                    $"Media cache generated for {total} game(s) — {dlg.FailedCount} thumbnail(s) failed (see litebox-debug.log).");
+            else
+                LiteBox.Notifications.NotificationCenter.Info($"Media cache generated — {total} game(s).");
+        };
         dlg.ShowPseudoModal(this);
     }
 
@@ -7123,6 +7177,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         }
 
         internal int FailedCount => _failed;
+        /// <summary>True when the run was stopped by the user (Cancel / closing the window) rather than
+        /// finishing. Read by the MENU call site to word its completion notification.</summary>
+        internal bool WasCancelled => _cts.IsCancellationRequested;
         internal void DriveMinimize() => MinimizeUnblock();   // --gencache driver
 
         public void RestoreFromMinimized()

@@ -355,7 +355,17 @@ internal static class BasePanel
                 }
                 catch { needWork = true; }   // check unreachable → let the window surface the error
 
-                if (needWork) await ExtDbUpdateWindow.ShowOrFocus(gStatus.FindForm());
+                if (needWork)
+                {
+                    bool ok = await ExtDbUpdateWindow.ShowOrFocus(gStatus.FindForm());
+                    // Completion notification on THIS path only. The window is also opened automatically by
+                    // the boot auto-update (HostBoot), and that one must stay silent — hence the hook here,
+                    // at the button, rather than inside the window. Worth having: the window is minimizable,
+                    // sits in the taskbar and can auto-close, so a multi-MB download can finish unseen.
+                    LiteBox.Notifications.NotificationCenter.Info(ok
+                        ? "Extended database updated."
+                        : "Extended database update did not complete.");
+                }
                 else await Task.Run(() => ExtDbDownloader.RunSharedAsync());   // silent no-op / legacy adoption
             }
             catch { }

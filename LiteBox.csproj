@@ -164,6 +164,38 @@
     <PackageReference Include="Lib.Harmony" Version="2.4.2" />
   </ItemGroup>
 
+  <!-- LaunchBox-compatibility shim (LbShim\) — an assembly whose IDENTITY is "LaunchBox", carrying
+       LaunchBox's public Notifications API forwarded to LiteBox's notification center, so a plugin that
+       reflects for `GetAssemblies().First(a => a.Name == "LaunchBox")` keeps working here (see
+       Host\Notifications\LaunchBoxShim.cs).
+       It is EMBEDDED and loaded from memory, never copied next to LiteBox.exe: the exe lives in <LB>\Core
+       beside the REAL LaunchBox.dll, and a file of that name there would overwrite LaunchBox's own.
+       ReferenceOutputAssembly=false: LiteBox must NOT bind to it at compile time (the CLR would then
+       resolve "LaunchBox" from Core — the real one — before we ever get to load ours). -->
+  <PropertyGroup>
+    <!-- The shim is single-TFM (net9 — a net9 library loads fine on the net10 runtime), so its output
+         path does not depend on which TFM of LiteBox is building. -->
+    <LbShimDll>$(MSBuildThisFileDirectory)LbShim\bin\$(Configuration)\net9.0-windows\LaunchBox.dll</LbShimDll>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="LbShim\**" />
+    <EmbeddedResource Remove="LbShim\**" />
+    <None Remove="LbShim\**" />
+    <!-- UndefineProperties: without it the net10 build pushes TargetFramework=net10.0-windows down into
+         the shim and fails its restore. -->
+    <ProjectReference Include="LbShim\LbShim.csproj" ReferenceOutputAssembly="false" Private="false"
+                      SkipGetTargetFrameworkProperties="true" UndefineProperties="TargetFramework" />
+    <!-- Declared statically (not appended from a target): resource NAMES are assigned early in the build,
+         before the ProjectReference has produced anything, so an item added later is silently ignored. A
+         literal Include needs no file at evaluation time — only by the time the compiler runs, which the
+         ProjectReference above guarantees. Placed AFTER the Remove above, which would otherwise drop it. -->
+    <EmbeddedResource Include="$(LbShimDll)"><LogicalName>shim/LaunchBox.dll</LogicalName></EmbeddedResource>
+  </ItemGroup>
+  <Target Name="CheckLaunchBoxShim" BeforeTargets="CoreCompile" DependsOnTargets="ResolveProjectReferences">
+    <Error Condition="!Exists('$(LbShimDll)')"
+           Text="LbShim output missing ($(LbShimDll)) — the LaunchBox-compatibility shim must build first; LaunchBox plugins would silently lose notifications." />
+  </Target>
+
   <ItemGroup>
     <!-- Fallback hero fanart, used when a game/node has no background of its own. -->
     <EmbeddedResource Include="defaultFanart.jpg" />

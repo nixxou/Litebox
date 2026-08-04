@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The LaunchBox COMPATIBILITY assembly.
+
+       A LaunchBox plugin that wants a notification has no SDK entry point for it: it reaches into the
+       application assembly by reflection —
+
+           AppDomain.CurrentDomain.GetAssemblies().First(a => a.GetName().Name == "LaunchBox")
+                    .GetType("Unbroken.LaunchBox.Windows.Desktop.Notifications.NotificationCenter")
+
+       — so under LiteBox that lookup finds nothing and the plugin silently no-ops. This project supplies
+       exactly that shape: an assembly whose IDENTITY is "LaunchBox" carrying LaunchBox's public
+       Notifications API, every call forwarded to LiteBox's own notification center (see ShimBridge).
+
+       Why the identity and not the file: LiteBox.exe lives in <LB>\Core — the SAME folder as the REAL
+       LaunchBox.dll. Shipping a file called LaunchBox.dll there would overwrite LaunchBox's own assembly.
+       So this dll is EMBEDDED into LiteBox (LiteBox.csproj, resource "shim/LaunchBox.dll") and loaded from
+       memory at boot (Host\Notifications\LaunchBoxShim.cs) — nothing lands on disk, and because the
+       identity registers in the default load context FIRST, a plugin with a hard reference to LaunchBox
+       binds here instead of dragging the real (obfuscated, licence-checking, WPF-app) LaunchBox.dll into
+       the process.
+
+       Keep this project dependency-free apart from WPF: ImageSource / ICommand appear in the mirrored
+       signatures, and LiteBox already runs with WPF loaded. -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- The identity a plugin searches for. The produced file is LaunchBox.dll under this project's own
+         bin\ (never copied to LiteBox's output — LiteBox embeds it instead). -->
+    <AssemblyName>LaunchBox</AssemblyName>
+    <RootNamespace>LiteBox.Shim</RootNamespace>
+    <!-- Higher than any real LaunchBox build, so a plugin compiled against LaunchBox 13.x binds to this
+         copy (a loaded assembly satisfies a reference to an equal-or-lower version). -->
+    <AssemblyVersion>99.0.0.0</AssemblyVersion>
+    <FileVersion>99.0.0.0</FileVersion>
+    <InformationalVersion>LiteBox LaunchBox-compatibility shim</InformationalVersion>
+    <Product>LiteBox</Product>
+    <!-- One self-contained file to embed: no pdb, no satellite resources, deterministic bytes. -->
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+</Project>

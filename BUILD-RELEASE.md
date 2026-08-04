@@ -92,6 +92,18 @@ This split lives in `LiteBox.csproj` via `$(SdkRefDll)` / `$(Lb9Root)` / `$(Lb10
 `Magick.NET*` and `Microsoft.Data.Sqlite` / `SQLitePCLRaw*` are net8 → satisfy both targets; only the SDK
 reference is split. All are `Private=false` (compile-time only); at runtime LiteBox binds Core's copy by name.
 
+### The LaunchBox-compatibility shim (`LbShim\`)
+
+A second, tiny project builds an assembly whose **identity is `LaunchBox`**, carrying LaunchBox's public
+Notifications API forwarded to LiteBox's notification center — so a plugin that reflects for
+`GetAssemblies().First(a => a.Name == "LaunchBox")` keeps working under LiteBox (see
+`Host\Notifications\README-API.md`). It is single-TFM (**net9**, which the net10 runtime loads fine).
+
+Nothing extra ships: the built dll is an **embedded resource** of LiteBox (`shim/LaunchBox.dll`) and is
+loaded from memory at boot. It must **never** become a file next to `LiteBox.exe` — that folder is
+`<LB>\Core`, where the **real** `LaunchBox.dll` lives. Hence `ReferenceOutputAssembly=false` +
+`Private=false` on the `ProjectReference`, and no entry in `$appFiles` / `LightPayload.Files`.
+
 ---
 
 ## What the script runs

@@ -39,6 +39,11 @@ internal sealed class WebKioskWindow : Form
     private string _deepLink;           // one-shot extra hash for a restore deep-link ("" normally)
     private bool _reassertTopMost;      // dropped TopMost for an external launch → restore when re-focused
 
+    /// <summary>True while a kiosk window is up — the signal NotificationUi uses to suppress native popups
+    /// (the fullscreen TopMost kiosk would fight them; the kiosk's own page shows the notifications).
+    /// Callers must guard against a type-load throw on a Core without WebView2 (13.27).</summary>
+    public static bool IsOpen => _instance is { IsDisposed: false };
+
     /// <summary>True when the WebView2 managed assemblies AND the Evergreen runtime are both present. Isolated
     /// + guarded so a Core without WebView2 (13.27) is caught, never fatal.</summary>
     public static bool IsAvailable()
@@ -211,6 +216,12 @@ internal sealed class WebKioskWindow : Form
         // After yielding to a store window (TopMost dropped), reclaim TopMost the moment the kiosk is
         // focused again — so once the user is done with the installer the kiosk is back on top.
         Activated += (_, _) => { if (_reassertTopMost) { _reassertTopMost = false; try { TopMost = true; } catch { } } };
+
+        // Notifications: from this instant the host stops showing native popups (NotificationUi checks
+        // IsOpen), but this window's page cannot poll for several seconds yet — WebView2 has to boot first.
+        // Mark the floor so the page replays what was silenced in between. See NotificationsApi.
+        try { NotificationsApi.KioskOpened(); } catch { }
+        FormClosed += (_, _) => { try { NotificationsApi.KioskClosed(); } catch { } };
 
         Shown += async (_, _) => await InitAsync();
         // NB: closing the kiosk does NOT re-lock — the kiosk shares the desktop runtime lock (same user),

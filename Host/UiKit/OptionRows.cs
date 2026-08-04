@@ -101,6 +101,14 @@ internal static class OptionRows
                         BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
                     };
                     cmb.Items.AddRange(it.Choices);
+                    // Grow (never shrink) to the widest entry: a self-explaining choice like
+                    // "Follow LaunchBox — currently: LiteBox popups" is useless truncated to "LiteBox po…".
+                    // Capped at the help text's wrap width so one long entry can't stretch the page.
+                    foreach (var choice in it.Choices)
+                    {
+                        int need = TextRenderer.MeasureText(choice ?? "", cmb.Font).Width + S(30);   // + arrow & padding
+                        if (need > cmb.Width) cmb.Width = Math.Min(need, wrapWidth);
+                    }
                     // With ChoiceValues, the combo displays Choices[i] but storage speaks ChoiceValues[i].
                     var values = it.ChoiceValues is { } cv && cv.Length == it.Choices.Length ? cv : it.Choices;
                     var cur = it.Get();

@@ -53,6 +53,7 @@ internal static class HostBoot
     public static string AutoEditEmu;   // --edit-emu "<title|id>" → open Edit Emulator on boot
     public static string AutoEditPage;
     public static string AutoOptions;   // null = not requested; "" = open on the first section
+    public static bool NotifyDemo;      // --notify-demo → raise one notification of each shape once the window is up
 
     /// <summary>Immediate subfolder names of <paramref name="root"/> (plugin folders),
     /// sorted case-insensitively. Empty when the root is missing/unreadable.</summary>
@@ -528,6 +529,11 @@ internal static class HostBoot
             catch (Exception ex) { Console.WriteLine($"[core] pre-init {an} failed: {ex.Message}"); }
         }
 
+        // Register the LaunchBox-compatibility notification API BEFORE any plugin loads: a plugin that
+        // raises LaunchBox notifications looks the assembly up by name, and some do it from their
+        // constructor. See Host\Notifications\LaunchBoxShim.cs.
+        Notifications.LaunchBoxShim.Install();
+
         var reg = PluginLoader.LoadFrom(pluginDirs);
         Console.WriteLine($"Loaded {reg.All.Count} plugin object(s): events={reg.SystemEvents.Count} sysmenu={reg.SystemMenus.Count} gamemenu={reg.GameMenus.Count} themeel={reg.ThemeElements.Count}");
 
@@ -553,6 +559,7 @@ internal static class HostBoot
         if (optIx >= 0)
             AutoOptions = (optIx + 1 < args.Length && !args[optIx + 1].StartsWith("--", StringComparison.Ordinal))
                 ? args[optIx + 1] : "";
+        NotifyDemo = args.Contains("--notify-demo");
 
         // Launch lifecycle: drop/reload the optional tier + notify launching plugins.
         HostLaunch.DryRun = args.Contains("--drylaunch");

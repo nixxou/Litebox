@@ -33,6 +33,9 @@ internal sealed partial class MainWindow
     // "Displaying N of M total games." — LaunchBox puts the count in the menu bar, not the toolbar.
     private ToolStripLabel _menuStatus;
 
+    // The notification bell (far right of the bar, like LaunchBox's): unread badge + the drop-down list.
+    private Notifications.NotificationBell _bell;
+
     private MenuStrip BuildMainMenu()
     {
         var menu = new MenuStrip
@@ -72,6 +75,10 @@ internal sealed partial class MainWindow
         _menuStatus = new ToolStripLabel("") { ForeColor = SubFg, Margin = new Padding(6, 0, 0, 0) };
         menu.Items.Add(_menuStatus);
         UpdateMenuStatus();
+
+        // Far right: the bell. Right-aligned, so it stays in the corner however wide the bar's own items get.
+        _bell = new Notifications.NotificationBell(this, menu);
+        menu.Items.Add(_bell.Item);
 
         return menu;
     }
@@ -363,17 +370,29 @@ internal sealed partial class MainWindow
     {
         if (!Gc.HostGameCache.Enabled) return;
         System.Threading.Tasks.Task task;
-        if (all) task = Safe(() => Gc.GameCache.RebuildAll());
+        string what;                       // what the completion notification names
+        if (all) { task = Safe(() => Gc.GameCache.RebuildAll()); what = "all platforms"; }
         else
         {
-            var tasks = CachePlatformTargets()
+            var targets = CachePlatformTargets();
+            var tasks = targets
                 .Select(n => Safe(() => Gc.GameCache.RebuildPlatform(Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetPlatformByName(n))))
                 .Where(t => t != null).ToArray();
             task = tasks.Length == 0 ? null : System.Threading.Tasks.Task.WhenAll(tasks);
+            what = targets.Count == 1 ? targets[0] : $"{targets.Count} platforms";
         }
-        task?.ContinueWith(_ =>
+        task?.ContinueWith(t =>
         {
             try { if (!IsDisposed && !_closing) BeginInvoke((Action)ReloadAfterGameChange); } catch { }
+            // Completion notification. It belongs to THIS method, not to GameCache.RebuildAll/RebuildPlatform:
+            // those also run automatically (at boot, and after an image edit via GameCacheBridge), and an
+            // automatic rebuild must stay silent. This method is reached only from the two Tools ▸ Rebuild
+            // Game Image Cache entries — a rebuild the user asked for, whose only visible effect today is
+            // the list quietly reloading whenever it happens to finish.
+            if (t.IsFaulted)
+                LiteBox.Notifications.NotificationCenter.Error($"Game image cache rebuild failed ({what}).");
+            else
+                LiteBox.Notifications.NotificationCenter.Info($"Game image cache rebuilt — {what}.");
         });
     }
 

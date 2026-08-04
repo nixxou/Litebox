@@ -70,6 +70,15 @@ internal static class LbGlobalOptions
                 "LaunchBox UI language — applies to LaunchBox's next start.")
                 .Values(langCodes).Tag(noImpact: true),
             B("Show splash screen during load", "ShowLaunchBoxSplashScreen", true),
+            // NOT NoImpact: LiteBox's own notifications follow this setting by default (one place to
+            // configure both frontends). Host\Notifications\NotificationSettings reads it.
+            OptionItem.Choice("g", "Notification system",
+                new[] { "LaunchBox Notifications", "Windows Notifications", "Message Boxes" },
+                () => s.Get("NotificationType", "0"), v => s.Set("NotificationType", v),
+                "Where notifications appear. LiteBox follows this too — unless its own Notifications "
+                + "section overrides it.",
+                applyLive: LbApiHost.Host.Notifications.NotificationSettings.Invalidate)
+                .Values("0", "1", "2"),
             B("Allow deleting ROMs when deleting games", "AllowDeletingRoms", true),
             B("Share optional usage data", "EnableTelemetry", true),
             B("Minimize LaunchBox when launching games", "MinimizeOnGameLaunch", true,

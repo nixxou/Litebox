@@ -293,6 +293,17 @@ internal static class EmbeddedWebServer
             // database site's "/" catch-all).
             _router.Add(@"/api/launchbox/icons/(?<name>[^/]+)\.(?<ext>[a-z0-9]{1,4})", LaunchBoxIconsApi.Handle);
             _router.Add(@"/api/launchbox/platforms/stats", LaunchBoxStatsApi.Handle);
+            // Notifications: the event poll vendor\notify.js runs, + the write-back verbs. Scoped to THIS
+            // surface deliberately, unlike the theme-agnostic /api/media|badges|recent above: only the
+            // LiteBox theme loads notify.js (BigBox sends notifications to the bell instead), and the
+            // action route EXECUTES a plugin-supplied callback rather than serving data. With this
+            // surface off, those routes would answer nobody — so they don't exist.
+            // Ids are Guid "N" (32 lowercase hex). action/<n> registered before the verb route: disjoint
+            // regexes, but explicit order keeps intent obvious (same rationale as the /api/media family).
+            _router.Add(@"/api/notifications/events", NotificationsApi.HandleEvents);
+            _router.Add(@"/api/notifications/test", NotificationsApi.HandleTest);
+            _router.Add(@"/api/notifications/(?<id>[0-9a-f]{32})/action/(?<index>\d+)", NotificationsApi.HandleAction);
+            _router.Add(@"/api/notifications/(?<id>[0-9a-f]{32})/(?<verb>read|unread|dismiss|remove)", NotificationsApi.HandleVerb);
             // R5: /launchbox/api/games/{id}/archive-{entries,favorite} — Select-ROM (the LiteBox-Web theme
             // uses a modal table, not the per-entry overlay, so it has no archive-metadata route). Same
             // handlers + gate as /bigbox/. Registered before the [a-z]+ {kind} mutation route.

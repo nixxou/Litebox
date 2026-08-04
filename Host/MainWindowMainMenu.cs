@@ -476,9 +476,9 @@ internal sealed partial class MainWindow
             M("MAME Arcade Full Set...", null),
             M("Install DOS Game...", null)),
         Sub("Manage", MenuIcons.Manage,
-            M("Manage Emulators...", null),
-            M("Manage Platforms...", null),
-            M("Manage Game Controllers...", null),
+            ManageEmulatorsItem(),
+            ManagePlatformsItem(),
+            ManageControllersItem(),
             Sep(),
             M("Open Bulk Edit Wizard...", MenuIcons.Edit)),
         Sub("Download", MenuIcons.Download,
@@ -513,9 +513,9 @@ internal sealed partial class MainWindow
             M("Connect to the LaunchBox Games Database...", null),
             M("Disconnect from the LaunchBox Games Database...", null)),
         Sep(),
-        M("Select Random Game...", MenuIcons.SelectRandomGame),
+        RandomGameItem(),
         M("Export to Android...", MenuIcons.ExportAndroid),
-        M("Options...", MenuIcons.Options));
+        OptionsItem());
 
         // LiteBox-only diagnostics (no LaunchBox counterpart) — below its tree, behind a separator.
         sub.DropDownItems.Add(Sep());
@@ -593,6 +593,126 @@ internal sealed partial class MainWindow
         Check("Progress", null, false),
         Sep(),
         M("Change Badge Images...", null));
+
+    /// <summary>The Manage Emulators window — one path for the toolbar's Emulators button and
+    /// Tools ▸ Manage ▸ Manage Emulators… Opportunistic SCOPED flush on close: only the
+    /// Emulators.xml ops go to disk now (when safe — LB/BB closed); game/playlist ops stay pending
+    /// until the close-time flush. Matches the natural "I closed the editor, it's saved" expectation
+    /// without committing unrelated half-done edits.</summary>
+    /// <summary>Tools ▸ Select Random Game… — jump to a random game of the list as it currently
+    /// stands (the selected node, minus whatever search/filter/parental rules hide). Drawing from the
+    /// VISIBLE set is also what makes the jump work at all: selecting a game the view filtered out
+    /// would find no row to land on.</summary>
+    private ToolStripMenuItem RandomGameItem()
+    {
+        var it = M("Select Random Game...", MenuIcons.SelectRandomGame);
+        it.Click += (_, _) => Safe(SelectRandomGame);
+        it.Enabled = true;
+        return it;
+    }
+
+    private void SelectRandomGame()
+    {
+        var view = _games?.VisibleGames;
+        if (view == null || view.Count == 0) return;
+        var g = view[Random.Shared.Next(view.Count)];
+        // Focus goes to whichever control is actually showing: in poster mode the list is hidden,
+        // and focusing it there would freeze the poster's arrow navigation (same rule as
+        // MirrorPosterToList's focus:false).
+        _games.SelectGame(g, focus: !_posterMode);
+        if (_posterMode) SelectPosterGame(g);
+        ShowDetails(g);
+    }
+
+    /// <summary>Move the poster's own selection + scroll onto a game (the poster is virtual, its index
+    /// IS the position in the visible list). No-op when the game isn't in the current view.</summary>
+    private void SelectPosterGame(IGame g)
+    {
+        if (_poster == null) return;
+        var view = _games?.VisibleGames;
+        if (view == null) return;
+        int ix = -1;
+        for (int i = 0; i < view.Count; i++) if (ReferenceEquals(view[i], g)) { ix = i; break; }
+        if (ix < 0) return;
+        try
+        {
+            _poster.SelectedIndices.Clear();
+            _poster.SelectedIndices.Add(ix);
+            _poster.EnsureVisible(ix);
+            _poster.Focus();
+        }
+        catch { }
+    }
+
+    /// <summary>Tools ▸ Options… — the same sectioned options window as the toolbar's gear, locked
+    /// under a second instance for the same reason (that instance is read-only).</summary>
+    private ToolStripMenuItem OptionsItem()
+    {
+        var it = M("Options...", MenuIcons.Options);
+        if (_secondInstance)
+        {
+            it.Enabled = false;
+            it.ToolTipText = "Options locked — another LiteBox instance is open (read-only)";
+        }
+        else it.Click += (_, _) => Safe(OpenOptionsWindow);
+        return it;
+    }
+
+    /// <summary>Tools ▸ Manage ▸ Manage Game Controllers… — the GameControllers.xml catalog window,
+    /// the very one Edit Game ▸ Controller Support opens.</summary>
+    private ToolStripMenuItem ManageControllersItem()
+    {
+        var it = M("Manage Game Controllers...", null);
+        it.Click += (_, _) => Safe(() =>
+        {
+            bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
+            using var w = new Controllers.ManageControllersWindow(ro);
+            w.ShowDialog(this);
+        });
+        return it;
+    }
+
+    private ToolStripMenuItem ManageEmulatorsItem()
+    {
+        var it = M("Manage Emulators...", null);
+        it.Click += (_, _) => Safe(OpenManageEmulators);
+        return it;
+    }
+
+    /// <summary>The sectioned options window — one path for the toolbar's gear and Tools ▸ Options…
+    /// Scoped flush on close: the LB-settings ops go to Settings.xml right away (when safe); LiteBox
+    /// INI options were already saved by ApplyFinished.</summary>
+    private void OpenOptionsWindow()
+    {
+        using var w = BuildOptionsWindow();
+        w.ShowDialog(this);
+        (_dm as Data.HostDataManagerXml)?.FlushLbSettingsIfSafe();
+    }
+
+    private void OpenManageEmulators()
+    {
+        bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
+        using var w = new Emulators.ManageEmulatorsWindow(ro, Media.MediaResolver.LbRoot ?? "");
+        w.ShowDialog(this);
+        (_dm as Data.HostDataManagerXml)?.FlushEmulatorsIfSafe();
+    }
+
+    /// <summary>Tools ▸ Manage ▸ Manage Platforms… — the list window (twin of Manage Emulators).
+    /// A platform edited or deleted there changes the hierarchy, so the tree is reloaded on close.</summary>
+    private ToolStripMenuItem ManagePlatformsItem()
+    {
+        var it = M("Manage Platforms...", null);
+        it.Click += (_, _) => Safe(() =>
+        {
+            bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
+            using var w = new Platforms.ManagePlatformsWindow(ro, Media.MediaResolver.LbRoot ?? "");
+            w.ShowDialog(this);
+            if (!w.Changed) return;
+            (_dm as Data.HostDataManagerXml)?.ReloadHierarchy();
+            PopulateSources();
+        });
+        return it;
+    }
 
     private ToolStripMenuItem ArrangeByMenu(string text)
     {

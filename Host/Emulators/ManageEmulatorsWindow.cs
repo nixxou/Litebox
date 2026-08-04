@@ -63,26 +63,26 @@ internal sealed class ManageEmulatorsWindow : LiteBoxForm
             Padding = new Padding(0, S(8), S(12), 0),
         };
 
-        var edit = Btn("Edit…");
+        var edit = ActionButton("Edit…", MenuIcons.Edit);
         edit.Click += (_, _) => EditSelected();
-        var add = Btn("Add…");
+        var add = ActionButton("Add…", MenuIcons.Add);
         add.Enabled = !readOnly;
         if (readOnly) add.Text = "Add 🔒";
         add.Click += (_, _) => AddEmulator();
-        var del = Btn("Delete");
+        var del = ActionButton("Delete", MenuIcons.Delete);
         del.Enabled = !readOnly;
         if (readOnly) del.Text = "Delete 🔒";
         del.Click += (_, _) => DeleteSelected();
         // Update All: every plugin-managed emulator with a newer installable
         // version gets InstallEmulator run sequentially (per-emulator progress
         // dialog).
-        var updAll = Btn("Update All");
+        var updAll = ActionButton("Update All", MenuIcons.Refresh);
         updAll.Enabled = !readOnly;
         if (readOnly) updAll.Text = "Update All 🔒";
         updAll.Click += (_, _) => UpdateAll();
         leftGroup.Controls.Add(edit); leftGroup.Controls.Add(add); leftGroup.Controls.Add(del); leftGroup.Controls.Add(updAll);
 
-        var close = Btn("Close");
+        var close = ActionButton("Close", MenuIcons.Exit);
         close.Click += (_, _) => Close();
         rightGroup.Controls.Add(close);
 
@@ -207,13 +207,6 @@ internal sealed class ManageEmulatorsWindow : LiteBoxForm
             EditEmulatorWindow.RunInstall(plugin, e, version, this);
         Fill();
     }
-
-    private Button Btn(string text) => new()
-    {
-        Text = text, Size = new Size(S(96), S(28)), Margin = new Padding(0, 0, S(8), 0),
-        FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.CancelBtn, ForeColor = Color.White,
-        FlatAppearance = { BorderSize = 0 }, Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-    };
 
     private static T? Safe<T>(Func<T?> f) { try { return f(); } catch { return default; } }
 }

@@ -39,4 +39,28 @@ internal class LiteBoxForm : Form
 
     /// <summary>Scales a pure chrome pixel dimension for the current DPI. See <see cref="DpiScale"/>.</summary>
     protected int S(int px) => (int)Math.Round(px * DpiScale);
+
+    /// <summary>A footer action button, optionally carrying one of the <see cref="MenuIcons"/> glyphs
+    /// to its left (LaunchBox labels these buttons with the same icons as the matching menu entries).
+    /// Sizes itself to its content so an icon — or a longer label — never crops the text; a missing
+    /// icon simply yields a text-only button.</summary>
+    protected Button ActionButton(string text, string? icon = null)
+    {
+        var btn = new Button
+        {
+            Text = text,
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(S(96), S(28)),
+            Padding = new Padding(S(10), S(4), S(12), S(4)),
+            Margin = new Padding(0, 0, S(8), 0),
+            FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.CancelBtn, ForeColor = Color.White,
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            TextImageRelation = TextImageRelation.ImageBeforeText,
+            ImageAlign = ContentAlignment.MiddleLeft,
+            TextAlign = ContentAlignment.MiddleRight,
+        };
+        btn.FlatAppearance.BorderSize = 0;
+        if (icon != null) btn.Image = MenuIcons.Get(icon, S(16));
+        return btn;
+    }
 }

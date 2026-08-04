@@ -405,29 +405,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             optBtn.Enabled = false;
             optBtn.ToolTipText = "Options locked — another LiteBox instance is open (read-only)";
         }
-        optBtn.Click += (_, _) =>
-        {
-            using var w = BuildOptionsWindow();
-            w.ShowDialog(this);
-            // Scoped flush: the LB-settings ops go to Settings.xml right away
-            // (when safe); LiteBox INI options were already saved by ApplyFinished.
-            (_dm as HostDataManagerXml)?.FlushLbSettingsIfSafe();
-        };
+        optBtn.Click += (_, _) => OpenOptionsWindow();
         bar.Items.Add(optBtn);
 
         // Manage Emulators (full per-emulator config; read-only honours the lock).
         var emusBtn = new ToolStripButton("Emulators") { ForeColor = Fg, ToolTipText = "Manage Emulators" };
-        emusBtn.Click += (_, _) =>
-        {
-            bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? true;
-            using var w = new Emulators.ManageEmulatorsWindow(ro, LbApiHost.Host.Media.MediaResolver.LbRoot ?? "");
-            w.ShowDialog(this);
-            // Opportunistic SCOPED flush: only the Emulators.xml ops go to disk now
-            // (when safe — LB/BB closed); game/playlist ops stay pending until the
-            // close-time flush. Matches the natural "I closed the editor, it's
-            // saved" expectation without committing unrelated half-done edits.
-            (_dm as HostDataManagerXml)?.FlushEmulatorsIfSafe();
-        };
+        emusBtn.Click += (_, _) => OpenManageEmulators();
         bar.Items.Add(emusBtn);
 
         // Plugins (system-menu plugins) — lives on the toolbar, right of Emulators;

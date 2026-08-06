@@ -87,6 +87,29 @@ Model3dRequireBack         false   ┐ Quand un modèle 3D MÉRITE-t-il d'être
 Model3dRequireSpine        false   │ affiché ET baké ? Le FRONT est toujours
 Model3dRequireBothScans    false   │ requis ; ces clés ajoutent des exigences.
 Model3dAcceptFullScan      false   ┘ Détail complet au §media-layout.json.
+ProgressApplyOnSelect      true    Réévalue les règles d'auto-progression d'un
+                                   jeu pendant que son panneau de détail se
+                                   charge (fond, quelques µs : la valeur n'est
+                                   réécrite que si elle change vraiment).
+ProgressSweepOnBoot        false   Passe les règles sur TOUTE la bibliothèque au
+                                   démarrage. Off par défaut : la sélection et
+                                   la sortie de jeu couvrent l'usage normal, le
+                                   balayage ne sert qu'à rattraper d'un coup.
+ProgressForbiddenFamilyMoves  Active>Not Started; Done>Not Started; Done>Active
+                                   Mouvements de FAMILLE que l'automatisme ne
+                                   fera jamais ("de>vers", séparés par des
+                                   points-virgules ; les familles sont celles de
+                                   la page Game Progress Organization). Rien
+                                   n'enregistre QUI a écrit une valeur : sans
+                                   cette barrière, un "Done / Completed" que tu
+                                   poses à la main sur un jeu sans
+                                   RetroAchievements est ramené à "In Progress"
+                                   ou "Unplayed" à la prochaine évaluation. Les
+                                   mouvements INTERNES à une famille restent
+                                   libres — In Progress <-> Paused est
+                                   précisément le rôle de la règle d'inactivité.
+                                   Clé LiteBox et non LB : LaunchBox n'a pas
+                                   l'équivalent et jetterait la clé de son XML.
 DetailLoadDelayMs          300     Délai (0-5000) avant le chargement différé du
                                    panneau de détail (anti-scroll-rapide).
 KillStoreLauncherAfterGame false   Ferme le client GOG/Steam/Epic/Ubisoft à la
@@ -214,6 +237,21 @@ ZoomPercent / TwoLineRows / AutoFitColumns  Confort de liste.
 MetaExpanded / VndbExpanded / RaExpanded / StoreAchExpanded  Sections du
                                panneau de détail repliées/dépliées.
 PosterMode / PosterImageGroup / PosterOwnerDraw  Réglages de la vue Poster.
+PosterImageMemoryLevel  3       Mémoire que la grille Poster peut consacrer à
+                               garder les jaquettes décodées et les tuiles
+                               composées. Défaut 4 (le 3 correspond exactement à
+                               ce que LiteBox gardait avant l'existence du
+                               réglage, le 10 va jusqu'à ~2 Go, le 1 au huitième
+                               du défaut). Le budget est en OCTETS : zoomer
+                               agrandit chaque tuile et en fait tenir moins, au
+                               lieu de multiplier la mémoire par quatre. Deux
+                               plafonds ne sont pas une question de mémoire et
+                               sont mesurés : un HBITMAP coûte un objet GDI et
+                               l'allocation échoue à 9 994 (cache de tuiles
+                               owner-draw, plafonné à 4096), tandis que 12 000
+                               bitmaps GDI+ laissent le compteur GDI à 3 — les
+                               vignettes décodées héritent donc de ce que les
+                               tuiles ne peuvent pas dépenser.
 
 --------------------------------------------------------------------------------
  1.5 Sections
@@ -233,9 +271,86 @@ PosterMode / PosterImageGroup / PosterOwnerDraw  Réglages de la vue Poster.
   Email / PasswordBlob  Compte LaunchBox ; PasswordBlob est CHIFFRÉ (crypto
                         Settings de LB, LbSettingsCrypto) — jamais en clair.
 
+--------------------------------------------------------------------------------
+ 1.6 Badges
+--------------------------------------------------------------------------------
+L'activation par badge, le pack et "Show Badges" appartiennent à LaunchBox et
+vivent dans SON Settings.xml (§5) : ShowBadges, BadgePack, et EnabledBadges —
+liste séparée par des PIPES, mesurée sur une écriture réelle de LaunchBox, dont
+l'ABSENCE signifie "tous activés". Ne vont ici que les clés que LaunchBox ne
+connaît pas : il reconstruit son XML à schéma fixe et JETTE tout élément
+étranger (voir docs/storage-audit.md §1).
+
+BadgeOrder             (ordre du catalogue)  Ordre de dessin GLOBAL, tous badges
+                       confondus, séparé par des pipes. EnabledBadges ne liste
+                       que les badges ACTIVÉS et ne peut donc pas porter l'ordre
+                       des autres. Les ids inconnus sont ignorés au chargement,
+                       les badges absents de la liste sont ajoutés à la fin : le
+                       catalogue peut grandir sans invalider le réglage.
+CustomBadgesDisabled   (vide)   Ids des badges CUSTOM désactivés, pipes. On
+                       stocke les désactivés et non les activés pour qu'un badge
+                       fraîchement créé démarre visible. Les ids custom
+                       n'entrent jamais dans EnabledBadges (LaunchBox les
+                       jetterait).
+BadgesComputeAtLoad    false    true = la passe tourne pendant le boot (la
+                       première liste est déjà badgée, démarrage plus long) ;
+                       false = elle démarre une fois la fenêtre affichée.
+BadgesHeroAlways       true     Le panneau de détail montre les badges même
+                       quand "Show Badges" est décoché (qui, chez LaunchBox,
+                       gouverne la LISTE et les tuiles).
+BadgesHeroScalePct     100      Taille des badges, en % (25-200 par pas de 25),
+BadgesListScalePct     100      pour chacune des trois surfaces. En liste, un
+BadgesPosterScalePct   100      badge ne peut pas dépasser la hauteur de ligne.
+BadgesHeroOpacityPct   80       Opacité, en % (5-100). Elle est CUITE dans le
+BadgesListOpacityPct   80       bitmap mis en cache, pas appliquée au dessin :
+BadgesPosterOpacityPct 80       les bandeaux et les tuiles sont composés une
+                       fois. Changer l'un de ces six réglages évince donc les
+                       icônes redimensionnées (sinon chaque valeur essayée
+                       laissait 0,2 à 0,7 Mo derrière elle, définitivement).
+BadgesPosterPlacement  just above the art   Où vont les badges sur une tuile :
+                       under the developer (rien ne couvre la jaquette, mais les
+                       tuiles grandissent), ou l'un des trois placements qui
+                       suivent l'ART — bord bas, bord haut, ou juste au-dessus
+                       dans l'espace qu'une jaquette courte laisse libre.
+BadgesPosterAlign      right    Alignement horizontal de la rangée de badges.
+BadgesPosterOverlay    false    Les badges sont dessinés PAR-DESSUS l'art au
+                       lieu de lui réserver une bande.
+
+Ce qui n'est PAS ici : les badges custom eux-mêmes (badges-custom.json, §2),
+leurs images (Images\Media Packs\Badges\LiteBox Custom\<id>.png — l'id EST le
+nom de fichier, un renommage déplace les deux ensemble), et le résultat de la
+passe (cache\badges.bin, §3bis).
+
 ================================================================================
  2. Fichiers JSON — un par fonctionnalité, créés au premier usage
 ================================================================================
+
+--------------------------------------------------------------------------------
+ badges-custom.json — badges définis par l'utilisateur
+--------------------------------------------------------------------------------
+Créé au premier badge custom (Badges -> Manage Badges -> Add Custom). Une liste
+d'objets : id stable, nom affiché, et les conditions dans le vocabulaire des
+playlists auto (PlaylistFilterDef) — une règle écrite ici veut dire exactement
+ce qu'elle veut dire sur une playlist.
+
+    [ { "Id": "french", "Name": "french",
+        "Rules": [ { "Field": "Favorite", "Comparison": "IsTrue",
+                     "Value": "" } ] },
+      { "Id": "xxx", "Name": "xxx",
+        "Rules": [ { "Field": "Progress", "Comparison": "Contains",
+                     "Value": "to Play" } ] } ]
+
+Règles sur des champs DIFFÉRENTS : toutes doivent matcher. Règles répétées sur
+le MÊME champ : l'une suffit. Certains champs du vocabulaire n'ont pas de
+réponse locale (succès Steam/GOG, noms alternatifs) : un badge qui repose
+dessus ne s'affichera jamais, et la fenêtre le dit au lieu de laisser deviner.
+
+L'Id EST le nom du fichier image (Images\Media Packs\Badges\LiteBox
+Custom\<id>.png) et la clé qu'utilisent BadgeOrder et
+CustomBadgesDisabled : renommer
+un badge déplace les quatre ensemble. Deux badges ne peuvent pas porter le même
+nom. Le renommage n'est appliqué qu'APRÈS la validation du dialogue — annuler
+après avoir tapé un nouveau nom laisse le badge stocké intact.
 
 --------------------------------------------------------------------------------
  media-layout.json — pipeline d'images du panneau de détail
@@ -580,6 +695,43 @@ lit (overviews, images web, mapping plateformes) et ne la modifie pas — son
 user_version n'est JAMAIS stampé par nous.
 
 ================================================================================
+ 3bis. cache\ — fichiers reconstructibles
+================================================================================
+Tout ce qui se refabrique seul : miniatures dégradées, GLB 3D, caches RA et
+boutiques… et le résultat de la passe de badges.
+
+--------------------------------------------------------------------------------
+ cache\badges.bin — résultat de la passe de badges
+--------------------------------------------------------------------------------
+Binaire maison (~103 Ko pour 5 075 jeux, ~6 Mo à 300 000). Contient la table des
+COMBINAISONS packées — [nombre][badge, variante] par combinaison, ~7 octets — et
+un entier par jeu : l'id de sa combinaison. C'est tout l'état badges de la
+bibliothèque ; en mémoire il vit dans GameRow (4 octets par jeu), pas dans un
+objet par jeu.
+
+Il existe parce que le rapport est inversé par rapport à un cache d'images :
+évaluer coûte 85-130 µs par jeu (400 ms ici, 25-40 s à 300 000) et le résultat
+tient dans quelques octets — relire vaut 3 000 fois recalculer. À l'inverse un
+bandeau de badges se compose en 15,8 µs et se relit en 55 à 481 : c'est pourquoi
+AUCUNE image de badge n'est mise en cache sur disque.
+
+Il n'est réutilisé que si RIEN de ce dont il dépend n'a bougé. L'estampille
+porte : le format, le pack, les ids du catalogue dans l'ordre des index, le
+nombre de jeux, la taille et la date de chaque XML de plateforme (ce qui attrape
+une modification faite dans LaunchBox pendant que LiteBox était fermé,
+sous-entités comprises), puis les entrées HORS store que les événements ne
+peuvent pas surveiller quand l'application ne tourne pas : nombre de fichiers et
+date la plus récente par dossier de pack, date des dossiers
+Manuals\<plateforme>,
+taille et date de chaque hiscore.dat installé, taille et date de
+saves-vault.json. Quelques dizaines de stats UNE fois au démarrage — pas de
+l'I/O par jeu. Un rejet nomme le champ qui a bougé.
+
+Écrit APRÈS le flush des XML, jamais avant : le flush change leurs dates et
+invaliderait le fichier qu'on vient d'écrire. Supprimé quand le catalogue lui-
+même change (badge custom ajouté/modifié/supprimé) : le fichier parle de lui.
+
+================================================================================
  4. Fichiers texte
 ================================================================================
 pending-cleanup.txt   Liste des bases marquées "supprimer au prochain
@@ -606,6 +758,21 @@ ADS NTFS (flux :nom)       Métadonnées attachées aux FICHIERS d'images/ROMs,
                              :lock         verrou d'image (partagé plugin)
                              :lb.dupcheck  cache anti-doublons par vue
                            Repli sidecar .ads\ sur les volumes non-NTFS.
+Settings.xml (LaunchBox)   Réglages de LB que LiteBox partage vraiment, lus ET
+                           écrits chez lui parce qu'ils lui appartiennent :
+                             ShowBadges / BadgePack / EnabledBadges (badges —
+                             EnabledBadges est séparé par des PIPES, absent =
+                             tous activés)
+                             EnableAutoProgressTracking + AutoProgress*Value,
+                             AutoProgressMinPlaytime, AutoProgressPausePeriod,
+                             AutoProgressIncludedValues (auto-progression)
+                           Nos propres clés n'y vont JAMAIS (elles seraient
+                           jetées) : voir BadgeOrder, CustomBadgesDisabled et
+                           ProgressForbiddenFamilyMoves au §1.
+Images\Media Packs\Badges\  Art des badges — packs installés par
+                           l'utilisateur, jamais livrés par LiteBox, plus le
+                           dossier "LiteBox Custom" où atterrissent les PNG des
+                           badges custom (<id>.png, 128x128).
 cache\                     Tout le reconstructible : thumbs\ (miniatures),
                            3d\ (modèles GLB + snapshot .png sidecar par modèle —
                            lu en direct pour l'affichage, ré-extrait du GLB si
@@ -615,7 +782,9 @@ cache\                     Tout le reconstructible : thumbs\ (miniatures),
                            boutiques), emumovies\, steam\, romcache\ (ROMs
                            extraites, éviction LRU), webview2-*\ (profils
                            navigateur), staging de téléchargement de la bdd
-                           étendue. "Tout supprimer" est toujours sans risque.
+                           étendue, badges.bin (résultat de la passe de
+                           badges, §3bis). "Tout supprimer" est toujours sans
+                           risque.
 web\ / web-assets\         Thèmes web servis / staging de déploiement.
 thirdparty\                Payload natif déployé (yt-dlp, RAHasher…).
 ================================================================================

@@ -94,8 +94,16 @@ internal static class ProgressAutomation
         }
         if (target == null && c.PlaytimeReached.Length > 0 && SafeInt(() => g.PlayTime) >= c.MinPlaytimeMinutes * 60L)
             target = c.PlaytimeReached;
-        if (target == null && c.NotStarted.Length > 0)
+        if (target == null && c.NotStarted.Length > 0
+            && (cur.Length == 0 || c.Targets.Contains(cur)))
+        {
+            // The fallback ("games that don't match any of the criteria") may only reclaim a value
+            // automation itself produces — never one that exists solely because you listed it as
+            // included. Otherwise the included list defeats its own purpose: you mark a game "Want to
+            // Play" so automation can take it over ONCE YOU PLAY IT, and instead it is wiped to
+            // "Unplayed" on the next look, before you ever played.
             target = c.NotStarted;
+        }
 
         // "In Progress but inactive for N days" — demote an in-progress RESULT to Paused.
         if (target != null && c.Paused.Length > 0 && c.PausePeriodDays > 0
@@ -106,7 +114,29 @@ internal static class ProgressAutomation
                 target = c.Paused;
         }
 
-        return target != null && !string.Equals(target, cur, StringComparison.Ordinal) ? target : null;
+        if (target == null || string.Equals(target, cur, StringComparison.Ordinal)) return null;
+
+        // ONE-WAY STREET. Nothing records who wrote a value, so automation cannot tell your "Done /
+        // Completed" from one it set itself — and without RetroAchievements on that game, its rules
+        // would happily walk it back to "In Progress" or "Unplayed". The guard is therefore on the
+        // MOVE rather than on the value: automation may carry a game forward through the families of
+        // the Game Progress Organization page, never backward. Inside a family it stays free, because
+        // "In Progress ↔ Paused" is exactly what the inactivity rule is for.
+        if (c.Forbidden.Count > 0)
+        {
+            string from = ProgressModel.Split(cur).category.Trim();
+            string to = ProgressModel.Split(target).category.Trim();
+            if (from.Length > 0 && to.Length > 0
+                && !string.Equals(from, to, StringComparison.OrdinalIgnoreCase)
+                && c.Forbidden.Contains(from + ">" + to))
+                return null;
+        }
+        return target;
+    }
+
+    private static string ForbiddenMoves()
+    {
+        try { return LiteBoxConfig.LoadForExe().ProgressForbiddenFamilyMoves ?? ""; } catch { return ""; }
     }
 
     // ── Settings snapshot ─────────────────────────────────────────────────
@@ -117,6 +147,12 @@ internal static class ProgressAutomation
         public string BeatenSoftcore = "", BeatenHardcore = "", Completed = "", Mastered = "";
         public int MinPlaytimeMinutes = 30, PausePeriodDays = 30;
         public HashSet<string> Owned = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>The rule targets alone — what automation can WRITE, as opposed to what it may
+        /// overwrite (<see cref="Owned"/>, which also carries the "included" list).</summary>
+        public HashSet<string> Targets = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Family moves automation must never make, as "from>to" (LiteBox's own setting —
+        /// LaunchBox has no equivalent, and would drop an unknown key from its Settings.xml).</summary>
+        public HashSet<string> Forbidden = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Null when Settings.xml is absent or the master switch is off.</summary>
         public static Cfg? Load()
@@ -138,9 +174,16 @@ internal static class ProgressAutomation
             if (int.TryParse(s.Get("AutoProgressPausePeriod", "30"), out var p)) c.PausePeriodDays = p;
             foreach (var v in new[] { c.NotStarted, c.PlaytimeReached, c.HasAchievements, c.Paused,
                                       c.BeatenSoftcore, c.BeatenHardcore, c.Completed, c.Mastered })
-                if (v.Length > 0) c.Owned.Add(v);
+                if (v.Length > 0) { c.Owned.Add(v); c.Targets.Add(v); }
             foreach (var part in s.Get("AutoProgressIncludedValues").Split(';'))
             { var t = part.Trim(); if (t.Length > 0) c.Owned.Add(t); }
+            foreach (var part in ForbiddenMoves().Split(';'))
+            {
+                var t = part.Trim();
+                int i = t.IndexOf('>');
+                if (i <= 0 || i >= t.Length - 1) continue;
+                c.Forbidden.Add(t.Substring(0, i).Trim() + ">" + t.Substring(i + 1).Trim());
+            }
             return c;
         }
     }

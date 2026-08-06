@@ -288,6 +288,16 @@ internal sealed class LiteBoxConfig
     // (cheap: RAM + at most one cached-RA read). Game-exit evaluation is always on.
     public bool ProgressSweepOnBoot   { get => GetBool("ProgressSweepOnBoot", false); set => SetBool("ProgressSweepOnBoot", value); }
     public bool ProgressApplyOnSelect { get => GetBool("ProgressApplyOnSelect", true); set => SetBool("ProgressApplyOnSelect", value); }
+
+    /// <summary>Family moves the progress automation must never make, "from>to", semicolon separated.
+    /// LiteBox's own setting: LaunchBox has no equivalent field, and rewrites Settings.xml without the
+    /// keys it does not know. Default: a game can be carried FORWARD through the families of the Game
+    /// Progress Organization page, never backward.</summary>
+    public string ProgressForbiddenFamilyMoves
+    {
+        get => Get("ProgressForbiddenFamilyMoves", "Active>Not Started; Done>Not Started; Done>Active");
+        set => Set("ProgressForbiddenFamilyMoves", value ?? "");
+    }
     public string GameRunningText     => Get("GameRunningText", "Game running...");
     public Color GameRunningColor     => ParseColor(Get("GameRunningColor", "#0F0F12"), Color.FromArgb(15, 15, 18));
 

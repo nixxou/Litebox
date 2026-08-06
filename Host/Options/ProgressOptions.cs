@@ -107,6 +107,33 @@ internal static class ProgressOptions
             BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
         };
         p.Controls.Add(included);
+        y += S(30);
+
+        // LiteBox's own guard, kept next to the rules it constrains rather than buried in another
+        // page. It is NOT written to Settings.xml: LaunchBox rewrites that file and drops the keys it
+        // does not know.
+        var liteCfg = LiteBoxConfig.LoadForExe();
+        p.Controls.Add(new Label
+        {
+            Text = "LiteBox: family moves automation may never make, \"from>to\" (semicolon separated)",
+            AutoSize = true, Location = new Point(x, y), ForeColor = Fg, BackColor = Bg,
+        });
+        y += S(22);
+        var noDemote = new TextBox
+        {
+            Location = new Point(x, y), Width = wFull, Text = liteCfg.ProgressForbiddenFamilyMoves,
+            BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
+        };
+        p.Controls.Add(noDemote);
+        y += S(24);
+        p.Controls.Add(new Label
+        {
+            Text = "Nothing records who set a Progress value, so automation cannot tell yours from its own. "
+                 + "This keeps it moving games FORWARD through the families of Game Progress Organization "
+                 + "only: a game you marked Done stays Done even without achievements. Moves inside a "
+                 + "family stay free (In Progress ↔ Paused). Empty = no restriction.",
+            Location = new Point(x, y), Width = wFull, Height = S(46), ForeColor = SubFg, BackColor = Bg,
+        });
 
         if (readOnly) foreach (Control c in p.Controls) c.Enabled = false;
 
@@ -124,6 +151,9 @@ internal static class ProgressOptions
             s.Set("AutoProgressCompletedValue", completed.Text.Trim());
             s.Set("AutoProgressMasteredValue", mastered.Text.Trim());
             s.Set("AutoProgressIncludedValues", included.Text.Trim());
+            var lite = LiteBoxConfig.LoadForExe();
+            lite.ProgressForbiddenFamilyMoves = noDemote.Text.Trim();
+            lite.Save();
             if (enable.Checked) ProgressAutomation.SweepAsync();   // reflect the new rules right away
         };
         return p;

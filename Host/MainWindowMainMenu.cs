@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
+using LbApiHost.Host.Data;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.Modules;
 using LbApiHost.Host.UiKit;
@@ -498,6 +499,7 @@ internal sealed partial class MainWindow
             ManageEmulatorsItem(),
             ManagePlatformsItem(),
             ManageControllersItem(),
+            ManageBadgesItem(),
             Sep(),
             M("Open Bulk Edit Wizard...", MenuIcons.Edit)),
         Sub("Download", MenuIcons.Download,
@@ -593,25 +595,122 @@ internal sealed partial class MainWindow
         return sub;
     }
 
-    // LaunchBox's badge set (BadgeXxx resources), plus the entry that opens the badge image folder.
-    private static ToolStripMenuItem BadgesMenu(string text) => Sub(text, MenuIcons.Badges,
-        Check("Show Badges", null, true),
-        Sep(),
-        Check("Achievements", null, false),
-        Check("Broken", null, false),
-        Check("Completed", null, false),
-        Check("Documents", null, false),
-        Check("Favorite", null, true),
-        Check("Game Save", null, false),
-        Check("Hidden", null, false),
-        Check("Installed", null, true),
-        Check("MAME High Scores", null, false),
-        Check("Multiple Discs", null, false),
-        Check("Multiple Versions", null, false),
-        Check("Portable", null, false),
-        Check("Progress", null, false),
-        Sep(),
-        M("Change Badge Images...", null));
+    // ── Badges — LaunchBox's tree, live ──────────────────────────────────────
+    // Show Badges + three group submenus (Game Attributes / Storefronts / Controller Support), each
+    // entry composed the way LaunchBox composes it: LabelEnableSomething ("Enable {0}") + the badge's
+    // own Indicator wording. State lives in LaunchBox's Settings.xml (Badges.BadgeSettings), so the
+    // two apps agree; the catalog (Badges.BadgeCatalog) owns the list, the labels and the predicates.
+    //
+    // The tree is built TWICE (the bar's BADGES entry and MENU ▸ View ▸ Badges), so every checkable
+    // item registers in _miBadges and SyncBadgeChecks re-stamps them all after any toggle — same
+    // pattern as _miImageGroup.
+    private readonly List<ToolStripMenuItem> _miBadges = new();
+    private ToolStripMenuItem _miShowBadges1, _miShowBadges2;   // the two "Show Badges" copies
+
+    private void SyncBadgeChecks()
+    {
+        foreach (var it in _miBadges)
+            if (it.Tag is string id) it.Checked = Badges.BadgeSettings.IsEnabled(id);
+        foreach (var it in new[] { _miShowBadges1, _miShowBadges2 })
+            if (it != null) it.Checked = Badges.BadgeSettings.ShowBadges;
+    }
+
+    private ToolStripMenuItem BadgesMenu(string text)
+    {
+        var show = new ToolStripMenuItem("Show Badges") { Checked = Badges.BadgeSettings.ShowBadges };
+        show.Click += (_, _) => Safe(() =>
+        {
+            Badges.BadgeSettings.ShowBadges = !Badges.BadgeSettings.ShowBadges;
+            SyncBadgeChecks();
+        });
+        // Two live copies of the tree exist at once; remember both so either click updates both.
+        if (_miShowBadges1 == null) _miShowBadges1 = show; else _miShowBadges2 = show;
+
+        var change = M("Change Badge Images...", null);
+        change.Click += (_, _) => Safe(OpenBadgeImagesFolder);
+        var manage = M("Manage Badges...", MenuIcons.Badges);
+        manage.Click += (_, _) => Safe(OpenManageBadges);
+        // The engine follows every change it can be told about; this is for the rest — files dropped
+        // in the media folders from Explorer, a badge pack edited outside the app.
+        var recompute = M("Recompute Badges", MenuIcons.Refresh);
+        recompute.Click += (_, _) => Safe(() => { Badges.BadgeImages.Reset(); Badges.BadgeEngine.InvalidateAll(); });
+
+        var groups = new List<ToolStripItem>
+        {
+            show,
+            BadgeGroupMenu("Game Attributes", Badges.BadgeGroup.GameAttributes),
+            BadgeGroupMenu("Storefronts", Badges.BadgeGroup.Storefronts),
+            BadgeGroupMenu("Controller Support", Badges.BadgeGroup.ControllerSupport),
+        };
+        // The Custom family only earns a submenu once the user has made one — an always-empty entry
+        // would just be a dead end next to LaunchBox's own three.
+        if (Badges.BadgeCatalog.Of(Badges.BadgeGroup.Custom).Any())
+            groups.Add(BadgeGroupMenu("Custom Badges", Badges.BadgeGroup.Custom));
+        groups.Add(Sep());
+        groups.Add(manage);
+        groups.Add(recompute);
+        groups.Add(change);
+
+        return Sub(text, MenuIcons.Badges, groups.ToArray());
+    }
+
+    private ToolStripMenuItem BadgeGroupMenu(string text, Badges.BadgeGroup group)
+    {
+        var sub = new ToolStripMenuItem(text);
+        foreach (var def in Badges.BadgeCatalog.Of(group))
+        {
+            var mi = new ToolStripMenuItem($"Enable {def.Label}")
+            { Tag = def.Id, Checked = Badges.BadgeSettings.IsEnabled(def.Id) };
+            var id = def.Id;
+            mi.Click += (_, _) => Safe(() =>
+            {
+                Badges.BadgeSettings.SetEnabled(id, !Badges.BadgeSettings.IsEnabled(id));
+                SyncBadgeChecks();
+            });
+            _miBadges.Add(mi);
+            sub.DropDownItems.Add(mi);
+        }
+        return sub;
+    }
+
+    private ToolStripMenuItem ManageBadgesItem()
+    {
+        var mi = M("Manage Badges...", MenuIcons.Badges);
+        mi.Click += (_, _) => Safe(OpenManageBadges);
+        return mi;
+    }
+
+    /// <summary>The Manage Badges window: which badges show, in which order, and the user's own ones.
+    /// Its Display tab shows the very same OptionItems as Options ▸ Display — one set of settings,
+    /// two places to reach them.</summary>
+    private void OpenManageBadges()
+    {
+        Badges.ManageBadgesWindow.Open(this,
+            (_dm as HostDataManagerXml)?.ReadOnly ?? false,
+            () => Safe(() => (IReadOnlyList<IGame>)(_dm?.GetAllGames() ?? Array.Empty<IGame>())) ?? Array.Empty<IGame>(),
+            () => BadgeHeroOptions().Concat(BadgeListOptions()).Concat(BadgePosterOptions()).ToArray());
+        SyncBadgeChecks();
+    }
+
+    /// <summary>LaunchBox's "Change Badge Images..." opens a pack picker; ours opens the folder those
+    /// packs live in — LiteBox reads whatever is there, it never ships badge art of its own.</summary>
+    private void OpenBadgeImagesFolder()
+    {
+        var dir = Badges.BadgeImages.PacksRoot;
+        if (string.IsNullOrEmpty(dir))
+        {
+            MessageBox.Show(this, "The LaunchBox folder isn't known yet.", "Badges",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        try { System.IO.Directory.CreateDirectory(dir); } catch { }
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true }); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Could not open " + dir + "\n\n" + ex.Message, "Badges",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
 
     /// <summary>The Manage Emulators window — one path for the toolbar's Emulators button and
     /// Tools ▸ Manage ▸ Manage Emulators… Opportunistic SCOPED flush on close: only the

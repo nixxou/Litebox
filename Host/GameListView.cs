@@ -246,19 +246,231 @@ internal sealed class GameListView : ListView
         set { if (_twoLineRows == value) return; _twoLineRows = value; ApplyRowHeight(); }
     }
 
-    private ImageList _rowSizer;   // a blank image list whose height sets the row height
+    private ImageList _rowSizer;   // the row-height image list — and, with badges on, the badge strips
 
-    // Row height = one blank-image height. 30px fits two wrapped lines (the native control fills the
-    // extra height by wrapping); 22px fits a single line (a second line has no room, so text truncates).
+    // Row height = one image height. 30px fits two wrapped lines (the native control fills the extra
+    // height by wrapping); 22px fits a single line (a second line has no room, so text truncates).
     // Re-applied on HandleCreated so the DPI scale is the real monitor's, not the pre-handle default.
-    private void ApplyRowHeight()
+    private void ApplyRowHeight() => RebuildRowImages(force: true);
+
+    // ── Badge strips (LaunchBox's "Show Badges", drawn BEFORE the title) ──────
+    // The list is deliberately NOT owner-drawn — that is what makes it scroll smoothly — so the
+    // badges ride in the one thing the native control already draws ahead of column 0: the item
+    // image. Games sharing a badge combination share a strip (a few dozen bitmaps for thousands of
+    // rows), and the whole image list is built BEFORE being assigned: adding to a live ImageList
+    // recreates its handle under the control, which a virtual list does not enjoy mid-paint.
+    //
+    // Badges stay on ONE line here, whatever the row height: stacked two-high at list scale they turn
+    // into unreadable confetti. A heavily-badged game therefore just pushes its title further right,
+    // and every strip is the same width — that of the most-badged game in the view — so the titles
+    // stay aligned with each other.
+
+    /// <summary>A game's badge COMBINATION id — the identity of its badge set, and the strip cache's
+    /// key. An int, read per displayed row: no string built, nothing allocated. 0 = no badges.</summary>
+    public Func<IGame, int> BadgeComboOf;
+
+    /// <summary>The icons of a combination, scaled to the given cell — called only when a combination
+    /// has no strip yet, so once per combination rather than once per row.</summary>
+    public Func<int, int, IReadOnlyList<Image>> BadgeStripImages;
+
+    /// <summary>The widest ENABLED badge count in the whole library: every strip is that wide, so the
+    /// titles line up. Taken from the library rather than from the view — finding the widest game of
+    /// the current view would mean walking it on every keystroke, which is exactly the cost this
+    /// design exists to remove.</summary>
+    public Func<int> BadgeMaxSlots;
+
+    /// <summary>Badge size in percent (25–200), from the Display options. Capped at the row height.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int BadgeCellScale { get; set; } = 100;
+
+    /// <summary>Memory the composed strips may occupy. What it really buys is scroll comfort: the
+    /// window shows ~40 rows, so anything past a few hundred slots only helps when jumping around.
+    /// The cap that bites first is not this one — filling an ImageList is quadratic (52 ms at 256
+    /// entries, 136 at 512, 1.7 s at 2048), which is why StripCap is clamped to 512.</summary>
+    public const long StripBudgetBytes = 40L * 1024 * 1024;
+
+    private readonly Dictionary<int, int> _slotOf = new();   // combination id → image list slot
+    private int[] _comboOfSlot = Array.Empty<int>();         // slot → combination id (0 = free)
+    private long[] _slotUsed = Array.Empty<long>();          // slot → last use (LRU)
+    private long _slotTick;
+    private int _stripCap;      // slots available for strips (index 1.._stripCap)
+    private int _stripW;        // 0 = no badges (image list stays the 1px row sizer)
+    private int _stripCell, _stripH;
+    private string _stripSig;   // what the current image list was built from
+    private bool _stripSourceThrew;
+    private int _stripMisses, _stripEvictions;
+
+    /// <summary>Recompute the strips (badge toggle, engine pass published, zoom, view change).</summary>
+    public void RefreshBadges() { RebuildRowImages(force: true); Invalidate(); }
+
+    /// <summary>Cheap counterpart for "a few games changed": the strips are composed lazily per
+    /// displayed row now, so there is nothing to recompute — only the geometry is re-checked, in case
+    /// a game gained enough badges to widen every strip.</summary>
+    public void RefreshBadgesIfCombinationsChanged() => RebuildRowImages();
+
+    private void RebuildRowImages(bool force = false)
     {
         float s = LiteBoxTheme.DpiScale(this);
-        int h = (int)Math.Round((_twoLineRows ? 30 : 22) * s * _zoom);
+        int h = Math.Max(1, (int)Math.Round((_twoLineRows ? 30 : 22) * s * _zoom));
+        // One row, sized to the row height (a badge can never be taller than the row it rides in, so
+        // the size setting is capped there — that cap is what BadgeCellScale's help warns about).
+        const int rows = 1;
+        int cell = Math.Max(6, Math.Min(h - 2, (int)Math.Round(16 * s * _zoom * BadgeCellScale / 100.0)));
+
+        // No scan of the view. The widest badge count comes from the library (memoised in the engine,
+        // walked over combinations rather than games), and each strip is composed the first time a row
+        // that needs it is actually displayed.
+        int maxCols = 0;
+        try { maxCols = BadgeComboOf != null && BadgeMaxSlots != null ? BadgeMaxSlots() : 0; }
+        catch (Exception ex)
+        {
+            if (!_stripSourceThrew) { _stripSourceThrew = true; Console.WriteLine("[badges] strip source threw: " + ex); }
+        }
+        int stripW = maxCols > 0 ? maxCols * cell : 0;
+
+        // Slots are bounded by memory AND by the cost of creating them: an ImageList fills
+        // quadratically, so a cap of 512 (136 ms, measured) is the practical ceiling whatever the
+        // budget allows. 512 slots is ~13× what the window can show at once.
+        int cap = 0;
+        if (stripW > 0)
+        {
+            long per = (long)stripW * h * 4 * 2;   // ×2: WinForms keeps the managed original as well
+            int budget = (int)Math.Clamp(StripBudgetBytes / Math.Max(1, per), 64, 512);
+            // No point holding more slots than the library has combinations. Rounded up to a power of
+            // two so a growing combination count re-sizes the list two or three times, not once per
+            // platform the pass publishes.
+            int want = 64;
+            int combos = 0;
+            try { combos = Badges.BadgeEngine.CacheCount; } catch { }
+            while (want < combos + 16 && want < 512) want <<= 1;
+            cap = Math.Min(budget, want);
+        }
+
+        string sig = $"{h}x{cell}x{stripW}x{cap}";
+        if (sig == _stripSig && _rowSizer != null)
+        {
+            // Same geometry: the image list itself is still right. A forced refresh (a badge toggled,
+            // the pass publishing) only means the COMPOSED strips are stale — dropping the slot map
+            // is enough, and they recompose as rows come back on screen. Rebuilding the list here
+            // would cost ~100 ms for nothing.
+            if (force) FlushStripSlots();
+            return;
+        }
+
+        var swBuild = System.Diagnostics.Stopwatch.StartNew();
+        _stripSig = sig;
+        _stripW = stripW; _stripCell = cell; _stripH = h; _stripCap = cap;
+        _slotOf.Clear();
+        _comboOfSlot = new int[cap + 1];
+        _slotUsed = new long[cap + 1];
+        _stripMisses = _stripEvictions = 0;
+
+        // Built complete BEFORE being assigned: adding to a live ImageList recreates its handle under
+        // the control, which a virtual list does not enjoy mid-paint. Afterwards we only ever REPLACE
+        // a slot in place (~70 µs, measured, and no handle recreation).
         var old = _rowSizer;
-        _rowSizer = new ImageList { ImageSize = new Size(1, Math.Max(1, h)), ColorDepth = ColorDepth.Depth32Bit };
+        _rowSizer = new ImageList
+        { ImageSize = new Size(Math.Max(1, _stripW), h), ColorDepth = ColorDepth.Depth32Bit };
+        if (_stripW > 0)
+        {
+            // Slot 0 is empty on purpose: a row with no badges still reserves the strip, so every title
+            // in the list starts at the same x. Slots 1..cap start blank and are filled on demand.
+            for (int i = 0; i <= cap; i++)
+                _rowSizer.Images.Add(new Bitmap(_stripW, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb));
+        }
         SmallImageList = _rowSizer;
         old?.Dispose();
+        Console.WriteLine($"[badges] strip cache: {cap} slots of {_stripW}x{h} "
+            + $"({(long)cap * _stripW * h * 4 * 2 / 1024} KB), cell={cell} view={_view.Length} "
+            + $"show={Badges.BadgeSettings.ShowBadges} combos={Badges.BadgeEngine.CacheCount} "
+            + $"build={swBuild.Elapsed.TotalMilliseconds:0}ms");
+    }
+
+    private static Bitmap ComposeStrip(IReadOnlyList<Image> images, int cell, int rows, int w, int h)
+    {
+        var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try
+        {
+            int cols = Math.Max(1, (images.Count + rows - 1) / rows);
+            int gridH = Math.Min(h, rows * cell);
+            int top = (h - gridH) / 2;
+            using var g = Graphics.FromImage(bmp);
+            for (int i = 0; i < images.Count; i++)
+            {
+                var img = images[i];
+                if (img == null) continue;
+                int col = i % cols, row = i / cols;
+                if (row >= rows) break;
+                int cx = col * cell + (cell - img.Width) / 2;
+                int cy = top + row * cell + (cell - img.Height) / 2;
+                g.DrawImage(img, cx, cy, img.Width, img.Height);
+            }
+        }
+        catch { }
+        return bmp;
+    }
+
+    // A displayed row asks for its strip. A hit is a dictionary lookup on an int; a miss composes the
+    // strip (15.8 µs) and drops it into a slot (~70 µs) — so a whole screen of unknown combinations
+    // costs ~3 ms, whatever the library's size and however badly its badges correlate.
+    private int StripIndex(IGame g)
+    {
+        if (_stripW <= 0 || _stripCap <= 0 || BadgeComboOf == null) return -1;
+        try
+        {
+            int combo = BadgeComboOf(g);
+            if (combo <= 0) return 0;                       // no badges: the blank strip keeps titles aligned
+            if (_slotOf.TryGetValue(combo, out var slot))
+            {
+                if (slot > 0) _slotUsed[slot] = ++_slotTick;
+                return slot;
+            }
+
+            var images = BadgeStripImages?.Invoke(combo, _stripCell);
+            if (images == null || images.Count == 0) { _slotOf[combo] = 0; return 0; }
+
+            slot = AcquireSlot();
+            if (slot <= 0) return 0;                        // everything on screen: fall back to blank
+            using (var bmp = ComposeStrip(images, _stripCell, 1, _stripW, _stripH))
+                _rowSizer.Images[slot] = bmp;               // in place: no handle recreation
+            int evicted = _comboOfSlot[slot];
+            if (evicted != 0) { _slotOf.Remove(evicted); _stripEvictions++; }
+            _comboOfSlot[slot] = combo;
+            _slotUsed[slot] = ++_slotTick;
+            _slotOf[combo] = slot;
+            _stripMisses++;
+            return slot;
+        }
+        catch (Exception ex)
+        {
+            if (!_stripSourceThrew) { _stripSourceThrew = true; Console.WriteLine("[badges] strip source threw: " + ex); }
+        }
+        return 0;
+    }
+
+    /// <summary>Forget which combination each slot holds, without touching the image list. What the
+    /// slots contain becomes wrong when the enabled set, the order or the opacity changes; the blank
+    /// bitmaps underneath are still the right size, so there is nothing to rebuild.</summary>
+    private void FlushStripSlots()
+    {
+        _slotOf.Clear();
+        Array.Clear(_comboOfSlot, 0, _comboOfSlot.Length);
+        Array.Clear(_slotUsed, 0, _slotUsed.Length);
+        _stripMisses = _stripEvictions = 0;
+    }
+
+    // A free slot, else the least recently used one — but never a slot handed out in the last few
+    // dozen requests, since a row still on screen is drawing it.
+    private const int SlotGuard = 96;
+    private int AcquireSlot()
+    {
+        int lru = 0; long lruAt = long.MaxValue;
+        for (int i = 1; i <= _stripCap; i++)
+        {
+            if (_comboOfSlot[i] == 0) return i;
+            if (_slotUsed[i] < lruAt) { lruAt = _slotUsed[i]; lru = i; }
+        }
+        return _slotTick - lruAt > SlotGuard ? lru : 0;
     }
 
     // ── Zoom (Ctrl +/- and Ctrl-wheel over the game list; level owned + persisted by MainWindow) ──
@@ -425,6 +637,7 @@ internal sealed class GameListView : ListView
         }
         catch { }
         MeasureContentFits();   // view content changed → re-fit columns (capped + cached, so cheap)
+        RebuildRowImages();     // the badge combinations in play may have changed (no-op when they didn't)
         AutoFit();
         try { SelectedIndices.Clear(); } catch { }
         int selIx = prev != null ? Array.IndexOf(_view, prev) : -1;
@@ -498,12 +711,14 @@ internal sealed class GameListView : ListView
             // column >= 1 (a forced header repaint — StretchColumn/ThemeHeader — makes it ask).
             var blank = new ListViewItem("");
             for (int i = 1; i < n; i++) blank.SubItems.Add("");
+            blank.ImageIndex = _stripW > 0 ? 0 : -1;
             e.Item = blank;
             return;
         }
         var g = _view[e.ItemIndex];
         var it = new ListViewItem(n > 0 ? CellText(_visCols[0], g) : "");
         for (int i = 1; i < n; i++) it.SubItems.Add(CellText(_visCols[i], g));
+        it.ImageIndex = StripIndex(g);   // badge strip drawn ahead of the first column's text
 
         // Theming (one-time, when the row scrolls into view — not per frame, so no scroll cost).
         Color bg = (Striped && (e.ItemIndex & 1) == 1) ? RowAlt : RowBack;

@@ -227,8 +227,16 @@ internal static class SaveVault
     public static List<VaultEntry> ForGame(string gameId)
     { lock (_lock) return Load().Where(e => string.Equals(e.GameId, gameId, StringComparison.OrdinalIgnoreCase)).ToList(); }
 
-    public static void Add(VaultEntry e) { lock (_lock) { Load().Add(e); Save(); } }
-    public static void Remove(VaultEntry e) { lock (_lock) { Load().Remove(e); Save(); } }
+    // The vault lives outside GameStore, so the badge engine cannot learn about it through the store's
+    // change notification — these three points are its only mutations, hence the hook here.
+    /// <summary>Raised when the vault changed for a game (its Has Saved Game / Has Save States badges).</summary>
+    public static event Action<string>? VaultChanged;
+
+    private static void Notify(VaultEntry e)
+    { try { if (!string.IsNullOrEmpty(e?.GameId)) VaultChanged?.Invoke(e.GameId); } catch { } }
+
+    public static void Add(VaultEntry e) { lock (_lock) { Load().Add(e); Save(); } Notify(e); }
+    public static void Remove(VaultEntry e) { lock (_lock) { Load().Remove(e); Save(); } Notify(e); }
     public static void Changed() { lock (_lock) { if (_entries != null) Save(); } }
 
     /// <summary>Absolute path of an entry (VaultPath is stored LB-root-relative when possible).</summary>

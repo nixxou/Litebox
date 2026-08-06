@@ -427,7 +427,9 @@ internal static class PlaylistFilterCatalog
         => value.HasValue && value.Value != default
             ? value.Value.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture) : "";
 
-    private static bool StoreMatches(string? source, string storeKey)
+    /// <summary>Does this game's Source name that storefront? One place knows the aliases each store
+    /// writes ("Origin"/"EA app", "Microsoft Store"/"Xbox"…), shared with the storefront badges.</summary>
+    public static bool StoreMatches(string? source, string storeKey)
     {
         var s = Norm(source);
         if (s.Length == 0) return false;

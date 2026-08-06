@@ -60,6 +60,11 @@ internal static class GameSortCatalog
     /// (émulateur installé, dat déployé) — sinon un jeu resterait « non supporté » pour la session.</summary>
     internal static void ClearMameSupportCache() => MameSupportCache.Clear();
 
+    /// <summary>Forget ONE game's MAME-support answer — it is keyed on the rom path and the emulator,
+    /// so editing either makes the memo lie (and nothing else clears it per game).</summary>
+    internal static void ForgetMameSupport(string gameId)
+    { if (!string.IsNullOrEmpty(gameId)) MameSupportCache.TryRemove(gameId, out _); }
+
     public static readonly GameSortDefinition[] Standard =
     {
         new("dateadded",       "Date Added",                  "DateAdded"),

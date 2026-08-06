@@ -421,6 +421,10 @@ internal sealed class HostDataManagerXml : DummyDataManager
     {
         int n = _store.Flush();
         Console.WriteLine($"[HostDataManagerXml] Save(wait={wait}) — flushed {n} game(s) to XML");
+        // The badge snapshot is only reusable while every platform XML is byte-for-byte what it was
+        // when the pass ran — which the flush above may have just changed. So it is rewritten HERE,
+        // after the flush, and never before it.
+        try { Badges.BadgeEngine.SaveSnapshot(force: n > 0); } catch { }
     }
 
     public override void ForceReload() => Console.WriteLine("[HostDataManagerXml] ForceReload — no-op (v1)");

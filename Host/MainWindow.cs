@@ -89,7 +89,72 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private int _slotCount;                                         // slots populated so far (<= cap)
     private readonly LinkedList<int> _slotLru = new();              // front = MRU, back = LRU
     private readonly Dictionary<int, LinkedListNode<int>> _slotNode = new();
-    private const int PosterSlotCap = 1024;                         // recycled slots (>> on-screen tiles)
+    // ── How much memory the poster grid may keep ─────────────────────────────
+    // The three caches below used to be capped by COUNT (1024 slots, 600 tiles, 600 thumbs), which
+    // hides the fact that one element is 105 KB at zoom 1 and 420 KB at zoom 2 — the same caps then
+    // mean 160 MB or 630 MB. They are capped by BYTES now, so the memory is what the user chose and
+    // the zoom only changes how many elements fit inside it.
+    //
+    // The budgets below are exactly what the old counts cost at zoom 1, so level 3 is the behaviour
+    // that shipped. The default is one notch above it: box art is the one thing here that costs a disk
+    // read and a decode to rebuild, and holding a bit more of it is what makes scrolling back over
+    // games already seen instant.
+    private const long PosterSlotBudget0 = 1024L * 124 * 212 * 4;    // native slots / composited tiles
+    private const long PosterThumbBudget0 = 600L * 124 * 174 * 4;    // decoded box art
+    // Level 3 is the reference (1×). Below it the steps are steep — the point of levels 1 and 2 is to
+    // give a small machine a real reduction, not a token one; above it they are geometric (×1.39 a
+    // step) up to ten times the reference.
+    private static readonly double[] PosterMemFactors =
+        { 0.125, 0.35, 1.0, 1.4, 2.0, 2.9, 4.2, 6.2, 9.0, 13.0 };
+
+    // Two ceilings that are NOT about memory, both measured:
+    //   • an HBITMAP costs one GDI object and a process gets 10 000 — allocation failed at 9 994 in a
+    //     standalone probe. The owner-draw tile cache holds one per tile, so it must stay well under.
+    //     (The native image list holds ONE handle whatever its slot count, but grows its internal strip
+    //     by reallocation, so several thousand slots is where filling it stops being free either way.)
+    //   • a GDI+ Bitmap, the form the decoded thumbs are kept in, costs NO handle at all: 12 000 of
+    //     them left the GDI count at 3. They are bounded by memory alone, so they get the high ceiling
+    //     — and they are also the ones worth keeping, being the only ones that cost a disk read and a
+    //     decode to rebuild.
+    private const int PosterTileHardCap = 4096;
+    private const int PosterThumbHardCap = 65536;
+
+    /// <summary>1–10, default 4. Scales every poster image cache at once.</summary>
+    private int PosterMemLevel => Math.Clamp(_cfg.GetInt("PosterImageMemoryLevel", 4), 1, 10);
+    private double PosterMemFactor => PosterMemFactors[PosterMemLevel - 1];
+
+    private long PosterSlotBytes => Math.Max(1L, (long)PCellW * (PImgH + PLabelH) * 4);
+    private long PosterThumbBytes => Math.Max(1L, (long)PCellW * PArtH * 4);
+
+    /// <summary>The two caps for a given level factor. Whatever the tiles cannot spend — they hit the
+    /// hard ceiling long before the budget does at the top levels — is handed to the decoded images
+    /// rather than left unused, which is why level 10 reaches its two gigabytes even though the tile
+    /// count stops at 4096.</summary>
+    private (int Tiles, int Thumbs) PosterCapsFor(double factor)
+    {
+        long tileBudget = (long)(PosterSlotBudget0 * factor);
+        int tiles = (int)Math.Clamp(tileBudget / PosterSlotBytes, 96, PosterTileHardCap);
+        long spill = Math.Max(0, tileBudget - (long)tiles * PosterSlotBytes);
+        int thumbs = (int)Math.Clamp(((long)(PosterThumbBudget0 * factor) + spill) / PosterThumbBytes,
+                                     64, PosterThumbHardCap);
+        return (tiles, thumbs);
+    }
+
+    /// <summary>Recycled image-list slots (>> on-screen tiles). The floor keeps scrolling smooth at
+    /// large zooms, where one tile is expensive: below ~96 the LRU would evict tiles still on screen.</summary>
+    private int PosterSlotCap => PosterCapsFor(PosterMemFactor).Tiles;
+    private int PosterTileCap => PosterSlotCap;     // the owner-draw renderer's equivalent
+
+    private int PosterThumbCap => PosterCapsFor(PosterMemFactor).Thumbs;
+
+    /// <summary>What the caps add up to right now — shown in the option's help so the level means
+    /// something concrete rather than a number between 1 and 10.</summary>
+    private string PosterMemEstimate()
+    {
+        var (t, th) = PosterCapsFor(PosterMemFactor);
+        long bytes = (long)t * PosterSlotBytes + (long)th * PosterThumbBytes;
+        return $"{bytes / (1024 * 1024)} MB at the current zoom ({t} tiles + {th} images)";
+    }
     // Legacy owner-draw renderer (opt-in via PosterOwnerDraw; needs a restart to switch). Kept as an
     // alternative to the native image list: it owner-draws each tile (custom rounded selection + hover
     // grow) but repaints managed per tile, so a held scroll in a huge view can stutter.
@@ -117,8 +182,22 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private const int PCellW0 = 124, PImgH0 = 174, PLabelH0 = 38, PGap0 = 14;
     private double _zoom = 1.0;                                       // central-panel zoom 0.5–2.0 (saved as ZoomPercent)
     private int PCellW  => (int)Math.Round(PCellW0  * _zoom);
-    private int PImgH   => (int)Math.Round(PImgH0   * _zoom);
-    private int PLabelH => (int)Math.Round(PLabelH0 * _zoom);
+    /// <summary>The ART box — what the box thumbs are scaled to fit. Stays put whatever the badges do,
+    /// so switching a badge placement never resizes the artwork.</summary>
+    private int PArtH   => (int)Math.Round(PImgH0   * _zoom);
+    /// <summary>The image ZONE: the art box plus, for the "just above the art" placement, a reserved
+    /// band on top. The art is bottom-anchored in the zone, so that band is empty space above it —
+    /// which is what makes that placement work even for a poster that fills the art box.</summary>
+    private int PImgH   => PArtH + (BadgeBandAbove ? PBadgeBand : 0);
+    // Badges sitting UNDER the developer line grow the label band instead. Every tile in the grid must
+    // be the same size, so the reserved row count is the most-badged game of the current view
+    // (RecomputePosterBadgeRows) — usually 1, 2 for a well-documented arcade game.
+    private int PLabelH => (int)Math.Round(PLabelH0 * _zoom) + (BadgeBandBelow ? PBadgeBand : 0);
+    private int PBadgeCell => Math.Max(6, PZ(14) * PosterBadgeScalePct / 100);
+    private int PBadgeBand => _posterBadgeRows * PBadgeCell;
+    private bool BadgeBandAbove => _posterBadgeRows > 0 && PosterBadgePlacement == PlaceAboveArt;
+    private bool BadgeBandBelow => _posterBadgeRows > 0 && PosterBadgePlacement == PlaceUnderDev;
+    private int _posterBadgeRows;
     private int PGap    => (int)Math.Round(PGap0    * _zoom);
     private int PZ(int px) => (int)Math.Round(px * _zoom);           // scale a tile-internal offset by zoom
     private Font _posterTileFont;                                    // MainWindow.Font × zoom, for tile title/dev text
@@ -279,6 +358,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         var details = BuildDetails(out _hero, out _media, out _strip, out _meta, out _vndb, out _notes);
         _hero.RateClicked = v => RateHeroGame(v);
         _hero.FavClicked = () => ToggleHeroFavorite();
+        _hero.ProgressClicked = r => Safe(() => ShowProgressMenu(r));
+        _hero.EditClicked = () => Safe(() => { if (_heroBadgeGame != null) OpenEditGame(new[] { _heroBadgeGame }); });
         _meta.ExpandedChanged = OnMetaExpandedToggled;
         _vndb.ExpandedChanged = OnVndbExpandedToggled;
 
@@ -291,6 +372,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _detailHost.Resize += (_, _) => RelayoutDetail();
 
         _poster = BuildPoster();
+        WireBadges();   // list strip source + the events that repaint badges + the background pass
 
         var inner = new ThemedSplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
         inner.Panel1.BackColor = Center;      // centre column — #2A2B34 (shows in the poster-grid side margins too)
@@ -794,6 +876,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     {
         if (_count != null) _count.Text = $"{_games.VisibleGames.Count} / {_games.TotalCount} games";
         UpdateMenuStatus();
+        // The badge band the tiles reserve is sized on the most-badged game of the VIEW, so a node or
+        // filter change can move it — and moving it changes every tile's height.
+        if (RecomputePosterBadgeRows()) { try { RebuildPosterGeometry(); } catch { } }
         if (_posterMode) RefreshPoster();
     }
 
@@ -1954,8 +2039,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 applyLive: Refresh3dValidity),
         };
 
-        var midList = new[]
-        {
+        Options.OptionItem[] midList =
+        [
             Options.OptionItem.Toggle("Display", "Auto-fit column widths to content",
                 () => _cfg.GetBool("AutoFitColumns", true), v => _cfg.SetBool("AutoFitColumns", v),
                 "On (default): the non-Title columns shrink to fit their content and the Title column grows to "
@@ -1967,19 +2052,31 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 "On (default): rows wrap long cell text onto a second line. Off: compact single-line rows, "
                 + "truncated with an ellipsis, more games on screen.",
                 applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
-        };
+            .. BadgeListOptions(),
+        ];
 
-        var midPoster = new[]
-        {
+        Options.OptionItem[] midPoster =
+        [
             Options.OptionItem.Toggle("Display", "Poster grid: legacy owner-draw rendering (needs restart)",
                 () => _cfg.GetBool("PosterOwnerDraw", false), v => _cfg.SetBool("PosterOwnerDraw", v),
                 "Off (default): native image-list grid (smooth held-scroll). On: the previous owner-draw "
                 + "renderer (rounded selection + hover grow, but can stutter). Takes effect after restart."),
-        };
+            Options.OptionItem.Number("Display", "Poster grid: image memory allocation (1-10)",
+                () => PosterMemLevel, v => _cfg.SetInt("PosterImageMemoryLevel", Math.Clamp(v, 1, 10)),
+                min: 1, max: 10, step: 1,
+                help: "How much memory the grid may spend keeping decoded box art and composited tiles, so "
+                + "that scrolling back over games you have already seen redraws instead of re-reading the "
+                + "disk. 4 is the default; 3 is what LiteBox kept before this setting existed, 10 goes all the "
+                + "way to about 2 GB and 1 down to an eighth of the default. The budget is in BYTES, so "
+                + "zooming in makes each tile bigger and simply fits fewer of them — it no longer multiplies "
+                + "the memory by four. Currently: " + PosterMemEstimate(),
+                applyLive: () => { RebuildPosterGeometry(); if (_posterMode) { RefreshPoster(); LayoutPoster(); } }),
+            .. BadgePosterOptions(),
+        ];
 
         // Right panel tab = OptionItems (16:9 + load delay) on top, media-layout editor below.
-        var rightOpts = new[]
-        {
+        Options.OptionItem[] rightOpts =
+        [
             Options.OptionItem.Toggle("Display", "Use 16:9 for the main media (else poster ratio)",
                 () => _cfg.Use169ForMainScreenshot, v => _cfg.Use169ForMainScreenshot = v,
                 applyLive: () => { _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0); RelayoutDetail(); Model3d.Model3dKeyIndex.KickAll(); }),
@@ -1994,17 +2091,20 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 "Only affects AUTOPLAY: off (default) an automatically started video is muted — a list that "
                 + "talks while you scroll is unbearable. A video you start by CLICKING always has sound.",
                 applyLive: () => { if (_mediaVideo != null) _mediaVideo.AutoplaySound = _cfg.VideoAutoplaySound; }),
+            .. BadgeHeroOptions(),
             Options.OptionItem.Number("Display", "Detail load delay (ms)",
                 () => _cfg.DetailLoadDelayMs, v => _cfg.DetailLoadDelayMs = v,
                 min: 0, max: 5000, step: 50,
                 help: "How long after selecting a game the deferred right-pane parts load (thumbnail strip, "
                 + "full-res box, RA/store panels, fanart). Default 300 ms; 0 = immediate. Applies next selection."),
-        };
+        ];
         var (rightRows, rightApply) = UiKit.OptionRows.Build(rightOpts, RS);
         var mediaPanel = new Media.MediaLayoutPanel();
         var rightTab = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = LiteBoxTheme.Bg };
-        rightTab.RowStyles.Add(new RowStyle(SizeType.Absolute, RS(150)));
-        rightTab.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        // Proportional, not a fixed 150px: that fixed height silently hid every option past the
+        // fourth behind a scrollbar in a box too short to look scrollable.
+        rightTab.RowStyles.Add(new RowStyle(SizeType.Percent, 45f));
+        rightTab.RowStyles.Add(new RowStyle(SizeType.Percent, 55f));
         ((Control)rightRows).Dock = DockStyle.Fill;
         mediaPanel.Dock = DockStyle.Fill;
         rightTab.Controls.Add((Control)rightRows, 0, 0);
@@ -3551,6 +3651,18 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             if (oldHiml != IntPtr.Zero) ImageList_Destroy(oldHiml);
         }
         try { if (_poster.IsHandleCreated) SetIconSpacing(_poster, PCellW + PGap, PImgH + PLabelH + PGap); } catch { }
+        // The whole ladder, at this geometry: the one line that says what the slider actually buys.
+        var ladder = new System.Text.StringBuilder();
+        for (int lv = 1; lv <= 10; lv++)
+        {
+            var (t, th) = PosterCapsFor(PosterMemFactors[lv - 1]);
+            long bytes = (long)t * PosterSlotBytes + (long)th * PosterThumbBytes;
+            ladder.Append(lv == PosterMemLevel ? " [" : " ").Append(lv).Append('=')
+                  .Append(bytes / (1024 * 1024)).Append(lv == PosterMemLevel ? "MB]" : "MB");
+        }
+        Console.WriteLine($"[poster] geometry {PCellW}x{PImgH + PLabelH} (zoom {_zoom:0.00}), "
+            + $"memory level {PosterMemLevel} -> {PosterMemEstimate()}");
+        Console.WriteLine($"[poster] memory ladder:{ladder}");
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -3779,6 +3891,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             {
                 tg.Clear(Center);   // match the centre-column zone (#2A2B34), not the side panels
                 var imgArea = new Rectangle(0, 0, PCellW, PImgH);
+                // The art is bottom-anchored inside imgArea and is usually NARROWER and SHORTER than it
+                // (a tall box in a 124×174 cell leaves empty band(s)). artRect is where the pixels
+                // actually are — the badge placements that talk about "the image" need that, not the area.
+                Rectangle artRect;
                 var img = PosterThumbSync(model, id);         // sync decode if the thumb is on disk; else null + async
                 if (img != null)
                 {
@@ -3786,16 +3902,18 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                     tg.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
                     tg.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
                     tg.DrawImage(img, ix, iy, img.Width, img.Height);
+                    artRect = new Rectangle(ix, iy, img.Width, img.Height);
                 }
                 else
                 {
                     // No art → a barely-there placeholder that blends into the zone (a hair lighter than Center).
                     tg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                    int pw = (int)(PCellW * 0.78f), ph = (int)(PImgH * 0.92f);
+                    int pw = (int)(PCellW * 0.78f), ph = (int)(PArtH * 0.92f);
                     var ph_r = new Rectangle((PCellW - pw) / 2, imgArea.Bottom - ph, pw, ph);
                     using var pb = new SolidBrush(PosterPlaceholder);
                     using var pp = RoundRect(ph_r, 10);
                     tg.FillPath(pb, pp);
+                    artRect = ph_r;   // the placeholder stands in for the art
                 }
                 var title = S(Safe(() => model.Title));
                 var dev = S(Safe(() => model.Developer));
@@ -3807,11 +3925,147 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 if (!string.IsNullOrEmpty(dev))
                     TextRenderer.DrawText(tg, dev, tileFont, dRect, SubFg,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                DrawTileBadges(tg, model, artRect);
             }
             hbm = tile.GetHbitmap();
         }
         catch { }
         return hbm;
+    }
+
+    // ── Poster tile badges ───────────────────────────────────────────────────
+    // Baked into the tile bitmap, which is composited once and cached — so badges cost nothing while
+    // scrolling. Four placements and three alignments (Options ▸ Display).
+    //
+    // Three of the placements are relative to THE ART, not to the tile: box art is bottom-anchored and
+    // usually narrower and shorter than the cell, so "at the top of the image" has to mean the top of
+    // the pixels — putting it at the top of the CELL would hang the badges in empty space above a
+    // short poster. BuildTileHbm hands over that rectangle (artRect); the placeholder stands in for it
+    // when a game has no art at all.
+    private const string PlaceUnderDev = "under the developer";
+    private const string PlaceArtBottom = "over the art, at its bottom";
+    private const string PlaceArtTop = "over the art, at its top";
+    private const string PlaceAboveArt = "just above the art";
+    private static readonly string[] PosterPlacements = { PlaceUnderDev, PlaceArtBottom, PlaceArtTop, PlaceAboveArt };
+    private static readonly string[] PosterAligns = { "centred", "left", "right" };
+
+    private string PosterBadgePlacement
+    {
+        get
+        {
+            var v = _cfg.Get("BadgesPosterPlacement");
+            if (!string.IsNullOrEmpty(v) && Array.IndexOf(PosterPlacements, v) >= 0) return v;
+            // Migrates the first shipped setting (a plain overlay on/off); anything else gets the
+            // default placement.
+            return _cfg.GetBool("BadgesPosterOverlay", false) ? PlaceArtBottom : PlaceAboveArt;
+        }
+    }
+    private string PosterBadgeAlign
+    {
+        get { var v = _cfg.Get("BadgesPosterAlign"); return Array.IndexOf(PosterAligns, v) >= 0 ? v : "right"; }
+    }
+
+    private int ListBadgeOpacityPct => Math.Clamp(_cfg.GetInt("BadgesListOpacityPct", 80), 5, 100);
+    private int PosterBadgeOpacityPct => Math.Clamp(_cfg.GetInt("BadgesPosterOpacityPct", 80), 5, 100);
+    private int ListBadgeScalePct => Math.Clamp(_cfg.GetInt("BadgesListScalePct", 100), 25, 200);
+    private int PosterBadgeScalePct => Math.Clamp(_cfg.GetInt("BadgesPosterScalePct", 100), 25, 200);
+
+    private void DrawTileBadges(Graphics g, IGame model, Rectangle artRect)
+    {
+        if (!Badges.BadgeSettings.ShowBadges) return;
+        var hits = Badges.BadgeEngine.VisibleCached(model);
+        if (hits.Count == 0) return;
+
+        string placement = PosterBadgePlacement;
+        bool onArt = placement == PlaceArtBottom || placement == PlaceArtTop;
+        int cell = PBadgeCell;
+        // Row capacity: the art's own width for the two placements drawn ON the art (an extra row
+        // just stacks over it), the whole tile for the two drawn OUTSIDE it — those two have a band
+        // reserved by RecomputePosterBadgeRows, which counts with the tile width, and the two must
+        // agree or a row would spill onto the art / into the title.
+        int capacityW = onArt ? artRect.Width : PCellW;
+        int cols = Math.Max(1, Math.Max(capacityW, cell) / cell);
+        int rows = Math.Max(1, (hits.Count + cols - 1) / cols);
+        int bandH = rows * cell;
+        // Horizontal alignment is relative to the ART for every art-relative placement (including the
+        // one drawn above it — badges belong to the picture, not to the cell).
+        var reference = placement == PlaceUnderDev ? new Rectangle(0, 0, PCellW, 0) : artRect;
+
+        int top;
+        bool veiled = false;
+        switch (placement)
+        {
+            case PlaceArtBottom: top = Math.Max(artRect.Y, artRect.Bottom - bandH); veiled = true; break;
+            case PlaceArtTop: top = artRect.Y; veiled = true; break;
+            case PlaceAboveArt: top = Math.Max(0, artRect.Y - bandH); break;   // the reserved band
+            default: top = PImgH + PZ(19) + PZ(15) + PZ(1); break;             // under the developer line
+        }
+
+        if (veiled)
+        {
+            using var veil = new SolidBrush(Color.FromArgb(120, 0, 0, 0));
+            g.FillRectangle(veil, new Rectangle(reference.X, top, reference.Width,
+                                                Math.Min(bandH, Math.Max(0, artRect.Bottom - top))));
+        }
+
+        string align = PosterBadgeAlign;
+        int used = Math.Min(hits.Count, rows * cols);
+        for (int i = 0; i < used; i++)
+        {
+            var img = Badges.BadgeImages.Get(hits[i].Image, cell, hits[i].Tint, PosterBadgeOpacityPct);
+            if (img == null) continue;
+            int row = i / cols, col = i % cols;
+            int rowCount = Math.Min(cols, hits.Count - row * cols);       // each row aligns its own run
+            int rowW = rowCount * cell;
+            int originX = align switch
+            {
+                "left" => reference.X,
+                "right" => reference.Right - rowW,
+                _ => reference.X + (reference.Width - rowW) / 2,
+            };
+            originX = Math.Max(0, Math.Min(originX, PCellW - rowW));   // a row wider than the art stays in the tile
+            int x = originX + col * cell + (cell - img.Width) / 2;
+            int y = top + row * cell + (cell - img.Height) / 2;
+            g.DrawImage(img, x, y, img.Width, img.Height);
+        }
+    }
+
+    /// <summary>How many badge rows the tiles must reserve for the current view — for the two
+    /// placements drawn OUTSIDE the art (under the developer, just above the art); the two drawn on
+    /// top of it need no room. Returns true when the value changed: every tile's height just moved,
+    /// so the geometry has to be rebuilt.</summary>
+    private bool RecomputePosterBadgeRows()
+    {
+        int rows = 0;
+        var place = PosterBadgePlacement;
+        if (Badges.BadgeSettings.ShowBadges && (place == PlaceUnderDev || place == PlaceAboveArt))
+        {
+            int cols = Math.Max(1, PCellW / PBadgeCell);
+            int max = 0;
+            try
+            {
+                foreach (var g in _games.VisibleGames)
+                {
+                    int n = Badges.BadgeEngine.VisibleCached(g).Count;
+                    if (n > max) max = n;
+                }
+            }
+            catch { }
+            rows = (max + cols - 1) / cols;
+        }
+        if (rows == _posterBadgeRows) return false;
+        _posterBadgeRows = rows;
+        return true;
+    }
+
+    // Badges changed (menu toggle, background pass, placement option): the tiles have them baked in,
+    // so every cached tile must go — and the geometry too when the reserved band changed.
+    private void DropPosterTiles()
+    {
+        RecomputePosterBadgeRows();
+        try { RebuildPosterGeometry(); } catch { }
+        if (_posterMode) { try { RefreshPoster(); LayoutPoster(); } catch { } }
+        else { try { _poster?.Invalidate(); } catch { } }
     }
 
     // ── Legacy owner-draw renderer (opt-in) ───────────────────────────────────
@@ -3881,7 +4135,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         IntPtr hbm = BuildTileHbm(model, id);
         _posterTileHbm[id] = hbm;
         _posterTileOrder.Enqueue(id);
-        while (_posterTileOrder.Count > 600)
+        while (_posterTileOrder.Count > PosterTileCap)
         {
             var old = _posterTileOrder.Dequeue();
             if (_posterTileHbm.TryGetValue(old, out var oh)) { if (oh != IntPtr.Zero) DeleteObject(oh); _posterTileHbm.Remove(old); }
@@ -3934,10 +4188,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             if (cachedFile != null)
             {
                 Image img = null;
-                try { using var raw = LoadImage(cachedFile); if (raw != null) img = ScaleContain(raw, PCellW, PImgH); } catch { }
-                _posterBmp[id] = img;             // cache (same 600-cap eviction as the async path)
+                try { using var raw = LoadImage(cachedFile); if (raw != null) img = ScaleContain(raw, PCellW, PArtH); } catch { }
+                _posterBmp[id] = img;             // cache (same byte-budget eviction as the async path)
                 _posterBmpOrder.Enqueue(id);
-                while (_posterBmpOrder.Count > 600)
+                while (_posterBmpOrder.Count > PosterThumbCap)
                 {
                     var old = _posterBmpOrder.Dequeue();
                     if (_posterBmp.TryGetValue(old, out var ob)) { ob?.Dispose(); _posterBmp.Remove(old); }
@@ -3998,7 +4252,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                     // managed LOH) on first use — bounded by THIS pool — and the 2nd pass is a cache HIT.
                     string thumb = _useImageCache ? ThumbCache.GetOrCreate(src, PosterFmt) : null;
                     using var raw = LoadImage(thumb ?? src);   // small thumb — or the original only if the cache/Magick is unavailable
-                    if (raw != null) img = ScaleContain(raw, PCellW, PImgH);   // pre-size to the cell once
+                    if (raw != null) img = ScaleContain(raw, PCellW, PArtH);   // pre-size to the art box once
                 }
             }
             catch { img = null; }
@@ -4037,7 +4291,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             else RefreshSlot(item.g, item.id);                     // native: rebuild the (phantom) slot in place
             any = true;
         }
-        while (_posterBmpOrder.Count > 600)
+        while (_posterBmpOrder.Count > PosterThumbCap)
         {
             var old = _posterBmpOrder.Dequeue();
             if (_posterBmp.TryGetValue(old, out var ob)) { ob?.Dispose(); _posterBmp.Remove(old); }
@@ -4264,7 +4518,332 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     {
         double eff = Safe(() => g.CommunityOrLocalStarRating);
         _hero.SetGame(S(g.Title), eff, Safe(() => g.StarRatingFloat) > 0, Safe(() => g.Favorite));
+        _heroBadgeGame = g;
+        RefreshHeroBadges();
     }
+
+    // ── Hero badges ──────────────────────────────────────────────────────────
+    // The status strip in the hero's top-right corner. The badge SET comes from the shared engine
+    // cache (computed once for the whole library), so this only turns names into pre-scaled bitmaps.
+    // Rebuilt on selection, on a Badges-menu toggle, and when the background pass publishes.
+    private IGame _heroBadgeGame;
+
+    // Hero badge display options (Options ▸ Display ▸ right panel). The hero is the detail view, not
+    // the browsing grid, so by default it keeps showing badges even with LaunchBox's "Show Badges"
+    // off — that setting is about the list. Unticking the first option makes it follow along.
+    private bool HeroBadgesAlways => _cfg.GetBool("BadgesHeroAlways", true);
+    private int HeroBadgeScalePct => Math.Clamp(_cfg.GetInt("BadgesHeroScalePct", 100), 25, 200);
+    private int HeroBadgeOpacityPct => Math.Clamp(_cfg.GetInt("BadgesHeroOpacityPct", 80), 5, 100);
+    private static readonly string[] BadgeScales =
+        { "25%", "50%", "75%", "100%", "125%", "150%", "175%", "200%" };
+
+    private void RefreshHeroBadges()
+    {
+        var g = _heroBadgeGame;
+        if (g == null || (!Badges.BadgeSettings.ShowBadges && !HeroBadgesAlways))
+        { _hero.SetBadges(Array.Empty<(Image, string)>()); _hero.SetProgress(null, null); return; }
+
+        var list = new List<(Image, string)>();
+        int px = Math.Max(6, (int)Math.Round(20 * LiteBoxTheme.DpiScale(this) * HeroBadgeScalePct / 100.0));
+        int opacity = HeroBadgeOpacityPct;
+        foreach (var hit in Badges.BadgeEngine.Visible(g))
+        {
+            // Progress leaves the strip — it becomes the button at the bottom-right (SetHeroProgress).
+            if (string.Equals(hit.Id, "Progress", StringComparison.OrdinalIgnoreCase)) continue;
+            var img = Badges.BadgeImages.Get(hit.Image, px, hit.Tint, opacity);
+            if (img != null) list.Add((img, hit.Tip));
+        }
+        _hero.SetBadges(list);
+        SetHeroProgress(g, px, opacity);
+    }
+
+    // The progress button's face: the game's own state badge, or the pack's generic Progress marker
+    // (dimmed) when nothing is set — the button has to be there for a game WITHOUT progress, since
+    // that is exactly when you want to set one. Hidden entirely when the Progress badge is disabled
+    // in View ▸ Badges, so the menu still governs it.
+    private void SetHeroProgress(IGame g, int px, int opacity)
+    {
+        if (!Badges.BadgeSettings.IsEnabled("Progress")) { _hero.SetProgress(null, null); return; }
+        string value = S(Safe(() => g.Progress));
+        Image img = null;
+        if (value.Length > 0)
+        {
+            var hit = Badges.BadgeEngine.Visible(g)
+                .FirstOrDefault(h => string.Equals(h.Id, "Progress", StringComparison.OrdinalIgnoreCase));
+            if (hit.Image != null) img = Badges.BadgeImages.Get(hit.Image, px, hit.Tint, opacity);
+        }
+        img ??= Badges.BadgeImages.Get("Progress", px, Badges.BadgeTint.None, Math.Min(opacity, 45));
+        _hero.SetProgress(img, value.Length > 0 ? value : "Progress: not set — click to choose");
+    }
+
+    // Click on that button: LaunchBox's own progress organization, as a menu. It opens to the LEFT of
+    // the button (AboveLeft) because the button sits at the right edge of the detail pane, which is
+    // itself at the right edge of the window — a menu growing rightwards would run off the screen.
+    private void ShowProgressMenu(Rectangle buttonRect)
+    {
+        var g = _heroBadgeGame;
+        if (g == null) return;
+        if ((_dm as HostDataManagerXml)?.ReadOnly ?? true)
+        {
+            MessageBox.Show(this, "The library is open read-only.", "Progress",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        string current = S(Safe(() => g.Progress));
+        var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
+
+        var none = new ToolStripMenuItem("(none)") { Checked = current.Length == 0 };
+        none.Click += (_, _) => Safe(() => ApplyProgress(g, ""));
+        menu.Items.Add(none);
+        menu.Items.Add(new ToolStripSeparator());
+
+        string lastCategory = null;
+        foreach (var value in Safe(() => MetadataChoicesCache.Get("Progress", _dm)) ?? Array.Empty<string>())
+        {
+            if (string.IsNullOrWhiteSpace(value)) continue;
+            // The organization is "Category / Value" — a separator between categories keeps a long
+            // list readable, exactly as the Options page groups them.
+            var (category, _) = Data.ProgressModel.Split(value);
+            if (lastCategory != null && !string.Equals(category, lastCategory, StringComparison.OrdinalIgnoreCase))
+                menu.Items.Add(new ToolStripSeparator());
+            lastCategory = category;
+
+            var it = new ToolStripMenuItem(value)
+            { Checked = string.Equals(value, current, StringComparison.OrdinalIgnoreCase) };
+            var captured = value;
+            it.Click += (_, _) => Safe(() => ApplyProgress(g, captured));
+            menu.Items.Add(it);
+        }
+
+        // Dispose AFTER the close finishes, never inside the event: WinForms keeps touching the
+        // drop-down while it closes (SetVisibleCore re-creates its handle), so disposing here throws
+        // ObjectDisposedException right after the item's own click handler has run.
+        menu.Closed += (_, _) =>
+        {
+            try { BeginInvoke((Action)(() => { try { menu.Dispose(); } catch { } })); } catch { }
+        };
+        // Anchored to the hero, opening UP-LEFT: the button sits at the right edge of the detail
+        // pane, itself at the right edge of the window, so a menu growing rightwards would run off
+        // the screen. (Control-relative overload — the screen-point one shows nothing here.)
+        menu.Show(_hero, new Point(buttonRect.Right, buttonRect.Top), ToolStripDropDownDirection.AboveLeft);
+    }
+
+    private void ApplyProgress(IGame g, string value)
+    {
+        Safe(() => g.Progress = value ?? "");           // → journal
+        Badges.BadgeEngine.Invalidate(g);               // its Progress badge just changed
+        MetadataChoicesCache.MarkFieldDirty("Progress");// a new custom value would join the choices
+        RefreshHeroBadges();
+        Safe(() => _games.RefreshGame(g));
+        _games?.RefreshBadges();
+        if (Guid.TryParse(S(Safe(() => g.Id)), out var id)) InvalidatePosterTile(id);
+        if (_posterMode) { try { _poster?.Invalidate(); } catch { } }
+    }
+
+    // ── Badge display options, built once and shown twice ────────────────────
+    // Options ▸ Display keeps them in the tab of the surface they affect; the Manage Badges window
+    // gathers all three under its Display tab. Same OptionItems, same storage, same applyLive — so
+    // whichever window you use, the other one shows the change next time it opens.
+
+    /// <summary>A badge size or opacity just changed. Both are BAKED into the cached bitmaps, so every
+    /// entry for the value we are leaving is dead — and nothing else would ever reclaim them (the cache
+    /// is keyed (name, height, tint, opacity) and only ever grew). Dropping them costs a re-decode of
+    /// the pack's ~44 images, a few milliseconds.
+    ///
+    /// All three surfaces are refreshed, not just the one whose option moved: the hero HOLDS Image
+    /// references handed out by the cache, so they must be re-fetched before anything paints again.</summary>
+    private void RescaleBadgeIcons(Action after = null)
+    {
+        Badges.BadgeImages.DropScaled();
+        RefreshHeroBadges();
+        if (_games != null) { _games.BadgeCellScale = ListBadgeScalePct; _games.RefreshBadges(); }
+        try { after?.Invoke(); } catch { }
+    }
+
+    internal Options.OptionItem[] BadgeHeroOptions() => new[]
+    {
+            Options.OptionItem.Toggle("Display", "Badges: show them here even when \"Show Badges\" is off",
+                () => _cfg.GetBool("BadgesHeroAlways", true), v => _cfg.SetBool("BadgesHeroAlways", v),
+                "On (default): the detail pane always shows the selected game's badges — LaunchBox's "
+                + "\"Show Badges\" (View ▸ Badges) governs the game LIST and the poster tiles, not this "
+                + "corner. Off: this strip follows that setting too. The per-badge toggles apply either way.",
+                applyLive: RefreshHeroBadges),
+            Options.OptionItem.Choice("Display", "Badges: size", BadgeScales,
+                () => HeroBadgeScalePct + "%",
+                v => _cfg.SetInt("BadgesHeroScalePct", int.TryParse(v.TrimEnd('%'), out var p) ? p : 100),
+                "Scales the badge strip in the detail pane. 100% ≈ 20 px at 100% DPI.",
+                applyLive: () => RescaleBadgeIcons()),
+            Options.OptionItem.Number("Display", "Badges: opacity (%)",
+                () => HeroBadgeOpacityPct, v => _cfg.SetInt("BadgesHeroOpacityPct", v),
+                min: 5, max: 100, step: 5,
+                help: "How opaque the badges are over the fanart. 100 = solid; 80 by default.",
+                applyLive: () => RescaleBadgeIcons()),
+    };
+
+    internal Options.OptionItem[] BadgeListOptions() => new[]
+    {
+            Options.OptionItem.Choice("Display", "Badges: size", BadgeScales,
+                () => ListBadgeScalePct + "%",
+                v => _cfg.SetInt("BadgesListScalePct", int.TryParse(v.TrimEnd('%'), out var p) ? p : 100),
+                "Scales the badge strip drawn before each title. A badge can never be taller than the "
+                + "row it rides in, so past a point this only stops growing — raise \"Two-line rows\" or "
+                + "the zoom for bigger badges.",
+                applyLive: () => RescaleBadgeIcons()),
+            Options.OptionItem.Number("Display", "Badges: opacity (%)",
+                () => ListBadgeOpacityPct, v => _cfg.SetInt("BadgesListOpacityPct", v),
+                min: 5, max: 100, step: 5,
+                help: "How opaque the badge strip drawn before each title is. 100 = solid; 80 by default. "
+                + "Only when \"Show Badges\" is on.",
+                applyLive: () => RescaleBadgeIcons()),
+            Options.OptionItem.Choice("Display", "Badges: when to work out which apply",
+                new[] { "after loading (background)", "during loading" },
+                () => _cfg.GetBool("BadgesComputeAtLoad", false) ? "during loading" : "after loading (background)",
+                v => _cfg.SetBool("BadgesComputeAtLoad", v == "during loading"),
+                "Badges are worked out ONCE for the whole library and kept — the list, the tiles and the "
+                + "detail pane then just draw them. Default: the pass runs in the background once the window "
+                + "is up, and badges appear platform by platform. \"During loading\" does it before the window "
+                + "shows, so the first list is already complete, at the cost of a longer start. Takes effect "
+                + "at the next start."),
+    };
+
+    internal Options.OptionItem[] BadgePosterOptions() => new[]
+    {
+            Options.OptionItem.Choice("Display", "Poster grid: where badges go",
+                PosterPlacements,
+                () => PosterBadgePlacement,
+                v => _cfg.Set("BadgesPosterPlacement", v),
+                "Only when \"Show Badges\" is on. Default: just above the art. Under the developer: nothing covers the box art, "
+                + "but the tiles get taller — enough for the most-badged game in view. The other three follow "
+                + "THE ART, which is bottom-anchored and usually smaller than the cell: over its bottom edge "
+                + "(above the title), over its top edge, or just above it in the empty space a short poster "
+                + "leaves — that last one falls back onto the art's top edge when the art fills the cell. The "
+                + "three art placements keep the tile's height.",
+                applyLive: DropPosterTiles),
+            Options.OptionItem.Choice("Display", "Poster grid: badge size", BadgeScales,
+                () => PosterBadgeScalePct + "%",
+                v => _cfg.SetInt("BadgesPosterScalePct", int.TryParse(v.TrimEnd('%'), out var p) ? p : 100),
+                "Scales the badges baked into the tiles. With the two placements that reserve room "
+                + "(under the developer, just above the art) the tiles grow with them.",
+                applyLive: () => RescaleBadgeIcons(DropPosterTiles)),
+            Options.OptionItem.Number("Display", "Poster grid: badge opacity (%)",
+                () => PosterBadgeOpacityPct, v => _cfg.SetInt("BadgesPosterOpacityPct", v),
+                min: 5, max: 100, step: 5,
+                help: "How opaque the badges baked into the tiles are — worth lowering when they sit on "
+                + "the art. 100 = solid; 80 by default.",
+                applyLive: () => RescaleBadgeIcons(DropPosterTiles)),
+            Options.OptionItem.Choice("Display", "Poster grid: badge alignment",
+                PosterAligns,
+                () => PosterBadgeAlign,
+                v => _cfg.Set("BadgesPosterAlign", v),
+                "Where the badge row sits horizontally — inside the art for the three art placements, across "
+                + "the tile when they are under the developer. Right by default.",
+                applyLive: DropPosterTiles),
+    };
+
+    // Everything the badge surfaces need, in one place: the list's strip source, the two events that
+    // can change what is drawn, and the background pass that fills the engine's cache.
+    private void WireBadges()
+    {
+        // Per displayed row the list reads one int — the combination id, which lives in the game's
+        // store row. It never evaluates: before the pass lands, rows simply have no badges and repaint
+        // when it publishes. The icons are asked for only when a combination has no strip yet.
+        _games.BadgeCellScale = ListBadgeScalePct;
+        _games.BadgeComboOf = g => Badges.BadgeSettings.ShowBadges ? Badges.BadgeEngine.Combo(g) : 0;
+        _games.BadgeMaxSlots = () => Badges.BadgeSettings.ShowBadges ? Badges.BadgeEngine.MaxEnabledSlots : 0;
+        _games.BadgeStripImages = (combo, cell) =>
+        {
+            var hits = Badges.BadgeEngine.Table.Materialize(combo, filtered: true);
+            if (hits.Length == 0 || cell <= 0) return Array.Empty<Image>();
+            int opacity = ListBadgeOpacityPct;
+            var imgs = new List<Image>(hits.Length);
+            foreach (var h in hits)
+            {
+                var img = Badges.BadgeImages.Get(h.Image, cell, h.Tint, opacity);
+                if (img != null) imgs.Add(img);
+            }
+            return imgs;
+        };
+
+        void Repaint()
+        {
+            try
+            {
+                if (IsDisposed) return;
+                BeginInvoke((Action)(() =>
+                {
+                    if (IsDisposed) return;
+                    RefreshHeroBadges();
+                    _games?.RefreshBadges();
+                    DropPosterTiles();     // tiles bake their badges in — they must be re-composited
+                }));
+            }
+            catch { }
+        }
+        Badges.BadgeSettings.Changed += Repaint;   // a Badges-menu toggle
+        Badges.BadgeEngine.Changed += Repaint;     // the background pass publishing a platform
+
+        // A handful of games changed under us (an edit, a store sync, a plugin write). Repainting
+        // EVERYTHING for that would drop every composited tile and rebuild every strip — so those
+        // games are repainted one by one, and only a genuinely new badge combination forces the
+        // strips to be rebuilt.
+        Badges.BadgeWatch.Recomputed += ids =>
+        {
+            try
+            {
+                if (IsDisposed) return;
+                BeginInvoke((Action)(() =>
+                {
+                    if (IsDisposed) return;
+                    foreach (var id in ids)
+                    {
+                        var g = GameById(id);
+                        if (g != null) Safe(() => _games.RefreshGame(g));
+                        // Tiles bake their badges in, and the two poster renderers keep them in
+                        // different places: owner-draw caches an HBITMAP per game (drop it and the
+                        // next paint rebuilds), the native one holds a slot in the image list that
+                        // has to be REWRITTEN. Doing only the first left the native tiles showing the
+                        // badges the game had before the edit.
+                        if (_posterOwnerDraw) InvalidatePosterTile(id);
+                        else if (g != null) Safe(() => RefreshSlot(g, id));
+                    }
+                    _games?.RefreshBadgesIfCombinationsChanged();
+                    if (_posterMode) { try { _poster?.Invalidate(); } catch { } }
+                    if (ids.Any(i => Guid.TryParse(S(Safe(() => _heroBadgeGame?.Id)), out var h) && h == i))
+                        RefreshHeroBadges();
+                }));
+            }
+            catch { }
+        };
+        Badges.BadgeWatch.Start(GameById);
+
+        // "At load" runs the pass now (the first list is already badged, boot is a bit longer);
+        // "after load" — the default — lets the window come up first.
+        if (_cfg.GetBool("BadgesComputeAtLoad", false)) StartBadgePass();
+        else Shown += (_, _) => StartBadgePass();
+    }
+
+    /// <summary>The live IGame for an id — the badge watcher hands out ids, the predicates need the
+    /// object. Looks in the current view first (the common case), then the whole library.</summary>
+    private IGame GameById(Guid id)
+    {
+        try
+        {
+            foreach (var g in _games.VisibleGames)
+                if (Guid.TryParse(S(Safe(() => g.Id)), out var x) && x == id) return g;
+            foreach (var g in _dm?.GetAllGames() ?? Array.Empty<IGame>())
+                if (Guid.TryParse(S(Safe(() => g.Id)), out var x) && x == id) return g;
+        }
+        catch { }
+        return null;
+    }
+
+    private void StartBadgePass()
+        => Badges.BadgeEngine.StartPass(() =>
+        {
+            try { return (_dm?.GetAllGames() ?? Array.Empty<IGame>()).ToList(); }
+            catch { return Array.Empty<IGame>(); }
+        });
 
     // The settle-time detail pane: fanart + thumb-strip schedules, metadata rows, notes, launch
     // buttons, store poll, parental trace. The hero title + main box image are applied by the caller.
@@ -4620,6 +5199,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         bool nv = !Safe(() => g.Favorite);
         Safe(() => g.Favorite = nv);             // → journal
         _hero.SetFavorite(nv);
+        RefreshHeroBadges();                     // the Favorite badge follows the heart
         Safe(() => _games.RefreshGame(g));
     }
 
@@ -5857,6 +6437,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;
             EditGameWindow.Open(games, _games.VisibleGames, ro, this);
+            // Safety net: the editor's pages also add and remove FILES (manuals, images) and future
+            // metadata downloads will too — no store notification can see those, so the edited games
+            // are re-evaluated wholesale on the way out.
+            Badges.BadgeWatch.RecomputeNow(games);
             try { _games.RebuildView(); } catch { }   // preserves the list's multi-selection (see GameListView)
             if (_posterMode) RestorePosterSelection(games);   // its RefreshPoster (via ViewChanged) dropped the poster's
             RequestDetail(games[0]);
@@ -6785,11 +7369,27 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         private static readonly Color HeartOn       = Color.FromArgb(0xFF, 0x4A, 0x4A);  // red
         private static readonly Color HeartOff      = Color.FromArgb(140, 200, 200, 205);
         private static readonly Color BoxBg         = Color.FromArgb(179, 45, 45, 50);   // ~0.70
+        private static readonly Color BoxBgHover    = Color.FromArgb(214, 70, 70, 78);   // the same plate, lit
 
         private Image _logo, _fanart;
         private string _logoText;       // fallback shown (with the same pulse) when there's no clear logo
         private bool _logoReady;        // logo load settled (image set, or confirmed none → show text)
         private bool _isGame, _favorite, _ratingIsUser;
+        // Badge strip, top-left. Images are CACHE-OWNED by BadgeImages — drawn, never disposed here.
+        private (Image img, string tip)[] _badges = Array.Empty<(Image, string)>();
+        private Rectangle[] _badgeRects = Array.Empty<Rectangle>();
+        private int _hoverBadge = -1;
+        private readonly ToolTip _badgeTip = new() { ShowAlways = true, InitialDelay = 350, ReshowDelay = 120 };
+        // Progress is pulled OUT of the strip: it is the one badge the user can set, so it gets its
+        // own button at the bottom-right — the heart's twin at the other end of that row.
+        private Image _progressImg;
+        private string _progressTip;
+        private Rectangle _progressRect;
+        private bool _hoverProgress;
+        // Edit button, left of the progress one: same plate, the menu set's pencil at 80% so it reads
+        // as a discreet affordance rather than a sixth badge.
+        private Rectangle _editRect;
+        private bool _hoverEdit;
         private double _rating;
         private double _fanartAlpha, _fanartTarget;
         private float _logoScale = 1f, _pulseT = 1f;
@@ -6802,6 +7402,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
         public Action<int> RateClicked;   // 1..5
         public Action FavClicked;
+        /// <summary>The progress button was clicked; the argument is the button in this panel's
+        /// CLIENT coordinates, so the caller can hang a menu off its left edge with the
+        /// control-relative Show overload.</summary>
+        public Action<Rectangle> ProgressClicked;
+        /// <summary>The edit button was clicked — opens Edit Game for the shown game.</summary>
+        public Action EditClicked;
 
         public HeroPanel()
         {
@@ -6815,9 +7421,33 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         public void SetGame(string title, double rating, bool isUser, bool favorite)
         { _isGame = true; _logoText = title; ClearLogoImage(); _rating = rating; _ratingIsUser = isUser; _favorite = favorite; Invalidate(); }
         public void SetNode(string title)
-        { _isGame = false; _logoText = title; ClearLogoImage(); _rating = 0; _favorite = false; _ratingIsUser = false; Invalidate(); }
+        { _isGame = false; _logoText = title; ClearLogoImage(); _rating = 0; _favorite = false; _ratingIsUser = false; SetBadges(null); SetProgress(null, null); Invalidate(); }
         public void SetRating(double rating, bool isUser) { _rating = rating; _ratingIsUser = isUser; Invalidate(); }
         public void SetFavorite(bool fav) { _favorite = fav; Invalidate(); }
+
+        /// <summary>The status badges drawn in the top-left corner. LaunchBox shows these on the
+        /// detail side whether or not "Show Badges" is on — that setting governs the game LIST — so
+        /// the caller passes whatever the enabled set says applies, and an empty list draws nothing.</summary>
+        public void SetBadges(IReadOnlyList<(Image img, string tip)> badges)
+        {
+            _badges = badges is { Count: > 0 } ? badges.ToArray() : Array.Empty<(Image, string)>();
+            _badgeRects = new Rectangle[_badges.Length];
+            _hoverBadge = -1;
+            _badgeTip.SetToolTip(this, null);
+            Invalidate();
+        }
+
+        /// <summary>The progress button, bottom-right. A null image hides it (badge disabled, or no
+        /// pack); the caller passes the game's own state image, or the pack's generic Progress marker
+        /// when the game has no progress set — the button stays there either way, because it is how
+        /// you SET one.</summary>
+        public void SetProgress(Image img, string tip)
+        {
+            _progressImg = img; _progressTip = tip;
+            _hoverProgress = false; _progressRect = Rectangle.Empty;
+            _hoverEdit = false; _editRect = Rectangle.Empty;
+            Invalidate();
+        }
 
         // Clear the logo image WITHOUT pulsing (subject changed; the real content —
         // image or text fallback — arrives via SetLogo and pulses then).
@@ -6890,7 +7520,47 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 if (_logo != null) DrawLogo(g, _logo, logoArea, _logoScale);
                 else if (_logoReady && !string.IsNullOrEmpty(_logoText)) DrawLogoText(g, _logoText, logoArea, _logoScale);
             }
-            if (_isGame) DrawRatingAndHeart(g, rect);
+            if (_isGame) { DrawBadges(g, rect); DrawRatingAndHeart(g, rect); }
+        }
+
+        // The badge strip: one row in the top-right corner, over a rounded plate (the same BoxBg the
+        // rating box uses) so the icons stay readable on a bright fanart. Badge art is not uniform in
+        // width — the pack's keyboard is wider than tall, its wheel taller than wide — so each image
+        // is drawn at its own size, vertically centred in a fixed-height row, and the plate is sized
+        // from the total. It grows LEFTWARD from the right edge, so adding a badge never moves the
+        // ones already there. Rects are kept for the hover tooltip.
+        private void DrawBadges(Graphics g, Rectangle rect)
+        {
+            if (_badges.Length == 0) return;
+            float s = LiteBoxTheme.DpiScale(this);
+            int gap = (int)Math.Round(4 * s), pad = (int)Math.Round(5 * s);
+            // Row height follows the ART, not a constant: the size option scales the images the
+            // caller hands over, and the plate has to grow with them.
+            int h = 0;
+            foreach (var (img, _) in _badges) if (img != null && img.Height > h) h = img.Height;
+            if (h <= 0) return;
+
+            int total = 0;
+            foreach (var (img, _) in _badges) total += (img?.Width ?? 0) + gap;
+            if (total <= 0) return;
+            total -= gap;
+
+            var plate = new Rectangle(Math.Max(10, rect.Right - 10 - (total + pad * 2)), 8,
+                                      total + pad * 2, h + pad * 2);
+            int x = plate.X + pad, y = plate.Y + pad;
+            using (var pb = new SolidBrush(BoxBg)) FillRound(g, plate, 4, pb);
+
+            for (int i = 0; i < _badges.Length; i++)
+            {
+                var img = _badges[i].img;
+                if (img == null) { _badgeRects[i] = Rectangle.Empty; continue; }
+                var r = new Rectangle(x, y + (h - img.Height) / 2, img.Width, img.Height);
+                g.DrawImage(img, r);
+                // Hit rect covers the full row height, so a short badge (the keyboard) is as easy to
+                // hover as a tall one.
+                _badgeRects[i] = new Rectangle(x, y, img.Width, h);
+                x += img.Width + gap;
+            }
         }
 
         private static void DrawCoverAlpha(Graphics g, Image img, Rectangle rect, float alpha)
@@ -6978,6 +7648,35 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             using (var hb = new SolidBrush(_favorite ? HeartOn : HeartOff))
             using (var hsf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                 g.DrawString("♥", heartFont, hb, _heartRect, hsf);
+
+            // Edit + progress buttons — same box language as the heart, at the OTHER end of the row:
+            // they are controls, not badges, so they never join the strip up top. Edit sits to the
+            // left of progress, and takes its place at the edge when progress is hidden.
+            int rightX = rect.Right - 10 - boxH;
+            _editRect = new Rectangle(_progressImg != null ? rightX - boxH - 6 : rightX, y, boxH, boxH);
+            using (var b = new SolidBrush(_hoverEdit ? BoxBgHover : BoxBg)) FillRound(g, _editRect, 4, b);
+            var pencil = UiKit.MenuIcons.Get(UiKit.MenuIcons.Edit, boxH - 6);
+            if (pencil != null)
+            {
+                var pr = new Rectangle(_editRect.X + (boxH - pencil.Width) / 2,
+                                       _editRect.Y + (boxH - pencil.Height) / 2, pencil.Width, pencil.Height);
+                var cm = new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.8f };
+                using var ia = new System.Drawing.Imaging.ImageAttributes();
+                ia.SetColorMatrix(cm);
+                g.DrawImage(pencil, pr, 0, 0, pencil.Width, pencil.Height, GraphicsUnit.Pixel, ia);
+            }
+
+            if (_progressImg != null)
+            {
+                _progressRect = new Rectangle(rightX, y, boxH, boxH);
+                using (var b = new SolidBrush(_hoverProgress ? BoxBgHover : BoxBg))
+                    FillRound(g, _progressRect, 4, b);
+                int side = boxH - 6;
+                float ratio = Math.Min(side / (float)_progressImg.Width, side / (float)_progressImg.Height);
+                int w = Math.Max(1, (int)(_progressImg.Width * ratio)), h = Math.Max(1, (int)(_progressImg.Height * ratio));
+                g.DrawImage(_progressImg, _progressRect.X + (boxH - w) / 2, _progressRect.Y + (boxH - h) / 2, w, h);
+            }
+            else _progressRect = Rectangle.Empty;
         }
 
         private static void FillRound(Graphics g, Rectangle r, int radius, Brush b)
@@ -7003,6 +7702,21 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             base.OnMouseClick(e);
         }
 
+        // The progress menu opens on mouse UP, not down. The button sits low in the window, so the
+        // drop-down has to be clamped back DOWN over the cursor — and a menu opened on mouse-down
+        // then receives the release as a click on whichever item landed under the pointer, silently
+        // setting a progress the user never picked. Opening on the release consumes it.
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            if (_isGame && e.Button == MouseButtons.Left)
+            {
+                if (!_progressRect.IsEmpty && _progressRect.Contains(e.Location))
+                { ProgressClicked?.Invoke(_progressRect); return; }
+                if (!_editRect.IsEmpty && _editRect.Contains(e.Location)) { EditClicked?.Invoke(); return; }
+            }
+            base.OnMouseUp(e);
+        }
+
         protected override void OnMouseMove(MouseEventArgs e)
         {
             if (_isGame)
@@ -7010,22 +7724,45 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 int hs = -1;
                 for (int i = 0; i < 5; i++) if (_starRects[i].Contains(e.Location)) { hs = i; break; }
                 bool oh = _heartRect.Contains(e.Location);
-                Cursor = (hs >= 0 || oh) ? Cursors.Hand : Cursors.Default;
-                if (hs != _hoverStar || oh != _hoverHeart) { _hoverStar = hs; _hoverHeart = oh; Invalidate(); }
+                bool op = !_progressRect.IsEmpty && _progressRect.Contains(e.Location);
+                bool oe = !_editRect.IsEmpty && _editRect.Contains(e.Location);
+                Cursor = (hs >= 0 || oh || op || oe) ? Cursors.Hand : Cursors.Default;
+                if (hs != _hoverStar || oh != _hoverHeart || op != _hoverProgress || oe != _hoverEdit)
+                { _hoverStar = hs; _hoverHeart = oh; _hoverProgress = op; _hoverEdit = oe; Invalidate(); }
+                UpdateBadgeHover(e.Location);
             }
             base.OnMouseMove(e);
         }
 
+        // The tooltip text is re-set only when the hovered badge CHANGES: setting it on every mouse
+        // move would restart the popup timer and the tip would never appear.
+        private void UpdateBadgeHover(Point p)
+        {
+            int hb = -1;
+            for (int i = 0; i < _badgeRects.Length; i++)
+                if (_badgeRects[i].Contains(p)) { hb = i; break; }
+            // The progress button shares the tooltip: index -2 marks it, so moving between it and the
+            // strip still re-arms the popup.
+            if (hb < 0 && !_progressRect.IsEmpty && _progressRect.Contains(p)) hb = -2;
+            if (hb < 0 && !_editRect.IsEmpty && _editRect.Contains(p)) hb = -3;
+            if (hb == _hoverBadge) return;
+            _hoverBadge = hb;
+            _badgeTip.SetToolTip(this, hb == -3 ? "Edit this game..." : hb == -2 ? _progressTip
+                                     : hb >= 0 ? _badges[hb].tip : null);
+        }
+
         protected override void OnMouseLeave(EventArgs e)
         {
-            if (_hoverStar != -1 || _hoverHeart) { _hoverStar = -1; _hoverHeart = false; Invalidate(); }
+            if (_hoverStar != -1 || _hoverHeart || _hoverProgress || _hoverEdit)
+            { _hoverStar = -1; _hoverHeart = false; _hoverProgress = false; _hoverEdit = false; Invalidate(); }
+            if (_hoverBadge != -1) { _hoverBadge = -1; _badgeTip.SetToolTip(this, null); }
             Cursor = Cursors.Default;
             base.OnMouseLeave(e);
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { _fade.Dispose(); _pulse.Dispose(); _logo?.Dispose(); _fanart?.Dispose(); }
+            if (disposing) { _fade.Dispose(); _pulse.Dispose(); _logo?.Dispose(); _fanart?.Dispose(); _badgeTip.Dispose(); }
             base.Dispose(disposing);
         }
     }

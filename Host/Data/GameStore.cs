@@ -55,6 +55,21 @@ internal struct GameRow
     public float CommunityStarRating;
     public int StartupLoadDelay;
     public int Flags;          // packed booleans, see GFlags
+
+    // ── Runtime-derived, NEVER persisted and never journalled ────────────────
+    // "Does this game have a manual / several documents?" is a question about the DISK, not about the
+    // XML: LaunchBox matches files in Manuals\<platform>\ by name, so answering it per game means
+    // walking that folder per game. The badge pass already indexes each platform's folder once —
+    // these two bits are that answer, kept instead of thrown away. They live in Tier 1 so they
+    // survive the launch-time drop, and they are deliberately NOT in GFlags (that one round-trips to
+    // LaunchBox's XML; these must never leak into it).
+    public bool HasManual, HasMultipleDocuments;
+
+    // The game's BADGE COMBINATION — an index into BadgeTable, 0 = not evaluated yet. Four bytes here
+    // replace the per-game object graph the badge engine used to keep (~630 bytes each, 190 MB on a
+    // 300k library). Tier 1 on purpose: a running game must not lose its badges, and re-deriving them
+    // costs a full pass.
+    public int BadgeCombo;
 }
 
 /// <summary>Bit flags packed into <see cref="GameRow.Flags"/>.</summary>
@@ -159,6 +174,7 @@ internal sealed class GameStore
             : rows.Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
         if (!_subEntities.TryGetValue(gid, out var m)) _subEntities[gid] = m = new(StringComparer.Ordinal);
         m[type] = list;
+        Notify(gid, "");
         if (ReadOnly || _oplog == null) return;
         _oplog.Append("replace", type, null, gid.ToString(), null, JsonSerializer.Serialize(list));
     }
@@ -239,6 +255,49 @@ internal sealed class GameStore
     public IReadOnlyList<AltName> AltNamesFor(Guid id) => _altNames.TryGetValue(id, out var l) ? l : (IReadOnlyList<AltName>)Array.Empty<AltName>();
     public IReadOnlyList<GameMount> MountsFor(Guid id) => _mounts.TryGetValue(id, out var l) ? l : (IReadOnlyList<GameMount>)Array.Empty<GameMount>();
     public IReadOnlyList<CustomField> CustomFieldsFor(Guid id) => _customFields.TryGetValue(id, out var l) ? l : (IReadOnlyList<CustomField>)Array.Empty<CustomField>();
+
+    /// <summary>Publishes the document bits a media sweep worked out (see GameRow). Returns true when
+    /// something actually moved, so the caller only reacts to real changes.</summary>
+    public bool SetDocumentBits(Guid id, bool hasManual, bool hasMultiple)
+    {
+        if (!_byId.TryGetValue(id, out var i)) return false;
+        if (Rows[i].HasManual == hasManual && Rows[i].HasMultipleDocuments == hasMultiple) return false;
+        Rows[i].HasManual = hasManual;
+        Rows[i].HasMultipleDocuments = hasMultiple;
+        return true;   // deliberately silent: derived data, no journal, no GameChanged
+    }
+
+    /// <summary>Forget every game's badge combination (the badge table was emptied — a custom badge
+    /// changed, the pack was swapped). Derived data: no journal, no notification.</summary>
+    public void ClearBadgeCombos()
+    {
+        for (int i = 0; i < Rows.Length; i++) Rows[i].BadgeCombo = 0;
+    }
+
+    /// <summary>Put back the combinations a saved pass computed. Returns how many rows matched — a
+    /// game the file doesn't know keeps 0 and is evaluated on demand.</summary>
+    public int ApplyBadgeCombos(IReadOnlyDictionary<Guid, int> combos)
+    {
+        int n = 0;
+        for (int i = 0; i < Rows.Length; i++)
+            if (combos.TryGetValue(Rows[i].Id, out var c) && c > 0) { Rows[i].BadgeCombo = c; n++; }
+        return n;
+    }
+
+    /// <summary>(file name, length, last-write ticks) for every platform XML — the cheap way to ask
+    /// "did LaunchBox change the library while we were away?", sub-entities included.</summary>
+    public IEnumerable<(string Name, long Length, long Ticks)> PlatformFileStamps()
+    {
+        var seen = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in _platformFile.Values) if (f != null) seen.Add(f);
+        foreach (var f in seen)
+        {
+            long len = 0, ticks = 0;
+            try { var fi = new System.IO.FileInfo(f); if (fi.Exists) { len = fi.Length; ticks = fi.LastWriteTimeUtc.Ticks; } }
+            catch { }
+            yield return (System.IO.Path.GetFileName(f), len, ticks);
+        }
+    }
 
     // Mutable list accessors for child-entity write-back (create the list on demand).
     internal List<AddApp> AddAppsMutable(Guid id) => _addApps.TryGetValue(id, out var l) ? l : (_addApps[id] = new List<AddApp>());
@@ -465,6 +524,7 @@ internal sealed class GameStore
     /// <summary>Free the optional (Notes) tier. Call before a game launch.</summary>
     public void DropOptional()
     {
+        OptionalDropped = true;   // silence derived caches: their inputs are about to disappear
         _notes = null;
         _extra.Clear();             // full-field cache (Missing*/Gog*/…) — non-essential during a game
         DropOptionalSubEntities();  // ModelSettings / GameControllerSupport / … — but KEEP GameSave (Tier-1)
@@ -490,7 +550,7 @@ internal sealed class GameStore
     /// extras + the per-game sub-entities.</summary>
     public void ReloadOptional()
     {
-        if (_notes != null) return;
+        if (_notes != null) { OptionalDropped = false; return; }
         var notes = new string[Rows.Length];
         var settings = new XmlReaderSettings { IgnoreComments = true, IgnoreWhitespace = true, DtdProcessing = DtdProcessing.Prohibit };
         foreach (var file in Directory.EnumerateFiles(_platformsDir, "*.xml"))
@@ -519,6 +579,9 @@ internal sealed class GameStore
         // modifies) already live in GameRow/_byId which were never dropped, so we skip them.
         var pending = _oplog?.ReadAll();
         if (pending != null && pending.Count > 0) ReplayOptionalTierOps(pending);
+        // Tier-2 is back: derived caches may listen again. What changed while it was gone (play
+        // counts, and whatever the running game wrote) is covered by the caller's own refresh.
+        OptionalDropped = false;
     }
 
     // Re-apply ONLY the pending ops affecting the droppable Tier-2 (Notes, non-modelled extra fields,
@@ -540,6 +603,32 @@ internal sealed class GameStore
             }
             // add / delete / move / child-entity replace / modelled-field modify / GameSave → Tier-1, skip.
         }
+    }
+
+    // ── Change notification ──────────────────────────────────────────────────
+    // Every mutation of the library converges here, whatever wrote it: Edit Game, the bulk editors,
+    // the store/RA syncs, a plugin going through ILiteBoxGame, DraftGame. That is why derived caches
+    // (the badge engine) listen HERE rather than instrumenting eighty IGame setters or a dozen UI
+    // call sites — those would each miss the paths they don't know about.
+    //
+    // `field` is the XML field name for a game modify, null for anything coarser (a child collection
+    // replaced, a platform move, an add or a delete).
+    //
+    // MUTED while the optional tier is dropped: a running game keeps writing PlayCount/PlayTime while
+    // Notes, the extra fields and the display sub-entities (controller support!) are freed. A listener
+    // recomputing then would read absent data as "no controller support" and cache that.
+
+    /// <summary>A game's stored data changed. Raised on the thread that wrote it.</summary>
+    public static event Action<Guid, string>? GameChanged;
+
+    /// <summary>True between DropOptional and ReloadOptional — the Tier-2 data is not there, so
+    /// nothing derived from it may be recomputed.</summary>
+    public static bool OptionalDropped { get; private set; }
+
+    private void Notify(Guid id, string field)
+    {
+        if (OptionalDropped || id == Guid.Empty) return;
+        try { GameChanged?.Invoke(id, field); } catch { }
     }
 
     // ── Mutations → operation log (WAL) ──────────────────────────────────────
@@ -612,6 +701,7 @@ internal sealed class GameStore
         ApplyFieldToRow(i, xmlName, value);
         if (oldChoice != null && !string.Equals(oldChoice, value, StringComparison.Ordinal))
             LbApiHost.Host.MetadataChoicesCache.MarkFieldDirty(xmlName);
+        Notify(Rows[i].Id, xmlName);
         if (ReadOnly || _oplog == null) return;
         _oplog.Append("modify", "Game", Rows[i].Id.ToString(), null, xmlName, value);
     }
@@ -1097,6 +1187,7 @@ internal sealed class GameStore
             _oplog.Append("add", "Game", id.ToString(), null, null, null);
             _oplog.Append("modify", "Game", id.ToString(), null, "Title", title);
         }
+        Notify(id, "");                                       // a new game has nothing derived yet
         LbApiHost.Host.MetadataChoicesCache.MarkAllDirty();   // a new game may introduce new combo values
         return idx;
     }
@@ -1125,6 +1216,7 @@ internal sealed class GameStore
         newPlatform ??= "";
         if (string.Equals(old, newPlatform, StringComparison.OrdinalIgnoreCase)) return;
         MoveInMemory(i, newPlatform);
+        Notify(Rows[i].Id, "Platform");
         if (!ReadOnly && _oplog != null) _oplog.Append("move", "Game", Rows[i].Id.ToString(), null, old, newPlatform);
     }
 
@@ -1148,6 +1240,7 @@ internal sealed class GameStore
         _byId.Remove(id);
         _addedIds.Remove(id);
         if (!ReadOnly && _oplog != null) _oplog.Append("delete", "Game", id.ToString(), null, "Platform", platform);
+        Notify(id, "");
         LbApiHost.Host.MetadataChoicesCache.MarkAllDirty();   // removing a game may drop combo values
         return true;
     }
@@ -1218,6 +1311,7 @@ internal sealed class GameStore
     /// game <paramref name="gid"/> as a single replace op. Always usable in-memory; persists only when not ReadOnly.</summary>
     public void RecordChildReplace(Guid gid, string entity)
     {
+        Notify(gid, "");
         if (ReadOnly || _oplog == null) return;
         _oplog.Append("replace", entity, null, gid.ToString(), null, SerializeChildren(entity, gid));
     }

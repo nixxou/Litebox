@@ -538,6 +538,12 @@ internal static class HostLaunch
             if (_droppedForGame)   // a background job kept these alive through the game — nothing to restore
             {
                 try { _store?.ReloadOptional(); Mem.Report("after ReloadOptional (exit)"); } catch { }
+                // Automatic Progress Tracking wrote this game's Progress a few lines up, while the store
+                // was still degreased — the badge cache deliberately ignores writes made then (a running
+                // game's IGame is missing its sub-entities). Now that the optional fields are back, this
+                // one game is recomputed: without it, the Progress badge would keep showing the value
+                // the game had BEFORE it was played, until the next full pass.
+                try { Badges.BadgeWatch.RecomputeNow(new[] { game }); } catch { }
                 try { if (Gc.HostGameCache.Enabled && Gc.HostGameCache.UnloadDuringGame) { Gc.HostGameCache.Reload(); Console.WriteLine("[gamecache] rebuilding after game exit"); } } catch { }
                 try { Media.Dedup.DedupEngine.Resume(); } catch { }   // CNN session allowed again (lazy re-create)
             }

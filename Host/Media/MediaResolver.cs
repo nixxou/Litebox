@@ -346,6 +346,12 @@ internal static class MediaResolver
     public static string Manual(string platformName, Guid id, string title)
         => BestInDir(MediaFolder("Manuals", platformName), id, Sanitize(title), ManualExts, flat: true);
 
+    /// <summary>The very folder ManualsAll walks (…\Manuals\&lt;sanitized platform&gt;), or null when
+    /// the LB root isn't known. Exposed for the badge pass, which indexes the folder ONCE per platform
+    /// instead of re-walking it per game — a "does this game have a manual?" answer over thousands of
+    /// games can't afford one enumeration each.</summary>
+    public static string ManualsFolder(string platformName) => MediaFolder("Manuals", platformName);
+
     /// <summary>TOUTES les musiques du jeu, dans l ordre du parcours (meme regle que les manuels :
     /// appartenance au nom de fichier, toute profondeur) — le premier est celui que Music() rend.</summary>
     public static List<string> MusicsAll(string platformName, Guid id, string title)

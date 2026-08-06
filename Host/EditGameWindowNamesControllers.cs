@@ -660,6 +660,10 @@ internal static class ControllerCatalogStore
         }
     }
 
+    /// <summary>Raised after any catalog write — a controller's CATEGORY is what decides which badge a
+    /// game's association shows, so editing the catalog moves badges across the whole library.</summary>
+    public static event Action? CatalogChanged;
+
     public static ControllerRec AddNew(string name, string category)
     {
         lock (_lock)
@@ -730,6 +734,7 @@ internal static class ControllerCatalogStore
 
     private static void Persist()
     {
+        try { CatalogChanged?.Invoke(); } catch { }
         var rows = _list!.Select(r =>
         {
             var d = new Dictionary<string, string>(StringComparer.Ordinal) { ["Id"] = r.Id, ["Name"] = r.Name, ["Category"] = r.Category };

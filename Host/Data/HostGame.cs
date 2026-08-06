@@ -132,6 +132,15 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
     public string CustomDosBoxVersionPath => _s.Str(R.CustomDosBoxIdx);
     // Host-internal (not an IGame member): the RetroAchievements ROM hash from the XML (debug column).
     public string RetroAchievementsHash => _s.Str(R.RaHashIdx);
+
+    /// <summary>Runtime-derived document facts (see GameRow): a manual exists for this game, and it
+    /// has several documents. Filled by the badge pass's media sweep, never read from the XML.</summary>
+    public bool HasManual => R.HasManual;
+    public bool HasMultipleDocuments => R.HasMultipleDocuments;
+
+    /// <summary>Index into BadgeTable (0 = not evaluated). Written by the badge pass, read by every
+    /// surface that draws badges — it is the whole per-game badge state, four bytes inside the row.</summary>
+    public int BadgeCombo { get => R.BadgeCombo; set => _s.Rows[_i].BadgeCombo = value; }
     public override string ScummVmGameDataFolderPath { get => _s.Str(R.ScummDataIdx); set => _s.SetGameField(_i, "ScummVMGameDataFolderPath", value); }
     public override string ScummVmGameType { get => _s.Str(R.ScummTypeIdx); set => _s.SetGameField(_i, "ScummVMGameType", value); }
     public override string Series { get => _s.Str(R.SeriesIdx); set => _s.SetGameField(_i, "Series", value); }

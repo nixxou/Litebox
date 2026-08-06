@@ -181,6 +181,7 @@ internal static class BadgeEngine
     /// than the individual recomputes, because it indexes each platform's media once).</summary>
     public static void RestartPass()
     {
+        Interlocked.Increment(ref _generation);   // a pass in flight is now working on stale premises
         var snapshot = _snapshot;
         if (snapshot != null) StartPass(snapshot, forceRecompute: true);
     }
@@ -191,6 +192,7 @@ internal static class BadgeEngine
     /// refills it.</summary>
     public static void InvalidateAll()
     {
+        Interlocked.Increment(ref _generation);   // BEFORE clearing: a pass in flight must see it move
         Table.Clear();
         _fallback.Clear();
         Store?.ClearBadgeCombos();
@@ -206,7 +208,15 @@ internal static class BadgeEngine
 
     // ── the background pass ──────────────────────────────────────────────────
 
-    /// <summary>Compute the whole library, off the UI thread. No-op when one is already running.
+    // Bumped by every InvalidateAll/RestartPass. A pass captures it on entry and compares on exit:
+    // a mismatch means someone cleared or re-premised the state UNDER the running pass — the rows it
+    // wrote before the clear are gone, so its "complete" result is a mix that must neither be
+    // published as complete nor snapshotted. StartPass returning early when a pass is already running
+    // used to silently DROP such a request; now the running pass itself notices and goes again.
+    private static int _generation;
+
+    /// <summary>Compute the whole library, off the UI thread. No-op when one is already running —
+    /// safely: the running pass re-runs itself if the state was invalidated under it.
     /// Games are handed in as a snapshot — the caller owns "which games exist".</summary>
     public static void StartPass(Func<IReadOnlyList<IGame>> snapshot) => StartPass(snapshot, forceRecompute: false);
 
@@ -219,12 +229,26 @@ internal static class BadgeEngine
             using var job = BackgroundJobs.Enter("badges");
             try
             {
-                // The pass is the expensive half of the badge system and the ONLY thing that grows
-                // with the library — so it is skipped outright when last session's result is still
-                // valid. A restart the user forced (a custom badge changed, the controller catalog
-                // moved) never takes that path: recomputing is the point.
-                if (!forceRecompute && BadgeSnapshot.TryLoad(Store, Table)) { Restored(); _dirty = 0; }
-                else { Pass(snapshot()); PassComplete = true; SaveSnapshot(force: true); }
+                bool recompute = forceRecompute;
+                for (int attempt = 0; attempt < 5; attempt++)   // bounded: a hot loop beats a livelock
+                {
+                    int gen = Volatile.Read(ref _generation);
+                    // The pass is the expensive half of the badge system and the ONLY thing that
+                    // grows with the library — so it is skipped outright when last session's result
+                    // is still valid. A restart the user forced (a custom badge changed, the
+                    // controller catalog moved) never takes that path: recomputing is the point.
+                    if (!recompute && BadgeSnapshot.TryLoad(Store, Table)) { Restored(); _dirty = 0; }
+                    else Pass(_snapshot?.Invoke() ?? snapshot());
+                    if (Volatile.Read(ref _generation) == gen)
+                    {
+                        _doneGeneration = gen;
+                        PassComplete = true;
+                        SaveSnapshot(force: recompute);
+                        break;
+                    }
+                    LbLog.Info("badges", "pass invalidated while running — going again");
+                    recompute = true;   // whatever invalidated us deleted the snapshot too
+                }
             }
             catch (Exception ex) { LbLog.Warn("badges", "pass failed: " + ex.Message); }
             finally
@@ -232,9 +256,19 @@ internal static class BadgeEngine
                 Volatile.Write(ref _passRunning, 0);
                 PassComplete = true;
                 Changed?.Invoke();
+                // An invalidation can still land between the loop's last generation check and the
+                // flag release above — its StartPass saw the flag up and returned. Now that the flag
+                // is down, that request would be lost; catching it here closes the last window.
+                if (Volatile.Read(ref _generation) != _doneGeneration)
+                {
+                    var again = _snapshot;
+                    if (again != null) StartPass(again, forceRecompute: true);
+                }
             }
         });
     }
+
+    private static int _doneGeneration;   // generation of the last pass that ran to completion
 
     // A restored snapshot brings the combinations back but not how many games carry each — the strip
     // cache fills itself with the ones that pay best, so they are counted here (one pass over an int

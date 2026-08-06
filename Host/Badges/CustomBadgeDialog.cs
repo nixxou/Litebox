@@ -115,13 +115,17 @@ internal sealed class CustomBadgeDialog : LiteBoxForm
         UpdateCount();
     }
 
-    /// <summary>Edits the badge IN PLACE (name, rules) and returns OK when the user confirmed. The
-    /// image, if one was chosen, has already been written to the pack folder.</summary>
+    /// <summary>Edits the badge IN PLACE (name, rules) and returns OK when the user confirmed — and
+    /// only then applies the rename, so a No or a Cancel after typing a new name leaves the stored
+    /// badge untouched. The image, if one was chosen, has already been written to the pack folder
+    /// (harmless on cancel: an image file with no definition is just an unused file).</summary>
     public static DialogResult Edit(IWin32Window owner, BadgeCustom badge,
                                     Func<IReadOnlyList<IGame>> games, float dpi)
     {
         using var dlg = new CustomBadgeDialog(badge, games, dpi);
-        return dlg.ShowDialog(owner);
+        var result = dlg.ShowDialog(owner);
+        if (result == DialogResult.OK) dlg.Apply();
+        return result;
     }
 
     private void PickImage()
@@ -193,10 +197,6 @@ internal sealed class CustomBadgeDialog : LiteBoxForm
             return;
         }
         _badge.Rules = _readRules().Select(BadgeRule.From).ToList();
-        // The name IS the identity: renaming carries the id, the image file, the place in the order
-        // and the enabled state along with it.
-        if (string.IsNullOrWhiteSpace(_badge.Id)) _badge.Name = name;
-        else BadgeCustomStore.Rename(_badge, name);
         if (_badge.Rules.Count == 0)
         {
             var r = MessageBox.Show(this,
@@ -204,7 +204,25 @@ internal sealed class CustomBadgeDialog : LiteBoxForm
                 "Custom badge", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (r != DialogResult.Yes) return;
         }
+        // NOTHING is applied from inside the dialog. Rename deletes the old definition, moves the
+        // image and rewrites the settings the moment it runs — so run here, it had already destroyed
+        // the badge when the user answered No above and then cancelled, with the outer Save never
+        // reached. The dialog only records what was asked; Apply() does it after OK, next to the Save.
+        _requestedName = name;
         DialogResult = DialogResult.OK;
         Close();
+    }
+
+    private string? _requestedName;
+
+    /// <summary>Apply what the dialog collected — the rename last of all, once the caller is
+    /// committed to saving. Call ONLY after ShowDialog returned OK, and follow with Save.</summary>
+    public void Apply()
+    {
+        string name = _requestedName ?? _badge.Name;
+        // The name IS the identity: renaming carries the id, the image file, the place in the order
+        // and the enabled state along with it.
+        if (string.IsNullOrWhiteSpace(_badge.Id)) _badge.Name = name;
+        else BadgeCustomStore.Rename(_badge, name);
     }
 }

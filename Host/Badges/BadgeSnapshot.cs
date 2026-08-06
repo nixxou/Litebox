@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using LbApiHost.Host.Data;
 using LbApiHost.Host.Diag;
@@ -37,11 +38,19 @@ internal static class BadgeSnapshot
 
     public static string Path => System.IO.Path.Combine(LiteBoxPaths.Cache, "badges.bin");
 
-    /// <summary>Identity of everything the file depends on. Cheap: a few dozen file stats, not a walk
-    /// of the library.</summary>
+    /// <summary>Identity of everything the file depends on. Cheap: a few dozen file and directory
+    /// stats ONCE at startup — this is not the per-game I/O the badge rules forbid.
+    ///
+    /// Two kinds of input feed a badge. What lives in the STORE (fields, sub-entities) is covered by
+    /// the platform XML stamps. What lives OUTSIDE it — the pack's art, the Manuals folders, the
+    /// installed hiscore.dat, the save vault — is watched by events while the app runs, but events
+    /// see nothing while the app is CLOSED: a PNG dropped into the pack overnight would restore
+    /// combinations that skipped that badge, forever, with nothing left to notice. Their stats close
+    /// that hole. Directory mtimes move on direct child add/remove/rename — exactly the changes that
+    /// alter what the pass would find (an edit INSIDE an existing manual changes no badge).</summary>
     public static string Stamp(GameStore? store)
     {
-        var sb = new StringBuilder(256);
+        var sb = new StringBuilder(512);
         sb.Append(Version).Append('|').Append(BadgeSettings.Pack).Append('|');
         foreach (var b in BadgeCatalog.All) sb.Append(b.Id).Append(',');
         sb.Append('|');
@@ -51,7 +60,67 @@ internal static class BadgeSnapshot
             foreach (var (name, len, ticks) in store.PlatformFileStamps())
                 sb.Append(name).Append(':').Append(len).Append(':').Append(ticks).Append(';');
         }
+        sb.Append('|');
+
+        // Badge art: one stat per pack folder (file count + newest write). Catches an added,
+        // replaced or deleted PNG — the review's exact counter-example.
+        try
+        {
+            var root = BadgeImages.PacksRoot;
+            if (root != null && Directory.Exists(root))
+                foreach (var pack in Directory.EnumerateDirectories(root).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+                    StampDirFiles(sb, pack, "*.png");
+        }
+        catch { }
+        sb.Append('|');
+
+        // Manuals: the Documents badge reads Manuals\<platform>\. Directory mtime, not a file walk.
+        try
+        {
+            if (store != null)
+                foreach (var plat in store.ByPlatform.Keys.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+                {
+                    var dir = Media.MediaResolver.ManualsFolder(plat);
+                    if (dir != null && Directory.Exists(dir))
+                        sb.Append(plat).Append(':').Append(Directory.GetLastWriteTimeUtc(dir).Ticks).Append(';');
+                }
+        }
+        catch { }
+        sb.Append('|');
+
+        // MAME High Scores: the installed hiscore.dat files decide which machines qualify.
+        try
+        {
+            foreach (var dat in Mame.HiscoreDat.DatFiles().OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                var fi = new FileInfo(dat);
+                if (fi.Exists) sb.Append(fi.Length).Append(':').Append(fi.LastWriteTimeUtc.Ticks).Append(';');
+            }
+        }
+        catch { }
+        sb.Append('|');
+
+        // Save vault: LiteBox's own index file — the save badges answer from it, not from disk walks.
+        try
+        {
+            var fi = new FileInfo(LiteBoxPaths.File("saves-vault.json"));
+            if (fi.Exists) sb.Append(fi.Length).Append(':').Append(fi.LastWriteTimeUtc.Ticks);
+        }
+        catch { }
         return sb.ToString();
+    }
+
+    // count + newest write over a folder's direct files: rename, add, delete and replace all move it.
+    private static void StampDirFiles(StringBuilder sb, string dir, string pattern)
+    {
+        try
+        {
+            int n = 0; long newest = 0;
+            foreach (var f in Directory.EnumerateFiles(dir, pattern))
+            { n++; var t = File.GetLastWriteTimeUtc(f).Ticks; if (t > newest) newest = t; }
+            sb.Append(System.IO.Path.GetFileName(dir)).Append(':').Append(n).Append(':').Append(newest).Append(';');
+        }
+        catch { }
     }
 
     // ── write ────────────────────────────────────────────────────────────────
@@ -152,26 +221,28 @@ internal static class BadgeSnapshot
         }
     }
 
-    // Which field of the stamp moved, in words. The layout is version|pack|catalog|game count|files.
+    // Which field of the stamp moved, in words. The layout is
+    // version|pack|catalog|game count|platform files|pack art|manuals|hiscore dats|save vault.
     private static string Difference(string saved, string now)
     {
         var a = saved.Split('|');
         var b = now.Split('|');
-        string[] names = { "the snapshot format", "the badge pack", "the badge catalog", "the game count" };
+        string[] names = { "the snapshot format", "the badge pack", "the badge catalog", "the game count",
+                           "!files", "the badge pack's art", "a Manuals folder", "the installed hiscore.dat", "the save vault" };
         for (int i = 0; i < Math.Min(a.Length, b.Length) && i < names.Length; i++)
-            if (!string.Equals(a[i], b[i], StringComparison.Ordinal)) return names[i] + " changed";
-        if (a.Length > 4 && b.Length > 4 && !string.Equals(a[4], b[4], StringComparison.Ordinal))
         {
-            var fa = a[4].Split(';');
-            var fb = b[4].Split(';');
-            for (int i = 0; i < Math.Max(fa.Length, fb.Length); i++)
+            if (string.Equals(a[i], b[i], StringComparison.Ordinal)) continue;
+            if (names[i] != "!files") return names[i] + " changed";
+            var fa = a[i].Split(';');
+            var fb = b[i].Split(';');
+            for (int j = 0; j < Math.Max(fa.Length, fb.Length); j++)
             {
-                string x = i < fa.Length ? fa[i] : "(missing)", y = i < fb.Length ? fb[i] : "(missing)";
+                string x = j < fa.Length ? fa[j] : "(missing)", y = j < fb.Length ? fb[j] : "(missing)";
                 if (x != y) return $"a platform file changed: {x} -> {y}";
             }
             return "the platform files changed";
         }
-        return "the stamp changed";
+        return a.Length != b.Length ? "the stamp layout changed" : "the stamp changed";
     }
 
     public static void Delete()

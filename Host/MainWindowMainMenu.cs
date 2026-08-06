@@ -48,8 +48,7 @@ internal sealed partial class MainWindow
         var bigBox = M("Big Box...", MenuIcons.BigBox);
         bigBox.Click += (_, _) => Safe(OpenBigBoxKiosk);
         var achievements = M("View Achievements Profile...", MenuIcons.Trophy);
-        achievements.Click += (_, _) => MessageBox.Show(this, "Not implemented yet.",
-            "Achievements", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        achievements.Click += (_, _) => Safe(OpenAchievementsProfile);
         var quit = M("Quit LiteBox", MenuIcons.Exit);
         quit.Click += (_, _) => Close();   // the FormClosing chain saves layout/selection and flushes
 
@@ -81,8 +80,137 @@ internal sealed partial class MainWindow
         _bell = new Notifications.NotificationBell(this, menu);
         menu.Items.Add(_bell.Item);
 
+        // The achievement points, to the bell's LEFT. Right-aligned items are placed from the right edge
+        // inward IN ADD ORDER, so the first one added takes the corner — this one has to come AFTER the
+        // bell to sit beside it, not before. (Same ordering as the toolbar's ExtendDB indicator.)
+        _raPoints = new ToolStripLabel("")
+        {
+            ForeColor = SubFg, Alignment = ToolStripItemAlignment.Right, Visible = false,
+            Margin = new Padding(0, 0, 10, 0),
+            ToolTipText = "Your RetroAchievements profile",
+            // The label is user-written, so its width is unknown until it is filled: AutoSize measures the
+            // text it actually got. Overflow.Never keeps it on the bar rather than letting a long template
+            // push it into the chevron menu, where an indicator is no indicator at all.
+            AutoSize = true, Overflow = ToolStripItemOverflow.Never,
+        };
+        _raPoints.Click += (_, _) => Safe(OpenAchievementsProfile);
+        menu.Items.Add(_raPoints);
+
+        StartAchievementPoints();
         return menu;
     }
+
+    // ── "HARDCORE POINTS: 30" ────────────────────────────────────────────────
+    // LaunchBox keeps the number in its menu bar and opens the RetroAchievements window from it.
+    // The label paints from the CACHE, so it is there the moment the bar is built; the network
+    // refresh runs behind it and re-labels when it lands (or never, and the cached number stands).
+
+    private ToolStripLabel _raPoints;
+
+    private void StartAchievementPoints()
+    {
+        if (!Ra.RaProfileService.Configured) return;      // no RA account → no indicator at all
+        UpdateAchievementPoints();
+        Ra.RaProfileService.Changed += OnAchievementPointsChanged;
+        FormClosed += (_, _) => Ra.RaProfileService.Changed -= OnAchievementPointsChanged;
+        // Only if the cache has aged out: restarting LiteBox twice in a minute must not spend five
+        // requests re-fetching numbers that cannot have moved.
+        System.Threading.Tasks.Task.Run(() => { try { Ra.RaProfileService.RefreshIfStale(); } catch { } });
+    }
+
+    private void OnAchievementPointsChanged()
+    {
+        // Raised on the fetching thread.
+        try
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            BeginInvoke((Action)(() => { if (!IsDisposed) UpdateAchievementPoints(); }));
+        }
+        catch { }
+    }
+
+    /// <summary>The RetroAchievements window. It gets the same three hooks RELATED GAMES has — the library
+    /// to match its recent games against, the cover resolver, and the "select this game" bridge — so a
+    /// recent game we actually own is clickable there exactly as a suggestion card is in the detail pane.
+    /// The click brings LiteBox back to the front — SelectGameById raises the window itself — but leaves
+    /// the RetroAchievements window open behind it, so a second game is one click away, not a reopen.</summary>
+    private void OpenAchievementsProfile()
+    {
+        Ra.RaProfileWindow.Open(this,
+            () => Safe(() => (IReadOnlyList<IGame>)(_dm?.GetAllGames() ?? Array.Empty<IGame>())) ?? Array.Empty<IGame>(),
+            RelatedLocalArt,
+            id => { try { SelectGameById(id); } catch { } });
+    }
+
+    /// <summary>A game just exited — if it was one with achievements, the points on the bar are almost
+    /// certainly stale, so refetch. Called from OnGameEnded.
+    ///
+    /// Refresh, NOT RefreshIfStale: the 30-minute TTL exists to stop pointless traffic at boot, and this
+    /// is the one moment we have positive reason to believe the numbers moved. Games with no RA id are
+    /// skipped outright — nothing can have changed, and a five-request round trip for every launch of
+    /// every unscored game in the library is exactly the traffic the TTL was protecting.</summary>
+    private void RefreshAchievementPointsAfterGame(IGame game)
+    {
+        if (!Ra.RaProfileService.Configured) return;
+        if (Ra.RaFields.Raid(game) <= 0) return;
+        System.Threading.Tasks.Task.Run(() => { try { Ra.RaProfileService.Refresh(); } catch { } });
+    }
+
+    /// <summary>The default label — LaunchBox's wording, as a template.</summary>
+    internal const string RaPointsDefault = "HARDCORE POINTS: %HP";
+
+    /// <summary>The tokens the label understands, in the order the help lists them.</summary>
+    private static readonly (string token, string what)[] RaPointsTokens =
+    {
+        ("%HP",   "hardcore points"),
+        ("%RP",   "RetroPoints (the white ones)"),
+        ("%SP",   "softcore points"),
+        ("%AU",   "achievements unlocked"),
+        ("%GB",   "games beaten"),
+        ("%RANK", "site rank (blank while RA hasn't ranked the account)"),
+        ("%USER", "RetroAchievements username"),
+    };
+
+    private void UpdateAchievementPoints()
+    {
+        if (_raPoints == null) return;
+        var p = Ra.RaProfileService.Cached();
+        if (p == null) { _raPoints.Visible = false; return; }   // nothing fetched yet — no empty label
+        string text = RenderRaPoints(_cfg.Get("AchievementsBarLabel", RaPointsDefault), p);
+        // An empty template is how you turn the indicator off, rather than needing a separate toggle.
+        _raPoints.Text = text;
+        _raPoints.Visible = text.Length > 0;
+    }
+
+    /// <summary>Substitute the tokens in the user's template. Longest token first, so %RANK is not eaten
+    /// by %R-something; numbers get thousands separators, and an absent rank renders empty rather than 0.</summary>
+    internal static string RenderRaPoints(string? template, Ra.RaProfile p)
+    {
+        string s = template ?? "";
+        if (s.Length == 0) return "";
+        s = s.Replace("%RANK", p.rank?.ToString("N0") ?? "")
+             .Replace("%USER", p.user ?? "")
+             .Replace("%HP", p.hardcorePoints.ToString("N0"))
+             .Replace("%RP", p.retroPoints.ToString("N0"))
+             .Replace("%SP", p.softcorePoints.ToString("N0"))
+             .Replace("%AU", p.achievementsUnlocked.ToString("N0"))
+             .Replace("%GB", p.gamesBeaten.ToString("N0"));
+        return s.Trim();
+    }
+
+    /// <summary>The Display option for the menu-bar label. Lives with the other Display options so it is
+    /// edited where the rest of the bar's appearance is.</summary>
+    internal Options.OptionItem AchievementPointsOption()
+        => Options.OptionItem.Text("Display", "Achievements: menu bar label",
+            () => _cfg.Get("AchievementsBarLabel", RaPointsDefault),
+            v => _cfg.Set("AchievementsBarLabel", v),
+            "What the RetroAchievements indicator writes in the menu bar. Default \"" + RaPointsDefault
+            + "\". Tokens: " + string.Join(", ", RaPointsTokens.Select(t => t.token + " = " + t.what))
+            + ". Anything else is written as-is, so \"%HP hardcore / %SP softcore\" works. The label sizes "
+            + "itself to whatever it ends up saying. Empty hides the indicator; the profile window is still "
+            + "reachable from MENU ▸ View Achievements Profile. Only shown when a RetroAchievements account "
+            + "is configured.",
+            applyLive: UpdateAchievementPoints);
 
     /// <summary>"Big Box..." — the fullscreen BigBox Web kiosk. With ExtendDB loaded its own kiosk wins
     /// (same rule as the F11 hotkey); otherwise the host kiosk runs on the embedded web server, which

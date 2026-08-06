@@ -300,6 +300,18 @@ BadgeHeroDiffers       (vide)   Badges dont l'état dans le PANNEAU DROIT diffè
                        hérite de l'état principal au lieu d'arriver dans une
                        seconde liste à moitié configurée. Clé LiteBox : LaunchBox
                        n'a pas de notion de panneau droit.
+AchievementsBarLabel   HARDCORE POINTS: %HP
+                       Ce que l'indicateur RetroAchievements écrit dans la barre
+                       de menu (à gauche de la cloche). Jetons remplacés :
+                       %HP points hardcore, %RP RetroPoints (les blancs),
+                       %SP points softcore, %AU achievements débloqués,
+                       %GB jeux battus, %RANK rang sur le site (vide tant que RA
+                       n'a pas classé le compte), %USER pseudo RA. Le reste est
+                       écrit tel quel, donc "%HP hardcore / %SP softcore" marche.
+                       Le libellé se redimensionne sur ce qu'il finit par dire.
+                       VIDE = indicateur masqué (le profil reste accessible par
+                       MENU ▸ View Achievements Profile). N'apparaît que si un
+                       compte RetroAchievements est configuré.
 BadgesComputeAtLoad    false    true = la passe tourne pendant le boot (la
                        première liste est déjà badgée, démarrage plus long) ;
                        false = elle démarre une fois la fenêtre affichée.

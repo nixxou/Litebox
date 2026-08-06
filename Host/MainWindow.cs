@@ -2037,6 +2037,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 + "for games where full-scan mode actually applies — that mode is set per platform and per game, "
                 + "so this stays available whatever the global setting says.",
                 applyLive: Refresh3dValidity),
+            AchievementPointsOption(),
         };
 
         Options.OptionItem[] midList =
@@ -6274,6 +6275,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         LedBlinky.GameStop();   // "4" — fire before the list re-selects a game (which would send a "9")
 
         _gameRunning = false;   // game over → store status refresh may resume
+
+        // Achievements earned in that session move the points in the menu bar (and the profile window,
+        // if it's open). Background, best-effort, and a no-op for a game without an RA id.
+        RefreshAchievementPointsAfterGame(g);
 
         HideRunningOverlay();
         // Bring the web kiosk back (to the exact page it was on) now the game has exited.

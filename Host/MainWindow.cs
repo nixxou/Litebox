@@ -4546,7 +4546,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         var list = new List<(Image, string)>();
         int px = Math.Max(6, (int)Math.Round(20 * LiteBoxTheme.DpiScale(this) * HeroBadgeScalePct / 100.0));
         int opacity = HeroBadgeOpacityPct;
-        foreach (var hit in Badges.BadgeEngine.Visible(g))
+        foreach (var hit in Badges.BadgeEngine.VisibleHero(g))
         {
             // Progress leaves the strip — it becomes the button at the bottom-right (SetHeroProgress).
             if (string.Equals(hit.Id, "Progress", StringComparison.OrdinalIgnoreCase)) continue;
@@ -4563,12 +4563,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // in View ▸ Badges, so the menu still governs it.
     private void SetHeroProgress(IGame g, int px, int opacity)
     {
-        if (!Badges.BadgeSettings.IsEnabled("Progress")) { _hero.SetProgress(null, null); return; }
+        if (!Badges.BadgeSettings.IsEnabledHero("Progress")) { _hero.SetProgress(null, null); return; }
         string value = S(Safe(() => g.Progress));
         Image img = null;
         if (value.Length > 0)
         {
-            var hit = Badges.BadgeEngine.Visible(g)
+            var hit = Badges.BadgeEngine.VisibleHero(g)
                 .FirstOrDefault(h => string.Equals(h.Id, "Progress", StringComparison.OrdinalIgnoreCase));
             if (hit.Image != null) img = Badges.BadgeImages.Get(hit.Image, px, hit.Tint, opacity);
         }

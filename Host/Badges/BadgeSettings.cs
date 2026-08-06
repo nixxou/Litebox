@@ -44,6 +44,11 @@ internal static class BadgeSettings
     // LiteBox's own (LiteBox.ini): the draw order of every badge, and which CUSTOM badges are off.
     private const string KeyOrder = "BadgeOrder";
     private const string KeyCustomOff = "CustomBadgesDisabled";
+    // Badges whose DETAIL-PANE state differs from the main one. Stored as the exception rather than as
+    // a second full set: one tick governs both surfaces, and only a deliberate disagreement is worth
+    // remembering — so a badge added to the catalog later inherits the main state instead of arriving
+    // in a half-configured second list.
+    private const string KeyHeroDiff = "BadgeHeroDiffers";
 
     /// <summary>Raised after any change, so every surface showing badges can repaint.</summary>
     public static event Action? Changed;
@@ -55,6 +60,31 @@ internal static class BadgeSettings
     public static int Version { get; private set; }
 
     private static void Bump() { Version++; _customIds = null; _orderIndex = null; Changed?.Invoke(); }
+
+    // ── the two surfaces ─────────────────────────────────────────────────────
+    // MAIN is the game list and the poster tiles — LaunchBox's own "enabled" notion, shared with it.
+    // DETAIL is the right-hand pane, which LaunchBox has no equivalent for.
+
+    private static HashSet<string>? _heroDiff;
+    private static HashSet<string> HeroDiff()
+        => _heroDiff ??= new HashSet<string>(Split(Cfg.Get(KeyHeroDiff) ?? ""), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Is this badge drawn in the DETAIL pane? Same as the main state unless the user made
+    /// the two disagree.</summary>
+    public static bool IsEnabledHero(string id) => IsEnabled(id) ^ HeroDiff().Contains(id);
+
+    /// <summary>Set the DETAIL pane's state. Agreeing with the main one is not stored — it is the
+    /// default, and storing it would freeze this badge against a later change of the main tick.</summary>
+    public static void SetEnabledHero(string id, bool on)
+    {
+        var diff = new HashSet<string>(HeroDiff(), StringComparer.OrdinalIgnoreCase);
+        if (on == IsEnabled(id)) { if (!diff.Remove(id)) return; }
+        else if (!diff.Add(id)) return;
+        Cfg.Set(KeyHeroDiff, string.Join("|", diff));
+        Cfg.Save();
+        _heroDiff = diff;
+        Bump();
+    }
 
     static BadgeSettings() { BadgeCustomStore.Changed += () => { _order = null; Bump(); }; }
 
@@ -90,6 +120,17 @@ internal static class BadgeSettings
 
     public static void SetEnabled(string id, bool on)
     {
+        Diag.LbLog.Info("badges", $"SetEnabled({id}, {on}) custom={IsCustom(id)}");
+        // The main tick carries the detail pane with it: a badge you turn off is off everywhere,
+        // and you say otherwise afterwards if you mean to.
+        if (_heroDiff?.Contains(id) == true || HeroDiff().Contains(id))
+        {
+            var diff = new HashSet<string>(HeroDiff(), StringComparer.OrdinalIgnoreCase);
+            diff.Remove(id);
+            Cfg.Set(KeyHeroDiff, string.Join("|", diff));
+            Cfg.Save();
+            _heroDiff = diff;
+        }
         // Custom badges never enter LaunchBox's EnabledBadges: that key belongs to LaunchBox, which
         // rewrites the file and would drop names it doesn't know. Their state is LiteBox's, and it
         // records the DISABLED ones so a newly created badge starts visible.
@@ -107,7 +148,11 @@ internal static class BadgeSettings
         var store = Store;
         if (store == null) return;
         // Materialise the full set the first time (absent = all enabled), then add/remove one.
-        var set = Enabled() ?? new HashSet<string>(BadgeCatalog.All.Select(b => b.Id), StringComparer.OrdinalIgnoreCase);
+        // BuiltIns, NOT All: this key is LaunchBox's, and materialising it from the live catalog put
+        // our custom ids into its file — which LaunchBox drops on its next save, and which nothing
+        // here would ever read back (custom state lives in CustomBadgesDisabled).
+        var set = Enabled() ?? new HashSet<string>(BadgeCatalog.BuiltIns.Select(b => b.Id), StringComparer.OrdinalIgnoreCase);
+        set.RemoveWhere(x => !BadgeCatalog.BuiltIns.Any(b => string.Equals(b.Id, x, StringComparison.OrdinalIgnoreCase)));
         if (on) set.Add(id); else set.Remove(id);
         string formatted = Format(set);   // reads the PREVIOUS raw value for its ordering — before we overwrite it
         _cache = set;
@@ -117,7 +162,7 @@ internal static class BadgeSettings
     }
 
     /// <summary>Forget the parsed set (settings reloaded from disk).</summary>
-    public static void Reset() { _cache = null; _cacheRaw = null; _customOff = null; _order = null; Bump(); }
+    public static void Reset() { _cache = null; _cacheRaw = null; _customOff = null; _heroDiff = null; _order = null; Bump(); }
 
     // ── draw order ───────────────────────────────────────────────────────────
     // ONE global list of every badge id, LiteBox's own (LaunchBox's EnabledBadges only lists the

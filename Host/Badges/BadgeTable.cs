@@ -154,7 +154,11 @@ internal sealed class BadgeTable
     /// <summary>The combination's badges as drawable hits. <paramref name="filtered"/> applies the
     /// Badges menu and the user's order — they are applied HERE, per visible row, rather than stored
     /// per game, so toggling a badge invalidates nothing but the composed strips.</summary>
-    public BadgeHit[] Materialize(int combo, bool filtered)
+    public BadgeHit[] Materialize(int combo, bool filtered) => Materialize(combo, filtered, hero: false);
+
+    /// <summary>Same, for a given surface: the detail pane has its own enabled set (an exception list
+    /// over the main one), so it filters on a different answer while sharing the same packed bytes.</summary>
+    public BadgeHit[] Materialize(int combo, bool filtered, bool hero)
     {
         var all = BadgeCatalog.All;
         List<BadgeHit>? hits = null;
@@ -168,7 +172,7 @@ internal sealed class BadgeTable
                 int bi = _blob[p + i * 2], vi = _blob[p + i * 2 + 1];
                 if (bi >= all.Count) continue;                       // catalog shrank under us
                 var def = all[bi];
-                if (filtered && !BadgeSettings.IsEnabled(def.Id)) continue;
+                if (filtered && !(hero ? BadgeSettings.IsEnabledHero(def.Id) : BadgeSettings.IsEnabled(def.Id))) continue;
                 string image = def.Id; string detail = ""; var tint = BadgeTint.None;
                 if (vi > 0 && vi <= _variants.Count)
                 {

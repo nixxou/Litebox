@@ -292,6 +292,14 @@ CustomBadgesDisabled   (vide)   Ids des badges CUSTOM désactivés, pipes. On
                        fraîchement créé démarre visible. Les ids custom
                        n'entrent jamais dans EnabledBadges (LaunchBox les
                        jetterait).
+BadgeHeroDiffers       (vide)   Badges dont l'état dans le PANNEAU DROIT diffère
+                       de l'état principal (liste + tuiles), pipes. On ne stocke
+                       que le désaccord : une seule case gouverne les deux
+                       surfaces, cocher/décocher la principale efface
+                       l'exception, et un badge ajouté plus tard au catalogue
+                       hérite de l'état principal au lieu d'arriver dans une
+                       seconde liste à moitié configurée. Clé LiteBox : LaunchBox
+                       n'a pas de notion de panneau droit.
 BadgesComputeAtLoad    false    true = la passe tourne pendant le boot (la
                        première liste est déjà badgée, démarrage plus long) ;
                        false = elle démarre une fois la fenêtre affichée.

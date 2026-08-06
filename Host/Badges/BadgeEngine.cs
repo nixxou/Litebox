@@ -105,6 +105,10 @@ internal static class BadgeEngine
     /// <summary>The badges to DRAW: applicable, enabled in the Badges menu, in the user's order.</summary>
     public static IReadOnlyList<BadgeHit> Visible(IGame? game) => Table.Materialize(ComboOrEvaluate(game), filtered: true);
 
+    /// <summary>What the DETAIL PANE draws — same combination, its own enabled set.</summary>
+    public static IReadOnlyList<BadgeHit> VisibleHero(IGame? game)
+        => Table.Materialize(ComboOrEvaluate(game), filtered: true, hero: true);
+
     /// <summary>Same, but NEVER computes: a game the pass hasn't reached yet answers empty. This is
     /// what the bulk surfaces (list rows, poster tiles) use — asking them to evaluate thousands of
     /// games on the UI thread is exactly what the background pass exists to avoid. They repaint on

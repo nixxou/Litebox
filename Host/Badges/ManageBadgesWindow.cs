@@ -52,6 +52,9 @@ internal sealed class ManageBadgesWindow : LiteBoxForm
     private readonly Button _up, _down, _add, _edit, _del;
     private bool _syncing;
     private bool _allowCheck;   // the last click landed on the checkbox (or the space bar was used)
+    private const int HeroColumn = 1;   // the drawn "Detail" checkbox
+    // One notch darker than the list itself, the same value Manage Controllers uses for its headers.
+    private static Color HeaderBg => Color.FromArgb(24, 24, 28);
 
     public ManageBadgesWindow(bool readOnly, Func<IReadOnlyList<IGame>> games,
                               Func<Options.OptionItem[]> displayOptions)
@@ -90,7 +93,8 @@ internal sealed class ManageBadgesWindow : LiteBoxForm
         // Column 0 carries the checkbox AND the item image (the native list draws both there and
         // nowhere else), so the priority number gets a column of its own rather than fighting them
         // for the same 40 pixels.
-        _badgeList.Columns.Add("", S(46));
+        _badgeList.Columns.Add("List", S(52));
+        _badgeList.Columns.Add("Detail", S(54), HorizontalAlignment.Center);
         _badgeList.Columns.Add("#", S(40), HorizontalAlignment.Right);
         _badgeList.Columns.Add("Badge", S(230));
         _badgeList.Columns.Add("Family", S(150));
@@ -102,13 +106,87 @@ internal sealed class ManageBadgesWindow : LiteBoxForm
         {
             var hit = _badgeList.HitTest(e.Location);
             _allowCheck = hit.Item != null && e.X <= hit.Item.Bounds.Left + S(20);
+            if (_readOnly || hit.Item?.Tag is not string id) return;
+            // The drawn checkbox has no hit-testing of its own: its column's bounds are the target.
+            var cell = hit.Item.SubItems.Count > HeroColumn ? hit.Item.SubItems[HeroColumn].Bounds : Rectangle.Empty;
+            if (cell.Width > 0 && e.X >= cell.Left && e.X < cell.Right)
+            {
+                BadgeSettings.SetEnabledHero(id, !BadgeSettings.IsEnabledHero(id));
+                _badgeList.Invalidate(cell);
+            }
         };
         _badgeList.KeyDown += (_, e) => { if (e.KeyCode == Keys.Space) _allowCheck = true; };
-        _badgeList.ItemCheck += (_, e) => { if (!_syncing && !_allowCheck) e.NewValue = e.CurrentValue; };
+        _badgeList.ItemCheck += (_, e) =>
+        {
+            if (_syncing || _allowCheck) return;
+            // A ListView applies the check state its items were BUILT with when the native control
+            // gets its handle — after the constructor, with _syncing long since back to false. Judging
+            // that replay as "a click that missed the box" un-ticked every badge on open, and the
+            // ItemChecked below then PERSISTED it. So the test is not "who fired this?" but "does it
+            // contradict the stored state?": the control catching up with the model is always let
+            // through, only a change that disagrees with it needs a click on the box.
+            var item = e.Index >= 0 && e.Index < _badgeList.Items.Count ? _badgeList.Items[e.Index] : null;
+            bool enabled = item?.Tag is string id && BadgeSettings.IsEnabled(id);
+            if (e.NewValue == (enabled ? CheckState.Checked : CheckState.Unchecked)) return;
+            e.NewValue = e.CurrentValue;
+        };
         _badgeList.ItemChecked += (_, e) =>
         {
             if (_syncing || e.Item?.Tag is not string id) return;
+            bool stored = BadgeSettings.IsEnabled(id);
+            if (e.Item.Checked == stored) return;              // already agrees — nothing to write
+            if (!_allowCheck)
+            {
+                // The control moved a box on its own: WinForms re-creates the native list when the
+                // window gets its handle, and every item goes through unchecked on the way. Blocking
+                // that in ItemCheck is useless (the value it would "restore" IS unchecked), and
+                // persisting it turned opening the window into "disable every badge" — 35 writes
+                // before the user had touched anything. The stored state is the authority: put the
+                // box back and write nothing.
+                _syncing = true;
+                try { e.Item.Checked = stored; } finally { _syncing = false; }
+                return;
+            }
             BadgeSettings.SetEnabled(id, e.Item.Checked);
+            _allowCheck = false;   // one click, one change: never a standing permission
+        };
+        // A ListView has exactly ONE native checkbox, in column 0 — so the second one is drawn. Owner
+        // draw is switched on but every other cell asks for the default rendering, which keeps the
+        // native checkbox, the icon, the selection and the theming exactly as they were.
+        _badgeList.OwnerDraw = true;
+        // The native header paints its own light background with BLACK text, which on this theme is
+        // unreadable. Same treatment as Manage Controllers so both windows match: our own fill, and
+        // the text in the theme's secondary foreground — so a Color.SubFg override in Options ▸ Theme
+        // moves it too, instead of freezing a literal here.
+        _badgeList.DrawColumnHeader += (_, e) =>
+        {
+            using var b = new SolidBrush(HeaderBg);
+            e.Graphics.FillRectangle(b, e.Bounds);
+            var r = e.Bounds; r.Inflate(-S(4), 0);
+            var align = e.Header?.TextAlign ?? HorizontalAlignment.Left;
+            var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix
+                      | (align == HorizontalAlignment.Right ? TextFormatFlags.Right
+                       : align == HorizontalAlignment.Center ? TextFormatFlags.HorizontalCenter
+                       : TextFormatFlags.Left);
+            TextRenderer.DrawText(e.Graphics, e.Header?.Text ?? "", _badgeList.Font, r, SubFg, flags);
+        };
+        // NOT DrawDefault here: in Details view, letting the system draw the ITEM makes it draw the
+        // whole row, sub-items included, and DrawSubItem never gets to put our checkbox anywhere.
+        // Every cell is therefore routed through DrawSubItem, which asks for the default rendering
+        // for all but ours.
+        _badgeList.DrawItem += (_, _) => { };
+        _badgeList.DrawSubItem += (_, e) =>
+        {
+            if (e.ColumnIndex != HeroColumn || e.Item?.Tag is not string id) { e.DrawDefault = true; return; }
+            e.DrawBackground();
+            var sz = CheckBoxRenderer.GetGlyphSize(
+                e.Graphics, System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal);
+            var at = new Point(e.Bounds.Left + (e.Bounds.Width - sz.Width) / 2,
+                               e.Bounds.Top + (e.Bounds.Height - sz.Height) / 2);
+            CheckBoxRenderer.DrawCheckBox(e.Graphics, at,
+                BadgeSettings.IsEnabledHero(id)
+                    ? System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal
+                    : System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal);
         };
         _badgeList.SelectedIndexChanged += (_, _) => SyncButtons();
         _badgeList.DoubleClick += (_, _) => EditSelected();
@@ -201,6 +279,7 @@ internal sealed class ManageBadgesWindow : LiteBoxForm
             {
                 int prio = BadgeSettings.OrderIndex(def.Id) + 1;
                 var it = new ListViewItem("") { Tag = def.Id, Checked = BadgeSettings.IsEnabled(def.Id) };
+                it.SubItems.Add("");                 // the drawn "Detail" checkbox lives in this cell
                 it.SubItems.Add(prio.ToString());
                 it.SubItems.Add(def.Label);
                 it.SubItems.Add(FamilyLabel(def.Group));

@@ -31,77 +31,185 @@ namespace LbApiHost.Host.Data;
 
 internal static class SafeXmlWrite
 {
-    /// <summary>Single-file safe write (the direct writers' entry point): LB-guard + backup +
-    /// tmp + atomic swap. Returns false when refused (LB running) or when the write failed —
-    /// the destination is untouched in both cases.</summary>
+    /// <summary>Single-file safe write (the direct writers' entry point). A one-element
+    /// <see cref="Commit"/>, deliberately: one code path means one behaviour, and in particular
+    /// one rollback — a Save of its own would have been the only write here that could not undo
+    /// itself.</summary>
     public static bool Save(XDocument doc, string path)
-    {
-        if (GameStore.IsLaunchBoxRunning())
-        { Console.WriteLine($"[safewrite] refused {Path.GetFileName(path)}: LaunchBox/BigBox is running"); return false; }
-        Backup(new[] { path }, DataRootOf(path));
-        return WriteSwap(doc, path);
-    }
+        => Commit(new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase) { [path] = doc },
+                  Array.Empty<string>(), DataRootOf(path));
 
-    /// <summary>Batch commit (the journal flush's write phase): backup every touched file —
-    /// including the ones about to be deleted — then write all .tmp, swap all, delete. Returns
-    /// false if ANY write failed or the whole batch was refused (LB running): the caller must
-    /// keep its ops pending, re-applying is idempotent.</summary>
+    /// <summary>Batch commit. Backs up every touched file — including the ones about to be
+    /// DELETED — then stages, swaps and deletes, in that order and only that order. On any
+    /// failure the batch is rolled back from the backup, so the caller either gets all of it or
+    /// none of it. Returns false when refused (read-only intent, LaunchBox running, no usable
+    /// backup) or when the batch failed; a false return means the destination files hold their
+    /// ORIGINAL content, not a half-applied mixture.</summary>
     public static bool Commit(IReadOnlyDictionary<string, XDocument> docs, IReadOnlyCollection<string> deletes, string? dataRoot)
     {
         if (docs.Count == 0 && deletes.Count == 0) return true;
         if (GameStore.IsLaunchBoxRunning())
         { Console.WriteLine("[safewrite] commit refused: LaunchBox/BigBox is running — nothing written"); return false; }
 
-        Backup(docs.Keys.Concat(deletes), dataRoot);
+        // What exists RIGHT NOW is what the backup can hold, and therefore what a rollback can
+        // put back. Files we are about to CREATE are absent from it on purpose: nothing to save,
+        // and undoing them is a delete, not a restore.
+        var existedBefore = docs.Keys.Concat(deletes)
+            .Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
-        // Phase 1: every touched doc to .tmp. A failure here means that doc's changes never make
-        // it to disk this pass, so the whole batch must NOT be considered flushed (allOk=false).
-        bool allOk = true;
+        // The backup used to be a courtesy that must "never block the write". It is the rollback's
+        // only source now, so no backup means no way back, and we do not start.
+        string? zip = Backup(existedBefore, dataRoot, out var zipRoot);
+        if (existedBefore.Count > 0 && zip == null)
+        { Console.WriteLine("[safewrite] commit refused: the safety backup could not be written"); return false; }
+
+        // Phase 1 — STAGE. Nothing visible changes here: every document is written beside its
+        // target. A failure means we abandon before touching anything, which is the cheapest
+        // possible outcome and needs no rollback at all.
         var swaps = new List<(string tmp, string file)>();
+        bool staged = true;
         foreach (var kv in docs)
         {
             string tmp = kv.Key + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try { LbXml.Save(kv.Value, tmp); swaps.Add((tmp, kv.Key)); }
-            catch (Exception ex) { Console.WriteLine("[safewrite] save tmp " + kv.Key + ": " + ex.Message); allOk = false; }
+            catch (Exception ex) { Console.WriteLine("[safewrite] stage " + kv.Key + ": " + ex.Message); staged = false; break; }
         }
-        // Phase 2: swap all .tmp → real file (atomic per file).
+        if (!staged)
+        {
+            foreach (var (tmp, _) in swaps) TryDelete(tmp);
+            Console.WriteLine("[safewrite] staging failed — nothing was written");
+            return false;
+        }
+
+        // Phase 2 — SWAP. From here on the library is visibly changing, so a failure has to be undone.
+        // What actually CHANGED is tracked as it happens: the loop stops at the first failure, so
+        // the remaining targets still hold their original bytes and must not be touched by the
+        // rollback. Deleting them only to restore the same content back would widen the blast
+        // radius of a failure for no gain — and lose a healthy file if the restore then failed too.
+        bool ok = true;
+        var swapped = new List<string>();   // now holds NEW content (or is a file we created)
+        var erased = new List<string>();    // actually deleted
         foreach (var (tmp, file) in swaps)
-            if (!ReplaceAtomic(tmp, file)) allOk = false;
-        // Phase 2b: whole-file deletes.
-        foreach (var df in deletes)
-            try { if (File.Exists(df)) File.Delete(df); }
-            catch (Exception ex) { Console.WriteLine("[safewrite] delete " + df + ": " + ex.Message); allOk = false; }
-        return allOk;
+            if (ReplaceAtomic(tmp, file)) swapped.Add(file);
+            else { ok = false; break; }
+
+        // Phase 3 — DELETE, and only once every swap landed. Erasure is the one act with no
+        // natural inverse; keeping it last means a failed batch never reaches it.
+        if (ok)
+            foreach (var df in deletes)
+                try { if (File.Exists(df)) { File.Delete(df); erased.Add(df); } }
+                catch (Exception ex) { Console.WriteLine("[safewrite] delete " + df + ": " + ex.Message); ok = false; break; }
+
+        if (!ok)
+        {
+            foreach (var (tmp, _) in swaps) TryDelete(tmp);       // leftovers from the aborted loop
+            var toRestore = swapped.Concat(erased)
+                .Where(f => existedBefore.Contains(f, StringComparer.OrdinalIgnoreCase)).ToList();
+            Rollback(swapped, toRestore, zip, zipRoot);
+            return false;
+        }
+        return true;
     }
+
+    /// <summary>Put the library back as it was, using the backup taken moments ago.
+    ///
+    /// Deleting comes FIRST and restoring second, which is not cosmetic: the likeliest reason a
+    /// commit failed is a full disk, and freeing the space the new versions occupy is what lets
+    /// the originals fit back. Files we CREATED are not in <paramref name="existedBefore"/>, so
+    /// step one is also what removes them — no special case needed.</summary>
+    private static void Rollback(IEnumerable<string> written, List<string> existedBefore, string? zip, string? zipRoot)
+    {
+        int removed = 0, restored = 0, failed = 0;
+        foreach (var f in written)                                  // 1. everything we wrote, created or modified
+            if (TryDelete(f)) removed++;
+        if (zip != null && zipRoot != null)
+        {
+            try
+            {
+                using var archive = ZipFile.OpenRead(zip);
+                foreach (var f in existedBefore)                     // 2. the originals, modified AND deleted
+                {
+                    string rel = Path.GetRelativePath(zipRoot, f).Replace('\\', '/');
+                    var entry = archive.GetEntry(rel);
+                    if (entry == null) { failed++; continue; }
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(f)!);
+                        entry.ExtractToFile(f, overwrite: true);
+                        restored++;
+                    }
+                    catch (Exception ex) { failed++; Console.WriteLine($"[safewrite] restore {Path.GetFileName(f)}: {ex.Message}"); }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[safewrite] rollback could not read the backup: " + ex.Message); failed++; }
+        }
+        Console.WriteLine(failed == 0
+            ? $"[safewrite] ROLLED BACK cleanly ({removed} removed, {restored} restored from {Path.GetFileName(zip) ?? "-"})"
+            : $"[safewrite] rollback INCOMPLETE ({restored} restored, {failed} failed) — recover by hand from {zip ?? "(no backup)"}");
+    }
+
+    /// <summary>Test-only: make the swap of a given destination fail, to exercise the rollback.
+    /// The recovery path is the one piece of this file that never runs in normal use, so it is
+    /// the one piece that would rot unnoticed — and a broken rollback is worse than none, since
+    /// it deletes before it restores. Same shape as GameStore.ForceLaunchBoxRunning; never set
+    /// outside a self-test.</summary>
+    internal static Func<string, bool>? FailSwapFor;
 
     // ── Atomic swap (tmp → dest). Returns whether dest now actually holds tmp's content. ──
+    // Retries before giving up: a file held for a moment by an antivirus scan or the Windows
+    // indexer is the ordinary reason File.Replace fails, and it clears on its own. Modelled on
+    // ExtDbDownloader's swap, which already retries five times then parks rather than forcing.
+    // There is NO copy-over fallback: overwriting the destination with a plain File.Copy is not
+    // atomic and destroys the original, which is the opposite of this method's job.
     public static bool ReplaceAtomic(string tmp, string dest)
     {
-        try
+        if (FailSwapFor?.Invoke(dest) == true)
+        { Console.WriteLine($"[safewrite] swap {Path.GetFileName(dest)}: forced failure (self-test)"); return false; }
+        for (int attempt = 1; attempt <= 5; attempt++)
         {
-            if (File.Exists(dest)) File.Replace(tmp, dest, null);
-            else File.Move(tmp, dest);
-            return true;
+            try
+            {
+                if (File.Exists(dest)) File.Replace(tmp, dest, null);
+                else File.Move(tmp, dest);
+                return true;
+            }
+            catch (IOException ex)
+            {
+                Console.WriteLine($"[safewrite] swap {Path.GetFileName(dest)} attempt {attempt}/5: {ex.Message}");
+                if (attempt < 5) System.Threading.Thread.Sleep(200 * attempt);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Console.WriteLine($"[safewrite] swap {Path.GetFileName(dest)} attempt {attempt}/5: {ex.Message}");
+                if (attempt < 5) System.Threading.Thread.Sleep(200 * attempt);
+            }
+            catch (Exception ex)
+            { Console.WriteLine($"[safewrite] swap {Path.GetFileName(dest)}: {ex.Message}"); break; }
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[safewrite] atomic replace {dest}: {ex.Message}");
-            try { File.Copy(tmp, dest, true); File.Delete(tmp); return true; }
-            catch (Exception ex2) { Console.WriteLine($"[safewrite] fallback copy {dest}: {ex2.Message}"); return false; }
-        }
+        return false;
     }
 
+    private static bool TryDelete(string path)
+    { try { if (File.Exists(path)) { File.Delete(path); return true; } } catch { } return false; }
+
     // ── Backup: only the dirty files, sub-path relative to <LB>\Data preserved, into a small
-    // timestamped zip under <LB>\Backups\LiteBox. Best-effort — never blocks the write. ──
-    private static void Backup(IEnumerable<string> files, string? dataRoot)
+    // timestamped zip under <LB>\Backups\LiteBox.
+    //
+    // Returns the zip's path, or null when nothing could be written — and the caller REFUSES the
+    // commit on null. This used to be best-effort ("a backup problem must never block the write"),
+    // which was fair while it was a courtesy; it is the rollback's only source now, so a batch
+    // without one is a batch that cannot be undone. `zipRoot` comes back too: entry names are
+    // relative to it, and the restore needs the same anchor to find them again.
+    private static string? Backup(IEnumerable<string> files, string? dataRoot, out string? zipRoot)
     {
+        zipRoot = null;
         try
         {
             var list = files.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            if (list.Count == 0) return;
+            if (list.Count == 0) return null;
             dataRoot ??= DataRootOf(list[0]);
             string? lbRoot = dataRoot != null ? Path.GetDirectoryName(dataRoot) : null;
-            if (string.IsNullOrEmpty(dataRoot) || string.IsNullOrEmpty(lbRoot)) return;
+            if (string.IsNullOrEmpty(dataRoot) || string.IsNullOrEmpty(lbRoot)) return null;
             string dir = Path.Combine(lbRoot, "Backups", "LiteBox");
             Directory.CreateDirectory(dir);
 
@@ -122,8 +230,10 @@ internal static class SafeXmlWrite
 
             PruneBackups(dir, 50);
             Console.WriteLine($"[safewrite] backed up {added} file(s) → {zipPath}");
+            zipRoot = dataRoot;
+            return zipPath;
         }
-        catch (Exception ex) { Console.WriteLine("[safewrite] backup skipped: " + ex.Message); }
+        catch (Exception ex) { Console.WriteLine("[safewrite] backup FAILED: " + ex.Message); return null; }
     }
 
     private static void PruneBackups(string dir, int keep)
@@ -138,16 +248,11 @@ internal static class SafeXmlWrite
         catch { }
     }
 
-    private static bool WriteSwap(XDocument doc, string path)
-    {
-        string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try { LbXml.Save(doc, tmp); }
-        catch (Exception ex) { Console.WriteLine("[safewrite] save tmp " + path + ": " + ex.Message); return false; }
-        return ReplaceAtomic(tmp, path);
-    }
+    // (WriteSwap is gone: Save routes through Commit now, so the single-file path gets the same
+    // staging, the same ordering and the same rollback as everything else.)
 
     /// <summary>Walk up from a file to the enclosing "Data" directory (backup rel-path anchor).
-    /// Null when the file isn't under one — backup is then skipped, the write still proceeds.</summary>
+    /// Null when the file isn't under one — the commit is then refused rather than run blind.</summary>
     private static string? DataRootOf(string path)
     {
         try

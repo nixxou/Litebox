@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--selftest-title-sort") || args.Contains("--selftest-game-sort") || args.Contains("--selftest-sort-parity") || args.Contains("--selftest-filter-parity") || args.Contains("--selftest-media-rename") || args.Contains("--selftest-lbxml") || args.Contains("--selftest-disc") || args.Contains("--selftest-m3u") || args.Contains("--selftest-savemove") || args.Contains("--selftest-mediamerge") || args.Contains("--selftest-hiscore-dat") || args.Contains("--selftest-mame-plugin") || args.Contains("--selftest-playlist-copy") || args.Contains("--selftest-filter-match") || args.Contains("--hiscore-dat") || args.Contains("--media-audit") || args.Contains("--disc-predict") || args.Contains("--combine-probe") || args.Contains("--rename-probe") || args.Contains("--expand-probe") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash") || args.Contains("--dedup-test") || args.Contains("--render-jewel") || args.Contains("--render-glb") || args.Contains("--render-oracle");
+bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--selftest-title-sort") || args.Contains("--selftest-game-sort") || args.Contains("--selftest-sort-parity") || args.Contains("--selftest-filter-parity") || args.Contains("--selftest-media-rename") || args.Contains("--selftest-lbxml") || args.Contains("--selftest-disc") || args.Contains("--selftest-m3u") || args.Contains("--selftest-savemove") || args.Contains("--selftest-safewrite") || args.Contains("--selftest-mediamerge") || args.Contains("--selftest-hiscore-dat") || args.Contains("--selftest-mame-plugin") || args.Contains("--selftest-playlist-copy") || args.Contains("--selftest-filter-match") || args.Contains("--hiscore-dat") || args.Contains("--media-audit") || args.Contains("--disc-predict") || args.Contains("--combine-probe") || args.Contains("--rename-probe") || args.Contains("--expand-probe") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--media-hash") || args.Contains("--dedup-test") || args.Contains("--render-jewel") || args.Contains("--render-glb") || args.Contains("--render-oracle");
 if (debugConsole)
     DebugConsole.Enable();
 
@@ -299,6 +299,8 @@ if (args.Contains("--selftest-mediamerge"))
     return MediaMergeSelfTest.Run();
 if (args.Contains("--selftest-savemove"))
     return SaveMoveSelfTest.Run();
+if (args.Contains("--selftest-safewrite"))
+    return SafeWriteSelfTest.Run();
 if (args.Contains("--selftest-disc"))
     return DiscParseSelfTest.Run();
 if (args.Contains("--selftest-m3u"))

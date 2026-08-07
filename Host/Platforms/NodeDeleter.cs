@@ -48,20 +48,40 @@ internal static class NodeDeleter
         return false;
     }
 
-    /// <summary>The file's DOM, loaded ONCE for the whole batch; null when it is missing.</summary>
-    private static XDocument? LoadOrNull(string file)
-    { try { return File.Exists(file) ? XDocument.Load(file) : null; } catch { return null; } }
+    /// <summary>The file's DOM, loaded ONCE for the whole batch.
+    ///
+    /// Three outcomes, and the middle one is why this is not a plain try/catch returning null:
+    /// loaded, legitimately ABSENT (a library with no Parents.xml is normal), or UNREADABLE —
+    /// malformed, locked, denied. Collapsing the last two meant a deletion would carry on and
+    /// erase a platform's games file while its &lt;Platform&gt; node and parent rows stayed on
+    /// disk, because "could not parse Platforms.xml" looked exactly like "there is nothing to
+    /// remove there". Returns false only on a real read failure.</summary>
+    private static bool TryLoad(string file, IWin32Window? owner, string title, out XDocument? doc)
+    {
+        doc = null;
+        if (!File.Exists(file)) return true;                     // absent is a valid state, not a failure
+        try { doc = XDocument.Load(file); return true; }
+        catch (Exception ex)
+        {
+            MessageBox.Show(owner,
+                $"{Path.GetFileName(file)} could not be read, so nothing was deleted:\n\n{ex.Message}",
+                title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+    }
 
     /// <summary>Commit the batch and say so when part of it did not land — an erasure that half
     /// happened must not look like one that did.</summary>
-    private static void CommitOrWarn(Dictionary<string, XDocument> docs, List<string> deletes,
+    private static bool CommitOrWarn(Dictionary<string, XDocument> docs, List<string> deletes,
                                      IWin32Window? owner, string title)
     {
-        if (SafeXmlWrite.Commit(docs, deletes, null)) return;
+        if (SafeXmlWrite.Commit(docs, deletes, null)) return true;
         MessageBox.Show(owner,
-            "Some files could not be written - the library may be partly updated.\n\n"
-            + "The originals of everything this touched are in Backups\\LiteBox.",
+            "Nothing was deleted.\n\nThe library could not be written, so the batch was rolled back "
+            + "to its previous state. See the log for what failed; the originals are also kept in "
+            + "Backups\\LiteBox.",
             title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        return false;
     }
 
     // ── platforms ──
@@ -82,14 +102,17 @@ internal static class NodeDeleter
         // collected, then a single Commit. Removing one platform at a time meant a failure midway
         // through a multi-delete left some nodes gone from Platforms.xml and their Parents rows
         // behind - and one backup zip per platform to reconcile afterwards.
-        var pdoc = LoadOrNull(PlatformsFile);
-        var rdoc = LoadOrNull(ParentsFile);
+        // Both documents must be READABLE before anything is decided: a games file is about to be
+        // erased on the strength of what they say.
+        if (!TryLoad(PlatformsFile, owner, "Delete Platform", out var pdoc)) return false;
+        if (!TryLoad(ParentsFile, owner, "Delete Platform", out var rdoc)) return false;
         var docs = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
         var deletes = new List<string>();
+        var going = new List<IPlatform>();
         foreach (var p in plats)
         {
             string name = Safe(() => p.Name) ?? ""; if (name.Length == 0) continue;
-            dm.DeletePlatformInternal(p);
+            going.Add(p);
             if (pdoc != null)
             {
                 int n = 0;
@@ -104,7 +127,10 @@ internal static class NodeDeleter
             string gamesFile = Path.Combine(MediaResolver.LbRoot ?? "", "Data", "Platforms", Sanitize(name) + ".xml");
             if (File.Exists(gamesFile)) deletes.Add(gamesFile);
         }
-        CommitOrWarn(docs, deletes, owner, "Delete Platform");
+        // Memory follows the DISK, never leads it: a refused or rolled-back commit leaves the
+        // library exactly as it was, and dropping the rows first would have desynchronised the two.
+        if (!CommitOrWarn(docs, deletes, owner, "Delete Platform")) return false;
+        foreach (var p in going) dm.DeletePlatformInternal(p);
         return true;
     }
 
@@ -120,19 +146,21 @@ internal static class NodeDeleter
                 "Delete Category", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return false;
         if (!GateOrExplain(dm, owner, "Delete Category")) return false;
 
-        var pdoc = LoadOrNull(PlatformsFile);
-        var rdoc = LoadOrNull(ParentsFile);
+        if (!TryLoad(PlatformsFile, owner, "Delete Category", out var pdoc)) return false;
+        if (!TryLoad(ParentsFile, owner, "Delete Category", out var rdoc)) return false;
         var docs = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
+        var going = new List<HostPlatformCategory>();
         foreach (var c in cats.OrderByDescending(c => Depth(Safe(() => c.Name) ?? "")))   // leaf-most first
         {
             string name = Safe(() => c.Name) ?? ""; if (name.Length == 0) continue;
-            dm.DeleteCategoryInternal(c);
+            going.Add(c);
             if (pdoc != null && RemoveAll(pdoc, "PlatformCategory", e => Eq((string?)e.Element("Name"), name)) > 0)
                 docs[PlatformsFile] = pdoc;
             if (rdoc != null && RemoveAll(rdoc, "Parent", e => Eq((string?)e.Element("PlatformCategoryName"), name) || Eq((string?)e.Element("ParentPlatformCategoryName"), name)) > 0)
                 docs[ParentsFile] = rdoc;
         }
-        CommitOrWarn(docs, new List<string>(), owner, "Delete Category");
+        if (!CommitOrWarn(docs, new List<string>(), owner, "Delete Category")) return false;
+        foreach (var c in going) dm.DeleteCategoryInternal(c);
         return true;
     }
 
@@ -147,19 +175,21 @@ internal static class NodeDeleter
                 "Delete Playlist", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return false;
         if (!GateOrExplain(dm, owner, "Delete Playlist")) return false;
 
-        var rdoc = LoadOrNull(ParentsFile);
+        if (!TryLoad(ParentsFile, owner, "Delete Playlist", out var rdoc)) return false;
         var docs = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
         var deletes = new List<string>();
+        var going = new List<HostPlaylist>();
         foreach (var pl in pls)
         {
             string id = Safe(() => pl.PlaylistIdValue) ?? "";
-            dm.DeletePlaylistInternal(pl);
+            going.Add(pl);
             if (id.Length > 0 && rdoc != null && RemoveAll(rdoc, "Parent", e => Eq((string?)e.Element("PlaylistId"), id)) > 0)
                 docs[ParentsFile] = rdoc;
             string file = Safe(() => pl.FileValue) ?? "";
             if (file.Length > 0 && File.Exists(file)) deletes.Add(file);
         }
-        CommitOrWarn(docs, deletes, owner, "Delete Playlist");
+        if (!CommitOrWarn(docs, deletes, owner, "Delete Playlist")) return false;
+        foreach (var pl in going) dm.DeletePlaylistInternal(pl);
         return true;
     }
 

@@ -900,6 +900,10 @@ internal sealed class GameStore
         var docs = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
         var index = new Dictionary<string, Dictionary<Guid, XElement>>(StringComparer.OrdinalIgnoreCase);
         var touched = new HashSet<Guid>();
+        // Ops that could not be resolved or applied THIS pass. Clearing the journal on top of these
+        // would lose them silently, so any non-zero count keeps the whole batch pending — the same
+        // golden rule that already covers a failed write.
+        int unresolved = 0;
 
         void EnsureDoc(string file)
         {
@@ -1075,8 +1079,13 @@ internal sealed class GameStore
                     // <PlatformFolder> and <PlatformDocument> by <Platform>, <ModelSettings> by
                     // <PlatformName> or <GameId>. One shape for the lot — the op carries file, element,
                     // key field and key value, so nothing here needs to know which is which.
+                    // A missing target here is NOT the benign "the game is gone anyway" of the Game
+                    // branches: these ops carry folder, document and 3D-box edits whose file is
+                    // Platforms.xml. Momentarily absent or locked, and clearing the journal would
+                    // discard them for good — so the op stays pending instead.
                     string file = op.ParentId;
-                    if (string.IsNullOrEmpty(file) || !File.Exists(file) || string.IsNullOrEmpty(op.Field)) continue;
+                    if (string.IsNullOrEmpty(file) || !File.Exists(file) || string.IsNullOrEmpty(op.Field))
+                    { unresolved++; Console.WriteLine($"[store] keyed op seq={op.Seq} kept pending: target '{file}' unavailable"); continue; }
                     EnsureDoc(file);
                     ApplyKeyedReplaceToDoc(docs[file], op.Entity, op.Field, op.Id ?? "", op.Value);
                 }
@@ -1110,7 +1119,7 @@ internal sealed class GameStore
                     touched.Add(subgid);
                 }
             }
-            catch (Exception ex) { Console.WriteLine("[store] apply op seq=" + op.Seq + ": " + ex.Message); }
+            catch (Exception ex) { unresolved++; Console.WriteLine("[store] apply op seq=" + op.Seq + ": " + ex.Message); }
         }
 
         // Create added games (resolve/create the platform file, replace any same-id node → idempotent).
@@ -1179,7 +1188,15 @@ internal sealed class GameStore
 
         // Deleted playlists are whole-file removals — don't write those files.
         foreach (var df in playlistDeletes) docs.Remove(df);
-        if (docs.Count == 0 && playlistDeletes.Count == 0) { ClearFlushed(); return 0; }
+        if (docs.Count == 0 && playlistDeletes.Count == 0)
+        {
+            // Nothing to write. Either every op was a no-op (clear them) or some never resolved
+            // (keep them) — the difference is the whole point: the second case used to wipe the
+            // journal without a single write attempt.
+            if (unresolved == 0) ClearFlushed();
+            else Console.WriteLine($"[store] nothing to write, {unresolved} op(s) unresolved — journal kept");
+            return 0;
+        }
 
         // The shared write discipline (SafeXmlWrite): re-check LB at commit time, snapshot the
         // pristine originals (including the files about to be deleted), write every doc to .tmp,
@@ -1193,10 +1210,14 @@ internal sealed class GameStore
         // the WHOLE batch pending and retry everything next flush rather than try to work out
         // precisely which ops landed and which didn't - re-applying an already-applied op is a
         // harmless no-op, silently losing one that never landed is not.
-        if (allOk)
+        if (allOk && unresolved == 0)
         {
             ClearFlushed();
             NotifyTitlesFlushed(ops);
+        }
+        else if (allOk)
+        {
+            Console.WriteLine($"[store] wrote everything staged, but {unresolved} op(s) never resolved — journal kept for retry");
         }
         else
         {

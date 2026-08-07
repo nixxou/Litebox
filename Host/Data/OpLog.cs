@@ -191,24 +191,11 @@ internal sealed class OpLog : IDisposable
         }
     }
 
-    /// <summary>Empties the log. Call ONLY after every target XML has been durably swapped.</summary>
-    public void Clear()
-    {
-        if (!Enabled) return;
-        lock (_lock)
-        {
-            try
-            {
-                using var cmd = _conn.CreateCommand();
-                cmd.CommandText = "DELETE FROM ops; DELETE FROM sqlite_sequence WHERE name='ops';";
-                cmd.ExecuteNonQuery();
-                using var wal = _conn.CreateCommand();
-                wal.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
-                wal.ExecuteNonQuery();
-            }
-            catch (Exception ex) { Console.WriteLine("[oplog] clear failed: " + ex.Message); }
-        }
-    }
+    // There is deliberately NO Clear(): emptying the table wholesale looked like the natural end of a
+    // successful flush, but the flush works from a SNAPSHOT and the journal keeps accepting writes
+    // while it runs. Anything appended in between was never in the batch, and a blanket delete threw
+    // it away — invisibly, since the in-memory value survived until the next restart. DeleteSeqs is
+    // the only acknowledgement: it removes exactly what was read and applied, and nothing else.
 
     // NB: LiteBox's launch history (RecordLaunch / RecordLaunchRomEntry / ClearLaunch / GetLastLaunch(Full) /
     // RecordDetection / GetLastDetectionMs) moved to Host/Data/LaunchHistoryDb — its own durable db, decoupled

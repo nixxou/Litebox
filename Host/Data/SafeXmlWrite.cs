@@ -3,17 +3,23 @@
 // instead of each truncating the destination in place with a bare StreamWriter.
 //
 // Three guarantees, in order:
-//   1. LB/BB not running — re-checked HERE, at commit time, not only at the caller's entry point.
-//      LaunchBox holds these files in memory and rewrites them wholesale at exit: anything we
-//      write while it runs is silently lost (or resurrects what we deleted). A refusal returns
-//      false; for the journal flush that means "ops stay pending", for a direct writer it means
-//      "tell the user to close LaunchBox".
+//   1. LB/BB not running — checked at entry AND again immediately before the first swap. The
+//      second check is the one that matters: the caller's own check can be minutes old, and even
+//      Commit's entry check precedes the backup and the staging, which take real time. LaunchBox
+//      holds these files in memory and rewrites them wholesale at exit, so anything we write while
+//      it runs is silently lost (or resurrects what we deleted). A refusal returns false; for the
+//      journal flush that means "ops stay pending", for a direct writer it means "tell the user to
+//      close LaunchBox".
 //   2. Backup — the pristine originals (including files about to be DELETED) go into a small
-//      timestamped zip under <LB>\Backups\LiteBox before anything is overwritten. Best-effort:
-//      a backup failure is logged, never blocks the write.
+//      timestamped zip under <LB>\Backups\LiteBox before anything is overwritten. NOT best-effort:
+//      it is the rollback's only source, so a batch that cannot be backed up is refused outright.
 //   3. Atomicity — serialize to a .tmp sibling, then File.Replace: at no instant does the real
 //      file hold a truncated document. A power cut mid-write leaves an orphan .tmp, not a
-//      destroyed Platforms.xml.
+//      destroyed Platforms.xml. Staging happens for the WHOLE batch before the first swap, and
+//      deletions only after every swap landed, so a failure is caught while it is still undoable;
+//      what did change is then put back from the backup. Across several files this is
+//      recoverable, not atomic — NTFS offers no multi-file transaction — but every visible change
+//      is reversible until the last one succeeds.
 //
 // Callers MUST honour the return value: false means the destination does NOT hold the new
 // content (see the WAL golden rule in GameStore.FlushOpsToXml — never clear ops that didn't land).
@@ -78,6 +84,20 @@ internal static class SafeXmlWrite
         {
             foreach (var (tmp, _) in swaps) TryDelete(tmp);
             Console.WriteLine("[safewrite] staging failed — nothing was written");
+            return false;
+        }
+
+        // Ownership is re-checked HERE, not only at entry. Everything above — zipping the backup,
+        // serialising each document — takes real time on a large library, and LaunchBox starting in
+        // that gap would load the OLD files, sit on them, and write its own snapshot back at exit:
+        // our swap would land, the journal would be cleared, and the change would be gone with
+        // nothing left to replay. Checking again shrinks that gap from seconds to the instant
+        // between this line and the first swap. It cannot be closed entirely — no check can — but
+        // this is where it is cheapest to narrow.
+        if (GameStore.IsLaunchBoxRunning())
+        {
+            foreach (var (tmp, _) in swaps) TryDelete(tmp);
+            Console.WriteLine("[safewrite] commit abandoned: LaunchBox/BigBox started while staging — nothing was written");
             return false;
         }
 
@@ -148,45 +168,43 @@ internal static class SafeXmlWrite
             : $"[safewrite] rollback INCOMPLETE ({restored} restored, {failed} failed) — recover by hand from {zip ?? "(no backup)"}");
     }
 
-    /// <summary>Test-only: make the swap of a given destination fail, to exercise the rollback.
-    /// The recovery path is the one piece of this file that never runs in normal use, so it is
-    /// the one piece that would rot unnoticed — and a broken rollback is worse than none, since
-    /// it deletes before it restores. Same shape as GameStore.ForceLaunchBoxRunning; never set
-    /// outside a self-test.</summary>
-    internal static Func<string, bool>? FailSwapFor;
+    /// <summary>Test-only hook, fired just before each swap with the destination path; return true
+    /// to make THAT swap fail. Two things need it, and both are invisible in normal operation: the
+    /// rollback (which never runs when nothing goes wrong, so it would rot unnoticed — and a broken
+    /// rollback is worse than none, since it deletes before it restores), and the journal race,
+    /// which needs an op appended while a flush is mid-flight. Same shape as
+    /// GameStore.ForceLaunchBoxRunning; never set outside a self-test.</summary>
+    internal static Func<string, bool>? BeforeSwap;
 
     // ── Atomic swap (tmp → dest). Returns whether dest now actually holds tmp's content. ──
-    // Retries before giving up: a file held for a moment by an antivirus scan or the Windows
-    // indexer is the ordinary reason File.Replace fails, and it clears on its own. Modelled on
-    // ExtDbDownloader's swap, which already retries five times then parks rather than forcing.
-    // There is NO copy-over fallback: overwriting the destination with a plain File.Copy is not
-    // atomic and destroys the original, which is the opposite of this method's job.
+    //
+    // Fails on the FIRST refusal, deliberately. An earlier version retried five times with backoff,
+    // copied from ExtDbDownloader — but that retry answers a lock which is EXPECTED there: the
+    // extended database is being replaced while LiteBox or the plugin still has it open. Nothing of
+    // ours holds these files. LaunchBox and BigBox are checked closed, XDocument.Load opens, parses
+    // and closes, and the write goes to a .tmp; only a passing third party (an antivirus, the search
+    // indexer) can be in the way, and that is the exceptional case, not the normal one.
+    //
+    // Waiting for it cost two seconds per file on the UI thread, and — worse — widened the two
+    // windows that actually lose data: ops appended to the journal mid-flush, and LaunchBox starting
+    // between the ownership check and the first swap. It made real failures likelier to defend
+    // against a hypothetical one. Every caller already answers a refusal correctly: the flush keeps
+    // its ops pending and retries at the next safe moment, the editors roll back and say so.
+    //
+    // There is likewise NO copy-over fallback: overwriting the destination with a plain File.Copy is
+    // not atomic and destroys the original, the exact opposite of this method's job.
     public static bool ReplaceAtomic(string tmp, string dest)
     {
-        if (FailSwapFor?.Invoke(dest) == true)
+        if (BeforeSwap?.Invoke(dest) == true)
         { Console.WriteLine($"[safewrite] swap {Path.GetFileName(dest)}: forced failure (self-test)"); return false; }
-        for (int attempt = 1; attempt <= 5; attempt++)
+        try
         {
-            try
-            {
-                if (File.Exists(dest)) File.Replace(tmp, dest, null);
-                else File.Move(tmp, dest);
-                return true;
-            }
-            catch (IOException ex)
-            {
-                Console.WriteLine($"[safewrite] swap {Path.GetFileName(dest)} attempt {attempt}/5: {ex.Message}");
-                if (attempt < 5) System.Threading.Thread.Sleep(200 * attempt);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                Console.WriteLine($"[safewrite] swap {Path.GetFileName(dest)} attempt {attempt}/5: {ex.Message}");
-                if (attempt < 5) System.Threading.Thread.Sleep(200 * attempt);
-            }
-            catch (Exception ex)
-            { Console.WriteLine($"[safewrite] swap {Path.GetFileName(dest)}: {ex.Message}"); break; }
+            if (File.Exists(dest)) File.Replace(tmp, dest, null);
+            else File.Move(tmp, dest);
+            return true;
         }
-        return false;
+        catch (Exception ex)
+        { Console.WriteLine($"[safewrite] swap {Path.GetFileName(dest)}: {ex.Message}"); return false; }
     }
 
     private static bool TryDelete(string path)

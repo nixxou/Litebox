@@ -38,7 +38,7 @@ internal static class SafeWriteSelfTest
         }
         finally
         {
-            SafeXmlWrite.FailSwapFor = null;
+            SafeXmlWrite.BeforeSwap = null;
             GameStore.ForceLaunchBoxRunning = forcedLb;
         }
         Console.WriteLine(fail == 0 ? "[safewrite] ALL PASS" : $"[safewrite] {fail} FAILURE(S)");
@@ -109,9 +109,9 @@ internal static class SafeWriteSelfTest
             var docs = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
             { [a] = Doc("NEW-A"), [b] = Doc("NEW-B") };
 
-            SafeXmlWrite.FailSwapFor = p => string.Equals(p, b, StringComparison.OrdinalIgnoreCase);
+            SafeXmlWrite.BeforeSwap = p => string.Equals(p, b, StringComparison.OrdinalIgnoreCase);
             bool ok = SafeXmlWrite.Commit(docs, Array.Empty<string>(), null);
-            SafeXmlWrite.FailSwapFor = null;
+            SafeXmlWrite.BeforeSwap = null;
 
             int f = Check("swap failure: commit reports failure", !ok);
             f += Check("swap failure: the file that DID swap is restored", Marker(a) == "ORIGINAL-A");
@@ -120,7 +120,7 @@ internal static class SafeWriteSelfTest
                 !Directory.EnumerateFiles(Path.Combine(root, "Data"), "*.tmp").Any());
             return f;
         }
-        finally { SafeXmlWrite.FailSwapFor = null; Nuke(root); }
+        finally { SafeXmlWrite.BeforeSwap = null; Nuke(root); }
     }
 
     /// <summary>Deletions are last on purpose. A swap that fails must mean the games file is still
@@ -134,16 +134,16 @@ internal static class SafeWriteSelfTest
             string games = Write(Path.Combine(root, "Data", "Platforms", "Doomed.xml"), "GAMES");
             var docs = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase) { [a] = Doc("NEW-A") };
 
-            SafeXmlWrite.FailSwapFor = p => string.Equals(p, a, StringComparison.OrdinalIgnoreCase);
+            SafeXmlWrite.BeforeSwap = p => string.Equals(p, a, StringComparison.OrdinalIgnoreCase);
             bool ok = SafeXmlWrite.Commit(docs, new[] { games }, null);
-            SafeXmlWrite.FailSwapFor = null;
+            SafeXmlWrite.BeforeSwap = null;
 
             int f = Check("delete ordering: commit reports failure", !ok);
             f += Check("delete ordering: the games file was NOT erased", File.Exists(games));
             f += Check("delete ordering: metadata is unchanged", Marker(a) == "ORIGINAL-A");
             return f;
         }
-        finally { SafeXmlWrite.FailSwapFor = null; Nuke(root); }
+        finally { SafeXmlWrite.BeforeSwap = null; Nuke(root); }
     }
 
     /// <summary>A file the batch never wrote must not be deleted-and-restored on the way out: the
@@ -162,9 +162,9 @@ internal static class SafeWriteSelfTest
             { [a] = Doc("NEW-A"), [c] = Doc("NEW-C") };
 
             // A fails first, so C is never swapped and must be left exactly as it is.
-            SafeXmlWrite.FailSwapFor = p => string.Equals(p, a, StringComparison.OrdinalIgnoreCase);
+            SafeXmlWrite.BeforeSwap = p => string.Equals(p, a, StringComparison.OrdinalIgnoreCase);
             bool ok = SafeXmlWrite.Commit(docs, Array.Empty<string>(), null);
-            SafeXmlWrite.FailSwapFor = null;
+            SafeXmlWrite.BeforeSwap = null;
 
             int f = Check("rollback scope: commit reports failure", !ok);
             f += Check("rollback scope: the never-swapped file still exists", File.Exists(c));
@@ -173,7 +173,7 @@ internal static class SafeWriteSelfTest
         }
         finally
         {
-            SafeXmlWrite.FailSwapFor = null;
+            SafeXmlWrite.BeforeSwap = null;
             try { if (File.Exists(c)) File.SetAttributes(c, FileAttributes.Normal); } catch { }
             Nuke(root);
         }

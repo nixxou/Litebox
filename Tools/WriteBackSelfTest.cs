@@ -48,6 +48,7 @@ internal static class WriteBackSelfTest
             fails += TestExtraFields(platformsDir);
             fails += TestSubEntities(platformsDir);
             fails += TestTier2DropReloadAddMove(platformsDir);
+            fails += TestJournalRace(platformsDir);
         }
         catch (Exception ex) { Console.WriteLine("[selftest] EXCEPTION: " + ex); fails++; }
         finally { GameStore.ForceLaunchBoxRunning = null; try { Directory.Delete(temp, true); } catch { } }
@@ -66,8 +67,14 @@ internal static class WriteBackSelfTest
         log.Append("delete", "Game", "id-2", null, null, null);
         var ops = log.ReadAll();
         f += Check("oplog read 3 ops in order", ops.Count == 3 && ops[0].Field == "Developer" && ops[2].OpType == "delete");
-        log.Clear();
-        f += Check("oplog cleared", log.Count() == 0);
+        // Acknowledgement is BY SEQ, always: there is no blanket Clear() any more, because a flush
+        // works from a snapshot and the journal keeps taking writes while it runs. Appending here
+        // after the read stands in for that, and the new op must outlive the acknowledgement.
+        log.Append("modify", "Game", "id-3", null, "Title", "arrived late");
+        log.DeleteSeqs(ops.Select(o => o.Seq).ToList());
+        f += Check("oplog: the acknowledged ops are gone", log.Count() == 1);
+        f += Check("oplog: the op appended after the read survives",
+            log.ReadAll().FirstOrDefault().Value == "arrived late");
         log.Dispose();
         return f;
     }
@@ -553,5 +560,71 @@ internal static class WriteBackSelfTest
     {
         Console.WriteLine((ok ? "[selftest] PASS  " : "[selftest] FAIL  ") + name);
         return ok ? 0 : 1;
+    }
+
+    /// <summary>An op appended WHILE a flush is in flight must survive it.
+    ///
+    /// The flush works from a snapshot: it reads the journal, then spends real time building the
+    /// documents, zipping the backup and swapping files. The journal stays open throughout, and
+    /// background writers use it — the progress sweep, the RA heartbeat, the store sync, play time
+    /// recorded as a game exits. Acknowledging the pass with a blanket "DELETE FROM ops" therefore
+    /// threw away whatever had arrived in between: never written to the XML, yet gone from the
+    /// journal. The in-memory value survived, so the loss only showed up at the next restart, as a
+    /// change the user had watched land and then found missing.
+    ///
+    /// The swap hook is what makes the race deterministic here: it fires between staging and the
+    /// file swap, which is exactly where a background thread would slip in.</summary>
+    private static int TestJournalRace(string platformsDir)
+    {
+        int f = 0;
+        var early = Guid.NewGuid();
+        var late = Guid.NewGuid();
+        string xml = Path.Combine(platformsDir, "RacePlat.xml");
+        File.WriteAllText(xml,
+            "<?xml version=\"1.0\" standalone=\"yes\"?>\n<LaunchBox>\n" +
+            $"  <Game><ID>{early}</ID><Title>Early</Title><Platform>RacePlat</Platform></Game>\n" +
+            $"  <Game><ID>{late}</ID><Title>Late</Title><Platform>RacePlat</Platform></Game>\n" +
+            "</LaunchBox>\n");
+
+        var store = GameStore.Load(platformsDir, Path.Combine(platformsDir, "..", "race.pending.db"));
+        store.ReadOnly = false;
+        if (!store.ById.TryGetValue(early, out var iEarly) || !store.ById.TryGetValue(late, out var iLate))
+        { Check("race: games found", false); store.CloseLog(); return 1; }
+
+        store.SetGameField(iEarly, "Developer", "IN-THE-BATCH");
+
+        // Fire once, mid-commit, standing in for a background thread reaching the journal.
+        bool fired = false;
+        SafeXmlWrite.BeforeSwap = _ =>
+        {
+            if (!fired) { fired = true; store.SetGameField(iLate, "Developer", "ARRIVED-LATE"); }
+            return false;   // let the swap proceed: the point is the acknowledgement, not a failure
+        };
+        int wrote = store.Flush();
+        SafeXmlWrite.BeforeSwap = null;
+
+        f += Check("race: the in-flight op was appended", fired);
+        f += Check("race: the batch was written", wrote > 0);
+
+        // (plain casts, not (string?): this file is outside a #nullable annotations context)
+        var doc = XDocument.Load(xml);
+        string DevOf(Guid id) => doc.Root.Elements("Game")
+            .Where(e => (string)e.Element("ID") == id.ToString())
+            .Select(e => (string)e.Element("Developer") ?? "").FirstOrDefault() ?? "<missing>";
+
+        f += Check("race: the snapshot's op landed on disk", DevOf(early) == "IN-THE-BATCH");
+        f += Check("race: the late op did NOT land (it was never in the batch)", DevOf(late) != "ARRIVED-LATE");
+        f += Check("race: the late op is STILL PENDING, not discarded", store.PendingCount > 0);
+
+        // And it applies on the next pass, which is the whole point of keeping it.
+        store.Flush();
+        string dev = XDocument.Load(xml).Root.Elements("Game")
+            .Where(e => (string)e.Element("ID") == late.ToString())
+            .Select(e => (string)e.Element("Developer") ?? "").FirstOrDefault() ?? "<missing>";
+        f += Check("race: the next flush writes it", dev == "ARRIVED-LATE");
+        f += Check("race: journal empty once everything landed", store.PendingCount == 0);
+
+        store.CloseLog();
+        return f;
     }
 }

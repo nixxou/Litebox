@@ -891,11 +891,13 @@ internal sealed class GameStore
         var ops = _oplog?.ReadAll();
         if (ops == null || ops.Count == 0) return 0;
         if (scope != null) { ops = ops.Where(scope).ToList(); if (ops.Count == 0) return 0; }
-        void ClearFlushed()
-        {
-            if (scope == null) _oplog.Clear();
-            else _oplog.DeleteSeqs(ops.Select(o => o.Seq).ToList());
-        }
+        // Acknowledge ONLY the ops this pass actually read. `ops` is a snapshot taken above, and the
+        // journal stays open the whole time we build the DOMs, zip the backup and swap the files —
+        // seconds, on a large library. Background writers append during that window (the progress
+        // sweep, the RA heartbeat, the store sync, play time recorded as a game exits), and a blanket
+        // DELETE FROM ops threw those away without ever writing them. The in-memory value survived,
+        // so the loss only surfaced at the next restart, as a change the user had watched land.
+        void ClearFlushed() => _oplog.DeleteSeqs(ops.Select(o => o.Seq).ToList());
 
         var docs = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
         var index = new Dictionary<string, Dictionary<Guid, XElement>>(StringComparer.OrdinalIgnoreCase);

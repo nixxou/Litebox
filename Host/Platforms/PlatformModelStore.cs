@@ -12,7 +12,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Xml.Linq;
+using Unbroken.LaunchBox.Plugins;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.Data;
 
@@ -23,8 +25,25 @@ internal static class PlatformModelStore
     private static string FilePath => Path.Combine(MediaResolver.LbRoot ?? "", "Data", "Platforms.xml");
 
     /// <summary>The platform's persisted ModelSettings as a field→value map (element order lost, irrelevant),
-    /// or null when the platform has no override.</summary>
+    /// or null when the platform has no override.
+    ///
+    /// Answered from the LIVE platform object, not from the file: the write is journalled now, so the XML
+    /// may not have caught up yet, and reading it would show the value the user just replaced. Falls back
+    /// to the XML only when there is no catalogue to ask (the render probes, the self-tests).</summary>
     public static Dictionary<string, string>? Read(string platformName)
+    {
+        try
+        {
+            // Data.HostPlatform explicitly: LbApiHost.Host also declares a HostPlatform (the dummy
+            // catalogue in HostServices), and the enclosing namespace beats the using import.
+            var hp = PluginHelper.DataManager?.GetPlatformByName(platformName) as Data.HostPlatform;
+            if (hp != null) return hp.ModelSettings;
+        }
+        catch { }
+        return ReadFromXml(platformName);
+    }
+
+    private static Dictionary<string, string>? ReadFromXml(string platformName)
     {
         try
         {
@@ -47,28 +66,35 @@ internal static class PlatformModelStore
     {
         try
         {
-            if (WriteGuard.Refuse(out var why)) { Console.WriteLine("[3dstore] refused: " + why); return false; }
-            if (!File.Exists(FilePath)) return false;
-            var doc = XDocument.Load(FilePath);
-            var root = doc.Root;
-            if (root == null) return false;
+            var dm = PluginHelper.DataManager as HostDataManagerXml;
+            var store = dm?.Store;
+            if (store == null) return false;
+            if (store.ReadOnly) { Console.WriteLine("[3dstore] refused: read-only"); return false; }
 
-            foreach (var old in root.Elements("ModelSettings")
-                     .Where(e => string.Equals((string?)e.Element("PlatformName"), platformName, StringComparison.OrdinalIgnoreCase)).ToList())
-                old.Remove();
-
+            // Build the row the way LaunchBox writes it — its own fields, then PlatformName, then an
+            // empty GameId (that pair is what tells a platform block from a game one).
+            var rows = new List<Dictionary<string, string>>();
             if (fields != null)
             {
-                var el = new XElement("ModelSettings");
-                foreach (var kv in fields.Where(kv => !string.Equals(kv.Key, "PlatformName", StringComparison.OrdinalIgnoreCase)))
-                    el.Add(new XElement(kv.Key, kv.Value ?? ""));
-                el.Add(new XElement("PlatformName", platformName));
-                el.Add(new XElement("GameId", ""));   // platform-level → empty GameId (LB parity)
-                root.Add(el);
+                var row = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var kv in fields)
+                    if (!string.Equals(kv.Key, "PlatformName", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(kv.Key, "GameId", StringComparison.OrdinalIgnoreCase))
+                        row[kv.Key] = kv.Value ?? "";
+                row["PlatformName"] = platformName;
+                row["GameId"] = "";
+                rows.Add(row);
             }
-            return SafeXmlWrite.Save(doc, FilePath);
+            // Journalled (lands on the next safe flush) + applied to the live platform NOW, which is
+            // what Read answers from — so the 3D preview redraws with the new settings immediately
+            // even while LaunchBox holds Platforms.xml. An empty row list removes the override.
+            store.RecordKeyedReplace("ModelSettings", FilePath, "PlatformName", platformName,
+                                     JsonSerializer.Serialize(rows));
+            if (PluginHelper.DataManager?.GetPlatformByName(platformName) is Data.HostPlatform hp)
+                hp.SetModelSettings(rows.Count > 0 ? rows[0] : null);
+            return true;
         }
-        catch { return false; }
+        catch (Exception ex) { Console.WriteLine("[3dstore] platform write: " + ex.Message); return false; }
     }
 
     // ── per-GAME override (decoded empirically 2026-07-22, '88 Games test): same root-level <ModelSettings>
@@ -84,8 +110,28 @@ internal static class PlatformModelStore
         return Path.Combine(MediaResolver.LbRoot ?? "", "Data", "Platforms", name + ".xml");
     }
 
-    /// <summary>The game's persisted ModelSettings (its own override), or null when the game has none.</summary>
+    /// <summary>The game's persisted ModelSettings (its own override), or null when the game has none.
+    ///
+    /// From the STORE, which has captured these blocks as generic per-game sub-entities since the
+    /// beginning — the 3D code simply never used them and re-parsed the platform file instead. They are
+    /// Tier-1, so a launched game does not free them under a running pass. Falls back to the XML when
+    /// there is no store (probes, self-tests).</summary>
     public static Dictionary<string, string>? ReadGame(string platformName, string gameId)
+    {
+        try
+        {
+            var store = (PluginHelper.DataManager as HostDataManagerXml)?.Store;
+            if (store != null && Guid.TryParse(gameId, out var gid))
+            {
+                var rows = store.GetSubEntities(gid, "ModelSettings");
+                return rows.Count > 0 ? new Dictionary<string, string>(rows[0], StringComparer.OrdinalIgnoreCase) : null;
+            }
+        }
+        catch { }
+        return ReadGameFromXml(platformName, gameId);
+    }
+
+    private static Dictionary<string, string>? ReadGameFromXml(string platformName, string gameId)
     {
         try
         {
@@ -109,6 +155,25 @@ internal static class PlatformModelStore
         var all = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
         try
         {
+            // Straight off the store's per-platform index — no file parse at all, where this used to
+            // re-read a multi-MB platform XML. Overrides are rare (one in the whole reference library),
+            // so this walks the platform's rows and finds almost nothing, which is the honest cost.
+            var store = (PluginHelper.DataManager as HostDataManagerXml)?.Store;
+            if (store != null && store.ByPlatform.TryGetValue(platformName, out var idxs))
+            {
+                foreach (var i in idxs)
+                {
+                    if (i < 0 || i >= store.Count) continue;
+                    var gid = store.Rows[i].Id;
+                    var rows = store.GetSubEntities(gid, "ModelSettings");
+                    if (rows.Count > 0) all[gid.ToString()] = new Dictionary<string, string>(rows[0], StringComparer.OrdinalIgnoreCase);
+                }
+                return all;
+            }
+        }
+        catch { }
+        try
+        {
             string file = GamePlatformFile(platformName);
             if (!File.Exists(file)) return all;
             foreach (var el in XDocument.Load(file).Root?.Elements("ModelSettings") ?? Enumerable.Empty<XElement>())
@@ -130,31 +195,29 @@ internal static class PlatformModelStore
     {
         try
         {
-            if (WriteGuard.Refuse(out var why)) { Console.WriteLine("[3dstore] refused: " + why); return false; }
-            string file = GamePlatformFile(platformName);
-            if (!File.Exists(file) || string.IsNullOrEmpty(gameId)) return false;
-            var doc = XDocument.Load(file);
-            var root = doc.Root;
-            if (root == null) return false;
+            var store = (PluginHelper.DataManager as HostDataManagerXml)?.Store;
+            if (store == null || !Guid.TryParse(gameId, out var gid)) return false;
+            if (store.ReadOnly) { Console.WriteLine("[3dstore] refused: read-only"); return false; }
 
-            foreach (var old in root.Elements("ModelSettings")
-                     .Where(e => string.Equals((string?)e.Element("GameId"), gameId, StringComparison.OrdinalIgnoreCase)).ToList())
-                old.Remove();
-
+            var rows = new List<Dictionary<string, string>>();
             if (fields != null)
             {
-                var el = new XElement("ModelSettings");
-                foreach (var kv in fields.Where(kv =>
-                             !string.Equals(kv.Key, "PlatformName", StringComparison.OrdinalIgnoreCase)
-                             && !string.Equals(kv.Key, "GameId", StringComparison.OrdinalIgnoreCase)))
-                    el.Add(new XElement(kv.Key, kv.Value ?? ""));
-                el.Add(new XElement("GameId", gameId));
-                el.Add(new XElement("PlatformName", ""));   // game-level → empty PlatformName (LB parity)
-                root.Add(el);
+                var row = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var kv in fields)
+                    if (!string.Equals(kv.Key, "PlatformName", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(kv.Key, "GameId", StringComparison.OrdinalIgnoreCase))
+                        row[kv.Key] = kv.Value ?? "";
+                row["GameId"] = gameId;
+                row["PlatformName"] = "";   // game-level → empty PlatformName (LB parity)
+                rows.Add(row);
             }
-            return SafeXmlWrite.Save(doc, file);
+            // The generic sub-entity path: updates memory (what ReadGame answers from) AND journals a
+            // "replace" op the flush re-emits into the platform file. An empty list clears the override,
+            // which is what LaunchBox does when "Override Default Settings" is unchecked.
+            store.SetSubEntities(gid, "ModelSettings", rows);
+            return true;
         }
-        catch { return false; }
+        catch (Exception ex) { Console.WriteLine("[3dstore] game write: " + ex.Message); return false; }
     }
 
     // ── ARGB int32 (signed) ↔ Color helpers, matching Color.ToArgb() (e.g. red = -65536) ──

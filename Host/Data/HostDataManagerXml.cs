@@ -458,18 +458,31 @@ internal sealed class HostDataManagerXml : DummyDataManager
         {
             try
             {
-                // Custom media folders: a pending row-set replaces what Platforms.xml still holds, so
-                // MediaResolver answers from the edit rather than from the file it has not reached yet.
-                if (op.OpType == GameStore.KeyedReplace && op.Entity == "PlatformFolder" && !string.IsNullOrEmpty(op.Id))
+                // Keyed root rows (folders, documents, platform 3D settings): a pending row set
+                // replaces what Platforms.xml still holds, so the readers — MediaResolver, the tree's
+                // Documents menu, the 3D cache — answer from the edit rather than from the file it
+                // has not reached yet.
+                if (op.OpType == GameStore.KeyedReplace && !string.IsNullOrEmpty(op.Id))
                 {
                     var hp = platforms.FirstOrDefault(x => string.Equals(x.Name, op.Id, StringComparison.OrdinalIgnoreCase));
-                    if (hp != null)
+                    if (hp == null) continue;
+                    var rows = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(op.Value ?? "[]") ?? new();
+                    string G(Dictionary<string, string> r, string k) => r.TryGetValue(k, out var v) ? v ?? "" : "";
+                    if (op.Entity == "PlatformFolder")
                     {
-                        var rows = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(op.Value ?? "[]") ?? new();
                         var stored = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                        foreach (var r in rows)
-                            if (r.TryGetValue("MediaType", out var mt) && r.TryGetValue("FolderPath", out var fp)) stored[mt] = fp;
+                        foreach (var r in rows) { var mt = G(r, "MediaType"); if (mt.Length > 0) stored[mt] = G(r, "FolderPath"); }
                         hp.SetPlatformFolders(stored, lbRoot);
+                        n++;
+                    }
+                    else if (op.Entity == "PlatformDocument")
+                    {
+                        hp.SetPlatformDocuments(rows.Select(r => (G(r, "Name"), G(r, "FilePath"))).ToList());
+                        n++;
+                    }
+                    else if (op.Entity == "ModelSettings")
+                    {
+                        hp.SetModelSettings(rows.Count > 0 ? new Dictionary<string, string>(rows[0], StringComparer.OrdinalIgnoreCase) : null);
                         n++;
                     }
                 }

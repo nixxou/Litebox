@@ -205,6 +205,27 @@ internal sealed class HostPlatform : DummyPlatform, ILiteBoxFields
         => _folders.Select(kv => (IPlatformFolder)new DummyPlatformFolder
         { MediaType = kv.Key, Platform = _name, FolderPath = kv.Value }).ToArray();
 
+    // ── 3D model settings, platform level (root <ModelSettings> keyed by <PlatformName>) ──────────
+    // Not in GameStore: that one only reads Data\Platforms\*.xml and only captures blocks with a
+    // parseable <GameId>, and this block's is empty by definition. So the platform object is its home,
+    // exactly like the folder map — which is what lets the write be journalled: the 3D code reads from
+    // here, so the edit shows immediately even though the XML lands later. HostPlatform is never
+    // dropped at game launch, so unlike the per-game blocks there is no tier to reason about.
+    private Dictionary<string, string> _modelSettings;
+
+    /// <summary>The platform's stored ModelSettings (field → value), or null when it has no override.</summary>
+    internal Dictionary<string, string> ModelSettings => _modelSettings;
+    internal void SetModelSettings(Dictionary<string, string> fields)
+        => _modelSettings = fields == null ? null : new Dictionary<string, string>(fields, StringComparer.OrdinalIgnoreCase);
+
+    // ── Platform documents (root <PlatformDocument> keyed by <Platform>), same story as the folders:
+    // the tree's Documents submenu reads them, so they live here to make the journalled write visible.
+    // Order matters — it is the grid's, and LaunchBox keeps it.
+    private List<(string Name, string FilePath)> _documents;
+    internal IReadOnlyList<(string Name, string FilePath)> Documents => _documents;
+    internal void SetPlatformDocuments(List<(string Name, string FilePath)> docs)
+        => _documents = docs == null ? null : new List<(string, string)>(docs);
+
     /// <summary>Replace this platform's custom media folders — mediaType → path as STORED (relative to
     /// the LB root, or absolute), resolved here the way <see cref="PlatformCatalog.Load"/> does.
     ///
@@ -401,6 +422,28 @@ internal static class PlatformCatalog
             map[media] = path;
         }
 
+        // Platform-level 3D model settings: root <ModelSettings> whose <PlatformName> names a platform
+        // (a filled <GameId> means it belongs to a game and lives in that platform's own file instead).
+        var modelByPlatform = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ms in root.Elements("ModelSettings"))
+        {
+            string plat = ((string)ms.Element("PlatformName") ?? "").Trim();
+            if (plat.Length == 0) continue;
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in ms.Elements()) map[c.Name.LocalName] = c.Value;
+            modelByPlatform[plat] = map;
+        }
+
+        // Platform documents, grouped by platform, order preserved (it is what the menu shows).
+        var docsByPlatform = new Dictionary<string, List<(string, string)>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pd in root.Elements("PlatformDocument"))
+        {
+            string plat = ((string)pd.Element("Platform") ?? "").Trim();
+            if (plat.Length == 0) continue;
+            if (!docsByPlatform.TryGetValue(plat, out var l)) docsByPlatform[plat] = l = new List<(string, string)>();
+            l.Add(((string)pd.Element("Name") ?? "", (string)pd.Element("FilePath") ?? ""));
+        }
+
         foreach (var pe in root.Elements("Platform"))
         {
             string name = (string)pe.Element("Name");
@@ -451,6 +494,8 @@ internal static class PlatformCatalog
                 (pex ??= new Dictionary<string, string>(StringComparer.Ordinal))[n] = val;
             }
             if (pex != null) hp.SetExtra(pex);
+            if (modelByPlatform.TryGetValue(name, out var ms3d)) hp.SetModelSettings(ms3d);
+            if (docsByPlatform.TryGetValue(name, out var pdocs)) hp.SetPlatformDocuments(pdocs);
             platforms.Add(hp);
         }
 

@@ -56,14 +56,16 @@ internal static class EditPlatformWindow
         var (notes, applyNotes) = BuildNotes(plat, s);
         w.AddSection("Notes", notes, applyNotes);
 
-        var (docs, applyDocs) = EditPlatformDocuments.Build(plat, locked, s);
-        w.AddSection("Documents" + mark, docs, applyDocs);
+        // Documents and 3D model settings are journalled too now (op-log + a live refresh of the
+        // platform object the readers answer from), so only Parents is left writing XML on the spot.
+        var (docs, applyDocs) = EditPlatformDocuments.Build(plat, readOnly, s);
+        w.AddSection("Documents", docs, applyDocs);
 
         var (parents, applyParents) = EditPlatformParents.Build(plat, locked, s);
         w.AddSection("Parents" + mark, parents, applyParents);
 
-        var (model, applyModel) = EditPlatformModel.Build(plat, locked, s);
-        w.AddSection("3D Model Settings" + mark, model, applyModel);
+        var (model, applyModel) = EditPlatformModel.Build(plat, readOnly, s);
+        w.AddSection("3D Model Settings", model, applyModel);
 
         if (readOnly) DisableAllInputs(w);
         w.ShowDialog(owner);

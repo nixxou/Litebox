@@ -477,8 +477,15 @@ internal static class WriteBackSelfTest
         f += Check("sub: read ModelSettings.ModelType", hg1.GetSubEntities("ModelSettings").FirstOrDefault()?["ModelType"] == "dvd");
         f += Check("sub: GameSave read before drop", hg1.GetSubEntities("GameSave").FirstOrDefault()?["CloudId"] == "save-99");
         s1.DropOptional();
+        // GameControllerSupport is the Tier-2 bulk (3123 rows on the reference library) and goes.
         f += Check("sub: display-only types dropped at launch (Tier-2)",
-            !hg1.SubEntityTypes.Contains("ModelSettings") && !hg1.SubEntityTypes.Contains("GameControllerSupport"));
+            !hg1.SubEntityTypes.Contains("GameControllerSupport"));
+        // ModelSettings joined Tier-1: it is what the 3D code reads, and a pass running while it was
+        // dropped would read "no override" and CACHE that against every game. It is also almost never
+        // present (one block in the whole reference library), so residency is under a kilobyte.
+        f += Check("sub: ModelSettings KEPT resident at launch (Tier-1)",
+            hg1.SubEntityTypes.Contains("ModelSettings")
+            && hg1.GetSubEntities("ModelSettings").FirstOrDefault()?["ModelType"] == "dvd");
         f += Check("sub: GameSave KEPT resident at launch (Tier-1)",
             hg1.SubEntityTypes.Contains("GameSave") && hg1.GetSubEntities("GameSave").FirstOrDefault()?["CloudId"] == "save-99");
         s1.ReloadOptional();

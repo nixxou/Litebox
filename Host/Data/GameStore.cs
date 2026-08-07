@@ -130,10 +130,16 @@ internal sealed class GameStore
     // exposes none of them. gameId -> elementType -> list of field maps.
     private readonly Dictionary<Guid, Dictionary<string, List<Dictionary<string, string>>>> _subEntities = new();
 
-    // Sub-entity types that may be needed WHILE a game runs (a launch / save-sync plugin reads or
-    // writes the game's <GameSave>) → kept resident (Tier-1), never freed by DropOptional. The rest
-    // (ModelSettings, GameControllerSupport, …) are display-only and stay Tier-2 (droppable).
-    private static readonly HashSet<string> _tier1SubEntities = new(StringComparer.Ordinal) { "GameSave" };
+    // Sub-entity types kept resident (Tier-1), never freed by DropOptional:
+    //   GameSave       — a launch / save-sync plugin reads or writes it WHILE the game runs.
+    //   ModelSettings  — not needed during a game, kept for a different reason: it is what the 3D
+    //                    code reads, and a pass that ran while it was dropped would read "no
+    //                    override" and CACHE that against every game. Measured on the real library:
+    //                    one block in the whole thing (against 3123 GameControllerSupport), so
+    //                    residency costs well under a kilobyte — cheaper than teaching the render
+    //                    path to tell "absent" from "freed", and it cannot be got wrong later.
+    // The rest (GameControllerSupport, …) are display-only and stay Tier-2 (droppable).
+    private static readonly HashSet<string> _tier1SubEntities = new(StringComparer.Ordinal) { "GameSave", "ModelSettings" };
     internal static bool IsTier1SubEntity(string type) => _tier1SubEntities.Contains(type);
 
     // Stash a game's non-modelled <Game> fields (Gog*/Android*/Missing*/RetroAchievements*/pause/…)

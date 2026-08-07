@@ -13,10 +13,12 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Windows.Forms;
 using System.Xml.Linq;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.UiKit;
+using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Host.Data;
 
@@ -31,6 +33,22 @@ internal static class EditPlatformDocuments
     public static List<(string name, string absPath)> GetDocuments(string platformName)
     {
         var list = new List<(string, string)>();
+        // The live platform first: the write is journalled, so the XML may still hold the previous set
+        // and the menu would offer documents the user had just removed. XML only as a fallback.
+        try
+        {
+            if (PluginHelper.DataManager?.GetPlatformByName(platformName) is Data.HostPlatform hp && hp.Documents != null)
+            {
+                foreach (var (nm, fp) in hp.Documents)
+                {
+                    string abs0 = ResolveAbs((fp ?? "").Trim());
+                    if (abs0.Length == 0) continue;
+                    list.Add((!string.IsNullOrEmpty(nm) ? nm : Path.GetFileName(abs0), abs0));
+                }
+                return list;
+            }
+        }
+        catch { }
         try
         {
             if (!File.Exists(PlatformsFile)) return list;
@@ -213,26 +231,26 @@ internal static class EditPlatformDocuments
         catch { return path; }
     }
 
-    // Rewrite this platform's <PlatformDocument> rows (root-level, grid order); other platforms untouched.
-    // Guarded internally (read-only / LB running) + atomic + backed up via SafeXmlWrite.
+    // This platform's <PlatformDocument> rows, replaced wholesale in grid order; others untouched.
+    // Journalled like the folders, and applied to the live platform so GetDocuments — which feeds the
+    // tree's Documents submenu — reflects the edit before the XML catches up.
     private static void WritePlatformDocuments(string platform, List<(string nm, string fp)> docs)
     {
         try
         {
-            if (Data.WriteGuard.Refuse(out var why)) { Data.WriteGuard.WarnBlocked("Platform documents", why); return; }
-            if (!File.Exists(PlatformsFile)) return;
-            var doc = XDocument.Load(PlatformsFile);
-            var root = doc.Root; if (root == null) return;
-            foreach (var e in root.Elements("PlatformDocument").Where(e => string.Equals((string?)e.Element("Platform"), platform, StringComparison.OrdinalIgnoreCase)).ToList())
-                e.Remove();
-            foreach (var (nm, fp) in docs)
-                root.Add(new XElement("PlatformDocument",
-                    new XElement("Name", nm),
-                    new XElement("FilePath", fp),
-                    new XElement("Platform", platform)));
-            SafeXmlWrite.Save(doc, PlatformsFile);
+            var store = (PluginHelper.DataManager as Data.HostDataManagerXml)?.Store;
+            var rows = docs.Select(d => new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Name"] = d.nm,
+                ["FilePath"] = d.fp,
+                ["Platform"] = platform,
+            }).ToList();
+            store?.RecordKeyedReplace("PlatformDocument", PlatformsFile, "Platform", platform,
+                                      JsonSerializer.Serialize(rows));
+            if (PluginHelper.DataManager?.GetPlatformByName(platform) is Data.HostPlatform hp)
+                hp.SetPlatformDocuments(docs.Select(d => (d.nm, d.fp)).ToList());
         }
-        catch { }
+        catch (Exception ex) { Console.WriteLine("[platdocs] " + ex.Message); }
     }
 
     private static T? Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }

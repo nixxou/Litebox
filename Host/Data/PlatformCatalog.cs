@@ -103,6 +103,57 @@ internal sealed class HostPlatform : DummyPlatform, ILiteBoxFields
     public override string MusicFolder { get => MusicFolderValue ?? ""; set { MusicFolderValue = value; Rec("MusicFolder", value); } }
     public override string VideosFolder { get => VideosFolderValue ?? ""; set { VideosFolderValue = value; Rec("VideosFolder", value); } }
 
+    /// <summary>Boot-overlay apply: set a field from a PENDING journal op without re-recording it
+    /// (the op is already in the journal — going through the public setter would double it).
+    /// Mirrors the Rec'ing setters above; unknown fields land in the extra dict like the loader's.</summary>
+    internal void ApplyFieldSilent(string field, string value)
+    {
+        if (string.IsNullOrEmpty(field)) return;
+        switch (field)
+        {
+            case "Developer": DeveloperValue = value; break;
+            case "Manufacturer": ManufacturerValue = value; break;
+            case "Notes": NotesValue = value; break;
+            case "Category": CategoryValue = value; break;
+            case "Cpu": CpuValue = value; break;
+            case "Memory": MemoryValue = value; break;
+            case "Graphics": GraphicsValue = value; break;
+            case "Sound": SoundValue = value; break;
+            case "Display": DisplayValue = value; break;
+            case "Media": MediaValue = value; break;
+            case "MaxControllers": MaxControllersValue = value; break;
+            case "ScrapeAs": ScrapeAsValue = value; break;
+            case "SortTitle": SortTitleValue = value; break;
+            case "NestedName": NestedNameValue = value; break;
+            case "LastGameId": LastGameIdValue = value; break;
+            case "ImageType": ImageTypeValue = value; break;
+            case "VideoPath": VideoPathValue = value; break;
+            case "BigBoxTheme": BigBoxThemeValue = value; break;
+            case "BigBoxView": BigBoxViewValue = value; break;
+            case "ReleaseDate":
+                ReleaseDateValue = DateTime.TryParse(value, CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var d) ? d : (DateTime?)null;
+                break;
+            case "HideInBigBox": HideInBigBoxValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase); break;
+            case "Folder": FolderValue = value; break;
+            case "FrontImagesFolder": FrontImagesFolderValue = value; break;
+            case "BackImagesFolder": BackImagesFolderValue = value; break;
+            case "ClearLogoImagesFolder": ClearLogoImagesFolderValue = value; break;
+            case "FanartImagesFolder": FanartImagesFolderValue = value; break;
+            case "ScreenshotImagesFolder": ScreenshotImagesFolderValue = value; break;
+            case "BannerImagesFolder": BannerImagesFolderValue = value; break;
+            case "SteamBannerImagesFolder": SteamBannerImagesFolderValue = value; break;
+            case "ManualsFolder": ManualsFolderValue = value; break;
+            case "MusicFolder": MusicFolderValue = value; break;
+            case "VideosFolder": VideosFolderValue = value; break;
+            case "Name": break;   // renames are surgical, never journaled — and the name keys the ops
+            default:
+                if (string.IsNullOrEmpty(value)) _extra?.Remove(field);
+                else (_extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[field] = value;
+                break;
+        }
+    }
+
     // ── games ────────────────────────────────────────────────────────────────
     public override IGame[] GetAllGames(bool includeHidden, bool includeBroken)
         => Filtered(includeHidden, includeBroken).ToArray();
@@ -227,6 +278,25 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFiel
     public override string VideoPath { get => VideoPathValue ?? ""; set { VideoPathValue = value; Rec("VideoPath", value); } }
     public override string SortTitle { get => SortTitleValue ?? ""; set { SortTitleValue = value; Rec("SortTitle", value); } }
     public override bool HideInBigBox { get => HideInBigBoxValue; set { HideInBigBoxValue = value; Rec("HideInBigBox", value ? "true" : "false"); } }
+
+    /// <summary>Boot-overlay apply (see <see cref="HostPlatform.ApplyFieldSilent"/>).</summary>
+    internal void ApplyFieldSilent(string field, string value)
+    {
+        if (string.IsNullOrEmpty(field)) return;
+        switch (field)
+        {
+            case "Notes": NotesValue = value; break;
+            case "NestedName": NestedNameValue = value; break;
+            case "VideoPath": VideoPathValue = value; break;
+            case "SortTitle": SortTitleValue = value; break;
+            case "HideInBigBox": HideInBigBoxValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase); break;
+            case "Name": break;   // renames are surgical, never journaled
+            default:
+                if (string.IsNullOrEmpty(value)) _extra?.Remove(field);
+                else (_extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[field] = value;
+                break;
+        }
+    }
 
     // Category images: Images\Platform Categories\<name>\<type>\<name>.ext
     public override string ClearLogoImagePath => Img("Clear Logo");

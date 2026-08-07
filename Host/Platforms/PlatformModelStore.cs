@@ -41,11 +41,13 @@ internal static class PlatformModelStore
     }
 
     /// <summary>Write (override ON) or remove (fields == null, override OFF) the platform's ModelSettings block.
-    /// PlatformName is always stamped. Empty-valued fields are written as empty elements (LB keeps them).</summary>
+    /// PlatformName is always stamped. Empty-valued fields are written as empty elements (LB keeps them).
+    /// Guarded INTERNALLY (read-only / LB running) — the greyed UI is convenience, this is the mechanism.</summary>
     public static bool Write(string platformName, Dictionary<string, string>? fields)
     {
         try
         {
+            if (WriteGuard.Refuse(out var why)) { Console.WriteLine("[3dstore] refused: " + why); return false; }
             if (!File.Exists(FilePath)) return false;
             var doc = XDocument.Load(FilePath);
             var root = doc.Root;
@@ -64,8 +66,7 @@ internal static class PlatformModelStore
                 el.Add(new XElement("GameId", ""));   // platform-level → empty GameId (LB parity)
                 root.Add(el);
             }
-            LbXml.Save(doc, FilePath);
-            return true;
+            return SafeXmlWrite.Save(doc, FilePath);
         }
         catch { return false; }
     }
@@ -123,11 +124,13 @@ internal static class PlatformModelStore
         return all;
     }
 
-    /// <summary>Write (override ON) or remove (fields == null) the game's ModelSettings block.</summary>
+    /// <summary>Write (override ON) or remove (fields == null) the game's ModelSettings block.
+    /// Guarded internally, same as <see cref="Write"/>.</summary>
     public static bool WriteGame(string platformName, string gameId, Dictionary<string, string>? fields)
     {
         try
         {
+            if (WriteGuard.Refuse(out var why)) { Console.WriteLine("[3dstore] refused: " + why); return false; }
             string file = GamePlatformFile(platformName);
             if (!File.Exists(file) || string.IsNullOrEmpty(gameId)) return false;
             var doc = XDocument.Load(file);
@@ -149,8 +152,7 @@ internal static class PlatformModelStore
                 el.Add(new XElement("PlatformName", ""));   // game-level → empty PlatformName (LB parity)
                 root.Add(el);
             }
-            LbXml.Save(doc, file);
-            return true;
+            return SafeXmlWrite.Save(doc, file);
         }
         catch { return false; }
     }

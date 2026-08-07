@@ -83,6 +83,24 @@ internal sealed class HostEmulator : DummyEmulator, ILiteBoxFields
     internal void RecordPlatforms()
         => _store?.RecordEntityReplace("EmulatorPlatform", _id, JsonSerializer.Serialize(_platforms.Select(p => p.Fields).ToList()));
 
+    /// <summary>Boot-overlay apply: set a field from a PENDING journal op without re-recording it.</summary>
+    internal void ApplyFieldSilent(string k, string v)
+    { if (string.IsNullOrEmpty(k) || k == "ID") return; if (string.IsNullOrEmpty(v)) _f.Remove(k); else _f[k] = v; }
+
+    /// <summary>Boot-overlay apply of a pending EmulatorPlatform "replace" op (whole collection).</summary>
+    internal void ReplacePlatformsSilent(string json)
+    {
+        List<Dictionary<string, string>> maps;
+        try { maps = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
+        _platforms.Clear();
+        foreach (var m in maps)
+        {
+            var ep = new HostEmulatorPlatform(new Dictionary<string, string>(m, StringComparer.Ordinal));
+            ep.Attach(this);
+            _platforms.Add(ep);
+        }
+    }
+
     public override string Id { get => _id; set { } }
     public override string ApplicationPath { get => G("ApplicationPath"); set => S("ApplicationPath", value); }
     public override string CommandLine { get => G("CommandLine"); set => S("CommandLine", value); }

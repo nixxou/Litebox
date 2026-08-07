@@ -56,7 +56,9 @@ internal static class BadgeSnapshot
         sb.Append('|');
         if (store != null)
         {
-            sb.Append(store.Rows.Length).Append('|');
+            // Count, not Rows.Length: the buffer's capacity moves with chunked growth — keying the
+            // stamp on it would invalidate the snapshot on slack changes that alter no game.
+            sb.Append(store.Count).Append('|');
             foreach (var (name, len, ticks) in store.PlatformFileStamps())
                 sb.Append(name).Append(':').Append(len).Append(':').Append(ticks).Append(';');
         }
@@ -148,9 +150,11 @@ internal static class BadgeSnapshot
 
                 // The per-game half: id → combination. Written by id rather than by row order, so a
                 // library that gained or lost a game elsewhere cannot silently shift every badge.
+                // Bounded on Count — slack buffer rows past it are not games and must not be written.
                 var rows = store.Rows;
-                w.Write(rows.Length);
-                for (int i = 0; i < rows.Length; i++)
+                int rowCount = store.Count;
+                w.Write(rowCount);
+                for (int i = 0; i < rowCount; i++)
                 {
                     w.Write(rows[i].Id.ToByteArray());
                     w.Write(rows[i].BadgeCombo);
@@ -159,7 +163,7 @@ internal static class BadgeSnapshot
             try { File.Delete(Path); } catch { }
             File.Move(tmp, Path);
             long bytes = new FileInfo(Path).Length;
-            LbLog.Info("badges", $"snapshot saved: {count - 1} combos, {store.Rows.Length} games, {bytes / 1024} KB");
+            LbLog.Info("badges", $"snapshot saved: {count - 1} combos, {store.Count} games, {bytes / 1024} KB");
         }
         catch (Exception ex) { LbLog.Warn("badges", "snapshot save failed: " + ex.Message); }
     }
@@ -210,7 +214,7 @@ internal static class BadgeSnapshot
 
             table.Restore(blob, blobLen, offset, count, variants);
             int applied = store.ApplyBadgeCombos(combos);
-            LbLog.Info("badges", $"snapshot loaded: {count - 1} combos, {applied}/{store.Rows.Length} games, "
+            LbLog.Info("badges", $"snapshot loaded: {count - 1} combos, {applied}/{store.Count} games, "
                                + $"{sw.ElapsedMilliseconds} ms");
             return applied > 0;
         }

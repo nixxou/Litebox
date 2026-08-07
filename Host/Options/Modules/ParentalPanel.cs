@@ -318,14 +318,17 @@ internal static class ParentalPanel
                     {
                         if (p.Length != 4 || !p.All(char.IsAsciiDigit)) { Warn("BigBox PINs are exactly 4 digits."); return; }
                         if (p != c) { Warn("The PIN and its confirmation do not match."); return; }
-                        BigBoxPin.Set(p);
+                        if (!BigBoxPin.Set(p))
+                        { Warn("The PIN could not be written to BigBoxSettings.xml — close LaunchBox / BigBox (or disable read-only) and try again."); return; }
                     }
                     // p empty + hasPin → keep the existing PIN unchanged.
                 }
                 else
                 {
-                    // Parental fully disabled → clear the shared PIN.
-                    BigBoxPin.Set("");
+                    // Parental fully disabled → clear the shared PIN. A refused clear (LB running /
+                    // read-only) is reported — a PIN the user believes gone but still set is worse.
+                    if (BigBoxPin.Current().Length > 0 && !BigBoxPin.Set(""))
+                    { Warn("The PIN could not be cleared from BigBoxSettings.xml — close LaunchBox / BigBox (or disable read-only) and try again."); return; }
                 }
             }
 

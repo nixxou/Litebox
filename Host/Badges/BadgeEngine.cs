@@ -282,10 +282,11 @@ internal static class BadgeEngine
         var store = Store;
         if (store == null) return;
         var counts = new int[Table.ComboCount + 2];
-        foreach (ref readonly var row in store.Rows.AsSpan())
+        // Bound on Count, not Rows.Length: the buffer may carry slack rows past the real games.
+        foreach (ref readonly var row in store.Rows.AsSpan(0, store.Count))
             if (row.BadgeCombo > 0 && row.BadgeCombo < counts.Length) counts[row.BadgeCombo]++;
         Table.SetOccurrences(counts);
-        LbLog.Info("badges", CacheReport(store.Rows.Length));
+        LbLog.Info("badges", CacheReport(store.Count));
     }
 
     private static void Pass(IReadOnlyList<IGame> games)

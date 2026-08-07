@@ -182,6 +182,86 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     public void SetResolver(Func<string, IGame> r) { _resolve = r; foreach (var g in _games) g.SetResolver(r); }
     public void SetAllGamesProvider(Func<IEnumerable<IGame>> p) => _allGames = p;
 
+    // ── Boot-overlay appliers: re-apply PENDING journal ops without re-recording them ──────────
+    private static readonly HashSet<string> _gameRowModeled = new(StringComparer.Ordinal)
+    { "GameId", "LaunchBoxDbId", "GameTitle", "GameFileName", "GamePlatform", "ManualOrder" };
+
+    /// <summary>Set a field from a pending op silently (mirrors the Rec'ing setters).</summary>
+    internal void ApplyFieldSilent(string field, string value)
+    {
+        if (string.IsNullOrEmpty(field)) return;
+        switch (field)
+        {
+            case "Name": NameValue = value; break;
+            case "NestedName": NestedNameValue = value; break;
+            case "Notes": NotesValue = value; break;
+            case "SortBy": SortByValue = value; break;
+            case "Category": CategoryValue = value; break;
+            case "VideoPath": VideoPathValue = value; break;
+            case "ImageType": ImageTypeValue = value; break;
+            case "SortTitle": SortTitleValue = value; break;
+            case "LastGameId": LastGameIdValue = value; break;
+            case "BigBoxView": BigBoxViewValue = value; break;
+            case "BigBoxTheme": BigBoxThemeValue = value; break;
+            case "AutoPopulate": AutoPopulateValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase); break;
+            case "IncludeWithPlatforms": IncludeWithPlatformsValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase); break;
+            case "HideInBigBox": HideInBigBoxValue = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase); break;
+            default:
+                if (string.IsNullOrEmpty(value)) _extra?.Remove(field);
+                else (_extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[field] = value;
+                break;
+        }
+    }
+
+    /// <summary>Apply a pending PlaylistGame "replace" op (whole collection, JSON of field maps —
+    /// the exact shape <see cref="RecordGames"/> serialises).</summary>
+    internal void ReplaceGamesSilent(string json)
+    {
+        List<Dictionary<string, string>> maps;
+        try { maps = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
+        _games.Clear();
+        foreach (var m in maps)
+        {
+            string G(string k) => m.TryGetValue(k, out var v) ? v : null;
+            Dictionary<string, string> extra = null;
+            foreach (var kv in m)
+                if (!_gameRowModeled.Contains(kv.Key))
+                    (extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[kv.Key] = kv.Value;
+            var g = new HostPlaylistGame
+            {
+                GameIdValue = G("GameId"),
+                GameTitleValue = G("GameTitle"),
+                GamePlatformValue = G("GamePlatform"),
+                GameFileNameValue = G("GameFileName"),
+                PlaylistIdValue = PlaylistIdValue,
+                ManualOrderValue = int.TryParse(G("ManualOrder"), out var mo) ? mo : 0,
+                LaunchBoxDbIdValue = int.TryParse(G("LaunchBoxDbId"), out var db) ? db : (int?)null,
+                Extra = extra,
+            };
+            g.SetOwner(this);
+            g.SetResolver(_resolve);
+            _games.Add(g);
+        }
+    }
+
+    /// <summary>Apply a pending PlaylistFilter "replace" op (the shape <see cref="RecordFilters"/> writes).</summary>
+    internal void ReplaceFiltersSilent(string json)
+    {
+        List<Dictionary<string, string>> maps;
+        try { maps = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
+        _filters.Clear();
+        foreach (var m in maps)
+        {
+            string G(string k) => m.TryGetValue(k, out var v) ? v : null;
+            Dictionary<string, string> extra = null;
+            foreach (var kv in m)
+                if (kv.Key != "Value" && kv.Key != "FieldKey" && kv.Key != "ComparisonTypeKey")
+                    (extra ??= new Dictionary<string, string>(StringComparer.Ordinal))[kv.Key] = kv.Value;
+            _filters.Add(new PlaylistFilterDef(G("FieldKey"), G("ComparisonTypeKey"), G("Value")) { Extra = extra });
+        }
+        InvalidateFilterPlan();
+    }
+
     public override string PlaylistId { get => PlaylistIdValue ?? ""; set { } }
     public override string Name { get => NameValue ?? ""; set { NameValue = value; Rec("Name", value); } }
     public override string NestedName { get => NestedNameValue ?? ""; set { NestedNameValue = value; Rec("NestedName", value); } }

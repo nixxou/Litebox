@@ -15,7 +15,8 @@
 //
 // Fail-safe: any SQLite error disables the log for the session (Enabled=false)
 // and every method becomes a no-op — write-back silently degrades, the host
-// never crashes. Write-back is off by default anyway (GameStore.ReadOnly=true).
+// never crashes. NB: write-back is ON by default (LiteBox.ini ships ReadOnly=false);
+// GameStore.ReadOnly's `= true` initializer is only a boot-safety placeholder.
 
 using System;
 using System.Collections.Generic;

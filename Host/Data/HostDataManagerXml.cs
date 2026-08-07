@@ -88,12 +88,20 @@ internal sealed class HostDataManagerXml : DummyDataManager
         _imagesRoot = imagesRoot;
         _dataDir = dataDir;
 
+        // The surviving journal (empty after a clean boot flush). The catalogues below load
+        // PRISTINE XML; pending ops — edits made while LaunchBox was running, kept for a later
+        // flush — are overlaid onto the loaded objects so the user's work shows immediately
+        // instead of only after LB closes and a flush lands. (Game-level ops are handled by
+        // GameStore.RecoverJournalOnLoad; this covers the entity catalogues.)
+        var pending = store.PendingOps();
+
         // Game wrappers (thin) built once.
         _allGames = new List<IGame>(store.Count);
         for (int i = 0; i < store.Count; i++) _allGames.Add(new HostGame(store, i));
 
         // Platforms + categories from Platforms.xml (attach the store so setters write back).
         var (platforms, categories) = PlatformCatalog.Load(dataDir, imagesRoot);
+        OverlayPlatformOps(pending, platforms, categories, imagesRoot);
         foreach (var c in categories) c.Attach(_store);
         _categories = categories.Cast<IPlatformCategory>().ToList();
         _categoryByName = new Dictionary<string, IPlatformCategory>(StringComparer.OrdinalIgnoreCase);
@@ -124,6 +132,7 @@ internal sealed class HostDataManagerXml : DummyDataManager
 
         // Emulators (attach the store so setters / AddNew / TryRemove route through the op-log).
         var emus = EmulatorCatalog.Load(dataDir);
+        OverlayEmulatorOps(pending, emus);
         foreach (var e in emus) e.Attach(_store);
         _emulators = emus.Cast<IEmulator>().ToList();
         _emulatorById = emus.ToDictionary(e => e.Id, e => (IEmulator)e, StringComparer.OrdinalIgnoreCase);
@@ -131,6 +140,7 @@ internal sealed class HostDataManagerXml : DummyDataManager
         // Playlists: manual ones resolve via GetGameById; auto-populate ones
         // evaluate their filters over the full game list.
         var playlists = PlaylistCatalog.Load(dataDir, imagesRoot);
+        OverlayPlaylistOps(pending, playlists, imagesRoot);
         foreach (var pl in playlists) { pl.SetResolver(GetGameById); pl.SetAllGamesProvider(() => _allGames); pl.Attach(_store); }
         _playlists = playlists.Cast<IPlaylist>().ToList();
         _playlistById = new Dictionary<string, IPlaylist>(StringComparer.OrdinalIgnoreCase);
@@ -298,6 +308,11 @@ internal sealed class HostDataManagerXml : DummyDataManager
     public override IGame GetGameById(string id)
         => (Guid.TryParse(id, out var g) && _store.ById.TryGetValue(g, out var i)) ? _allGames[i] : null;
 
+    /// <summary>Pre-size the row buffer for a KNOWN batch of AddNewGame calls (Expand, an import):
+    /// one exact reallocation instead of chunked growth. Purely an optimization hint — omitting it
+    /// is always correct.</summary>
+    internal void ReserveAdditionalGames(int n) { try { if (n > 0) _store?.Reserve(_store.Count + n); } catch { } }
+
     public override IGame AddNewGame(string title)
     {
         int idx = _store.AddGameRow(title ?? "", out _);   // grows the store + logs an "add" op
@@ -428,4 +443,89 @@ internal sealed class HostDataManagerXml : DummyDataManager
     }
 
     public override void ForceReload() => Console.WriteLine("[HostDataManagerXml] ForceReload — no-op (v1)");
+
+    // ── Boot overlay of PENDING journal ops onto the freshly-loaded catalogues ───────────────
+    // Ops are applied in seq order (last-write-wins), through the Silent appliers so nothing is
+    // re-recorded. This is what makes "create a playlist / emulator / platform while LaunchBox is
+    // open, restart LiteBox" show the object instead of losing it until the eventual flush — the
+    // exact bug PlaylistCopier documented as "the copy only appears after two restarts".
+
+    private static void OverlayPlatformOps(List<Op> ops, List<HostPlatform> platforms, List<HostPlatformCategory> categories, string imagesRoot)
+    {
+        int n = 0;
+        foreach (var op in ops)
+        {
+            try
+            {
+                if (op.Entity == "Platform" && !string.IsNullOrEmpty(op.Id))
+                {
+                    var p = platforms.FirstOrDefault(x => string.Equals(x.Name, op.Id, StringComparison.OrdinalIgnoreCase));
+                    if (op.OpType == "add") { if (p == null) { platforms.Add(new HostPlatform(op.Id, null, imagesRoot)); n++; } }
+                    else if (op.OpType == "modify" && p != null) { p.ApplyFieldSilent(op.Field, op.Value); n++; }
+                    else if (op.OpType == "delete" && p != null) { platforms.Remove(p); n++; }
+                }
+                else if (op.Entity == "PlatformCategory" && !string.IsNullOrEmpty(op.Id))
+                {
+                    var c = categories.FirstOrDefault(x => string.Equals(x.Name, op.Id, StringComparison.OrdinalIgnoreCase));
+                    if (op.OpType == "add") { if (c == null) { categories.Add(new HostPlatformCategory(op.Id, imagesRoot)); n++; } }
+                    else if (op.OpType == "modify" && c != null) { c.ApplyFieldSilent(op.Field, op.Value); n++; }
+                    else if (op.OpType == "delete" && c != null) { categories.Remove(c); n++; }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[overlay] platform op seq=" + op.Seq + ": " + ex.Message); }
+        }
+        if (n > 0) Console.WriteLine($"[overlay] platforms/categories: {n} pending op(s) re-applied");
+    }
+
+    private static void OverlayEmulatorOps(List<Op> ops, List<HostEmulator> emus)
+    {
+        int n = 0;
+        foreach (var op in ops)
+        {
+            try
+            {
+                if (op.Entity == "Emulator" && !string.IsNullOrEmpty(op.Id))
+                {
+                    var e = emus.FirstOrDefault(x => string.Equals(x.Id, op.Id, StringComparison.OrdinalIgnoreCase));
+                    if (op.OpType == "add")
+                    { if (e == null) { emus.Add(new HostEmulator(op.Id, new Dictionary<string, string>(StringComparer.Ordinal) { ["ID"] = op.Id }, new List<HostEmulatorPlatform>())); n++; } }
+                    else if (op.OpType == "modify" && e != null) { e.ApplyFieldSilent(op.Field, op.Value); n++; }
+                    else if (op.OpType == "delete" && e != null) { emus.Remove(e); n++; }
+                }
+                else if (op.Entity == "EmulatorPlatform" && op.OpType == "replace" && !string.IsNullOrEmpty(op.ParentId))
+                {
+                    var e = emus.FirstOrDefault(x => string.Equals(x.Id, op.ParentId, StringComparison.OrdinalIgnoreCase));
+                    if (e != null) { e.ReplacePlatformsSilent(op.Value); n++; }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[overlay] emulator op seq=" + op.Seq + ": " + ex.Message); }
+        }
+        if (n > 0) Console.WriteLine($"[overlay] emulators: {n} pending op(s) re-applied");
+    }
+
+    private static void OverlayPlaylistOps(List<Op> ops, List<HostPlaylist> playlists, string imagesRoot)
+    {
+        int n = 0;
+        HostPlaylist Find(string id) => playlists.FirstOrDefault(x => string.Equals(x.PlaylistIdValue, id, StringComparison.OrdinalIgnoreCase));
+        foreach (var op in ops)
+        {
+            try
+            {
+                if (op.Entity == "Playlist" && !string.IsNullOrEmpty(op.Id))
+                {
+                    var pl = Find(op.Id);
+                    if (op.OpType == "add")
+                    { if (pl == null) { playlists.Add(new HostPlaylist { PlaylistIdValue = op.Id, FileValue = op.ParentId, ImagesRootValue = imagesRoot }); n++; } }
+                    else if (op.OpType == "modify" && pl != null) { pl.ApplyFieldSilent(op.Field, op.Value); n++; }
+                    else if (op.OpType == "delete" && pl != null) { playlists.Remove(pl); n++; }
+                }
+                else if (op.Entity == "PlaylistGame" && op.OpType == "replace" && !string.IsNullOrEmpty(op.Id))
+                { var pl = Find(op.Id); if (pl != null) { pl.ReplaceGamesSilent(op.Value); n++; } }
+                else if (op.Entity == "PlaylistFilter" && op.OpType == "replace" && !string.IsNullOrEmpty(op.Id))
+                { var pl = Find(op.Id); if (pl != null) { pl.ReplaceFiltersSilent(op.Value); n++; } }
+            }
+            catch (Exception ex) { Console.WriteLine("[overlay] playlist op seq=" + op.Seq + ": " + ex.Message); }
+        }
+        if (n > 0) Console.WriteLine($"[overlay] playlists: {n} pending op(s) re-applied");
+    }
 }

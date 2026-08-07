@@ -12,8 +12,11 @@
 // bad response, rejected credentials — the ACTIVE token is left completely untouched and the timestamp
 // is not advanced, so the next cycle retries. We never replace a working token with a failure.
 //
-// Read-only: writing the token edits LaunchBox's Settings.xml, so renewal is skipped when LiteBox runs
-// in read-only mode (canWrite == false) — the caller passes the current mode.
+// Read-only: writing the token edits LaunchBox's Settings.xml, so renewal is skipped in read-only
+// mode. The mode is read LIVE at each firing (CanWrite delegate) — a boot-time latch went stale the
+// moment the user toggled read-only in the options mid-session. Also skipped while LB/BB runs: LB
+// rewrites Settings.xml wholesale at exit, so a token written under it is doomed anyway — skipping
+// keeps the timestamp unstamped and the next cycle retries once the field is clear.
 
 #nullable enable
 
@@ -26,26 +29,27 @@ internal static class RaTokenRenew
 {
     private static int _running;   // single-flight across boot + heartbeat
 
-    /// <summary>Whether writing Settings.xml is allowed (false in LB read-only mode). Set once at boot so
-    /// the catalogue heartbeat can trigger renewal too, without threading the mode through the engine.</summary>
-    public static volatile bool AllowWrite;
+    /// <summary>Live "may I write Settings.xml" source, wired at boot to the data manager's
+    /// read-only state. Read at each firing — never latched. Null (not wired) = no.</summary>
+    public static Func<bool>? CanWrite;
 
     /// <summary>Renew the token if it is due and credentials are on file. Fire-and-forget (runs on a
     /// background thread); safe to call repeatedly. No-op unless a password is stored and it is due.</summary>
-    public static void MaybeRenewAsync(bool canWrite)
+    public static void MaybeRenewAsync()
     {
         if (System.Threading.Interlocked.Exchange(ref _running, 1) == 1) return;
         Task.Run(() =>
         {
-            try { RenewIfDue(canWrite); }
+            try { RenewIfDue(); }
             catch (Exception ex) { Log("failed: " + ex.Message); }
             finally { System.Threading.Interlocked.Exchange(ref _running, 0); }
         });
     }
 
-    private static void RenewIfDue(bool canWrite)
+    private static void RenewIfDue()
     {
-        if (!canWrite) return;                          // read-only → never write Settings.xml
+        if (CanWrite?.Invoke() != true) return;         // read-only (live) → never write Settings.xml
+        if (LbApiHost.Host.Data.GameStore.IsLaunchBoxRunning()) return;   // LB owns Settings.xml right now
         if (!RaPanelConfig.HasPassword) return;         // nothing to re-login with
 
         string user = RaTokenStore.Username();

@@ -165,10 +165,13 @@ internal static class EditPlatformFolders
     }
 
     // Rewrite this platform's <PlatformFolder> rows (root-level) to exactly `map`; other platforms untouched.
+    // Guarded internally (read-only / LB running) + atomic + backed up via SafeXmlWrite; a refusal
+    // warns the user — a folder change that silently didn't land would be worse than the dialog.
     private static void WritePlatformFolders(string platform, Dictionary<string, string> map)
     {
         try
         {
+            if (Data.WriteGuard.Refuse(out var why)) { Data.WriteGuard.WarnBlocked("Platform folders", why); return; }
             if (!File.Exists(PlatformsFile)) return;
             var doc = XDocument.Load(PlatformsFile);
             var root = doc.Root; if (root == null) return;
@@ -179,7 +182,7 @@ internal static class EditPlatformFolders
                     new XElement("MediaType", kv.Key),
                     new XElement("FolderPath", kv.Value),
                     new XElement("Platform", platform)));
-            LbXml.Save(doc, PlatformsFile);
+            SafeXmlWrite.Save(doc, PlatformsFile);
         }
         catch { }
     }

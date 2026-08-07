@@ -752,12 +752,13 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             try { RaCatalogEngine.Start(); } catch { }
             // RA session-token auto-renewal: if the user stored their RA password, re-login and rewrite
             // the expiring token in Settings.xml when it's due. Skipped in read-only; fail-safe on error.
-            // AllowWrite is latched so the catalogue heartbeat can renew periodically too (long sessions).
+            // CanWrite is a LIVE delegate (not a boot latch): toggling read-only in the options is seen
+            // by the very next heartbeat firing, no restart needed.
             try
             {
-                bool raCanWrite = !(_dm is HostDataManagerXml roDm) || !roDm.ReadOnly;
-                Ra.RaTokenRenew.AllowWrite = raCanWrite;
-                Ra.RaTokenRenew.MaybeRenewAsync(raCanWrite);
+                var dmRef = _dm;
+                Ra.RaTokenRenew.CanWrite = () => !(dmRef is HostDataManagerXml roDm) || !roDm.ReadOnly;
+                Ra.RaTokenRenew.MaybeRenewAsync();
             }
             catch { }
         };

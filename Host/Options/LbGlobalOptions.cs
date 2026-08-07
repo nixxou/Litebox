@@ -940,14 +940,15 @@ internal static class LbGlobalOptions
                 var r = await Integrations.GamesDbAuth.SignInAsync(email.Text, pwd.Text);
                 if (r.Ok)
                 {
-                    Data.LbKeys.WriteGamesDbToken(r.Token);
+                    bool wrote = Data.LbKeys.WriteGamesDbToken(r.Token);
                     liteCfg.SetSec("LaunchBoxAccount", "Email", email.Text.Trim());
                     liteCfg.SetSec("LaunchBoxAccount", "PasswordBlob", string.IsNullOrEmpty(pwd.Text) ? "" : Data.LbSettingsCrypto.EncryptLocal(pwd.Text));
                     try { liteCfg.Save(); } catch { }
-                    status.ForeColor = Good;
+                    status.ForeColor = wrote ? Good : Bad;
+                    status.Text = wrote ? r.Message
+                        : "Signed in, but the token could not be written — close LaunchBox / BigBox (or disable read-only) and retry.";
                 }
-                else status.ForeColor = Bad;
-                status.Text = r.Message;
+                else { status.ForeColor = Bad; status.Text = r.Message; }
                 tokenLbl.Text = TokenLine();
                 connect.Enabled = !readOnly;
             };

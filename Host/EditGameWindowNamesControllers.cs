@@ -723,6 +723,41 @@ internal static class ControllerCatalogStore
                 }
         }
         catch (Exception ex) { Console.WriteLine("[controllers] catalog load failed: " + ex.Message); }
+
+        // Boot OVERLAY (same pattern as HostDataManagerXml's): the XML above is pristine, but a
+        // catalog edit made while LB was running is still a pending "GameController" replace op in
+        // the journal. Without this, the window reloads the OLD list — and because Persist()
+        // re-serialises the WHOLE current list, the next edit would silently overwrite the pending
+        // one (last-write-wins). The op carries the full collection, so the LAST one wins outright.
+        try
+        {
+            var pending = (PluginHelper.DataManager as HostDataManagerXml)?.Store?.PendingOps();
+            string? json = null;
+            if (pending != null)
+                foreach (var op in pending)   // seq order → keep the latest
+                    if (op.Entity == "GameController" && op.OpType == "replace") json = op.Value;
+            if (!string.IsNullOrEmpty(json))
+            {
+                var rows = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new();
+                var overlaid = new List<ControllerRec>();
+                foreach (var d in rows)
+                {
+                    var r = new ControllerRec();
+                    foreach (var kv in d)
+                        switch (kv.Key)
+                        {
+                            case "Id": r.Id = kv.Value ?? ""; break;
+                            case "Name": r.Name = kv.Value ?? ""; break;
+                            case "Category": r.Category = kv.Value ?? ""; break;
+                            default: r.Extra[kv.Key] = kv.Value ?? ""; break;
+                        }
+                    if (r.Id.Length > 0) overlaid.Add(r);
+                }
+                list = overlaid;
+                Console.WriteLine($"[controllers] overlaid pending catalog op ({list.Count} controller(s))");
+            }
+        }
+        catch (Exception ex) { Console.WriteLine("[controllers] pending overlay failed: " + ex.Message); }
         _list = list;
         Sort();
     }

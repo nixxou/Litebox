@@ -214,10 +214,12 @@ internal static class EditPlatformDocuments
     }
 
     // Rewrite this platform's <PlatformDocument> rows (root-level, grid order); other platforms untouched.
+    // Guarded internally (read-only / LB running) + atomic + backed up via SafeXmlWrite.
     private static void WritePlatformDocuments(string platform, List<(string nm, string fp)> docs)
     {
         try
         {
+            if (Data.WriteGuard.Refuse(out var why)) { Data.WriteGuard.WarnBlocked("Platform documents", why); return; }
             if (!File.Exists(PlatformsFile)) return;
             var doc = XDocument.Load(PlatformsFile);
             var root = doc.Root; if (root == null) return;
@@ -228,7 +230,7 @@ internal static class EditPlatformDocuments
                     new XElement("Name", nm),
                     new XElement("FilePath", fp),
                     new XElement("Platform", platform)));
-            LbXml.Save(doc, PlatformsFile);
+            SafeXmlWrite.Save(doc, PlatformsFile);
         }
         catch { }
     }

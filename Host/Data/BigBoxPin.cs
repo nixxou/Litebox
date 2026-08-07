@@ -58,6 +58,10 @@ internal static class BigBoxPin
     {
         try
         {
+            // BigBoxSettings.xml belongs to BigBox and is not journalable (no op family targets
+            // it) — so this is a hard internal guard, not a deferral: read-only or LB/BB running
+            // means the PIN write is refused, and the caller must tell the user.
+            if (WriteGuard.Refuse(out var why)) { Console.WriteLine("[bbpin] refused: " + why); return false; }
             var path = SettingsPath();
             if (path == null) return false;
             var xml = File.ReadAllText(path);

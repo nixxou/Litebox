@@ -31,10 +31,22 @@ internal static class NodeDeleter
     private static string PlatformsFile => Path.Combine(MediaResolver.LbRoot ?? "", "Data", "Platforms.xml");
     private static string ParentsFile => Path.Combine(MediaResolver.LbRoot ?? "", "Data", "Parents.xml");
 
+    // Deletion is EXCLUSIVE work: it edits Platforms.xml/Parents.xml directly and deletes whole
+    // files — no journal to replay it, no way for erasure to be repaired. The gate requires
+    // write-mode, LB/BB closed, a healthy journal, and drains pending edits first (they were
+    // computed against the files about to change).
+    private static bool GateOrExplain(HostDataManagerXml? dm, IWin32Window? owner, string title)
+    {
+        if (ExclusiveGate.CanRun(dm?.Store, out var why)) return true;
+        MessageBox.Show(owner, why, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        return false;
+    }
+
     // ── platforms ──
     public static bool DeletePlatforms(List<IPlatform> plats, HostDataManagerXml? dm, IWin32Window? owner)
     {
         if (plats == null || plats.Count == 0 || dm == null) return false;
+        if (!GateOrExplain(dm, owner, "Delete Platform")) return false;
         var names = plats.Select(p => Safe(() => p.Name) ?? "").Where(n => n.Length > 0).ToList();
         int games = 0; foreach (var p in plats) try { games += p.GetAllGames(true, true)?.Length ?? 0; } catch { }
         string what = names.Count == 1 ? $"platform \"{names[0]}\"" : $"{names.Count} platforms";
@@ -44,7 +56,6 @@ internal static class NodeDeleter
                 "Media and ROM files on disk are NOT deleted.",
                 "Delete Platform", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return false;
 
-        try { dm.FlushIfSafe(); } catch { }   // push pending edits before the files disappear
         foreach (var p in plats)
         {
             string name = Safe(() => p.Name) ?? ""; if (name.Length == 0) continue;
@@ -74,6 +85,7 @@ internal static class NodeDeleter
     public static bool DeleteCategories(List<HostPlatformCategory> cats, HostDataManagerXml? dm, IWin32Window? owner)
     {
         if (cats == null || cats.Count == 0 || dm == null) return false;
+        if (!GateOrExplain(dm, owner, "Delete Category")) return false;
         var names = cats.Select(c => Safe(() => c.Name) ?? "").Where(n => n.Length > 0).ToList();
         string what = names.Count == 1 ? $"category \"{names[0]}\"" : $"{names.Count} categories";
         if (MessageBox.Show(owner,
@@ -96,6 +108,7 @@ internal static class NodeDeleter
     public static bool DeletePlaylists(List<HostPlaylist> pls, HostDataManagerXml? dm, IWin32Window? owner)
     {
         if (pls == null || pls.Count == 0 || dm == null) return false;
+        if (!GateOrExplain(dm, owner, "Delete Playlist")) return false;
         var names = pls.Select(p => Safe(() => p.Name) ?? "").Where(n => n.Length > 0).ToList();
         string what = names.Count == 1 ? $"playlist \"{names[0]}\"" : $"{names.Count} playlists";
         if (MessageBox.Show(owner,
@@ -164,7 +177,7 @@ internal static class NodeDeleter
         {
             if (!File.Exists(file)) return;
             var doc = XDocument.Load(file);
-            if (op(doc) > 0) LbXml.Save(doc, file);
+            if (op(doc) > 0) SafeXmlWrite.Save(doc, file);   // atomic + backed up; refused if LB appeared
         }
         catch (Exception ex) { Console.WriteLine("[delete] " + Path.GetFileName(file) + ": " + ex.Message); }
     }

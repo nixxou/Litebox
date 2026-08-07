@@ -518,8 +518,9 @@ internal static class RaPanel
                     if (pwdChanged && pwd.Text.Length > 0)
                     {
                         // New password → the token may be stale; make it due and kick a background renewal now.
+                        // (The renewal reads the live read-only state itself — no mode to pass.)
                         RaPanelConfig.MarkTokenStale();
-                        RaTokenRenew.MaybeRenewAsync(canWrite: true);
+                        RaTokenRenew.MaybeRenewAsync();
                     }
                 }
 

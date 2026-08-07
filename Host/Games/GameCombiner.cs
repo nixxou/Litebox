@@ -348,6 +348,10 @@ internal static class GameCombiner
         string platform = Safe(() => game.Platform) ?? "";
         string rootPath = Safe(() => game.ApplicationPath) ?? "";
 
+        // One exact-size buffer reservation for the whole batch (a 130-version expand used to
+        // re-copy the entire row array once per created game).
+        dm.ReserveAdditionalGames(versions.Count);
+
         int restored = 0;
         foreach (var v in versions)
         {

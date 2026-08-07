@@ -67,6 +67,9 @@ internal static class LbKeys
     {
         try
         {
+            // Internal guard (read-only / LB running): the byte-preserving surgical write below is
+            // exactly what LB would clobber on exit — refuse rather than write something doomed.
+            if (WriteGuard.Refuse(out var why)) { Console.WriteLine("[keys] gamesdb token write refused: " + why); return false; }
             var file = SettingsPath;
             if (!File.Exists(file)) return false;
             byte[] raw = File.ReadAllBytes(file);

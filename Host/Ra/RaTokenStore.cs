@@ -60,6 +60,10 @@ internal static class RaTokenStore
     {
         try
         {
+            // Internal guard (read-only / LB running) — defense in depth on top of the callers'
+            // own checks: a token written while LB holds Settings.xml is clobbered at its exit.
+            if (LbApiHost.Host.Data.WriteGuard.Refuse(out var why))
+            { Console.WriteLine("[ra] token write refused: " + why); return false; }
             string file = SettingsPath;
             if (!File.Exists(file)) return false;
 

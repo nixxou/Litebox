@@ -50,6 +50,23 @@ internal sealed class LbStartupApp
         return app;
     }
 
+    /// <summary>Inverse of <see cref="ToFieldMap"/> — the boot overlay rebuilds rows from a pending
+    /// "replace" op's JSON field maps.</summary>
+    public static LbStartupApp FromMap(IReadOnlyDictionary<string, string> m)
+    {
+        string G(string k) => m.TryGetValue(k, out var v) ? v ?? "" : "";
+        var app = new LbStartupApp
+        {
+            ApplicationPath = G("ApplicationPath"),
+            CommandLine = G("CommandLine"),
+            StartWithLaunchBox = G("StartWithLaunchBox").Equals("true", StringComparison.OrdinalIgnoreCase),
+            StartWithBigBox = G("StartWithBigBox").Equals("true", StringComparison.OrdinalIgnoreCase),
+            AllowMultipleInstances = G("AllowMultipleInstances").Equals("true", StringComparison.OrdinalIgnoreCase),
+        };
+        foreach (var kv in m) if (!Modelled.Contains(kv.Key)) app.Extra[kv.Key] = kv.Value;
+        return app;
+    }
+
     public LbStartupApp Clone() => new()
     {
         ApplicationPath = ApplicationPath, CommandLine = CommandLine,
@@ -99,6 +116,20 @@ internal sealed class LbImageTypeSetting
         };
         foreach (var c in e.Elements())
             if (!Modelled.Contains(c.Name.LocalName)) s.Extra[c.Name.LocalName] = c.Value;
+        return s;
+    }
+
+    /// <summary>Inverse of <see cref="ToFieldMap"/>, for the boot overlay of a pending replace op.</summary>
+    public static LbImageTypeSetting FromMap(IReadOnlyDictionary<string, string> m)
+    {
+        string G(string k) => m.TryGetValue(k, out var v) ? v ?? "" : "";
+        var s = new LbImageTypeSetting
+        {
+            ImageType = G("ImageType"),
+            IsDefault = G("IsDefault").Equals("true", StringComparison.OrdinalIgnoreCase),
+            UseInAutoImports = G("UseInAutoImports").Equals("true", StringComparison.OrdinalIgnoreCase),
+        };
+        foreach (var kv in m) if (!Modelled.Contains(kv.Key)) s.Extra[kv.Key] = kv.Value;
         return s;
     }
 
@@ -155,6 +186,35 @@ internal sealed class LbSettingsStore
             }
         }
         catch (Exception ex) { Console.WriteLine("[lbsettings] load failed: " + ex.Message); }
+
+        // Boot OVERLAY: the XML above is pristine, but edits made while LB was running (or after a
+        // failed flush) are still in the journal — re-apply them here so the options window shows
+        // the user's values instead of silently reverting them until the next successful flush.
+        try
+        {
+            int overlaid = 0;
+            foreach (var op in store?.PendingOps() ?? new List<Op>())
+            {
+                if (op.Entity == "Settings" && op.OpType == "modify" && !string.IsNullOrEmpty(op.Field))
+                { _f[op.Field] = op.Value ?? ""; overlaid++; }
+                else if (op.Entity == "StartupAppSettings" && op.OpType == "replace")
+                {
+                    var maps = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(op.Value ?? "[]") ?? new();
+                    _startupApps.Clear();
+                    _startupApps.AddRange(maps.Select(LbStartupApp.FromMap));
+                    overlaid++;
+                }
+                else if (op.Entity == "ImageTypeSettings" && op.OpType == "replace")
+                {
+                    var maps = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(op.Value ?? "[]") ?? new();
+                    _imageTypes.Clear();
+                    _imageTypes.AddRange(maps.Select(LbImageTypeSetting.FromMap));
+                    overlaid++;
+                }
+            }
+            if (overlaid > 0) Console.WriteLine($"[lbsettings] overlaid {overlaid} pending journal op(s)");
+        }
+        catch (Exception ex) { Console.WriteLine("[lbsettings] pending overlay failed: " + ex.Message); }
         Console.WriteLine($"[lbsettings] {file} loaded={Loaded} fields={_f.Count} startupApps={_startupApps.Count} imageTypes={_imageTypes.Count}");
     }
 

@@ -82,7 +82,13 @@ internal static class GFlags
 
 internal sealed class GameStore
 {
+    /// <summary>The row BUFFER — may hold slack beyond <see cref="Count"/> after adds (growth is
+    /// chunked so adding N games costs O(1) reallocations, not N whole-array copies on the LOH).
+    /// Loops over games MUST bound on <see cref="Count"/>, not Rows.Length; only capacity-shaped
+    /// code (_notes sizing, memory stats) reads the raw Length.</summary>
     public GameRow[] Rows = Array.Empty<GameRow>();
+    private int _count;                             // the real number of games (see Rows)
+    private const int GrowChunk = 1024;             // ~240 KB of slack max — never a doubling
     public List<string> Pool = new() { "" };        // index 0 = empty; grows at runtime via InternRuntime
     private Dictionary<string, int> _poolMap = new(StringComparer.Ordinal) { [""] = 0 };
     private string[] _notes;                        // tier 2 (droppable), index-aligned with Rows
@@ -211,11 +217,26 @@ internal sealed class GameStore
     /// consultent ce flag avant d'effacer quoi que ce soit.</summary>
     public bool JournalFaulted => _oplog != null && _oplog.Faulted;
     public string JournalFaultReason => _oplog?.FaultReason;
+
+    /// <summary>Ops currently waiting in the journal (0 when clean or disabled). The exclusive
+    /// gate uses this after a drain: an operation that edits the XMLs directly must not run over
+    /// ops that were computed against the PREVIOUS state of those files.</summary>
+    public int PendingCount => _oplog?.Count() ?? 0;
+
+    /// <summary>The surviving journal, in seq order — the boot OVERLAY's input. The catalogues
+    /// (platforms/emulators/playlists/settings) load pristine XML; anything still pending (edits
+    /// made while LB was running, or a failed flush) is re-applied onto the in-memory objects so
+    /// the UI shows the user's work instead of losing it until the next successful flush. Empty
+    /// after a clean boot flush — the overlay is then a no-op.</summary>
+    internal List<Op> PendingOps() => _oplog?.ReadAll() ?? new List<Op>();
     private string _opDbOverride;   // set only by the self-test, to isolate from the real log
     private string OpDbPath => _opDbOverride ?? LiteBoxPaths.File("LiteBox.pending.db");
 
-    /// <summary>Read-only mode (config, default true): NOTHING is ever written to disk — neither
-    /// the journal nor the Platform XMLs. Mutations update the in-memory Rows only, for this run.</summary>
+    /// <summary>Read-only mode: NOTHING is ever written to disk — neither the journal nor the
+    /// Platform XMLs. Mutations update the in-memory Rows only, for this run. The field starts
+    /// true only as a boot-safety placeholder: HostBoot overwrites it from LiteBox.ini, whose
+    /// shipped default is ReadOnly=false — WRITE-BACK IS ON in a normal install (it is forced
+    /// back to true in memory when a second LiteBox instance is running).</summary>
     public bool ReadOnly = true;
 
     /// <summary>Raised after a flush has DURABLY written game Title changes to the XML, with the
@@ -271,7 +292,7 @@ internal sealed class GameStore
     /// changed, the pack was swapped). Derived data: no journal, no notification.</summary>
     public void ClearBadgeCombos()
     {
-        for (int i = 0; i < Rows.Length; i++) Rows[i].BadgeCombo = 0;
+        for (int i = 0; i < _count; i++) Rows[i].BadgeCombo = 0;
     }
 
     /// <summary>Put back the combinations a saved pass computed. Returns how many rows matched — a
@@ -279,7 +300,7 @@ internal sealed class GameStore
     public int ApplyBadgeCombos(IReadOnlyDictionary<Guid, int> combos)
     {
         int n = 0;
-        for (int i = 0; i < Rows.Length; i++)
+        for (int i = 0; i < _count; i++)
             if (combos.TryGetValue(Rows[i].Id, out var c) && c > 0) { Rows[i].BadgeCombo = c; n++; }
         return n;
     }
@@ -305,7 +326,25 @@ internal sealed class GameStore
     internal List<GameMount> MountsMutable(Guid id) => _mounts.TryGetValue(id, out var l) ? l : (_mounts[id] = new List<GameMount>());
     internal List<CustomField> CustomFieldsMutable(Guid id) => _customFields.TryGetValue(id, out var l) ? l : (_customFields[id] = new List<CustomField>());
 
-    public int Count => Rows.Length;
+    public int Count => _count;
+
+    /// <summary>Pre-size the buffer for a KNOWN batch (Expand, a future import): one reallocation
+    /// sized exactly, instead of chunked growth. No-op when capacity already suffices.</summary>
+    public void Reserve(int totalRows)
+    {
+        if (totalRows <= Rows.Length) return;
+        Array.Resize(ref Rows, totalRows);
+        if (_notes != null) Array.Resize(ref _notes, totalRows);
+    }
+
+    /// <summary>Give back the slack after a mass add — one copy back to the exact size.</summary>
+    public void TrimExcess()
+    {
+        if (Rows.Length == _count) return;
+        Array.Resize(ref Rows, _count);
+        if (_notes != null) Array.Resize(ref _notes, _count);
+    }
+
     public string Str(int idx) => (idx > 0 && idx < Pool.Count) ? Pool[idx] : "";
 
     /// <summary>Interns a string into the pool at runtime (write-back setters). Append-only;
@@ -516,7 +555,8 @@ internal sealed class GameStore
             }
         }
 
-        Rows = rows.ToArray();
+        Rows = rows.ToArray();      // exact size at load — a user who never adds pays zero slack
+        _count = Rows.Length;
         _notes = notes?.ToArray();
     }
 
@@ -636,22 +676,22 @@ internal sealed class GameStore
     // ReadOnly, appends a "modify" op. The XMLs are rewritten later, at a safe time (FlushOpsToXml).
 
     public void JournalFavorite(int i, bool v)
-    { if (i < 0 || i >= Rows.Length || Rows[i].Favorite == v) return; RecordModify(i, "Favorite", v ? "true" : "false"); }
+    { if (i < 0 || i >= _count || Rows[i].Favorite == v) return; RecordModify(i, "Favorite", v ? "true" : "false"); }
 
     public void JournalStarRating(int i, float v)
-    { if (i < 0 || i >= Rows.Length || Math.Abs(Rows[i].StarRatingFloat - v) < 0.001f) return; RecordModify(i, "StarRatingFloat", v.ToString(CultureInfo.InvariantCulture)); }
+    { if (i < 0 || i >= _count || Math.Abs(Rows[i].StarRatingFloat - v) < 0.001f) return; RecordModify(i, "StarRatingFloat", v.ToString(CultureInfo.InvariantCulture)); }
 
     /// <summary>A launch begins: bump play count + stamp last-played now.</summary>
     public void JournalPlayStart(int i)
     {
-        if (i < 0 || i >= Rows.Length) return;
+        if (i < 0 || i >= _count) return;
         RecordModify(i, "PlayCount", (Rows[i].PlayCount + 1).ToString(CultureInfo.InvariantCulture));
         RecordModify(i, "LastPlayedDate", new DateTime(DateTime.Now.Ticks, DateTimeKind.Local).ToString("o", CultureInfo.InvariantCulture));
     }
 
     /// <summary>A launch ended: add the elapsed seconds to total play time.</summary>
     public void JournalPlayTime(int i, int addSeconds)
-    { if (i < 0 || i >= Rows.Length || addSeconds <= 0) return; RecordModify(i, "PlayTime", (Rows[i].PlayTime + addSeconds).ToString(CultureInfo.InvariantCulture)); }
+    { if (i < 0 || i >= _count || addSeconds <= 0) return; RecordModify(i, "PlayTime", (Rows[i].PlayTime + addSeconds).ToString(CultureInfo.InvariantCulture)); }
 
     /// <summary>Record the emulator/version a game was just launched with, in LiteBox's OWN history
     /// (op-log db, table launch_history — SAME schema as ExtendDB's, ROM left NULL). Written on EVERY
@@ -690,7 +730,7 @@ internal sealed class GameStore
     /// (e.g. "Developer"), <paramref name="value"/> the serialized value ("" = clear). Updates memory
     /// + logs the op. Unknown field names are ignored (logged once).</summary>
     public void SetGameField(int i, string xmlName, string value)
-    { if (i < 0 || i >= Rows.Length || string.IsNullOrEmpty(xmlName)) return; RecordModify(i, xmlName, value ?? ""); }
+    { if (i < 0 || i >= _count || string.IsNullOrEmpty(xmlName)) return; RecordModify(i, xmlName, value ?? ""); }
 
     // Apply to memory (always, for UI) + append the op (only when persisting).
     private void RecordModify(int i, string xmlName, string value)
@@ -1124,27 +1164,11 @@ internal sealed class GameStore
         foreach (var df in playlistDeletes) docs.Remove(df);
         if (docs.Count == 0 && playlistDeletes.Count == 0) { ClearFlushed(); return 0; }
 
-        // Snapshot the pristine originals (still untouched on disk) before any swap.
-        BackupBeforeWrite(docs.Keys);
-
-        // Phase 1: write every touched doc to .tmp. Any failure here means that doc's changes
-        // never make it to disk this pass, so the whole batch must NOT be cleared (allOk=false).
-        bool allOk = true;
-        var swaps = new List<(string tmp, string file)>();
-        foreach (var kv in docs)
-        {
-            string tmp = kv.Key + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try { LbXml.Save(kv.Value, tmp); swaps.Add((tmp, kv.Key)); }
-            catch (Exception ex) { Console.WriteLine("[store] save tmp " + kv.Key + ": " + ex.Message); allOk = false; }
-        }
-        // Phase 2: swap all .tmp → real file (atomic per file). A failed swap here is the same
-        // class of problem: that doc's edits are stuck in a .tmp file, not the real one.
-        foreach (var (tmp, file) in swaps)
-            if (!ReplaceAtomic(tmp, file)) allOk = false;
-        // Phase 2b: whole-file playlist deletes.
-        foreach (var df in playlistDeletes)
-            try { if (File.Exists(df)) File.Delete(df); }
-            catch (Exception ex) { Console.WriteLine("[store] delete playlist file " + df + ": " + ex.Message); allOk = false; }
+        // The shared write discipline (SafeXmlWrite): re-check LB at commit time, snapshot the
+        // pristine originals (including the files about to be deleted), write every doc to .tmp,
+        // swap all atomically, then the whole-file deletes. False = at least one write did not
+        // land (or LB appeared mid-session) — the batch must stay pending.
+        bool allOk = SafeXmlWrite.Commit(docs, playlistDeletes, Path.GetDirectoryName(_platformsDir));
 
         // Phase 3: ONLY now clear the log, and ONLY if every write above actually succeeded.
         // Ops are idempotent by design (see OpLog.cs header: modify = last-write-wins, delete =
@@ -1197,10 +1221,14 @@ internal sealed class GameStore
 
     private int GrowRow(Guid id)
     {
-        int idx = Rows.Length;
-        Array.Resize(ref Rows, idx + 1);
+        // Chunked growth: +1024 rows (~240 KB) when full, NOT +1 per game — the old per-add
+        // Array.Resize re-copied the whole multi-MB buffer on the LOH for every single game,
+        // which made Expand (130 adds) and any future import quadratic. Callers that know their
+        // batch size can Reserve() first for a single exact-size reallocation.
+        if (_count == Rows.Length) Reserve(_count + GrowChunk);
+        int idx = _count++;
         Rows[idx] = new GameRow { Id = id, LaunchBoxDbId = -1, MaxPlayers = -1, ReleaseYear = -1 };
-        if (_notes != null) { Array.Resize(ref _notes, idx + 1); _notes[idx] = null; }
+        if (_notes != null) _notes[idx] = null;
         _byId[id] = idx;
         _addedIds.Add(id);
         return idx;
@@ -1211,7 +1239,7 @@ internal sealed class GameStore
     /// node between Platform files, preserving all its fields.</summary>
     public void MoveGamePlatform(int i, string newPlatform)
     {
-        if (i < 0 || i >= Rows.Length) return;
+        if (i < 0 || i >= _count) return;
         string old = Str(Rows[i].PlatformIdx);
         newPlatform ??= "";
         if (string.Equals(old, newPlatform, StringComparison.OrdinalIgnoreCase)) return;
@@ -1456,56 +1484,6 @@ internal sealed class GameStore
             foreach (var e in existing) e.Remove();
         }
         else foreach (var el in rebuilt) doc.Root.Add(el);
-    }
-
-    // Before overwriting any XML, snapshot the pristine originals into a small timestamped zip —
-    // ONLY the dirty files, with their sub-path relative to <LB>\Data preserved (so identically
-    // named files in different folders don't collide). Lives under <LB>\Backups\LiteBox. Unlike
-    // LB's automatic backups this is targeted (a few KB), not a full Data dump. Best-effort:
-    // any failure is logged and skipped — a backup problem must never block the write.
-    private void BackupBeforeWrite(ICollection<string> files)
-    {
-        if (files == null || files.Count == 0) return;
-        try
-        {
-            string dataRoot = Path.GetDirectoryName(_platformsDir);                       // <LB>\Data
-            string lbRoot = dataRoot != null ? Path.GetDirectoryName(dataRoot) : null;    // <LB>
-            if (string.IsNullOrEmpty(dataRoot) || string.IsNullOrEmpty(lbRoot)) return;
-            string dir = Path.Combine(lbRoot, "Backups", "LiteBox");
-            Directory.CreateDirectory(dir);
-
-            var now = DateTime.Now;
-            string zipPath = Path.Combine(dir, $"LiteBox Data Backup {now:yyyy-MM-dd HH-mm-ss}.zip");
-            int n = 1;
-            while (File.Exists(zipPath))   // two flushes in the same second
-                zipPath = Path.Combine(dir, $"LiteBox Data Backup {now:yyyy-MM-dd HH-mm-ss} ({n++}).zip");
-
-            int added = 0;
-            using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
-                foreach (var f in files)
-                {
-                    if (!File.Exists(f)) continue;
-                    string rel = Path.GetRelativePath(dataRoot, f).Replace('\\', '/');
-                    zip.CreateEntryFromFile(f, rel, CompressionLevel.Optimal);
-                    added++;
-                }
-
-            PruneBackups(dir, 50);
-            Console.WriteLine($"[store] backed up {added} file(s) → {zipPath}");
-        }
-        catch (Exception ex) { Console.WriteLine("[store] backup skipped: " + ex.Message); }
-    }
-
-    private static void PruneBackups(string dir, int keep)
-    {
-        try
-        {
-            var files = Directory.GetFiles(dir, "LiteBox Data Backup *.zip");
-            if (files.Length <= keep) return;
-            Array.Sort(files, StringComparer.OrdinalIgnoreCase);   // timestamped name sorts chronologically
-            for (int i = 0; i < files.Length - keep; i++) { try { File.Delete(files[i]); } catch { } }
-        }
-        catch { }
     }
 
     private static void ApplyModify(XElement ge, string field, string value)
@@ -1871,32 +1849,13 @@ internal sealed class GameStore
         return d;
     }
 
-    // ── Atomic disk write (tmp → replace) ────────────────────────────────────
-    // Returns whether dest now actually holds tmp's content. Callers MUST check this before
-    // treating the corresponding ops as flushed — see the golden-rule note on FlushOpsToXml.
-    private static bool ReplaceAtomic(string tmp, string dest)
-    {
-        try
-        {
-            if (File.Exists(dest)) File.Replace(tmp, dest, null);
-            else File.Move(tmp, dest);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[store] atomic replace {dest}: {ex.Message}");
-            try { File.Copy(tmp, dest, true); File.Delete(tmp); return true; }
-            catch (Exception ex2) { Console.WriteLine($"[store] fallback copy {dest}: {ex2.Message}"); return false; }
-        }
-    }
-
     // ── Stats ────────────────────────────────────────────────────────────────
     public void LogStats()
     {
-        long rowBytes = (long)Rows.Length * System.Runtime.InteropServices.Marshal.SizeOf<GameRow>();
+        long rowBytes = (long)Rows.Length * System.Runtime.InteropServices.Marshal.SizeOf<GameRow>();   // capacity on purpose: real allocation, slack visible
         long poolChars = Pool.Sum(s => (long)(s?.Length ?? 0));
         long notesChars = _notes?.Sum(s => (long)(s?.Length ?? 0)) ?? 0;
-        Console.WriteLine($"[store] games={Rows.Length} platforms={_byPlatform.Count} pool={Pool.Count} entries (~{poolChars * 2 / 1048576.0:F1}MB chars) " +
+        Console.WriteLine($"[store] games={_count}{(Rows.Length != _count ? $" (cap {Rows.Length})" : "")} platforms={_byPlatform.Count} pool={Pool.Count} entries (~{poolChars * 2 / 1048576.0:F1}MB chars) " +
                           $"rows~{rowBytes / 1048576.0:F1}MB notes~{notesChars * 2 / 1048576.0:F1}MB ({(_notes == null ? "dropped" : "loaded")})");
 
         // Footprint of the newer full-field / sub-entity stores (the bits that grew memory).

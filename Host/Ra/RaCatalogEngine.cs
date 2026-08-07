@@ -65,7 +65,7 @@ internal static class RaCatalogEngine
         try
         {
             if (Web.RecentState.IsGameRunning || Web.RecentState.IsExtractionInProgress) return;
-            RaTokenRenew.MaybeRenewAsync(RaTokenRenew.AllowWrite);   // renew the RA session token if it's due (cheap, single-flight)
+            RaTokenRenew.MaybeRenewAsync();   // renew the RA session token if it's due (cheap, single-flight; reads the live read-only state itself)
             RefreshDue();
         }
         catch (Exception ex) { Log("tick failed: " + ex.Message); }

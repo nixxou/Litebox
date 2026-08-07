@@ -196,6 +196,8 @@ internal static class ParentsPicker
         void Apply()
         {
             if (readOnly) return;
+            // Direct Parents.xml write — one refusal warning for the whole apply, not one per child.
+            if (WriteGuard.Refuse(out var gwhy)) { WriteGuard.WarnBlocked("Parents", gwhy); return; }
             var addAll = occurrences.Where(kv => kv.Value[0].StateImageIndex == StChecked).Select(kv => kv.Key).ToHashSet();
             var keep = occurrences.Where(kv => kv.Value[0].StateImageIndex == StPartial).Select(kv => kv.Key).ToHashSet();
             foreach (var ck in childKeys)
@@ -222,17 +224,20 @@ internal static class ParentsPicker
     }
 
     // ── Parents.xml write: replace ALL of this child's rows with the chosen set (other children untouched) ──
+    // Guarded internally (read-only / LB running) + atomic + backed up via SafeXmlWrite — a parent
+    // change that silently didn't land would resurface as a "lost" tree move, so refusal warns.
     private static void WriteParents(ParentChildKind kind, string childKey, bool rootChecked, List<Key> parents)
     {
         try
         {
+            if (WriteGuard.Refuse(out var why)) { Console.WriteLine("[parents] refused: " + why); return; }
             // Une install sans aucun parent explicite n'a pas de Parents.xml : sortir ici ferait
             // silencieusement retomber la playlist collée à Root au prochain démarrage.
             if (!File.Exists(ParentsFile))
             {
                 var dir = Path.GetDirectoryName(ParentsFile);
                 if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
-                LbXml.Save(new XDocument(new XElement("LaunchBox")), ParentsFile);
+                if (!SafeXmlWrite.Save(new XDocument(new XElement("LaunchBox")), ParentsFile)) return;
             }
             var doc = XDocument.Load(ParentsFile);
             var root = doc.Root; if (root == null) return;
@@ -253,7 +258,7 @@ internal static class ParentsPicker
             foreach (var k in parents.DistinctBy(k => (char.ToLowerInvariant(k.K), k.Name.ToLowerInvariant())))
                 root.Add(k.K == 'c' ? Row("", k.Name) : Row(k.Name, ""));
             if (rootChecked) root.Add(Row("", ""));   // explicit Root membership row
-            LbXml.Save(doc, ParentsFile);
+            SafeXmlWrite.Save(doc, ParentsFile);
         }
         catch { }
     }

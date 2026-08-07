@@ -105,7 +105,11 @@ internal static class EditCategoryWindow
             string newName = nameTb.Text.Trim();
             if (newName.Length > 0 && !string.Equals(newName, oldName, StringComparison.Ordinal))
             {
-                if (!RenameCategory(oldName, newName))
+                // The rename is a DIRECT surgical write (Platforms.xml + Parents.xml refs) — refused
+                // outright when LB/BB runs or read-only is on. Field edits below still journal fine.
+                if (WriteGuard.Refuse(out var why))
+                { WriteGuard.WarnBlocked($"Renaming to \"{newName}\"", why); }
+                else if (!RenameCategory(oldName, newName))
                 { MessageBox.Show($"Cannot rename to \"{newName}\" (name already in use?).", "Rename Category", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
                 else cat.SetNameInternal(newName);
             }
@@ -146,7 +150,7 @@ internal static class EditCategoryWindow
             bool taken = pdoc.Root!.Elements("PlatformCategory").Any(e => string.Equals((string?)e.Element("Name"), newName, StringComparison.OrdinalIgnoreCase));
             if (taken) return false;
             foreach (var n in nodes) n.Element("Name")!.Value = newName;
-            LbXml.Save(pdoc, PlatformsFile);
+            if (!SafeXmlWrite.Save(pdoc, PlatformsFile)) return false;
 
             if (File.Exists(ParentsFile))
             {
@@ -159,7 +163,7 @@ internal static class EditCategoryWindow
                     var pa = e.Element("ParentPlatformCategoryName");
                     if (pa != null && string.Equals(pa.Value, oldName, StringComparison.OrdinalIgnoreCase)) { pa.Value = newName; changed = true; }
                 }
-                if (changed) LbXml.Save(rdoc, ParentsFile);
+                if (changed) SafeXmlWrite.Save(rdoc, ParentsFile);
             }
 
             try

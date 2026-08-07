@@ -399,11 +399,16 @@ internal static class HostBoot
             sw.Stop();
             store.LogStats();
             Console.WriteLine($"Parsed XML in {sw.ElapsedMilliseconds} ms");
-            bool cfgReadOnly = LiteBoxConfig.LoadForExe().ReadOnly;   // default true → never write to the XMLs
+            bool cfgReadOnly = LiteBoxConfig.LoadForExe().ReadOnly;   // ini default false → write-back on
             store.ReadOnly = cfgReadOnly || InstanceGuard.AnotherInstanceRunning;
             if (InstanceGuard.AnotherInstanceRunning)
                 Console.WriteLine("[store] another LiteBox instance is running → read-only enforced (in-memory; LiteBox.ini untouched)");
             Console.WriteLine($"[store] ReadOnly = {store.ReadOnly}");
+            // Defense in depth: every direct writer of a LaunchBox-owned file (Platforms.xml /
+            // Parents.xml editors, BigBox PIN, tokens) consults this guard ITSELF — reading the
+            // LIVE store state, so a read-only toggle applied in the options is seen immediately.
+            var guardStore = store;
+            Data.WriteGuard.IsReadOnly = () => guardStore.ReadOnly;
             store.RecoverJournalOnLoad();   // apply any pending user-state (crash/kill or deferred-while-LB-up)
             Mem.Report("after store build");
             string dataDir = Path.GetFullPath(Path.Combine(platformsDir, ".."));     // ...\LB\Data

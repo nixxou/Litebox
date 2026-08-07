@@ -139,6 +139,10 @@ internal static class MameHighScoreSubmit
         var res = MameUpload.SendAsync(Data.LbKeys.GamesDbToken, rom, score, initials).GetAwaiter().GetResult();
         Log($"{kind} '{rom}': upload result = {res}");
 
+        // Unconfirmed counts as sent, deliberately. The core may well have delivered it, so retrying would
+        // duplicate; and on a rom the database refuses, not moving the baseline would retry at the end of
+        // every single game, forever. A rare unconfirmed loss is the better trade than permanent noise —
+        // and the log says which of the two happened, so a real problem is visible rather than guessed at.
         if (res != MameUploadResult.Failed)
         {
             // Update our new pre-game best so a second run in the same session doesn't re-submit the same score,

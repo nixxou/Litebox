@@ -106,6 +106,46 @@ internal static class HostBoot
             Diag.MameProbe.DriveTest(lbRootD, GetArg(args, "--mame-drivetest"));
             return 0;
         }
+        // --mame-submit <rom> <score> [initials]: send ONE score for real, and say what came back.
+        //
+        // ⚠️ This POSTS to the live community leaderboard under the user's own account token. It exists
+        // because the auto-submit path could not be observed: a score is only produced by actually playing,
+        // and once submitted the pre-game baseline moves, so a failure could not be retried without beating
+        // it again. This makes the request reproducible on demand — and it is the only way to re-send a score
+        // that was reported sent and never arrived.
+        if (args.Contains("--mame-submit"))
+        {
+            int at = Array.IndexOf(args, "--mame-submit");
+            string rom = at + 1 < args.Length ? args[at + 1] : "";
+            string scoreArg = at + 2 < args.Length ? args[at + 2] : "";
+            string initials = at + 3 < args.Length && !args[at + 3].StartsWith("--") ? args[at + 3] : "";
+            if (rom.Length == 0 || !long.TryParse(scoreArg, out long score) || score <= 0)
+            {
+                Console.WriteLine("usage: --mame-submit <rom> <score> [initials]   e.g. --mame-submit mslugx 142130 NIX");
+                return 2;
+            }
+            string lbRootS = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { SetLaunchBoxCoreRootFolder(lbRootS); } catch { }
+            LbApiHost.Host.Media.MediaResolver.Init(lbRootS);   // LbKeys reads Settings.xml relative to the LB root
+            string tok = Data.LbKeys.GamesDbToken;
+            Console.WriteLine($"[mame-submit] rom={rom} score={score} initials=\"{initials}\" "
+                              + $"token={(tok.Length > 0 ? tok.Substring(0, Math.Min(8, tok.Length)) + "… (" + tok.Length + " chars)" : "MISSING")}");
+            if (tok.Length == 0)
+            {
+                Console.WriteLine("[mame-submit] no CloudAuthenticationToken in Data\\Settings.xml — sign in first (Options → LB · Integrations).");
+                return 1;
+            }
+            var res = Mame.MameUpload.SendAsync(tok, rom, score, initials).GetAwaiter().GetResult();
+            Console.WriteLine($"[mame-submit] result = {res}");
+            Console.WriteLine(res switch
+            {
+                Mame.MameUploadResult.Confirmed   => "[mame-submit] ACCEPTED by the server (our own request, HTTP 2xx). Check the leaderboard.",
+                Mame.MameUploadResult.Unconfirmed => "[mame-submit] our request was REFUSED; the core was called instead but reports nothing — treat as unconfirmed.",
+                _                              => "[mame-submit] FAILED — nothing was accepted.",
+            });
+            Console.WriteLine("[mame-submit] details are in Core\\litebox\\mame-submit.log");
+            return res == Mame.MameUploadResult.Failed ? 1 : 0;
+        }
         // --mame-uploadtest: no-network self-test of the captured-key fallback crypto (byte-identity check).
         if (args.Contains("--mame-uploadtest"))
         {

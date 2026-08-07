@@ -34,9 +34,11 @@ internal static class MameHighScoreSubmit
     // Always-on trace to <LB>\Core\litebox\mame-submit.log (LiteBox's host console is invisible in normal GUI
     // runs, and litebox-debug.log only exists in debug mode — so this feature logs to its own file regardless,
     // like SaveManager/StoreTrace, to make "why wasn't my score posted?" answerable).
-    private static void Log(string s)
+    // MameHiscorePlugin logs here too (tag "mame-plugin"): "why wasn't my score posted?" has one answer file,
+    // and the plugin not being enabled is one of the answers.
+    internal static void Log(string s, string tag = "mame-submit")
     {
-        Console.WriteLine("[mame-submit] " + s);
+        Console.WriteLine($"[{tag}] " + s);
         try { File.AppendAllText(LiteBoxPaths.File("mame-submit.log"), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {s}{Environment.NewLine}"); }
         catch { }
     }
@@ -75,8 +77,11 @@ internal static class MameHighScoreSubmit
         string kind = RawKind(game, emulator, out var rom);
         // Only snapshot when this kind's upload is enabled (else the baseline is irrelevant and we skip hi2txt).
         if (kind.Length == 0 || !UploadEnabledFor(kind)) { lock (_gate) { _baselineRom = ""; _baselineScore = -1; } return; }
-        // FBNeo needs hiscore.dat present to write .hi files — ensure it before the game runs.
+        // Both emulators need a nudge before they will write a score file at all — FBNeo needs hiscore.dat
+        // present, MAME needs its hiscore plugin switched on. The options-apply path does this too; here it
+        // catches the emulator that was added (or reinstalled) since.
         if (kind == "fbneo") { try { FbneoHiscore.EnsureDeployed(emulator); } catch { } }
+        if (kind == "mame") { try { MameHiscorePlugin.EnsureEnabled(emulator); } catch { } }
         long pre = 0;
         var hi = LocateHiFile(emulator, rom, kind);
         if (hi != null) { var (s, _) = RunHi2txt(hi); if (s > 0) pre = s; }
@@ -146,7 +151,11 @@ internal static class MameHighScoreSubmit
 
     // ── locate the .hi score file the emulator just wrote ───────────────
     // The structure is known exactly, so we check precise paths (no recursion):
-    //   • MAME     → <emuDir>\hi\<rom>.hi  (the hiscore plugin's fixed location).
+    //   • MAME     → <homepath>\hiscore\<rom>.hi. NOT `hi\`, which is where the plugin wrote before it moved
+    //     to homepath, and NOT plugins\hiscore\, which holds the plugin's own code and hiscore.dat. The
+    //     formula is the plugin's own (plugins\hiscore\init.lua, get_data_path): the FIRST ';' segment of
+    //     the homepath core option + "/hiscore". homepath defaults to "." = MAME's working directory =
+    //     the emulator folder. `hi\` stays in the list as a fallback for older plugin builds.
     //   • FBNeo/RA → <emuDir>\saves\[<core folder>\]fbneo\<rom>.hi. The FBNeo libretro core always writes
     //     hiscores into a `fbneo` subfolder of RetroArch's save dir; RetroArch's "Sort saves into folders by
     //     core" option optionally inserts the core's display name ("FinalBurn Neo") above it. So there are two
@@ -160,7 +169,8 @@ internal static class MameHighScoreSubmit
 
         string target = rom + ".hi";
         var paths = kind == "mame"
-            ? new[] { Path.Combine(emuDir, "hi", target) }
+            ? new[] { Path.Combine(MameHiscorePlugin.ScoreDir(emuDir), target),   // MAME's current location
+                      Path.Combine(emuDir, "hi", target) }                        // older plugin builds
             : new[] { Path.Combine(emuDir, "saves", "FinalBurn Neo", "fbneo", target),   // Sort saves by core: ON
                       Path.Combine(emuDir, "saves", "fbneo", target) };                  // Sort saves by core: OFF
         foreach (var c in paths)

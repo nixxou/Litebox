@@ -1163,6 +1163,9 @@ internal static class LbGlobalOptions
                 liteCfg.SetSec("Mame", "UploadFbneoHighScores", fb.Checked ? "true" : "false");
                 // Enabling FBNeo upload needs hiscore.dat so the core writes .hi files — deploy it if missing.
                 if (fb.Checked) { try { Mame.FbneoHiscore.EnsureDeployedForAllFbneo(); } catch { } }
+                // Same idea for MAME, whose blocker is its hiscore PLUGIN being off — LaunchBox never turns it
+                // on, so an upload option with no plugin behind it would silently never find a score file.
+                if (ul.Checked) { try { Mame.MameHiscorePlugin.EnsureEnabledForAllMame(); } catch { } }
             });
         }
 

@@ -78,6 +78,18 @@ internal static class EditPlatformModel
         ["FrontSpineIsClear"] = "false",
     };
 
+    /// <summary>React to a ModelSettings write: refresh the 3D key index on success, and SAY SO on
+    /// failure. The blocked case (read-only / LaunchBox holding the file) names itself; anything else
+    /// — the file gone, the disk full — used to return false into a discarded bool, so a settings
+    /// screen that saved nothing looked exactly like one that saved.</summary>
+    private static void WroteOrWarn(bool wrote, Action onSuccess)
+    {
+        if (wrote) { try { onSuccess(); } catch { } return; }
+        if (Data.WriteGuard.Refuse(out var why)) Data.WriteGuard.WarnBlocked("3D model settings", why);
+        else Data.WriteGuard.WarnBlocked("3D model settings",
+            "The write to the platform XML failed. Check that the file exists and is writable, then try again.");
+    }
+
     public static (Control panel, Action apply) Build(IPlatform plat, bool readOnly, float s)
     {
         string name = Safe(() => plat.Name) ?? "";
@@ -87,7 +99,7 @@ internal static class EditPlatformModel
         // ModelSettings ctor defaults (platforms LB has no entry for, e.g. SNES).
         // Preview = a sample game of this platform (title filled lazily by SwitchSampleGame; bare case otherwise).
         var (panel, apply, _) = BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs) ?? CtorDefaults(),
-                                          f => { if (PlatformModelStore.Write(name, f)) Model3d.Model3dKeyIndex.KickPlatform(name); else if (Data.WriteGuard.Refuse(out var why)) Data.WriteGuard.WarnBlocked("3D model settings", why); }, readOnly, s, name, PreviewSampleTitle(name), null, null);
+                                          f => WroteOrWarn(PlatformModelStore.Write(name, f), () => Model3d.Model3dKeyIndex.KickPlatform(name)), readOnly, s, name, PreviewSampleTitle(name), null, null);
         return (panel, apply);
     }
 
@@ -109,7 +121,9 @@ internal static class EditPlatformModel
                                                                             Func<Dictionary<string, string>?>? imgOv)
         => BuildCore(PlatformModelStore.ReadGame(platformName, gameId),
                      PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? "") ?? CtorDefaults(),
-                     f => { if (!PlatformModelStore.WriteGame(platformName, gameId, f)) { if (Data.WriteGuard.Refuse(out var why)) Data.WriteGuard.WarnBlocked("3D model settings", why); } else try { var gg = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId); if (gg != null) Model3d.Model3dKeyIndex.KickGame(gg); } catch { } }, readOnly, s, platformName, gameTitle ?? "", platformName, imgOv);
+                     f => WroteOrWarn(PlatformModelStore.WriteGame(platformName, gameId, f), () =>
+                          { var gg = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId); if (gg != null) Model3d.Model3dKeyIndex.KickGame(gg); }),
+                     readOnly, s, platformName, gameTitle ?? "", platformName, imgOv);
 
     // A representative game of a platform to texture the platform-level preview: the first title with a Box -
     // Front image on disk (any region). Empty when none → the preview shows a bare (untextured) case.

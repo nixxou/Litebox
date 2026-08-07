@@ -38,7 +38,9 @@ internal static class EditCategoryWindow
     {
         if (cat == null) return;
         string name = Safe(() => cat.Name) ?? "Category";
-        using var w = new OptionsWindow($"Edit Platform Category — {name}{(readOnly ? "   [READ-ONLY]" : "")}");
+        // Notes and most Details fields ride the op-log; the RENAME and Parents write XML directly.
+        bool locked = WriteGuard.DirectWriteLocked(readOnly);
+        using var w = new OptionsWindow($"Edit Platform Category — {name}{WriteGuard.TitleMark(readOnly)}");
         float s = LiteBoxTheme.DpiScale(w);
 
         var (details, applyDetails) = BuildDetails(cat, readOnly, s);
@@ -48,8 +50,8 @@ internal static class EditCategoryWindow
         w.AddSection("Notes", notes, applyNotes);
 
         // Deferred child key: Details may have renamed the category by the time the appliers run.
-        var (parents, applyParents) = ParentsPicker.Build(ParentChildKind.Category, name, readOnly, s, () => cat.Name);
-        w.AddSection("Parents", parents, applyParents);
+        var (parents, applyParents) = ParentsPicker.Build(ParentChildKind.Category, name, locked, s, () => cat.Name);
+        w.AddSection("Parents" + WriteGuard.TabLockMark(readOnly), parents, applyParents);
 
         w.ShowDialog(owner);
         if (!readOnly) { try { (PluginHelper.DataManager as HostDataManagerXml)?.FlushIfSafe(); } catch { } }
@@ -86,6 +88,10 @@ internal static class EditCategoryWindow
             return tb;
         }
         var nameTb = Row("Unique Name:", Safe(() => cat.Name) ?? "");
+        // The rename cannot be journalled — the name is the KEY every later op is recorded against —
+        // so it writes Platforms.xml and Parents.xml on the spot, and locks while LaunchBox holds them.
+        // The other fields on this tab ride the op-log and stay editable.
+        if (WriteGuard.DirectWriteLocked(readOnly)) { nameTb.ReadOnly = true; nameTb.BackColor = Bg; }
         var nestedTb = Row("Nested Name:", Safe(() => cat.NestedName) ?? "");
         var sortTb = Row("Sort Title:", Safe(() => cat.SortTitle) ?? "");
         var videoTb = Row("Video Path:", Safe(() => cat.VideoPath) ?? "");
@@ -150,8 +156,13 @@ internal static class EditCategoryWindow
             bool taken = pdoc.Root!.Elements("PlatformCategory").Any(e => string.Equals((string?)e.Element("Name"), newName, StringComparison.OrdinalIgnoreCase));
             if (taken) return false;
             foreach (var n in nodes) n.Element("Name")!.Value = newName;
-            if (!SafeXmlWrite.Save(pdoc, PlatformsFile)) return false;
 
+            // ONE commit for both files. Two independent Saves could land the new name in
+            // Platforms.xml while Parents.xml kept referencing the old one — the category would
+            // silently lose its place in the tree — and would leave two separate backup zips to
+            // reconcile. Commit takes one LaunchBox test, one zip holding BOTH originals, and
+            // reports whether everything landed.
+            var docs = new Dictionary<string, XDocument> { [PlatformsFile] = pdoc };
             if (File.Exists(ParentsFile))
             {
                 var rdoc = XDocument.Load(ParentsFile);
@@ -163,9 +174,12 @@ internal static class EditCategoryWindow
                     var pa = e.Element("ParentPlatformCategoryName");
                     if (pa != null && string.Equals(pa.Value, oldName, StringComparison.OrdinalIgnoreCase)) { pa.Value = newName; changed = true; }
                 }
-                if (changed) SafeXmlWrite.Save(rdoc, ParentsFile);
+                if (changed) docs[ParentsFile] = rdoc;
             }
+            if (!SafeXmlWrite.Commit(docs, Array.Empty<string>(), null)) return false;
 
+            // Images last, and only once the XML actually landed: a moved folder with an unrenamed
+            // category would hide every image behind a name nothing looks up.
             try
             {
                 string root = Path.Combine(MediaResolver.LbRoot ?? "", "Images", "Platform Categories");
@@ -197,7 +211,8 @@ internal static class EditPlaylistWindow
         string name = Safe(() => pl.Name) ?? "Playlist";
         string id = Safe(() => pl.PlaylistIdValue) ?? "";
         if (string.IsNullOrEmpty(id)) return;   // parents are keyed by PlaylistId
-        using var w = new OptionsWindow($"Edit Playlist — {name}{(readOnly ? "   [READ-ONLY]" : "")}");
+        bool locked = WriteGuard.DirectWriteLocked(readOnly);   // Parents writes Parents.xml directly
+        using var w = new OptionsWindow($"Edit Playlist — {name}{WriteGuard.TitleMark(readOnly)}");
         float s = LiteBoxTheme.DpiScale(w);
         w.SetSidePanel(BuildImagesSide(pl, readOnly, s), 350);
         var state = new PlaylistEditorState(Safe(() => pl.AutoPopulate));
@@ -214,8 +229,8 @@ internal static class EditPlaylistWindow
         var (games, applyGames) = EditPlaylistPopulate.BuildGames(pl, readOnly, s, state);
         w.AddSection("Games", games, applyGames);
 
-        var (parents, applyParents) = ParentsPicker.Build(ParentChildKind.Playlist, id, readOnly, s);
-        w.AddSection("Parents", parents, applyParents);
+        var (parents, applyParents) = ParentsPicker.Build(ParentChildKind.Playlist, id, locked, s);
+        w.AddSection("Parents" + WriteGuard.TabLockMark(readOnly), parents, applyParents);
 
         if (readOnly) DisableAllInputs(w);
         w.ShowDialog(owner);

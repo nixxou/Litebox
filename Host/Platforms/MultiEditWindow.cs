@@ -100,7 +100,9 @@ internal static class MultiEditWindow
     public static void OpenPlatforms(List<IPlatform> plats, bool readOnly, IWin32Window? owner)
     {
         if (plats == null || plats.Count < 2) return;
-        using var w = new OptionsWindow($"Edit {plats.Count} Platforms{(readOnly ? "   [READ-ONLY]" : "")}");
+        // Details rides the op-log (fine while LaunchBox runs); Parents writes Parents.xml directly.
+        bool locked = WriteGuard.DirectWriteLocked(readOnly);
+        using var w = new OptionsWindow($"Edit {plats.Count} Platforms{WriteGuard.TitleMark(readOnly)}");
         float s = LiteBoxTheme.DpiScale(w);
         var f = NewFields(s);
 
@@ -127,8 +129,8 @@ internal static class MultiEditWindow
 
         w.AddSection("Details", f.Panel, () => { if (!readOnly) RunAppliers(f); });
         var names = plats.Select(pl => Safe(() => pl.Name) ?? "").Where(nm => nm.Length > 0).ToList();
-        var (parents, applyParents) = ParentsPicker.BuildMulti(ParentChildKind.Platform, names, readOnly, s);
-        w.AddSection("Parents", parents, applyParents);
+        var (parents, applyParents) = ParentsPicker.BuildMulti(ParentChildKind.Platform, names, locked, s);
+        w.AddSection("Parents" + WriteGuard.TabLockMark(readOnly), parents, applyParents);
 
         w.ShowDialog(owner);
         if (!readOnly) { try { (PluginHelper.DataManager as HostDataManagerXml)?.FlushIfSafe(); } catch { } }
@@ -138,7 +140,8 @@ internal static class MultiEditWindow
     public static void OpenCategories(List<HostPlatformCategory> cats, bool readOnly, IWin32Window? owner)
     {
         if (cats == null || cats.Count < 2) return;
-        using var w = new OptionsWindow($"Edit {cats.Count} Platform Categories{(readOnly ? "   [READ-ONLY]" : "")}");
+        bool locked = WriteGuard.DirectWriteLocked(readOnly);
+        using var w = new OptionsWindow($"Edit {cats.Count} Platform Categories{WriteGuard.TitleMark(readOnly)}");
         float s = LiteBoxTheme.DpiScale(w);
         var f = NewFields(s);
 
@@ -150,8 +153,8 @@ internal static class MultiEditWindow
 
         w.AddSection("Details", f.Panel, () => { if (!readOnly) RunAppliers(f); });
         var names = cats.Select(c => Safe(() => c.Name) ?? "").Where(nm => nm.Length > 0).ToList();
-        var (parents, applyParents) = ParentsPicker.BuildMulti(ParentChildKind.Category, names, readOnly, s);
-        w.AddSection("Parents", parents, applyParents);
+        var (parents, applyParents) = ParentsPicker.BuildMulti(ParentChildKind.Category, names, locked, s);
+        w.AddSection("Parents" + WriteGuard.TabLockMark(readOnly), parents, applyParents);
 
         w.ShowDialog(owner);
         if (!readOnly) { try { (PluginHelper.DataManager as HostDataManagerXml)?.FlushIfSafe(); } catch { } }
@@ -161,7 +164,8 @@ internal static class MultiEditWindow
     public static void OpenPlaylists(List<HostPlaylist> pls, bool readOnly, IWin32Window? owner)
     {
         if (pls == null || pls.Count < 2) return;
-        using var w = new OptionsWindow($"Edit {pls.Count} Playlists{(readOnly ? "   [READ-ONLY]" : "")}");
+        bool locked = WriteGuard.DirectWriteLocked(readOnly);
+        using var w = new OptionsWindow($"Edit {pls.Count} Playlists{WriteGuard.TitleMark(readOnly)}");
         float s = LiteBoxTheme.DpiScale(w);
         var f = NewFields(s);
 
@@ -192,8 +196,8 @@ internal static class MultiEditWindow
         w.AddSection("Games", gamesPanel, applyGames);
 
         var ids = pls.Select(pl => Safe(() => pl.PlaylistIdValue) ?? "").Where(id => id.Length > 0).ToList();
-        var (parents, applyParents) = ParentsPicker.BuildMulti(ParentChildKind.Playlist, ids, readOnly, s);
-        w.AddSection("Parents", parents, applyParents);
+        var (parents, applyParents) = ParentsPicker.BuildMulti(ParentChildKind.Playlist, ids, locked, s);
+        w.AddSection("Parents" + WriteGuard.TabLockMark(readOnly), parents, applyParents);
 
         w.ShowDialog(owner);
         if (!readOnly) { try { (PluginHelper.DataManager as HostDataManagerXml)?.FlushIfSafe(); } catch { } }

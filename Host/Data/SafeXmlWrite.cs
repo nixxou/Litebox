@@ -180,6 +180,31 @@ internal static class WriteGuard
         return false;
     }
 
+    /// <summary>Should a DIRECT-write editor tab open LOCKED? Read-only, or LaunchBox/BigBox holding
+    /// the files — in which case anything typed there would be refused at OK, so it is kinder to say
+    /// so before the work than after it.
+    ///
+    /// Journal-backed tabs must NOT use this: a game's fields, a platform's metadata and its notes
+    /// are recorded and applied later, so they stay perfectly editable while LaunchBox runs. Locking
+    /// a whole window would take that away.</summary>
+    public static bool DirectWriteLocked(bool readOnly) => readOnly || GameStore.IsLaunchBoxRunning();
+
+    /// <summary>Marker appended to a locked tab's section title (empty when nothing is locked).</summary>
+    public static string TabLockMark(bool readOnly) => DirectWriteLocked(readOnly) ? " 🔒" : "";
+
+    /// <summary>Window-title marker naming what is locked and why. Read-only wins when both apply —
+    /// it locks strictly more (every tab, not just the direct-write ones).</summary>
+    public static string TitleMark(bool readOnly)
+        => readOnly ? "   [READ-ONLY]"
+         : GameStore.IsLaunchBoxRunning() ? "   [LAUNCHBOX OPEN — 🔒 tabs are locked until it closes]"
+         : "";
+
+    /// <summary>Sentence for a locked tab's own info line, when it has one.</summary>
+    public static string TabLockNote(bool readOnly)
+        => readOnly ? "  Read-only: changes here are not saved."
+         : GameStore.IsLaunchBoxRunning() ? "  LOCKED: LaunchBox / BigBox is running and owns this file — close it to edit."
+         : "";
+
     /// <summary>Refusal message box for the editors: "«what» was not saved — reason".</summary>
     public static void WarnBlocked(string what, string why)
     {

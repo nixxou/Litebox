@@ -35,7 +35,12 @@ internal static class EditPlatformWindow
     {
         if (plat == null) return;
         string name = Safe(() => plat.Name) ?? "Platform";
-        using var w = new OptionsWindow($"Edit Platform — {name}{(readOnly ? "   [READ-ONLY]" : "")}");
+        // Details and Notes ride the op-log, so they stay editable while LaunchBox runs — the edits are
+        // recorded and applied when it closes. The other four write their XML DIRECTLY, so they would be
+        // refused at OK: they open locked instead, rather than letting the work be typed and thrown away.
+        bool locked = WriteGuard.DirectWriteLocked(readOnly);
+        string mark = WriteGuard.TabLockMark(readOnly);
+        using var w = new OptionsWindow($"Edit Platform — {name}{WriteGuard.TitleMark(readOnly)}");
         float s = LiteBoxTheme.DpiScale(w);
 
         // Details tab = fields (left) + the Images panel (right), LB-style. The Images panel belongs to Details
@@ -43,20 +48,20 @@ internal static class EditPlatformWindow
         var (details, applyDetails) = BuildDetails(plat, readOnly, lbRoot, s);
         w.AddSection("Details", details, applyDetails);
 
-        var (folders, applyFolders) = EditPlatformFolders.Build(plat, readOnly, s);
-        w.AddSection("Folders", folders, applyFolders);
+        var (folders, applyFolders) = EditPlatformFolders.Build(plat, locked, s);
+        w.AddSection("Folders" + mark, folders, applyFolders);
 
         var (notes, applyNotes) = BuildNotes(plat, s);
         w.AddSection("Notes", notes, applyNotes);
 
-        var (docs, applyDocs) = EditPlatformDocuments.Build(plat, readOnly, s);
-        w.AddSection("Documents", docs, applyDocs);
+        var (docs, applyDocs) = EditPlatformDocuments.Build(plat, locked, s);
+        w.AddSection("Documents" + mark, docs, applyDocs);
 
-        var (parents, applyParents) = EditPlatformParents.Build(plat, readOnly, s);
-        w.AddSection("Parents", parents, applyParents);
+        var (parents, applyParents) = EditPlatformParents.Build(plat, locked, s);
+        w.AddSection("Parents" + mark, parents, applyParents);
 
-        var (model, applyModel) = EditPlatformModel.Build(plat, readOnly, s);
-        w.AddSection("3D Model Settings", model, applyModel);
+        var (model, applyModel) = EditPlatformModel.Build(plat, locked, s);
+        w.AddSection("3D Model Settings" + mark, model, applyModel);
 
         if (readOnly) DisableAllInputs(w);
         w.ShowDialog(owner);

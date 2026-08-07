@@ -43,6 +43,7 @@ internal sealed class FilterDialog : Form
     private TextBox _pubText = null!, _devText = null!;
     private ListBox _pubSug = null!, _devSug = null!, _histList = null!;
     private readonly List<FilterCriteria> _history;
+    private Button? _histRemove, _histClear;   // History tab: act on the selected past search
     private Button _apply = null!;
 
     // Les listes multi-sélection, par clé de dimension : construites et relues par le même code, pour
@@ -340,16 +341,121 @@ internal sealed class FilterDialog : Form
     {
         var p = new Panel { BackColor = Bg };
         _histList = new ListBox { Location = new Point(0, 0), Size = new Size(S(500), S(360)), BackColor = Panel2, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false };
+        FillHistoryList();
+        _histList.DoubleClick += (_, _) => ApplyHistoryRow();
+        _histList.SelectedIndexChanged += (_, _) => SyncHistoryButtons();
+        _histList.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Delete) return;
+            RemoveHistoryRow();
+            e.Handled = e.SuppressKeyPress = true;
+        };
+        // Un clic droit sélectionne d'abord la ligne visée : sinon « Remove » agirait sur la sélection
+        // précédente, pas sur la ligne que l'utilisateur a pointée.
+        _histList.MouseDown += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right) return;
+            int i = _histList.IndexFromPoint(e.Location);
+            if (i >= 0 && i < _history.Count) _histList.SelectedIndex = i;
+        };
+        _histList.ContextMenuStrip = BuildHistoryMenu();
+        p.Controls.Add(_histList);
+
+        // À droite de la liste, pas dessous : l'onglet n'a plus de hauteur libre sous la liste, mais il
+        // lui reste ~190px de largeur.
+        _histRemove = HistButton(p, "Remove selected", 0, RemoveHistoryRow);
+        _histClear = HistButton(p, "Clear history", 36, ClearHistoryRows);
+
+        p.Controls.Add(new Label
+        {
+            Text = "Double-click a past search to apply it. Del (or right-click) removes one.",
+            AutoSize = true, ForeColor = SubFg, Location = new Point(0, S(366)),
+        });
+        SyncHistoryButtons();
+        return p;
+    }
+
+    private Button HistButton(Panel p, string text, int y, Action onClick)
+    {
+        var b = new Button
+        {
+            Text = text, Size = new Size(S(160), S(28)), Location = new Point(S(512), S(y)),
+            FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, FlatAppearance = { BorderSize = 0 },
+        };
+        b.Click += (_, _) => onClick();
+        p.Controls.Add(b);
+        return b;
+    }
+
+    private ContextMenuStrip BuildHistoryMenu()
+    {
+        var menu = new ContextMenuStrip { BackColor = Panel2, ForeColor = Fg, ShowImageMargin = false };
+        var apply = new ToolStripMenuItem("Apply this search", null, (_, _) => ApplyHistoryRow());
+        var remove = new ToolStripMenuItem("Remove from history", null, (_, _) => RemoveHistoryRow());
+        var clear = new ToolStripMenuItem("Clear history", null, (_, _) => ClearHistoryRows());
+        menu.Items.AddRange(new ToolStripItem[] { apply, new ToolStripSeparator(), remove, clear });
+        menu.Opening += (_, _) =>
+        {
+            bool row = HistoryRow() >= 0;
+            apply.Enabled = remove.Enabled = row;
+            clear.Enabled = _history.Count > 0;
+        };
+        return menu;
+    }
+
+    /// <summary>Index of the selected past search, or -1. Guards the "(no recent searches)" placeholder,
+    /// which is a ListBox row with no criteria behind it.</summary>
+    private int HistoryRow()
+    {
+        int i = _histList?.SelectedIndex ?? -1;
+        return i >= 0 && i < _history.Count ? i : -1;
+    }
+
+    private void FillHistoryList()
+    {
+        _histList.BeginUpdate();
+        _histList.Items.Clear();
         if (_history.Count == 0) _histList.Items.Add("(no recent searches)");
         else foreach (var h in _history) _histList.Items.Add(h.Summary());
-        _histList.DoubleClick += (_, _) =>
-        {
-            int i = _histList.SelectedIndex;
-            if (i >= 0 && i < _history.Count) { Result = _history[i].Clone(); DialogResult = DialogResult.OK; Close(); }
-        };
-        p.Controls.Add(_histList);
-        p.Controls.Add(new Label { Text = "Double-click a past search to apply it.", AutoSize = true, ForeColor = SubFg, Location = new Point(0, S(366)) });
-        return p;
+        _histList.EndUpdate();
+    }
+
+    private void SyncHistoryButtons()
+    {
+        if (_histRemove == null || _histClear == null) return;   // la liste se peuple avant les boutons
+        _histRemove.Enabled = HistoryRow() >= 0;
+        _histClear.Enabled = _history.Count > 0;
+    }
+
+    private void ApplyHistoryRow()
+    {
+        int i = HistoryRow();
+        if (i < 0) return;
+        Result = _history[i].Clone();
+        DialogResult = DialogResult.OK;
+        Close();
+    }
+
+    private void RemoveHistoryRow()
+    {
+        int i = HistoryRow();
+        if (i < 0) return;
+        SearchHistory.Remove(_history[i]);   // le fichier d'abord ; _history n'en est qu'un instantané
+        _history.RemoveAt(i);
+        FillHistoryList();
+        if (_history.Count > 0) _histList.SelectedIndex = Math.Min(i, _history.Count - 1);
+        SyncHistoryButtons();
+    }
+
+    private void ClearHistoryRows()
+    {
+        if (_history.Count == 0) return;
+        if (MessageBox.Show(this, "Forget every past search?", "Clear history",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        SearchHistory.Clear();
+        _history.Clear();
+        FillHistoryList();
+        SyncHistoryButtons();
     }
 
     // ── Footer (Apply / Clear / Cancel) ───────────────────────────────────────

@@ -201,13 +201,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private int PGap    => (int)Math.Round(PGap0    * _zoom);
     private int PZ(int px) => (int)Math.Round(px * _zoom);           // scale a tile-internal offset by zoom
     private Font _posterTileFont;                                    // MainWindow.Font × zoom, for tile title/dev text
-    private readonly ToolStripTextBox _search;
+    private TextBox _search;                                          // quick search — left panel header (borderless, hosted in _searchWrap)
+    private RoundedField _searchWrap;                                 // the rounded frame around it (carries the quick-filter tint)
     // Debounces the search box: ApplyFilter → RebuildView → MeasureContentFits re-scans every row of the
     // (possibly ~15000-row) view to re-fit non-stretch columns, otherwise on EVERY keystroke — wasted CPU +
     // input latency near that library size. 150ms feels instant once typing pauses, yet collapses a fast
     // typist's whole word into one measure pass.
     private readonly System.Windows.Forms.Timer _searchDebounce = new() { Interval = 150 };
-    private ToolStripButton _filterBtn;                               // advanced search filter (dialog + active indicator)
+    private FilterGlyphButton _filterBtn;                             // advanced search filter (dialog + active indicator)
     private Search.FilterCriteria _filter;                            // null = no advanced filter
     private readonly ToolStripDropDownButton _arrangeBtn;
     private readonly ToolStripLabel _count;
@@ -261,7 +262,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private System.Windows.Forms.Timer _fanartTimer;                       // 0.5s debounce before fanart fade-in
     private readonly Dictionary<string, string> _fanartPick = new();       // node/game key -> chosen fanart src (stable per session)
     private object _currentNode;   // selected tree node (for the right pane when no game is selected)
-    private System.Windows.Forms.ComboBox _viewCombo;               // left-panel "group by" selector
+    private ThemedDropDown _viewCombo;                              // left-panel "group by" selector
     private SourceView _currentView = SourceViews.ById(null);       // current grouping (default Platform Category)
     private bool _suppressViewEvent;                                // guard combo SelectedIndexChanged during sync
     private List<object> _treeRoots;   // tree roots (incl. AllNode) — for key lookup on restore
@@ -391,18 +392,22 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         inner.Panel1.Resize += (_, _) => LayoutPoster();   // keep the poster grid centred on resize
 
         var outer = new ThemedSplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Bg, SplitterWidth = 4 };
-        // Left panel = a "group by" ComboBox (top) above the source tree (fill). A TableLayoutPanel gives a
-        // deterministic top-strip + fill split (no docking z-order guessing).
+        // Left panel, LaunchBox layout: search field + advanced-filter funnel on top, the "group by"
+        // selector under them, then the source tree (fill). A TableLayoutPanel gives a deterministic
+        // strip + strip + fill split (no docking z-order guessing).
+        var searchRow = BuildSearchRow();
         _viewCombo = BuildViewCombo();
         var leftPanel = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2,
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3,
             BackColor = Panel, Margin = Padding.Empty, Padding = Padding.Empty,
         };
         leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        leftPanel.Controls.Add(_viewCombo, 0, 0);
-        leftPanel.Controls.Add(_sources, 0, 1);
+        leftPanel.Controls.Add(searchRow, 0, 0);
+        leftPanel.Controls.Add(_viewCombo, 0, 1);
+        leftPanel.Controls.Add(_sources, 0, 2);
         outer.Panel1.Controls.Add(leftPanel);
         outer.Panel2.Controls.Add(inner);
         Controls.Add(outer);
@@ -415,24 +420,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             BackColor = Panel2, ForeColor = Fg, Renderer = new DarkRenderer(),
             Padding = new Padding(6, 2, 6, 2), ImageScalingSize = new Size(16, 16),
         };
-        bar.Items.Add(new ToolStripLabel("Search:") { ForeColor = SubFg });
-        _search = new ToolStripTextBox
-        {
-            AutoSize = false, Width = 240, BorderStyle = BorderStyle.FixedSingle,
-            BackColor = Panel, ForeColor = Fg,
-        };
-        _searchDebounce.Tick += (_, _) => { _searchDebounce.Stop(); ApplyFilter(); };
-        _search.TextChanged += (_, _) => { _searchDebounce.Stop(); _searchDebounce.Start(); ReflectQuickFilter(); };
-        // Éditer le champ à la main sort le filtre du régime transitoire : il ne doit plus
-        // disparaître en changeant de plateforme.
-        _search.KeyDown += (_, _) => _typedFilterIsTransient = false;
-        bar.Items.Add(_search);
-        _filterBtn = new ToolStripButton("Filter") { ForeColor = Fg, ToolTipText = "Advanced search filter" };
-        _filterBtn.Click += (_, _) => OpenFilterDialog();
-        _filterBtn.MouseUp += (_, e) => { if (e.Button == MouseButtons.Right) ClearAdvancedFilter(); };
-        bar.Items.Add(_filterBtn);
-        bar.Items.Add(new ToolStripSeparator());
-
+        // Search + Filter used to live here; they moved to the left panel header (BuildSearchRow),
+        // directly above the tree they filter — the LaunchBox grouping.
         _arrangeBtn = new ToolStripDropDownButton("Arrange By: Title ▲")
         {
             ForeColor = Fg,
@@ -1663,13 +1652,62 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         return tv;
     }
 
-    // ── "Group by" view selector (above the source tree) ─────────────────────
-    private System.Windows.Forms.ComboBox BuildViewCombo()
+    // ── Left panel header: quick search + advanced-filter funnel ─────────────
+    // The search box sits above the tree it filters, with the funnel beside it, instead of on the
+    // toolbar: that's where LaunchBox puts it, and it puts the two filtering controls — the text one
+    // and the criteria one — next to each other rather than at opposite ends of the window.
+    private Control BuildSearchRow()
     {
-        var cb = new System.Windows.Forms.ComboBox
+        float s = LiteBoxTheme.DpiScale(this);
+        int h = (int)Math.Round(30 * s), gap = (int)Math.Round(6 * s), pad = (int)Math.Round(8 * s);
+
+        _search = new TextBox
         {
-            Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList,
-            FlatStyle = FlatStyle.Flat, BackColor = Panel, ForeColor = Fg,
+            BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg,
+            Font = new Font("Segoe UI", 10f), PlaceholderText = "Search",
+        };
+        _searchDebounce.Tick += (_, _) => { _searchDebounce.Stop(); ApplyFilter(); };
+        _search.TextChanged += (_, _) => { _searchDebounce.Stop(); _searchDebounce.Start(); ReflectQuickFilter(); };
+        // Éditer le champ à la main sort le filtre du régime transitoire : il ne doit plus
+        // disparaître en changeant de plateforme.
+        _search.KeyDown += (_, _) => _typedFilterIsTransient = false;
+
+        _searchWrap = new RoundedField
+        {
+            Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Panel,
+            Padding = new Padding((int)Math.Round(11 * s), 0, (int)Math.Round(8 * s), 0),
+        };
+        _searchWrap.Controls.Add(_search);
+
+        _filterBtn = new FilterGlyphButton { Dock = DockStyle.Fill, Margin = new Padding(gap, 0, 0, 0), BackColor = Panel };
+        _filterBtn.Click += (_, _) => OpenFilterDialog();
+        _filterBtn.MouseUp += (_, e) => { if (e.Button == MouseButtons.Right) ClearAdvancedFilter(); };
+        _tips.SetToolTip(_filterBtn, "Advanced search filter");
+
+        var row = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top, ColumnCount = 2, RowCount = 1, Height = h,
+            BackColor = Panel, Padding = Padding.Empty,
+            Margin = new Padding(pad, pad, pad, (int)Math.Round(6 * s)),
+        };
+        row.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, h + gap));   // funnel = square, + its left gap
+        row.Controls.Add(_searchWrap, 0, 0);
+        row.Controls.Add(_filterBtn, 1, 0);
+        return row;
+    }
+
+    // ── "Group by" view selector (above the source tree) ─────────────────────
+    private ThemedDropDown BuildViewCombo()
+    {
+        float s = LiteBoxTheme.DpiScale(this);
+        var cb = new ThemedDropDown
+        {
+            Dock = DockStyle.Top, Height = (int)Math.Round(32 * s), BackColor = Panel,
+            ForeColor = Fg, Font = new Font("Segoe UI", 9.75f),
+            Margin = new Padding((int)Math.Round(8 * s), 0, (int)Math.Round(8 * s), (int)Math.Round(8 * s)),
+            MenuRenderer = new DarkRenderer(),
         };
         foreach (var v in SourceViews.All) cb.Items.Add(v.Label);
         cb.SelectedIndexChanged += (_, _) => OnGroupViewChanged();
@@ -3333,9 +3371,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     {
         if (_filterBtn == null) return;
         bool active = _filter != null && _filter.IsActive;
-        _filterBtn.Text = active ? "● Filter" : "Filter";
-        _filterBtn.ForeColor = active ? Accent : Fg;
-        _filterBtn.ToolTipText = active ? "Filter active — click to edit, right-click to clear" : "Advanced search filter";
+        // Lit + inset, in the same blue family as a deliberate quick filter (see ReflectQuickFilter) but
+        // stronger — the button is small, so it needs the extra contrast to carry the same message.
+        _filterBtn.Active = active;
+        _tips.SetToolTip(_filterBtn, active ? "Filter active — click to edit, right-click to clear" : "Advanced search filter");
     }
 
     // Les valeurs proposées par le dialogue de filtre.
@@ -6659,10 +6698,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     private void EnsureSearchBadge()
     {
-        if (_searchBadge != null || _search?.TextBox == null) return;
+        if (_searchBadge != null || _search == null) return;
         try
         {
-            var host = _search.TextBox;
+            var host = _search;
             _searchBadge = new Label
             {
                 Text = "TEMP",
@@ -6708,12 +6747,16 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (_search == null) return;
         bool active = !string.IsNullOrWhiteSpace(_search.Text);
         bool temp = active && _typedFilterIsTransient;
-        var back = !active ? Panel
+        var back = !active ? Panel2
                  : temp ? Color.FromArgb(74, 51, 20)     // ambre sombre — filtre éphémère
                         : Color.FromArgb(30, 62, 86);    // bleu — recherche délibérée
         var fore = !active ? Fg : temp ? Color.FromArgb(255, 206, 140) : Color.White;
+        var edge = !active ? RoundedField.FieldBorder
+                 : temp ? Color.FromArgb(168, 116, 46)
+                        : Color.FromArgb(70, 132, 178);
         if (_search.BackColor != back) _search.BackColor = back;
         if (_search.ForeColor != fore) _search.ForeColor = fore;
+        _searchWrap?.SetFieldColors(back, edge);   // the frame carries the tint too, not just the text strip
 
         EnsureSearchBadge();
         if (_searchBadge != null && _searchBadge.Visible != temp)

@@ -14,10 +14,12 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Windows.Forms;
 using System.Xml.Linq;
 using LbApiHost.Host.Media;
 using LbApiHost.Host.UiKit;
+using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 using LbApiHost.Host.Data;
 
@@ -142,7 +144,7 @@ internal static class EditPlatformFolders
                 SetOrDefault("Manual", v => hp.ManualsFolder = v);
                 SetOrDefault("Music", v => hp.MusicFolder = v);
             }
-            WritePlatformFolders(name, map);
+            WritePlatformFolders(plat, name, map);
         }
         return (p, Apply);
     }
@@ -164,27 +166,29 @@ internal static class EditPlatformFolders
         catch { return path; }
     }
 
-    // Rewrite this platform's <PlatformFolder> rows (root-level) to exactly `map`; other platforms untouched.
-    // Guarded internally (read-only / LB running) + atomic + backed up via SafeXmlWrite; a refusal
-    // warns the user — a folder change that silently didn't land would be worse than the dialog.
-    private static void WritePlatformFolders(string platform, Dictionary<string, string> map)
+    // This platform's <PlatformFolder> rows, replaced wholesale; other platforms untouched.
+    //
+    // JOURNALLED, not written on the spot: the row set goes to the op-log and lands on the next safe
+    // flush, so the tab works while LaunchBox holds Platforms.xml instead of refusing. Read-your-writes
+    // comes from the second half — the live HostPlatform's folder map is updated here too, and THAT is
+    // what MediaResolver and the game cache answer from. (Writing the XML alone used to leave that map
+    // stale until the next restart, so a folder you had just changed still resolved to the old place.)
+    private static void WritePlatformFolders(IPlatform plat, string platform, Dictionary<string, string> map)
     {
         try
         {
-            if (Data.WriteGuard.Refuse(out var why)) { Data.WriteGuard.WarnBlocked("Platform folders", why); return; }
-            if (!File.Exists(PlatformsFile)) return;
-            var doc = XDocument.Load(PlatformsFile);
-            var root = doc.Root; if (root == null) return;
-            foreach (var e in root.Elements("PlatformFolder").Where(e => string.Equals((string?)e.Element("Platform"), platform, StringComparison.OrdinalIgnoreCase)).ToList())
-                e.Remove();
-            foreach (var kv in map)
-                root.Add(new XElement("PlatformFolder",
-                    new XElement("MediaType", kv.Key),
-                    new XElement("FolderPath", kv.Value),
-                    new XElement("Platform", platform)));
-            SafeXmlWrite.Save(doc, PlatformsFile);
+            var store = (PluginHelper.DataManager as Data.HostDataManagerXml)?.Store;
+            var rows = map.Select(kv => new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["MediaType"] = kv.Key,
+                ["FolderPath"] = kv.Value,
+                ["Platform"] = platform,
+            }).ToList();
+            store?.RecordKeyedReplace("PlatformFolder", PlatformsFile, "Platform", platform,
+                                      JsonSerializer.Serialize(rows));
+            if (plat is Data.HostPlatform hp) hp.SetPlatformFolders(map, MediaResolver.LbRoot ?? "");
         }
-        catch { }
+        catch (Exception ex) { Console.WriteLine("[platfolders] " + ex.Message); }
     }
 
     private static string Sanitize(string sn)

@@ -205,6 +205,27 @@ internal sealed class HostPlatform : DummyPlatform, ILiteBoxFields
         => _folders.Select(kv => (IPlatformFolder)new DummyPlatformFolder
         { MediaType = kv.Key, Platform = _name, FolderPath = kv.Value }).ToArray();
 
+    /// <summary>Replace this platform's custom media folders — mediaType → path as STORED (relative to
+    /// the LB root, or absolute), resolved here the way <see cref="PlatformCatalog.Load"/> does.
+    ///
+    /// This map is what MediaResolver and the game cache answer from. Until now the editor wrote the
+    /// XML and left it alone, so a folder changed in this session kept resolving to the OLD location
+    /// until LiteBox restarted — media simply looked missing. Writing through here is what makes the
+    /// journalled write visible immediately, which is the whole point of not writing the XML directly.
+    /// <paramref name="lbRoot"/> anchors relative paths; empty leaves them as given.</summary>
+    internal void SetPlatformFolders(IReadOnlyDictionary<string, string> stored, string lbRoot)
+    {
+        _folders.Clear();
+        foreach (var kv in stored)
+        {
+            if (string.IsNullOrWhiteSpace(kv.Key) || string.IsNullOrWhiteSpace(kv.Value)) continue;
+            string path = kv.Value;
+            if (!Path.IsPathRooted(path) && !string.IsNullOrEmpty(lbRoot))
+            { try { path = Path.GetFullPath(Path.Combine(lbRoot, path)); } catch { } }
+            _folders[kv.Key] = path;
+        }
+    }
+
     // ── Tree children (Parents.xml): LB allows categories AND playlists to nest UNDER a platform ──
     private readonly List<object> _treeChildren = new();
     public void AddTreeChild(object c) { if (c != null) _treeChildren.Add(c); }

@@ -1063,6 +1063,17 @@ internal sealed class GameStore
                     EnsureDoc(file);
                     ApplyCollectionReplaceToDoc(docs[file], "EmulatorPlatform", "Emulator", op.ParentId, _emuPlatOrder, op.Value);
                 }
+                else if (op.OpType == KeyedReplace)
+                {
+                    // Root-level rows keyed by one of their own child elements, in a file the op names:
+                    // <PlatformFolder> and <PlatformDocument> by <Platform>, <ModelSettings> by
+                    // <PlatformName> or <GameId>. One shape for the lot — the op carries file, element,
+                    // key field and key value, so nothing here needs to know which is which.
+                    string file = op.ParentId;
+                    if (string.IsNullOrEmpty(file) || !File.Exists(file) || string.IsNullOrEmpty(op.Field)) continue;
+                    EnsureDoc(file);
+                    ApplyKeyedReplaceToDoc(docs[file], op.Entity, op.Field, op.Id ?? "", op.Value);
+                }
                 else if (op.Entity == "Playlist" || op.Entity == "PlaylistGame" || op.Entity == "PlaylistFilter")
                 {
                     string file = op.ParentId;                       // playlist ops carry their source file
@@ -1679,6 +1690,35 @@ internal sealed class GameStore
         "PlatformCategory" => (PlatformsFile, "Name", _platformCategoryAddOrder),
         _ => (null, null, null),
     };
+
+    // ── Keyed root-row collections (PlatformFolder / PlatformDocument / ModelSettings) ────────
+    // These are root-level siblings of <Platform> and <Game>, owned by no entity the SDK models,
+    // and identified by one of their own children. They used to be written straight to the XML,
+    // which meant an edit made while LaunchBox held the file was refused outright. One op family
+    // covers all of them: replace every <Entity> in `file` whose `keyField` equals `key` with the
+    // rows in `json` (an empty list deletes them all).
+    internal const string KeyedReplace = "replace-keyed";
+
+    public void RecordKeyedReplace(string entity, string file, string keyField, string key, string json)
+    { if (!ReadOnly && _oplog != null) _oplog.Append(KeyedReplace, entity, key, file, keyField, json); }
+
+    /// <summary>DOM apply: drop this key's rows, re-emit from the JSON in the order given. Element
+    /// field order follows each row's own key order — the writers build them the way LaunchBox does.</summary>
+    private static void ApplyKeyedReplaceToDoc(XDocument doc, string entity, string keyField, string key, string json)
+    {
+        foreach (var e in doc.Root.Elements(entity)
+                     .Where(e => string.Equals((string)e.Element(keyField) ?? "", key, StringComparison.OrdinalIgnoreCase))
+                     .ToList())
+            e.Remove();
+        List<Dictionary<string, string>> rows;
+        try { rows = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(json) ?? new(); } catch { return; }
+        foreach (var rec in rows)
+        {
+            var el = new XElement(entity);
+            foreach (var kv in rec) el.Add(new XElement(kv.Key, kv.Value ?? ""));
+            doc.Root.Add(el);
+        }
+    }
 
     public void RecordEntityModify(string entity, string id, string field, string value)
     { if (!ReadOnly && _oplog != null) _oplog.Append("modify", entity, id, null, field, value); }

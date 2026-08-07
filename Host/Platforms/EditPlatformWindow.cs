@@ -48,8 +48,10 @@ internal static class EditPlatformWindow
         var (details, applyDetails) = BuildDetails(plat, readOnly, lbRoot, s);
         w.AddSection("Details", details, applyDetails);
 
-        var (folders, applyFolders) = EditPlatformFolders.Build(plat, locked, s);
-        w.AddSection("Folders" + mark, folders, applyFolders);
+        // Folders is JOURNALLED now (op-log + a live refresh of the platform's folder map), so it
+        // no longer belongs to the locked set — it works with LaunchBox open like Details does.
+        var (folders, applyFolders) = EditPlatformFolders.Build(plat, readOnly, s);
+        w.AddSection("Folders", folders, applyFolders);
 
         var (notes, applyNotes) = BuildNotes(plat, s);
         w.AddSection("Notes", notes, applyNotes);

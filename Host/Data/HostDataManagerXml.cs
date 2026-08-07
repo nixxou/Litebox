@@ -101,7 +101,8 @@ internal sealed class HostDataManagerXml : DummyDataManager
 
         // Platforms + categories from Platforms.xml (attach the store so setters write back).
         var (platforms, categories) = PlatformCatalog.Load(dataDir, imagesRoot);
-        OverlayPlatformOps(pending, platforms, categories, imagesRoot);
+        string lbRootForFolders = Path.GetDirectoryName(dataDir) ?? "";
+        OverlayPlatformOps(pending, platforms, categories, imagesRoot, lbRootForFolders);
         foreach (var c in categories) c.Attach(_store);
         _categories = categories.Cast<IPlatformCategory>().ToList();
         _categoryByName = new Dictionary<string, IPlatformCategory>(StringComparer.OrdinalIgnoreCase);
@@ -450,14 +451,29 @@ internal sealed class HostDataManagerXml : DummyDataManager
     // open, restart LiteBox" show the object instead of losing it until the eventual flush — the
     // exact bug PlaylistCopier documented as "the copy only appears after two restarts".
 
-    private static void OverlayPlatformOps(List<Op> ops, List<HostPlatform> platforms, List<HostPlatformCategory> categories, string imagesRoot)
+    private static void OverlayPlatformOps(List<Op> ops, List<HostPlatform> platforms, List<HostPlatformCategory> categories, string imagesRoot, string lbRoot)
     {
         int n = 0;
         foreach (var op in ops)
         {
             try
             {
-                if (op.Entity == "Platform" && !string.IsNullOrEmpty(op.Id))
+                // Custom media folders: a pending row-set replaces what Platforms.xml still holds, so
+                // MediaResolver answers from the edit rather than from the file it has not reached yet.
+                if (op.OpType == GameStore.KeyedReplace && op.Entity == "PlatformFolder" && !string.IsNullOrEmpty(op.Id))
+                {
+                    var hp = platforms.FirstOrDefault(x => string.Equals(x.Name, op.Id, StringComparison.OrdinalIgnoreCase));
+                    if (hp != null)
+                    {
+                        var rows = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(op.Value ?? "[]") ?? new();
+                        var stored = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var r in rows)
+                            if (r.TryGetValue("MediaType", out var mt) && r.TryGetValue("FolderPath", out var fp)) stored[mt] = fp;
+                        hp.SetPlatformFolders(stored, lbRoot);
+                        n++;
+                    }
+                }
+                else if (op.Entity == "Platform" && !string.IsNullOrEmpty(op.Id))
                 {
                     var p = platforms.FirstOrDefault(x => string.Equals(x.Name, op.Id, StringComparison.OrdinalIgnoreCase));
                     if (op.OpType == "add") { if (p == null) { platforms.Add(new HostPlatform(op.Id, null, imagesRoot)); n++; } }

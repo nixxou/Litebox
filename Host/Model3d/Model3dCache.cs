@@ -231,6 +231,29 @@ internal static class Model3dCache
     /// stale job still baked in turn — the queue ground for seconds behind games long since left.</summary>
     public static string? Ensure(IGame g, bool allowBake = true, Func<bool>? stillWanted = null)
     {
+        // No authoritative media state → do not judge. The host game cache is dropped while a game runs
+        // (its RAM belongs to the game) and is not up yet while it builds. Asking "is this model still
+        // current?" then means walking the art directories LiteBox just stepped aside to stop touching,
+        // and a verdict reached that way can be WRONG in the expensive direction: a mistaken "stale"
+        // queues a bake — a WPF scene and its textures — behind a running game.
+        //
+        // So we answer from the name alone: the file is the game's slot, it was judged current when it
+        // was written, and nothing we can trust says otherwise yet. Zero IO, not even the header read.
+        // The next selection once the cache is back validates normally and re-bakes if it must.
+        if (Gc.HostGameCache.Enabled && !Gc.GameCache.IsGlobalReady)
+        {
+            try
+            {
+                string gid = g.Id ?? "";
+                if (gid.Length > 0)
+                {
+                    string path = Path.Combine(Dir, gid + ".glb");
+                    if (File.Exists(path)) return path;
+                }
+            }
+            catch { }
+        }
+
         var idn = Resolve(g);
         if (idn == null || !idn.HasArt) return null;   // nothing real to show → no bake, block hides
         try

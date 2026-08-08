@@ -72,7 +72,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private readonly GameListView _games;
     // Poster (grid) view — a native virtual ListView mirroring the OLV's displayed (sorted+filtered)
     // order; owner-drawn box-art tiles. Toggled from VIEW ▸ Images View / List View.
-    private ListView _poster;
+    private PosterListView _poster;
     private bool _posterMode;
     private readonly Dictionary<Guid, Image> _posterBmp = new();   // decoded box thumbs (visible-ish)
     private readonly Queue<Guid> _posterBmpOrder = new();          // FIFO eviction order
@@ -3359,6 +3359,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         private const int LVM_SETITEMSTATE = LVM_FIRST + 43;
         private const int LVM_GETNEXTITEM = LVM_FIRST + 12;
         private const int LVNI_FOCUSED = 0x0001;
+        private const int LVNI_SELECTED = 0x0002;
         private const uint LVIS_FOCUSED = 1, LVIS_SELECTED = 2;
         private const int WM_LBUTTONDOWN = 0x0201, WM_KEYDOWN = 0x0100;
 
@@ -3419,6 +3420,44 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             base.WndProc(ref m);
         }
 
+        /// <summary>Select every tile in one message (Ctrl+A). Index -1 targets all items, so this costs the
+        /// same whether the view holds ten games or ten thousand — the list view has done it this way all
+        /// along, the poster simply had no Ctrl+A wired to it.</summary>
+        public void SelectAllItems()
+        {
+            if (!IsHandleCreated || VirtualListSize == 0) return;
+            var all = new LVITEM { stateMask = LVIS_SELECTED, state = LVIS_SELECTED };
+            SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref all);
+            _anchor = 0;   // a later Shift+click extends from the top, as it does in the list
+        }
+
+        /// <summary>Deselect everything in one message — same reason as <see cref="SelectAllItems"/>:
+        /// index -1 means "all items", so it does not depend on how many are currently selected.</summary>
+        public void ClearSelection()
+        {
+            if (!IsHandleCreated) return;
+            var none = new LVITEM { stateMask = LVIS_SELECTED, state = 0 };
+            SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref none);
+        }
+
+        /// <summary>Every selected index, walked ONCE through the native control.
+        ///
+        /// Not <see cref="ListView.SelectedIndices"/>: in virtual mode its indexer keeps no cursor, so
+        /// asking for element i replays i LVM_GETNEXTITEM messages from the start, and enumerating the
+        /// whole selection costs O(n²). Selecting a few thousand tiles by Shift+click then froze the UI
+        /// for as long as it took to make millions of round trips. LVM_GETNEXTITEM already means "the
+        /// selected item AFTER this one", so carrying the cursor forward makes the walk linear.</summary>
+        public List<int> SelectedIndicesFast()
+        {
+            var res = new List<int>();
+            if (!IsHandleCreated) return res;
+            for (int i = (int)SendMessage(Handle, LVM_GETNEXTITEM, (IntPtr)(-1), (IntPtr)LVNI_SELECTED);
+                 i >= 0;
+                 i = (int)SendMessage(Handle, LVM_GETNEXTITEM, (IntPtr)i, (IntPtr)LVNI_SELECTED))
+                res.Add(i);
+            return res;
+        }
+
         // Select exactly [min(a,b)..max(a,b)], clearing the rest; focus the moving end. Anchor unchanged.
         // Wrapped in Begin/EndUpdate so the clear-then-set sequence paints once, not as a flash of nothing.
         private void SelectRange(int a, int b)
@@ -3439,7 +3478,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         }
     }
 
-    private ListView BuildPoster()
+    private PosterListView BuildPoster()
     {
         bool od = _posterOwnerDraw;
         if (od) _posterGeom = new ImageList { ColorDepth = ColorDepth.Depth32Bit, ImageSize = new Size(PCellW, PImgH + PLabelH) };
@@ -3644,8 +3683,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             // requiring central-panel keyboard focus made it miss right after a Ctrl-wheel zoom (the
             // wheel leaves focus wherever it was, so the list usually isn't keyboard-focused then).
             if (k == Keys.D0 || k == Keys.NumPad0) { ApplyZoomLevel(1.0); return true; }
-            // Ctrl+A → select every game (detail list; the poster does its own range/multi-select natively).
-            if (k == Keys.A && _games != null && _games.Focused) { _games.SelectAll(); return true; }
+            // Ctrl+A → select every game, in whichever central view has the keyboard. The poster used to be
+            // left out on the assumption that the native control handled it: a virtual-mode ListView does
+            // not, so the key simply did nothing there.
+            if (k == Keys.A)
+            {
+                if (_posterMode && _poster != null && _poster.Focused) { _poster.SelectAllItems(); OnPosterSelectionChanged(); return true; }
+                if (_games != null && _games.Focused) { _games.SelectAll(); return true; }
+            }
             if (CentralPanelHasFocus())
             {
                 switch (k)
@@ -3743,17 +3788,21 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // feeds SelectedGamesProvider (so edits / plugin menus see the whole poster selection).
     private void MirrorPosterToList()
     {
-        if (_poster == null || _poster.SelectedIndices.Count == 0) return;
-        if (_poster.SelectedIndices.Count == 1) { var m = PosterModel(_poster.SelectedIndices[0]); if (m != null) _games.SelectGame(m, false); }
-        else { var games = PosterSelectedGames(); if (games.Count > 0) _games.SelectGames(games, false); }
+        if (_poster == null) return;
+        var idx = _poster.SelectedIndicesFast();   // one walk, reused below — see SelectedIndicesFast
+        if (idx.Count == 0) return;
+        if (idx.Count == 1) { var m = PosterModel(idx[0]); if (m != null) _games.SelectGame(m, false); }
+        else { var games = GamesAt(idx); if (games.Count > 0) _games.SelectGames(games, false); }
     }
 
 
     // The games behind the poster's current selection, in display order.
-    private List<IGame> PosterSelectedGames()
+    private List<IGame> PosterSelectedGames() => _poster == null ? new List<IGame>() : GamesAt(_poster.SelectedIndicesFast());
+
+    private List<IGame> GamesAt(List<int> indices)
     {
-        var list = new List<IGame>();
-        try { foreach (int i in _poster.SelectedIndices) { var m = PosterModel(i); if (m != null) list.Add(m); } }
+        var list = new List<IGame>(indices.Count);
+        try { foreach (int i in indices) { var m = PosterModel(i); if (m != null) list.Add(m); } }
         catch { }
         return list;
     }
@@ -3765,7 +3814,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (item == null) return;
         // Match the list's right-click: if the clicked tile isn't part of the selection, select just it;
         // otherwise keep the whole multi-selection and act on all of it (Play / Edit / plugin menus).
-        if (!item.Selected) { _poster.SelectedIndices.Clear(); _poster.SelectedIndices.Add(item.Index); }
+        if (!item.Selected) { _poster.ClearSelection(); _poster.SelectedIndices.Add(item.Index); }
         var games = PosterSelectedGames();
         if (games.Count == 0) return;
         var menu = BuildGameContextMenu(games.ToArray());
@@ -6412,7 +6461,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             var view = _games.VisibleGames;
             var pos = new Dictionary<IGame, int>(view.Count);
             for (int i = 0; i < view.Count; i++) pos[view[i]] = i;
-            _poster.SelectedIndices.Clear();
+            _poster.ClearSelection();
             foreach (var g in games) if (pos.TryGetValue(g, out var ix)) _poster.SelectedIndices.Add(ix);
             if (_poster.SelectedIndices.Count > 0) { try { _poster.EnsureVisible(_poster.SelectedIndices[0]); } catch { } }
         }

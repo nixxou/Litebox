@@ -66,6 +66,8 @@ internal sealed class GameListView : ListView
     private const int LVM_SETEXTENDEDLISTVIEWSTYLE = LVM_FIRST + 54;
     private const int LVM_GETHEADER = LVM_FIRST + 31;
     private const int LVS_EX_DOUBLEBUFFER = 0x00010000;
+    private const int LVM_GETNEXTITEM = LVM_FIRST + 12;
+    private const int LVNI_SELECTED = 0x0002;
     private const uint LVIS_FOCUSED = 1, LVIS_SELECTED = 2;
     private const int WM_CONTEXTMENU = 0x007B;
     private const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_FRAMECHANGED = 0x20;
@@ -752,9 +754,33 @@ internal sealed class GameListView : ListView
     {
         get
         {
-            try { return SelectedIndices.Cast<int>().Where(i => i >= 0 && i < _view.Length).Select(i => _view[i]).ToArray(); }
+            try
+            {
+                var idx = SelectedIndicesFast();
+                var res = new List<IGame>(idx.Count);
+                foreach (int i in idx) if (i >= 0 && i < _view.Length) res.Add(_view[i]);
+                return res.ToArray();
+            }
             catch { return Array.Empty<IGame>(); }
         }
+    }
+
+    /// <summary>Every selected index, walked ONCE through the native control.
+    ///
+    /// Not <see cref="ListView.SelectedIndices"/>: in virtual mode its indexer keeps no cursor, so asking
+    /// for element i replays i LVM_GETNEXTITEM messages from the start — enumerating the whole selection
+    /// costs O(n²). After a select-all over a few thousand games that is millions of round trips, which is
+    /// exactly how long the UI stays frozen. LVM_GETNEXTITEM already takes "the selected item after this
+    /// one", so carrying the cursor forward makes the same walk linear.</summary>
+    public List<int> SelectedIndicesFast()
+    {
+        var res = new List<int>();
+        if (!IsHandleCreated) return res;
+        for (int i = (int)SendMessage(Handle, LVM_GETNEXTITEM, (IntPtr)(-1), (IntPtr)LVNI_SELECTED);
+             i >= 0;
+             i = (int)SendMessage(Handle, LVM_GETNEXTITEM, (IntPtr)i, (IntPtr)LVNI_SELECTED))
+            res.Add(i);
+        return res;
     }
 
     public void SelectGame(IGame g, bool focus)

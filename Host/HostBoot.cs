@@ -522,6 +522,16 @@ internal static class HostBoot
         Console.WriteLine($"PluginHelper wired. DataManager={dm.GetType().Name} games={dm.GetAllGames().Length} platforms={dm.GetAllPlatforms().Length} categories={dm.GetAllPlatformCategories().Length} emulators={dm.GetAllEmulators().Length} playlists={dm.GetAllPlaylists().Length}");
         Mem.Report("after wrappers+inject");
 
+        // --selftest-model3d [sample] [bakes]: the 3D cache's currency invariant, checked against the real
+        // library. Here because it needs the catalogue and nothing more — no window, no plugins.
+        if (args.Contains("--selftest-model3d"))
+        {
+            int si = Array.IndexOf(args, "--selftest-model3d");
+            int sample = si + 1 < args.Length && int.TryParse(args[si + 1], out var sv) ? sv : 200;
+            int bakes = si + 2 < args.Length && int.TryParse(args[si + 2], out var bv) ? bv : 5;
+            return Diag.Model3dSelfTest.Run(sample, bakes);
+        }
+
         // ── Plugins (config-driven; edited in Options → Plugins) ────────────
         // The enabled set lives in LiteBox.ini (EnabledPlugins=A,B,…). KEY ABSENT
         // (first run / not configured) → enable EVERY folder present under

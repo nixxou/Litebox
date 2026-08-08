@@ -1,7 +1,11 @@
 // Single-instance guard. LiteBox's write-back owns the LaunchBox Platform XMLs and the op-log
-// (Core\LiteBox.pending.db) — only ONE process may write them at a time. When a second LiteBox is
-// launched while one is already running we don't refuse to start (the user may want a read-only
-// second view); instead we run that instance in a FORCED read-only mode:
+// (Core\LiteBox.pending.db) — only ONE process may write them at a time.
+//
+// The ordinary double-click never gets here any more: HostBoot.Run refuses an ARGUMENT-LESS launch
+// outright when another host from the same install is already up, and says so with a tray balloon. What
+// this guard still covers is everything that carries arguments — a --headless diagnostic, a --drylaunch
+// session — started alongside a running host. Those we don't refuse (they are deliberate, and often the
+// point is to observe the running one); instead we run them in a FORCED read-only mode:
 //   • store.ReadOnly is set true IN MEMORY (the LiteBox.ini value is never touched);
 //   • the GUI surfaces a warning (coloured caption + banner) and locks the options menu.
 // The named mutex handle is kept alive for the whole process lifetime so a third instance also sees

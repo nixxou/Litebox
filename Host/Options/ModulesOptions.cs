@@ -21,7 +21,10 @@ namespace LbApiHost.Host.Options;
 
 internal static class ModulesOptions
 {
-    public static (Control panel, Action apply) Build(float dpiS, bool readOnly)
+    /// <param name="initialTab">Open straight on this module's config tab instead of the module list —
+    /// the parental padlock uses it to land on Parental. Ignored when the module is off (it then has no
+    /// tab at all, and the list is the honest place to arrive).</param>
+    public static (Control panel, Action apply) Build(float dpiS, bool readOnly, LbModule? initialTab = null)
     {
         int S(int px) => (int)Math.Round(px * dpiS);
         var Bg = LiteBoxTheme.Bg; var Fg = LiteBoxTheme.Fg; var Sub = LiteBoxTheme.SubFg;
@@ -178,6 +181,9 @@ internal static class ModulesOptions
             foreach (var kv in configTabs) { try { kv.Value.apply?.Invoke(); } catch { } }
             ReconcileRuntime();   // apply toggles that own a live service (the web server) without a restart
         }
+        if (initialTab != null && configTabs.TryGetValue(initialTab.Value, out var landing))
+            tabs.SelectedTab = landing.page;
+
         return (root, Apply);
     }
 

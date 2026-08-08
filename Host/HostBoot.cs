@@ -74,6 +74,23 @@ internal static class HostBoot
     public static int Run(string[] args)
     {
         string coreDir = AppContext.BaseDirectory;
+
+        // ONE GUI per install. No arguments means the user double-clicked LiteBox — every other mode
+        // carries a flag — so this is the only place the rule can apply without catching anything else:
+        // the Steam-achievements helper (LiteBox re-launching ITSELF as "--steam-ach <appid>") and the
+        // installer's root re-launcher both return inside Program before reaching here, and the headless
+        // /selftest/dry-launch modes all pass arguments. Matched on the EXE PATH, not the process name:
+        // a second install (a net9 LB next to a net10 one) is a different LiteBox and stays free to run.
+        //
+        // Refusing outright — rather than the read-only second view InstanceGuard was built for — is the
+        // deliberate choice: two hosts sharing one library made every write path answer "which one wins?".
+        // Checked before any boot work so the refused instance costs nothing.
+        if (args.Length == 0 && AnotherCoreHostRunning())
+        {
+            NotifyAlreadyRunning();
+            return 0;
+        }
+
         Mem.Report("startup");
         InstanceGuard.Probe();   // a 2nd LiteBox must not also write the XMLs / op-log (forces read-only below)
         bool refreshNatives = LbApiHost.Host.Install.Migration.MigrateConfigAndNeedNatives();   // config migration + upgrade detection (before config/db are used)
@@ -962,6 +979,62 @@ internal static class HostBoot
         return 0;
     }
 
+
+    /// <summary>Is another LiteBox from THIS install already running? Matched on the EXE PATH, because the
+    /// process NAME answers for three different things: the host, the root re-launcher that spawns it, and
+    /// a parallel install. Only the same file is the same LiteBox.</summary>
+    private static bool AnotherCoreHostRunning()
+    {
+        string self;
+        try { self = Environment.ProcessPath; } catch { return false; }
+        if (string.IsNullOrEmpty(self)) return false;   // can't tell → never block the only instance we know of
+        int me = Environment.ProcessId;
+        foreach (var p in System.Diagnostics.Process.GetProcessesByName("LiteBox"))
+        {
+            try
+            {
+                if (p.Id != me && string.Equals(p.MainModule?.FileName, self, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            catch { }   // another user's process, or an elevated one: not ours to reason about
+            finally { try { p.Dispose(); } catch { } }
+        }
+        return false;
+    }
+
+    /// <summary>Say why nothing opened. A tray balloon is what Windows 10/11 renders as a toast, with no
+    /// manifest and no AppUserModelID to register. STA + a short pump: the shell needs a message loop to
+    /// draw it, and this process's main thread is MTA. Stays silent when the user turned notifications off
+    /// — that is the whole budget worth spending on saying "already running".</summary>
+    private static void NotifyAlreadyRunning()
+    {
+        var t = new Thread(() =>
+        {
+            try
+            {
+                System.Drawing.Icon icon;
+                try { icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath) ?? System.Drawing.SystemIcons.Application; }
+                catch { icon = System.Drawing.SystemIcons.Application; }
+                using var ni = new NotifyIcon
+                {
+                    Icon = icon,
+                    Visible = true,
+                    BalloonTipTitle = "LiteBox",
+                    BalloonTipText = "LiteBox is already running.",
+                };
+                ni.ShowBalloonTip(4000);
+                using var timer = new System.Windows.Forms.Timer { Interval = 4000 };
+                timer.Tick += (_, _) => { timer.Stop(); Application.ExitThread(); };
+                timer.Start();
+                Application.Run();
+                ni.Visible = false;
+            }
+            catch { }
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join(6000);   // a shell hiccup must never hold the refused process open
+    }
 
     private static string GetArg(string[] args, string flag)
     {

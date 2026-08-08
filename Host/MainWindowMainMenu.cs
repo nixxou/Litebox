@@ -1,12 +1,11 @@
-// The top menu bar, shaped like LaunchBox's desktop menu.
+﻿// The top menu bar, shaped like LaunchBox's desktop menu.
 //
 //   MENU  TOOLS  VIEW  ARRANGE BY  IMAGE GROUP  BADGES  |  Displaying 29 of 5075 total games.
 //
 // The tree, the labels, the check marks and the icons are LaunchBox's. Entries go live one at a
 // time (MENU's Big Box / Achievements / Quit are wired; the rest is still inert), and the shortcuts
-// LaunchBox shows are left out entirely (they would advertise keys that do nothing). The existing
-// toolbar keeps driving the features it already owns (Arrange By, Image Group, Emulators, Options…);
-// this bar will take them over one at a time.
+// LaunchBox shows are left out entirely (they would advertise keys that do nothing). This bar is now
+// the only one: the second toolbar that used to sit under it handed over its last controls and went.
 //
 // Labels are LaunchBox's own, read out of its localized string table (Label*Menu keys) so the
 // wording matches exactly — minus the '_' mnemonics, which WinForms would turn into '&' accelerators.
@@ -80,9 +79,24 @@ internal sealed partial class MainWindow
         _bell = new Notifications.NotificationBell(this, menu);
         menu.Items.Add(_bell.Item);
 
+        // The parental padlock, immediately left of the bell (added straight after it — see the ordering
+        // note below). Visible only when parental control is configured; RefreshExtendDbIndicators owns
+        // its image and tooltip. IsLink is here for the hand cursor alone: the item shows an image, so the
+        // link colouring never renders, but the pointer says "this does something".
+        _parentalInd = new ToolStripLabel("")
+        {
+            Alignment = ToolStripItemAlignment.Right, Visible = false,
+            ImageScaling = ToolStripItemImageScaling.None,
+            DisplayStyle = ToolStripItemDisplayStyle.Image,
+            Margin = new Padding(0, 0, 8, 0),
+            IsLink = true, LinkBehavior = LinkBehavior.NeverUnderline,
+        };
+        WirePadlockClicks(_parentalInd);
+        menu.Items.Add(_parentalInd);
+
         // The achievement points, to the bell's LEFT. Right-aligned items are placed from the right edge
         // inward IN ADD ORDER, so the first one added takes the corner — this one has to come AFTER the
-        // bell to sit beside it, not before. (Same ordering as the toolbar's ExtendDB indicator.)
+        // bell to sit beside it, not before.
         _raPoints = new ToolStripLabel("")
         {
             ForeColor = SubFg, Alignment = ToolStripItemAlignment.Right, Visible = false,
@@ -95,6 +109,16 @@ internal sealed partial class MainWindow
         };
         _raPoints.Click += (_, _) => Safe(OpenAchievementsProfile);
         menu.Items.Add(_raPoints);
+
+        // The ExtendDB indicator, leftmost of the right-hand group (added last). Session state, like the
+        // padlock — RefreshExtendDbIndicators owns its visibility.
+        _extDbInd = new ToolStripLabel("ExtendDB")
+        {
+            ForeColor = Accent, Alignment = ToolStripItemAlignment.Right, Visible = false,
+            Margin = new Padding(0, 0, 10, 0),
+            ToolTipText = "ExtendDB plugin detected — its metadata & media cache power this view",
+        };
+        menu.Items.Add(_extDbInd);
 
         StartAchievementPoints();
         return menu;
@@ -267,15 +291,10 @@ internal sealed partial class MainWindow
     private readonly List<ToolStripMenuItem> _miImagesView = new();
     private readonly List<ToolStripMenuItem> _miListView = new();
 
-    /// <summary>Route a menu view switch through the toolbar's List/Poster toggle when it exists, so
-    /// the button's checked state (and its "view you'd switch TO" label) stays truthful. The button's
-    /// CheckedChanged then drives SetPosterMode; a same-value write fires nothing, matching the
-    /// SetPosterMode no-op guard.</summary>
-    private void SwitchView(bool poster)
-    {
-        if (_posterBtn != null) _posterBtn.Checked = poster;
-        else SetPosterMode(poster);
-    }
+    /// <summary>Switch between the list and the poster grid. SetPosterMode is a no-op on a same-value
+    /// call, so the menu entries can fire it freely; it stamps the check marks back onto every copy of
+    /// the pair through SyncViewSwitchChecks.</summary>
+    private void SwitchView(bool poster) => SetPosterMode(poster);
 
     /// <summary>Reflect the active view on every Images View / List View menu entry (called by
     /// SetPosterMode, and safe before the menu exists).</summary>
@@ -427,8 +446,7 @@ internal sealed partial class MainWindow
         sub.DropDownItems.Add(Sep());
 
         // Named for what they actually DO here (LaunchBox says "Refresh …", but our action is the
-        // thumbnail-cache generation run): the same flow as the toolbar's Generate Image Cache,
-        // scoped to the selection or the whole library.
+        // thumbnail-cache generation run), scoped to the selection or the whole library.
         var refreshSel = new ToolStripMenuItem("Generate Image Cache (Selected Games)...") { Image = MenuIcons.Get(MenuIcons.Refresh) };
         refreshSel.Click += (_, _) => Safe(() => GenerateCachedImages(_games?.SelectedGames));
         sub.DropDownItems.Add(refreshSel);
@@ -626,6 +644,7 @@ internal sealed partial class MainWindow
         Sub("Manage", MenuIcons.Manage,
             ManageEmulatorsItem(),
             ManagePlatformsItem(),
+            ManagePlaylistsItem(),
             ManageControllersItem(),
             ManageBadgesItem(),
             Sep(),
@@ -666,12 +685,38 @@ internal sealed partial class MainWindow
         M("Export to Android...", MenuIcons.ExportAndroid),
         OptionsItem());
 
-        // LiteBox-only diagnostics (no LaunchBox counterpart) — below its tree, behind a separator.
-        sub.DropDownItems.Add(Sep());
-        var viewer = new ToolStripMenuItem("Game Image Cache Viewer...") { Image = MenuIcons.Get(MenuIcons.Audit) };
-        viewer.Click += (_, _) => Safe(OpenGameImageCacheViewer);
-        sub.DropDownItems.Add(viewer);
+        // Plugin system-menu items, at the bottom of Tools behind a separator — where LaunchBox puts them.
+        // (The Game Image Cache Viewer used to sit here; it is still one click away under View ▸ Media,
+        // next to the rebuild actions it belongs with.)
+        var plugins = PluginMenuItems();
+        if (plugins.Count > 0)
+        {
+            sub.DropDownItems.Add(Sep());
+            foreach (var it in plugins) sub.DropDownItems.Add(it);
+        }
         return sub;
+    }
+
+    /// <summary>The loaded plugins' system-menu entries (ISystemMenuItemPlugin), as menu items. FRESH
+    /// instances on every call: a ToolStripItem belongs to one ToolStrip, and ToolsMenu itself is built
+    /// twice (nested under MENU, and as the bar's own TOOLS), so the two can't share item objects.
+    /// A plugin that throws on Caption/ShowInLaunchBox still gets an entry, named after its type.</summary>
+    private List<ToolStripItem> PluginMenuItems()
+    {
+        var items = new List<ToolStripItem>();
+        if (_reg == null) return items;
+        foreach (var m in _reg.SystemMenus)
+        {
+            string cap; bool show;
+            try { cap = m.Caption ?? m.GetType().Name; show = m.ShowInLaunchBox; }
+            catch { cap = m.GetType().Name; show = true; }
+            if (!show) continue;
+            var captured = m;
+            var it = new ToolStripMenuItem(cap);
+            it.Click += (_, _) => Safe(() => captured.OnSelected());
+            items.Add(it);
+        }
+        return items;
     }
 
     private static ToolStripMenuItem HelpMenu(string text) => Sub(text, MenuIcons.Help,
@@ -688,14 +733,13 @@ internal sealed partial class MainWindow
         M("Check for Updates...", MenuIcons.CheckUpdates),
         M("About...", MenuIcons.About));
 
-    // The image groups LaunchBox offers for the tiles, in its order. Ours are a subset (the toolbar's
-    // Image Group button lists the regroupements LiteBox actually caches) — this bar shows the full
-    // LaunchBox set for now, and will be reconciled when the entries start doing something.
+    // The image groups LaunchBox offers for the tiles, in its order. Ours are a subset (only the
+    // regroupements LiteBox actually caches) — this bar shows the full LaunchBox set for now, and will
+    // be reconciled when the entries start doing something.
     // ── Image Group — the poster tiles' image type ───────────────────────────
-    // The toolbar dropdown's own list, not LaunchBox's: ours is limited to the regroupements LiteBox
-    // manages and caches (CacheRegroupements). The menu drives the SAME state through
-    // SelectPosterGroup, which re-stamps every surface — this tree exists twice (MENU ▸ View ▸ Image
-    // Group and the bar's IMAGE GROUP) plus the toolbar button.
+    // Not LaunchBox's list: ours is limited to the regroupements LiteBox manages and caches
+    // (CacheRegroupements). SelectPosterGroup owns the state and re-stamps every surface — this tree
+    // exists twice, under MENU ▸ View ▸ Image Group and as the bar's own IMAGE GROUP.
     private readonly List<ToolStripMenuItem> _miImageGroup = new();
 
     /// <summary>Reflect the active image group on every menu entry (called by SelectPosterGroup).</summary>
@@ -935,6 +979,89 @@ internal sealed partial class MainWindow
         (_dm as Data.HostDataManagerXml)?.FlushLbSettingsIfSafe();
     }
 
+    // ── The padlock's three gestures ──────────────────────────────────────────
+    //   single click → lock / unlock        double click → the settings
+    //   right click  → both, named, for whoever never guesses the first two.
+    //
+    // The two mouse gestures can't both act on the spot. WinForms fires Click on the FIRST press of a
+    // double click and DoubleClick only on the second, so acting immediately would toggle the lock on the
+    // way to the settings — and on a locked session that means a PIN prompt swallowing the second click.
+    // So the single click is HELD for the system's double-click interval and only runs if no second one
+    // lands. One timer, reused; a tick after the form is gone does nothing.
+    private System.Windows.Forms.Timer _padlockClick;
+    private ContextMenuStrip _padlockMenu;
+
+    private void WirePadlockClicks(ToolStripLabel padlock)
+    {
+        _padlockClick = new System.Windows.Forms.Timer { Interval = Math.Max(120, SystemInformation.DoubleClickTime) };
+        _padlockClick.Tick += (_, _) =>
+        {
+            _padlockClick.Stop();
+            if (IsDisposed) return;
+            Safe(ToggleParentalLock);
+        };
+        padlock.DoubleClickEnabled = true;   // without this a double click is just two Clicks
+        padlock.Click += (_, _) => { _padlockClick.Stop(); _padlockClick.Start(); };
+        padlock.DoubleClick += (_, _) => { _padlockClick.Stop(); Safe(OpenParentalOptions); };
+        padlock.MouseUp += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right) return;
+            _padlockClick.Stop();            // a right click never starts a double click
+            Safe(() => ShowPadlockMenu(padlock));
+        };
+    }
+
+    /// <summary>Locked → prompt for the PIN and unlock; unlocked → re-lock (no PIN needed to lock).</summary>
+    private void ToggleParentalLock() => Media.ParentalBridge.ShowLockDialog(this);
+
+    /// <summary>The right-click menu: the same two actions, spelled out. Built once and relabelled on open —
+    /// the toggle's wording is the CURRENT state's opposite, so it can't be baked in at construction.</summary>
+    private void ShowPadlockMenu(ToolStripItem padlock)
+    {
+        if (_padlockMenu == null)
+        {
+            var m = new ContextMenuStrip
+            {
+                BackColor = Panel2, ForeColor = Fg, Renderer = new DarkRenderer(), ShowImageMargin = false,
+            };
+            var toggle = new ToolStripMenuItem("");
+            toggle.Click += (_, _) => Safe(ToggleParentalLock);
+            var settings = new ToolStripMenuItem("Parental settings...");
+            settings.Click += (_, _) => Safe(OpenParentalOptions);
+            m.Items.AddRange(new ToolStripItem[] { toggle, new ToolStripSeparator(), settings });
+            m.Opening += (_, _) =>
+            {
+                bool locked = false;
+                try { locked = Media.ParentalBridge.Locked; } catch { }
+                toggle.Text = locked ? "Unlock (PIN)..." : "Lock now";
+            };
+            _padlockMenu = m;
+        }
+        if (padlock.Owner == null) { _padlockMenu.Show(Control.MousePosition); return; }
+        _padlockMenu.Show(padlock.Owner, new Point(padlock.Bounds.Left, padlock.Bounds.Bottom));
+    }
+
+    /// <summary>The padlock's double click: the parental settings, PIN first when the session is locked.
+    ///
+    /// The PIN has to come BEFORE the window, not inside it. ParentalPanel refuses to show the settings
+    /// while parental is active and PIN-protected — it opens on a stub whose only move is "unlock, then
+    /// close and reopen Options". Unlocking here means the window opens on the real page, once.
+    ///
+    /// A cancelled or failed PIN opens nothing: there is nothing to show a locked user, and a window that
+    /// says so is a window that has to be closed again.</summary>
+    private void OpenParentalOptions()
+    {
+        if (Media.ParentalBridge.Locked)
+        {
+            Media.ParentalBridge.ShowLockDialog(this);
+            if (Media.ParentalBridge.Locked) return;
+        }
+        using var w = BuildOptionsWindow(Modules.LbModule.Parental);
+        w.SelectSection("Modules");
+        w.ShowDialog(this);
+        (_dm as Data.HostDataManagerXml)?.FlushLbSettingsIfSafe();
+    }
+
     private void OpenManageEmulators()
     {
         bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
@@ -952,6 +1079,23 @@ internal sealed partial class MainWindow
         {
             bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
             using var w = new Platforms.ManagePlatformsWindow(ro, Media.MediaResolver.LbRoot ?? "");
+            w.ShowDialog(this);
+            if (!w.Changed) return;
+            (_dm as Data.HostDataManagerXml)?.ReloadHierarchy();
+            PopulateSources();
+        });
+        return it;
+    }
+
+    /// <summary>Tools ▸ Manage ▸ Manage Playlists… — the list window (twin of Manage Platforms). Editing
+    /// or deleting a playlist changes the hierarchy, so the tree is reloaded on close.</summary>
+    private ToolStripMenuItem ManagePlaylistsItem()
+    {
+        var it = M("Manage Playlists...", null);
+        it.Click += (_, _) => Safe(() =>
+        {
+            bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
+            using var w = new Platforms.ManagePlaylistsWindow(ro);
             w.ShowDialog(this);
             if (!w.Changed) return;
             (_dm as Data.HostDataManagerXml)?.ReloadHierarchy();

@@ -71,10 +71,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private readonly Dictionary<object, TreeNode> _treeNodeMap = new();   // node object → its TreeNode (selection restore)
     private readonly GameListView _games;
     // Poster (grid) view — a native virtual ListView mirroring the OLV's displayed (sorted+filtered)
-    // order; owner-drawn box-art tiles. Toggled from the toolbar (list ⇄ poster).
+    // order; owner-drawn box-art tiles. Toggled from VIEW ▸ Images View / List View.
     private ListView _poster;
-    private ToolStripButton _posterBtn;
-    private ToolStripDropDownButton _posterGroupBtn;   // toolbar "Image Group" (twin of View ▸ Image Group)
     private bool _posterMode;
     private readonly Dictionary<Guid, Image> _posterBmp = new();   // decoded box thumbs (visible-ish)
     private readonly Queue<Guid> _posterBmpOrder = new();          // FIFO eviction order
@@ -210,10 +208,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private readonly System.Windows.Forms.Timer _searchDebounce = new() { Interval = 150 };
     private FilterGlyphButton _filterBtn;                             // advanced search filter (dialog + active indicator)
     private Search.FilterCriteria _filter;                            // null = no advanced filter
-    private readonly ToolStripDropDownButton _arrangeBtn;
-    private readonly ToolStripLabel _count;
-    private ToolStripLabel _extDbInd;      // "ExtendDB present" indicator (toolbar, before the count)
-    private ToolStripLabel _parentalInd;   // parental-control padlock indicator (toolbar, before the count)
+    private ToolStripLabel _extDbInd;      // "ExtendDB present" indicator (menu bar, left of the padlock)
+    private ToolStripLabel _parentalInd;   // parental-control padlock indicator (menu bar, left of the bell)
     private Image _padlockClosed, _padlockOpen;
     // Platforms whose games parental control must hide from the list (a platform directly listed,
     // or any platform sitting under a hidden category). Recomputed with the tree. See ParentalBridge.
@@ -402,6 +398,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3,
             BackColor = Panel, Margin = Padding.Empty, Padding = Padding.Empty,
         };
+        // The single column has to be declared, and declared as Percent: a TableLayoutPanel fills any
+        // ColumnStyle it was not given with an AutoSize one, and an AutoSize column sizes itself on its
+        // children rather than on the panel. The rows were spelled out and the column was not, so the
+        // strip sized itself to what it wanted and overflowed to the right when the pane was dragged
+        // narrower — taking the funnel with it, since it sits at the right end of the search row while
+        // the search box holds the percent column beside it. The button did not shrink or hide; it was
+        // simply outside the panel being painted.
+        leftPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
@@ -413,114 +417,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         Controls.Add(outer);
         _outerSplit = outer; _innerSplit = inner;   // for splitter % persistence
 
-        // ── Top toolbar ──────────────────────────────────────────────────────
-        var bar = new ToolStrip
-        {
-            Dock = DockStyle.Top, GripStyle = ToolStripGripStyle.Hidden,
-            BackColor = Panel2, ForeColor = Fg, Renderer = new DarkRenderer(),
-            Padding = new Padding(6, 2, 6, 2), ImageScalingSize = new Size(16, 16),
-        };
-        // Search + Filter used to live here; they moved to the left panel header (BuildSearchRow),
-        // directly above the tree they filter — the LaunchBox grouping.
-        _arrangeBtn = new ToolStripDropDownButton("Arrange By: Title ▲")
-        {
-            ForeColor = Fg,
-            ToolTipText = "Choose the game order; selecting the active field reverses it",
-        };
-        _arrangeBtn.DropDownOpening += (_, _) => RebuildArrangeMenu();
-        bar.Items.Add(_arrangeBtn);
-        bar.Items.Add(new ToolStripSeparator());
+        // The second bar is gone. Everything it carried has a home in the LaunchBox-shaped menu above it —
+        // Arrange By and Image Group as top-level entries, the list/poster switch and Generate Image Cache
+        // under VIEW, Options / Emulators / Plugins under TOOLS, the game count as the bar's status label,
+        // and the two session indicators (padlock, ExtendDB) beside the bell. See MainWindowMainMenu.cs.
 
-        // Label shows the view you'd switch TO: "Poster View" while in list mode, "List View" while in
-        // poster mode (kept in sync by SetPosterMode). Default mode is list → start as "Poster View".
-        var posterBtn = new ToolStripButton("Poster View") { ForeColor = Fg, CheckOnClick = true, ToolTipText = "Toggle list / poster view" };
-        posterBtn.CheckedChanged += (_, _) => SetPosterMode(posterBtn.Checked);
-        _posterBtn = posterBtn;
-        bar.Items.Add(posterBtn);
-
-        // Poster IMAGE GROUP — which regroupement the tiles show (LB's "Image Group" submenu), limited to
-        // the regroupements we manage/cache. Persisted; switching flushes the tile caches (zoom pattern).
+        // Poster IMAGE GROUP — which regroupement the tiles show. Restored HERE because BuildMainMenu's
+        // Image Group entries read _posterGroup to stamp their check marks, and it builds below.
         _posterGroup = _cfg.Get("PosterImageGroup", null) ?? "Front";
-        var grpBtn = new ToolStripDropDownButton("Image Group") { ForeColor = Fg, ToolTipText = "Poster view: which image type the tiles show" };
-        _posterGroupBtn = grpBtn;   // SelectPosterGroup re-stamps its items (the menu bar shares the state)
-        ToolStripMenuItem GroupItem(string key, string label)
-        {
-            var mi = new ToolStripMenuItem(label) { Tag = key, Checked = string.Equals(_posterGroup, key, StringComparison.OrdinalIgnoreCase) };
-            mi.Click += (_, _) => SelectPosterGroup(key);
-            return mi;
-        }
-        grpBtn.DropDownItems.Add(GroupItem("Front", "Use Default (Box fronts)"));
-        grpBtn.DropDownItems.Add(new ToolStripSeparator());
-        foreach (var (key, title) in CacheRegroupements)
-            if (key != "Front") grpBtn.DropDownItems.Add(GroupItem(key, title));
-        bar.Items.Add(grpBtn);
-        bar.Items.Add(new ToolStripSeparator());
-        var genBtn = new ToolStripButton("Generate Image Cache")
-        { ForeColor = Fg, ToolTipText = "Pre-generate the cached thumbnails (logo, box, screenshot) for every game" };
-        genBtn.Click += (_, _) => GenerateAllCachedImages();
-        bar.Items.Add(genBtn);
-
-        // Options (gear) — right aligned. Opens the sectioned options window
-        // (Host/Options): the old per-toggle dropdown grew past what a menu
-        // can carry, and the window's option model lets each setting migrate
-        // to its final storage (INI vs LB Settings/emulator/game) later
-        // without touching the UI.
-        var optBtn = new ToolStripButton("⚙")
-        {
-            ForeColor = Fg, ToolTipText = "Options", Alignment = ToolStripItemAlignment.Right,
-            DisplayStyle = ToolStripItemDisplayStyle.Text,
-            Font = new Font("Segoe UI Symbol", 11f),
-        };
-        if (_secondInstance)   // options locked while a 2nd instance forces read-only
-        {
-            optBtn.Enabled = false;
-            optBtn.ToolTipText = "Options locked — another LiteBox instance is open (read-only)";
-        }
-        optBtn.Click += (_, _) => OpenOptionsWindow();
-        bar.Items.Add(optBtn);
-
-        // Manage Emulators (full per-emulator config; read-only honours the lock).
-        var emusBtn = new ToolStripButton("Emulators") { ForeColor = Fg, ToolTipText = "Manage Emulators" };
-        emusBtn.Click += (_, _) => OpenManageEmulators();
-        bar.Items.Add(emusBtn);
-
-        // Plugins (system-menu plugins) — lives on the toolbar, right of Emulators;
-        // the top MenuStrip is reserved for the upcoming LaunchBox-style menu.
-        var pluginsBtn = new ToolStripDropDownButton("Plugins") { ForeColor = Fg };
-        foreach (var m in _reg.SystemMenus)
-        {
-            string cap; bool show;
-            try { cap = m.Caption ?? m.GetType().Name; show = m.ShowInLaunchBox; }
-            catch { cap = m.GetType().Name; show = true; }
-            if (!show) continue;
-            var captured = m;
-            var it = new ToolStripMenuItem(cap);
-            it.Click += (_, _) => Safe(() => captured.OnSelected());
-            pluginsBtn.DropDownItems.Add(it);
-        }
-        if (pluginsBtn.DropDownItems.Count == 0)
-            pluginsBtn.DropDownItems.Add(new ToolStripMenuItem("(no plugin menu items)") { Enabled = false });
-        bar.Items.Add(pluginsBtn);
-
-        _count = new ToolStripLabel("") { ForeColor = SubFg, Alignment = ToolStripItemAlignment.Right };
-        bar.Items.Add(_count);
-
-        // ExtendDB / parental-control indicators, just to the left of the game count.
-        // Right-aligned items lay out right→left in add order, so adding these AFTER _count
-        // puts them on its left (the padlock nearest the count, "ExtendDB" further left).
-        _parentalInd = new ToolStripLabel("")
-        {
-            Alignment = ToolStripItemAlignment.Right, Visible = false,
-            ImageScaling = ToolStripItemImageScaling.None,
-            DisplayStyle = ToolStripItemDisplayStyle.Image,
-        };
-        bar.Items.Add(_parentalInd);
-        _extDbInd = new ToolStripLabel("ExtendDB")
-        {
-            ForeColor = Accent, Alignment = ToolStripItemAlignment.Right, Visible = false,
-            ToolTipText = "ExtendDB plugin detected — its metadata & media cache power this view",
-        };
-        bar.Items.Add(_extDbInd);
 
         // Persist layout / window / selection once, at close (not per change).
         // _closing lets the serialized detail loader bail before its blocking Invoke once the pump ends.
@@ -566,7 +470,6 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // ── Top menu: the LaunchBox-shaped bar (see MainWindowMainMenu.cs) ───
         var menu = BuildMainMenu();
 
-        Controls.Add(bar);
         Controls.Add(menu);
         MainMenuStrip = menu;
 
@@ -603,6 +506,19 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             int leftPm = _cfg.GetInt("SplitLeftPermille", 0);
             int midPm = _cfg.GetInt("SplitMidPermille", 0);
             float dpiS = LiteBoxTheme.DpiScale(this);
+            // A floor for the left pane, because WinForms' default is 25px and the funnel lives in a
+            // fixed-width column at the right of the search row: past a certain narrowness it is the
+            // button that falls off the edge, silently, while the search box keeps its own space.
+            //
+            // 85 is the point where the row still HOLDS rather than the point where it is comfortable:
+            // 16 of padding + 36 for the funnel and its gap, leaving 33 for the field — which stays
+            // typable only because RoundedField now yields its insets instead of eating that 33. The
+            // "Platform Category" selector below truncates well before this; that is a legibility
+            // matter, and the tree underneath is what the pane is for.
+            //
+            // Set BEFORE restoring the saved fraction, since SetSplitFraction clamps against it: an INI
+            // written when there was no floor is corrected on the way in rather than reproduced.
+            try { outer.Panel1MinSize = (int)Math.Round(85 * dpiS); } catch { }
             if (leftPm > 0) SetSplitFraction(outer, leftPm / 1000.0);
             else try { outer.SplitterDistance = (int)Math.Round(240 * dpiS); } catch { }
             if (midPm > 0) SetSplitFraction(inner, midPm / 1000.0);
@@ -619,7 +535,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             RestoreSelection();      // last category + game
             RefreshExtendDbIndicators();   // ExtendDB-present + parental padlock
             try { ActiveControl = _games; _games.Focus(); } catch { }
-            if (_cfg.GetBool("PosterMode", false)) _posterBtn.Checked = true;   // → SetPosterMode(true)
+            if (_cfg.GetBool("PosterMode", false)) SetPosterMode(true);   // restore the saved view
             LedBlinky.FrontendStart();   // "1" — the front-end is up (LEDBlinky FE-active animation, etc.)
         };
         // Final dark-scrollbar pass once everything (data, columns) is in place.
@@ -864,8 +780,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     private void OnViewChanged()
     {
-        if (_count != null) _count.Text = $"{_games.VisibleGames.Count} / {_games.TotalCount} games";
-        UpdateMenuStatus();
+        UpdateMenuStatus();   // "Displaying N of M total games." in the menu bar
         // The badge band the tiles reserve is sized on the most-badged game of the VIEW, so a node or
         // filter change can move it — and moving it changes every tile's height.
         if (RecomputePosterBadgeRows()) { try { RebuildPosterGeometry(); } catch { } }
@@ -873,7 +788,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     }
 
     // ── ExtendDB / parental indicators ─────────────────────────────────────────
-    // Reflect ExtendDB's presence and parental-control state into the toolbar:
+    // Reflect ExtendDB's presence and parental-control state into the menu bar:
     //   • "ExtendDB" label — shown whenever the plugin is loaded.
     //   • padlock — shown when parental control is CONFIGURED; closed (amber) when the
     //     session is locked (restrictions enforced), open (grey) when unlocked. Mirrors
@@ -894,9 +809,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             _padlockClosed ??= GlyphPadlock(true);
             _padlockOpen ??= GlyphPadlock(false);
             _parentalInd.Image = locked ? _padlockClosed : _padlockOpen;
-            _parentalInd.ToolTipText = locked
+            _parentalInd.ToolTipText = (locked
                 ? "Parental control ACTIVE (locked) — restricted categories and games are hidden"
-                : "Parental control unlocked";
+                : "Parental control unlocked")
+                + "\nClick to " + (locked ? "unlock (PIN)" : "lock") + " · double-click for the settings · right-click for both";
         }
     }
 
@@ -2174,7 +2090,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         Model3d.Model3dKeyIndex.KickAll();
     }
 
-    private Options.OptionsWindow BuildOptionsWindow()
+    /// <param name="moduleTab">When set, the Modules section opens on that module's own tab (the parental
+    /// padlock jumps straight to Parental). The caller still picks the SECTION via SelectSection.</param>
+    private Options.OptionsWindow BuildOptionsWindow(Modules.LbModule? moduleTab = null)
     {
         var w = new Options.OptionsWindow("LiteBox — Options");
         w.ApplyFinished = () => _cfg.Save();
@@ -2232,7 +2150,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // ExtendDB features, folded natively into LiteBox — enable/disable each + its own settings. LiteBox-own
         // state (litebox-options.db), so editable even in LB read-only mode, like the Caches maintenance below.
         {
-            var (modPanel, modApply) = Options.ModulesOptions.Build(LiteBoxTheme.DpiScale(this), readOnly: false);
+            var (modPanel, modApply) = Options.ModulesOptions.Build(LiteBoxTheme.DpiScale(this), readOnly: false, moduleTab);
             w.AddSection("Modules", modPanel, modApply);
         }
 
@@ -3014,8 +2932,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         return bmp;
     }
 
-    // Toolbar padlock for the parental indicator. closed = locked (amber, shackle down on both
-    // legs); open = unlocked (grey, one leg lifted). 16×16 to match the toolbar ImageScalingSize.
+    // Menu-bar padlock for the parental indicator. closed = locked (amber, shackle down on both
+    // legs); open = unlocked (grey, one leg lifted). 16×16, the bar's icon size.
     private static Image GlyphPadlock(bool closed)
     {
         var bmp = new Bitmap(16, 16);
@@ -3194,15 +3112,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // ActivateNodeSort consumes this staged session order on the next real node load.
     }
 
-    private void RebuildArrangeMenu()
-    {
-        if (_arrangeBtn == null) return;
-        _arrangeBtn.DropDownItems.Clear();
-        PopulateArrangeItems(_arrangeBtn.DropDownItems);
-    }
-
-    /// <summary>Fills a drop-down with the sort catalog — shared by the toolbar's Arrange By button
-    /// and the menu bar's two Arrange By entries. Always rebuilt rather than cached: the entries
+    /// <summary>Fills a drop-down with the sort catalog — shared by the menu bar's two Arrange By
+    /// entries. Always rebuilt rather than cached: the entries
     /// depend on the current node (a manual playlist adds "Manual"), on the active extra column, and
     /// on the custom fields the library actually uses.</summary>
     private void PopulateArrangeItems(ToolStripItemCollection into)
@@ -3255,7 +3166,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     // The active sort's direction, drawn in the item's ICON margin (where a tick would sit). Two
     // cached 16px bitmaps — a filled triangle reads cleaner at that size than the ▲/▼ text glyphs
-    // the toolbar button's own label uses.
+    // a label would spell it with.
     private static readonly Dictionary<bool, Image> _sortArrowCache = new();
 
     private static Image SortArrowImage(bool ascending)
@@ -3300,16 +3211,6 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         var columnKey = ColumnKeyForSort(key);
         _games.SortGlyphColumn = _games.AllColumns.FirstOrDefault(c =>
             c.Visible && string.Equals(c.Key, columnKey, StringComparison.OrdinalIgnoreCase));
-        if (_arrangeBtn != null)
-        {
-            bool catalogKey = GameSortCatalog.IsStandard(key)
-                || string.Equals(key, GameSortCatalog.Manual, StringComparison.OrdinalIgnoreCase)
-                || key.StartsWith(GameSortCatalog.CustomPrefix, StringComparison.OrdinalIgnoreCase);
-            var label = catalogKey
-                ? GameSortCatalog.Label(key)
-                : _games.AllColumns.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase))?.Title ?? key;
-            _arrangeBtn.Text = "Arrange By: " + label + (asc ? " ▲" : " ▼");
-        }
         ApplyFilter();   // sets the filter predicate + rebuilds the view (single pass)
     }
 
@@ -3349,7 +3250,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _filter = (c.IsActive || c.SortBy != "alpha") ? c : null;   // keep only if it does something
         if (c.IsActive) Search.SearchHistory.Add(c);
 
-        // The filter's "Order by" is a one-shot: drive the toolbar sort so the user can still re-sort after.
+        // The filter's "Order by" is a one-shot: drive the list's own sort so the user can still re-sort after.
         string sortKey = c.SortBy switch { "year" => "releaseyear", "rating" => "starrating", "lastplayed" => "lastplayed", _ => null };
         if (sortKey != null)
         {
@@ -3575,11 +3476,24 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     }
 
     // Provide the (virtual) item: just an image-list slot — the composited tile carries box + text.
+    //
+    // Nothing is built once the window is on its way out. WinForms walks EVERY virtual item when the
+    // native window dies (ReleaseUiaProvider, on WM_DESTROY, asks the collection for each index), and a
+    // virtual list keeps no item cache — every one of those asks lands here. Building a tile then means
+    // loading and decoding the whole library's box art AFTER the window is off screen, on the very UI
+    // thread the exit path joins: 15 s of ghost process and ~700 MB of churn on a 5000-game library,
+    // with nothing left to draw it on. The item WinForms gets back is released on the spot and never
+    // owned an accessibility object, so that walk frees nothing either way — only the tile is wasted.
+    // Hand back the blank item (never null: the Items[i] path throws on a null virtual item) and skip
+    // the build.
     private void OnPosterRetrieveItem(object sender, RetrieveVirtualItemEventArgs e)
     {
         int slot = -1;
-        var model = PosterModel(e.ItemIndex);
-        if (model != null && Guid.TryParse(S(Safe(() => model.Id)), out var id)) slot = SlotFor(model, id);
+        if (!_closing && !Disposing && !IsDisposed)
+        {
+            var model = PosterModel(e.ItemIndex);
+            if (model != null && Guid.TryParse(S(Safe(() => model.Id)), out var id)) slot = SlotFor(model, id);
+        }
         e.Item = new ListViewItem("") { ImageIndex = slot };
     }
 
@@ -3773,7 +3687,6 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     {
         if (_posterMode == on || _poster == null) return;
         _posterMode = on;
-        if (_posterBtn != null) _posterBtn.Text = on ? "List View" : "Poster View";   // label = the view you'd switch TO
         try { SyncViewSwitchChecks(); } catch { }   // menu bar: Images View / List View check marks
         _cfg.SetBool("PosterMode", on); _cfg.Save();
         if (on)
@@ -3793,16 +3706,13 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         }
     }
 
-    /// <summary>Pick the image type the poster tiles show. One state, three surfaces: the toolbar
-    /// dropdown and both Image Group menus are re-stamped, then the tile caches are rebuilt (the
-    /// zoom pattern) and the poster repainted when it is the live view.</summary>
+    /// <summary>Pick the image type the poster tiles show. One state, two surfaces: both Image Group
+    /// menus are re-stamped, then the tile caches are rebuilt (the zoom pattern) and the poster
+    /// repainted when it is the live view.</summary>
     private void SelectPosterGroup(string key)
     {
         _posterGroup = key;
         try { _cfg.Set("PosterImageGroup", key); _cfg.Save(); } catch { }
-        if (_posterGroupBtn != null)
-            foreach (ToolStripItem it in _posterGroupBtn.DropDownItems)
-                if (it is ToolStripMenuItem mi && mi.Tag is string k) mi.Checked = string.Equals(k, key, StringComparison.OrdinalIgnoreCase);
         try { SyncImageGroupChecks(); } catch { }
         try { RebuildPosterGeometry(); } catch { }
         if (_posterMode) { try { RefreshPoster(); LayoutPoster(); } catch { } }
@@ -5987,7 +5897,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     /// <summary>The Generate Image Cache flow (options dialog → phased progress run).
     /// <paramref name="only"/> restricts the run to those games (the menu's selected-games entry);
-    /// null = the whole library (toolbar button / all-games entry).</summary>
+    /// null = the whole library (the all-games entry).</summary>
     private void GenerateCachedImages(IGame[] only)
     {
         if (_genCacheLive is { IsDisposed: false } live) { try { live.RestoreFromMinimized(); } catch { } return; }
@@ -6641,7 +6551,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // Two behaviours, decided by the current order, because only one of them makes sense in each:
     //
     //   Title A→Z  → JUMP. The native type-ahead handles it (OnTypeAheadSearch).
-    //   Any other  → FILTER. The typed text goes into the toolbar Search box, which already filters
+    //   Any other  → FILTER. The typed text goes into the left panel's Search box, which already filters
     //                over Title/Platform/Developer and already ANDs with the advanced criteria.
     //                Reusing it means no second filter state, no second indicator, and the text
     //                stays visible and editable where the user expects to find it.

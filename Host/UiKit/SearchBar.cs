@@ -52,9 +52,22 @@ internal sealed class RoundedField : Panel
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e);
-        int w = Math.Max(0, ClientSize.Width - Padding.Horizontal);
+        // The insets are a look, not a constraint, so they give way before the content does. At the
+        // panel's full width they are the ~19px that keeps the text off the rounded frame; squeezed,
+        // they would take the field with them — 19 of padding inside a 33px box leaves 14px to type in,
+        // a sliver in a frame. Capping the pair at a third of the width keeps two thirds for the text
+        // however narrow it gets, and the proportions between left and right are preserved so the
+        // asymmetry (more room before the caret than after) survives the shrink.
+        int left = Padding.Left, right = Padding.Right, inset = left + right;
+        int cap = ClientSize.Width / 3;
+        if (inset > cap && inset > 0)
+        {
+            left = Math.Max(2, left * cap / inset);
+            right = Math.Max(2, right * cap / inset);
+        }
+        int w = Math.Max(0, ClientSize.Width - left - right);
         foreach (Control c in Controls)
-            c.SetBounds(Padding.Left, Math.Max(0, (ClientSize.Height - c.Height) / 2), w, c.Height);
+            c.SetBounds(left, Math.Max(0, (ClientSize.Height - c.Height) / 2), w, c.Height);
     }
 
     protected override void OnPaint(PaintEventArgs e)

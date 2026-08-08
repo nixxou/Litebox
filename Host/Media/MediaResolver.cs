@@ -674,31 +674,92 @@ internal static class MediaResolver
     /// designe le jeu, jamais celui du dossier. Images et videos gardent la recherche a plat : chez
     /// elles un sous-dossier veut dire quelque chose (region, type de video) et fusionner les
     /// niveaux melangerait les categories.</param>
+    // ── Scoped directory-listing memo ────────────────────────────────────────
+    // A pass that resolves art for the WHOLE library asks the same few hundred directories tens of
+    // thousands of times — once per game, with a different title filter each time. Inside the scope
+    // below, a directory is read ONCE and every later question about it is answered from RAM. Its
+    // ABSENCE is remembered too, and that half carries most of the win: the region sub-folders are
+    // mostly missing, and Directory.Exists is a syscall like any other.
+    //
+    // Opt-in and [ThreadStatic]: only the thread that opened the scope changes behaviour, and the memo
+    // dies with the scope — nothing survives a pass, so there is no stale listing to invalidate. NOT
+    // for interactive callers: they ask about one game, and reading a whole directory to answer one
+    // question is the wrong trade.
+    [ThreadStatic] private static Dictionary<string, string[]> _dirMemo;
+
+    /// <summary>Memoise directory listings for the calling thread until the returned scope is
+    /// disposed. Nested scopes are no-ops — the outermost owns the memo.</summary>
+    internal static IDisposable ScopedDirCache() => new DirCacheScope();
+
+    private sealed class DirCacheScope : IDisposable
+    {
+        private readonly bool _owner;
+        public DirCacheScope()
+        {
+            _owner = _dirMemo == null;
+            if (_owner) _dirMemo = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        }
+        public void Dispose() { if (_owner) _dirMemo = null; }
+    }
+
+    /// <summary>The directory's files, or null when it does not exist — both answers memoised.</summary>
+    private static string[] MemoNames(string dir)
+    {
+        var memo = _dirMemo;
+        if (memo.TryGetValue(dir, out var names)) return names;
+        string[] v = null;
+        try { if (Directory.Exists(dir)) v = Directory.GetFiles(dir); } catch { }
+        return memo[dir] = v;
+    }
+
     private static string BestInDir(string dir, Guid id, string sani, HashSet<string> exts,
                                     bool flat = false)
     {
-        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return null;
+        if (string.IsNullOrEmpty(dir)) return null;
+
+        // Memoised only for the recursive-free branch: WalkFlat walks a whole subtree, which is a
+        // different unit of work than "this directory's files".
+        bool memoised = _dirMemo != null && !flat;
+        string[] memo = null;
+        if (memoised)
+        {
+            memo = MemoNames(dir);
+            if (memo == null) return null;   // remembered as absent
+        }
+        else if (!Directory.Exists(dir)) return null;
 
         string best = null;
         long bestNum = long.MaxValue;
-        string glob = sani.Length > 0 ? sani + "*" : "*";
 
-        // TWO globs, and the second is not an optimisation — it is the whole point of the GUID form.
-        // TryMatch ignores the title part of a GUID name so a file follows its game whatever the
-        // title becomes; narrowing on the title first quietly undid that. The deferred rename writes
-        // exactly the offending shape — "<OLD title>.<guid>-01.pdf" for a game already renamed — so
-        // with the title glob alone a manual or a music track went INVISIBLE between the rename and
-        // the flush. Images survive it through the id-keyed cache; nothing else does.
         IEnumerable<string> files;
-        try
+        if (memoised)
         {
-            if (flat) return WalkFlat(dir, id, sani, exts);
-            files = Directory.EnumerateFiles(dir, glob, SearchOption.TopDirectoryOnly);
-            if (id != Guid.Empty)
-                files = files.Concat(Directory.EnumerateFiles(dir, "*." + id.ToString("D") + "*",
-                                                              SearchOption.TopDirectoryOnly));
+            // The WHOLE listing goes to TryMatch, which is the real predicate: its plain branch
+            // demands the name be exactly "<sani>-<n>", so only names starting with the title can
+            // ever win, and its GUID branch keys off the name's shape. The globs below are therefore
+            // a pre-filter, never a criterion — dropping them cannot change the winner.
+            files = memo;
         }
-        catch { return null; }
+        else
+        {
+            string glob = sani.Length > 0 ? sani + "*" : "*";
+
+            // TWO globs, and the second is not an optimisation — it is the whole point of the GUID form.
+            // TryMatch ignores the title part of a GUID name so a file follows its game whatever the
+            // title becomes; narrowing on the title first quietly undid that. The deferred rename writes
+            // exactly the offending shape — "<OLD title>.<guid>-01.pdf" for a game already renamed — so
+            // with the title glob alone a manual or a music track went INVISIBLE between the rename and
+            // the flush. Images survive it through the id-keyed cache; nothing else does.
+            try
+            {
+                if (flat) return WalkFlat(dir, id, sani, exts);
+                files = Directory.EnumerateFiles(dir, glob, SearchOption.TopDirectoryOnly);
+                if (id != Guid.Empty)
+                    files = files.Concat(Directory.EnumerateFiles(dir, "*." + id.ToString("D") + "*",
+                                                                  SearchOption.TopDirectoryOnly));
+            }
+            catch { return null; }
+        }
 
         foreach (var f in files)
         {

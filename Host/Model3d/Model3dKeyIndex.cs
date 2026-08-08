@@ -149,20 +149,24 @@ internal static class Model3dKeyIndex
         // 1. keys — the ONE place the whole library's keys are computed.
         var byGame = new Dictionary<string, Entry>(games.Length, StringComparer.OrdinalIgnoreCase);
         var gameByKey = new Dictionary<string, string>(games.Length, StringComparer.OrdinalIgnoreCase);
-        foreach (var g in games)
-        {
-            if (gen != _generation) return;   // superseded by a newer rebuild
-            try
+        // Resolve() asks the same few hundred art directories once PER GAME — the same question with a
+        // different title each time. Under this scope each of them is read once and answered from RAM
+        // for the rest of the walk; the memo is dropped at the closing brace.
+        using (Media.MediaResolver.ScopedDirCache())
+            foreach (var g in games)
             {
-                var idn = Model3dCache.Resolve(g, ctx);
-                if (idn is { HasArt: true })
+                if (gen != _generation) return;   // superseded by a newer rebuild
+                try
                 {
-                    byGame[idn.GameId] = new Entry(idn.Key, false, false);
-                    gameByKey[idn.Key] = idn.GameId;
+                    var idn = Model3dCache.Resolve(g, ctx);
+                    if (idn is { HasArt: true })
+                    {
+                        byGame[idn.GameId] = new Entry(idn.Key, false, false);
+                        gameByKey[idn.Key] = idn.GameId;
+                    }
                 }
+                catch { }
             }
-            catch { }
-        }
 
         // 2. presence (+ 3. sweep, once per launch + 4. sidecar repair) — ONE directory walk.
         bool sweep = System.Threading.Interlocked.Exchange(ref _sweepDone, 1) == 0
@@ -207,6 +211,8 @@ internal static class Model3dKeyIndex
             try { if (Model3dCache.ReadThumbPng(glb) != null) repaired++; } catch { }
         }
 
+        DumpKeys(byGame);
+
         int nGlb = 0, nPng = 0;
         lock (_lock) foreach (var e in _byGame.Values) { if (e.HasGlb) nGlb++; if (e.HasPng) nPng++; }
         Console.WriteLine($"[model3d] index: {byGame.Count} bakeable game(s), {nGlb} glb, {nPng} png"
@@ -220,6 +226,9 @@ internal static class Model3dKeyIndex
     private static void RecomputeGames(IGame[] games, int gen, bool partial)
     {
         var ctx = new Model3dCache.ResolveContext { Stat = BuildStatProvider(out _) };
+        // Worth memoising for a PLATFORM re-key (hundreds of games over the same directories), never for
+        // a single game: reading a whole directory to answer one question is the wrong trade.
+        using (games.Length > 1 ? Media.MediaResolver.ScopedDirCache() : null)
         foreach (var g in games)
         {
             if (gen != _generation) return;
@@ -248,6 +257,24 @@ internal static class Model3dKeyIndex
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
+
+    // Opt-in oracle (LITEBOX_3DKEYDUMP=1): every game's key, sorted by game id, into
+    // Core\litebox\model3d-keys.txt. The pass costs seconds and touches the whole library through a
+    // long resolution chain, so any change to that chain — a faster listing, a different art source —
+    // has to prove it produced the SAME keys, not merely the same counts (two errors cancel out in a
+    // count). Writes nothing at all without the variable.
+    private static void DumpKeys(Dictionary<string, Entry> byGame)
+    {
+        if (Environment.GetEnvironmentVariable("LITEBOX_3DKEYDUMP") is not { Length: > 0 }) return;
+        try
+        {
+            string path = Path.Combine(LiteBoxPaths.Data, "model3d-keys.txt");
+            File.WriteAllLines(path, byGame.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                                           .Select(kv => kv.Key + "  " + kv.Value.Key));
+            Console.WriteLine($"[model3d] key dump → {path} ({byGame.Count} entries)");
+        }
+        catch (Exception ex) { Console.WriteLine("[model3d] key dump failed: " + ex.Message); }
+    }
 
     // One bulk Everything query over the LB image tree → RAM dict; per-path misses (art outside the
     // tree, custom spine files) fall back to FileInfo inside Resolve's Slot().

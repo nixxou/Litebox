@@ -3354,7 +3354,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // (LVM_SETSELECTIONMARK is ignored) — Shift+click / Shift+arrow ranged from index 0 and over-selected.
     // So we own the Shift range: track our anchor, and on a Shift interaction re-select exactly [anchor..target].
     // Plain / Ctrl clicks and plain navigation stay native (they were fine); we only note the new anchor after.
-    private sealed class PosterListView : ListView
+    internal sealed class PosterListView : ListView   // internal: --selftest-selection drives it headless
     {
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref LVITEM lvi);
@@ -3475,7 +3475,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
         // Select exactly [min(a,b)..max(a,b)], clearing the rest; focus the moving end. Anchor unchanged.
         // Wrapped in Begin/EndUpdate so the clear-then-set sequence paints once, not as a flash of nothing.
-        private void SelectRange(int a, int b)
+        internal void SelectRange(int a, int b)   // internal: measured by --selftest-selection
         {
             if (!IsHandleCreated) return;
             int lo = Math.Min(a, b), hi = Math.Max(a, b);

@@ -122,7 +122,7 @@ internal static class CoreModelHost
                     // NOTE: the hosted core's art resolution does NOT honour this setting — the throwaway Game's
                     // image getters rank regions by LB's hard-coded list (World first; obfuscated constant —
                     // patching the reflectable static twins like GamesDb.prioritizedRegions changed nothing).
-                    // The home-made zone mirrors that order on purpose (see HomeModel3d.ResolveArt); real
+                    // The home-made zone mirrors that order on purpose (see Model3dArt); real
                     // LaunchBox with user RegionPriorities may pick another regional scan for the preview.
                 }
                 catch (Exception ex) { Console.WriteLine("[model3d] region priorities: " + ex.Message); }

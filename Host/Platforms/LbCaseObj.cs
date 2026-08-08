@@ -236,7 +236,12 @@ internal static class LbCaseObj
             var parts = System.IO.Path.GetFullPath(path).Split(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
             for (int i = 0; i < parts.Length; i++)
                 if (parts[i].Equals("Images", StringComparison.OrdinalIgnoreCase))
-                    return i + 3 < parts.Length ? parts[i + 3] : null;   // Images/<platform>/<type>/<region>/file
+                    // i+3 is a region only when something FOLLOWS it — otherwise it is the file itself. An
+                    // image sitting straight in its type folder (no region sub-folder) used to be read as a
+                    // region named after the file, and IsEuropeanRegion matches substrings: "Palamedes…png"
+                    // contains "pal", so that game got a PAL spine. Harmless while the resolver could not
+                    // see those files at all; not once GUID-form art resolves.
+                    return i + 4 < parts.Length ? parts[i + 3] : null;   // Images/<platform>/<type>/<region>/file
             return null;
         }
         catch { return null; }

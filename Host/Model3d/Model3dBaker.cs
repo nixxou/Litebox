@@ -73,9 +73,9 @@ internal static class Model3dBaker
     /// <summary>Build + bake + thumb-render a game's model. MUST run on the bake thread (callers go through
     /// <see cref="Run{T}"/>). Null when the model can't be built.</summary>
     public static (List<BakedMesh> meshes, List<BakedMaterial> mats, byte[] thumbPng)? Bake(
-        Dictionary<string, string>? map, string title, string platform, Dictionary<string, string>? imgOv = null)
+        Dictionary<string, string>? map, string title, Model3dArt art)
     {
-        var model = Platforms.HomeModel3d.BuildModel(map, title, platform, imgOv);
+        var model = Platforms.HomeModel3d.BuildModel(map, title, art);
         if (model == null) return null;
         var (meshes, mats) = BakeModel(model);
         if (meshes.Count == 0) return null;
@@ -95,10 +95,9 @@ internal static class Model3dBaker
     /// <summary>Build the game's model with source-resolution textures, flattened + frozen (UI-thread
     /// safe). MUST run on a bake STA worker (callers go through <see cref="Run{T}"/>). Null when the
     /// model can't be built.</summary>
-    public static Model3D? BakeRuntimeModel(Dictionary<string, string>? map, string title, string platform,
-                                            Dictionary<string, string>? imgOv = null)
+    public static Model3D? BakeRuntimeModel(Dictionary<string, string>? map, string title, Model3dArt art)
     {
-        var model = Platforms.HomeModel3d.BuildModel(map, title, platform, imgOv);
+        var model = Platforms.HomeModel3d.BuildModel(map, title, art);
         if (model == null) return null;
         var grp = new Model3DGroup();
         void Walk(Model3D m, Matrix3D parent)

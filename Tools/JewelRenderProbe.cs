@@ -23,7 +23,17 @@ internal static class JewelRenderProbe
     private static byte _ambient = 0x33;
     private static bool _fillLight;
 
-    // usage: --render-jewel <out.png> <yawDeg> <pitchDeg> [distance] [WxH]
+    // usage: --render-jewel <out.png> [yawDeg] [pitchDeg] [distance] [WxH]
+    //        [platform <name>] [title <game title>] [type <box|jewelCase|dvd|longJewelCase|doubleJewelCase>]
+    //        [front|spine|back|logo|full <path>] [noscan] [noback] [map "K=V;K=V"] [noplastic|nocap|diagback]
+    //
+    // WHICH GAME: platform + title, resolved through MediaResolver exactly as the app does — so the probe
+    // renders the same art the cache would bake. There is no catalogue in this process (--render-jewel
+    // returns before HostBoot), hence no game id and no game cache: MediaResolver falls back to its disk
+    // walk over LB's conventional Images\<platform>\<type> layout, which needs no plugin host to answer.
+    // Per-slot paths override that, for art that is NOT in the library — the only way to exercise a case
+    // the real tree cannot produce (an image outside Images\ has no region, which is how the Dreamcast
+    // black/white measurement gets tested).
     public static int Run(string[] args, int idx)
     {
         try
@@ -39,43 +49,35 @@ internal static class JewelRenderProbe
                 int.TryParse(p[0], out w); int.TryParse(p[1], out h);
             }
 
-            // FF7 PS1 jewel defaults (from model-defaults.json) + real art forced via the override map.
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["ModelType"] = "jewelCase",
-                ["FrontSpineImage"] = @"{Resources}\Sony Playstation",
-                ["FrontSpineIsClear"] = "true",
-                ["DoubleSpineImageMode"] = "AutomaticDetection",
-                ["FullImageSpineWidth"] = "0.143",
-                ["FullScanIsLandscape"] = "false",
-                ["LogoRotation"] = "0,0,0,",
-                ["SpineRotation"] = "0,,0,",
-                ["UseFullScanImages"] = "false",
-            };
-            // Art relative to CWD (= LB root when launched from Core). Falls through to whatever exists.
+            string platform = ArgValue(args, "platform") ?? "Sony Playstation";
+            string title = ArgValue(args, "title") ?? "Final Fantasy 7";
+            InitMediaRoot();
+
+            // Defaults for the platform (model-defaults.json, scrapeAs-aware) — the settings the app itself
+            // would start from — else the ModelSettings ctor defaults. `type` and `map` override from there.
+            var map = new Dictionary<string, string>(
+                Host.Platforms.ModelDefaults.TryGet(platform, platform)
+                ?? Host.Platforms.EditPlatformModel.CtorDefaults()
+                ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
+            if (ArgValue(args, "type") is { Length: > 0 } forcedType) map["ModelType"] = forcedType;
+
+            // Per-slot path overrides. Absolute or relative to CWD (= LB root when launched from Core).
             var ov = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            bool na = args.Contains("naart");   // force NON-European art (World front + NA spine) to exercise the NTSC path
-            AddIfExists(ov, "front", na
-                ? FirstExisting(@"Images\Sony Playstation\Box - Front\World\Final Fantasy 7-20.png",
-                                @"Images\Sony Playstation\Box - Front\France\Final Fantasy 7-01.png")
-                : FirstExisting(@"Images\Sony Playstation\Box - Front\France\Final Fantasy 7-01.png",
-                                @"Images\Sony Playstation\Box - Front\World\Final Fantasy 7-20.png"));
-            // "spinefile <path>": use an arbitrary spine image (outside the Images tree → no region), so the
-            // Dreamcast black/white MEASUREMENT can be exercised without touching the real library.
-            string? forcedSpine = ArgValue(args, "spinefile");
-            if (forcedSpine != null && File.Exists(forcedSpine)) ov["spine"] = Path.GetFullPath(forcedSpine);
-            else if (!args.Contains("noscan"))   // "noscan" simulates a game without a Box - Spine scan (preset cap path)
-                AddIfExists(ov, "spine", na
-                    ? FirstExisting(@"Images\Sony Playstation\Box - Spine\North America\Final Fantasy 7-20.jpg",
-                                    @"Images\Sony Playstation\Box - Spine\Europe\Final Fantasy 7-01.jpg")
-                    : FirstExisting(@"Images\Sony Playstation\Box - Spine\Europe\Final Fantasy 7-01.jpg",
-                                    @"Images\Sony Playstation\Box - Spine\North America\Final Fantasy 7-20.jpg"));
-            if (!args.Contains("noback"))
-                AddIfExists(ov, "back", FirstExisting(
-                    @"Images\Sony Playstation\Box - Back\France\Final Fantasy 7-01.png",
-                    @"Images\Sony Playstation\Box - Back\World\Final Fantasy 7-20.png"));
-            AddIfExists(ov, "logo", FirstExisting(
-                @"Images\Sony Playstation\Clear Logo\World\Final Fantasy 7-20.png"));
+            foreach (var slot in Host.Model3d.Model3dImageStore.Slots)
+                if (ArgValue(args, slot) is { Length: > 0 } sp)
+                {
+                    if (File.Exists(sp)) ov[slot] = Path.GetFullPath(sp);
+                    else Console.WriteLine($"[jewel-probe] {slot} \"{sp}\" does not exist — ignored");
+                }
+            // Legacy spelling of `spine <path>`, kept so old command lines keep working.
+            if (!ov.ContainsKey("spine") && ArgValue(args, "spinefile") is { Length: > 0 } fs && File.Exists(fs))
+                ov["spine"] = Path.GetFullPath(fs);
+            // "noscan" simulates a game with no Box - Spine scan (exercises the preset cap path); "noback"
+            // a game with no back scan. Both work by pinning the slot to nothing — see SuppressedSlots.
+            var suppressed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (args.Contains("noscan")) suppressed.Add("spine");
+            if (args.Contains("noback")) suppressed.Add("back");
+
             Host.Platforms.HomeModel3d.DebugSkipPlastic = args.Contains("noplastic");
             Host.Platforms.HomeModel3d.DebugSkipCap = args.Contains("nocap");
             Host.Platforms.HomeModel3d.DebugBackFaces = args.Contains("diagback");
@@ -83,24 +85,41 @@ internal static class JewelRenderProbe
             int ai = Array.IndexOf(args, "amb");
             if (ai >= 0 && ai + 1 < args.Length && byte.TryParse(args[ai + 1], System.Globalization.NumberStyles.HexNumber, null, out var ab)) _ambient = ab;
             ApplyMapArg(args, map);   // `map "K=V;K=V"` → spine-mode overrides etc. (empty V = remove)
+
+            // ONE resolution, the app's own (Model3dArt → MediaResolver), then the explicit overrides and
+            // the suppressions on top. Everything below reads these paths — the probe cannot disagree with
+            // the renderer about which files it is looking at.
+            var art = Suppress(Host.Model3d.Model3dArt.Resolve(map, platform, Guid.Empty, title, ov), suppressed);
+            Console.WriteLine($"[jewel-probe] {platform} / \"{title}\" type={(map.TryGetValue("ModelType", out var mt) ? mt : "box")}");
+            foreach (var (slot, path) in new[] { ("front", art.Front), ("logo", art.Logo), ("spine", art.Spine),
+                                                 ("back", art.Back), ("full", art.Full) })
+                Console.WriteLine($"[jewel-probe]   {slot,-6} {(path == null ? (suppressed.Contains(slot) ? "(suppressed)" : "NOT FOUND") : (ov.ContainsKey(slot) ? "[forced] " : "") + path)}");
+
             if (map.TryGetValue("FrontSpineImage", out var dbgSpec) && dbgSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase))
             {
                 string key = dbgSpec.Substring(12);
-                string? fRgn = Host.Platforms.LbCaseObj.RegionOfImagePath(ov.TryGetValue("front", out var fp) ? fp : null);
-                string? sRgn = Host.Platforms.LbCaseObj.RegionOfImagePath(ov.TryGetValue("spine", out var sp) ? sp : null);
-                var scanBmp = LoadBmp(sp); var frontBmp = LoadBmp(fp);
+                string? fRgn = Host.Platforms.LbCaseObj.RegionOfImagePath(art.Front);
+                string? sRgn = Host.Platforms.LbCaseObj.RegionOfImagePath(art.Spine);
+                var scanBmp = LoadBmp(art.Spine); var frontBmp = LoadBmp(art.Front);
                 string suffix = key.Contains(" - ", StringComparison.Ordinal) ? " (explicite)"
                     : Host.Platforms.LbCaseObj.AutoVersionSuffix(key, scanBmp, frontBmp, sRgn, fRgn);
                 string resolved = key.Contains(" - ", StringComparison.Ordinal) ? key : key + suffix;
                 var got = Host.Platforms.LbCaseObj.SpineImage(resolved, fRgn);
                 Console.WriteLine($"[jewel-probe] auto: front={fRgn ?? "-"} spine={sRgn ?? "-"} | \"{key}\" -> \"{resolved}\" -> {(got == null ? "NULL" : got.PixelWidth + "x" + got.PixelHeight)}");
             }
-            Console.WriteLine($"[jewel-probe] art: {string.Join(", ", ov.Keys)}  map: {string.Join(";", map.Select(kv => kv.Key + "=" + kv.Value))}  (cwd={Environment.CurrentDirectory})");
+
+            // "loop <n>": bake the SAME model n times through the real worker pool and report memory as it
+            // goes — the Generate-Media-Cache pass in miniature, minus the library. A bake that leaks shows
+            // up as a straight line here in seconds, and a fix can be judged on the same line instead of on
+            // an hour-long pass. `gc` collects before each report, which separates what the GC can still
+            // reclaim (managed) from what it cannot (WPF's unmanaged render resources).
+            if (int.TryParse(ArgValue(args, "loop"), out var loopN) && loopN > 0)
+                return LeakLoop(map, title, art, loopN, args.Contains("gc"), args.Contains("fresh"), args.Contains("shutdown"));
 
             byte[]? png = null;
             var t = new Thread(() =>
             {
-                try { png = Render(map, ov, yaw, pitch, dist, w, h); }
+                try { png = Render(map, platform, title, art, yaw, pitch, dist, w, h); }
                 catch (Exception ex) { Console.WriteLine("[jewel-probe] render: " + ex); }
             });
             t.SetApartmentState(ApartmentState.STA);
@@ -138,12 +157,22 @@ internal static class JewelRenderProbe
                     if (prev == null) { Console.WriteLine("[oracle] core unavailable (run the DEPLOYED LB\\Core exe)"); return; }
                     var ui = (prev.Control as System.Windows.Forms.Integration.ElementHost)?.Child as System.Windows.FrameworkElement;
                     if (ui == null) { Console.WriteLine("[oracle] no WPF child"); return; }
-                    var map = Host.Platforms.ModelDefaults.TryGet("Sony Playstation", "Sony Playstation")
-                              ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    ApplyMapArg(args, map);   // `map "K=V;K=V"` → overrides (empty V = remove)
+                    // Same platform/title arguments as --render-jewel: the A/B is only worth anything if both
+                    // sides are asked for the SAME game with the SAME settings. LaunchBox resolves that
+                    // game's art through its own code — which is the point, it is the reference.
+                    string platform = ArgValue(args, "platform") ?? "Sony Playstation";
                     string title = ArgValue(args, "title") ?? "Final Fantasy 7";
-                    Console.WriteLine("[oracle] map: " + string.Join(";", map.Select(kv => kv.Key + "=" + kv.Value)) + "  title=" + title);
-                    prev.Redraw(map, title, "Sony Playstation");
+                    // SAME settings cascade as --render-jewel, ctor defaults included: LB has no defaults
+                    // entry for every platform (Game Boy, SNES…), and starting one side from an empty map
+                    // would make the two renders differ for a reason that has nothing to do with the
+                    // renderer — which is precisely the confusion this A/B exists to avoid.
+                    var map = new Dictionary<string, string>(
+                        Host.Platforms.ModelDefaults.TryGet(platform, platform)
+                        ?? Host.Platforms.EditPlatformModel.CtorDefaults()
+                        ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
+                    ApplyMapArg(args, map);   // `map "K=V;K=V"` → overrides (empty V = remove)
+                    Console.WriteLine($"[oracle] {platform} / \"{title}\"  map: " + string.Join(";", map.Select(kv => kv.Key + "=" + kv.Value)));
+                    prev.Redraw(map, title, platform);
                     ui.Measure(new System.Windows.Size(w, h));
                     ui.Arrange(new System.Windows.Rect(0, 0, w, h));
                     Pump(wait);                    // FlowModel loads art ASYNC and rebuilds — let it settle
@@ -347,14 +376,15 @@ internal static class JewelRenderProbe
         catch (Exception ex) { Console.WriteLine("[jewel-probe] " + ex); return 1; }
     }
 
-    private static byte[]? Render(Dictionary<string, string> map, Dictionary<string, string> ov,
+    private static byte[]? Render(Dictionary<string, string> map, string platform, string title,
+                                  Host.Model3d.Model3dArt art,
                                   double yaw, double pitch, double dist, int w, int h)
     {
         // BakeRuntimeModel flattens VisualBrush composites to frozen ImageBrush textures (they render headless,
         // unlike the live VisualBrush materials BuildModel emits) — same geometry, faithful to what's shown.
         // Bounds dump (geometry diagnosis): the LIVE model keeps its child structure (paper quads + plastic
         // group) so we can compare the paper-insert depth to the plastic-shell depth.
-        var live = Host.Platforms.HomeModel3d.BuildModel(map, "Final Fantasy VII", "Sony Playstation", ov);
+        var live = Host.Platforms.HomeModel3d.BuildModel(map, title, art);
         if (live is Model3DGroup lg)
         {
             Console.WriteLine($"[jewel-probe] model bounds: {Fmt(live.Bounds)}  ({lg.Children.Count} children)");
@@ -366,13 +396,13 @@ internal static class JewelRenderProbe
         // the runtime flatten. This is what caught the doubleSided round-trip bug (live fine, GLB broken).
         if (Environment.GetCommandLineArgs().Contains("glb"))
         {
-            var bakedOut = Host.Model3d.Model3dBaker.Bake(map, "Final Fantasy VII", "Sony Playstation", ov);
+            var bakedOut = Host.Model3d.Model3dBaker.Bake(map, title, art);
             if (bakedOut == null) { Console.WriteLine("[jewel-probe] Bake returned null"); return null; }
             var (meshes, mats, thumb) = bakedOut.Value;
             string tmp = Path.Combine(Path.GetTempPath(), "jewelprobe-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".glb");
             try
             {
-                Host.Model3d.GlbFile.Write(tmp, meshes, mats, thumb, new Host.Model3d.GlbInfo("probe", "", "Sony Playstation", "Final Fantasy VII", Host.Model3d.Model3dCache.BakerVersion, "probe"));
+                Host.Model3d.GlbFile.Write(tmp, meshes, mats, thumb, new Host.Model3d.GlbInfo("probe", "", platform, title, Host.Model3d.Model3dCache.BakerVersion, "probe"));
                 var reloaded = Host.Model3d.GlbFile.LoadModel(tmp);
                 if (reloaded == null) { Console.WriteLine("[jewel-probe] GLB reload null"); return null; }
                 Console.WriteLine("[jewel-probe] GLB round-trip path (bake → write → reload)");
@@ -381,7 +411,7 @@ internal static class JewelRenderProbe
             finally { try { File.Delete(tmp); } catch { } }
         }
 
-        var model = Host.Model3d.Model3dBaker.BakeRuntimeModel(map, "Final Fantasy VII", "Sony Playstation", ov);
+        var model = Host.Model3d.Model3dBaker.BakeRuntimeModel(map, title, art);
         if (model == null) { Console.WriteLine("[jewel-probe] BakeRuntimeModel returned null"); return null; }
         return RenderModel(model, yaw, pitch, dist, w, h);
     }
@@ -444,14 +474,76 @@ internal static class JewelRenderProbe
         catch { return null; }
     }
 
-    private static string? FirstExisting(params string[] paths)
+    /// <summary>Bake the same model <paramref name="n"/> times through Model3dBaker's real STA worker pool
+    /// — the same path Generate Media Cache drives — reporting memory every 50. Same art, same settings
+    /// every round, so anything that grows is the bake retaining what it should have released.</summary>
+    private static int LeakLoop(Dictionary<string, string> map, string title, Host.Model3d.Model3dArt art,
+                                int n, bool collect, bool fresh, bool shutdown)
     {
-        foreach (var p in paths) if (File.Exists(p)) return Path.GetFullPath(p);
-        return null;
+        var proc = System.Diagnostics.Process.GetCurrentProcess();
+        void Report(int i, string note = "")
+        {
+            if (collect) { GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect(); }
+            proc.Refresh();
+            Console.WriteLine($"[leak] {i,5}/{n}  managed={GC.GetTotalMemory(false) / (1024 * 1024),5} MB"
+                            + $"  private={proc.PrivateMemorySize64 / (1024 * 1024),5} MB"
+                            + $"  ws={proc.WorkingSet64 / (1024 * 1024),5} MB  handles={proc.HandleCount,6}{note}");
+        }
+        Console.WriteLine($"[leak] {(fresh ? "one THROWAWAY STA thread per bake" + (shutdown ? " + dispatcher shutdown" : "") : Host.Model3d.Model3dBaker.WorkerCount + " persistent STA worker(s)")}, collect={collect}");
+        Report(0, "  (baseline)");
+        for (int i = 1; i <= n; i++)
+        {
+            object? baked;
+            if (fresh)
+            {
+                // Same work, but the thread — and with it the Dispatcher and MediaContext WPF attaches to
+                // it — dies after every bake. If the growth goes away here and not with the pool, what the
+                // pool retains is per-thread WPF render state, not anything the bake itself allocates.
+                object? r = null;
+                var th = new Thread(() =>
+                {
+                    try { r = Host.Model3d.Model3dBaker.Bake(map, title, art); } catch { }
+                    // `shutdown`: end the Dispatcher WPF attached to this thread. Without it the dispatcher
+                    // stays registered in WPF's static table forever — holding its MediaContext, everything
+                    // rendered through it, and the thread itself (hence the handle count climbing).
+                    if (shutdown) { try { System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown(); } catch { } }
+                });
+                th.SetApartmentState(ApartmentState.STA);
+                th.Start(); th.Join();
+                baked = r;
+            }
+            else baked = Host.Model3d.Model3dBaker.Run(() => Host.Model3d.Model3dBaker.Bake(map, title, art));
+            if (baked == null) { Report(i, "  BAKE RETURNED NULL"); return 1; }
+            if (i % 50 == 0 || i == n) Report(i);
+        }
+        return 0;
     }
 
-    private static void AddIfExists(Dictionary<string, string> ov, string slot, string? path)
+    /// <summary>Point MediaResolver at the LaunchBox root so `platform`+`title` resolve. There is no plugin
+    /// host here, so it answers from LB's conventional Images\&lt;platform&gt;\&lt;type&gt; layout. The root is the
+    /// exe's Core\.. when the DEPLOYED build is run, else the current directory.</summary>
+    private static void InitMediaRoot()
     {
-        if (!string.IsNullOrEmpty(path)) ov[slot] = path!;
+        try
+        {
+            if (!string.IsNullOrEmpty(Host.Media.MediaResolver.LbRoot)) return;
+            string exeRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+            string root = Directory.Exists(Path.Combine(exeRoot, "Images")) ? exeRoot : Environment.CurrentDirectory;
+            Host.Media.MediaResolver.Init(root);
+        }
+        catch (Exception ex) { Console.WriteLine("[jewel-probe] media init: " + ex.Message); }
     }
+
+    /// <summary>Blank the named slots — "noscan"/"noback" reproduce a game that simply does not have that
+    /// scan, which is a different render path (the preset spine cap, the grey back insert) and not something
+    /// the library can be asked for on demand.</summary>
+    private static Host.Model3d.Model3dArt Suppress(Host.Model3d.Model3dArt art, HashSet<string> slots)
+        => slots.Count == 0 ? art : art with
+        {
+            Front = slots.Contains("front") ? null : art.Front,
+            Logo = slots.Contains("logo") ? null : art.Logo,
+            Spine = slots.Contains("spine") ? null : art.Spine,
+            Back = slots.Contains("back") ? null : art.Back,
+            Full = slots.Contains("full") ? null : art.Full,
+        };
 }

@@ -117,50 +117,33 @@ internal sealed class HomeModel3d : IDisposable
 
     /// <summary>Build the model for the given settings map + sample game. Unknown/absent ModelType renders as
     /// a box (what LB does for null settings). <paramref name="imgOv"/> = optional per-slot image override
-    /// (front/back/spine/logo/full — see Model3dImageStore).</summary>
+    /// (front/back/spine/logo/full — see Model3dImageStore); <paramref name="gameId"/> = the game behind the
+    /// title when there is one (the platform-settings preview has only a sample title).</summary>
     public void Build(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
-                      System.Collections.Generic.Dictionary<string, string>? imgOv = null)
+                      System.Collections.Generic.Dictionary<string, string>? imgOv = null, Guid gameId = default)
     {
-        try { _modelHost.Content = BuildModel(map, gameTitle, platform, imgOv); }
+        try { _modelHost.Content = BuildModel(map, gameTitle, Model3d.Model3dArt.Resolve(map, platform, gameId, gameTitle, imgOv)); }
         catch (Exception ex) { Console.WriteLine("[homemodel] build: " + ex.Message); _modelHost.Content = null; }
     }
 
     /// <summary>The pure model factory behind <see cref="Build"/> — usable without a viewport (GLB baking,
-    /// offscreen thumb rendering). Must run on an STA thread (the composed textures are WPF visuals).</summary>
-    internal static Model3D? BuildModel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
-                                        System.Collections.Generic.Dictionary<string, string>? imgOv = null)
+    /// offscreen thumb rendering). Must run on an STA thread (the composed textures are WPF visuals).
+    /// <paramref name="art"/> is ALREADY resolved (see <see cref="Model3d.Model3dArt"/>): the builders load
+    /// paths, they never look for them — which is what lets the cache key describe exactly what will be
+    /// consumed. The title is still needed beyond the art: the jewel's plain-text edge strip prints it.</summary>
+    internal static Model3D? BuildModel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle,
+                                        Model3d.Model3dArt art)
     {
         string type = map != null && map.TryGetValue("ModelType", out var t) ? t : "box";
         return type switch
         {
-            "jewelCase" => BuildJewel(map, gameTitle, platform, imgOv),
-            "dvd" => BuildDvd(map, gameTitle, platform, imgOv),
-            "longJewelCase" => BuildLongJewel(map, gameTitle, platform, imgOv),
-            "doubleJewelCase" => BuildDoubleJewel(map, gameTitle, platform, imgOv),
-            _ => BuildBox(map, gameTitle, platform, imgOv),
+            "jewelCase" => BuildJewel(map, gameTitle, art),
+            "dvd" => BuildDvd(map, gameTitle, art),
+            "longJewelCase" => BuildLongJewel(map, gameTitle, art),
+            "doubleJewelCase" => BuildDoubleJewel(map, gameTitle, art),
+            _ => BuildBox(map, gameTitle, art),
         };
     }
-
-    // ── Per-slot art resolution with the image-override layer (Edit Game → Image Selection tab) ──
-    //   • slot forced in the override → that exact file;
-    //   • override selects a FULL SCAN → front/spine/back are SUPPRESSED (the sheet replaces the three;
-    //     without this an auto-resolved spine scan would win the full-scan arbiter over the user's pick);
-    //   • otherwise → the automatic type→region→number resolution.
-    // Shared with Model3dCache.Resolve so the cache key and the bake see the same sources by construction.
-    internal static string? ResolveSlot(System.Collections.Generic.Dictionary<string, string>? ov, string slot,
-                                        string? platform, string? title, string[] typeChain)
-    {
-        if (ov != null)
-        {
-            if (ov.TryGetValue(slot, out var p) && !string.IsNullOrEmpty(p)) return p;
-            if (ov.ContainsKey("full") && slot is "front" or "spine" or "back") return null;
-        }
-        return ResolveArt(platform, title, typeChain);
-    }
-
-    /// <summary>The override forces full-scan composition (a "full" pick implies UseFullScanImages).</summary>
-    internal static bool FullForced(System.Collections.Generic.Dictionary<string, string>? ov)
-        => ov != null && ov.ContainsKey("full");
 
     /// <summary>A "{Resources}\&lt;preset&gt;" key with its AUTO-DETECT version resolved. A key that already
     /// carries " - &lt;version&gt;" is an EXPLICIT user pick (Black/White/European Version) and is returned
@@ -223,13 +206,13 @@ internal sealed class HomeModel3d : IDisposable
         return (Math.Min(1, a), Math.Min(1, 1 / a), defaultD);
     }
 
-    private static Model3D? BuildBox(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
-                                     System.Collections.Generic.Dictionary<string, string>? ov = null)
+    private static Model3D? BuildBox(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle,
+                                     Model3d.Model3dArt art)
     {
-        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain());
-        string? logoPath = ResolveSlot(ov, "logo", platform, gameTitle, Media.MediaResolver.ClearLogo);
-        string? spinePath = ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" });
-        string? backPath = ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain());
+        string? frontPath = art.Front;
+        string? logoPath = art.Logo;
+        string? spinePath = art.Spine;
+        string? backPath = art.Back;
         // Missing front → LB's NoImage placeholder (shipped): texture, dims and corner colour all follow.
         var front = LoadBitmap(frontPath) ?? LbCaseObj.SpineImage("NoImage");
         var logo = LoadBitmap(logoPath);
@@ -251,9 +234,7 @@ internal sealed class HomeModel3d : IDisposable
         // present, LB slices the SINGLE full sheet by ALIGNMENT CROPPING: every textured face gets the whole
         // image UniformToFill — front hAlign=Right, back hAlign=Left, sides hAlign=Center — and top/bottom are
         // the full scan's corner-average. (Flag off → Box - Full is ignored entirely.)
-        bool fullScanFlag = (map != null && map.TryGetValue("UseFullScanImages", out var ufs) && ufs.Equals("true", StringComparison.OrdinalIgnoreCase))
-                            || FullForced(ov);
-        var fullImg = fullScanFlag && spine == null ? LoadBitmap(ResolveSlot(ov, "full", platform, gameTitle, new[] { "Box - Full" })) : null;
+        var fullImg = art.FullScan && spine == null ? LoadBitmap(art.Full) : null;
 
         // Dims (autonomous — nothing read from the live model): full-scan mode derives them from the sheet
         // (spinePx = FullImageSpineWidth×sheetW; D = spinePx/sheetH; panel aspect rotated by the landscape
@@ -461,8 +442,8 @@ internal sealed class HomeModel3d : IDisposable
     //   (BackMat grey #FF696969), grey back (BackMat #FF050505), top/bottom→n/a, left/right edge strips = clear
     //   logo Uniform on #FF1C1116. Brush grids: spine 120×1000 transparent, front/back 1000×889.63, strips
     //   1000×54.27.  TODO: Box - Back image on the back quad; preset/custom/text spine styles (FrontSpineImage).
-    private static Model3D? BuildJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
-                                       System.Collections.Generic.Dictionary<string, string>? ov = null)
+    private static Model3D? BuildJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle,
+                                       Model3d.Model3dArt art)
     {
         // Spine mode first — it selects the PLASTIC MODEL (oracle-dumped 2026-07-28, all modes):
         //   FrontSpineIsClear=true  (empty clear / {Resources} presets / custom clear) → ClearSpineJewelCase
@@ -474,15 +455,15 @@ internal sealed class HomeModel3d : IDisposable
         var plastic = LbCaseObj.Load(spineClear ? "ClearSpineJewelCase" : "JewelCase") ?? LbCaseObj.Load("JewelCase");
         if (plastic == null) return null;   // no embedded model → keep LB's clone (comparison still works)
 
-        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain());
+        string? frontPath = art.Front;
         string? region = LbCaseObj.RegionOfImagePath(frontPath);   // drives the Auto-Detect spine version
         var front = LoadBitmap(frontPath);
-        var logo = LoadBitmap(ResolveSlot(ov, "logo", platform, gameTitle, Media.MediaResolver.ClearLogo));
+        var logo = LoadBitmap(art.Logo);
 
         var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
         var clear = System.Windows.Media.Colors.Transparent;
-        var backScan = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain()));
-        string? scanPath = ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" });
+        var backScan = LoadBitmap(art.Back);
+        string? scanPath = art.Spine;
         string? scanRegion = LbCaseObj.RegionOfImagePath(scanPath);
         var scan = LoadBitmap(scanPath);
         string logoFont = map != null && map.TryGetValue("LogoFont", out var lf) ? lf : "";
@@ -662,21 +643,21 @@ internal sealed class HomeModel3d : IDisposable
     //     live model's child group (game-independent). TODO: reproduce procedurally.
     //   TODO: DoubleSpineImageMode variants (Single / DualSplitCenter / DualMiddleSeparator) — Automatic split
     //   is what's implemented (observed behaviour with a spine scan).
-    private static Model3D? BuildDoubleJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
-                                             System.Collections.Generic.Dictionary<string, string>? ov = null)
+    private static Model3D? BuildDoubleJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle,
+                                             Model3d.Model3dArt art)
     {
-        string? frontPath = ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain());
+        string? frontPath = art.Front;
         string? region = LbCaseObj.RegionOfImagePath(frontPath);   // drives the Auto-Detect spine version
         var front = LoadBitmap(frontPath);
-        var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain()));
+        var backImg = LoadBitmap(art.Back);
 
         // Spine strips: the game's OWN Box - Spine scan first (ov-aware — an Image Selection pick flows
-        // through ResolveSlot), the FrontSpineImage preset/custom only as the NO-SCAN fallback. Same
+        // through Model3dArt), the FrontSpineImage preset/custom only as the NO-SCAN fallback. Same
         // priority rule as the single jewel (v9): "Sony Playstation Spine" mode used to REPLACE the scan
         // with the generic preset and the game's texture vanished from the side strips — the real
         // LaunchBox keeps showing the scan in that mode (user-verified, doubled-spine test).
         string spineSpec = map != null && map.TryGetValue("FrontSpineImage", out var ss) ? ss : "";
-        string? djScanPath = ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" });
+        string? djScanPath = art.Spine;
         var djScan = LoadBitmap(djScanPath);
         System.Windows.Media.Imaging.BitmapSource? spine =
             djScan
@@ -758,15 +739,15 @@ internal sealed class HomeModel3d : IDisposable
     //   back scan X±0.346 Z=-0.055 (Grid grey bg), left/right = Box - Spine scan bare-Image UNIFORM CENTERED
     //   (natural size, not stretched) — no clear-logo strips on this type. Plastic = embedded LongJewelCaseObj
     //   with Translate(0.056,-0.146,-0.04) → Scale(0.488) → Scale(1,1,1.459) (dump-verbatim).
-    private static Model3D? BuildLongJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
-                                           System.Collections.Generic.Dictionary<string, string>? ov = null)
+    private static Model3D? BuildLongJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle,
+                                           Model3d.Model3dArt art)
     {
         var plastic = LbCaseObj.Load("LongJewelCase");
         if (plastic == null) return null;
 
-        var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain()));
-        var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain()));
-        var spineImg = LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }));
+        var front = LoadBitmap(art.Front);
+        var backImg = LoadBitmap(art.Back);
+        var spineImg = LoadBitmap(art.Spine);
 
         var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
         var clear = System.Windows.Media.Colors.Transparent;
@@ -819,15 +800,15 @@ internal sealed class HomeModel3d : IDisposable
     //   • group transform = LB's Scale (art-aspect-derived) — borrowed from the live model (the oracle), the
     //     full sizing-rule re-implementation comes later like box/jewel dims.
     // TODO: spine fallback when no Box - Spine scan; Full Scan mode; spine/logo rotation options for dvd.
-    private static Model3D? BuildDvd(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
-                                     System.Collections.Generic.Dictionary<string, string>? ov = null)
+    private static Model3D? BuildDvd(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle,
+                                     Model3d.Model3dArt art)
     {
         // Colours: forced options else derived. A missing front falls back to LB's NoImage placeholder
         // (shipped, 245×319 ≈ aspect 0.766) — LB uses it as the front TEXTURE and every derived value
         // (dims, corner colour) follows from it naturally (probe case F).
-        var front = LoadBitmap(ResolveSlot(ov, "front", platform, gameTitle, Media.MediaResolver.FrontChain())) ?? LbCaseObj.SpineImage("NoImage");
-        var backImg = LoadBitmap(ResolveSlot(ov, "back", platform, gameTitle, Media.MediaResolver.BackChain()));
-        var spineImg = LoadBitmap(ResolveSlot(ov, "spine", platform, gameTitle, new[] { "Box - Spine" }));
+        var front = LoadBitmap(art.Front) ?? LbCaseObj.SpineImage("NoImage");
+        var backImg = LoadBitmap(art.Back);
+        var spineImg = LoadBitmap(art.Spine);
 
         var caseColor = System.Windows.Media.Color.FromRgb(0x1D, 0x1D, 0x1D);
         if (map != null && map.TryGetValue("CaseColor", out var kc) && int.TryParse(kc, out var kargb))
@@ -845,9 +826,7 @@ internal sealed class HomeModel3d : IDisposable
         // the WHOLE sheet becomes a plain ImageBrush on the wrap mesh (its authored UVs already lay out
         // back|spine|front), plastic keeps the case colour. Dims: W=min(1,panel/sheetH), H=min(1,sheetH/panel),
         // D=spinePx/sheetH with spinePx=FullImageSpineWidth×sheetW (the dvd ignores the landscape flag).
-        bool fullFlag = (map != null && map.TryGetValue("UseFullScanImages", out var ufs2) && ufs2.Equals("true", StringComparison.OrdinalIgnoreCase))
-                        || FullForced(ov);
-        var sheet = fullFlag && spineImg == null ? LoadBitmap(ResolveSlot(ov, "full", platform, gameTitle, new[] { "Box - Full" })) : null;
+        var sheet = art.FullScan && spineImg == null ? LoadBitmap(art.Full) : null;
         if (sheet != null)
         {
             var wrapSheet = new DiffuseMaterial(new ImageBrush(sheet) { Stretch = System.Windows.Media.Stretch.Fill });
@@ -881,7 +860,7 @@ internal sealed class HomeModel3d : IDisposable
         // clear logo decoded at width 206, rotated 90°, margins (0.015×frontW, 30), centred — it overflows
         // the narrow spine column symmetrically, exactly like LB.
         const double ColPanel = 434.89202807270095, ColSpine = 59.8601763541479;
-        var logo = LoadBitmap(ResolveSlot(ov, "logo", platform, gameTitle, Media.MediaResolver.ClearLogo));
+        var logo = LoadBitmap(art.Logo);
         var sides = ParseSides(map, "SpineRotation");
         var logoSides = ParseSides(map, "LogoRotation");
         double frontW = front != null ? Math.Round(front.PixelWidth * 600.0 / front.PixelHeight) : 460;
@@ -948,16 +927,6 @@ internal sealed class HomeModel3d : IDisposable
     {
         var grid = new System.Windows.Controls.Grid { Width = gridW, Height = gridH, Background = new SolidColorBrush(bg) };
         return new DiffuseMaterial(new VisualBrush(grid) { Stretch = System.Windows.Media.Stretch.Fill });
-    }
-
-    // Art resolution for the preview: the preview only has a TITLE (no game Guid), so use MediaResolver's
-    // title-only classic disk walk with the STANDARD region order (user RegionPriorities first — real-LaunchBox
-    // parity, now that no oracle needs matching). The id-keyed cache bridge is skipped on purpose: with
-    // Guid.Empty it would answer null when the cache is Ready.
-    internal static string? ResolveArt(string? platform, string? title, string[] typeChain)
-    {
-        if (string.IsNullOrEmpty(platform) || string.IsNullOrEmpty(title)) return null;
-        try { return Media.MediaResolver.ImageByTitle(platform, title, typeChain); } catch { return null; }
     }
 
     // VisualBrush face material exactly as LB composes it: Grid sized dim×1000 px, case-colour background,

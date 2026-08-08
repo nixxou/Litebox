@@ -128,6 +128,10 @@ internal static class EditPlatformRenderProbe
 
         // LB_GAME_MODE=1 → build the EDIT GAME variant of the panel (BuildForGame) instead of the platform one,
         // with LB_SAMPLE_TITLE as the game (reproduces game-window-specific layout/preview differences).
+        // The Guid here is a PLACEHOLDER: this probe runs before HostBoot installs the catalogue, so there is
+        // no game to name — it only needs a key to store an override under. EditPlatformModel.PreviewIdOf
+        // rejects it for art resolution (an id no game answers to resolves to nothing), leaving the preview
+        // to match LB_SAMPLE_TITLE by filename, which is all this probe can do without a catalogue.
         var (panel, _) = Environment.GetEnvironmentVariable("LB_GAME_MODE") == "1"
             ? EditPlatformModel.BuildForGame(plat.Name ?? platformName, Guid.NewGuid().ToString(), false, 1f, null,
                                              Environment.GetEnvironmentVariable("LB_SAMPLE_TITLE") ?? "")

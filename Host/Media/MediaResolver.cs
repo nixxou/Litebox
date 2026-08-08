@@ -194,29 +194,40 @@ internal static class MediaResolver
 
     // ── Public API (used by HostGame) ────────────────────────────────────────
 
-    /// <summary>Best image path for a property's type chain (fast path via cache, else IO). Null if none.</summary>
+    /// <summary>Best image path for a property's type chain. Null if none.
+    ///
+    /// THE single door. Where the answer comes from — the game cache when it is up, a disk walk when it is
+    /// not — is this method's business, not the caller's; so is a caller who has no game id (dev probes and
+    /// forced sample titles, which can only be matched by filename). There used to be a second public entry
+    /// point for that last case, and the 3D pipeline reached for it once and then used it for EVERYTHING,
+    /// including the paths that did hold the id: art the cache could have answered from memory was resolved
+    /// by walking forty directories, on every single selection.</summary>
     public static string Image(string platformName, Guid id, string title, string[] typeChain)
     {
         if (string.IsNullOrEmpty(platformName) || typeChain == null) return null;
 
-        if (GameCacheBridge.Ready(platformName))
+        // A ready cache is authoritative — but it is keyed by id, so a caller without one has to walk.
+        if (id != Guid.Empty && GameCacheBridge.Ready(platformName))
         {
             foreach (var type in typeChain)
             {
                 var p = GameCacheBridge.BestImage(platformName, id, type);
                 if (!string.IsNullOrEmpty(p)) return p;
             }
-            return null; // cache is authoritative when ready
+            return null;
         }
 
-        // Classic IO fallback.
-        var plat = SafePlatform(platformName);
-        if (plat == null) return null;
+        // Classic IO walk. With an id, BestInDir matches both the GUID and the title filename forms; with
+        // Guid.Empty only the title form can match, which is all a caller without a game can ask for.
+        if (string.IsNullOrEmpty(title)) return null;
+        var plat = SafePlatform(platformName);   // null outside a plugin host (e.g. render probes)
         string sani = Sanitize(title);
-
         foreach (var type in typeChain)
         {
-            string folder = SafeFolder(plat, type);
+            // Custom platform folder when configured, else LB's conventional Images\<platform>\<type> layout
+            // — the latter is what keeps this working with no plugin host to ask.
+            string folder = (plat != null ? SafeFolder(plat, type) : null)
+                            ?? (ImagesRoot != null ? Path.Combine(ImagesRoot, Sanitize(platformName), type) : null);
             if (folder == null || !Directory.Exists(folder)) continue;
 
             // User priorities → LaunchBox's hard-coded fallback → root ("none", no region sub-folder) last.
@@ -224,30 +235,6 @@ internal static class MediaResolver
             {
                 var dir = region == LbRegions.None ? folder : Path.Combine(folder, region);
                 var hit = BestInDir(dir, id, sani, ImageExts);
-                if (hit != null) return hit;
-            }
-        }
-        return null;
-    }
-
-    /// <summary>Title-only best image via the classic disk walk (region-ordered), NEVER the game cache — for
-    /// callers with no game Guid (e.g. the 3D-model preview's sample game, matched by filename): when the cache
-    /// is Ready, Image() answers through the id-keyed bridge and Guid.Empty finds nothing.</summary>
-    public static string ImageByTitle(string platformName, string title, string[] typeChain)
-    {
-        if (string.IsNullOrEmpty(platformName) || string.IsNullOrEmpty(title) || typeChain == null) return null;
-        var plat = SafePlatform(platformName);   // null outside a plugin host (e.g. render probes)
-        string sani = Sanitize(title);
-        foreach (var type in typeChain)
-        {
-            // Custom platform folder when configured, else LB's conventional Images\<platform>\<type> layout.
-            string folder = (plat != null ? SafeFolder(plat, type) : null)
-                            ?? (ImagesRoot != null ? Path.Combine(ImagesRoot, Sanitize(platformName), type) : null);
-            if (folder == null || !Directory.Exists(folder)) continue;
-            foreach (var region in RegionOrder())
-            {
-                var dir = region == LbRegions.None ? folder : Path.Combine(folder, region);
-                var hit = BestInDir(dir, Guid.Empty, sani, ImageExts);
                 if (hit != null) return hit;
             }
         }

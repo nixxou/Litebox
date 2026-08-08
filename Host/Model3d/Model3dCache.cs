@@ -14,8 +14,11 @@
 //   • one line per art source the builders can consume (front / clear logo / spine / back / full-scan /
 //     custom spine file), each `slot|path|size|mtime` or `slot|-` when absent. Path+size+mtime — the
 //     dup-check poisoning taught us path+size alone can miss a same-size replacement.
-// Art resolution mirrors HomeModel3d EXACTLY (same ResolveArt → ImageByTitle chain), so the key changes
-// iff what the builder would consume changes. The manifest and the game identity are stored INSIDE the
+// Art is resolved ONCE (Model3dArt) and the resolved paths are carried to the bake, so the key changes
+// iff what the builder will consume changes — the two can no longer drift apart. That resolution goes
+// through MediaResolver with the game's id, so a ready game cache answers it from memory: deciding
+// whether an existing model is still current costs lookups, not a walk through the art directories.
+// The manifest and the game identity are stored INSIDE the
 // GLB (extras.litebox), which is what makes a file able to answer "am I still what you would bake?" on
 // its own — IsCurrent is one header read against a key we just computed. It is asked for the ONE game
 // being looked at, not for the library, and never on the fast-scroll path.
@@ -42,7 +45,7 @@ internal static class Model3dCache
 {
     /// <summary>Salts every key — bump when the bake output changes (geometry, materials, thumb pose/size,
     /// GLB layout) so stale files are re-keyed away in one move.</summary>
-    public const int BakerVersion = 13;   // v13: Dreamcast Auto-Detect picks its spine COLOUR by measuring the artwork (PAL -> blue, else black-vs-white on the spine scan or the front's right 3%) (v12: auto version follows the front art's region, v11: double-jewel strips keep the game scan, v10: doubleSided through the GLB)
+    public const int BakerVersion = 14;   // v14: art resolves ONCE, through MediaResolver with the game's id -> the game cache answers it (fast validation), GUID-form images become visible, and an image in a type folder is no longer read as a region (v13: Dreamcast Auto-Detect picks its spine COLOUR by measuring the artwork, v12: auto version follows the front art's region, v11: double-jewel strips keep the game scan, v10: doubleSided through the GLB)
 
     // One lock object per game id, so two bake workers never build the same model at once. Keyed by game
     // rather than by file so it holds whatever the file is called.
@@ -60,11 +63,10 @@ internal static class Model3dCache
     }
 
     /// <summary>A game's resolved identity in the cache: its key, GLB path, and the pieces that formed it.
-    /// <c>ImgOv</c> = the EFFECTIVE per-slot image override (null = auto / invalidated) — fed to the bake so
-    /// key and textures agree by construction.</summary>
+    /// <c>Art</c> = the five resolved art paths (image override already applied) — the SAME object is fed to
+    /// the bake, so the key and the textures cannot describe different files.</summary>
     internal sealed record Identity(string Key, string GlbPath, string Manifest, Dictionary<string, string>? Map,
-                                    string Platform, string Title, string GameId, bool HasArt,
-                                    Dictionary<string, string>? ImgOv);
+                                    string Platform, string Title, string GameId, bool HasArt, Model3dArt Art);
 
     /// <summary>Per-pass memoization for bulk key computation (Model3dKeyIndex): platform settings and
     /// per-game overrides are parsed ONCE PER FILE instead of once per game (the naive per-game reads
@@ -154,18 +156,19 @@ internal static class Model3dCache
             present.Add(name);
             sb.Append(path!.ToLowerInvariant()).Append('|').Append(size).Append('|').Append(mtime).Append('\n');
         }
-        // The slots the builders can consume — resolution identical to HomeModel3d's own calls, INCLUDING
+        // The slots the builders can consume, resolved ONCE — the very paths the bake will load, including
         // the per-game image override (custom fields 3D.Image*, Edit Game → Image Selection; Effective =
         // null when any pick is missing on disk → the whole override is ignored, back to full auto).
+        // Resolution goes through MediaResolver with the game's id, so a ready game cache answers it from
+        // memory: validating an already-current model costs a handful of lookups, not a directory walk.
         var ov = Model3dImageStore.Effective(g);
-        Slot("front", Platforms.HomeModel3d.ResolveSlot(ov, "front", platform, title, Media.MediaResolver.FrontChain()));
-        Slot("logo", Platforms.HomeModel3d.ResolveSlot(ov, "logo", platform, title, Media.MediaResolver.ClearLogo));
-        Slot("spine", Platforms.HomeModel3d.ResolveSlot(ov, "spine", platform, title, new[] { "Box - Spine" }));
-        Slot("back", Platforms.HomeModel3d.ResolveSlot(ov, "back", platform, title, Media.MediaResolver.BackChain()));
-        bool fullScan = (map != null && map.TryGetValue("UseFullScanImages", out var ufs)
-                         && ufs.Equals("true", StringComparison.OrdinalIgnoreCase))
-                        || Platforms.HomeModel3d.FullForced(ov);
-        Slot("full", fullScan ? Platforms.HomeModel3d.ResolveSlot(ov, "full", platform, title, new[] { "Box - Full" }) : null);
+        Guid.TryParse(id, out var gid);
+        var art = Model3dArt.Resolve(map, platform, gid, title, ov);
+        Slot("front", art.Front);
+        Slot("logo", art.Logo);
+        Slot("spine", art.Spine);
+        Slot("back", art.Back);
+        Slot("full", art.Full);   // null unless the sheet mode applies to this game — see Model3dArt.Resolve
         // A CUSTOM spine image is a real file whose change must re-key; embedded {Resources} presets are
         // already covered by the params (name) + BakerVersion (content ships with LiteBox).
         string spineSpec = map != null && map.TryGetValue("FrontSpineImage", out var ss) ? (ss ?? "") : "";
@@ -184,7 +187,7 @@ internal static class Model3dCache
         // The GAME names the file; the key rides INSIDE it. Deriving the name from the key instead made
         // finding a game's model require computing that key — art resolution for the whole library, at
         // every boot, only to answer "which file?". Identity is stable, currency is not: keep them apart.
-        return new Identity(key, Path.Combine(Dir, id + ".glb"), manifest, map, platform, title, id, hasArt, ov);
+        return new Identity(key, Path.Combine(Dir, id + ".glb"), manifest, map, platform, title, id, hasArt, art);
     }
 
     // The instant-lookup index that used to live here is gone: reading each GLB's header to learn which
@@ -308,7 +311,7 @@ internal static class Model3dCache
                 // Only a CURRENT file lets us off: a stale one is exactly what we came to replace.
                 if (File.Exists(idn.GlbPath) && IsCurrent(idn)) return true;
                 if (stillWanted != null && !stillWanted()) return false;   // selection moved on → skip, drain the queue
-                var baked = Model3dBaker.Bake(idn.Map, idn.Title, idn.Platform, idn.ImgOv);
+                var baked = Model3dBaker.Bake(idn.Map, idn.Title, idn.Art);
                 if (baked == null) return false;
                 var (meshes, mats, thumb) = baked.Value;
                 GlbFile.Write(idn.GlbPath, meshes, mats, thumb,

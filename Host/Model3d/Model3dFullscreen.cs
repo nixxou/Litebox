@@ -114,7 +114,7 @@ internal sealed class Model3dFullscreen : Form
 
                 // 2) the hi-res live rebuild (may briefly queue behind bulk bakes — the GLB covers the wait).
                 System.Windows.Media.Media3D.Model3D? hi = null;
-                try { hi = Model3dBaker.Run(() => Model3dBaker.BakeRuntimeModel(idn.Map, idn.Title, idn.Platform, idn.ImgOv)); }
+                try { hi = Model3dBaker.Run(() => Model3dBaker.BakeRuntimeModel(idn.Map, idn.Title, idn.Art)); }
                 catch (Exception ex) { Console.WriteLine("[model3d] hi-res build failed: " + ex.Message); }
                 Post(() =>
                 {

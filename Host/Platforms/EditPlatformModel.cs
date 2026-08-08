@@ -98,8 +98,10 @@ internal static class EditPlatformModel
         // a custom-named platform with Scrape As "Sony Playstation" pre-fills the PS1 jewel preset), else the
         // ModelSettings ctor defaults (platforms LB has no entry for, e.g. SNES).
         // Preview = a sample game of this platform (title filled lazily by SwitchSampleGame; bare case otherwise).
+        // No sample passed: the platform preview picks its own (first game of the platform that has front
+        // art) and can cycle through the rest — see SampleGames.
         var (panel, apply, _) = BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs) ?? CtorDefaults(),
-                                          f => WroteOrWarn(PlatformModelStore.Write(name, f), () => Model3d.Model3dKeyIndex.DropPlatform(name)), readOnly, s, name, PreviewSampleTitle(name), null, null);
+                                          f => WroteOrWarn(PlatformModelStore.Write(name, f), () => Model3d.Model3dKeyIndex.DropPlatform(name)), readOnly, s, name, "", Guid.Empty, null, null);
         return (panel, apply);
     }
 
@@ -123,35 +125,19 @@ internal static class EditPlatformModel
                      PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? "") ?? CtorDefaults(),
                      f => WroteOrWarn(PlatformModelStore.WriteGame(platformName, gameId, f), () =>
                           { var gg = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId); if (gg != null) Model3d.Model3dKeyIndex.DropGame(gg); }),
-                     readOnly, s, platformName, gameTitle ?? "", platformName, imgOv);
+                     readOnly, s, platformName, gameTitle ?? "", PreviewIdOf(gameId), platformName, imgOv);
 
-    // A representative game of a platform to texture the platform-level preview: the first title with a Box -
-    // Front image on disk (any region). Empty when none → the preview shows a bare (untextured) case.
-    private static string PreviewSampleTitle(string platform)
+    /// <summary>The id to resolve the preview's art with — only when it designates a game that EXISTS.
+    /// EditPlatformRenderProbe opens this panel with a Guid.NewGuid() placeholder (it needs a key to store an
+    /// override under, not a game), and an id no game answers to resolves to nothing at all once the game
+    /// cache is up. Falling back to Guid.Empty matches by title instead, which is what that probe wants.</summary>
+    private static Guid PreviewIdOf(string gameId)
     {
-        // Probe hook: force a specific sample game (env LB_SAMPLE_TITLE) to reproduce user-reported cases.
-        var forced = Environment.GetEnvironmentVariable("LB_SAMPLE_TITLE");
-        if (!string.IsNullOrEmpty(forced)) return forced;
-        try
-        {
-            string root = Media.MediaResolver.LbRoot ?? "";
-            string dir = System.IO.Path.Combine(root, "Images", Sanitize(platform), "Box - Front");
-            if (!System.IO.Directory.Exists(dir)) return "";
-            foreach (var f in System.IO.Directory.EnumerateFiles(dir, "*.*", System.IO.SearchOption.AllDirectories))
-            {
-                var ext = System.IO.Path.GetExtension(f).ToLowerInvariant();
-                if (ext is ".jpg" or ".jpeg" or ".png" or ".bmp")
-                {
-                    // "<Title>-NN.ext" → strip the trailing "-NN" index LB appends.
-                    string n = System.IO.Path.GetFileNameWithoutExtension(f);
-                    int dash = n.LastIndexOf('-');
-                    return dash > 0 && int.TryParse(n.Substring(dash + 1), out _) ? n.Substring(0, dash) : n;
-                }
-            }
-        }
-        catch { }
-        return "";
+        if (!Guid.TryParse(gameId, out var gid)) return Guid.Empty;
+        try { return Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId) != null ? gid : Guid.Empty; }
+        catch { return Guid.Empty; }
     }
+
 
     private static string Sanitize(string sn)
     {
@@ -160,11 +146,44 @@ internal static class EditPlatformModel
         return sn.Replace('\'', '_').Trim();
     }
 
-    // Up to N distinct game titles of a platform that HAVE a Box - Front image on disk — for the platform
-    // preview's "Switch Sample Game" cycle. Empty when the platform has no box art.
-    private static List<string> SampleTitles(string platform)
+    // Up to N GAMES of a platform that have front art — for the platform preview's "Switch Sample Game"
+    // cycle. Real games, with their ids: the preview then resolves art exactly as the bake will, so what it
+    // shows is what gets cached. Sampling image FILES and guessing a title by stripping the trailing "-NN"
+    // was close enough while everything resolved by title, but a GUID-form file ("<Title>.<guid>-01.png")
+    // yields "<Title>.<guid>" — a title no game has, so that sample found neither logo, spine nor back.
+    private static List<(Guid Id, string Title)> SampleGames(string platform, int max)
     {
-        var list = new List<string>();
+        var list = new List<(Guid, string)>();
+        // Probe hook: force one specific sample (env LB_SAMPLE_TITLE) to reproduce user-reported cases. A
+        // title with no game behind it — MediaResolver matches it by filename on its own.
+        var forced = Environment.GetEnvironmentVariable("LB_SAMPLE_TITLE");
+        if (!string.IsNullOrEmpty(forced)) { list.Add((Guid.Empty, forced)); return list; }
+        try
+        {
+            var plat = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetPlatformByName(platform);
+            if (plat == null) return list;
+            foreach (var g in plat.GetAllGames(true, true))
+            {
+                if (g == null) continue;
+                string title = g.Title ?? "";
+                if (title.Length == 0 || !Guid.TryParse(g.Id, out var gid)) continue;
+                // Front art is what textures the preview — a game without it shows a bare case, so skip it.
+                if (string.IsNullOrEmpty(Media.MediaResolver.Image(platform, gid, title, Media.MediaResolver.FrontChain()))) continue;
+                list.Add((gid, title));
+                if (list.Count >= max) break;
+            }
+        }
+        catch { }
+        return list.Count > 0 ? list : SampleTitlesFromDisk(platform, max);
+    }
+
+    // Fallback for the render probes, which build this panel BEFORE HostBoot installs the catalogue: with no
+    // games to ask, the only samples available are the image files themselves, and a title guessed by
+    // stripping LaunchBox's trailing "-NN". No game id, so the art resolves by filename — which is exactly
+    // what a probe with no catalogue can be given.
+    private static List<(Guid Id, string Title)> SampleTitlesFromDisk(string platform, int max)
+    {
+        var list = new List<(Guid, string)>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -177,8 +196,8 @@ internal static class EditPlatformModel
                 string n = System.IO.Path.GetFileNameWithoutExtension(f);
                 int dash = n.LastIndexOf('-');
                 if (dash > 0 && int.TryParse(n.Substring(dash + 1), out _)) n = n.Substring(0, dash);
-                if (seen.Add(n)) list.Add(n);
-                if (list.Count >= 24) break;
+                if (seen.Add(n)) list.Add((Guid.Empty, n));
+                if (list.Count >= max) break;
             }
         }
         catch { }
@@ -189,7 +208,8 @@ internal static class EditPlatformModel
                                                            Dictionary<string, string>? fallback,
                                                            Action<Dictionary<string, string>?> write,
                                                            bool readOnly, float s,
-                                                           string previewPlatform, string previewGameTitle, string? _unused,
+                                                           string previewPlatform, string previewGameTitle, Guid previewGameId,
+                                                           string? _unused,
                                                            Func<Dictionary<string, string>?>? imgOv)
     {
         int S(int px) => (int)Math.Round(px * s);
@@ -209,9 +229,12 @@ internal static class EditPlatformModel
         root.Controls.Add(left);
         root.Controls.Add(preview);      // preview docks right first, left fills the rest
         // Sample-game rotation state: platform preview cycles through titles-with-box-art; game preview is fixed.
-        var sampleTitles = string.IsNullOrEmpty(_unused) ? SampleTitles(previewPlatform) : new List<string> { previewGameTitle };
-        int sampleIdx = Math.Max(0, sampleTitles.IndexOf(previewGameTitle));
-        string CurrentSampleTitle() => sampleTitles.Count > 0 ? sampleTitles[sampleIdx % sampleTitles.Count] : previewGameTitle;
+        var sampleGames = string.IsNullOrEmpty(_unused) ? SampleGames(previewPlatform, 24)
+                                                        : new List<(Guid Id, string Title)> { (previewGameId, previewGameTitle) };
+        int sampleIdx = Math.Max(0, sampleGames.FindIndex(g => string.Equals(g.Title, previewGameTitle, StringComparison.OrdinalIgnoreCase)));
+        (Guid Id, string Title) CurrentSample() => sampleGames.Count > 0 ? sampleGames[sampleIdx % sampleGames.Count]
+                                                                        : (previewGameId, previewGameTitle);
+        string CurrentSampleTitle() => CurrentSample().Title;
         Action? redrawPreview = null;   // set later; Refresh() invokes it on every option change
 
         int y = S(6);
@@ -512,17 +535,18 @@ internal static class EditPlatformModel
         void RedrawPreview()
         {
             var map = ApplyMapExtra(BuildFieldMap() ?? fallback);
-            try { home.Build(map, CurrentSampleTitle(), previewPlatform, imgOv?.Invoke()); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
+            var sample = CurrentSample();
+            try { home.Build(map, sample.Title, previewPlatform, imgOv?.Invoke(), sample.Id); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
             // ═══ LB-ORACLE ═══ mirror every redraw into the LaunchBox zone (no-op when the flag is off).
             try { live?.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
         }
         // Redraw after every option change (Refresh calls RedrawPreview) + once the host handle exists.
         redrawPreview = RedrawPreview;
         root.HandleCreated += (_, _) => { try { root.BeginInvoke((Action)RedrawPreview); } catch { } };
-        if (sampleTitles.Count > 1)
+        if (sampleGames.Count > 1)
         {
             sampleBtn.Enabled = true; sampleBtn.ForeColor = Fg;
-            sampleBtn.Click += (_, _) => { sampleIdx = (sampleIdx + 1) % sampleTitles.Count; RedrawPreview(); };
+            sampleBtn.Click += (_, _) => { sampleIdx = (sampleIdx + 1) % sampleGames.Count; RedrawPreview(); };
         }
         root.Disposed += (_, _) => { try { home?.Dispose(); } catch { } try { live?.Dispose(); } catch { } };   // live = LB-ORACLE
 

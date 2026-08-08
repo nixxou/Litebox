@@ -1,18 +1,22 @@
 // --selftest-selection [items]: the poster's select-all and its selection read, headless.
 //
-// Written to confirm a diagnosis, and it refuted it — which is the whole reason it exists.
+// A FLOOR for the poster's selection, and a caution about what this cannot see.
 //
-// The claim was that reading the poster's selection was quadratic: a virtual-mode ListView's
+// The original claim was that reading the selection was quadratic: a virtual-mode ListView's
 // SelectedIndices INDEXER keeps no cursor, so element i replays i LVM_GETNEXTITEM messages and reading n
-// costs n²/2. The indexer part is true and measurable here (~450 ms for 3000). But the code that was
-// blamed used foreach, and the ENUMERATOR is linear — 5000 indices in about a millisecond. The reported
-// freeze cannot have come from there, and the numbers below say so on every run.
+// costs n²/2. Measured here, the indexer part is true (~470 ms for 3000) — but the code that was blamed
+// iterated with foreach, and the ENUMERATOR is linear (5000 in about a millisecond). Count and Clear cost
+// nothing either. On the strength of that this test was first written to say the freeze could not have
+// come from the selection at all.
 //
-// What is measured, therefore, is a floor rather than a fix: select-all, the range set by Shift+click,
-// and both ways of reading the result. If a future change makes any of them scale with the library
-// again, this fails. Where the reported freeze DOES come from is still open — the surviving suspect is
-// the owner-drawn tiles being recomposed (which also explains the memory climbing, something no
-// selection bookkeeping would do).
+// That conclusion was wrong: the fix demonstrably removed the freeze in the running app. What this drives
+// is a BARE control — no ImageList, no owner-draw, a RetrieveVirtualItem handing back an empty item, and
+// nothing downstream. The real poster composes a GDI tile per item and mirrors every selection change
+// into the game list. The cost lives somewhere in that chain, which none of the numbers below reach.
+//
+// So: these figures are a floor, not a verdict. If select-all, the Shift+click range, or the read ever
+// start scaling with the library again, this fails — and that is all it is entitled to claim. Reproducing
+// the freeze itself would take a populated poster, which this deliberately is not.
 
 #nullable enable
 
@@ -111,6 +115,22 @@ internal static class SelectionSelfTest
         Check(fastMs <= Math.Max(50, enumMs * 4), $"the walk costs no more than the foreach it replaces ({fastMs} vs {enumMs} ms)");
         Check(idxMs > enumMs * 4 || idxMs < 50,
               $"note: the indexer is the quadratic one ({idxMs} ms/{probe} vs foreach {enumMs} ms/{viaEnum})");
+
+        // The two members the replaced code touched besides the enumerator: OnPosterSelectionChanged and
+        // MirrorPosterToList asked for Count three times between them, and two call sites cleared through
+        // the collection. Neither was measured when the walk was blamed.
+        sw.Restart();
+        int c1 = 0;
+        for (int i = 0; i < 3; i++) c1 = lv.SelectedIndices.Count;
+        sw.Stop();
+        Console.WriteLine($"[selftest-selection] SelectedIndices.Count x3: {sw.ElapsedMilliseconds} ms (= {c1})");
+
+        sw.Restart();
+        lv.SelectedIndices.Clear();
+        sw.Stop();
+        long collClearMs = sw.ElapsedMilliseconds;
+        Console.WriteLine($"[selftest-selection] SelectedIndices.Clear(): {collClearMs} ms");
+        lv.SelectAllItems();
 
         // ── the Shift+click range, which is what the user actually reported ──
         // SelectRange sets the state item by item (the native virtual-mode range is wrong), so unlike

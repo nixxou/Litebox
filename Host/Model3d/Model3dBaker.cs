@@ -30,9 +30,9 @@ internal static class Model3dBaker
     public const double CameraDistance = 1.55;  // closer than the editor preview's 2.0 → the case fills the block
     public const int ThumbPx = 640;             // snapshot HEIGHT; width = ThumbPx × TargetAspect()
 
-    // ── single STA bake worker ───────────────────────────────────────────────
+    // ── STA bake workers ─────────────────────────────────────────────────────
     private static readonly BlockingCollection<Action> _queue = new();
-    private static Thread[]? _threads;
+    private static bool _started;
     private static readonly object _startLock = new();
 
     /// <summary>Parallel bake workers. WPF requires STA, but nothing requires a SINGLE STA thread —
@@ -41,23 +41,50 @@ internal static class Model3dBaker
     /// (rare: a user select racing the bulk pass) — wasteful but safe, the unique-tmp atomic move wins.</summary>
     public static readonly int WorkerCount = Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
 
+    /// <summary>Bakes a worker runs before it is retired and replaced.
+    ///
+    /// Touching a Viewport3D or a RenderTargetBitmap makes WPF attach a Dispatcher to the thread, and that
+    /// dispatcher — with its MediaContext and EVERY resource rendered through it — is held by a static WPF
+    /// table until it is shut down. On a thread that never ends, that is a leak with no ceiling: measured at
+    /// ~5 MB per bake, which the GC cannot reclaim because the objects are still rooted. Generating the
+    /// whole library (2994 models) that way climbed past 3 GB and ended in a run of
+    /// "Insufficient memory to continue" thumb failures.
+    ///
+    /// A dispatcher cannot be emptied, and a thread whose dispatcher has been shut down cannot serve another
+    /// job — so the only lever is to end the thread. Retiring a worker every few bakes caps what one can
+    /// accumulate (this many × ~5 MB) against one thread creation, which is nothing next to a bake.</summary>
+    private const int BakesPerWorker = 8;
+
     private static void EnsureThreads()
     {
-        if (_threads != null) return;
+        if (_started) return;
         lock (_startLock)
         {
-            if (_threads != null) return;
-            var arr = new Thread[WorkerCount];
-            for (int i = 0; i < arr.Length; i++)
-            {
-                var t = new Thread(() => { foreach (var job in _queue.GetConsumingEnumerable()) { try { job(); } catch { } } })
-                { IsBackground = true, Name = "model3d-bake-" + i };
-                t.SetApartmentState(ApartmentState.STA);
-                t.Start();
-                arr[i] = t;
-            }
-            _threads = arr;
+            if (_started) return;
+            for (int i = 0; i < WorkerCount; i++) StartWorker(i);
+            _started = true;
         }
+    }
+
+    private static void StartWorker(int slot)
+    {
+        var t = new Thread(() =>
+        {
+            int done = 0;
+            foreach (var job in _queue.GetConsumingEnumerable())
+            {
+                try { job(); } catch { }
+                if (++done >= BakesPerWorker) break;
+            }
+            // Replace ourselves FIRST: the queue must not lose a worker while this one winds down (a bulk
+            // pass keeps it full, and Run() blocks its caller until some worker picks the job up).
+            try { StartWorker(slot); } catch (Exception ex) { Console.WriteLine("[model3d] worker respawn: " + ex.Message); }
+            // Then let the dispatcher — and everything WPF rendered through it — go.
+            try { System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown(); } catch { }
+        })
+        { IsBackground = true, Name = "model3d-bake-" + slot };
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
     }
 
     /// <summary>Run <paramref name="job"/> on a bake STA worker and wait for its result.</summary>

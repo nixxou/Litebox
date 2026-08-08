@@ -1034,6 +1034,11 @@ internal sealed partial class MainWindow
                 bool locked = false;
                 try { locked = Media.ParentalBridge.Locked; } catch { }
                 toggle.Text = locked ? "Unlock (PIN)..." : "Lock now";
+                // Third door to the same options window — greyed for the same reason Tools ▸ Options is,
+                // and stated, so the entry does not just fall silent under a read-only second instance.
+                settings.Enabled = !_secondInstance;
+                settings.ToolTipText = _secondInstance
+                    ? "Settings locked — another LiteBox instance is open (read-only)" : null;
             };
             _padlockMenu = m;
         }
@@ -1051,6 +1056,11 @@ internal sealed partial class MainWindow
     /// says so is a window that has to be closed again.</summary>
     private void OpenParentalOptions()
     {
+        // Same window Tools ▸ Options opens, so the same lock applies. A launch WITH arguments can still
+        // put a second host next to a running one, and that instance is read-only: it must not reach a
+        // window that saves LiteBox.ini, the parental lists and the PIN. The menu item disables itself
+        // for this reason; the padlock was a second door into the same room.
+        if (_secondInstance) return;
         if (Media.ParentalBridge.Locked)
         {
             Media.ParentalBridge.ShowLockDialog(this);

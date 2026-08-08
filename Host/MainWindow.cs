@@ -585,6 +585,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 {
                     try
                     {
+                        // The launch-with-arguments path is precisely how a second host gets to exist next
+                        // to a running one, and this one asks for the options window by name. Same bar as
+                        // the menu item and the padlock: that window saves, this instance may not.
+                        if (_secondInstance)
+                        {
+                            Console.WriteLine("[options] another LiteBox instance is open → options not shown (read-only)");
+                            return;
+                        }
                         using var w = BuildOptionsWindow();
                         if (HostBoot.AutoOptions.Length > 0 && !w.SelectSection(HostBoot.AutoOptions))
                             Console.WriteLine($"[options] section not found: \"{HostBoot.AutoOptions}\"");
@@ -809,10 +817,17 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             _padlockClosed ??= GlyphPadlock(true);
             _padlockOpen ??= GlyphPadlock(false);
             _parentalInd.Image = locked ? _padlockClosed : _padlockOpen;
+            // Locking is a session-only toggle (ParentalFilter.SetLocked writes nothing), so it stays
+            // available in a read-only second instance — hiding the restricted games is exactly what one
+            // might have come to look at. The SETTINGS are a different matter: that window saves, so it is
+            // barred here as it is under Tools ▸ Options, and the tip must stop offering the gesture.
             _parentalInd.ToolTipText = (locked
                 ? "Parental control ACTIVE (locked) — restricted categories and games are hidden"
                 : "Parental control unlocked")
-                + "\nClick to " + (locked ? "unlock (PIN)" : "lock") + " · double-click for the settings · right-click for both";
+                + "\nClick to " + (locked ? "unlock (PIN)" : "lock")
+                + (_secondInstance
+                    ? " · right-click for the lock · settings locked (another LiteBox instance is open)"
+                    : " · double-click for the settings · right-click for both");
         }
     }
 

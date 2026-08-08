@@ -532,6 +532,14 @@ internal static class HostBoot
             return Diag.Model3dSelfTest.Run(sample, bakes);
         }
 
+        // --selftest-bakeleak [bakes]: the bake pool must not grow with the number of models it makes.
+        if (args.Contains("--selftest-bakeleak"))
+        {
+            int bi = Array.IndexOf(args, "--selftest-bakeleak");
+            int n = bi + 1 < args.Length && int.TryParse(args[bi + 1], out var nv) ? nv : 120;
+            return Diag.BakeLeakSelfTest.Run(n);
+        }
+
         // ── Plugins (config-driven; edited in Options → Plugins) ────────────
         // The enabled set lives in LiteBox.ini (EnabledPlugins=A,B,…). KEY ABSENT
         // (first run / not configured) → enable EVERY folder present under

@@ -1,7 +1,13 @@
-// Disk cache of baked 3D case models: one GLB per (game, resolved model settings, art sources) under
-// Core\litebox\cache\3d\<md5>.glb.
+// Disk cache of baked 3D case models: ONE GLB per game, at Core\litebox\cache\3d\<gameId>.glb, with its
+// snapshot beside it as <gameId>.png.
 //
-// IDENTITY — the filename is the MD5 of a canonical MANIFEST built from:
+// IDENTITY is the game; CURRENCY is the manifest. The two used to be one thing — the filename WAS the
+// manifest's MD5 — which read elegantly and cost a fortune: finding a game's model meant computing that
+// key, so the whole library's art had to be resolved at every boot (and again after every game exit)
+// only to answer "which file?". Naming the artifact after the game answers it for free, and leaves the
+// manifest to do the one job it is actually good at.
+//
+// CURRENCY — the key is the MD5 of a canonical MANIFEST built from:
 //   • a BakerVersion salt (bump on any geometry/material/thumb pipeline change → whole cache invalidates);
 //   • the RESOLVED settings map (game override → platform override → LB hardcoded defaults → ctor
 //     defaults), sorted key=value — so editing a PLATFORM's model settings naturally re-keys every game;
@@ -9,12 +15,15 @@
 //     custom spine file), each `slot|path|size|mtime` or `slot|-` when absent. Path+size+mtime — the
 //     dup-check poisoning taught us path+size alone can miss a same-size replacement.
 // Art resolution mirrors HomeModel3d EXACTLY (same ResolveArt → ImageByTitle chain), so the key changes
-// iff what the builder would consume changes. The manifest (and the game identity) is also stored inside
-// the GLB (extras.litebox) — the GC and the debug UI read a file's identity from the file itself.
+// iff what the builder would consume changes. The manifest and the game identity are stored INSIDE the
+// GLB (extras.litebox), which is what makes a file able to answer "am I still what you would bake?" on
+// its own — IsCurrent is one header read against a key we just computed. It is asked for the ONE game
+// being looked at, not for the library, and never on the fast-scroll path.
 //
-// The GC (SweepStale, kicked from ThumbGc's once-per-launch pass) deletes a cached file when its recorded
-// game no longer exists or when that game's CURRENT key no longer matches the filename (art changed,
-// settings changed, baker bumped). CleanAll wipes the folder outright (Options → Caches).
+// A model that turns out to be out of date is not deleted: it sits in its game's own slot and the next
+// bake writes over it. So the sweep has only ownership left to judge — a file whose name is not a game
+// id, or whose game has left the library (SweepStale). CleanAll wipes the folder outright (Options →
+// Caches), and an in-app edit that invalidates a model deletes it at the source (Model3dKeyIndex).
 
 #nullable enable
 
@@ -34,6 +43,11 @@ internal static class Model3dCache
     /// <summary>Salts every key — bump when the bake output changes (geometry, materials, thumb pose/size,
     /// GLB layout) so stale files are re-keyed away in one move.</summary>
     public const int BakerVersion = 13;   // v13: Dreamcast Auto-Detect picks its spine COLOUR by measuring the artwork (PAL -> blue, else black-vs-white on the spine scan or the front's right 3%) (v12: auto version follows the front art's region, v11: double-jewel strips keep the game scan, v10: doubleSided through the GLB)
+
+    // One lock object per game id, so two bake workers never build the same model at once. Keyed by game
+    // rather than by file so it holds whatever the file is called.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, object> _bakeGates
+        = new(StringComparer.OrdinalIgnoreCase);
 
     public static string Dir
     {
@@ -93,6 +107,7 @@ internal static class Model3dCache
         string platform, title, id;
         try { platform = g.Platform ?? ""; title = g.Title ?? ""; id = g.Id ?? ""; } catch { return null; }
         if (platform.Length == 0 || title.Length == 0) return null;
+        if (id.Length == 0) return null;   // the id NAMES the artifact now — no id, nothing addressable to cache
 
         string scrapeAs = "";
         try { scrapeAs = ctx?.ScrapeAs(platform) ?? PluginHelper.DataManager?.GetPlatformByName(platform)?.ScrapeAs ?? ""; } catch { }
@@ -166,54 +181,15 @@ internal static class Model3dCache
         // bake produces, so tightening it must never re-key (and re-bake) the models that stay valid.
         bool hasArt = Model3dOptions.Valid(
             present.Contains("front"), present.Contains("back"), present.Contains("spine"), present.Contains("full"));
-        return new Identity(key, Path.Combine(Dir, key + ".glb"), manifest, map, platform, title, id, hasArt, ov);
+        // The GAME names the file; the key rides INSIDE it. Deriving the name from the key instead made
+        // finding a game's model require computing that key — art resolution for the whole library, at
+        // every boot, only to answer "which file?". Identity is stable, currency is not: keep them apart.
+        return new Identity(key, Path.Combine(Dir, id + ".glb"), manifest, map, platform, title, id, hasArt, ov);
     }
 
-    // ── instant lookup index (gameId → cached GLB path) ──────────────────────
-    // The INSTANT image path runs for EVERY game a fast scroll transits — Resolve() there (art-slot
-    // IO, per-slot stats, platform settings) made each step cost tens of ms and froze the transit
-    // loader. The instant question is only "does this game have a cached model?": answered from a RAM
-    // index built once from the GLB headers, updated by bakes, invalidated by sweeps. A slightly stale
-    // hit is harmless — the settle-time pipeline re-resolves properly and re-bakes.
-
-    private static Dictionary<string, string>? _instantIndex;   // gameId → glb path
-    private static readonly object _indexLock = new();
-
-    /// <summary>The cached GLB for <paramref name="g"/> per the RAM index — O(1), no art resolution.
-    /// Null when the game has no baked model (the caller falls back to a plain image family).</summary>
-    public static string? CachedGlbForInstant(IGame g)
-    {
-        string id;
-        try { id = g.Id ?? ""; } catch { return null; }
-        if (id.Length == 0) return null;
-        lock (_indexLock)
-        {
-            if (_instantIndex == null)
-            {
-                var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                try
-                {
-                    foreach (var f in Directory.EnumerateFiles(Dir, "*.glb"))
-                        try { if (GlbFile.ReadInfo(f) is { GameId.Length: > 0 } info) map[info.GameId] = f; } catch { }
-                }
-                catch { }
-                _instantIndex = map;
-                Console.WriteLine($"[model3d] instant index built ({map.Count} model(s))");
-            }
-            return _instantIndex.TryGetValue(id, out var p) ? p : null;
-        }
-    }
-
-    private static void IndexAdd(string gameId, string glbPath)
-    {
-        if (string.IsNullOrEmpty(gameId)) return;
-        lock (_indexLock) { if (_instantIndex != null) _instantIndex[gameId] = glbPath; }
-    }
-
-    private static void IndexInvalidate()
-    {
-        lock (_indexLock) { _instantIndex = null; }   // rebuilt lazily on the next instant lookup
-    }
+    // The instant-lookup index that used to live here is gone: reading each GLB's header to learn which
+    // game owns it only made sense while the FILENAME could not say. Now it does, so "has this game a
+    // model?" is an answer the directory listing already carries — see Model3dKeyIndex.
 
     // ── snapshot sidecar (<key>.png next to <key>.glb) ───────────────────────
     // The baked thumb ALSO lives as a loose PNG beside the GLB: the instant/strip display is then a
@@ -261,13 +237,34 @@ internal static class Model3dCache
         {
             if (File.Exists(idn.GlbPath))
             {
-                if (!File.Exists(PngPathFor(idn.GlbPath))) ReadThumbPng(idn.GlbPath);   // restore sidecar
-                return idn.GlbPath;
+                // The file is the game's slot, so it is always the RIGHT file — the only question left is
+                // whether it is still current. Asking here, for the one game being looked at, is what
+                // replaced asking for all 5000 at boot.
+                if (IsCurrent(idn))
+                {
+                    if (!File.Exists(PngPathFor(idn.GlbPath))) ReadThumbPng(idn.GlbPath);   // restore sidecar
+                    return idn.GlbPath;
+                }
+                if (!allowBake) return idn.GlbPath;   // caller can't bake: a stale model beats none
             }
         }
         catch { }
         if (!allowBake) return null;
-        return BakeTo(idn, stillWanted) ? idn.GlbPath : null;
+        return BakeTo(idn, stillWanted) ? idn.GlbPath : null;   // re-bake overwrites its own slot
+    }
+
+    /// <summary>Does the file at <c>idn.GlbPath</c> still describe what the builders would produce now?
+    /// The GLB carries the key and the baker version it was made with, so this is one small header read
+    /// against a key we have just computed — no second source of truth, and nothing to keep in sync.</summary>
+    public static bool IsCurrent(Identity idn)
+    {
+        try
+        {
+            var info = GlbFile.ReadInfo(idn.GlbPath);
+            return info != null && info.BakerVersion == BakerVersion
+                   && string.Equals(info.Key, idn.Key, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     private static bool BakeTo(Identity idn, Func<bool>? stillWanted = null)
@@ -279,7 +276,14 @@ internal static class Model3dCache
             // no-ops. (Checking inside but writing outside the job left a window where both baked.)
             return Model3dBaker.Run(() =>
             {
-                if (File.Exists(idn.GlbPath)) return true;
+                // ONE gate per game. The queue is drained by SEVERAL bake workers, so two jobs for the
+                // same game can run at the same instant: both find no file, both build it, both write it.
+                // Checking for the file first never closed that window — it only made it small. The loser
+                // waits here, then finds the winner's file on the line below and stops.
+                lock (_bakeGates.GetOrAdd(idn.GameId, _ => new object()))
+                {
+                // Only a CURRENT file lets us off: a stale one is exactly what we came to replace.
+                if (File.Exists(idn.GlbPath) && IsCurrent(idn)) return true;
                 if (stillWanted != null && !stillWanted()) return false;   // selection moved on → skip, drain the queue
                 var baked = Model3dBaker.Bake(idn.Map, idn.Title, idn.Platform, idn.ImgOv);
                 if (baked == null) return false;
@@ -287,10 +291,10 @@ internal static class Model3dCache
                 GlbFile.Write(idn.GlbPath, meshes, mats, thumb,
                               new GlbInfo(idn.Key, idn.GameId, idn.Platform, idn.Title, BakerVersion, idn.Manifest));
                 if (thumb != null) TryWritePng(PngPathFor(idn.GlbPath), thumb);   // sidecar, same bake
-                IndexAdd(idn.GameId, idn.GlbPath);
-                Model3dKeyIndex.NotifyBaked(idn.GameId, idn.Key);
+                Model3dKeyIndex.NotifyBaked(idn.GameId);
                 Console.WriteLine($"[model3d] baked {idn.Title} → {Path.GetFileName(idn.GlbPath)} ({new FileInfo(idn.GlbPath).Length / 1024} KB)");
                 return true;
+                }
             });
         }
         catch (Exception ex) { Console.WriteLine("[model3d] bake failed (" + idn.Title + "): " + ex.Message); return false; }
@@ -316,7 +320,6 @@ internal static class Model3dCache
     /// <summary>Delete every cached model (Options → Caches "Delete all").</summary>
     public static int CleanAll()
     {
-        IndexInvalidate();
         Model3dKeyIndex.NotifyAllDeleted();
         int n = 0;
         try
@@ -328,47 +331,49 @@ internal static class Model3dCache
         return n;
     }
 
-    /// <summary>Mark-and-sweep: delete cached models whose game is gone or whose CURRENT key no longer
-    /// matches the filename (stale bake). Identity read from each file's extras — self-contained.
-    /// Returns (kept, deleted).</summary>
+    /// <summary>Delete what belongs to NOBODY: a leftover .tmp, a file whose name is not a game id, one
+    /// whose game has left the library, and a sidecar without its model. Every verdict is an affirmative
+    /// statement about that one file — nothing is deleted because a lookup came back empty. That is the
+    /// whole difference with the key-named scheme, where "no current key claims this file" also described
+    /// a resolution that had merely failed, and one unreadable art directory could take a whole category
+    /// of valid models with it.
+    ///
+    /// Staleness is no longer a sweep concern: a stale model sits in its own game's slot, and the next
+    /// bake writes over it. Returns (kept, deleted) counted in models, not files.</summary>
     public static (int kept, int deleted) SweepStale(IGame[] games)
     {
-        int kept = 0, deleted = 0;
-        var byId = new Dictionary<string, IGame>(StringComparer.OrdinalIgnoreCase);
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var g in games)
-            try { if (g.Id is { Length: > 0 } id) byId[id] = g; } catch { }
-        // Current-key memo: many files can belong to the same game (stale generations) — resolve once.
-        var curKey = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            try { if (g.Id is { Length: > 0 } id) ids.Add(id); } catch { }
+        if (ids.Count == 0) return (0, 0);   // no library in hand → nothing can be judged, so judge nothing
+
+        int kept = 0, deleted = 0;
         try
         {
             foreach (var f in Directory.EnumerateFiles(Dir))
             {
-                if (f.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) { try { File.Delete(f); } catch { } continue; }
-                if (!f.EndsWith(".glb", StringComparison.OrdinalIgnoreCase)) continue;
-                var info = GlbFile.ReadInfo(f);
-                bool stale;
-                if (info == null || info.GameId.Length == 0) stale = true;          // unreadable/foreign → out
-                else if (!byId.TryGetValue(info.GameId, out var g)) stale = true;   // game gone
-                else
-                {
-                    if (!curKey.TryGetValue(info.GameId, out var k))
-                        curKey[info.GameId] = k = Resolve(g)?.Key;
-                    stale = k == null || !string.Equals(k, Path.GetFileNameWithoutExtension(f), StringComparison.OrdinalIgnoreCase);
-                }
-                if (stale)
-                {
-                    try { File.Delete(f); deleted++; } catch { }
-                    try { File.Delete(PngPathFor(f)); } catch { }   // the sidecar follows its GLB out
-                }
-                else kept++;
+                bool glb = f.EndsWith(".glb", StringComparison.OrdinalIgnoreCase);
+                bool png = f.EndsWith(".png", StringComparison.OrdinalIgnoreCase);
+                string name = Path.GetFileNameWithoutExtension(f);
+
+                bool drop;
+                if (f.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) drop = true;
+                else if (!glb && !png) continue;                                  // foreign extension: not ours to judge
+                else if (!Guid.TryParseExact(name, "D", out _)) drop = true;      // not a game id (e.g. a key-named file)
+                else if (!ids.Contains(name)) drop = true;                        // the game has left the library
+                else if (png && !File.Exists(Path.ChangeExtension(f, ".glb"))) drop = true;   // sidecar with no model
+                else drop = false;
+
+                if (drop) { try { File.Delete(f); if (glb) deleted++; } catch { } }
+                else if (glb) kept++;
             }
-            // Orphan sidecars: a PNG whose GLB is gone (deleted above, or externally) has no source of
-            // truth left — drop it. A PNG WITH its GLB is never touched here.
-            foreach (var f in Directory.EnumerateFiles(Dir, "*.png"))
-                try { if (!File.Exists(Path.ChangeExtension(f, ".glb"))) File.Delete(f); } catch { }
         }
         catch (Exception ex) { Console.WriteLine("[model3d] sweep: " + ex.Message); }
-        if (deleted > 0) { IndexInvalidate(); Console.WriteLine($"[model3d] sweep: {deleted} stale model(s) deleted, {kept} kept"); }
+        if (deleted > 0)
+        {
+            Model3dKeyIndex.Refresh();
+            Console.WriteLine($"[model3d] sweep: {deleted} unowned model(s) deleted, {kept} kept");
+        }
         return (kept, deleted);
     }
 }

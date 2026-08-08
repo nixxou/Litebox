@@ -2035,7 +2035,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         [
             Options.OptionItem.Toggle("Display", "Use 16:9 for the main media (else poster ratio)",
                 () => _cfg.Use169ForMainScreenshot, v => _cfg.Use169ForMainScreenshot = v,
-                applyLive: () => { _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0); RelayoutDetail(); Model3d.Model3dKeyIndex.KickAll(); }),
+                // Display only: the bake aspect is a constant, so this cannot change a single model. It
+                // used to trigger a full key rebuild — seconds of work that provably produced the same
+                // index. What it DOES need is the 3D options snapshot dropped, which nothing did.
+                applyLive: () => { _mediaAspect = _cfg.Use169ForMainScreenshot ? (16.0 / 9.0) : (2.0 / 3.0); RelayoutDetail(); Model3d.Model3dOptions.Invalidate(); }),
             Options.OptionItem.Toggle("Display", "Videos: play automatically when selected",
                 () => _cfg.VideoAutoplay, v => _cfg.VideoAutoplay = v,
                 "On: a video starts as soon as it becomes the main media. Off (default): its still frame is "
@@ -2086,8 +2089,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // set of games that may have a model just changed.
     private void Refresh3dValidity()
     {
+        // These knobs decide whether a model is worth SHOWING, not what it contains — they are
+        // deliberately outside the manifest so that tightening the rule never re-bakes. Dropping the
+        // snapshot is therefore the whole job; no cached file becomes wrong.
         Model3d.Model3dOptions.Invalidate();
-        Model3d.Model3dKeyIndex.KickAll();
     }
 
     /// <param name="moduleTab">When set, the Modules section opens on that module's own tab (the parental
@@ -2505,7 +2510,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 IGame[] games;
                 try { games = _dm.GetAllGames(); } catch { games = Array.Empty<IGame>(); }
                 var (kept, deletedN) = Model3d.Model3dCache.SweepStale(games);
-                Model3d.Model3dKeyIndex.RefreshPresence();
+                Model3d.Model3dKeyIndex.Refresh();
                 try { BeginInvoke(new Action(() => { if (m3dLbl.IsDisposed) return; M3dStats($"{deletedN} stale deleted, {kept} kept"); m3dClean.Enabled = true; m3dWipe.Enabled = true; })); } catch { }
             });
         };
@@ -4439,18 +4444,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             if (allow3d)
                 try
                 {
-                    // O(1) RAM lookups only — NEVER Model3dCache.Resolve here: this path runs for every
+                    // O(1) set lookup only — NEVER Model3dCache.Resolve here: this path runs for every
                     // game a fast scroll transits, and Resolve's art-slot IO froze the transit loader.
-                    // Primary: the GameCache-companion key index (exact: knows the CURRENT key). Fallback
-                    // (index not ready / host cache disabled): the header-scan index (may serve a stale bake).
-                    if (Model3d.Model3dKeyIndex.Ready)
-                    {
-                        var e = Model3d.Model3dKeyIndex.Get(Safe(() => g.Id));
-                        if (e is { HasGlb: true })
-                            return (logoSrc, Media.Media3dItem.For(Path.Combine(Model3d.Model3dCache.Dir, e.Key + ".glb")));
-                    }
-                    else if (Model3d.Model3dCache.CachedGlbForInstant(g) is { } glb)
-                        return (logoSrc, Media.Media3dItem.For(glb));
+                    // Presence is all this needs, and the file is named after the game, so there is no
+                    // second branch and nothing to be ready for. Whether that model is still CURRENT is
+                    // settled later, off the transit path, by whoever actually loads it.
+                    string gid = S(Safe(() => g.Id));
+                    if (Model3d.Model3dKeyIndex.HasModel(gid))
+                        return (logoSrc, Media.Media3dItem.For(Path.Combine(Model3d.Model3dCache.Dir, gid + ".glb")));
                 }
                 catch (Exception ex) { Console.WriteLine("[media3d] instant lookup failed: " + ex.Message); }
             fam = Media.MediaLayout.Current.Immediate3dFallback;
@@ -5626,15 +5627,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 if (budget > 0)
                     try
                     {
-                        // Key index first (RAM, current key); Resolve only when it isn't ready.
-                        string? glbPath = null;
-                        if (Model3d.Model3dKeyIndex.Ready)
-                        {
-                            if (Model3d.Model3dKeyIndex.Get(S(Safe(() => g.Id))) is { } ke)
-                                glbPath = Path.Combine(Model3d.Model3dCache.Dir, ke.Key + ".glb");
-                        }
-                        else if (Model3d.Model3dCache.Resolve(g) is { HasArt: true } idn)
-                            glbPath = idn.GlbPath;
+                        // "COULD this game have a model", not "does it already have one". The item added
+                        // here is the sentinel the block bakes from, so gating it on the file existing
+                        // means nothing is ever baked. This runs in the post-load pipeline, off the
+                        // transit path, which is exactly where the one Resolve that answers it belongs.
+                        string? glbPath = Model3d.Model3dCache.Resolve(g) is { HasArt: true } idn3d
+                            ? idn3d.GlbPath : null;
                         if (glbPath != null && Add(Media.Media3dItem.For(glbPath), sentinel: true)) contrib[ei]++;
                     }
                     catch { }

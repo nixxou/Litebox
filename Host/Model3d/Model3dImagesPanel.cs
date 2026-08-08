@@ -48,7 +48,7 @@ internal sealed class Model3dImagesPanel : Panel
 
     /// <summary>Persist the selection as the game's LiteBox3dImage* fields (called by the page's apply).
     /// Override unchecked → fields cleared (back to the automatic pick).</summary>
-    public void Apply() { if (!_readOnly) { Model3dImageStore.Write(_game, CurrentSelection); Model3dKeyIndex.KickGame(_game); } }
+    public void Apply() { if (!_readOnly) { Model3dImageStore.Write(_game, CurrentSelection); Model3dKeyIndex.DropGame(_game); } }
 
     private sealed class Tile : Panel
     {

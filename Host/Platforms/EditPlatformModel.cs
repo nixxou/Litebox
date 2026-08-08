@@ -99,7 +99,7 @@ internal static class EditPlatformModel
         // ModelSettings ctor defaults (platforms LB has no entry for, e.g. SNES).
         // Preview = a sample game of this platform (title filled lazily by SwitchSampleGame; bare case otherwise).
         var (panel, apply, _) = BuildCore(PlatformModelStore.Read(name), ModelDefaults.TryGet(name, scrapeAs) ?? CtorDefaults(),
-                                          f => WroteOrWarn(PlatformModelStore.Write(name, f), () => Model3d.Model3dKeyIndex.KickPlatform(name)), readOnly, s, name, PreviewSampleTitle(name), null, null);
+                                          f => WroteOrWarn(PlatformModelStore.Write(name, f), () => Model3d.Model3dKeyIndex.DropPlatform(name)), readOnly, s, name, PreviewSampleTitle(name), null, null);
         return (panel, apply);
     }
 
@@ -122,7 +122,7 @@ internal static class EditPlatformModel
         => BuildCore(PlatformModelStore.ReadGame(platformName, gameId),
                      PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? "") ?? CtorDefaults(),
                      f => WroteOrWarn(PlatformModelStore.WriteGame(platformName, gameId, f), () =>
-                          { var gg = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId); if (gg != null) Model3d.Model3dKeyIndex.KickGame(gg); }),
+                          { var gg = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId); if (gg != null) Model3d.Model3dKeyIndex.DropGame(gg); }),
                      readOnly, s, platformName, gameTitle ?? "", platformName, imgOv);
 
     // A representative game of a platform to texture the platform-level preview: the first title with a Box -

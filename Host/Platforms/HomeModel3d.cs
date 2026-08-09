@@ -185,7 +185,7 @@ internal sealed class HomeModel3d : IDisposable
     // TODO: non-zero per-side rotations; UseFullScanImages wrap mode; LB's decode sizing (h=600 / logo w=206 —
     // only affects texture sharpness).
     // ── AUTONOMOUS DIMS (probe-derived rules — nothing read from the live model) ──
-    //   forced ModelSizeString "w;h;d" → used directly. Else the art aspect a = W/H of the decoded front:
+    //   forced ModelSizeString "w;h;d" → NORMALISED to the unit box (see below). Else the art aspect a = W/H of the decoded front:
     //   W = min(1, a), H = min(1, 1/a); no art → LB's placeholder aspect 0.766 (W .766, H 1).
     //   Depth: box = 0.143 (constant, all observations); dvd = W×(spineW/frontW) when a spine scan exists,
     //   else defaultD(0.065)×H. Full-scan box: spinePx = FullImageSpineWidth×sheetW, D = spinePx/sheetH,
@@ -200,7 +200,19 @@ internal sealed class HomeModel3d : IDisposable
                 && double.TryParse(p[0], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var fw)
                 && double.TryParse(p[1], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var fh)
                 && double.TryParse(p[2], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var fd))
-                return (fw, fh, fd);
+            {
+                // A forced size states PROPORTIONS, not scene units — so it is scaled onto the same unit box
+                // the automatic path below always produces (max(W,H) = 1). LB's own Genesis and Master System
+                // defaults are "5;7.165;1": the cardboard box measured in INCHES. Taken verbatim that builds a
+                // model seven units tall around a camera sitting at 2.76 — the extreme zoom a fresh install
+                // showed on those two platforms, baked into the GLB and its thumb. Dividing the three by
+                // max(W,H) keeps the box's aspect AND its depth ratio while restoring the scale the framing
+                // law assumes; a size already written in unit terms (max(W,H) = 1) passes through unchanged.
+                double k = Math.Max(fw, fh);
+                if (k > 0 && double.IsFinite(k)) return (fw / k, fh / k, fd / k);
+                // k unusable (zeros, negatives, NaN) — a degenerate model renders as nothing at all, so the
+                // art-derived path below is the better answer than honouring the garbage.
+            }
         }
         double a = front != null && front.PixelHeight > 0 ? (double)front.PixelWidth / front.PixelHeight : 0.766;
         return (Math.Min(1, a), Math.Min(1, 1 / a), defaultD);

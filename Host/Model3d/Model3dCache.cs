@@ -267,8 +267,11 @@ internal static class Model3dCache
     /// Generate-Media-Cache pass repair sidecar-less caches for free.
     /// <paramref name="stillWanted"/> (optional) is re-checked INSIDE the STA job right before the
     /// expensive bake: fast scrolling queues one bake per settled game, and without this check every
-    /// stale job still baked in turn — the queue ground for seconds behind games long since left.</summary>
-    public static string? Ensure(IGame g, bool allowBake = true, Func<bool>? stillWanted = null)
+    /// stale job still baked in turn — the queue ground for seconds behind games long since left.
+    /// <paramref name="force"/> (the bulk generator's "Regenerate everything") re-bakes even a CURRENT
+    /// model — transactionally: GlbFile.Write is tmp+move, so a failed bake leaves the old GLB in
+    /// place instead of an emptied slot.</summary>
+    public static string? Ensure(IGame g, bool allowBake = true, Func<bool>? stillWanted = null, bool force = false)
     {
         // No authoritative media state → do not judge. The host game cache is dropped while a game runs
         // (its RAM belongs to the game) and is not up yet while it builds. Asking "is this model still
@@ -301,8 +304,8 @@ internal static class Model3dCache
             {
                 // The file is the game's slot, so it is always the RIGHT file — the only question left is
                 // whether it is still current. Asking here, for the one game being looked at, is what
-                // replaced asking for all 5000 at boot.
-                if (IsCurrent(idn))
+                // replaced asking for all 5000 at boot. (force: current is not enough — re-bake anyway.)
+                if (!force && IsCurrent(idn))
                 {
                     if (!File.Exists(PngPathFor(idn.GlbPath))) ReadThumbPng(idn.GlbPath);   // restore sidecar
                     return idn.GlbPath;
@@ -312,7 +315,7 @@ internal static class Model3dCache
         }
         catch { }
         if (!allowBake) return null;
-        return BakeTo(idn, stillWanted) ? idn.GlbPath : null;   // re-bake overwrites its own slot
+        return BakeTo(idn, stillWanted, force) ? idn.GlbPath : null;   // re-bake overwrites its own slot
     }
 
     /// <summary>Does the file at <c>idn.GlbPath</c> still describe what the builders would produce now?
@@ -329,7 +332,7 @@ internal static class Model3dCache
         catch { return false; }
     }
 
-    private static bool BakeTo(Identity idn, Func<bool>? stillWanted = null)
+    private static bool BakeTo(Identity idn, Func<bool>? stillWanted = null, bool force = false)
     {
         try
         {
@@ -345,7 +348,9 @@ internal static class Model3dCache
                 lock (_bakeGates.GetOrAdd(idn.GameId, _ => new object()))
                 {
                 // Only a CURRENT file lets us off: a stale one is exactly what we came to replace.
-                if (File.Exists(idn.GlbPath) && IsCurrent(idn)) return true;
+                // (force came here to replace even that — the bulk phase runs each game once, so no
+                // double bake; the per-game gate still serializes against a concurrent selection bake.)
+                if (!force && File.Exists(idn.GlbPath) && IsCurrent(idn)) return true;
                 if (stillWanted != null && !stillWanted()) return false;   // selection moved on → skip, drain the queue
                 var baked = Model3dBaker.Bake(idn.Map, idn.Title, idn.Art);
                 if (baked == null) return false;

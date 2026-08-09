@@ -92,12 +92,24 @@ internal static class VideoThumbnailer
         return c != null && File.Exists(c);
     }
 
-    /// <summary>Drop the cached frame so the next <see cref="Get"/> re-extracts it — the bulk generator's
-    /// "Regenerate everything" path (Get alone reads the cached JPEG back).</summary>
-    public static void DropCached(string videoPath)
+    /// <summary>Re-extract the frame and overwrite the cached JPEG — the bulk generator's "Regenerate
+    /// everything" path (Get alone reads the cached file back). Transactional: the old thumbnail is only
+    /// replaced AFTER a successful decode — libvlc absent or a broken video leaves it untouched.
+    /// False = the extraction failed (nothing was replaced).</summary>
+    public static bool Regenerate(string videoPath)
     {
-        var c = CachePath(videoPath);
-        if (c != null) { try { File.Delete(c); } catch { } }
+        if (string.IsNullOrEmpty(videoPath) || !File.Exists(videoPath)) return false;
+        Bitmap? frame = null;
+        try
+        {
+            frame = Extract(videoPath);
+            if (frame == null) return false;
+            var cache = CachePath(videoPath);
+            if (cache != null) { try { frame.Save(cache, ImageFormat.Jpeg); } catch { } }   // Save truncates: overwrite
+            return true;
+        }
+        catch { return false; }
+        finally { frame?.Dispose(); }
     }
 
     /// <summary>

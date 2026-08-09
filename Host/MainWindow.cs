@@ -6017,12 +6017,13 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (opts.Videos) csvParts.Add("videos");
         if (opts.Docs) csvParts.Add("docs");
         if (opts.Models3d) csvParts.Add("models3d");
+        if (opts.Dup) csvParts.Add("dup");
         try { _cfg.Set("GenCacheSelection", string.Join(",", csvParts)); _cfg.Save(); } catch { }
 
         // The WHAT is remembered; the HOW is not — a forced rebuild is a one-shot gesture (the red entry
         // under the split button), never the state the next run opens in.
         bool force = opts.Force;
-        var phases = BuildCachePhases(chosen, opts.Videos, opts.Docs, opts.Models3d, force);
+        var phases = BuildCachePhases(chosen, opts.Videos, opts.Docs, opts.Models3d, opts.Dup, force);
         if (phases.Count == 0) return;
 
         var dlg = new GenerateCacheProgressForm(phases, games);
@@ -6068,8 +6069,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             try
             {
-                if (force) Video.VideoThumbnailer.DropCached(p);
-                else if (Video.VideoThumbnailer.IsCached(p)) continue;
+                if (force) { if (!Video.VideoThumbnailer.Regenerate(p)) fail++; continue; }
+                if (Video.VideoThumbnailer.IsCached(p)) continue;
                 using var img = Video.VideoThumbnailer.Get(p);
                 if (img == null) fail++;
             }
@@ -6120,24 +6121,35 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     internal sealed record CachePhase(string Title, int Dop, Func<IGame, int> Work);
 
     /// <param name="force">"Regenerate everything": each phase drops the cached entry before rebuilding it.
-    /// The default run is missing-only — every worker is a cache HIT for anything already there.</param>
-    private List<CachePhase> BuildCachePhases(ISet<string> regroupements, bool videos, bool docs, bool models3d = false, bool force = false)
+    /// The default run is missing-only — every worker is a cache HIT for anything already there.
+    /// The dup phase is the exception: force changes nothing for it (see below).</param>
+    private List<CachePhase> BuildCachePhases(ISet<string> regroupements, bool videos, bool docs, bool models3d = false, bool dup = false, bool force = false)
     {
         var phases = new List<CachePhase>();
         foreach (var (key, title) in CacheRegroupements)
             if (regroupements.Contains(key)) phases.Add(ImagePhase(title, key, force));
         if (videos) phases.Add(new CachePhase("Video thumbnails", 1, g => VideoWork(g, force)));
         if (docs) phases.Add(new CachePhase("Document thumbnails", 1, g => DocWork(g, force)));
+        // Pre-compute the missing dup-check results (both views), the same walk as the Options → Caches
+        // "Update duplicates" pass minus its forceDup — a valid (ctx,par) record cannot be stale, so even
+        // a forced run only fills the gaps. Sequential like that pass (one CNN/GPU engine). Gated on the
+        // option: with it off the filter is null and the walk would be a silent no-op.
+        bool dupOn = false;
+        try { dupOn = Media.MediaLayout.Current.PreventDuplicates; } catch { }
+        if (dup && dupOn) phases.Add(new CachePhase("Duplicate detection", 1, g =>
+        {
+            try { BuildMediaList(g, poster: false); BuildMediaList(g, poster: true); } catch { }
+            return 0;   // the filter fails OPEN and persists nothing — there is no failure to count
+        }));
         // Bakes run on the STA worker POOL (Model3dBaker.WorkerCount) — feed it as many blocked callers.
         // A game with no case art is a skip, not a failure.
         if (models3d) phases.Add(new CachePhase("3D box models", Model3d.Model3dBaker.WorkerCount, g =>
         {
             var idn = Model3d.Model3dCache.Resolve(g);
             if (idn == null || !idn.HasArt) return 0;
-            // Ensure keeps a CURRENT model (only a stale one re-bakes) — a forced run deletes the slot
-            // (GLB + sidecar, index sets updated) so the bake below is unconditional.
-            if (force) Model3d.Model3dKeyIndex.DropGame(g);
-            return Model3d.Model3dCache.Ensure(g) == null ? 1 : 0;
+            // force flows INTO Ensure (re-bake even a current model) rather than deleting the slot first:
+            // GlbFile.Write is tmp+move, so a failed bake leaves the old GLB instead of an empty slot.
+            return Model3d.Model3dCache.Ensure(g, force: force) == null ? 1 : 0;
         }));
         return phases;
     }
@@ -6158,7 +6170,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             if (Has("shots")) regs.Add("Screenshots");
             // "force" in the csv drives the same rebuild-everything run as the dialog's red entry.
             bool force = sel.Contains("force", StringComparer.OrdinalIgnoreCase);
-            var phases = BuildCachePhases(regs, Has("videos"), Has("docs"), Has("models3d"), force);
+            var phases = BuildCachePhases(regs, Has("videos"), Has("docs"), Has("models3d"), Has("dup"), force);
             Console.WriteLine($"[gencache] phases=[{string.Join(", ", phases.Select(p => p.Title))}] games={games.Length} force={force}");
             if (phases.Count == 0 || games.Length == 0) { Application.Exit(); return; }
 
@@ -7868,13 +7880,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         public bool Videos => _video.Checked;
         public bool Docs => _doc.Checked;
         public bool Models3d => _m3d.Checked;
+        public bool Dup => _dup.Checked;
 
         /// <summary>True when the run was started from the split button's red entry: every selected cache
         /// is DROPPED and rebuilt. The plain button only fills what is missing.</summary>
         public bool Force { get; private set; }
 
         private readonly Dictionary<string, CheckBox> _regs = new(StringComparer.OrdinalIgnoreCase);
-        private readonly CheckBox _video, _doc, _m3d;
+        private readonly CheckBox _video, _doc, _m3d, _dup;
         private readonly float _s;
         private int S(int px) => (int)Math.Round(px * _s);
 
@@ -7910,12 +7923,24 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             _video = Cb("Video thumbnails", 16, yAfter, initial.Contains("videos"), 320);
             _doc = Cb("Document thumbnails", 16, yAfter + 24, initial.Contains("docs"), 320);
             _m3d = Cb("3D box models (GLB cache)", 16, yAfter + 48, initial.Contains("models3d"), 320);
-            Controls.Add(_video); Controls.Add(_doc); Controls.Add(_m3d);
+            // Duplicate detection: pre-compute the missing :lb.dupcheck results so game selection never
+            // pays the first-visit cost. Missing-only in BOTH run modes — the (ctx,par) key self-invalidates
+            // (file set, order, sizes, engine, threshold, version all in it), so a valid record can never be
+            // stale and a forced recompute would only redo the CNN work for the same verdicts. The real
+            // rewrite hammer stays on Options → Caches → "Update duplicates". Needs the option enabled.
+            bool dupOn = false;
+            try { dupOn = Media.MediaLayout.Current.PreventDuplicates; } catch { }
+            _dup = Cb(dupOn ? "Duplicate detection (missing results)"
+                            : "Duplicate detection (enable it in Display first)",
+                      16, yAfter + 72, dupOn && initial.Contains("dup"), 340);
+            _dup.Enabled = dupOn;
+            if (!dupOn) _dup.ForeColor = SubFg;
+            Controls.Add(_video); Controls.Add(_doc); Controls.Add(_m3d); Controls.Add(_dup);
 
             // Split button: the safe run is the button itself ("Generate missing" — every worker is a cache
             // HIT for what is already there), the destructive one lives behind the arrow, in Danger red, so
             // rebuilding a whole library takes a second deliberate gesture.
-            int yBtn = yAfter + 24 * 3 + 16;
+            int yBtn = yAfter + 24 * 4 + 16;
             var ok = new Button { Text = "Generate missing", Location = new Point(S(108), S(yBtn)), Size = new Size(S(132), S(28)),
                                   FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, DialogResult = DialogResult.OK };
             var drop = new Button { Text = "▾", Location = new Point(S(240), S(yBtn)), Size = new Size(S(24), S(28)),
@@ -7935,7 +7960,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 Size = new Size(S(156), S(30)),               // as wide as the button + its arrow: one piece
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI Semibold", 9f),
-                ToolTipText = "Delete the cached media of the ticked families and build them again from the source.",
+                ToolTipText = "Delete the cached media of the ticked families and build them again from the source.\n"
+                            + "Duplicate detection stays fill-missing-only (its results can't go stale) — "
+                            + "use Options → Caches → \"Update duplicates\" to force a rewrite.",
             };
             all.Click += (_, _) => { Force = true; DialogResult = DialogResult.OK; };
             menu.Items.Add(all);

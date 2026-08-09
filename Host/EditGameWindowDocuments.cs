@@ -961,29 +961,32 @@ internal sealed partial class EditGameWindow
     /// <summary>Ensure the document's cached preview EXISTS (render + save if missing) without keeping a
     /// bitmap — the bulk cache generator's entry point. True = cached / rendered / nothing to render
     /// (non-previewable type); false = the render failed for a renderable type.
-    /// <paramref name="force"/> drops the cached render first ("Regenerate everything").</summary>
+    /// <paramref name="force"/> re-renders and replaces the cached preview ("Regenerate everything") —
+    /// transactionally: a failed render leaves the old preview in place.</summary>
     internal static bool DocEnsureThumb(string absPath, bool force = false)
     {
         string ext = Path.GetExtension(absPath).ToLowerInvariant();
         if (ext is not (".pdf" or ".cbz" or ".zip" or ".txt" or ".docx")) return true;
         string? cache = DocThumbCachePath(absPath, DocRenderDim);
         if (cache == null) return false;               // source missing/unreadable
-        if (force) { try { File.Delete(cache); } catch { } }
-        else if (File.Exists(cache)) return true;      // HIT
+        if (!force && File.Exists(cache)) return true; // HIT
         Bitmap? bmp = null;
-        try { bmp = DocThumb(absPath, DocRenderDim); return bmp != null; }
+        try { bmp = DocThumb(absPath, DocRenderDim, force); return bmp != null; }
+        catch { return false; }
         finally { bmp?.Dispose(); }
     }
 
-    /// <summary>Real preview for a document (disk-cached), or null when the type has no preview (→ badge).</summary>
-    private static Bitmap? DocThumb(string absPath, int maxDim)
+    /// <summary>Real preview for a document (disk-cached), or null when the type has no preview (→ badge).
+    /// <paramref name="force"/> skips the cache read and lets the fresh render REPLACE the cached file —
+    /// only once it exists (tmp + move), so a failed render never costs the old preview.</summary>
+    private static Bitmap? DocThumb(string absPath, int maxDim, bool force = false)
     {
         string ext = Path.GetExtension(absPath).ToLowerInvariant();
         bool renderable = ext is ".pdf" or ".cbz" or ".zip" or ".txt" or ".docx";
         if (!renderable) return null;
 
         string? cache = DocThumbCachePath(absPath, maxDim);
-        if (cache != null && File.Exists(cache))
+        if (!force && cache != null && File.Exists(cache))
         {
             try { using var ms = new MemoryStream(File.ReadAllBytes(cache)); return new Bitmap(Image.FromStream(ms)); }
             catch { try { File.Delete(cache); } catch { } }
@@ -999,7 +1002,8 @@ internal sealed partial class EditGameWindow
         };
         if (bmp != null && cache != null)
         {
-            try { var tmp = cache + "." + Guid.NewGuid().ToString("N") + ".tmp"; bmp.Save(tmp, ImageFormat.Png); try { File.Move(tmp, cache, false); } catch { File.Delete(tmp); } } catch { }
+            // Lazy callers keep first-writer-wins (overwrite:false); the force path replaces the old file.
+            try { var tmp = cache + "." + Guid.NewGuid().ToString("N") + ".tmp"; bmp.Save(tmp, ImageFormat.Png); try { File.Move(tmp, cache, force); } catch { try { File.Delete(tmp); } catch { } } } catch { }
         }
         return bmp;
     }

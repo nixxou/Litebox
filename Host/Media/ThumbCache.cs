@@ -165,19 +165,28 @@ internal static class ThumbCache
         catch { return null; }                          // missing Magick (standalone) → null
     }
 
-    /// <summary>Force-rebuild a thumbnail: drop whatever already sits under the key (any container) and
-    /// generate it again from the source. The bulk generator's "Regenerate everything" path — GetOrCreate
-    /// is a HIT for anything cached, and Generate itself never overwrites an existing target, so the entry
-    /// has to go first. Returns null on failure (missing Magick, unreadable source).</summary>
+    /// <summary>Force-rebuild a thumbnail: generate it again from the source (GetOrCreate would HIT) and
+    /// only THEN replace what sits under the key. The bulk generator's "Regenerate everything" path.
+    /// Transactional on purpose: a failed generation (missing Magick, unreadable source) leaves the old
+    /// thumbnail exactly where it was — the sibling containers (a rebuild can change the extension:
+    /// Auto jpg↔png, alpha png↔webp) are deleted only after the new file is on disk.
+    /// Returns null on failure.</summary>
     public static string Rebuild(string sourcePath, ThumbFormat fmt, int maxDim = DefaultMaxDim)
     {
         KickSweep();
         var targetBase = TargetBaseFor(sourcePath, maxDim, IsAlphaKey(fmt));
         if (targetBase == null) return null;
-        try { File.Delete(targetBase + ".jpg"); } catch { }
-        foreach (var ext in AlphaExtsAll) { try { File.Delete(targetBase + ext); } catch { } }
-        try { return Generate(sourcePath, targetBase, maxDim, fmt); }
-        catch { return null; }
+        string made;
+        try { made = Generate(sourcePath, targetBase, maxDim, fmt, overwrite: true); }
+        catch { return null; }                          // missing Magick (standalone) → old thumb kept
+        if (made == null) return null;
+        foreach (var ext in new[] { ".jpg", ".png", ".webp" })
+        {
+            string sib = targetBase + ext;
+            if (!string.Equals(sib, made, StringComparison.OrdinalIgnoreCase))
+                try { File.Delete(sib); } catch { }
+        }
+        return made;
     }
 
     // HIT probe. Alpha namespace → .png/.webp (either). Jpg/Auto → .jpg first (common, fastest), then the
@@ -285,7 +294,9 @@ internal static class ThumbCache
     // Isolated so the JIT-time assembly-not-found (Magick absent) is caught by GetOrCreate.
     // Format: Png → always keep alpha (container = AlphaExt); Jpg → always jpg (no transparency check);
     // Auto → keep alpha only when the RESIZED image has real transparency (beyond the 3 px rim), else jpg.
-    private static string Generate(string sourcePath, string targetBase, int maxDim, ThumbFormat fmt)
+    // overwrite = the Rebuild path: the finished tmp replaces an existing target (lazy callers keep
+    // first-writer-wins so two concurrent MISSes never clobber each other).
+    private static string Generate(string sourcePath, string targetBase, int maxDim, ThumbFormat fmt, bool overwrite = false)
     {
         string target;
         var tmpGuid = Guid.NewGuid().ToString("N");
@@ -305,7 +316,7 @@ internal static class ThumbCache
             img.Write(target + "." + tmpGuid + ".tmp");
         }
         var tmp = target + "." + tmpGuid + ".tmp";
-        try { File.Move(tmp, target, overwrite: false); }
+        try { File.Move(tmp, target, overwrite); }
         catch { try { File.Delete(tmp); } catch { } }
         return File.Exists(target) ? target : null;
     }

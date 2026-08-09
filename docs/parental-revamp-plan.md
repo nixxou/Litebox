@@ -109,6 +109,45 @@ Verify experimentally, not by reasoning:
 **Deliverable:** a short findings note appended here. If W0.1/W0.2 come back bad, the
 ASI-for-LaunchBox direction changes shape before we commit to it.
 
+#### WS0 findings — 2026-08-10 (code archaeology done; runtime verification PENDING)
+
+*What the codebase establishes (no LaunchBox run needed):*
+- **The write chokepoint exists under LaunchBox.exe.** Saving a platform is
+  LaunchBox.dll shared code: serialize to `Metadata\Temp\<guid>`, then **one**
+  `File.Copy` onto `Data\Platforms\<name>.xml` (`ExtendDB/Patches/PlatformXmlWriteGuard.cs`
+  header). The Harmony prefix already installs in **both** processes — only the *gate*
+  was BigBox-only — so the interception point is present under LB, unexercised.
+- **LaunchBox keeps its own backups in `LB\Backups\`** (distinct from LiteBox's
+  `LB\Backups\LiteBox` in `Host/Data/SafeXmlWrite.cs`), written as part of its save
+  pipeline. Closed-source: the *read mechanism* it uses for those is unknown from code.
+
+*What still needs a locked LaunchBox.exe run (cannot be settled by reading):*
+- **W0.1** — confirm the `File.Copy → Data\Platforms` chokepoint actually fires under
+  LB.exe (not a different save path), AND enumerate LB's *other* write paths while
+  locked. LB is the editor: it saves on every edit, and writes `Playlists\*.xml`,
+  `Settings.xml`, favorites. The rating/ID filter only redirects `Platforms\*.xml`
+  reads, so only Platforms saves can persist a filtered subset — **unless** LB derives
+  playlists/favorites from the filtered in-memory view and writes *those*. Verify.
+- **W0.2** — observe how LB reads `Platforms\*.xml` when backing up: `CreateFileW`
+  (→ our filter poisons the backup) vs `CopyFileExW` (→ bypasses the hook → safe).
+
+*Safe test protocol (NEVER on the real library):*
+1. Copy an LB install (or just `Data\`) to a throwaway location.
+2. Deploy the **existing vendored** `extenddb.asi` + `winhttp.dll` into `Core` as a
+   proxy for the mechanism (it already filters Platforms reads by rating), with a
+   config that hides some games.
+3. Record the on-disk `Platforms\<p>.xml` game count BEFORE any edit (must be unchanged
+   — the read filter redirects reads, never the file).
+4. Run LB.exe locked, make one edit (rename a visible game), re-inspect that XML: did
+   the hidden games survive? → **write-guard necessity test**.
+5. Trigger/await an LB backup; unzip `LB\Backups\<latest>` and compare a platform's game
+   count to the real file. → **poisoning test**.
+6. ProcMon filtered on the platform-XML path, locked: is the backup read a `CreateFile`
+   (poisoned) or `CopyFile` (safe)?
+
+**Status: BLOCKED on a runtime pass.** WS1/WS2/WS3 are LiteBox-native and do NOT depend
+on this gate — safe to proceed with those while WS0's runtime pass is scheduled.
+
 ### WS1 — Options panel cleanup (independent, low-risk, do early)
 - Strip the activation blabla → one line: *LiteBox uses BigBox's parental PIN; set /
   unset it here.* Keep only PIN + confirm + Show.

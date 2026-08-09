@@ -69,11 +69,26 @@ internal static class ModelDefaults
     // PS5 games as a cardboard box. The PS5 retail case is the same keep-case shape as the PS4's, in
     // translucent blue — PS4's block verbatim (dvd, CaseColor #1E51CE blue, full-scan enabled) is the
     // closest thing LB itself would have shipped, and what a user override would have hand-copied anyway.
+    //
+    // Nintendo Switch 2: same story, one generation later. The retail case is the Switch's keep case with
+    // the plastic gone RED — the Switch block with CaseColor #D22A28 instead of its white #F5F5F5.
     private static readonly Dictionary<string, Dictionary<string, string>> Additions = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Sony Playstation 5"] = new(StringComparer.OrdinalIgnoreCase)
         {
             ["CaseColor"] = "-14790194",                    // PS4's #FF1E51CE — the keep-case blue
+            ["DoubleSpineImageMode"] = "AutomaticDetection",
+            ["FrontSpineIsClear"] = "false",
+            ["FullImageSpineWidth"] = "0.065",
+            ["FullScanIsLandscape"] = "false",
+            ["LogoRotation"] = "0,0,0,",
+            ["ModelType"] = "dvd",
+            ["SpineRotation"] = "0,,0,",
+            ["UseFullScanImages"] = "true",
+        },
+        ["Nintendo Switch 2"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["CaseColor"] = "-3003864",                     // #FFD22A28 — the Switch 2 keep-case red
             ["DoubleSpineImageMode"] = "AutomaticDetection",
             ["FrontSpineIsClear"] = "false",
             ["FullImageSpineWidth"] = "0.065",

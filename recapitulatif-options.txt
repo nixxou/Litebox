@@ -106,27 +106,44 @@ Model3dAutoJewelCase       true    DIVERGENCE ASSUMÉE d'avec LaunchBox. LB fige
                                    LaunchBox tel quel, à mettre pour comparer
                                    avec l'oracle (Model3dLbOracle).
                                    Code : HomeModel3d.RefineCaseType.
-Model3dAutoDoubleJewel     true    DIVERGENCE ASSUMÉE. Un jeu MULTI-DISQUES est
-                                   dans un boîtier cristal DOUBLE ; LB ne peut
-                                   pas le savoir (ModelType est par plateforme,
-                                   donc tout PS1 est un cristal simple jusqu'à
-                                   un override par jeu). Mais le scan Box -
-                                   Spine DU JEU photographie le boîtier concerné
-                                   et son rapport épaisseur/hauteur EST cette
-                                   épaisseur — même lecture que BuildBox, qui
-                                   prend déjà la profondeur d'une boîte dans
-                                   spineW/spineH. Repères RÉELS : cristal simple
-                                   10.4/142 = 0.073, double 22/142 = 0.155.
-                                   Bascule au point milieu LOG, relevé de 10%
-                                   vers le double ; au-delà de 0.35 l'image
-                                   n'est pas une tranche et est ignorée (une
-                                   planche complète 260x142 se replie à 0.55).
+Model3dAutoDoubleJewel     true    DIVERGENCE ASSUMÉE, PS1 UNIQUEMENT. Certains
+                                   jeux multi-disques sont en boîtier cristal
+                                   DOUBLE ; LB ne peut pas le savoir (ModelType
+                                   est par plateforme). DEUX signaux exigés
+                                   ENSEMBLE, chacun couvrant le défaut de
+                                   l'autre :
+                                     - multi-disques déclaré (>=2 numéros de
+                                       disque distincts dans les applications
+                                       additionnelles, règle du badge Multiple
+                                       Discs) — seul, il ne suffit pas : des
+                                       multi-disques sortent en boîtier
+                                       d'épaisseur simple à plateaux empilés
+                                       (FF7 Japon et Amérique du Nord) ;
+                                     - tranche du jeu mesurant entre 0.09 et
+                                       0.11 — seule, elle ne suffit pas : le
+                                       ratio dépend du recadrage, le MÊME jeu
+                                       mesurant 0.048 dans un jeu de scans et
+                                       0.105 dans un autre.
+                                   Bande CALIBRÉE sur des scans mesurés, pas sur
+                                   des millimètres : les 4 tranches FF7 de
+                                   référence se séparent en 0.0484/0.0500
+                                   (simples) contre 0.0956/0.1047 (doubles), un
+                                   écart de x1.91 sans rien entre les deux. Le
+                                   rapport entre groupes (2.04) colle au rapport
+                                   physique double/simple (2.12) : le scan perd
+                                   l'échelle absolue mais garde la PROPORTION.
+                                   PS1 = nom de plateforme OU Scrape As.
                                    N'utilise JAMAIS une tranche {Resources} :
-                                   elle est identique pour toute la plateforme
-                                   et les basculerait toutes d'un coup. Se
-                                   CHAÎNE après Model3dAutoJewelCase (un Saturn
-                                   JP 2 disques : long box -> cristal -> double).
+                                   identique pour toute la plateforme, elle les
+                                   basculerait toutes d'un coup.
+                                   Se CHAÎNE après Model3dAutoJewelCase.
                                    Code : HomeModel3d.RefineCaseType.
+
+    NOTE commune aux deux options ci-dessus : elles ne s'appliquent QU'EN MODE
+    AUTO. Dès qu'un bloc ModelSettings a été écrit — par jeu ou par plateforme —
+    RefineCaseType rend la main immédiatement. Ces règles rendent le DÉFAUT plus
+    juste, elles ne discutent jamais un choix explicite. Le drapeau voyage dans
+    Model3dArt.Overridden et entre dans la clé de cache.
 ProgressApplyOnSelect      true    Réévalue les règles d'auto-progression d'un
                                    jeu pendant que son panneau de détail se
                                    charge (fond, quelques µs : la valeur n'est

@@ -45,7 +45,7 @@ internal static class Model3dCache
 {
     /// <summary>Salts every key — bump when the bake output changes (geometry, materials, thumb pose/size,
     /// GLB layout) so stale files are re-keyed away in one move.</summary>
-    public const int BakerVersion = 18;   // v18: a LYING-DOWN spine scan is stood upright for every builder, not just BuildBox — the other four drew it sideways (v17: a jewel-case game whose own Box - Spine scan measures a double-width case is built as one (Model3dAutoDoubleJewel), v16: Saturn/Sega CD fall back from the long box to a plain jewel case when the front art fits that shape better (Model3dAutoJewelCase) — both decisions are made in the builder, so unlike the Genesis fix they do NOT move the key on their own, v15: a forced ModelSizeString is normalised onto the unit box, so LB's Genesis/Master System defaults ("5;7.165;1" — inches) stop baking a model seven units tall in front of the camera, v14: art resolves ONCE, through MediaResolver with the game's id -> the game cache answers it (fast validation), GUID-form images become visible, and an image in a type folder is no longer read as a region, v13: Dreamcast Auto-Detect picks its spine COLOUR by measuring the artwork, v12: auto version follows the front art's region, v11: double-jewel strips keep the game scan, v10: doubleSided through the GLB)
+    public const int BakerVersion = 19;   // v19: the double-jewel rule is PS1-only and needs BOTH signals (declared multi-disc + a spine measuring 0.09-0.11), and every auto case rule now stands down in front of a written ModelSettings block (v18: a LYING-DOWN spine scan is stood upright for every builder, not just BuildBox — the other four drew it sideways, v17: a jewel-case game whose own Box - Spine scan measures a double-width case is built as one (Model3dAutoDoubleJewel), v16: Saturn/Sega CD fall back from the long box to a plain jewel case when the front art fits that shape better (Model3dAutoJewelCase) — both decisions are made in the builder, so unlike the Genesis fix they do NOT move the key on their own, v15: a forced ModelSizeString is normalised onto the unit box, so LB's Genesis/Master System defaults ("5;7.165;1" — inches) stop baking a model seven units tall in front of the camera, v14: art resolves ONCE, through MediaResolver with the game's id -> the game cache answers it (fast validation), GUID-form images become visible, and an image in a type folder is no longer read as a region, v13: Dreamcast Auto-Detect picks its spine COLOUR by measuring the artwork, v12: auto version follows the front art's region, v11: double-jewel strips keep the game scan, v10: doubleSided through the GLB)
 
     // One lock object per game id, so two bake workers never build the same model at once. Keyed by game
     // rather than by file so it holds whatever the file is called.
@@ -114,10 +114,16 @@ internal static class Model3dCache
         string scrapeAs = "";
         try { scrapeAs = ctx?.ScrapeAs(platform) ?? PluginHelper.DataManager?.GetPlatformByName(platform)?.ScrapeAs ?? ""; } catch { }
         Dictionary<string, string>? map = null;
+        // WHICH source answered matters, not just what it said: a block somebody wrote (per game, then per
+        // platform) is a human choice, and HomeModel3d.RefineCaseType's auto rules stand down in front of it.
+        // The ?? chain is kept lazy — the platform file is still not read when the game has its own block.
+        bool overridden = false;
         try
         {
-            map = (id.Length > 0 ? (ctx != null ? ctx.GameSettings(platform, id) : Platforms.PlatformModelStore.ReadGame(platform, id)) : null)
-                  ?? (ctx != null ? ctx.PlatformSettings(platform) : Platforms.PlatformModelStore.Read(platform))
+            var own = id.Length > 0 ? (ctx != null ? ctx.GameSettings(platform, id) : Platforms.PlatformModelStore.ReadGame(platform, id)) : null;
+            var plat = own ?? (ctx != null ? ctx.PlatformSettings(platform) : Platforms.PlatformModelStore.Read(platform));
+            overridden = plat != null;
+            map = plat
                   ?? Platforms.ModelDefaults.TryGet(platform, scrapeAs)
                   ?? Platforms.EditPlatformModel.CtorDefaults();
         }
@@ -163,7 +169,16 @@ internal static class Model3dCache
         // memory: validating an already-current model costs a handful of lookups, not a directory walk.
         var ov = Model3dImageStore.Effective(g);
         Guid.TryParse(id, out var gid);
-        var art = Model3dArt.Resolve(map, platform, gid, title, ov);
+        // The scrape-resolved name is what the auto rules key on, so a custom-named PS1 library behaves like
+        // one — the same identity ModelDefaults matches. MultiDisc is only ASKED for on the platform that can
+        // act on it: GetAllAdditionalApplications is an in-memory catalogue call, but the key-index pass runs
+        // over the whole library and there is no reason to pay it thousands of times for nothing.
+        string platKey = scrapeAs.Length > 0 ? scrapeAs : platform;
+        bool multiDisc = Platforms.HomeModel3d.CanAutoDoubleJewel(platKey) && IsMultiDisc(g);
+        var art = Model3dArt.Resolve(map, platform, gid, title, ov, platKey, multiDisc, overridden);
+        // Both change what gets BUILT from identical art, so both belong in the key: adding a second disc
+        // must re-bake, and so must ticking Override on a platform whose fields happen to match the defaults.
+        sb.Append("md=").Append(multiDisc ? '1' : '0').Append(" ov=").Append(overridden ? '1' : '0').Append('\n');
         Slot("front", art.Front);
         Slot("logo", art.Logo);
         Slot("spine", art.Spine);
@@ -199,6 +214,27 @@ internal static class Model3dCache
     // plain ReadAllBytes (no GLB header walk, and the OS caches the small file independently). The GLB
     // keeps embedding the thumb (single self-contained artifact, web/three.js reuse); the sidecar is a
     // pure accelerator, restored from the GLB whenever it's missing.
+
+    /// <summary>Two or more DISTINCT disc numbers among the game's additional applications — the same rule
+    /// the "Multiple Discs" badge applies, and the same doctrine as M3uPlaylistPlanner: discs are FIELDS,
+    /// never parsed out of file names. In-memory catalogue call, no I/O.</summary>
+    private static bool IsMultiDisc(IGame g)
+    {
+        try
+        {
+            var apps = g.GetAllAdditionalApplications();
+            if (apps == null) return false;
+            var seen = new HashSet<int>();
+            foreach (var a in apps)
+            {
+                int? d = null;
+                try { d = a.Disc; } catch { }
+                if (d.HasValue && seen.Add(d.Value) && seen.Count >= 2) return true;
+            }
+            return false;
+        }
+        catch { return false; }
+    }
 
     /// <summary>The sidecar snapshot path of a cached GLB.</summary>
     public static string PngPathFor(string glbPath) => Path.ChangeExtension(glbPath, ".png");

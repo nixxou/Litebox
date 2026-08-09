@@ -118,12 +118,58 @@ internal sealed class HomeModel3d : IDisposable
     /// <summary>Build the model for the given settings map + sample game. Unknown/absent ModelType renders as
     /// a box (what LB does for null settings). <paramref name="imgOv"/> = optional per-slot image override
     /// (front/back/spine/logo/full — see Model3dImageStore); <paramref name="gameId"/> = the game behind the
-    /// title when there is one (the platform-settings preview has only a sample title).</summary>
+    /// title when there is one (the platform-settings preview has only a sample title).
+    /// <paramref name="overridden"/> = the editor's Override box is ticked, i.e. <paramref name="map"/> is a
+    /// human choice rather than a fallback — the preview must show the auto rules standing down exactly as
+    /// the bake will, or the panel would promise a shape the library never renders.</summary>
     public void Build(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle, string? platform,
-                      System.Collections.Generic.Dictionary<string, string>? imgOv = null, Guid gameId = default)
+                      System.Collections.Generic.Dictionary<string, string>? imgOv = null, Guid gameId = default,
+                      bool overridden = false)
     {
-        try { _modelHost.Content = BuildModel(map, gameTitle, Model3d.Model3dArt.Resolve(map, platform, gameId, gameTitle, imgOv)); }
+        try
+        {
+            string platKey = ScrapeKeyOf(platform);
+            bool multiDisc = CanAutoDoubleJewel(platKey) && PreviewIsMultiDisc(gameId);
+            var art = Model3d.Model3dArt.Resolve(map, platform, gameId, gameTitle, imgOv, platKey, multiDisc, overridden);
+            _modelHost.Content = BuildModel(map, gameTitle, art);
+        }
         catch (Exception ex) { Console.WriteLine("[homemodel] build: " + ex.Message); _modelHost.Content = null; }
+    }
+
+    /// <summary>The platform's Scrape As when it has one, else its own name — the identity the auto rules
+    /// key on, so a custom-named PS1 library behaves like the real thing.</summary>
+    private static string? ScrapeKeyOf(string? platform)
+    {
+        if (string.IsNullOrEmpty(platform)) return platform;
+        try
+        {
+            var sa = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetPlatformByName(platform)?.ScrapeAs;
+            return string.IsNullOrWhiteSpace(sa) ? platform : sa;
+        }
+        catch { return platform; }
+    }
+
+    /// <summary>Preview-side disc count (Model3dCache owns the one used for the bake). Guid.Empty — the
+    /// platform-settings preview, which has a sample title and no game — is never multi-disc.</summary>
+    private static bool PreviewIsMultiDisc(Guid gameId)
+    {
+        if (gameId == Guid.Empty) return false;
+        try
+        {
+            var g = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId.ToString());
+            if (g == null) return false;
+            var apps = g.GetAllAdditionalApplications();
+            if (apps == null) return false;
+            var seen = new System.Collections.Generic.HashSet<int>();
+            foreach (var a in apps)
+            {
+                int? d = null;
+                try { d = a.Disc; } catch { }
+                if (d.HasValue && seen.Add(d.Value) && seen.Count >= 2) return true;
+            }
+            return false;
+        }
+        catch { return false; }
     }
 
     /// <summary>The pure model factory behind <see cref="Build"/> — usable without a viewport (GLB baking,
@@ -169,48 +215,60 @@ internal sealed class HomeModel3d : IDisposable
     private static readonly double JewelCrossover = Math.Sqrt(JewelFrontAspect * LongFrontAspect) * 1.05;
 
     // ── AUTO DOUBLE JEWEL (Model3dAutoDoubleJewel, default ON) — also a divergence from LaunchBox ──
-    // A multi-disc release sits in a double-width ("fat") jewel case, and LB has no way to know: ModelType is
-    // per platform, so every PS1 game is a single jewel until someone overrides that game by hand. But the
-    // game's OWN Box - Spine scan is a photograph of the very case in question, and its depth-over-height
-    // ratio IS the case thickness — the same reading BuildBox already trusts when it takes a box's depth
-    // straight from spineW/spineH. These two constants are therefore REAL-WORLD millimetres, not model units:
-    // what is being classified is a scan of a physical object, and the mesh it will later be stretched onto
-    // has no say in what that object was.
-    private const double SingleSpineAspect = 10.4 / 142.0;   // 0.0732 — standard CD jewel case
-    private const double DoubleSpineAspect = 22.0 / 142.0;   // 0.1549 — the double-width case (FF7 and friends)
+    // A multi-disc release MAY sit in a double-width jewel case, and LaunchBox has no way to know: ModelType
+    // is per platform, so every PS1 game is a single jewel until someone overrides that one game by hand.
+    //
+    // Two signals are required TOGETHER, because each one alone is wrong in a way the other covers:
+    //   • the disc count alone does not imply a thick case — plenty of multi-disc releases ship in a
+    //     single-width case with stacked trays (the Japanese and North American Final Fantasy 7 both do);
+    //   • the spine scan alone is not a measurement — its ratio depends on how the strip was cropped, and
+    //     the SAME game measures 0.048 in one scan set and 0.105 in another.
+    // Requiring both means the case has to be declared multi-disc AND look thick in its own artwork.
+    //
+    // The band is CALIBRATED on measured scans, not on millimetres. The four Final Fantasy 7 spines in the
+    // reference library split cleanly in two with nothing in between — 0.0484 (Japan) and 0.0500 (North
+    // America) against 0.0956 (Asia) and 0.1047 (France), a 1.91x gap — and the user confirmed the last two
+    // are the double cases. That the two groups differ by 2.04x while a real double-to-single case differs
+    // by 2.12x is what says the scan preserves the RATIO faithfully even though it shows the printed strip
+    // (about half the case width) rather than the case: absolute millimetres are not recoverable, the
+    // proportion is. PS1 only — the band is calibrated on PS1 scans and claims nothing about any other
+    // platform's artwork conventions.
+    private const string DoubleJewelPlatform = "Sony Playstation";
+    private const double DoubleSpineMin = 0.09;   // below: the single-width cases, measured at 0.048-0.050
+    private const double DoubleSpineMax = 0.11;   // above: not a spine strip — a wrap or a mis-slotted cover
 
-    /// <summary>Log midpoint of the two thicknesses, RAISED 10% toward the double so a single case keeps
-    /// LaunchBox's default unless the scan is clearly the thick one. The two are ~2.1x apart, so this leaves
-    /// a wide dead zone: a real single (0.073) sits 38% below the bar, a real double (0.155) 32% above.</summary>
-    private static readonly double DoubleSpineCrossover = Math.Sqrt(SingleSpineAspect * DoubleSpineAspect) * 1.10;
-
-    /// <summary>Past this, the image is not a spine strip at all — a whole wrap dropped into the spine slot,
-    /// a mis-scraped cover — and measuring it would mean nothing. The bound has to be well clear of a real
-    /// wrap BECAUSE of the orientation folding in <see cref="SpineThickness"/>: a jewel wrap is
-    /// front+spine+back, 260x142, which folds to 0.55 and would otherwise read as an absurdly thick case.
-    /// 0.35 keeps even a four-disc box (45/142 = 0.32) while leaving that a wide berth.</summary>
-    private const double SpineAspectMax = 0.35;
+    /// <summary>Is <paramref name="platformKey"/> a platform the double-jewel rule is calibrated for? Public
+    /// so Model3dCache can skip the disc lookup for every other platform.</summary>
+    internal static bool CanAutoDoubleJewel(string? platformKey)
+        => string.Equals(platformKey, DoubleJewelPlatform, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Refine the platform's model type against what this game's own artwork measures. Two steps,
     /// in order, so they can chain — a Japanese two-disc Saturn release goes long box → jewel → double jewel.
-    /// Anything unreadable, out of range, or with the matching option off leaves the type untouched.</summary>
+    /// Anything unreadable, out of range, or with the matching option off leaves the type untouched.
+    ///
+    /// AUTO MODE ONLY. A ModelSettings block somebody wrote — per game or per platform — ends this function
+    /// before it starts: these rules exist to make the DEFAULT smarter, and a default that argued with an
+    /// explicit choice would just be a bug wearing a feature's clothes.</summary>
     private static string RefineCaseType(string type, Model3d.Model3dArt art)
     {
+        if (art.Overridden) return type;
+
         // 1) long box → jewel case, on the FRONT art's shape.
         if (string.Equals(type, "longJewelCase", StringComparison.OrdinalIgnoreCase)
             && Model3d.Model3dOptions.AutoJewelCase
             && ImageAspect(art.Front) > JewelCrossover)          // 0 (no readable front) keeps the default
             type = "jewelCase";
 
-        // 2) jewel case → double jewel, on the SPINE SCAN's thickness. Deliberately the game's OWN scan
-        //    (art.Spine) and never the {Resources} preset: a preset is one generic strip shipped with
-        //    LiteBox, identical for every game on the platform, so it measures the artwork pack — not the
-        //    case this game came in — and would flip a whole platform at once.
+        // 2) jewel case → double jewel: PS1, declared multi-disc, AND a spine scan that measures thick.
+        //    Deliberately the game's OWN scan (art.Spine) and never the {Resources} preset — a preset is one
+        //    generic strip shipped with LiteBox, identical for every game on the platform, so it measures the
+        //    artwork pack rather than the case and would flip the whole platform at once.
         if (string.Equals(type, "jewelCase", StringComparison.OrdinalIgnoreCase)
-            && Model3d.Model3dOptions.AutoDoubleJewel)
+            && Model3d.Model3dOptions.AutoDoubleJewel
+            && CanAutoDoubleJewel(art.Platform) && art.MultiDisc)
         {
             double t = SpineThickness(art.Spine);
-            if (t > DoubleSpineCrossover && t <= SpineAspectMax) type = "doubleJewelCase";
+            if (t >= DoubleSpineMin && t <= DoubleSpineMax) type = "doubleJewelCase";
         }
         return type;
     }

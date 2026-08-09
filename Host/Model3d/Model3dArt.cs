@@ -24,9 +24,20 @@ using System.Collections.Generic;
 namespace LbApiHost.Host.Model3d;
 
 /// <summary>The resolved art sources for one model build. <c>FullScan</c> = the sheet mode applies to this
-/// game (option or image-override pick) — the builders still arbitrate it against the spine scan.</summary>
+/// game (option or image-override pick) — the builders still arbitrate it against the spine scan.
+///
+/// <c>Platform</c> and <c>MultiDisc</c> are not art, but they ride along for the same reason the paths do:
+/// the builders must not go looking things up. Platform is the SCRAPE-RESOLVED name (a custom-named PS1
+/// library answers "Sony Playstation", the same key ModelDefaults matches on), and MultiDisc is the badge
+/// rule — two or more distinct disc numbers among the additional applications. Both feed
+/// HomeModel3d.RefineCaseType, and MultiDisc is in the cache manifest so adding a disc re-keys the model.
+///
+/// <c>Overridden</c> = these settings came from a ModelSettings block somebody WROTE (per game or per
+/// platform), not from LaunchBox's defaults. The auto rules are a smarter default, never a second opinion
+/// on a human choice, so they all stand down when this is true.</summary>
 internal sealed record Model3dArt(string? Front, string? Logo, string? Spine, string? Back, string? Full,
-                                  bool FullScan)
+                                  bool FullScan, string? Platform = null, bool MultiDisc = false,
+                                  bool Overridden = false)
 {
     /// <summary>Nothing resolved — the bare case a builder falls back to when there is no game and no
     /// platform to resolve against.</summary>
@@ -34,9 +45,12 @@ internal sealed record Model3dArt(string? Front, string? Logo, string? Spine, st
 
     /// <summary>Resolve every slot for one game. <paramref name="id"/> = the game's Guid (Guid.Empty for the
     /// platform-settings preview, which has only a sample title — MediaResolver falls back on its own).
-    /// <paramref name="ov"/> = the effective per-slot image override (Edit Game → Image Selection).</summary>
+    /// <paramref name="ov"/> = the effective per-slot image override (Edit Game → Image Selection).
+    /// <paramref name="platformKey"/> = the scrape-resolved platform name, <paramref name="multiDisc"/> the
+    /// badge rule's verdict; callers that know them pass them, the probes leave them at their defaults.</summary>
     public static Model3dArt Resolve(Dictionary<string, string>? map, string? platform, Guid id, string? title,
-                                     Dictionary<string, string>? ov)
+                                     Dictionary<string, string>? ov, string? platformKey = null,
+                                     bool multiDisc = false, bool overridden = false)
     {
         bool fullScan = IsFullScan(map, ov);
         return new Model3dArt(
@@ -48,7 +62,10 @@ internal sealed record Model3dArt(string? Front, string? Logo, string? Spine, st
             // builders can reach, so it must not enter the key either (an unrelated Box - Full landing on
             // disk would re-key — and re-bake — a model it cannot change).
             fullScan ? Slot(ov, "full", platform, id, title, new[] { "Box - Full" }) : null,
-            fullScan);
+            fullScan,
+            string.IsNullOrEmpty(platformKey) ? platform : platformKey,
+            multiDisc,
+            overridden);
     }
 
     /// <summary>Full-scan mode: the UseFullScanImages option, or an image override that picked a full scan

@@ -121,11 +121,18 @@ internal static class EditPlatformModel
     public static (Control panel, Action apply, Action redraw) BuildForGame(string platformName, string gameId, bool readOnly, float s,
                                                                             string? scrapeAs, string? gameTitle,
                                                                             Func<Dictionary<string, string>?>? imgOv)
-        => BuildCore(PlatformModelStore.ReadGame(platformName, gameId),
-                     PlatformModelStore.Read(platformName) ?? ModelDefaults.TryGet(platformName, scrapeAs ?? "") ?? CtorDefaults(),
+    {
+        // The platform's own block, read ONCE: it is both this panel's fallback and — when the game has no
+        // block of its own — the reason the auto case rules must stand down for this game. Without the flag
+        // the preview would apply them while the bake did not.
+        var platBlock = PlatformModelStore.Read(platformName);
+        return BuildCore(PlatformModelStore.ReadGame(platformName, gameId),
+                     platBlock ?? ModelDefaults.TryGet(platformName, scrapeAs ?? "") ?? CtorDefaults(),
                      f => WroteOrWarn(PlatformModelStore.WriteGame(platformName, gameId, f), () =>
                           { var gg = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId); if (gg != null) Model3d.Model3dKeyIndex.DropGame(gg); }),
-                     readOnly, s, platformName, gameTitle ?? "", PreviewIdOf(gameId), platformName, imgOv);
+                     readOnly, s, platformName, gameTitle ?? "", PreviewIdOf(gameId), platformName, imgOv,
+                     platBlock != null);
+    }
 
     /// <summary>The id to resolve the preview's art with — only when it designates a game that EXISTS.
     /// EditPlatformRenderProbe opens this panel with a Guid.NewGuid() placeholder (it needs a key to store an
@@ -210,7 +217,8 @@ internal static class EditPlatformModel
                                                            bool readOnly, float s,
                                                            string previewPlatform, string previewGameTitle, Guid previewGameId,
                                                            string? _unused,
-                                                           Func<Dictionary<string, string>?>? imgOv)
+                                                           Func<Dictionary<string, string>?>? imgOv,
+                                                           bool fallbackIsOverride = false)
     {
         int S(int px) => (int)Math.Round(px * s);
         var cur = own ?? fallback;   // displayed values: own override, else the parent level's (game←platform)
@@ -534,9 +542,13 @@ internal static class EditPlatformModel
         // sample game. Override off → the fallback map (platform override / hardcoded defaults / ctor defaults).
         void RedrawPreview()
         {
-            var map = ApplyMapExtra(BuildFieldMap() ?? fallback);
+            // Override ticked → these fields ARE the human choice. Unticked → the fallback stands in, and it
+            // is only a choice when it came from the platform's own block (fallbackIsOverride).
+            var own = BuildFieldMap();
+            var map = ApplyMapExtra(own ?? fallback);
+            bool overridden = own != null || fallbackIsOverride;
             var sample = CurrentSample();
-            try { home.Build(map, sample.Title, previewPlatform, imgOv?.Invoke(), sample.Id); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
+            try { home.Build(map, sample.Title, previewPlatform, imgOv?.Invoke(), sample.Id, overridden); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
             // ═══ LB-ORACLE ═══ mirror every redraw into the LaunchBox zone (no-op when the flag is off).
             try { live?.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
         }

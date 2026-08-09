@@ -3646,6 +3646,18 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _posterTileHbm.Clear(); _posterTileOrder.Clear();
         foreach (var img in _posterBmp.Values) img?.Dispose();
         _posterBmp.Clear();
+        // The FIFO must reset WITH the dictionary it evicts for: ids left behind inflate its count, and
+        // the eviction loop then throws out FRESH thumbs until the stale ids drain through.
+        _posterBmpOrder.Clear();
+        // Queued and ready work belongs to the OLD geometry/group — a decode landing after this rebuild
+        // would insert a thumb sized for the previous cell (or resolved for the previous image group)
+        // into the fresh caches. Dropped here; pending ids go with it so tiles re-queue cleanly. (A
+        // worker mid-decode can still land ≤ PosterMaxWorkers stale entries — rare, evicts normally.)
+        lock (_posterQLock)
+        {
+            _posterReq.Clear(); _posterPending.Clear();
+            while (_posterDone.Count > 0) { var (_, _, img) = _posterDone.Dequeue(); img?.Dispose(); }
+        }
         _slotOf.Clear(); _slotId.Clear(); _slotCount = 0; _slotLru.Clear(); _slotNode.Clear();
         _posterTileFont?.Dispose(); _posterTileFont = null;
 
@@ -3768,6 +3780,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             _poster.Visible = false; _games.Visible = true; _games.BringToFront();
             try { ActiveControl = _games; _games.Focus(); } catch { }
+            // Leaving the poster RELEASES its image memory outright (user decision): a list-mode session
+            // should not keep hundreds of MB of tiles idle for a view that is not on screen. Same full
+            // drop as a zoom change — coming back is a cold rebuild, tiles refill lazily as they show.
+            // The list view itself holds no box art (its only images are the badge strips).
+            try { RebuildPosterGeometry(); } catch { }
         }
     }
 

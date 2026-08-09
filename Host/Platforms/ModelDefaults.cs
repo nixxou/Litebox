@@ -42,6 +42,26 @@ internal static class ModelDefaults
         return _cache.GetOrAdd(key, _ => Resolve(name, scrape));
     }
 
+    // LiteBox's CORRECTIONS to LB's hardcoded defaults, applied on top of whichever source answered.
+    //
+    // LaunchBox ships Genesis and Master System as ModelType "dvd" — a keep case: a paper wrap over a
+    // plastic shell, and that shell is #1D1D1D (the dvd default for any platform carrying no CaseColor,
+    // and neither of these two carries one). Those platforms never shipped in a keep case; they shipped in
+    // a printed CARDBOARD box, which is exactly what "box" models — every face either textured or tinted
+    // with the artwork's corner average. The shell is what shows as strictly black edges beside, say, an
+    // SNES box, whose platform has no LB default at all and so falls through to CtorDefaults' "box".
+    // The size those two carry reads the same way: "5;7.165;1" is 5 x 7.165 x 1 INCHES of cardboard.
+    //
+    // Corrections live HERE rather than in model-defaults.json because that file is regenerated verbatim
+    // from the core by --model-defaults-extract; an edit to it would be silently lost on the next LB
+    // version. Changing ModelType also changes the resolved map, hence the cache key, so exactly these
+    // platforms re-bake — no BakerVersion bump, and no library-wide re-bake for a two-platform fix.
+    private static readonly Dictionary<string, Dictionary<string, string>> Corrections = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Sega Genesis"]       = new(StringComparer.OrdinalIgnoreCase) { ["ModelType"] = "box" },
+        ["Sega Master System"] = new(StringComparer.OrdinalIgnoreCase) { ["ModelType"] = "box" },
+    };
+
     private static Dictionary<string, string>? Resolve(string name, string scrape)
     {
         // FROZEN TABLE first (embedded model-defaults.json, extracted from the core once per LB version via
@@ -51,11 +71,23 @@ internal static class ModelDefaults
         var table = FrozenTable();
         if (table != null)
         {
-            if (scrape.Length > 0 && table.TryGetValue(scrape, out var byScrape)) return new(byScrape, StringComparer.OrdinalIgnoreCase);
-            if (name.Length > 0 && table.TryGetValue(name, out var byName)) return new(byName, StringComparer.OrdinalIgnoreCase);
+            if (scrape.Length > 0 && table.TryGetValue(scrape, out var byScrape)) return Corrected(scrape, byScrape);
+            if (name.Length > 0 && table.TryGetValue(name, out var byName)) return Corrected(name, byName);
             return null;   // authoritative when loaded — LB simply has no default for this platform
         }
-        return ResolveViaCore(name, scrape);
+        var core = ResolveViaCore(name, scrape);
+        return core == null ? null : Corrected(scrape.Length > 0 ? scrape : name, core);
+    }
+
+    /// <summary>A copy of <paramref name="src"/> with the corrections for <paramref name="key"/> applied.
+    /// Keyed on whichever of scrapeAs/name actually matched, so a custom-named platform inherits the
+    /// correction through its Scrape As exactly the way it inherits the preset itself.</summary>
+    private static Dictionary<string, string> Corrected(string key, Dictionary<string, string> src)
+    {
+        var m = new Dictionary<string, string>(src, StringComparer.OrdinalIgnoreCase);
+        if (Corrections.TryGetValue(key, out var fix))
+            foreach (var kv in fix) m[kv.Key] = kv.Value;
+        return m;
     }
 
     private static Dictionary<string, Dictionary<string, string>>? _frozen;

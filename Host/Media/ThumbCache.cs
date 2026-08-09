@@ -165,6 +165,21 @@ internal static class ThumbCache
         catch { return null; }                          // missing Magick (standalone) → null
     }
 
+    /// <summary>Force-rebuild a thumbnail: drop whatever already sits under the key (any container) and
+    /// generate it again from the source. The bulk generator's "Regenerate everything" path — GetOrCreate
+    /// is a HIT for anything cached, and Generate itself never overwrites an existing target, so the entry
+    /// has to go first. Returns null on failure (missing Magick, unreadable source).</summary>
+    public static string Rebuild(string sourcePath, ThumbFormat fmt, int maxDim = DefaultMaxDim)
+    {
+        KickSweep();
+        var targetBase = TargetBaseFor(sourcePath, maxDim, IsAlphaKey(fmt));
+        if (targetBase == null) return null;
+        try { File.Delete(targetBase + ".jpg"); } catch { }
+        foreach (var ext in AlphaExtsAll) { try { File.Delete(targetBase + ext); } catch { } }
+        try { return Generate(sourcePath, targetBase, maxDim, fmt); }
+        catch { return null; }
+    }
+
     // HIT probe. Alpha namespace → .png/.webp (either). Jpg/Auto → .jpg first (common, fastest), then the
     // alpha exts (Auto may have produced a transparent thumb). Robust to a format switch: finds whichever
     // extension is actually on disk.

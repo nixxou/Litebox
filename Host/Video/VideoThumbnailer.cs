@@ -92,6 +92,14 @@ internal static class VideoThumbnailer
         return c != null && File.Exists(c);
     }
 
+    /// <summary>Drop the cached frame so the next <see cref="Get"/> re-extracts it — the bulk generator's
+    /// "Regenerate everything" path (Get alone reads the cached JPEG back).</summary>
+    public static void DropCached(string videoPath)
+    {
+        var c = CachePath(videoPath);
+        if (c != null) { try { File.Delete(c); } catch { } }
+    }
+
     /// <summary>
     /// Same thing for a video we DON'T own: libvlc opens the URL and range-requests its way to the 20% mark, so
     /// we decode a frame without downloading the whole file (a Steam trailer is 5-10 MB; we pull a fraction).

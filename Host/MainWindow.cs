@@ -6019,7 +6019,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (opts.Models3d) csvParts.Add("models3d");
         try { _cfg.Set("GenCacheSelection", string.Join(",", csvParts)); _cfg.Save(); } catch { }
 
-        var phases = BuildCachePhases(chosen, opts.Videos, opts.Docs, opts.Models3d);
+        // The WHAT is remembered; the HOW is not — a forced rebuild is a one-shot gesture (the red entry
+        // under the split button), never the state the next run opens in.
+        bool force = opts.Force;
+        var phases = BuildCachePhases(chosen, opts.Videos, opts.Docs, opts.Models3d, force);
         if (phases.Count == 0) return;
 
         var dlg = new GenerateCacheProgressForm(phases, games);
@@ -6039,29 +6042,34 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 LiteBox.Notifications.NotificationCenter.Error(
                     $"Media cache generated for {total} game(s) — {dlg.FailedCount} thumbnail(s) failed (see litebox-debug.log).");
             else
-                LiteBox.Notifications.NotificationCenter.Info($"Media cache generated — {total} game(s).");
+                LiteBox.Notifications.NotificationCenter.Info(
+                    (force ? "Media cache regenerated — " : "Media cache generated — ") + $"{total} game(s).");
         };
         dlg.ShowPseudoModal(this);
     }
 
     // One image REGROUPEMENT per phase (ClearLogo → webp/alpha, everything else → jpg).
     // Failures are counted only when a source EXISTS and still would not generate (Magick trouble).
-    private static CachePhase ImagePhase(string title, string regroupement) => new(title, Math.Min(4, Math.Max(1, Environment.ProcessorCount)), g =>
+    // force = the "Regenerate everything" run: the cached entry is dropped and rebuilt instead of hit.
+    private static CachePhase ImagePhase(string title, string regroupement, bool force) => new(title, Math.Min(4, Math.Max(1, Environment.ProcessorCount)), g =>
     {
         string src = CacheSourceFor(g, regroupement);
         if (string.IsNullOrEmpty(src)) return 0;
-        return ThumbCache.GetOrCreate(src, ThumbCache.FormatFor(regroupement)) == null && File.Exists(src) ? 1 : 0;
+        var fmt = ThumbCache.FormatFor(regroupement);
+        string made = force ? ThumbCache.Rebuild(src, fmt) : ThumbCache.GetOrCreate(src, fmt);
+        return made == null && File.Exists(src) ? 1 : 0;
     });
 
     // Every video of the game (cache-first, IGame fallback) — frame-extracted unless already cached.
-    private static int VideoWork(IGame g)
+    private static int VideoWork(IGame g, bool force)
     {
         int fail = 0;
         foreach (var p in VideoPathsOf(g))
         {
             try
             {
-                if (Video.VideoThumbnailer.IsCached(p)) continue;
+                if (force) Video.VideoThumbnailer.DropCached(p);
+                else if (Video.VideoThumbnailer.IsCached(p)) continue;
                 using var img = Video.VideoThumbnailer.Get(p);
                 if (img == null) fail++;
             }
@@ -6090,7 +6098,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     }
 
     // Every document of the game (AdditionalApplication Section=Document), rendered at DocRenderDim.
-    private static int DocWork(IGame g)
+    private static int DocWork(IGame g, bool force)
     {
         int fail = 0;
         try
@@ -6100,7 +6108,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 if (a is not Data.HostAdditionalApplication { IsDocument: true } h) continue;
                 string abs = EditGameWindow.DocResolve(h.ApplicationPath);
                 if (string.IsNullOrEmpty(abs) || !File.Exists(abs)) continue;
-                if (!EditGameWindow.DocEnsureThumb(abs)) fail++;
+                if (!EditGameWindow.DocEnsureThumb(abs, force)) fail++;
             }
         }
         catch { }
@@ -6111,19 +6119,24 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     /// (returns the number of FAILURES for that game). The progress dialog runs the phases in order.</summary>
     internal sealed record CachePhase(string Title, int Dop, Func<IGame, int> Work);
 
-    private List<CachePhase> BuildCachePhases(ISet<string> regroupements, bool videos, bool docs, bool models3d = false)
+    /// <param name="force">"Regenerate everything": each phase drops the cached entry before rebuilding it.
+    /// The default run is missing-only — every worker is a cache HIT for anything already there.</param>
+    private List<CachePhase> BuildCachePhases(ISet<string> regroupements, bool videos, bool docs, bool models3d = false, bool force = false)
     {
         var phases = new List<CachePhase>();
         foreach (var (key, title) in CacheRegroupements)
-            if (regroupements.Contains(key)) phases.Add(ImagePhase(title, key));
-        if (videos) phases.Add(new CachePhase("Video thumbnails", 1, VideoWork));
-        if (docs) phases.Add(new CachePhase("Document thumbnails", 1, DocWork));
+            if (regroupements.Contains(key)) phases.Add(ImagePhase(title, key, force));
+        if (videos) phases.Add(new CachePhase("Video thumbnails", 1, g => VideoWork(g, force)));
+        if (docs) phases.Add(new CachePhase("Document thumbnails", 1, g => DocWork(g, force)));
         // Bakes run on the STA worker POOL (Model3dBaker.WorkerCount) — feed it as many blocked callers.
         // A game with no case art is a skip, not a failure.
         if (models3d) phases.Add(new CachePhase("3D box models", Model3d.Model3dBaker.WorkerCount, g =>
         {
             var idn = Model3d.Model3dCache.Resolve(g);
             if (idn == null || !idn.HasArt) return 0;
+            // Ensure keeps a CURRENT model (only a stale one re-bakes) — a forced run deletes the slot
+            // (GLB + sidecar, index sets updated) so the bake below is unconditional.
+            if (force) Model3d.Model3dKeyIndex.DropGame(g);
             return Model3d.Model3dCache.Ensure(g) == null ? 1 : 0;
         }));
         return phases;
@@ -6143,8 +6156,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             if (Has("logos")) regs.Add("ClearLogo");
             if (Has("fronts")) regs.Add("Front");
             if (Has("shots")) regs.Add("Screenshots");
-            var phases = BuildCachePhases(regs, Has("videos"), Has("docs"), Has("models3d"));
-            Console.WriteLine($"[gencache] phases=[{string.Join(", ", phases.Select(p => p.Title))}] games={games.Length}");
+            // "force" in the csv drives the same rebuild-everything run as the dialog's red entry.
+            bool force = sel.Contains("force", StringComparer.OrdinalIgnoreCase);
+            var phases = BuildCachePhases(regs, Has("videos"), Has("docs"), Has("models3d"), force);
+            Console.WriteLine($"[gencache] phases=[{string.Join(", ", phases.Select(p => p.Title))}] games={games.Length} force={force}");
             if (phases.Count == 0 || games.Length == 0) { Application.Exit(); return; }
 
             var dlg = new GenerateCacheProgressForm(phases, games);
@@ -7854,6 +7869,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         public bool Docs => _doc.Checked;
         public bool Models3d => _m3d.Checked;
 
+        /// <summary>True when the run was started from the split button's red entry: every selected cache
+        /// is DROPPED and rebuilt. The plain button only fills what is missing.</summary>
+        public bool Force { get; private set; }
+
         private readonly Dictionary<string, CheckBox> _regs = new(StringComparer.OrdinalIgnoreCase);
         private readonly CheckBox _video, _doc, _m3d;
         private readonly float _s;
@@ -7893,16 +7912,63 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             _m3d = Cb("3D box models (GLB cache)", 16, yAfter + 48, initial.Contains("models3d"), 320);
             Controls.Add(_video); Controls.Add(_doc); Controls.Add(_m3d);
 
+            // Split button: the safe run is the button itself ("Generate missing" — every worker is a cache
+            // HIT for what is already there), the destructive one lives behind the arrow, in Danger red, so
+            // rebuilding a whole library takes a second deliberate gesture.
             int yBtn = yAfter + 24 * 3 + 16;
-            var ok = new Button { Text = "Generate", Location = new Point(S(174), S(yBtn)), Size = new Size(S(90), S(28)),
+            var ok = new Button { Text = "Generate missing", Location = new Point(S(108), S(yBtn)), Size = new Size(S(132), S(28)),
                                   FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, DialogResult = DialogResult.OK };
+            var drop = new Button { Text = "▾", Location = new Point(S(240), S(yBtn)), Size = new Size(S(24), S(28)),
+                                    FlatStyle = FlatStyle.Flat, BackColor = ControlPaint.Dark(Accent, 0.04f), ForeColor = Color.White,
+                                    TabStop = false };
             var cancel = new Button { Text = "Cancel", Location = new Point(S(272), S(yBtn)), Size = new Size(S(90), S(28)),
                                       FlatStyle = FlatStyle.Flat, BackColor = Panel2, ForeColor = Fg, DialogResult = DialogResult.Cancel };
             ok.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
+            drop.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
             cancel.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 72);
+
+            var menu = new ContextMenuStrip { Renderer = new DangerRenderer(), BackColor = LiteBoxTheme.Danger,
+                                              ForeColor = Color.White, ShowImageMargin = false };
+            var all = new ToolStripMenuItem("Regenerate everything")
+            {
+                AutoSize = false,
+                Size = new Size(S(156), S(30)),               // as wide as the button + its arrow: one piece
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI Semibold", 9f),
+                ToolTipText = "Delete the cached media of the ticked families and build them again from the source.",
+            };
+            all.Click += (_, _) => { Force = true; DialogResult = DialogResult.OK; };
+            menu.Items.Add(all);
+            drop.Click += (_, _) => menu.Show(ok, new Point(0, ok.Height));
+            Disposed += (_, _) => menu.Dispose();
+
             AcceptButton = ok; CancelButton = cancel;
-            Controls.Add(ok); Controls.Add(cancel);
+            Controls.Add(ok); Controls.Add(drop); Controls.Add(cancel);
             ClientSize = new Size(S(380), S(yBtn + 42));
+        }
+
+        /// <summary>The dropped panel is an EXTENSION of the button, not a normal menu: it paints itself in
+        /// Danger red (the shared DarkRenderer forces Panel2/Fg on every item, which would flatten exactly
+        /// the signal this entry exists to carry).</summary>
+        private sealed class DangerRenderer : ToolStripProfessionalRenderer
+        {
+            public DangerRenderer() : base(new DarkColors()) { RoundedEdges = false; }
+
+            protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+            {
+                var c = e.Item.Selected ? ControlPaint.Light(LiteBoxTheme.Danger, 0.25f) : LiteBoxTheme.Danger;
+                using var b = new SolidBrush(c);
+                e.Graphics.FillRectangle(b, new Rectangle(Point.Empty, e.Item.Size));
+            }
+
+            protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+            {
+                using var b = new SolidBrush(LiteBoxTheme.Danger);
+                e.Graphics.FillRectangle(b, e.AffectedBounds);
+            }
+
+            protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+            { e.TextColor = Color.White; base.OnRenderItemText(e); }
         }
     }
 

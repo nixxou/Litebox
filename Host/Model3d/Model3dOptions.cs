@@ -22,7 +22,7 @@ internal static class Model3dOptions
     public static Func<LiteBoxConfig>? Source;
 
     private sealed record Snap(bool NeedBack, bool NeedSpine, bool NeedBoth, bool AcceptFull, bool Use169,
-                               bool AutoJewel);
+                               bool AutoJewel, bool AutoDouble);
 
     private static Snap? _snap;
     private static readonly object _lock = new();
@@ -38,10 +38,11 @@ internal static class Model3dOptions
                 if (_snap != null) return _snap;
                 LiteBoxConfig cfg;
                 try { cfg = Source?.Invoke() ?? LiteBoxConfig.LoadForExe(); }
-                catch { return _snap = new Snap(false, false, false, false, true, true); }
+                catch { return _snap = new Snap(false, false, false, false, true, true, true); }
                 return _snap = new Snap(cfg.Model3dRequireBack, cfg.Model3dRequireSpine,
                                         cfg.Model3dRequireBothScans, cfg.Model3dAcceptFullScan,
-                                        cfg.Use169ForMainScreenshot, cfg.Model3dAutoJewelCase);
+                                        cfg.Use169ForMainScreenshot, cfg.Model3dAutoJewelCase,
+                                        cfg.Model3dAutoDoubleJewel);
             }
         }
     }
@@ -72,4 +73,8 @@ internal static class Model3dOptions
     /// <summary>May a long-box platform fall back to a plain jewel case when the artwork fits that shape
     /// better? See HomeModel3d.RefineCaseType — a deliberate divergence from LaunchBox, on by default.</summary>
     public static bool AutoJewelCase => S.AutoJewel;
+
+    /// <summary>May a jewel-case game be promoted to a double-width case when its own spine scan measures
+    /// one? See HomeModel3d.RefineCaseType — a deliberate divergence from LaunchBox, on by default.</summary>
+    public static bool AutoDoubleJewel => S.AutoDouble;
 }

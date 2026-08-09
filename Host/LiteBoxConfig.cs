@@ -282,6 +282,12 @@ internal sealed class LiteBoxConfig
     /// False = LaunchBox's own choice, unconditionally — set this when comparing against the oracle.</summary>
     public bool Model3dAutoJewelCase { get => GetBool("Model3dAutoJewelCase", true); set => SetBool("Model3dAutoJewelCase", value); }
 
+    /// <summary>Also a divergence, on by default. True = a jewel-case game whose OWN Box - Spine scan
+    /// measures a double-width case is built as a doubleJewelCase — how a multi-disc release (FF7 and
+    /// friends) gets its real shape without a per-game override. Never uses a {Resources} preset spine:
+    /// that strip is identical for every game on the platform and would flip all of them at once.</summary>
+    public bool Model3dAutoDoubleJewel { get => GetBool("Model3dAutoDoubleJewel", true); set => SetBool("Model3dAutoDoubleJewel", value); }
+
     // ═══ LB-ORACLE (Model3dLbOracle) — dev/diagnostic, default OFF ═══
     // true → the Edit Platform 3D tab shows a SECOND preview zone rendered by LaunchBox's own core
     // (CoverFlow.FlowModel via CoreModelHost) above LiteBox's renderer, for side-by-side comparison of

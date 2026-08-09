@@ -168,19 +168,65 @@ internal sealed class HomeModel3d : IDisposable
     /// scan (137x190 = 0.721) does not.</summary>
     private static readonly double JewelCrossover = Math.Sqrt(JewelFrontAspect * LongFrontAspect) * 1.05;
 
-    /// <summary>Long box → jewel case when the front art fits the jewel proportions better. Any other model
-    /// type, the option off, or an unreadable front → the type is returned untouched.</summary>
+    // ── AUTO DOUBLE JEWEL (Model3dAutoDoubleJewel, default ON) — also a divergence from LaunchBox ──
+    // A multi-disc release sits in a double-width ("fat") jewel case, and LB has no way to know: ModelType is
+    // per platform, so every PS1 game is a single jewel until someone overrides that game by hand. But the
+    // game's OWN Box - Spine scan is a photograph of the very case in question, and its depth-over-height
+    // ratio IS the case thickness — the same reading BuildBox already trusts when it takes a box's depth
+    // straight from spineW/spineH. These two constants are therefore REAL-WORLD millimetres, not model units:
+    // what is being classified is a scan of a physical object, and the mesh it will later be stretched onto
+    // has no say in what that object was.
+    private const double SingleSpineAspect = 10.4 / 142.0;   // 0.0732 — standard CD jewel case
+    private const double DoubleSpineAspect = 22.0 / 142.0;   // 0.1549 — the double-width case (FF7 and friends)
+
+    /// <summary>Log midpoint of the two thicknesses, RAISED 10% toward the double so a single case keeps
+    /// LaunchBox's default unless the scan is clearly the thick one. The two are ~2.1x apart, so this leaves
+    /// a wide dead zone: a real single (0.073) sits 38% below the bar, a real double (0.155) 32% above.</summary>
+    private static readonly double DoubleSpineCrossover = Math.Sqrt(SingleSpineAspect * DoubleSpineAspect) * 1.10;
+
+    /// <summary>Past this, the image is not a spine strip at all — a whole wrap dropped into the spine slot,
+    /// a mis-scraped cover — and measuring it would mean nothing. The bound has to be well clear of a real
+    /// wrap BECAUSE of the orientation folding in <see cref="SpineThickness"/>: a jewel wrap is
+    /// front+spine+back, 260x142, which folds to 0.55 and would otherwise read as an absurdly thick case.
+    /// 0.35 keeps even a four-disc box (45/142 = 0.32) while leaving that a wide berth.</summary>
+    private const double SpineAspectMax = 0.35;
+
+    /// <summary>Refine the platform's model type against what this game's own artwork measures. Two steps,
+    /// in order, so they can chain — a Japanese two-disc Saturn release goes long box → jewel → double jewel.
+    /// Anything unreadable, out of range, or with the matching option off leaves the type untouched.</summary>
     private static string RefineCaseType(string type, Model3d.Model3dArt art)
     {
-        if (!string.Equals(type, "longJewelCase", StringComparison.OrdinalIgnoreCase)) return type;
-        if (!Model3d.Model3dOptions.AutoJewelCase) return type;
-        double a = FrontAspect(art.Front);
-        return a > JewelCrossover ? "jewelCase" : type;   // a == 0 (no readable front) keeps the default
+        // 1) long box → jewel case, on the FRONT art's shape.
+        if (string.Equals(type, "longJewelCase", StringComparison.OrdinalIgnoreCase)
+            && Model3d.Model3dOptions.AutoJewelCase
+            && ImageAspect(art.Front) > JewelCrossover)          // 0 (no readable front) keeps the default
+            type = "jewelCase";
+
+        // 2) jewel case → double jewel, on the SPINE SCAN's thickness. Deliberately the game's OWN scan
+        //    (art.Spine) and never the {Resources} preset: a preset is one generic strip shipped with
+        //    LiteBox, identical for every game on the platform, so it measures the artwork pack — not the
+        //    case this game came in — and would flip a whole platform at once.
+        if (string.Equals(type, "jewelCase", StringComparison.OrdinalIgnoreCase)
+            && Model3d.Model3dOptions.AutoDoubleJewel)
+        {
+            double t = SpineThickness(art.Spine);
+            if (t > DoubleSpineCrossover && t <= SpineAspectMax) type = "doubleJewelCase";
+        }
+        return type;
     }
 
-    /// <summary>The front artwork's width/height read from its HEADER — no pixel decode, so this stays
+    /// <summary>A spine scan's depth-over-height, orientation-independent. Spine strips are scanned both
+    /// upright and lying down (BuildBox rotates the lying ones before use), and a case is thinner than it is
+    /// tall either way — so the short side over the long side measures the same case from both. 0 = unknown.</summary>
+    private static double SpineThickness(string? path)
+    {
+        double a = ImageAspect(path);
+        return a <= 0 ? 0 : a > 1 ? 1 / a : a;
+    }
+
+    /// <summary>An image's width/height read from its HEADER — no pixel decode, so this stays
     /// affordable on the bake path where the builders decode the image again anyway. 0 when unknown.</summary>
-    private static double FrontAspect(string? path)
+    private static double ImageAspect(string? path)
     {
         try
         {

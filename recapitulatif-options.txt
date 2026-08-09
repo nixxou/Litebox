@@ -106,6 +106,27 @@ Model3dAutoJewelCase       true    DIVERGENCE ASSUMÉE d'avec LaunchBox. LB fige
                                    LaunchBox tel quel, à mettre pour comparer
                                    avec l'oracle (Model3dLbOracle).
                                    Code : HomeModel3d.RefineCaseType.
+Model3dAutoDoubleJewel     true    DIVERGENCE ASSUMÉE. Un jeu MULTI-DISQUES est
+                                   dans un boîtier cristal DOUBLE ; LB ne peut
+                                   pas le savoir (ModelType est par plateforme,
+                                   donc tout PS1 est un cristal simple jusqu'à
+                                   un override par jeu). Mais le scan Box -
+                                   Spine DU JEU photographie le boîtier concerné
+                                   et son rapport épaisseur/hauteur EST cette
+                                   épaisseur — même lecture que BuildBox, qui
+                                   prend déjà la profondeur d'une boîte dans
+                                   spineW/spineH. Repères RÉELS : cristal simple
+                                   10.4/142 = 0.073, double 22/142 = 0.155.
+                                   Bascule au point milieu LOG, relevé de 10%
+                                   vers le double ; au-delà de 0.35 l'image
+                                   n'est pas une tranche et est ignorée (une
+                                   planche complète 260x142 se replie à 0.55).
+                                   N'utilise JAMAIS une tranche {Resources} :
+                                   elle est identique pour toute la plateforme
+                                   et les basculerait toutes d'un coup. Se
+                                   CHAÎNE après Model3dAutoJewelCase (un Saturn
+                                   JP 2 disques : long box -> cristal -> double).
+                                   Code : HomeModel3d.RefineCaseType.
 ProgressApplyOnSelect      true    Réévalue les règles d'auto-progression d'un
                                    jeu pendant que son panneau de détail se
                                    charge (fond, quelques µs : la valeur n'est

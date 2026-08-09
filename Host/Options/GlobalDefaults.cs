@@ -61,6 +61,7 @@ internal static class GlobalDefaults
         ("Model3dAcceptFullScan",           "false"),
         ("Model3dLbOracle",                 "false"),       // dev: LaunchBox comparison zone in Edit Platform
         ("Model3dAutoJewelCase",            "true"),        // Saturn/Sega CD: jewel case when the art fits it better
+        ("Model3dAutoDoubleJewel",          "true"),        // multi-disc: double jewel when the spine scan measures one
     };
 
     /// <summary>Write every missing key with its default. One boot pass, idempotent — it only ever writes

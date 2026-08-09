@@ -804,17 +804,23 @@ internal sealed class HomeModel3d : IDisposable
         return grp;
     }
 
-    // ── ITERATION 4c: DOUBLE JEWEL CASE — dump-exact structure:
-    //   • front/back art quads Z=±0.0573 (Grid 1000×1000, bg = corner-avg of the front art — NOTE: LB's actual
-    //     bg on SoM was #1C3219 vs corner-avg #104E30, formula not fully pinned, but the bg is INVISIBLE in
-    //     practice: the art Fill covers the whole grid) + a TINT overlay quad Z=±0.0466 per side
-    //     (Diffuse #DE24262C + Specular #34969BA0 pow=18 — the insert seen through the closed lid).
+    // ── ITERATION 4c: DOUBLE JEWEL CASE — dump-exact structure (re-dumped 2026-08-09, FF7/PS1, 16 leaves):
+    //   • FRONT art quad X[-0.42..0.492] Z=+0.0573 — NOT full width: the leftmost 0.073 of the front face is
+    //     the HINGE CAP quad X[-0.493..-0.42], textured with the FrontSpineImage preset's DOUBLE-JEWEL
+    //     variant (asset "<preset> - NA Double Jewel", 82×861 — the only double variant shipped: the dump's
+    //     FRANCE-region FF7 still gets NA). Grid 1000×1000, bg = corner-avg of the cap image, Img Fill.
+    //     This cap is the black plastic-looking left border LB shows and LiteBox was missing.
+    //     Front tint follows the narrowed front: X[-0.416..0.488] (was [-0.489..0.488] when full-width).
+    //   • back art X[-0.482..0.492] Z=-0.0573 + tint X[-0.478..0.488] Z=-0.0466 (unchanged by the cap).
+    //     Tints: Diffuse #DE24262C + Specular #34969BA0 pow=18 — the insert seen through the closed lid.
+    //   • Every paper leaf in the dump carries BackMaterial = the SAME material (nothing is single-sided).
     //   • FOUR spine strips (two per side, split at z=±0.008..0.058): LB splits the spine image into left/right
     //     HALVES — right side gets [left-half (back), right-half (front)], left side gets the SAME halves
     //     ROTATED 180° (probe-verified against LB's .bbflow-double-jewel-spine cache files, diff 0.04).
-    //     Strip brush = Grid[220×1000] transparent + half Image Fill.
-    //   • plastic: NOT an embedded obj (LB builds it procedurally — 7 segments, scale 69.78); cloned from the
-    //     live model's child group (game-independent). TODO: reproduce procedurally.
+    //     Strip brush = Grid[220×1000] transparent + half Image Fill. The GAME's scan feeds the strips; the
+    //     cap uses the PRESET even when a scan exists (dump: strips 33/34×640 = the scan's halves, cap 82×861).
+    //   • plastic: NOT an embedded obj (LB builds it procedurally — 7 segments, scale 69.78); LiteBox ships a
+    //     one-shot export (DoubleJewelCase) whose 7 segments match the dump's leaf9/0..6 exactly.
     //   TODO: DoubleSpineImageMode variants (Single / DualSplitCenter / DualMiddleSeparator) — Automatic split
     //   is what's implemented (observed behaviour with a spine scan).
     private static Model3D? BuildDoubleJewel(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle,
@@ -877,7 +883,23 @@ internal sealed class HomeModel3d : IDisposable
             halfRr = new System.Windows.Media.Imaging.TransformedBitmap(halfR, new System.Windows.Media.RotateTransform(180));
         }
 
+        // The hinge cap image: the preset's DOUBLE-JEWEL variant when one is shipped, the resolved regular
+        // preset otherwise; a custom (non-{Resources}) file is used as-is. The game's own scan never lands
+        // here — the dump shows the cap wearing the preset while the strips wear the scan's halves.
+        System.Windows.Media.Imaging.BitmapSource? cap = null;
+        if (spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase))
+        {
+            string key = spineSpec.Substring(12);
+            int dash = key.IndexOf(" - ", StringComparison.Ordinal);
+            string baseKey = dash > 0 ? key.Substring(0, dash) : key;   // an explicit version still wants ITS double variant
+            cap = LbCaseObj.SpineImage(baseKey + " - NA Double Jewel")
+                  ?? LbCaseObj.SpineImage(ResolvePresetKey(key, djScan, front, LbCaseObj.RegionOfImagePath(djScanPath), region), region);
+        }
+        else if (spineSpec.Length > 0) cap = LoadBitmap(spineSpec);
+
         var grp = new Model3DGroup();
+        // Every paper quad is double-faced with the SAME material — the dump shows back=mat on all of them
+        // (the art's mirror is what shows through the clear shell from behind).
         void Quad(Material mat, (double x, double y, double z)[] p)
         {
             var mesh = new MeshGeometry3D();
@@ -888,10 +910,16 @@ internal sealed class HomeModel3d : IDisposable
                 mesh.TextureCoordinates.Add(new System.Windows.Point(uv[i].Item1, uv[i].Item2));
             }
             foreach (var ix in new[] { 3, 0, 2, 3, 1, 0 }) mesh.TriangleIndices.Add(ix);
-            grp.Children.Add(new GeometryModel3D { Geometry = mesh, Material = mat });
+            grp.Children.Add(new GeometryModel3D { Geometry = mesh, Material = mat, BackMaterial = mat });
         }
-        Quad(frontMat, new[] { (-0.493, 0.4265, 0.0573), (0.492, 0.4265, 0.0573), (-0.493, -0.4265, 0.0573), (0.492, -0.4265, 0.0573) });
-        Quad(tintG, new[] { (-0.489, 0.4195, 0.0466), (0.488, 0.4195, 0.0466), (-0.489, -0.4195, 0.0466), (0.488, -0.4195, 0.0466) });
+        // Front insert: full width only when there is NO cap to wear (unobserved case — every shipped double
+        // platform carries a preset); with a cap the front starts at -0.42 and the cap owns [-0.493..-0.42].
+        double fl = cap != null ? -0.42 : -0.493, tl = cap != null ? -0.416 : -0.489;
+        Quad(frontMat, new[] { (fl, 0.4265, 0.0573), (0.492, 0.4265, 0.0573), (fl, -0.4265, 0.0573), (0.492, -0.4265, 0.0573) });
+        Quad(tintG, new[] { (tl, 0.4195, 0.0466), (0.488, 0.4195, 0.0466), (tl, -0.4195, 0.0466), (0.488, -0.4195, 0.0466) });
+        if (cap != null)
+            Quad(FaceMaterial(cap, System.Windows.Media.Stretch.Fill, 1000, 1000, CornerAverage(cap)),
+                 new[] { (-0.493, 0.4265, 0.0573), (-0.42, 0.4265, 0.0573), (-0.493, -0.4265, 0.0573), (-0.42, -0.4265, 0.0573) });
         Quad(backMat, new[] { (0.492, 0.4265, -0.0573), (-0.482, 0.4265, -0.0573), (0.492, -0.4265, -0.0573), (-0.482, -0.4265, -0.0573) });
         Quad(tintG, new[] { (0.488, 0.4195, -0.0466), (-0.478, 0.4195, -0.0466), (0.488, -0.4195, -0.0466), (-0.478, -0.4195, -0.0466) });
         // strips: v0 at -Y (bottom) — the dump's exact tables (u along z, v bottom→top)

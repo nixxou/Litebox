@@ -157,6 +157,19 @@ internal static class JewelRenderProbe
                     if (prev == null) { Console.WriteLine("[oracle] core unavailable (run the DEPLOYED LB\\Core exe)"); return; }
                     var ui = (prev.Control as System.Windows.Forms.Integration.ElementHost)?.Child as System.Windows.FrameworkElement;
                     if (ui == null) { Console.WriteLine("[oracle] no WPF child"); return; }
+                    // FlowModel builds NOTHING outside a real window: its art load + model build hang off
+                    // Loaded/render hooks that never fire for a control that was only Measured/Arranged.
+                    // Host it in an off-screen form for the probe's lifetime — same trick as the live probe.
+                    var host = new System.Windows.Forms.Form
+                    {
+                        FormBorderStyle = System.Windows.Forms.FormBorderStyle.None,
+                        StartPosition = System.Windows.Forms.FormStartPosition.Manual,
+                        Location = new System.Drawing.Point(-4000, -4000),   // off-screen, still "shown"
+                        Size = new System.Drawing.Size(w, h), ShowInTaskbar = false,
+                    };
+                    prev.Control.Dock = System.Windows.Forms.DockStyle.Fill;
+                    host.Controls.Add(prev.Control);
+                    host.Show();
                     // Same platform/title arguments as --render-jewel: the A/B is only worth anything if both
                     // sides are asked for the SAME game with the SAME settings. LaunchBox resolves that
                     // game's art through its own code — which is the point, it is the reference.
@@ -173,13 +186,12 @@ internal static class JewelRenderProbe
                     ApplyMapArg(args, map);   // `map "K=V;K=V"` → overrides (empty V = remove)
                     Console.WriteLine($"[oracle] {platform} / \"{title}\"  map: " + string.Join(";", map.Select(kv => kv.Key + "=" + kv.Value)));
                     prev.Redraw(map, title, platform);
-                    ui.Measure(new System.Windows.Size(w, h));
-                    ui.Arrange(new System.Windows.Rect(0, 0, w, h));
-                    Pump(wait);                    // FlowModel loads art ASYNC and rebuilds — let it settle
+                    // FlowModel loads art ASYNC and rebuilds — pump until geometry exists, up to `wait` ms.
+                    long until = Environment.TickCount64 + wait;
+                    while (Environment.TickCount64 < until && prev.BuiltGeometry() == null) Pump(100);
+                    Pump(400);                     // settle: textures land a beat after the group appears
                     if (args.Contains("dump")) DumpStructure(prev.BuiltGeometry());   // exact quads + materials
                     if (l != 0 || r != 0 || u != 0 || dn != 0) { prev.Rotate(l, r, u, dn); Pump(800); }
-                    ui.Measure(new System.Windows.Size(w, h));
-                    ui.Arrange(new System.Windows.Rect(0, 0, w, h));
                     var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
                     rtb.Render(ui);
                     var enc = new PngBitmapEncoder();
@@ -187,6 +199,7 @@ internal static class JewelRenderProbe
                     using var ms = new MemoryStream();
                     enc.Save(ms);
                     png = ms.ToArray();
+                    try { host.Close(); host.Dispose(); } catch { }
                 }
                 catch (Exception ex) { Console.WriteLine("[oracle] " + ex); }
             });
@@ -208,7 +221,10 @@ internal static class JewelRenderProbe
 
     // ═══ LB-ORACLE ═══ dump the built Model3DGroup: every leaf's transformed bounds, uv range and material —
     // the ground-truth structure to compare our builders against (successor of the deleted DumpGroup).
-    private static void DumpStructure(Model3DGroup? root)
+    // Internal: the WINDOWED probe (--model3d-live + LB_ORACLE_DUMP=1) calls it on the oracle zone's
+    // geometry — the headless FlowModel never builds (its art/build hooks need a real window), so the
+    // live window is where a trustworthy dump comes from.
+    internal static void DumpStructure(Model3DGroup? root)
     {
         if (root == null) { Console.WriteLine("[oracle-dump] no built geometry"); return; }
         int leaf = 0;

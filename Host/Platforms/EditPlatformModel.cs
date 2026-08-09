@@ -32,6 +32,7 @@ internal static class EditPlatformModel
     private static Color GroupBody => Blend(Bg, Panel2);
 
     internal static OrbitController? LastOrbit;   // exposed for the --model3d-live probe to drive rotate/zoom
+    internal static CoreModelHost.Preview? LastOracle;   // exposed for the --model3d-live probe's LB_ORACLE_DUMP=1
 
     // Model Type dropdown label → stored ModelType string.
     private static readonly (string label, string val)[] ModelTypes =
@@ -612,6 +613,7 @@ internal static class EditPlatformModel
         if (oracleWanted)
         {
             try { live = CoreModelHost.Preview.Create(nativeRotate: true); } catch (Exception ex) { Console.WriteLine("[model3d] oracle: " + ex.Message); }
+            LastOracle = live;
             if (live != null)
             {
                 // Stack: LB zone (top, fills) + home-made zone (bottom, ~50%), each with its own header —

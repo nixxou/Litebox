@@ -163,6 +163,14 @@ internal static class EditPlatformRenderProbe
             }
             for (int i = 0; i < 10; i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(60); }
             Application.DoEvents();
+            // LB_ORACLE_DUMP=1 → print the ORACLE zone's built geometry (quads/materials, ground truth).
+            // Here and not in the headless probe because FlowModel only builds inside a real window.
+            if (Environment.GetEnvironmentVariable("LB_ORACLE_DUMP") == "1")
+            {
+                for (int i = 0; i < 100 && EditPlatformModel.LastOracle?.BuiltGeometry() == null; i++)
+                { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(100); }
+                Tools.JewelRenderProbe.DumpStructure(EditPlatformModel.LastOracle?.BuiltGeometry());
+            }
             try
             {
                 using var bmp = new System.Drawing.Bitmap(form.Width, form.Height);

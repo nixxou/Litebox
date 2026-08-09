@@ -135,6 +135,7 @@ internal sealed class HomeModel3d : IDisposable
                                         Model3d.Model3dArt art)
     {
         string type = map != null && map.TryGetValue("ModelType", out var t) ? t : "box";
+        type = RefineCaseType(type, art);
         return type switch
         {
             "jewelCase" => BuildJewel(map, gameTitle, art),
@@ -143,6 +144,54 @@ internal sealed class HomeModel3d : IDisposable
             "doubleJewelCase" => BuildDoubleJewel(map, gameTitle, art),
             _ => BuildBox(map, gameTitle, art),
         };
+    }
+
+    // ── AUTO JEWEL (Model3dAutoJewelCase, default ON) — a deliberate DIVERGENCE from LaunchBox ──
+    // LB pins Sega Saturn and Sega CD to longJewelCase, the US long box. Their JAPANESE releases came in an
+    // ordinary CD jewel case, and the two shapes are nowhere near each other: the long box's front quad is
+    // 0.633 x 0.982 (aspect 0.645), the jewel case's is 0.912 x 0.863 (aspect 1.057). Face artwork is
+    // Fill-STRETCHED onto whichever quad it lands on — nothing adapts — so a square-ish jewel scan on a long
+    // box is squeezed to roughly 60% of its width, which is what the JP half of those libraries looked like.
+    // Choosing the case whose own front the artwork actually fits costs one image-header read per model.
+    //
+    // ONE-DIRECTIONAL on purpose: nothing is ever promoted from jewel to long. The jewelCase platforms carry
+    // {Resources} spine presets (PS1, Dreamcast) authored against that builder, and the long-box builder has
+    // no clear-logo strips to put them on.
+    private const double JewelFrontAspect = 0.912 / 0.863;    // 1.0568 — the jewel case's own front quad
+    private const double LongFrontAspect = 0.6330 / 0.982;    // 0.6446 — the long box's
+
+    /// <summary>Where the two shapes stop competing: the LOG-space midpoint, so "twice as wide" and "half as
+    /// wide" sit equally far from each side (a plain average would bias toward the wider case). RAISED by 5%
+    /// — the bar to leave the long box is deliberately above the true midpoint, so artwork that lands in the
+    /// ambiguous middle keeps LaunchBox's own default and the divergence has to earn itself. Landmarks: a CD
+    /// jewel insert (120x120 = 1.000) and a whole jewel front (125x142 = 0.880) clear it; a Sega CD long box
+    /// scan (137x190 = 0.721) does not.</summary>
+    private static readonly double JewelCrossover = Math.Sqrt(JewelFrontAspect * LongFrontAspect) * 1.05;
+
+    /// <summary>Long box → jewel case when the front art fits the jewel proportions better. Any other model
+    /// type, the option off, or an unreadable front → the type is returned untouched.</summary>
+    private static string RefineCaseType(string type, Model3d.Model3dArt art)
+    {
+        if (!string.Equals(type, "longJewelCase", StringComparison.OrdinalIgnoreCase)) return type;
+        if (!Model3d.Model3dOptions.AutoJewelCase) return type;
+        double a = FrontAspect(art.Front);
+        return a > JewelCrossover ? "jewelCase" : type;   // a == 0 (no readable front) keeps the default
+    }
+
+    /// <summary>The front artwork's width/height read from its HEADER — no pixel decode, so this stays
+    /// affordable on the bake path where the builders decode the image again anyway. 0 when unknown.</summary>
+    private static double FrontAspect(string? path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return 0;
+            using var s = System.IO.File.OpenRead(path);
+            var f = System.Windows.Media.Imaging.BitmapFrame.Create(
+                s, System.Windows.Media.Imaging.BitmapCreateOptions.DelayCreation,
+                System.Windows.Media.Imaging.BitmapCacheOption.None);
+            return f.PixelHeight > 0 ? (double)f.PixelWidth / f.PixelHeight : 0;
+        }
+        catch { return 0; }
     }
 
     /// <summary>A "{Resources}\&lt;preset&gt;" key with its AUTO-DETECT version resolved. A key that already

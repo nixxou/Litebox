@@ -276,6 +276,12 @@ internal sealed class LiteBoxConfig
     /// that mode is set per platform/game, so this stays meaningful whatever any global setting says).</summary>
     public bool Model3dAcceptFullScan { get => GetBool("Model3dAcceptFullScan", false); set => SetBool("Model3dAcceptFullScan", value); }
 
+    /// <summary>A DIVERGENCE from LaunchBox, on by default. LB pins Sega Saturn and Sega CD to the US long
+    /// box (longJewelCase); their Japanese releases came in an ordinary CD jewel case. True = a game whose
+    /// front artwork fits the jewel case's proportions better than the long box's is built as a jewel case.
+    /// False = LaunchBox's own choice, unconditionally — set this when comparing against the oracle.</summary>
+    public bool Model3dAutoJewelCase { get => GetBool("Model3dAutoJewelCase", true); set => SetBool("Model3dAutoJewelCase", value); }
+
     // ═══ LB-ORACLE (Model3dLbOracle) — dev/diagnostic, default OFF ═══
     // true → the Edit Platform 3D tab shows a SECOND preview zone rendered by LaunchBox's own core
     // (CoverFlow.FlowModel via CoreModelHost) above LiteBox's renderer, for side-by-side comparison of

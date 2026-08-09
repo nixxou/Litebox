@@ -21,7 +21,8 @@ internal static class Model3dOptions
     /// <summary>The host's live config (set once at boot). Null → read the ini file on demand.</summary>
     public static Func<LiteBoxConfig>? Source;
 
-    private sealed record Snap(bool NeedBack, bool NeedSpine, bool NeedBoth, bool AcceptFull, bool Use169);
+    private sealed record Snap(bool NeedBack, bool NeedSpine, bool NeedBoth, bool AcceptFull, bool Use169,
+                               bool AutoJewel);
 
     private static Snap? _snap;
     private static readonly object _lock = new();
@@ -37,10 +38,10 @@ internal static class Model3dOptions
                 if (_snap != null) return _snap;
                 LiteBoxConfig cfg;
                 try { cfg = Source?.Invoke() ?? LiteBoxConfig.LoadForExe(); }
-                catch { return _snap = new Snap(false, false, false, false, true); }
+                catch { return _snap = new Snap(false, false, false, false, true, true); }
                 return _snap = new Snap(cfg.Model3dRequireBack, cfg.Model3dRequireSpine,
                                         cfg.Model3dRequireBothScans, cfg.Model3dAcceptFullScan,
-                                        cfg.Use169ForMainScreenshot);
+                                        cfg.Use169ForMainScreenshot, cfg.Model3dAutoJewelCase);
             }
         }
     }
@@ -67,4 +68,8 @@ internal static class Model3dOptions
 
     /// <summary>The media box aspect the whole 3D pipeline targets (16:9 or the 2:3 poster ratio).</summary>
     public static double TargetAspect() => S.Use169 ? 16.0 / 9.0 : 2.0 / 3.0;
+
+    /// <summary>May a long-box platform fall back to a plain jewel case when the artwork fits that shape
+    /// better? See HomeModel3d.RefineCaseType — a deliberate divergence from LaunchBox, on by default.</summary>
+    public static bool AutoJewelCase => S.AutoJewel;
 }

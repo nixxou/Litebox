@@ -87,6 +87,25 @@ Model3dRequireBack         false   ┐ Quand un modèle 3D MÉRITE-t-il d'être
 Model3dRequireSpine        false   │ affiché ET baké ? Le FRONT est toujours
 Model3dRequireBothScans    false   │ requis ; ces clés ajoutent des exigences.
 Model3dAcceptFullScan      false   ┘ Détail complet au §media-layout.json.
+Model3dAutoJewelCase       true    DIVERGENCE ASSUMÉE d'avec LaunchBox. LB fige
+                                   Sega Saturn et Sega CD sur le long box US
+                                   (longJewelCase) ; leurs sorties JAPONAISES
+                                   étaient en boîtier cristal ordinaire. true =
+                                   un jeu dont la jaquette avant colle mieux aux
+                                   proportions du cristal (avant 0.912x0.863,
+                                   ratio 1.057) qu'à celles du long box (avant
+                                   0.633x0.982, ratio 0.645) est construit en
+                                   jewelCase. Bascule au point milieu LOG des
+                                   deux ratios, décalé de 5% vers le cristal :
+                                   une jaquette ambiguë garde le choix de LB.
+                                   Sens UNIQUE — jamais cristal -> long box (les
+                                   plateformes cristal portent des tranches
+                                   {Resources} écrites pour ce builder-là).
+                                   Coût : une lecture d'EN-TÊTE d'image par
+                                   modèle, aucun décodage. false = choix de
+                                   LaunchBox tel quel, à mettre pour comparer
+                                   avec l'oracle (Model3dLbOracle).
+                                   Code : HomeModel3d.RefineCaseType.
 ProgressApplyOnSelect      true    Réévalue les règles d'auto-progression d'un
                                    jeu pendant que son panneau de détail se
                                    charge (fond, quelques µs : la valeur n'est

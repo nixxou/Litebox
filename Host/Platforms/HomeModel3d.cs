@@ -224,6 +224,25 @@ internal sealed class HomeModel3d : IDisposable
         return a <= 0 ? 0 : a > 1 ? 1 / a : a;
     }
 
+    /// <summary>A spine scan the right way up. Strips are scanned both upright and LYING DOWN (a Game Boy
+    /// spine comes in at 230x41), but every builder's geometry contract is PORTRAIT: the spine's height runs
+    /// along the case height. A lying scan therefore paints the side sideways — and in BuildBox, which takes
+    /// the box depth straight from spineW/spineH, it also explodes that depth into a slab. Rotated 90°
+    /// CLOCKWISE: the US top-to-bottom reading direction, matching how portrait scans are oriented (verified
+    /// on real NA scans).
+    ///
+    /// This lived inside BuildBox alone, so the four other builders drew lying scans lying down. It is the
+    /// same defect in all five, hence one helper — the alternative was fixing the two jewel builders that
+    /// the double-case detection newly depends on and leaving the identical bug in dvd and long box.
+    /// Only the GAME'S OWN scan is passed through here; the {Resources} presets already ship upright.</summary>
+    private static System.Windows.Media.Imaging.BitmapSource? UprightSpine(System.Windows.Media.Imaging.BitmapSource? spine)
+    {
+        if (spine == null || spine.PixelWidth <= spine.PixelHeight) return spine;
+        var rot = new System.Windows.Media.Imaging.TransformedBitmap(spine, new System.Windows.Media.RotateTransform(90));
+        rot.Freeze();
+        return rot;
+    }
+
     /// <summary>An image's width/height read from its HEADER — no pixel decode, so this stays
     /// affordable on the bake path where the builders decode the image again anyway. 0 when unknown.</summary>
     private static double ImageAspect(string? path)
@@ -323,17 +342,7 @@ internal sealed class HomeModel3d : IDisposable
         // Missing front → LB's NoImage placeholder (shipped): texture, dims and corner colour all follow.
         var front = LoadBitmap(frontPath) ?? LbCaseObj.SpineImage("NoImage");
         var logo = LoadBitmap(logoPath);
-        System.Windows.Media.Imaging.BitmapSource? spine = LoadBitmap(spinePath);
-        // LANDSCAPE spine scan (the strip scanned lying down — e.g. GB 230×41): the geometry contract is
-        // PORTRAIT (the spine's height runs along the box height; box depth D = spineW/spineH), so a lying
-        // scan explodes D into a slab. Auto-rotate 90° clockwise — the US top-to-bottom reading direction,
-        // matching how portrait spine scans are oriented (verified on real NA scans).
-        if (spine != null && spine.PixelWidth > spine.PixelHeight)
-        {
-            var rot = new System.Windows.Media.Imaging.TransformedBitmap(spine, new RotateTransform(90));
-            rot.Freeze();
-            spine = rot;
-        }
+        System.Windows.Media.Imaging.BitmapSource? spine = UprightSpine(LoadBitmap(spinePath));   // see UprightSpine
         var back = LoadBitmap(backPath);
 
         // FULL-SCAN MODE (probe-decoded priority): when UseFullScanImages is on, the game's SPINE SCAN is the
@@ -572,7 +581,7 @@ internal sealed class HomeModel3d : IDisposable
         var backScan = LoadBitmap(art.Back);
         string? scanPath = art.Spine;
         string? scanRegion = LbCaseObj.RegionOfImagePath(scanPath);
-        var scan = LoadBitmap(scanPath);
+        var scan = UprightSpine(LoadBitmap(scanPath));
         string logoFont = map != null && map.TryGetValue("LogoFont", out var lf) ? lf : "";
         var textColor = System.Windows.Media.Colors.White;
         if (map != null && map.TryGetValue("CaseColor", out var tc) && int.TryParse(tc, out var targb))
@@ -765,7 +774,7 @@ internal sealed class HomeModel3d : IDisposable
         // LaunchBox keeps showing the scan in that mode (user-verified, doubled-spine test).
         string spineSpec = map != null && map.TryGetValue("FrontSpineImage", out var ss) ? ss : "";
         string? djScanPath = art.Spine;
-        var djScan = LoadBitmap(djScanPath);
+        var djScan = UprightSpine(LoadBitmap(djScanPath));
         System.Windows.Media.Imaging.BitmapSource? spine =
             djScan
             ?? (spineSpec.StartsWith("{Resources}\\", StringComparison.OrdinalIgnoreCase)
@@ -854,7 +863,7 @@ internal sealed class HomeModel3d : IDisposable
 
         var front = LoadBitmap(art.Front);
         var backImg = LoadBitmap(art.Back);
-        var spineImg = LoadBitmap(art.Spine);
+        var spineImg = UprightSpine(LoadBitmap(art.Spine));
 
         var grey = System.Windows.Media.Color.FromRgb(0x69, 0x69, 0x69);
         var clear = System.Windows.Media.Colors.Transparent;
@@ -915,7 +924,7 @@ internal sealed class HomeModel3d : IDisposable
         // (dims, corner colour) follows from it naturally (probe case F).
         var front = LoadBitmap(art.Front) ?? LbCaseObj.SpineImage("NoImage");
         var backImg = LoadBitmap(art.Back);
-        var spineImg = LoadBitmap(art.Spine);
+        var spineImg = UprightSpine(LoadBitmap(art.Spine));
 
         var caseColor = System.Windows.Media.Color.FromRgb(0x1D, 0x1D, 0x1D);
         if (map != null && map.TryGetValue("CaseColor", out var kc) && int.TryParse(kc, out var kargb))

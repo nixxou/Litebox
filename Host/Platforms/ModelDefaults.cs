@@ -62,6 +62,38 @@ internal static class ModelDefaults
         ["Sega Master System"] = new(StringComparer.OrdinalIgnoreCase) { ["ModelType"] = "box" },
     };
 
+    // LiteBox's ADDITIONS: whole blocks for platforms LB simply has NO entry for — a missing entry falls
+    // through to the ctor default, a plain "box", which is a different failure than a wrong field.
+    //
+    // Sony Playstation 5: LB's 3D module predates the console and was never revised for it, so it renders
+    // PS5 games as a cardboard box. The PS5 retail case is the same keep-case shape as the PS4's, in
+    // translucent blue — PS4's block verbatim (dvd, CaseColor #1E51CE blue, full-scan enabled) is the
+    // closest thing LB itself would have shipped, and what a user override would have hand-copied anyway.
+    private static readonly Dictionary<string, Dictionary<string, string>> Additions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Sony Playstation 5"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["CaseColor"] = "-14790194",                    // PS4's #FF1E51CE — the keep-case blue
+            ["DoubleSpineImageMode"] = "AutomaticDetection",
+            ["FrontSpineIsClear"] = "false",
+            ["FullImageSpineWidth"] = "0.065",
+            ["FullScanIsLandscape"] = "false",
+            ["LogoRotation"] = "0,0,0,",
+            ["ModelType"] = "dvd",
+            ["SpineRotation"] = "0,,0,",
+            ["UseFullScanImages"] = "true",
+        },
+    };
+
+    /// <summary>An addition for <paramref name="scrape"/>/<paramref name="name"/> (scrapeAs first, same
+    /// precedence as the table itself), or null. Returns a copy — callers mutate their maps.</summary>
+    private static Dictionary<string, string>? AdditionFor(string name, string scrape)
+    {
+        if (scrape.Length > 0 && Additions.TryGetValue(scrape, out var byScrape)) return new(byScrape, StringComparer.OrdinalIgnoreCase);
+        if (name.Length > 0 && Additions.TryGetValue(name, out var byName)) return new(byName, StringComparer.OrdinalIgnoreCase);
+        return null;
+    }
+
     private static Dictionary<string, string>? Resolve(string name, string scrape)
     {
         // FROZEN TABLE first (embedded model-defaults.json, extracted from the core once per LB version via
@@ -73,10 +105,11 @@ internal static class ModelDefaults
         {
             if (scrape.Length > 0 && table.TryGetValue(scrape, out var byScrape)) return Corrected(scrape, byScrape);
             if (name.Length > 0 && table.TryGetValue(name, out var byName)) return Corrected(name, byName);
-            return null;   // authoritative when loaded — LB simply has no default for this platform
+            // LB has no entry (authoritative when the table loaded) — LiteBox's own additions answer last.
+            return AdditionFor(name, scrape);
         }
         var core = ResolveViaCore(name, scrape);
-        return core == null ? null : Corrected(scrape.Length > 0 ? scrape : name, core);
+        return core == null ? AdditionFor(name, scrape) : Corrected(scrape.Length > 0 ? scrape : name, core);
     }
 
     /// <summary>A copy of <paramref name="src"/> with the corrections for <paramref name="key"/> applied.

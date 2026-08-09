@@ -4169,6 +4169,27 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (_posterTileHbm.TryGetValue(id, out var h)) { if (h != IntPtr.Zero) DeleteObject(h); _posterTileHbm.Remove(id); }
     }
 
+    // Drop EVERY cached poster layer for these games so the next paint re-resolves and re-decodes their
+    // art. The editor adds and removes FILES (image downloads, deletions) that no store notification can
+    // see — the same blindness the badge RecomputeNow above OpenEditGame covers — and the poster pipeline
+    // caches at three levels on top of the resolution: the decoded thumb (_posterBmp, where null is a
+    // "no art, don't retry" SENTINEL — a game that had no image would keep its phantom forever), the
+    // composited tile (owner-draw HBITMAP), and the native image-list slot. ThumbCache needs nothing:
+    // its key includes the source file's size, so a new or replaced file re-keys by construction.
+    private void InvalidatePosterArt(IReadOnlyList<IGame> games)
+    {
+        if (games == null || games.Count == 0) return;
+        foreach (var g in games)
+        {
+            if (!Guid.TryParse(S(Safe(() => g.Id)), out var id)) continue;
+            lock (_posterQLock) _posterPending.Remove(id);   // a queued stale load must not block the fresh one
+            if (_posterBmp.TryGetValue(id, out var bmp)) { bmp?.Dispose(); _posterBmp.Remove(id); }
+            if (_posterOwnerDraw) InvalidatePosterTile(id);   // next DrawPosterItem recomposites
+            else RefreshSlot(g, id);                          // native: rebuild the live slot in place
+        }
+        if (_posterMode && _poster is { Visible: true }) _poster.Invalidate();
+    }
+
     private void OnPosterMouseMove(object sender, MouseEventArgs e)
     {
         int idx = _poster.GetItemAt(e.X, e.Y)?.Index ?? -1;
@@ -6458,6 +6479,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             // metadata downloads will too — no store notification can see those, so the edited games
             // are re-evaluated wholesale on the way out.
             Badges.BadgeWatch.RecomputeNow(games);
+            InvalidatePosterArt(games);   // same blindness, poster side: drop their cached thumbs/tiles
             try { _games.RebuildView(); } catch { }   // preserves the list's multi-selection (see GameListView)
             if (_posterMode) RestorePosterSelection(games);   // its RefreshPoster (via ViewChanged) dropped the poster's
             RequestDetail(games[0]);

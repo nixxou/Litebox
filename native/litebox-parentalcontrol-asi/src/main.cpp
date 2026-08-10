@@ -891,12 +891,26 @@ extern "C" __declspec(dllexport) HANDLE __stdcall litebox_parental_open_real_fil
 
 // -------------------- DllMain --------------------
 
-static bool RunningInBigBox()
+static std::wstring HostExeName()
 {
     wchar_t exePath[MAX_PATH] = {};
-    if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) == 0) return false;
-    LPCWSTR exeName = PathFindFileNameW(exePath);
-    return _wcsicmp(exeName, L"BigBox.exe") == 0;
+    if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) == 0) return L"";
+    return PathFindFileNameW(exePath);
+}
+
+static bool RunningInBigBox()
+{
+    return _wcsicmp(HostExeName().c_str(), L"BigBox.exe") == 0;
+}
+
+// The read-filter must ONLY touch the third-party apps. winhttp.dll sits in Core, so ANY Core
+// process that loads it (LiteBox.exe itself — which has its own native parental filtering and
+// writes Data\ legitimately — a helper, an updater…) drags this ASI in. Attach inert unless the
+// host is exactly LaunchBox.exe or BigBox.exe.
+static bool RunningInLaunchBoxOrBigBox()
+{
+    auto n = HostExeName();
+    return _wcsicmp(n.c_str(), L"LaunchBox.exe") == 0 || _wcsicmp(n.c_str(), L"BigBox.exe") == 0;
 }
 
 static void InitLogPath()
@@ -938,6 +952,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
     // install with no parental config stays silent. The boot banner above is dropped on purpose
     // (restart with a config in place to capture it).
     g_debugLog = g_configPresent;
+
+    // Host-process guard: never touch anything but the two third-party apps. LiteBox.exe (its own
+    // native parental filtering + legitimate Data\ writes) and any other Core process that loads
+    // winhttp.dll attach inert here — no config read acted on, no hook, no Settings.xml touch.
+    if (!RunningInLaunchBoxOrBigBox())
+    {
+        Log("[Boot] host is not LaunchBox.exe / BigBox.exe (" + Narrow(HostExeName()) + ") — attaching inert.");
+        return TRUE;
+    }
 
     g_isBigBox = RunningInBigBox();
 

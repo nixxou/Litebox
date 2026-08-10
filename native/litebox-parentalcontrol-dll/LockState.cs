@@ -15,16 +15,18 @@ namespace LiteBoxParental
     internal static class LockState
     {
         private static bool _configLoaded;
-        private static bool _launchBoxEnabled, _bigBoxEnabled, _isBigBox;
+        private static bool _launchBoxEnabled, _bigBoxEnabled, _isBigBox, _isHost;
 
         private static bool _locked = true;            // runtime lock — starts locked
         private static bool _inMemoryFiltered = true;  // latch — starts filtered (boots locked)
 
         public static bool IsBigBox { get { EnsureConfig(); return _isBigBox; } }
 
-        /// <summary>Parental is configured for THIS process (LaunchBoxEnabled here / BigBoxEnabled in BB).
-        /// When false the plugin is inert — no write-guard, no filtering.</summary>
-        public static bool ScopeActive { get { EnsureConfig(); return _isBigBox ? _bigBoxEnabled : _launchBoxEnabled; } }
+        /// <summary>Parental is configured for THIS process (LaunchBoxEnabled here / BigBoxEnabled in BB)
+        /// AND the host is one of the two third-party apps. When false the plugin is inert — no
+        /// write-guard. The host check keeps the File.Copy guard off anything but LaunchBox.exe /
+        /// BigBox.exe (never LiteBox.exe, which writes Data\ legitimately).</summary>
+        public static bool ScopeActive { get { EnsureConfig(); return _isHost && (_isBigBox ? _bigBoxEnabled : _launchBoxEnabled); } }
 
         public static bool Locked => _locked;
 
@@ -60,7 +62,9 @@ namespace LiteBoxParental
             _configLoaded = true;
             try
             {
-                _isBigBox = string.Equals(Process.GetCurrentProcess().ProcessName, "BigBox", StringComparison.OrdinalIgnoreCase);
+                var procName = Process.GetCurrentProcess().ProcessName;
+                _isBigBox = string.Equals(procName, "BigBox", StringComparison.OrdinalIgnoreCase);
+                _isHost = _isBigBox || string.Equals(procName, "LaunchBox", StringComparison.OrdinalIgnoreCase);
                 var core = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule?.FileName ?? "");
                 var dat = string.IsNullOrEmpty(core) ? null : Path.Combine(core, "litebox-parental.dat");
                 if (dat != null && File.Exists(dat))

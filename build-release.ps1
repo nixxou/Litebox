@@ -91,7 +91,9 @@ if (-not $SkipNativeBuild) {
   if (-not $msb) { throw 'MSBuild (VS C++ toolset) not found - install it, or pass -SkipNativeBuild to reuse a pre-staged native\payload.' }
   & $msb $asiProj /p:Configuration=Release /p:Platform=x64 /nologo /v:m
   if ($LASTEXITCODE -ne 0) { throw "native ASI build failed (exit $LASTEXITCODE)." }
-  & dotnet build $dllProj -c Release -v q -nologo
+  # Forward the SAME LaunchBox SDK roots the hosts use — the guard is dual-targeted and picks its SDK per TFM
+  # from Lb9Root/Lb10Root, so without this it would compile against the csproj defaults, not the requested roots.
+  & dotnet build $dllProj -c Release -v q -nologo "-p:Lb9Root=$Lb9Root" "-p:Lb10Root=$Lb10Root"
   if ($LASTEXITCODE -ne 0) { throw "native write-guard plugin build failed (exit $LASTEXITCODE)." }
   & (Join-Path $here 'native\assemble-payload.ps1')
   if ($LASTEXITCODE -ne 0) { throw 'native\assemble-payload.ps1 failed - payload not staged.' }

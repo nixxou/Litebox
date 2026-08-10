@@ -203,14 +203,36 @@ internal static class ParentalNativeInstall
             var core = CoreDir();
             if (core == null) return;
             var pluginDst = Path.Combine(Root!, "Plugins", PluginDir);
-            int replaced = 0;
-            replaced += CopyIfDiffers(SourceDir, pluginDst, PluginApiFile,        PluginName);   // per-TFM guard → bare name
+
+            // The GUARD is safety-critical: the ASI's interlock trusts its FILE presence, so a wrong-TFM guard
+            // left in place would let the filter run unguarded (data-loss). If it needs replacing and we can't,
+            // FAIL CLOSED — remove the loader so the ASI never loads next launch — rather than report success.
+            var guardSrc = Path.Combine(SourceDir, PluginApiFile);
+            var guardDst = Path.Combine(pluginDst, PluginName);
+            bool guardNeeds = File.Exists(guardSrc) && !(File.Exists(guardDst) && FilesEqual(guardSrc, guardDst));
+            if (guardNeeds && !TryCopyApi(SourceDir, pluginDst, PluginApiFile, PluginName))
+            {
+                bool loaderGone = TryDelete(Path.Combine(core, LoaderName));
+                Log($"[MIGRATION] guard replacement FAILED for {Tfm} — read filter DISABLED "
+                  + (loaderGone ? "(loader removed; reinstall from LiteBox Options)."
+                                : "AND loader removal FAILED (close LaunchBox/BigBox, then reinstall)."));
+                return;
+            }
+
+            // The rest are TFM-agnostic (native ASI / loader, net9-forward-compat Harmony) — a failed refresh
+            // just keeps the working old copy, so best-effort is fine here.
+            int replaced = (guardNeeds ? 1 : 0);
             replaced += CopyIfDiffers(SourceDir, pluginDst, HarmonyName + ".api", HarmonyName);
             replaced += CopyIfDiffers(SourceDir, core,      AsiName + ".api",     AsiName);
             replaced += CopyIfDiffers(SourceDir, core,      LoaderName + ".api",  LoaderName);
             if (replaced > 0) Log($"migrated deployed payload to {Tfm} ({replaced} file(s) replaced)");
         }
         catch (Exception ex) { Log("RefreshDeployedIfInstalled failed: " + ex.Message); }
+    }
+
+    private static bool TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); return true; } catch { return false; }
     }
 
     /// <summary>Copy the shipped source over the deployed file ONLY when they differ (missing, different size, or

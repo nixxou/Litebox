@@ -145,10 +145,40 @@ must arm in the ctor and be triggered by a menu click; a headless launch+kill ca
 nothing. Keep HarmonyLib out of every type SIGNATURE (bodies only) or LB's plugin-scan
 `GetTypes()` throws and the plugin never loads.
 
-Still open (minor, non-blocking): **W0.1** — enumerate LB's *other* writes on an edit
-while locked (playlists/favorites/Settings.xml) beyond the known `Data\Platforms` copy.
-The write-guard chokepoint is confirmed; this is a completeness sweep for WS5.2, runnable
-with the same probe (patch `File.Copy`/`File.WriteAllText`, make an edit, read the log).
+#### W0.1 RESULT — 2026-08-10: write mechanism confirmed; guard scope = ALL of `Data\`
+
+Same probe (write-mode Harmony patches on `File.Copy`/`Move`/`Delete`/`FileStream`/
+`File.OpenHandle`, NO path filter — grep after). Full capture: `scratchpad/ws0-w01-writes.log`.
+Every data file LaunchBox persists uses ONE uniform pattern:
+
+```
+FileStream → LB\Metadata\Temp\<guid>            (serialise new content to a temp)
+File.Copy(Metadata\Temp\<guid>, Data\X.xml, overwrite:true)   ← the chokepoint
+File.Delete(Metadata\Temp\<guid>)
+```
+
+So **ExtendDB's `File.Copy`-prefix write-guard is STILL VALID for LB 13.28** — the earlier
+"RandomAccess / OpenHandle" worry was a false alarm caused by a probe bug (the `\Data\`
+filter tested the *source* arg; for a temp→Data copy only the *destination* is under
+`\Data\`). It is a 3-arg `File.Copy(src, dst, overwrite:true)`.
+
+**The real finding — the guard must cover far more than `Data\Platforms\`.** A single
+edit/sync session rewrote, all via the same `File.Copy`:
+- the edited platform (`Platforms\MS-DOS.xml`) **plus a full-library sweep of ~80 more
+  `Platforms\*.xml`** (3DO, Amstrad, Atari…, alphabetical — a whole-library re-serialise);
+- the platform **index** `Data\Platforms.xml`;
+- `Data\Parents.xml` (parent/clone rows = game IDs);
+- `Data\Playlists\ManualPlayList.xml` (playlists enumerate game IDs);
+- globals: `Settings.xml`, `GameControllers.xml`, `InputBindings.xml`, `ListCache.xml`,
+  `ImportBlacklist.xml`; and `Data\UnsyncedChanges.xml` is deleted when the sync completes.
+
+Under lock the in-memory library is the FILTERED subset, so **any** of these rewrites —
+not just the edited game's platform — persists that subset and drops the hidden games
+(`Parents.xml` and playlists carry game IDs directly → direct loss). Therefore WS5.2's
+write-guard must **block the temp→`Data\` copy for the whole `Data\` tree while locked**,
+not only `Data\Platforms\`. Since editing is forbidden while locked anyway (WS3), the
+simplest safe policy is: **block every `File.Copy` whose destination is under `Data\`
+while the lock is engaged.** (ExtendDB gated only `Data\Platforms\`; widen it.)
 
 <details><summary>Superseded pre-run analysis (kept for context)</summary>
 
@@ -264,6 +294,10 @@ New directories, inspired by ExtendDB, not sharing its build.
   + latch for **both** LB and BB; lock/unlock → `SetFiltering` + `ForceReload` +
   GameCache concerns; the **PIN entry UI under LaunchBox** (small dialog to lock/unlock);
   anti-tamper target = the LiteBox-owned artifact, not ExtendDB's.
+  **Guard scope (from W0.1): block every `File.Copy` whose destination is under `Data\`
+  while locked** — not just `Data\Platforms\`. A sync re-serialises the whole library
+  (all `Platforms\*.xml` + the `Platforms.xml` index + `Parents.xml` + `Playlists\*`),
+  every one via the temp→`Data\` copy; any of them would persist the filtered subset.
 - ~~**W5.3 — Backup guard**~~ — DROPPED. WS0 proved LaunchBox backs up via a child
   `7z.exe` that reads the real files; the ASI never touches it, so backups are safe.
 

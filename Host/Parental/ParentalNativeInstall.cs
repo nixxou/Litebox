@@ -188,10 +188,12 @@ internal static class ParentalNativeInstall
         }
     }
 
-    /// <summary>Migration hook: when the native filter is installed, re-deploy the guard matching THIS runtime
-    /// (and refresh the shared files). Self-heals after an LB upgrade across the net9↔net10 boundary — the
-    /// previously-deployed guard is the wrong TFM and would fail to load, so we overwrite it with ours. Silent,
-    /// best-effort (a running LaunchBox/BigBox locks the dll → skipped, harmless). Called once from HostBoot.</summary>
+    /// <summary>Migration hook: when the native filter is installed, ensure the DEPLOYED files match the ones
+    /// LiteBox ships for THIS runtime — replacing ONLY the ones that actually differ. Self-heals after an LB
+    /// upgrade across the net9↔net10 boundary (the previously-deployed guard is the wrong TFM — same size but
+    /// different bytes — so it gets swapped) and after a LiteBox update (a changed ASI/loader/Harmony). A normal
+    /// launch with nothing changed copies nothing. Silent, best-effort (a running LaunchBox/BigBox locks a file →
+    /// that one is skipped, harmless). Called once from HostBoot.</summary>
     public static void RefreshDeployedIfInstalled()
     {
         try
@@ -201,14 +203,56 @@ internal static class ParentalNativeInstall
             var core = CoreDir();
             if (core == null) return;
             var pluginDst = Path.Combine(Root!, "Plugins", PluginDir);
-            int refreshed = 0;
-            refreshed += TryCopyApi(SourceDir, pluginDst, PluginApiFile,        PluginName)  ? 1 : 0;
-            refreshed += TryCopyApi(SourceDir, pluginDst, HarmonyName + ".api", HarmonyName) ? 1 : 0;
-            refreshed += TryCopyApi(SourceDir, core,      AsiName + ".api",     AsiName)     ? 1 : 0;
-            refreshed += TryCopyApi(SourceDir, core,      LoaderName + ".api",  LoaderName)  ? 1 : 0;
-            if (refreshed > 0) Log($"refreshed deployed payload for {Tfm} ({refreshed}/4 file(s))");
+            int replaced = 0;
+            replaced += CopyIfDiffers(SourceDir, pluginDst, PluginApiFile,        PluginName);   // per-TFM guard → bare name
+            replaced += CopyIfDiffers(SourceDir, pluginDst, HarmonyName + ".api", HarmonyName);
+            replaced += CopyIfDiffers(SourceDir, core,      AsiName + ".api",     AsiName);
+            replaced += CopyIfDiffers(SourceDir, core,      LoaderName + ".api",  LoaderName);
+            if (replaced > 0) Log($"migrated deployed payload to {Tfm} ({replaced} file(s) replaced)");
         }
         catch (Exception ex) { Log("RefreshDeployedIfInstalled failed: " + ex.Message); }
+    }
+
+    /// <summary>Copy the shipped source over the deployed file ONLY when they differ (missing, different size, or
+    /// same size but different bytes — the net9/net10 guards are byte-different at identical size). Returns 1 if it
+    /// copied, 0 if already up to date or the copy was skipped (locked / error). Never throws.</summary>
+    private static int CopyIfDiffers(string srcDir, string dstDir, string apiFile, string destName)
+    {
+        try
+        {
+            var src = Path.Combine(srcDir, apiFile);
+            var dst = Path.Combine(dstDir, destName);
+            if (!File.Exists(src)) return 0;                 // nothing to copy from
+            if (File.Exists(dst) && FilesEqual(src, dst)) return 0;   // already the right bytes
+        }
+        catch { return 0; }
+        return TryCopyApi(srcDir, dstDir, apiFile, destName) ? 1 : 0;
+    }
+
+    /// <summary>Byte-equality of two files (length first, then a streamed compare with early-exit). Reads only —
+    /// no writes — so the common "already up to date" launch does no disk churn beyond the compare.</summary>
+    private static bool FilesEqual(string a, string b)
+    {
+        var fa = new FileInfo(a); var fb = new FileInfo(b);
+        if (fa.Length != fb.Length) return false;
+        const int N = 64 * 1024;
+        using var sa = File.OpenRead(a);
+        using var sb = File.OpenRead(b);
+        var ba = new byte[N]; var bb = new byte[N];
+        while (true)
+        {
+            int ra = ReadBlock(sa, ba), rb = ReadBlock(sb, bb);
+            if (ra != rb) return false;
+            if (ra == 0) return true;
+            for (int i = 0; i < ra; i++) if (ba[i] != bb[i]) return false;
+        }
+    }
+
+    private static int ReadBlock(Stream s, byte[] buf)
+    {
+        int total = 0, r;
+        while (total < buf.Length && (r = s.Read(buf, total, buf.Length - total)) > 0) total += r;
+        return total;
     }
 
     /// <summary>Remove the payload. Loader first (so the ASI is never loaded again), then the rest.

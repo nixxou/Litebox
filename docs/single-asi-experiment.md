@@ -108,3 +108,65 @@ Test plan (once buildable), in increasing risk:
 A single DLL that, when present, gives BOTH the read filter and the write guard, and when absent gives
 NEITHER — with no separate interlock needed. That removes `ParentalNativeInstall`'s dual-TFM guard
 juggling, the boot migration, and the whole "filtered-but-unguarded" defense.
+
+---
+
+# RESULT (2026-08-11): PROVEN via `DOTNET_STARTUP_HOOKS` — no C++/CLI needed
+
+The mixed-mode C++/CLI route above was NOT needed. A cleaner mechanism works and is proven on the live
+net10 LaunchBox (13.28):
+
+**`DOTNET_STARTUP_HOOKS`.** .NET runs a top-level `internal class StartupHook { static void Initialize() }`
+in an assembly BEFORE the app's `Main`. A tiny native stub (loaded early by winhttp) sets the env var; the
+CLR then runs our managed `Initialize()` before LaunchBox reads anything.
+
+Measured (probe logs): native trigger set the var → `StartupHook.Initialize` ran **before Main** → it armed
+a MinHook `CreateFileW` hook → the hook then caught **100% of the platform-XML reads** (~190 platforms, all
+~0.8 s AFTER the hook armed). And the SAME assembly, placed in `Plugins\`, ALSO loaded as a LaunchBox plugin
+(`ISystemMenuItemPlugin`) — its menu showed `early:True reads:190`, i.e. the plugin instance and the
+startup-hook instance **share statics = same AssemblyLoadContext = one instance doing both roles.**
+
+Two gotchas found:
+- A startup hook that **fails to load fails FAST → crashes LaunchBox.** So `Initialize()` must use ONLY BCL +
+  kernel32 (zero external managed deps), or its dep resolution can brick startup. (Harmony + an ALC resolver
+  in `Initialize` crashed it; removing both fixed it.)
+- `DOTNET_STARTUP_HOOKS` is **inherited by child .NET processes** — LaunchBox self-relaunched once, so the hook
+  ran twice. Harmless here; the guard must be idempotent (hook-once).
+
+## Chosen target architecture
+
+Two physical files, but only ONE carries logic:
+- **`winhttp.dll`** — a tiny GENERIC native stub (Ultimate ASI Loader or a ~15-line proxy): its only job is to
+  `SetEnvironmentVariable("DOTNET_STARTUP_HOOKS", <path to the managed dll>)`. Immutable, no business logic →
+  can never diverge. (It also still needs to exist for the loader; that's fine.)
+- **`litebox-parental.dll`** (managed, in `Plugins\litebox-parental\`) — does EVERYTHING, atomically:
+  - `StartupHook.Initialize()` (early, before Main): installs the `CreateFileW` hook. BCL + kernel32 only.
+  - the hook **filters reads** (`Platforms\*.xml` → filtered stream) AND **blocks writes** into `Data\`
+    (`File.Copy` → `CreateFileW(dest, GENERIC_WRITE)` — the same hook sees it). **No Harmony needed** — the
+    write-guard is the same native hook, so there is no `0Harmony.dll` early-dependency to brick startup.
+  - `ISystemMenuItemPlugin` / `ISystemEventsPlugin` (loaded later by the plugin scanner, SAME instance/statics):
+    the lock/unlock UI + BigBox lock events; shares state with the early hook.
+
+**The native hook needs MinHook** (to hook `CreateFileW`). Options: ship a `MinHook`/native `.bin` beside the
+managed dll and `LoadLibrary` it from `Initialize` (as the probe does), or a pure-managed inline hook. The
+`.bin` route is proven (the probe uses it) and keeps the atomicity (if the managed dll is absent, nothing
+runs; if the `.bin` is absent, the hook fails → the guard can refuse to filter → fail-safe).
+
+**Atomicity achieved:** if `litebox-parental.dll` loads → read-filter + write-guard + UI all active. If it
+fails/absent → NONE of them → LaunchBox runs on the real, unfiltered library with no guard needed. There is no
+"filtered-but-unguarded" state to defend, so `ParentalNativeInstall`'s interlock + dual-TFM guard migration +
+fail-closed machinery all go away. Dual-TFM is free (a net9 managed dll loads on net10).
+
+## Do we need Harmony? — No.
+
+WS0's write chokepoint (`File.Copy` into `Data\`) surfaces at the `CreateFileW` level as
+`CreateFileW(dest, GENERIC_WRITE, CREATE_ALWAYS)`, which the read-filter's hook already sees. So the write-guard
+lives in the same hook — refuse the open (File.Copy throws) or redirect it to a throwaway (File.Copy silently
+no-ops, like the old Harmony prefix). Since edits are UI-blocked while locked (WS3), the write-guard is a
+last-resort net, so even a hard refuse is acceptable. Dropping Harmony removes the early dependency that bricked
+startup and makes the single artifact fully self-contained (BCL + kernel32 + the MinHook `.bin`).
+
+## Open item to validate during build
+- The **write-block form** (refuse vs redirect) against a real LaunchBox save (edit a game → save → File.Copy
+  into `Data\`): confirm the save is blocked and LaunchBox stays stable. (Read-filter timing + plugin duality
+  are already proven.)

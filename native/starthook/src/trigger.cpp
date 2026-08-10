@@ -35,8 +35,11 @@ BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID)
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(h);
-        std::wstring core = CoreDir();
-        std::wstring hookDll = core + L"startuphook.dll";
+        std::wstring core = CoreDir();                 // ...\LB\Core\
+        // LB root = core minus the trailing "Core\"; point the hook at the combined plugin dll in Plugins.
+        std::wstring root = core;
+        if (root.size() >= 5) root.resize(root.size() - 5);   // strip "Core\"
+        std::wstring hookDll = root + L"Plugins\\parentalprobe\\parentalprobe.dll";
         BOOL ok = SetEnvironmentVariableW(L"DOTNET_STARTUP_HOOKS", hookDll.c_str());
         Log(core, (ok ? L"DllMain: set DOTNET_STARTUP_HOOKS=" : L"DllMain: FAILED to set DOTNET_STARTUP_HOOKS=") + hookDll);
     }

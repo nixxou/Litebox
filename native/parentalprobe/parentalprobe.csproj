@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- parentalprobe.dll — combined test: DOTNET_STARTUP_HOOKS target (StartupHook.Initialize) AND a
+       LaunchBox plugin (ISystemMenuItemPlugin) in ONE assembly. net10 for the test LB (13.28). -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>parentalprobe</AssemblyName>
+    <RootNamespace>ParentalProbe</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Lb10Root Condition="'$(Lb10Root)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\..\LB</Lb10Root>
+    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Combined.cs" />
+    <Reference Include="0Harmony">
+      <HintPath>..\..\..\ExtendDB\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unbroken.LaunchBox.Plugins">
+      <HintPath>$(Lb10Root)\Core\Unbroken.LaunchBox.Plugins.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

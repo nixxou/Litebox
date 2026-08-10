@@ -3,6 +3,32 @@
 Branch: `parentalcontrolrevamp`. This is the goal + roadmap doc for the branch; it
 survives sessions and context compaction. Read it first each session.
 
+## Progress (2026-08-10)
+
+- **WS0 — DONE (GREEN).** Both chokepoints proved in runtime (see the WS0 verdict below):
+  backup is safe (child `7z.exe`), writes go temp→`File.Copy(overwrite)`→`Data\` and a
+  sync rewrites the whole library, so the write-guard must cover all of `Data\`.
+- **WS1 — DONE.** Parental panel trimmed (one-line activation; dropped the périmé BigBox
+  write-mode / force-web / require-install controls; star/favorite toggles rescoped off
+  "(web)"). `2fc9664`.
+- **WS2 — DONE.** `ParentalBridge.DesktopMutationBlocked` gates the desktop hero rating/
+  favorite on the same allow-flags the web uses. All three surfaces agree. `89bf769`.
+- **WS3 — DONE.** Admin lockdown: parental-locked folded into the `ro` gate at every menu
+  chokepoint (game menu, tree menu, Tools▸Manage), game action methods hard-block
+  (OpenEditGame/Delete/Combine/Expand/Add), and the one web endpoint that bypassed the
+  guard (ResetHistory) now refuses while locked. `e79f9ce`.
+- **WS4 — DONE (native side).** Red "Requires parental" checkbox in Edit Game →
+  `ParentalGameFlag` (Options DB, Game scope). Enforced on desktop list/tree, suggester,
+  and the owned web view. `4471ba1`. (DB-site case still open — minor.)
+- **WS7 — DONE.** `ParentalNativeExport` writes `LB\Core\litebox-parental.dat` (scopes,
+  Mode, Rules, PinSet, BlockedId set) — the flat file the ASI will read. Regenerated on
+  Save / Edit-Game / boot. `d0576b1`.
+- **WS5 / WS6 — TODO.** The two native projects (C++ ASI + managed plugin) and the install
+  flow. The biggest lift and the hardest to test without running LB — do next.
+
+Reusable: the throwaway `lb-backup-probe/` (Harmony probe) is the skeleton for the WS5.2
+managed plugin. `ParentalNativeExport`'s format is the WS5.1 ASI's input contract.
+
 Companion: [`parental-parity-audit.md`](parental-parity-audit.md) — the concrete
 desktop/web gap list (findings 1.1–1.7, fixes X1–X8). This plan does **not** repeat
 those; it folds them into the relevant workstream.

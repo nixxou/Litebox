@@ -290,6 +290,12 @@ New directories, inspired by ExtendDB, not sharing its build.
     exports for name/pin/hotkey);
   - **cold-start gate for LaunchBox:** LB vanilla has no `<LockPin>` "boots locked"
     notion — our config alone decides, so LB starts filtered whenever the scope is on.
+  - **read-filter scope (mirror of the W0.1 write finding — verify):** the ASI filters
+    `Platforms\*.xml` (the games). Open: do `Parents.xml` (parent/clone ID pairs) and
+    `Playlists\*.xml` (game-ID lists) LEAK hidden games on read, or does LB just ignore
+    dangling IDs? If they leak, the ASI must strip hidden IDs from those reads too —
+    the exact symmetric counterpart of guarding all of `Data\` on write. Confirm with
+    the probe (filter a game, read what LB shows for a playlist containing it).
 - **W5.2 — `litebox-parentalcontrol.dll`:** the managed plugin — `File.Copy` write-guard
   + latch for **both** LB and BB; lock/unlock → `SetFiltering` + `ForceReload` +
   GameCache concerns; the **PIN entry UI under LaunchBox** (small dialog to lock/unlock);

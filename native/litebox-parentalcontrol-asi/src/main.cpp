@@ -388,40 +388,23 @@ static std::wstring ResolveExtendDbDir(const std::wstring& coreDir)
     return full;
 }
 
-// -------------------- anti-tamper: plugin presence --------------------
+// -------------------- safety interlock: write-guard plugin presence --------------------
 //
-// If ExtendDBParental.dat exists and records a PluginPath, the ExtendDB
-// plugin DLL MUST still be present there. If it is gone, someone removed
-// the plugin to bypass parental control — so we abort the whole program
-// (TerminateProcess). Runs in BOTH BigBox.exe and LaunchBox.exe, since
-// the LaunchBox-side filtering lives in that same managed plugin.
-//
-// Graceful no-ops: no config file, or a config with no PluginPath entry
-// (older config) — nothing to enforce. PluginPath is normally relative
-// to LB\Core; an absolute path (different volume) is honored as-is.
-static void EnforcePluginPresence(const std::wstring& coreDir)
+// NO anti-tamper here (deliberate — nothing is ever aborted). Instead a SAFETY INTERLOCK:
+// the read-filter is dangerous WITHOUT the managed write-guard plugin, because a filtered
+// read + a save would permanently drop the hidden games. So we filter ONLY when that plugin
+// is installed. When its DLL is absent we simply do NOT filter — the process sees the real,
+// unfiltered library (harmless). Checked once at boot at the standard deploy path; and once
+// the plugin has actually called set_filtering() its presence is proven regardless.
+static bool WriteGuardPluginPresent(const std::wstring& coreDir)
 {
-    if (!g_configPresent) return;       // no config -> nothing to enforce
-    if (g_pluginPath.empty()) return;   // config predates PluginPath -> can't enforce
-
-    std::wstring rel = Widen(g_pluginPath);
-    bool isAbsolute =
-        (rel.size() >= 2 && rel[1] == L':') ||                       // X:\...
-        (rel.size() >= 2 && rel[0] == L'\\' && rel[1] == L'\\');      // \\server\share
-    std::wstring full = isAbsolute ? rel : (coreDir + rel);
-
+    // LiteBox deploys the managed plugin here (WS6 install flow).
+    const std::wstring full = coreDir + L"..\\Plugins\\litebox-parentalcontrol\\litebox-parentalcontrol.dll";
     DWORD attrs = GetFileAttributesW(full.c_str());
-    if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY))
-        return; // the plugin DLL is present — all good
-
-    Log("[Tamper] ExtendDB plugin DLL missing at recorded path: " + Narrow(full)
-        + " — blocking program launch.");
-    MessageBoxW(nullptr,
-        L"Parental control is active, but the ExtendDB plugin has been removed.\n\n"
-        L"Restore the ExtendDB plugin to start the program.",
-        L"ExtendDB — Parental Control",
-        MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
-    TerminateProcess(GetCurrentProcess(), 0xEDB);
+    bool present = (attrs != INVALID_FILE_ATTRIBUTES) && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+    Log(std::string("[Boot] write-guard plugin ") + (present ? "present" : "MISSING") + " at " + Narrow(full)
+        + (present ? "" : " -> read-filter DISABLED (a filtered read without the write-guard risks data loss)."));
+    return present;
 }
 
 static std::string MatchDepth1Open(const std::string& line)
@@ -619,7 +602,8 @@ static HANDLE OpenStreamingPipe(const std::wstring& original,
 // parental control" option is on, it enables filtering on BigBoxLocked and disables it
 // on BigBoxUnlocked.
 
-static bool          g_isBigBox         = false; // host process is BigBox.exe (else LaunchBox.exe)
+static bool          g_isBigBox          = false; // host process is BigBox.exe (else LaunchBox.exe)
+static bool          g_writeGuardPresent = false; // the managed write-guard plugin dll is installed
 static bool          g_lockPinSet       = false; // BigBoxSettings.xml has a non-empty <LockPin>
 static volatile bool g_filteringEnabled = true;  // runtime toggle, driven by the managed plugin
 static volatile bool g_managedTookOver  = false; // set on the first set_filtering() call
@@ -836,10 +820,14 @@ static void EnforceRegionPrioritiesWorld(const std::wstring& settingsPath)
 
 static bool FilteringActive()
 {
-    // Once the managed plugin has taken control, it is the sole authority (it evaluated the scope +
-    // lock/unlock state before calling, so we don't re-check the cold-start gate here).
+    // Once the managed plugin has taken control, it is the sole authority — and its very call proves
+    // the write-guard is here, so we obey it (the boot-time file check is moot at that point).
     if (g_managedTookOver)
         return g_filteringEnabled;
+
+    // SAFETY INTERLOCK: never filter unmanaged unless the write-guard plugin is installed. A filtered
+    // read without the write-guard could let a save persist the filtered subset → data loss.
+    if (!g_writeGuardPresent) return false;
 
     // Cold-start gate (before the managed plugin has spoken), PER PROCESS:
     //   • BigBox boots locked only when a LockPin is set → require it there;
@@ -953,9 +941,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
 
     g_isBigBox = RunningInBigBox();
 
-    // Anti-tamper: if the config records a PluginPath, the LiteBox managed plugin must still be there;
-    // a removed plugin aborts the program (both processes). No-op when PluginPath is absent.
-    EnforcePluginPresence(coreDir);
+    // Safety interlock (NOT anti-tamper): the read-filter only runs when the managed write-guard plugin
+    // is installed — without it a filtered read + a save would drop the hidden games. Missing → no filter.
+    g_writeGuardPresent = WriteGuardPluginPresent(coreDir);
 
     // Attach inert unless parental is configured for THIS process.
     bool scopeOn = g_isBigBox ? g_bigBoxEnabled : g_launchBoxEnabled;

@@ -42,18 +42,27 @@ survives sessions and context compaction. Read it first each session.
   Replaced by a **safety interlock**: the read-filter runs only when the write-guard plugin
   dll is present — missing → it does not filter (fail safe to the real library, no data
   risk). `ef2c38d`.
-- **REMAINING:**
-  - **WS5.2 follow-up** (see its README): the **LaunchBox unlock PIN dialog** — LB has no
-    lock/unlock events, so it stays filtered until an unlock; a Tools-menu PIN prompt →
-    `SetLocked(false)` is the follow-up (today unlocking a LaunchBox session is done from
-    LiteBox).
-  - **Runtime validation** of the whole native chain in LaunchBox/BigBox — the safety
-    interlock + the write-guard mean a filtered save can't persist even mid-bring-up, but
-    the filter/reload/lock behaviour still needs a live pass. The payload is already staged
-    in the net10 dev install (`Core\litebox\parental-native\`), inert until the in-app
-    Install button runs; the `.dat` never enables filtering until parental is configured.
-  - **WS4 DB-site case** (owned games shown on the DB browse site) — minor.
-  - Fold in the parity-audit fixes X1–X8.
+- **WS5.2 LaunchBox unlock PIN dialog — DONE.** `aef216a`. A Tools-menu entry (LaunchBox
+  only) locks/unlocks: unlocked → re-lock; locked → a masked PIN prompt verified against
+  BigBox's `<LockPin>` (`PinVerify` ports LiteBox's Rijndael-256 cipher onto the
+  BouncyCastle LB ships in Core; 3-strike lockout). Correct PIN → ASI filter off + reload.
+- **Parity-audit fixes X1–X8 — RESOLVED** (the audit was a 2026-07-18 snapshot; the code
+  caught up since): X1 (panel PIN-gate — `LockedStub`), X2 (kiosk unlock ephemeral, no
+  cookie — `ParentalApi.HandleUnlock` + `IsKioskRequest`), X3 (web unlock shares the
+  3-strike lockout), X4 (no-PIN → fail-closed, `WebParentalState`), X5 (rating rules in the
+  db-site SQL — `EsrbSqlFilter` via `ExtraWhere`), X7 (constant-time PIN — `FixedTimeEquals`)
+  are all present; X6 is moot (force-web UI removed in WS1); X8 is superseded by WS5.
+
+- **ONLY REMAINING — runtime validation** of the native chain in LaunchBox/BigBox (needs a
+  live run — I can only build). The three interlocks make a stock install safe: the native
+  filter (a) only exists for LaunchBox.exe / BigBox.exe (never LiteBox.exe), (b) only filters
+  when the write-guard plugin is present, (c) only when parental is configured in the `.dat`.
+  The payload is staged in the net10 dev install (`Core\litebox\parental-native\`), inert
+  until the in-app Install button runs. Minor: the DB-*browse*-site blocked-flag edge (owned
+  games only; rating rules already applied there).
+
+**The project is code-complete.** Everything in the plan is implemented and builds
+(LiteBox host + both native projects); only a live LB/BB validation pass is left.
 
 Reusable: the throwaway `lb-backup-probe/` (Harmony probe) was the skeleton for WS5.2.
 `ParentalNativeExport`'s format is the ASI's input contract.

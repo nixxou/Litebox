@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- litebox-parentalcontrol.dll — managed LaunchBox/BigBox plugin, the runtime half of
+       LiteBox parental control (WS5.2). Its counterpart is the native ASI (WS5.1) that
+       filters platform-XML READS; this plugin guards WRITES (blocks any File.Copy into
+       Data\ while locked, so a filtered save can never persist), drives the ASI's on/off
+       via its exports, and reloads the real library on unlock.
+
+       TargetFramework must match the LaunchBox install (LB 13.28 → net10.0-windows).
+       Loaded from LB\Plugins\litebox-parentalcontrol\ with 0Harmony.dll alongside. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>litebox-parentalcontrol</AssemblyName>
+    <RootNamespace>LiteBoxParental</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=false: never copy these next to the plugin (0Harmony is deployed alongside
+         separately; the SDK dll must not be duplicated — it breaks type identity). -->
+    <Reference Include="0Harmony">
+      <HintPath>..\..\..\ExtendDB\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unbroken.LaunchBox.Plugins">
+      <HintPath>..\..\..\..\..\LB\Core\Unbroken.LaunchBox.Plugins.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

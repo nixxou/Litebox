@@ -955,7 +955,7 @@ internal sealed partial class MainWindow
         var it = M("Manage Game Controllers...", null);
         it.Click += (_, _) => Safe(() =>
         {
-            bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
+            bool ro = ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) || Media.ParentalBridge.Active;   // read-only OR parental limited
             using var w = new Controllers.ManageControllersWindow(ro);
             w.ShowDialog(this);
         });
@@ -1074,7 +1074,7 @@ internal sealed partial class MainWindow
 
     private void OpenManageEmulators()
     {
-        bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
+        bool ro = ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) || Media.ParentalBridge.Active;   // read-only OR parental limited
         using var w = new Emulators.ManageEmulatorsWindow(ro, Media.MediaResolver.LbRoot ?? "");
         w.ShowDialog(this);
         (_dm as Data.HostDataManagerXml)?.FlushEmulatorsIfSafe();
@@ -1087,7 +1087,7 @@ internal sealed partial class MainWindow
         var it = M("Manage Platforms...", null);
         it.Click += (_, _) => Safe(() =>
         {
-            bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
+            bool ro = ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) || Media.ParentalBridge.Active;   // read-only OR parental limited
             using var w = new Platforms.ManagePlatformsWindow(ro, Media.MediaResolver.LbRoot ?? "");
             w.ShowDialog(this);
             if (!w.Changed) return;
@@ -1104,7 +1104,7 @@ internal sealed partial class MainWindow
         var it = M("Manage Playlists...", null);
         it.Click += (_, _) => Safe(() =>
         {
-            bool ro = (_dm as Data.HostDataManagerXml)?.ReadOnly ?? true;
+            bool ro = ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) || Media.ParentalBridge.Active;   // read-only OR parental limited
             using var w = new Platforms.ManagePlaylistsWindow(ro);
             w.ShowDialog(this);
             if (!w.Changed) return;

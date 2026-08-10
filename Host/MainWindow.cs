@@ -1420,7 +1420,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             if (e.Button != MouseButtons.Right || e.Node?.Tag == null) return;
             var tag = e.Node.Tag;
-            bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;
+            // Read-only OR parental LIMITED (locked): platform/category/playlist edit windows open
+            // read-only, and every delete/paste (gated on !ro) drops out. See the parental lockdown.
+            bool ro = ((_dm as HostDataManagerXml)?.ReadOnly ?? false) || Media.ParentalBridge.Active;
             var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
 
             // Right-click INSIDE a multi-selection → homogeneous multi-edit; mixed types get no edit entry.
@@ -6462,6 +6464,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     /// games stop existing as games — so the outcome is reported once it is done.</summary>
     private void CombineSelectedGames(IGame[] games)
     {
+        if (Media.ParentalBridge.Active) return;   // limited mode
         if (_dm is not HostDataManagerXml dm || games.Length < 2) return;
         var root = Platforms.RootGamePicker.Ask(this, games);
         if (root == null) return;
@@ -6497,6 +6500,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     private void ExpandSelectedGames(IGame[] games)
     {
+        if (Media.ParentalBridge.Active) return;   // limited mode
         if (_dm is not HostDataManagerXml dm) return;
         // LaunchBox's wording, plus a line it does not have. Reproducing a data loss is a defensible
         // choice; reproducing it in silence is not.
@@ -6519,6 +6523,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private void OpenEditGame(IGame[] games)
     {
         if (games == null || games.Length == 0) return;
+        if (Media.ParentalBridge.Active) return;   // limited mode: the editor is an admin surface
         try
         {
             bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;

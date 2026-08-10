@@ -43,7 +43,9 @@ internal sealed partial class MainWindow
         var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
         if (games == null || games.Length == 0) return menu;
 
-        bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? true;
+        // Admin actions are unavailable in read-only mode AND in parental LIMITED mode (locked): every
+        // item already gated on `ro` (Edit/Delete/Add/Combine/Expand/Reset/playlist…) greys out at once.
+        bool ro = ((_dm as HostDataManagerXml)?.ReadOnly ?? true) || Media.ParentalBridge.Active;
 
         if (games.Length == 1) BuildSingleGameMenu(menu, games[0], ro);
         else BuildMultiGameMenu(menu, games, ro);
@@ -148,7 +150,7 @@ internal sealed partial class MainWindow
         var items = new List<ToolStripItem>();
 
         items.Add(Item(games.Length > 1 ? $"Edit {games.Length} Games…" : "Edit…", MenuIcons.Edit,
-            () => OpenEditGame(games)));
+            () => OpenEditGame(games), !ro));
 
         items.Add(BuildPlaylistSubmenu(games, ro));
 
@@ -464,6 +466,7 @@ internal sealed partial class MainWindow
     /// other game would resolve.</summary>
     private void DeleteGames(IGame[] games)
     {
+        if (Media.ParentalBridge.Active) return;   // limited mode
         if (_dm is not HostDataManagerXml dm || games.Length == 0) return;
 
         Games.GameMediaDeleter.Plan plan;
@@ -525,6 +528,7 @@ internal sealed partial class MainWindow
     /// these", so it wins; failing that, the tree node answers.</summary>
     private void AddGameFromDraft(string platform = "")
     {
+        if (Media.ParentalBridge.Active) return;   // limited mode
         if (_dm is not HostDataManagerXml dm) return;
         // The tree fallback: categories and playlists also surface as IPlatform adapters, so they
         // are ruled out first (same order as LoadNode's dispatch) — their name is not a platform.

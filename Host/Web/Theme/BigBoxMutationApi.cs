@@ -58,7 +58,7 @@ internal static class BigBoxMutationApi
                 "broken"       => SetFlag(id, ctx, (g, v) => g.Broken = v, "broken"),
                 "play"         => Play(id, ctx),
                 "launch"       => Play(id, ctx),   // alias
-                "resethistory" => ResetHistory(id),
+                "resethistory" => ResetHistory(id, ctx),
                 "install"      => Install(id, ctx),
                 _              => Fail("unknown action"),
             };
@@ -222,8 +222,11 @@ internal static class BigBoxMutationApi
 
     // ── resethistory ────────────────────────────────────────────────────────────
 
-    private static HttpResponse ResetHistory(string id)
+    private static HttpResponse ResetHistory(string id, RouteContext ctx)
     {
+        // Resetting play history is a data mutation with no allow-flag → refused while locked (like hide/broken).
+        var deny = ParentalWebWriteGuard.DenyReason(IsLocked(ctx), "resethistory");
+        if (deny != null) return Fail(deny);
         var game = ResolveGame(id);
         if (game == null) return Fail("not in library");
         try { if (PluginHelper.DataManager is HostDataManagerXml hdm) hdm.ClearLastLaunch(game.Id); } catch { }

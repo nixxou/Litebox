@@ -32,6 +32,12 @@
       <HintPath>..\..\..\..\..\LB\Core\Unbroken.LaunchBox.Plugins.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- LaunchBox ships BouncyCastle in Core; we use it to decrypt BigBox's LockPin (Rijndael-256,
+         the exact cipher LiteBox's LbSettingsCrypto uses) to verify the unlock PIN. -->
+    <Reference Include="BouncyCastle.Crypto">
+      <HintPath>..\..\..\..\..\LB\Core\BouncyCastle.Crypto.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

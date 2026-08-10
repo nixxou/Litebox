@@ -22,6 +22,11 @@ namespace LiteBoxParental
 
         public static bool IsBigBox { get { EnsureConfig(); return _isBigBox; } }
 
+        /// <summary>The host process is one of the two third-party apps (LaunchBox.exe / BigBox.exe).
+        /// Everything else — LiteBox.exe (which does its own parental filtering + writes Data\), a helper,
+        /// an updater — must see the plugin as fully inert.</summary>
+        public static bool IsHost { get { EnsureConfig(); return _isHost; } }
+
         /// <summary>Parental is configured for THIS process (LaunchBoxEnabled here / BigBoxEnabled in BB)
         /// AND the host is one of the two third-party apps. When false the plugin is inert — no
         /// write-guard. The host check keeps the File.Copy guard off anything but LaunchBox.exe /

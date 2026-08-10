@@ -25,6 +25,13 @@ namespace LiteBoxParental
             {
                 if (_done) return;
                 _done = true;
+                // Host guard FIRST: never do anything under LiteBox.exe (its own parental filtering +
+                // legitimate Data\ writes) or any process that isn't LaunchBox.exe / BigBox.exe.
+                if (!LockState.IsHost)
+                {
+                    Log.Line($"=== litebox-parentalcontrol: host is {System.Diagnostics.Process.GetCurrentProcess().ProcessName} (not LaunchBox/BigBox) — fully inert ===");
+                    return;
+                }
                 Log.Line($"=== litebox-parentalcontrol loaded (isBigBox={LockState.IsBigBox}, scopeActive={LockState.ScopeActive}) ===");
                 if (!LockState.ScopeActive)
                 {

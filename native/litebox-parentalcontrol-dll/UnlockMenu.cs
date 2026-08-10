@@ -14,7 +14,9 @@ namespace LiteBoxParental
 {
     public sealed class UnlockMenuItem : ISystemMenuItemPlugin
     {
-        public string Caption => "Parental control (lock / unlock)…";
+        // Caption is re-read each time LaunchBox builds the Tools menu, so it names JUST the action the
+        // click performs: "Unlock…" when locked (opens the PIN prompt), "Lock" when unlocked (immediate).
+        public string Caption => LockState.Locked ? "Parental control: Unlock…" : "Parental control: Lock";
         public Image IconImage => SystemIcons.Shield.ToBitmap();
         public bool ShowInLaunchBox => true;
         public bool ShowInBigBox => false;               // BigBox has its own lock/unlock

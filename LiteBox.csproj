@@ -181,6 +181,11 @@
     <Compile Remove="LbShim\**" />
     <EmbeddedResource Remove="LbShim\**" />
     <None Remove="LbShim\**" />
+    <!-- native/ holds the standalone C++ ASI + managed LaunchBox plugin (their own builds) —
+         never part of the LiteBox host compile. -->
+    <Compile Remove="native\**" />
+    <EmbeddedResource Remove="native\**" />
+    <None Remove="native\**" />
     <!-- UndefineProperties: without it the net10 build pushes TargetFramework=net10.0-windows down into
          the shim and fails its restore. -->
     <ProjectReference Include="LbShim\LbShim.csproj" ReferenceOutputAssembly="false" Private="false"

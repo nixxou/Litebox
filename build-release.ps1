@@ -40,7 +40,11 @@ param(
   # where $PSScriptRoot can be empty in some hosts (nested powershell), giving "\..\..\..\LB" -> C:\LB.
   # In the body it's reliable.
   [string]$Lb10Root = '',
-  [string]$Rid      = 'win-x64'
+  [string]$Rid      = 'win-x64',
+  # By default the release REBUILDS the native parental payload from source (ASI + write-guard plugin) and
+  # re-stages it, so the shipped binaries always match the committed source. Pass -SkipNativeBuild only when
+  # you deliberately want to reuse a pre-staged native\payload (e.g. a machine without the C++ toolset).
+  [switch]$SkipNativeBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,6 +72,34 @@ $payload = @(
 # them at Core\litebox\parental-native\; the in-app Install button deploys them into Core + Plugins on demand.
 $parentalPayloadDir = Join-Path $here 'native\payload'
 $parentalPayload = @('litebox-parentalcontrol.asi.api','winhttp.dll.api','litebox-parentalcontrol.dll.api','0Harmony.dll.api')
+
+# Rebuild the native payload from source FIRST so the shipped ASI + write-guard match the committed code
+# (the payload dir is gitignored; trusting a stale copy is how a fixed source ships with old behaviour).
+# The Codex adversarial review flagged exactly this: verify-existence-only let a stale guard DLL slip through.
+function Find-MSBuild {
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+  if (-not (Test-Path $vswhere)) { return $null }
+  $p = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+  if ($p -and (Test-Path $p)) { return $p }
+  return $null
+}
+if (-not $SkipNativeBuild) {
+  Write-Host '-- rebuilding native parental payload from source (ASI + write-guard plugin)' -ForegroundColor Cyan
+  $asiProj = Join-Path $here 'native\litebox-parentalcontrol-asi\litebox-parentalcontrol-asi.vcxproj'
+  $dllProj = Join-Path $here 'native\litebox-parentalcontrol-dll\litebox-parentalcontrol.csproj'
+  $msb = Find-MSBuild
+  if (-not $msb) { throw 'MSBuild (VS C++ toolset) not found - install it, or pass -SkipNativeBuild to reuse a pre-staged native\payload.' }
+  & $msb $asiProj /p:Configuration=Release /p:Platform=x64 /nologo /v:m
+  if ($LASTEXITCODE -ne 0) { throw "native ASI build failed (exit $LASTEXITCODE)." }
+  & dotnet build $dllProj -c Release -v q -nologo
+  if ($LASTEXITCODE -ne 0) { throw "native write-guard plugin build failed (exit $LASTEXITCODE)." }
+  & (Join-Path $here 'native\assemble-payload.ps1')
+  if ($LASTEXITCODE -ne 0) { throw 'native\assemble-payload.ps1 failed - payload not staged.' }
+  Write-Host '   native payload rebuilt + staged.' -ForegroundColor Green
+} else {
+  Write-Warning '  -SkipNativeBuild: shipping whatever is already staged in native\payload (NOT rebuilt from source).'
+}
+
 foreach ($p in $parentalPayload) {
   if (-not (Test-Path (Join-Path $parentalPayloadDir $p))) {
     throw "parental payload missing: $p - run native\assemble-payload.ps1 (after building the two native projects) before build-release.ps1"

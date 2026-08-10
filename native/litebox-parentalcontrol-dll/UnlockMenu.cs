@@ -46,8 +46,10 @@ namespace LiteBoxParental
                 if (PinVerify.Verify(dlg.Pin))
                 {
                     PinLockout.Reset();
-                    LockState.SetLocked(false);
-                    Info("Unlocked. Restart or refresh the view — the full library is back.");
+                    if (LockState.SetLocked(false))
+                        Info("Unlocked. Restart or refresh the view — the full library is back.");
+                    else
+                        Warn("Couldn't safely unlock (library reload failed) — still locked to protect your data. Try again.");
                 }
                 else
                 {

@@ -31,8 +31,16 @@ namespace LiteBoxParental
         private static SetFilteringDelegate _setFiltering;
         private static OpenRealFileDelegate _openRealFile;
         private static bool _tried;
+        private static bool _asiLoaded;
 
         public static bool Available => _setFiltering != null;
+
+        /// <summary>The ASI module is loaded in THIS process (winhttp brought it in). When false, nothing is
+        /// filtering reads here, so the library in memory is the real one — a caller may treat "filter off" as
+        /// satisfied without a set_filtering call. Distinct from <see cref="Available"/> (module loaded AND the
+        /// control export resolved): a loaded-but-unresolvable ASI is the dangerous case a guard must fail closed
+        /// on, and this lets the caller tell the two apart.</summary>
+        public static bool IsAsiLoaded { get { Init(); return _asiLoaded; } }
 
         private static void Init()
         {
@@ -42,6 +50,7 @@ namespace LiteBoxParental
             {
                 var h = GetModuleHandleW("litebox-parentalcontrol.asi");
                 if (h == IntPtr.Zero) { Log.Line("[AsiBridge] litebox-parentalcontrol.asi not loaded in this process."); return; }
+                _asiLoaded = true;
 
                 var pf = GetProcAddress(h, "litebox_parental_set_filtering");
                 if (pf != IntPtr.Zero) _setFiltering = Marshal.GetDelegateForFunctionPointer<SetFilteringDelegate>(pf);
@@ -54,12 +63,15 @@ namespace LiteBoxParental
             catch (Exception ex) { Log.Line("[AsiBridge] init error: " + ex.Message); }
         }
 
-        public static void SetFiltering(bool enabled)
+        /// <summary>Flip the ASI read filter. Returns true iff the export was actually invoked — false when the
+        /// control export is unavailable (ASI not loaded, or loaded but unresolvable) or the call threw. Callers
+        /// that must fail closed use the return + <see cref="IsAsiLoaded"/> to decide whether "filter off" is proven.</summary>
+        public static bool SetFiltering(bool enabled)
         {
             Init();
-            if (_setFiltering == null) { Log.Line("[AsiBridge] SetFiltering: export unavailable."); return; }
-            try { _setFiltering(enabled ? 1 : 0); }
-            catch (Exception ex) { Log.Line($"[AsiBridge] SetFiltering error: {ex.GetType().Name} {ex.Message}"); }
+            if (_setFiltering == null) { Log.Line("[AsiBridge] SetFiltering: export unavailable."); return false; }
+            try { _setFiltering(enabled ? 1 : 0); return true; }
+            catch (Exception ex) { Log.Line($"[AsiBridge] SetFiltering error: {ex.GetType().Name} {ex.Message}"); return false; }
         }
 
         public static IntPtr OpenRealFile(string path)

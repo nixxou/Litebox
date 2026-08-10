@@ -48,3 +48,5 @@ if ($Deploy) {
   Copy-Item (Join-Path $out '*') $dst -Force
   Write-Host "deployed payload -> $dst  (inert until the in-app Install button runs)" -ForegroundColor Green
 }
+
+exit 0   # explicit success code so a caller (build-release.ps1) reading $LASTEXITCODE never sees a stale value

@@ -35,7 +35,12 @@ namespace LiteBoxParental
                 Log.Line($"=== litebox-parentalcontrol loaded (isBigBox={LockState.IsBigBox}, scopeActive={LockState.ScopeActive}) ===");
                 if (!LockState.ScopeActive)
                 {
-                    Log.Line("[Boot] parental not configured for this process — write-guard NOT installed (inert).");
+                    // Interlock, the safe direction: the write-guard is NOT being installed here, so the ASI must
+                    // NOT be filtering — a filtered read with no guard is exactly the data-loss path. Tell the ASI
+                    // to stop (idempotent when parental is genuinely off; decisive if a config-contract drift ever
+                    // let the ASI's `enabled` gate fire while this scope check did not). Fails to a leak, never loss.
+                    AsiBridge.SetFiltering(false);
+                    Log.Line("[Boot] parental not configured for this process — write-guard NOT installed; ASI filter forced off (inert).");
                     return;
                 }
                 new Harmony("litebox.parentalcontrol").PatchAll(typeof(Boot).Assembly);

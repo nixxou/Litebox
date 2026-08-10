@@ -192,6 +192,10 @@ internal sealed class ParentalConfig
             Log("saved lists to " + ListsPath);
         }
         catch (Exception ex) { Log("save lists failed: " + ex.Message); }
+
+        // Regenerate the flat file the native ASI reads (it can't read this ini / json / the Options DB).
+        // `this` is the singleton the panel just mutated, so the export reads the new values in memory.
+        try { ParentalNativeExport.Write(); } catch { }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

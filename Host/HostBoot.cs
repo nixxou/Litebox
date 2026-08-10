@@ -484,6 +484,10 @@ internal static class HostBoot
             Data.LbVersion.Detect(lbRoot);
             Data.ProblemKeys.Build();
             Data.LiteBoxOptionsDb.Open();
+            // Refresh the native ASI's flat config (LB\Core\litebox-parental.dat) once the LB root +
+            // Options DB are up — only when parental is configured, so a non-parental install isn't
+            // littered. Save() keeps it current afterwards. Best-effort; never blocks boot.
+            try { if (Parental.ParentalConfig.Instance.AnyScopeEnabled) Parental.ParentalNativeExport.Write(); } catch { }
             Data.ProblemKeys.SeedRenamedFromXml(Path.Combine(dataDir, "Settings.xml"));
             // Guarantee every LiteBox-own gameplay GLOBAL default is present in LiteBox.ini with a
             // visible value (no hidden keys). Must run BEFORE anything resolves a launch

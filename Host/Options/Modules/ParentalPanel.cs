@@ -130,10 +130,11 @@ internal static class ParentalPanel
         // ═════════════════════════════════════════════════════════════════════
         var gAct = Group("Activation", rootY);
         int y1 = 24;
-        Cap(gAct, "Parental control for this LiteBox host (desktop + embedded web). The PIN is BigBox's own "
-                + "parental code — set or clear it below; BigBox boots locked when a PIN is set.", 12, y1, 690); y1 += 34;
+        Cap(gAct, "One switch — when on, parental control applies everywhere: the LiteBox desktop, the web "
+                + "clients, and vanilla LaunchBox / BigBox (via the native filter installed below). The PIN is "
+                + "BigBox's own parental code — set or clear it below; BigBox boots locked when a PIN is set.", 12, y1, 690); y1 += 46;
 
-        var chkLaunchBox = Chk(gAct, "Enable Parental Control for LaunchBox", 12, y1, cfg.LaunchBoxEnabled); y1 += 26;
+        var chkEnabled = Chk(gAct, "Enable parental control", 12, y1, cfg.Enabled); y1 += 26;
 
         // PIN + confirm (BigBoxPin) — shared credential.
         bool pinAvailable = BigBoxPin.Available;
@@ -150,8 +151,6 @@ internal static class ParentalPanel
         // Digits-only PIN entry (the web keypad / BigBox pop-up only enter digits).
         void DigitsOnly(object? s, KeyPressEventArgs e) { if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar)) e.Handled = true; }
         pin.KeyPress += DigitsOnly; pinConfirm.KeyPress += DigitsOnly;
-
-        var chkBigBox = Chk(gAct, "Enable for BigBox", 12, y1, cfg.BigBoxEnabled); y1 += 30;
 
         // The two "allow while locked" toggles — now govern all three surfaces (LiteBox desktop,
         // BigBox-web, LaunchBox-web), not just the web (see ParentalWebWriteGuard + the desktop guard).
@@ -308,7 +307,7 @@ internal static class ParentalPanel
         // ── Enable-dependent field states ───────────────────────────────────
         void SyncEnabled()
         {
-            bool anyScope = chkLaunchBox.Checked || chkBigBox.Checked;
+            bool anyScope = chkEnabled.Checked;
             pin.Enabled = pinConfirm.Enabled = showPin.Enabled = pinAvailable && !readOnly && anyScope;
             pinNote.Text = !pinAvailable
                 ? "BigBoxSettings.xml was not found (BigBox has never run on this install) — the PIN cannot be set here."
@@ -316,8 +315,7 @@ internal static class ParentalPanel
                     ? "A PIN is already set. Leave both boxes blank to keep it, or type a new one (twice) to change it."
                     : anyScope ? "Set a PIN (required to enable parental control) and confirm it." : "No PIN is currently set.";
         }
-        chkLaunchBox.CheckedChanged += (_, _) => SyncEnabled();
-        chkBigBox.CheckedChanged += (_, _) => SyncEnabled();
+        chkEnabled.CheckedChanged += (_, _) => SyncEnabled();
 
         // Prefill the PIN boxes with the current PIN (so leaving them keeps it visible when "Show" is on).
         try { if (pinAvailable) { var cur = BigBoxPin.Current(); pin.Text = cur; pinConfirm.Text = cur; } } catch { }
@@ -328,7 +326,7 @@ internal static class ParentalPanel
         {
             if (readOnly) return;
 
-            bool lbOn = chkLaunchBox.Checked, bbOn = chkBigBox.Checked, anyScope = lbOn || bbOn;
+            bool anyScope = chkEnabled.Checked;
 
             // PIN validation (mirrors ExtendDB): required on first enable, must match confirm when set.
             if (pinAvailable)
@@ -358,8 +356,7 @@ internal static class ParentalPanel
 
             // Persist the config. ForceWebHideAll / BigBoxWriteMode / BlockInstallWhenLocked are no longer
             // exposed (removed pending the vanilla-LB/BB revamp) — left untouched at their loaded defaults.
-            cfg.LaunchBoxEnabled = lbOn;
-            cfg.BigBoxEnabled = bbOn;
+            cfg.Enabled = anyScope;
             cfg.AllowLockedModifyRatings = chkAllowRatings.Checked;
             cfg.AllowLockedModifyFavorites = chkAllowFavorites.Checked;
             cfg.Mode = cmbMode.SelectedIndex == 1 ? ParentalMode.Blacklist : ParentalMode.Whitelist;

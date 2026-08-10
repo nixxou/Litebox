@@ -57,8 +57,7 @@ internal static class ParentalNativeExport
             var sb = new StringBuilder(512);
             sb.Append("# LiteBox parental control — generated, do not edit\r\n");
             sb.Append("Version=1\r\n");
-            sb.Append("LaunchBoxEnabled=").Append(cfg.LaunchBoxEnabled ? '1' : '0').Append("\r\n");
-            sb.Append("BigBoxEnabled=").Append(cfg.BigBoxEnabled ? '1' : '0').Append("\r\n");
+            sb.Append("Enabled=").Append(cfg.Enabled ? '1' : '0').Append("\r\n");
             sb.Append("Mode=").Append(cfg.Mode == ParentalMode.Blacklist ? "Blacklist" : "Whitelist").Append("\r\n");
             sb.Append("PinSet=").Append(PinPresent() ? '1' : '0').Append("\r\n");
             foreach (var r in cfg.Rules)

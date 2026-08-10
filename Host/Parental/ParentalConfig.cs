@@ -48,11 +48,10 @@ internal sealed class ParentalConfig
 
     // ── Scalars (LiteBox.ini [Parental]) ────────────────────────────────────
 
-    /// <summary>Parental control is configured for the LaunchBox-side view filter.</summary>
-    public bool LaunchBoxEnabled { get; set; } = false;
-
-    /// <summary>Parental control is configured for the BigBox-side read filter.</summary>
-    public bool BigBoxEnabled { get; set; } = false;
+    /// <summary>Parental control is configured. ONE switch — when on it applies everywhere (LiteBox
+    /// desktop, the web frontends, and vanilla LaunchBox/BigBox via the native filter). There is no
+    /// per-app scope anymore. The module master switch LbModule.Parental gates on top of this.</summary>
+    public bool Enabled { get; set; } = false;
 
     /// <summary>LaunchBox "force web" block-all: while active (enabled + locked) hide EVERY
     /// game regardless of rating — supersedes the rules. LaunchBox-only.</summary>
@@ -92,9 +91,9 @@ internal sealed class ParentalConfig
     /// <summary>Config-format version that last wrote parental-lists.json ("0.0.0" = pre-versioning).</summary>
     public string ConfigVersion { get; set; } = "0.0.0";
 
-    /// <summary>Either scope switched on (the config-level "configured" flag; the module
-    /// master switch LbModule.Parental gates on top of this in ParentalFilter).</summary>
-    public bool AnyScopeEnabled => LaunchBoxEnabled || BigBoxEnabled;
+    /// <summary>The config-level "configured" flag (alias of <see cref="Enabled"/>, kept for callers).
+    /// The module master switch LbModule.Parental gates on top of this in ParentalFilter.</summary>
+    public bool AnyScopeEnabled => Enabled;
 
     // ── Singleton lifecycle ─────────────────────────────────────────────────
 
@@ -123,8 +122,9 @@ internal sealed class ParentalConfig
         try
         {
             var cfg = LiteBoxConfig.LoadForExe();
-            c.LaunchBoxEnabled          = cfg.GetSecBool(Section, "LaunchBoxEnabled", false);
-            c.BigBoxEnabled             = cfg.GetSecBool(Section, "BigBoxEnabled", false);
+            // Single switch now; migrate from the retired per-app scopes (either on → enabled).
+            c.Enabled = cfg.GetSecBool(Section, "Enabled",
+                cfg.GetSecBool(Section, "LaunchBoxEnabled", false) || cfg.GetSecBool(Section, "BigBoxEnabled", false));
             c.ForceWebHideAll           = cfg.GetSecBool(Section, "ForceWebHideAll", false);
             c.AllowLockedModifyRatings  = cfg.GetSecBool(Section, "AllowLockedModifyRatings", false);
             c.AllowLockedModifyFavorites= cfg.GetSecBool(Section, "AllowLockedModifyFavorites", false);
@@ -163,8 +163,7 @@ internal sealed class ParentalConfig
         try
         {
             var cfg = LiteBoxConfig.LoadForExe();
-            cfg.SetSec(Section, "LaunchBoxEnabled",           B(LaunchBoxEnabled));
-            cfg.SetSec(Section, "BigBoxEnabled",              B(BigBoxEnabled));
+            cfg.SetSec(Section, "Enabled",                    B(Enabled));
             cfg.SetSec(Section, "ForceWebHideAll",            B(ForceWebHideAll));
             cfg.SetSec(Section, "AllowLockedModifyRatings",   B(AllowLockedModifyRatings));
             cfg.SetSec(Section, "AllowLockedModifyFavorites", B(AllowLockedModifyFavorites));

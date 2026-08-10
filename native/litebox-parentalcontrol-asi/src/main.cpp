@@ -146,8 +146,7 @@ static std::string ExtractTagValue(const std::string& s, const char* tag)
 //   Blacklist -> a game is kept unless some rule matches its Rating.
 
 static bool                            g_configPresent    = false;  // litebox-parental.dat exists
-static bool                            g_bigBoxEnabled    = false;  // BigBoxEnabled=1
-static bool                            g_launchBoxEnabled = false;  // LaunchBoxEnabled=1
+static bool                            g_enabled          = false;  // Enabled=1 (single switch; applies to LB and BB)
 static bool                            g_pinSet           = false;  // PinSet=1 (BigBox LockPin present)
 static int                             g_mode             = 0;      // 0 = Whitelist, 1 = Blacklist
 static std::vector<std::string>        g_rules;                     // Rule= wildcard patterns
@@ -246,10 +245,8 @@ static void LoadParentalConfig(const std::wstring& path)
         std::string key = ToLowerCopy(TrimCopy(line.substr(0, eq)));
         std::string val = TrimCopy(line.substr(eq + 1));
 
-        if (key == "bigboxenabled")
-            g_bigBoxEnabled = ParseConfigBool(val);
-        else if (key == "launchboxenabled")
-            g_launchBoxEnabled = ParseConfigBool(val);
+        if (key == "enabled" || key == "bigboxenabled" || key == "launchboxenabled")
+            g_enabled = g_enabled || ParseConfigBool(val);   // single switch; tolerate the retired scope keys
         else if (key == "pinset")
             g_pinSet = ParseConfigBool(val);
         else if (key == "mode")
@@ -269,8 +266,8 @@ static void LoadParentalConfig(const std::wstring& path)
 
     char msg[256];
     snprintf(msg, sizeof(msg),
-             "[Boot] config loaded: LaunchBoxEnabled=%d BigBoxEnabled=%d PinSet=%d mode=%s rules=%d blocked=%zu",
-             g_launchBoxEnabled ? 1 : 0, g_bigBoxEnabled ? 1 : 0, g_pinSet ? 1 : 0,
+             "[Boot] config loaded: Enabled=%d PinSet=%d mode=%s rules=%d blocked=%zu",
+             g_enabled ? 1 : 0, g_pinSet ? 1 : 0,
              g_mode == 1 ? "Blacklist" : "Whitelist", ruleCount, g_blockedIds.size());
     Log(msg);
 }
@@ -668,7 +665,7 @@ static const char* kLockedFlags[] = {
 static void EnforceBigBoxLockRestrictions(const std::wstring& settingsPath)
 {
     if (!g_configPresent)  { return; }
-    if (!g_bigBoxEnabled)  { return; }
+    if (!g_enabled)        { return; }
     if (!g_lockPinSet)     { return; }
 
     std::ifstream in(settingsPath.c_str(), std::ios::binary);
@@ -833,8 +830,8 @@ static bool FilteringActive()
     //   • BigBox boots locked only when a LockPin is set → require it there;
     //   • LaunchBox has no such notion → our config's LaunchBoxEnabled alone decides.
     if (!g_configPresent || !g_filteringEnabled) return false;
-    if (g_isBigBox) return g_bigBoxEnabled && g_lockPinSet;
-    return g_launchBoxEnabled;
+    if (g_isBigBox) return g_enabled && g_lockPinSet;
+    return g_enabled;
 }
 
 // Exported control channel: the managed plugin calls this to enable/disable filtering.
@@ -969,7 +966,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
     g_writeGuardPresent = WriteGuardPluginPresent(coreDir);
 
     // Attach inert unless parental is configured for THIS process.
-    bool scopeOn = g_isBigBox ? g_bigBoxEnabled : g_launchBoxEnabled;
+    bool scopeOn = g_enabled;
     if (!g_configPresent || !scopeOn)
     {
         Log(std::string("[Boot] attached to ") + (g_isBigBox ? "BigBox.exe" : "LaunchBox.exe")

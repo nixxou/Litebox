@@ -271,6 +271,40 @@ internal static class ParentalPanel
         y4 += 32;
         CloseGroup(gLock, y4);
 
+        // ═════════════════════════════════════════════════════════════════════
+        // Group 5 — Vanilla LaunchBox / BigBox (native filter install)
+        // ═════════════════════════════════════════════════════════════════════
+        var gNative = Group("Vanilla LaunchBox / BigBox", rootY);
+        int y5 = 24;
+        Cap(gNative, "Extend parental control to the real LaunchBox and BigBox apps by installing a native filter "
+                + "(an ASI loader + a write-guard plugin). The read-filter never runs unless the write-guard is "
+                + "present, so it cannot lose games. Takes effect on the next LaunchBox / BigBox launch.", 12, y5, 690); y5 += 46;
+        var installBtn = Btn(gNative, "Install", 12, y5, 110);
+        var uninstallBtn = Btn(gNative, "Uninstall", 130, y5, 110);
+        var nativeStatus = Cap(gNative, "", 252, y5 + 4, 430);
+        void RefreshNative()
+        {
+            bool inst = ParentalNativeInstall.IsInstalled;
+            bool payload = ParentalNativeInstall.PayloadAvailable;
+            nativeStatus.Text = inst ? "Installed." : payload ? "Not installed." : "Payload missing — cannot install.";
+            installBtn.Text = inst ? "Reinstall" : "Install";
+            installBtn.Enabled = !readOnly && payload;
+            uninstallBtn.Enabled = !readOnly && inst;
+        }
+        installBtn.Click += (_, _) =>
+        {
+            var (ok, msg) = ParentalNativeInstall.Install(); RefreshNative();
+            MessageBox.Show(msg, "LiteBox — Parental Control", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        };
+        uninstallBtn.Click += (_, _) =>
+        {
+            var (ok, msg) = ParentalNativeInstall.Uninstall(); RefreshNative();
+            MessageBox.Show(msg, "LiteBox — Parental Control", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        };
+        RefreshNative();
+        y5 += 34;
+        CloseGroup(gNative, y5);
+
         // ── Enable-dependent field states ───────────────────────────────────
         void SyncEnabled()
         {

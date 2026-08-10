@@ -5242,6 +5242,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private void RateHeroGame(int value)
     {
         var g = _heroGame; if (g == null) return;
+        // Parental: a locked user can't set ratings unless "allow star ratings while locked" is on.
+        if (ParentalBridge.DesktopMutationBlocked("rating")) return;
         Safe(() => g.StarRatingFloat = value);   // → journal (deferred, gated); no immediate XML write
         _hero.SetRating(value, isUser: true);
         Safe(() => _games.RefreshGame(g));
@@ -5250,6 +5252,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private void ToggleHeroFavorite()
     {
         var g = _heroGame; if (g == null) return;
+        // Parental: a locked user can't toggle favorite unless "allow favorites while locked" is on.
+        if (ParentalBridge.DesktopMutationBlocked("favorite")) return;
         bool nv = !Safe(() => g.Favorite);
         Safe(() => g.Favorite = nv);             // → journal
         _hero.SetFavorite(nv);

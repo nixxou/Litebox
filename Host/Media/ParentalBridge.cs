@@ -70,6 +70,24 @@ internal static class ParentalBridge
     /// <summary>The configured parental hotkey as a WinForms <see cref="Keys"/> value (0 = none).</summary>
     public static int HotKey { get { EnsureHooked(); return ParentalFilter.HotKey; } }
 
+    /// <summary>Desktop counterpart of <see cref="ParentalWebWriteGuard"/>: while parental is Active
+    /// (configured + locked), a quick star-rating / favorite edit from the LiteBox desktop is refused
+    /// unless the matching "allow while locked" flag is set. <paramref name="kind"/> = "rating" |
+    /// "favorite". Returns true = BLOCK the edit. Reads the SAME two <see cref="ParentalConfig"/> flags
+    /// the web guard reads, so all three surfaces agree. Full editing is gated by the admin lockdown,
+    /// not here.</summary>
+    public static bool DesktopMutationBlocked(string kind)
+    {
+        EnsureHooked();
+        if (!ParentalFilter.Active) return false;   // unlocked / disabled → allowed
+        return (kind ?? "").Trim().ToLowerInvariant() switch
+        {
+            "rating"   => !ParentalConfig.Instance.AllowLockedModifyRatings,
+            "favorite" => !ParentalConfig.Instance.AllowLockedModifyFavorites,
+            _          => true,   // any other mutation is not permitted while locked
+        };
+    }
+
     /// <summary>True when a game with this ESRB/age rating should be VISIBLE. Allow-all when inactive.</summary>
     /// <summary>"Force web hide-all" configured (module + scope on), independent of the desktop lock —
     /// the web combines it with its per-client lock state.</summary>

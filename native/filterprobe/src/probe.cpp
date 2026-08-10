@@ -74,17 +74,51 @@ static HANDLE WINAPI Hook_CreateFileW(LPCWSTR name, DWORD acc, DWORD share, LPSE
     if (name != nullptr)
     {
         std::wstring p(name);
+        bool w = (acc & GENERIC_WRITE) != 0;
         if (ContainsCI(p, L"\\Data\\Platforms\\") && EndsWithCI(p, L".xml"))
         {
-            bool w = (acc & GENERIC_WRITE) != 0;
             InterlockedIncrement(&g_platformReads);
             Log(std::string("[Open] Platforms xml ") + (w ? "WRITE " : "READ  ") + Narrow(p));
+        }
+        // WRITE-GUARD probe: does LaunchBox's save surface here as a write/create open? File.Copy -> CopyFileEx
+        // may use FILE_GENERIC_WRITE (not GENERIC_WRITE), so detect ANY write access bit OR a create/truncate
+        // disposition, and log the RAW access mask + disposition so we see the exact pattern. Observe ONLY.
+        else if (ContainsCI(p, L"\\Data\\"))
+        {
+            const DWORD writeBits = GENERIC_WRITE | GENERIC_ALL | 0x0002 /*FILE_WRITE_DATA*/ | 0x0004 /*FILE_APPEND_DATA*/ | 0x0100 /*FILE_WRITE_EA*/;
+            bool writeish = (acc & writeBits) != 0;
+            bool createish = (disp == CREATE_ALWAYS || disp == CREATE_NEW || disp == TRUNCATE_EXISTING); // 2 / 1 / 5
+            if (writeish || createish)
+            {
+                char buf[64]; snprintf(buf, sizeof(buf), "acc=0x%08lX disp=%lu ", (unsigned long)acc, (unsigned long)disp);
+                Log(std::string("[Open] Data WRITE  ") + buf + Narrow(p));
+            }
         }
     }
     return g_orig(name, acc, share, sa, disp, fl, tmpl);
 }
 
 // Called by the managed plugin from its [ModuleInitializer]. Returns 0 on success.
+// -------------------- copy-API hooks (the real write path: File.Copy -> CopyFile2 / CopyFileExW) --------------
+// LaunchBox saves via File.Copy(temp -> Data\), which does NOT go through the exported CreateFileW (CopyFile2
+// opens internally). So the write-guard needs its OWN native hook on the copy API. Observe only (passthrough).
+
+using CopyFileExW_t = BOOL (WINAPI*)(LPCWSTR, LPCWSTR, LPPROGRESS_ROUTINE, LPVOID, LPBOOL, DWORD);
+static CopyFileExW_t g_orig_CopyFileExW = nullptr;
+static BOOL WINAPI Hook_CopyFileExW(LPCWSTR src, LPCWSTR dst, LPPROGRESS_ROUTINE pr, LPVOID d, LPBOOL cancel, DWORD flags)
+{
+    if (dst) { std::wstring p(dst); if (ContainsCI(p, L"\\Data\\")) Log(std::string("[Copy] CopyFileExW -> ") + Narrow(p)); }
+    return g_orig_CopyFileExW(src, dst, pr, d, cancel, flags);
+}
+
+using CopyFile2_t = HRESULT (WINAPI*)(PCWSTR, PCWSTR, COPYFILE2_EXTENDED_PARAMETERS*);
+static CopyFile2_t g_orig_CopyFile2 = nullptr;
+static HRESULT WINAPI Hook_CopyFile2(PCWSTR src, PCWSTR dst, COPYFILE2_EXTENDED_PARAMETERS* ep)
+{
+    if (dst) { std::wstring p(dst); if (ContainsCI(p, L"\\Data\\")) Log(std::string("[Copy] CopyFile2 -> ") + Narrow(p)); }
+    return g_orig_CopyFile2(src, dst, ep);
+}
+
 extern "C" __declspec(dllexport) int __stdcall Probe_Install()
 {
     InitLogPath();
@@ -93,6 +127,20 @@ extern "C" __declspec(dllexport) int __stdcall Probe_Install()
     if (MH_CreateHook((LPVOID)&CreateFileW, (LPVOID)&Hook_CreateFileW, (LPVOID*)&g_orig) != MH_OK) { Log("[ProbeInstall] MH_CreateHook FAILED"); return 2; }
     if (MH_EnableHook((LPVOID)&CreateFileW) != MH_OK)                              { Log("[ProbeInstall] MH_EnableHook FAILED"); return 3; }
     Log("[ProbeInstall] hook ARMED on CreateFileW — any Platforms\\*.xml opened from now on is logged");
+
+    // Also hook the copy APIs (the real write path). Resolve by name from kernel32 so a missing symbol is soft.
+    HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+    if (k32)
+    {
+        FARPROC pCfe = GetProcAddress(k32, "CopyFileExW");
+        if (pCfe && MH_CreateHook((LPVOID)pCfe, (LPVOID)&Hook_CopyFileExW, (LPVOID*)&g_orig_CopyFileExW) == MH_OK && MH_EnableHook((LPVOID)pCfe) == MH_OK)
+            Log("[ProbeInstall] hook ARMED on CopyFileExW");
+        else Log("[ProbeInstall] CopyFileExW hook not installed");
+        FARPROC pCf2 = GetProcAddress(k32, "CopyFile2");
+        if (pCf2 && MH_CreateHook((LPVOID)pCf2, (LPVOID)&Hook_CopyFile2, (LPVOID*)&g_orig_CopyFile2) == MH_OK && MH_EnableHook((LPVOID)pCf2) == MH_OK)
+            Log("[ProbeInstall] hook ARMED on CopyFile2");
+        else Log("[ProbeInstall] CopyFile2 hook not installed");
+    }
     return 0;
 }
 

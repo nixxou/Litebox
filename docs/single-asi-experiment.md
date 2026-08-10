@@ -166,7 +166,25 @@ no-ops, like the old Harmony prefix). Since edits are UI-blocked while locked (W
 last-resort net, so even a hard refuse is acceptable. Dropping Harmony removes the early dependency that bricked
 startup and makes the single artifact fully self-contained (BCL + kernel32 + the MinHook `.bin`).
 
-## Open item to validate during build
-- The **write-block form** (refuse vs redirect) against a real LaunchBox save (edit a game → save → File.Copy
-  into `Data\`): confirm the save is blocked and LaunchBox stays stable. (Read-filter timing + plugin duality
-  are already proven.)
+## Write path CONFIRMED (2026-08-11): CopyFileExW, not CreateFileW
+
+A LaunchBox save does NOT surface at the hooked `CreateFileW` (0 write-opens caught on an edit+close) — its
+`File.Copy(temp -> Data\X.xml)` goes through the Win32 **`CopyFileExW`** export, which opens the destination
+internally (bypassing the exported CreateFileW). Hooking `CopyFileExW` (+ `CopyFile2` as a belt) caught the
+save cleanly: on an edit of a Windows game + close, 12 `[Copy] CopyFileExW -> …\Data\…` were logged, including
+`…\Data\Platforms\Windows.xml` (the edited game's platform file) plus Settings.xml, ListCache.xml, etc.
+
+So the two hooks the single managed DLL installs early are:
+- **`CreateFileW`** → the READ filter (`Platforms\*.xml` → filtered stream), and
+- **`CopyFileExW`** (+ `CopyFile2`) → the WRITE guard (block/redirect a copy whose destination is under
+  `Data\` while locked). Both native (MinHook), both from `StartupHook.Initialize`, zero managed deps.
+
+**No Harmony, confirmed.** The write path is a hookable Win32 export sitting right next to the read hook.
+
+Block form (implementation choice): return TRUE from the `CopyFileExW` hook WITHOUT calling the original →
+the copy silently doesn't happen and `File.Copy` sees success (gentle, like the old Harmony prefix); or return
+FALSE → `File.Copy` throws. Since edits are UI-blocked while locked (WS3), the guard is a last-resort net, so
+either is acceptable. Scope: gate on lock state; WS0 covered all of `Data\`, but the filtered library only
+lives in `Platforms\*.xml` / the `Platforms.xml` index / `Playlists\*.xml`, so those are the must-block set.
+
+## Status: fully proven — ready to build the real single artifact.

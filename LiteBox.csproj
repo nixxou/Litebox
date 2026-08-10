@@ -317,9 +317,13 @@
          standalone publish (build-release.ps1). ParentalNativeInstall.EnsureShipped extracts these to
          Core\litebox\parental-native\ at boot; the in-app Install button then deploys them on demand. The light
          zip ships them loose there instead (build-release.ps1). -->
+    <!-- The write-guard is dual-targeted: BOTH the net9 and net10 builds embed (both light hosts carry
+         both, so a migrated host always has its matching guard). EnsureShipped extracts every parental-native/*
+         resource; ParentalNativeInstall deploys the one matching this host's TFM. ASI/winhttp/0Harmony single. -->
     <EmbeddedResource Include="native\payload\litebox-parentalcontrol.asi.api"><LogicalName>parental-native/litebox-parentalcontrol.asi.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="native\payload\winhttp.dll.api"><LogicalName>parental-native/winhttp.dll.api</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="native\payload\litebox-parentalcontrol.dll.api"><LogicalName>parental-native/litebox-parentalcontrol.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="native\payload\litebox-parentalcontrol.net9.dll.api"><LogicalName>parental-native/litebox-parentalcontrol.net9.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="native\payload\litebox-parentalcontrol.net10.dll.api"><LogicalName>parental-native/litebox-parentalcontrol.net10.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="native\payload\0Harmony.dll.api"><LogicalName>parental-native/0Harmony.dll.api</LogicalName></EmbeddedResource>
   </ItemGroup>
 

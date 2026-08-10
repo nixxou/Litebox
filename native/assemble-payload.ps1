@@ -4,10 +4,14 @@
 
   Output: native\payload\ (staging), each file suffixed .api so nothing loads it from the shipped
   spot (the in-app Install button strips .api on deploy):
-    litebox-parentalcontrol.asi.api   (WS5.1 build)
-    litebox-parentalcontrol.dll.api   (WS5.2 build)
-    0Harmony.dll.api                  (Harmony, from the ExtendDB checkout)
-    winhttp.dll.api                   (Ultimate ASI Loader, from ExtendDB\thirdparty\winhttp.dll.api)
+    litebox-parentalcontrol.asi.api        (WS5.1 build; TFM-agnostic native)
+    litebox-parentalcontrol.net9.dll.api   (WS5.2 write-guard, net9 build — LB 13.27)
+    litebox-parentalcontrol.net10.dll.api  (WS5.2 write-guard, net10 build — LB 13.28+)
+    0Harmony.dll.api                       (Harmony, net9 build — loads on both)
+    winhttp.dll.api                        (Ultimate ASI Loader, from ExtendDB\thirdparty\winhttp.dll.api)
+
+  The write-guard is dual-targeted (see litebox-parentalcontrol.csproj); LiteBox deploys the copy
+  matching Core's runtime. The ASI / winhttp / 0Harmony are single (native or net9-forward-compatible).
 
   LiteBox ships this folder as Core\litebox\parental-native\; the in-app Install button
   (ParentalNativeInstall) copies it into LB\Core + LB\Plugins. Re-run after rebuilding either
@@ -20,12 +24,15 @@ $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $out  = Join-Path $here 'payload'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
+# Retire the old single-TFM guard name if a previous run staged it (now per-TFM .net9/.net10).
+Remove-Item (Join-Path $out 'litebox-parentalcontrol.dll.api') -Force -ErrorAction SilentlyContinue
 
 $sources = @{
-  'litebox-parentalcontrol.asi' = Join-Path $here 'litebox-parentalcontrol-asi\bin\Release\litebox-parentalcontrol.asi'
-  'litebox-parentalcontrol.dll' = Join-Path $here 'litebox-parentalcontrol-dll\bin\Release\litebox-parentalcontrol.dll'
-  '0Harmony.dll'                = [IO.Path]::GetFullPath((Join-Path $here '..\..\ExtendDB\0Harmony.dll'))
-  'winhttp.dll'                 = [IO.Path]::GetFullPath((Join-Path $here '..\..\ExtendDB\thirdparty\winhttp.dll.api'))
+  'litebox-parentalcontrol.asi'       = Join-Path $here 'litebox-parentalcontrol-asi\bin\Release\litebox-parentalcontrol.asi'
+  'litebox-parentalcontrol.net9.dll'  = Join-Path $here 'litebox-parentalcontrol-dll\bin\Release\net9.0-windows\litebox-parentalcontrol.dll'
+  'litebox-parentalcontrol.net10.dll' = Join-Path $here 'litebox-parentalcontrol-dll\bin\Release\net10.0-windows\litebox-parentalcontrol.dll'
+  '0Harmony.dll'                      = [IO.Path]::GetFullPath((Join-Path $here '..\..\ExtendDB\0Harmony.dll'))
+  'winhttp.dll'                       = [IO.Path]::GetFullPath((Join-Path $here '..\..\ExtendDB\thirdparty\winhttp.dll.api'))
 }
 
 $missing = @()

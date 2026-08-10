@@ -290,15 +290,11 @@ internal static class ParentalPanel
         {
             bool inst = ParentalNativeInstall.IsInstalled;
             bool payload = ParentalNativeInstall.PayloadAvailable;
-            bool supported = ParentalNativeInstall.SupportedOnThisRuntime;
-            // net9 (LB 13.27): the write-guard plugin can't load, so the native filter would be unguarded —
-            // never offer Install here. Uninstall stays live so a payload from an older build can be removed.
-            nativeStatus.Text = !supported ? "Requires LaunchBox 13.28+ (.NET 10)."
-                              : inst        ? "Installed."
-                              : payload     ? "Not installed."
-                                            : "Payload missing — cannot install.";
+            // Supported on both net9 (LB 13.27) and net10 (13.28+): LiteBox ships a guard build per runtime and
+            // deploys the one matching Core (self-healing on an LB upgrade — see ParentalNativeInstall).
+            nativeStatus.Text = inst ? "Installed." : payload ? "Not installed." : "Payload missing — cannot install.";
             installBtn.Text = inst ? "Reinstall" : "Install";
-            installBtn.Enabled = !readOnly && supported && payload;
+            installBtn.Enabled = !readOnly && payload;
             uninstallBtn.Enabled = !readOnly && inst;
         }
         installBtn.Click += (_, _) =>

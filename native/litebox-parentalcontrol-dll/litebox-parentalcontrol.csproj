@@ -6,19 +6,33 @@
        Data\ while locked, so a filtered save can never persist), drives the ASI's on/off
        via its exports, and reloads the real library on unlock.
 
-       TargetFramework must match the LaunchBox install (LB 13.28 → net10.0-windows).
-       Loaded from LB\Plugins\litebox-parentalcontrol\ with 0Harmony.dll alongside. -->
+       DUAL-TARGET (net9 for LB 13.27, net10 for LB 13.28+): the plugin references the LaunchBox
+       SDK, whose asmVer differs per LB (13.27 vs 13.28), so it must be built against the MATCHING
+       SDK per TFM (a net9 build binds up to 13.28 at runtime; a net10 build can't bind DOWN to
+       13.27). LiteBox ships BOTH and deploys the one matching Core's runtime — see
+       Host/Parental/ParentalNativeInstall (PluginApiName). Loaded from LB\Plugins\litebox-
+       parentalcontrol\ with 0Harmony.dll alongside. -->
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFrameworks>net9.0-windows;net10.0-windows</TargetFrameworks>
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>litebox-parentalcontrol</AssemblyName>
     <RootNamespace>LiteBoxParental</RootNamespace>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <!-- The two TFMs land in bin\Release\net9.0-windows\ and net10.0-windows\ (do NOT flatten —
+         they'd collide). assemble-payload.ps1 stages each into a per-TFM .api. -->
+
+    <!-- SDK reference per TFM (mirrors LiteBox.csproj): net9 → the 13.27 install's SDK; anything
+         else → the 13.28 install's. A net9 project cannot reference LB's net10 SDK (CS1705). -->
+    <Lb9Root  Condition="'$(Lb9Root)' == ''">G:\LB</Lb9Root>
+    <Lb10Root Condition="'$(Lb10Root)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\..\LB</Lb10Root>
+    <LbCoreDir Condition="'$(TargetFramework)' == 'net9.0-windows'">$(Lb9Root)\Core</LbCoreDir>
+    <LbCoreDir Condition="'$(LbCoreDir)' == ''">$(Lb10Root)\Core</LbCoreDir>
+    <!-- The SDK is a higher build than we reference on the OTHER runtime; MSB3277 is expected. -->
+    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,13 +43,14 @@
       <Private>false</Private>
     </Reference>
     <Reference Include="Unbroken.LaunchBox.Plugins">
-      <HintPath>..\..\..\..\..\LB\Core\Unbroken.LaunchBox.Plugins.dll</HintPath>
+      <HintPath>$(LbCoreDir)\Unbroken.LaunchBox.Plugins.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <!-- LaunchBox ships BouncyCastle in Core; we use it to decrypt BigBox's LockPin (Rijndael-256,
-         the exact cipher LiteBox's LbSettingsCrypto uses) to verify the unlock PIN. -->
+         the exact cipher LiteBox's LbSettingsCrypto uses) to verify the unlock PIN. Per-TFM Core so
+         the reference matches the SDK's install. -->
     <Reference Include="BouncyCastle.Crypto">
-      <HintPath>..\..\..\..\..\LB\Core\BouncyCastle.Crypto.dll</HintPath>
+      <HintPath>$(LbCoreDir)\BouncyCastle.Crypto.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

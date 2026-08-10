@@ -71,7 +71,7 @@ $payload = @(
 # csproj parental-native/* block, which reads native\payload\). ParentalNativeInstall.EnsureShipped lands
 # them at Core\litebox\parental-native\; the in-app Install button deploys them into Core + Plugins on demand.
 $parentalPayloadDir = Join-Path $here 'native\payload'
-$parentalPayload = @('litebox-parentalcontrol.asi.api','winhttp.dll.api','litebox-parentalcontrol.dll.api','0Harmony.dll.api')
+$parentalPayload = @('litebox-parentalcontrol.asi.api','winhttp.dll.api','litebox-parentalcontrol.net9.dll.api','litebox-parentalcontrol.net10.dll.api','0Harmony.dll.api')
 
 # Rebuild the native payload from source FIRST so the shipped ASI + write-guard match the committed code
 # (the payload dir is gitignored; trusting a stale copy is how a fixed source ships with old behaviour).
@@ -188,15 +188,11 @@ foreach ($t in $targets) {
     Copy-Item $src (Join-Path $tpDir $p)
   }
   # Native parental payload (.api) LOOSE under litebox\parental-native\ (extracts to Core\litebox\parental-native\).
-  # net10 ONLY: the write-guard plugin targets net10, so on a net9 (LB 13.27) Core it can't load — shipping it
-  # there would leave the ASI filtering with no guard (data-loss). net9 keeps LiteBox's own parental control.
-  if ($label -eq 'net10') {
-    $pnDir = Join-Path $stageZip 'litebox\parental-native'
-    New-Item -ItemType Directory -Force $pnDir | Out-Null
-    foreach ($p in $parentalPayload) { Copy-Item (Join-Path $parentalPayloadDir $p) (Join-Path $pnDir $p) }
-  } else {
-    Write-Host "  (native parental payload omitted for $label - net10-only feature)"
-  }
+  # Shipped in BOTH zips: the write-guard is dual-targeted (net9 + net10 builds), and LiteBox deploys the one
+  # matching Core's runtime — so each zip carries both guard builds and the shared ASI/winhttp/0Harmony.
+  $pnDir = Join-Path $stageZip 'litebox\parental-native'
+  New-Item -ItemType Directory -Force $pnDir | Out-Null
+  foreach ($p in $parentalPayload) { Copy-Item (Join-Path $parentalPayloadDir $p) (Join-Path $pnDir $p) }
   # c) Web frontend theme assets (optional; gitignored web-assets\ on the build machine). Shipped under the
   #    zip's litebox\web-assets\ (extracts to Core\litebox\web-assets\); WebAssets.EnsureDeployed installs them
   #    to Core\litebox\web\ at boot. Under litebox\ so uninstall's rmdir sweeps it. Absent -> placeholder theme.

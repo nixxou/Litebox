@@ -119,6 +119,9 @@ function Deploy-ParentalNative([string]$lbRoot) {
   }
   $dst = Join-Path $lbRoot 'Core\litebox\parental-native'
   New-Item -ItemType Directory -Force -Path $dst | Out-Null
+  # Mirror the staged payload exactly — clear stale .api first so a renamed file (e.g. the retired
+  # single-TFM guard name) never lingers in the dev install.
+  Remove-Item (Join-Path $dst '*.api') -Force -ErrorAction SilentlyContinue
   Copy-Item (Join-Path $payload '*.api') $dst -Force
   Write-Host "  parental-native (.api) -> $dst" -ForegroundColor Green
 }

@@ -126,6 +126,10 @@ internal static class Installer
             // failure just leaves the Web module on its placeholder theme.
             string? webErr = WebPayload.ExtractToCore(core);
             if (webErr != null) Console.WriteLine("[installer] " + webErr);
+            // Drop the native parental payload SOURCE (.api) into Core\litebox\parental-native\ too — only the
+            // standalone installer embeds it (the light host does not), so without this a standalone install
+            // would have nothing for the in-app Install button / the boot-time guard migration to work from.
+            try { Parental.ParentalNativeInstall.ExtractShippedToCore(core); } catch { }
         }
         else
         {

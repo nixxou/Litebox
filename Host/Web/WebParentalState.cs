@@ -102,8 +102,20 @@ internal sealed class WebParentalState
     public bool IsRatingAllowed(string rating)
         => !IsLocked || (!ForceAllWeb && ParentalBridge.IsRatingAllowed(rating));
 
-    /// <summary>A platform / category / playlist with this name must be hidden from the tree (locked only).</summary>
-    public bool IsHidden(string name) => IsLocked && ParentalBridge.IsNameHidden(name);
+    /// <summary>A platform / category / playlist with this name must be hidden from THIS client. The list is
+    /// chosen by the CLIENT's lock state (cookie for a browser, the shared desktop lock for the kiosk) — NOT
+    /// the desktop runtime lock, so a locked browser hides the LOCKED list even while the desktop is unlocked.
+    /// Both lists apply: hide-when-LOCKED while locked, hide-when-UNLOCKED while unlocked (unlike the vanilla
+    /// LB/BB native filter, which enforces the locked list only — see the panel note).</summary>
+    public bool IsHidden(string name)
+    {
+        if (!IsActive || string.IsNullOrEmpty(name)) return false;
+        var cfg = Parental.ParentalConfig.Instance;
+        var list = IsLocked ? cfg.HiddenPlatformsBigBoxOn : cfg.HiddenPlatformsBigBoxOff;
+        foreach (var n in list)
+            if (string.Equals(n, name, System.StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
 
     /// <summary>SQL fragment enforcing the rating RULES on a Games query (column "g".ESRB), so lists,
     /// counts and paging all match — plugin BuildEsrbSqlFilter parity. Null = allow-all (unlocked);

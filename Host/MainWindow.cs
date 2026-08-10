@@ -1421,10 +1421,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         tv.NodeMouseClick += (_, e) =>
         {
             if (e.Button != MouseButtons.Right || e.Node?.Tag == null) return;
+            // Limited mode: the source-tree context menu is entirely admin (edit / delete / copy / paste
+            // platforms, categories, playlists), so it is suppressed wholesale — select + launch only.
+            if (Media.ParentalBridge.Active) return;
             var tag = e.Node.Tag;
-            // Read-only OR parental LIMITED (locked): platform/category/playlist edit windows open
-            // read-only, and every delete/paste (gated on !ro) drops out. See the parental lockdown.
-            bool ro = ((_dm as HostDataManagerXml)?.ReadOnly ?? false) || Media.ParentalBridge.Active;
+            bool ro = (_dm as HostDataManagerXml)?.ReadOnly ?? false;
             var menu = new ContextMenuStrip { Renderer = new DarkRenderer(), BackColor = Panel2, ForeColor = Fg };
 
             // Right-click INSIDE a multi-selection → homogeneous multi-edit; mixed types get no edit entry.
@@ -6025,6 +6026,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     /// null = the whole library (the all-games entry).</summary>
     private void GenerateCachedImages(IGame[] only)
     {
+        if (Media.ParentalBridge.Active) return;   // limited mode: no image-cache generation
         if (_genCacheLive is { IsDisposed: false } live) { try { live.RestoreFromMinimized(); } catch { } return; }
         var games = only ?? Safe(() => _dm.GetAllGames()) ?? Array.Empty<IGame>();
         if (games.Length == 0) return;

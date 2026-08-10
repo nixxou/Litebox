@@ -19,7 +19,7 @@ internal static class PlatformDetailHandler
         var repo = new DbRepository();
         var platform = ResolvePlatformBySlug(repo, slug);
         if (platform == null) return HttpResponse.NotFound("Platform not found.");
-        if (parental.IsLocked && parental.IsHidden(platform.Name))
+        if (parental.IsHidden(platform.Name))
             return HttpResponse.NotFound("Platform not found.");
 
         var sb = new StringBuilder();

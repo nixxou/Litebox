@@ -62,7 +62,7 @@ internal static class PlatformDetailApi
         if (p == null) return HttpResponse.NotFound();
 
         var parental = WebParentalState.From(ctx.Request);
-        if (parental.IsLocked && parental.IsHidden(p.Name)) return HttpResponse.NotFound();
+        if (parental.IsHidden(p.Name)) return HttpResponse.NotFound();
 
         var dto = new
         {
@@ -154,7 +154,7 @@ internal static class PlatformGamesApi
 
         var req = ctx.Request;
         var parental = WebParentalState.From(req);
-        if (parental.IsLocked && parental.IsHidden(p.Name)) return HttpResponse.NotFound();
+        if (parental.IsHidden(p.Name)) return HttpResponse.NotFound();
 
         var threshold = repo.GetStarThreshold(p.Name);
         var userAdult = req.GetQueryInt("adult", 1);

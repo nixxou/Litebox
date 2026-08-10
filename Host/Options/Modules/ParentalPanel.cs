@@ -1,11 +1,12 @@
 // Parental module config panel — native to LiteBox.
 //
 // Four groups, built through ModulePanelKit for the shared dark look:
-//   • Activation    — enable for LaunchBox / BigBox, the shared PIN (+ confirm, reuses Host/Data/BigBoxPin —
+//   • Activation    — the single parental enable switch, the shared PIN (+ confirm, reuses Host/Data/BigBoxPin —
 //                     BigBox's own parental PIN), and the two "allow while locked" toggles (star / favorite).
 //   • Filter rules  — Whitelist/Blacklist mode + a rating-pattern list (wildcards * and ?) with Add/Remove.
-//   • Hide platforms (BigBox) — a hide-when-LOCKED and a hide-when-UNLOCKED list, each a platform combo
-//                     (from PluginHelper.DataManager) + Add/Remove.
+//   • Hide platforms — a hide-when-LOCKED and a hide-when-UNLOCKED list, each a platform combo
+//                     (from PluginHelper.DataManager) + Add/Remove. Applies everywhere parental applies; the
+//                     native filter enforces hide-when-LOCKED only (hide-when-UNLOCKED deferred for vanilla LB/BB).
 //   • Lock control  — the pop-up hotkey (captured live) + Clear.
 //
 // Removed pending the vanilla-LB/BB revamp (WS5/WS6): the BigBox write-mode combo, "force web hide all",
@@ -195,13 +196,15 @@ internal static class ParentalPanel
         CloseGroup(gRules, y2);
 
         // ═════════════════════════════════════════════════════════════════════
-        // Group 3 — Hide platforms (BigBox)
+        // Group 3 — Hide platforms
         // ═════════════════════════════════════════════════════════════════════
         var platformNames = LoadPlatformNames();
 
-        var gHide = Group("Hide platforms (BigBox)", rootY);
+        var gHide = Group("Hide platforms", rootY);
         int y3 = 24;
-        Cap(gHide, "Remove platforms / categories from the BigBox filter page. The LOCKED list applies while parental is locked; the UNLOCKED list applies otherwise.", 12, y3, 690); y3 += 34;
+        Cap(gHide, "Remove whole platforms / categories from view — everywhere parental applies (LiteBox desktop, "
+                 + "the web clients, and vanilla LaunchBox / BigBox via the native filter). The LOCKED list applies "
+                 + "while parental is locked; the UNLOCKED list applies otherwise.", 12, y3, 690); y3 += 48;
 
         // Locked list.
         Cap(gHide, "Hide when LOCKED", 12, y3); y3 += 18;
@@ -220,6 +223,8 @@ internal static class ParentalPanel
 
         // Unlocked list.
         Cap(gHide, "Hide when UNLOCKED", 12, y3); y3 += 18;
+        Cap(gHide, "Note: LiteBox and the web clients enforce this list. The native filter for vanilla "
+                 + "LaunchBox / BigBox does NOT yet apply hide-when-unlocked (deferred).", 12, y3, 690); y3 += 34;
         var cmbHideOff = ModulePanelKit.Combo(dpiS, readOnly, width: 300);
         cmbHideOff.Location = new Point(S(12), S(y3));
         foreach (var n in platformNames) cmbHideOff.Items.Add(n);

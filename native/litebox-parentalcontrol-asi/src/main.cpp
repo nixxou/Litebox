@@ -7,9 +7,14 @@
 //   • its <Rating> passes the rules (Whitelist/Blacklist + wildcard Rule= patterns), AND
 //   • its <ID> is NOT in the per-game blocked set (BlockedId=, the "requires parental" flag).
 //
+// The same hook also enforces the LOCKED hide-list (HideName=): a hidden platform / playlist
+// file is streamed empty, hidden <Platform>/<PlatformCategory> rows are dropped from the
+// Data\Platforms.xml index, and playlist entries pointing at a blocked game or a hidden
+// platform are pruned (see the hide-list purge section).
+//
 // Config = LB\Core\litebox-parental.dat, the flat file LiteBox writes (Host/Parental/
-// ParentalNativeExport). Keys: LaunchBoxEnabled, BigBoxEnabled, PinSet, Mode, repeated
-// Rule=, repeated BlockedId=, optional PluginPath (anti-tamper). No file / scope off for
+// ParentalNativeExport). Keys: Enabled (single switch), PinSet, Mode, repeated Rule=,
+// repeated BlockedId=, repeated HideName=, optional PluginPath. No file / disabled for
 // this process → the ASI is inert.
 //
 // Cold-start gate (before the managed plugin speaks), PER PROCESS:
@@ -35,6 +40,7 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -151,6 +157,7 @@ static bool                            g_pinSet           = false;  // PinSet=1 
 static int                             g_mode             = 0;      // 0 = Whitelist, 1 = Blacklist
 static std::vector<std::string>        g_rules;                     // Rule= wildcard patterns
 static std::unordered_set<std::string> g_blockedIds;                // BlockedId= per-game "requires parental" IDs
+static std::unordered_set<std::string> g_hiddenNames;               // HideName= platform/category/playlist names (lowercased) hidden WHEN LOCKED
 static std::string                     g_pluginPath;                // PluginPath= (relative to LB\Core) — anti-tamper
 
 static std::string TrimCopy(const std::string& s)
@@ -259,6 +266,10 @@ static void LoadParentalConfig(const std::wstring& path)
         {
             if (!val.empty()) g_blockedIds.insert(val);
         }
+        else if (key == "hidename")
+        {
+            if (!val.empty()) g_hiddenNames.insert(ToLowerCopy(val));  // matched case-insensitively vs file basenames / GamePlatform
+        }
         else if (key == "pluginpath")
             g_pluginPath = val;
         // Version: ignored.
@@ -266,9 +277,9 @@ static void LoadParentalConfig(const std::wstring& path)
 
     char msg[256];
     snprintf(msg, sizeof(msg),
-             "[Boot] config loaded: Enabled=%d PinSet=%d mode=%s rules=%d blocked=%zu",
+             "[Boot] config loaded: Enabled=%d PinSet=%d mode=%s rules=%d blocked=%zu hidden=%zu",
              g_enabled ? 1 : 0, g_pinSet ? 1 : 0,
-             g_mode == 1 ? "Blacklist" : "Whitelist", ruleCount, g_blockedIds.size());
+             g_mode == 1 ? "Blacklist" : "Whitelist", ruleCount, g_blockedIds.size(), g_hiddenNames.size());
     Log(msg);
 }
 
@@ -574,6 +585,174 @@ static HANDLE OpenStreamingPipe(const std::wstring& original,
     return readEnd;
 }
 
+// -------------------- hide-list purge (platforms / categories / playlists) --------------------
+//
+// The LOCKED hide-list (HideName= in litebox-parental.dat) names whole platforms, categories
+// and playlists to remove while parental is locked. The ASI enforces it three ways, all
+// file-local (no cross-file index needed) so it stays as dumb + safe as the rating filter:
+//   • Platforms\<name>.xml  hidden  → streamed as an empty <LaunchBox/> (the platform shows no games);
+//   • Playlists\<name>.xml  hidden  → streamed as an empty <LaunchBox/> (the playlist vanishes);
+//   • Data\Platforms.xml (the index) → <Platform>/<PlatformCategory> whose <Name> is hidden are dropped
+//     (the platform / category leaves BigBox's filter list);
+//   • Playlists\*.xml (kept ones)   → each <PlaylistGame> is pruned when its <GameId> is a BlockedId OR
+//     its <GamePlatform> is a hidden platform (hidden games referenced in playlists disappear too).
+// Rating-based pruning inside playlists is NOT done (it needs a global cross-platform rating scan);
+// that gap is acceptable — the per-game BlockedId + hidden-platform cases cover the intent.
+
+// Minimal XML entity unescape for the five predefined entities — LaunchBox writes platform names with
+// these escaped, but the config carries the raw name, so compare unescaped. Lo-fi single pass.
+static std::string XmlUnescape(const std::string& s)
+{
+    if (s.find('&') == std::string::npos) return s;
+    std::string out; out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); )
+    {
+        if (s[i] == '&')
+        {
+            if      (s.compare(i, 5, "&amp;")  == 0) { out += '&';  i += 5; continue; }
+            else if (s.compare(i, 4, "&lt;")   == 0) { out += '<';  i += 4; continue; }
+            else if (s.compare(i, 4, "&gt;")   == 0) { out += '>';  i += 4; continue; }
+            else if (s.compare(i, 6, "&apos;") == 0) { out += '\''; i += 6; continue; }
+            else if (s.compare(i, 6, "&quot;") == 0) { out += '"';  i += 6; continue; }
+        }
+        out += s[i++];
+    }
+    return out;
+}
+
+// Lowercased file basename without the .xml extension — matched against g_hiddenNames.
+static std::string BaseNameNoExtLower(const std::wstring& path)
+{
+    const wchar_t* fn = PathFindFileNameW(path.c_str());
+    std::wstring w(fn ? fn : L"");
+    if (w.size() >= 4 && _wcsicmp(w.c_str() + w.size() - 4, L".xml") == 0) w.resize(w.size() - 4);
+    return ToLowerCopy(Narrow(w));
+}
+
+static bool IsHiddenName(const std::string& lowerName)
+{
+    return !lowerName.empty() && g_hiddenNames.find(lowerName) != g_hiddenNames.end();
+}
+
+// Blocking write of the whole buffer to the pipe. Returns false on a broken pipe.
+static bool WriteAllToPipe(HANDLE h, const std::string& s)
+{
+    const char* p = s.data();
+    size_t remaining = s.size();
+    DWORD written = 0;
+    while (remaining > 0)
+    {
+        DWORD chunk = (DWORD)std::min<size_t>(remaining, 64 * 1024);
+        if (!WriteFile(h, p, chunk, &written, nullptr) || written == 0) return false;
+        p += written;
+        remaining -= written;
+    }
+    return true;
+}
+
+// Generic pipe: a detached thread runs `producer(writeEnd)`, which owns + closes the write end.
+static HANDLE OpenProducerPipe(std::function<void(HANDLE)> producer)
+{
+    HANDLE readEnd = nullptr, writeEnd = nullptr;
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = FALSE;
+    if (!CreatePipe(&readEnd, &writeEnd, &sa, 64 * 1024)) return nullptr;
+    std::thread([writeEnd, producer]() { producer(writeEnd); }).detach();
+    return readEnd;
+}
+
+// A valid but empty library document — used to purge a whole hidden platform / playlist.
+static void StreamEmptyRoot(HANDLE writeEnd)
+{
+    WriteAllToPipe(writeEnd,
+        std::string("<?xml version=\"1.0\" standalone=\"yes\"?>\r\n<LaunchBox>\r\n</LaunchBox>\r\n"));
+    CloseHandle(writeEnd);
+}
+
+// Re-stream a playlist file, dropping every <PlaylistGame> whose game is blocked (BlockedId) or whose
+// <GamePlatform> is a hidden platform. Everything else (the <Playlist> metadata, kept games) passes through.
+static void StreamPrunedPlaylist(HANDLE writeEnd, const std::wstring& original)
+{
+    t_suppress = true;
+    struct Guard { ~Guard() { t_suppress = false; } } guard;
+
+    std::ifstream in(original.c_str(), std::ios::binary);
+    if (!in) { CloseHandle(writeEnd); return; }
+
+    std::string line, buffer, currentName;
+    bool inElement = false;
+    while (std::getline(in, line))
+    {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!inElement)
+        {
+            auto name = MatchDepth1Open(line);
+            if (!name.empty()) { inElement = true; currentName = name; buffer.clear(); buffer.append(line).append("\n"); }
+            else if (!WriteAllToPipe(writeEnd, line) || !WriteAllToPipe(writeEnd, std::string("\n"))) { CloseHandle(writeEnd); return; }
+        }
+        else
+        {
+            buffer.append(line).append("\n");
+            if (IsDepth1Close(line, currentName))
+            {
+                inElement = false;
+                bool keep = true;
+                if (currentName == "PlaylistGame")
+                {
+                    auto gid = ExtractTagValue(buffer, "GameId");
+                    if (gid.empty()) gid = ExtractTagValue(buffer, "GameID");
+                    auto plat = XmlUnescape(TrimCopy(ExtractTagValue(buffer, "GamePlatform")));
+                    bool blocked = !gid.empty() && g_blockedIds.find(gid) != g_blockedIds.end();
+                    bool hiddenPlat = IsHiddenName(ToLowerCopy(plat));
+                    keep = !(blocked || hiddenPlat);
+                }
+                if (keep && !WriteAllToPipe(writeEnd, buffer)) { CloseHandle(writeEnd); return; }
+            }
+        }
+    }
+    CloseHandle(writeEnd);
+}
+
+// Re-stream the Platforms.xml index, dropping <Platform>/<PlatformCategory> whose <Name> is hidden.
+static void StreamFilteredPlatformIndex(HANDLE writeEnd, const std::wstring& original)
+{
+    t_suppress = true;
+    struct Guard { ~Guard() { t_suppress = false; } } guard;
+
+    std::ifstream in(original.c_str(), std::ios::binary);
+    if (!in) { CloseHandle(writeEnd); return; }
+
+    std::string line, buffer, currentName;
+    bool inElement = false;
+    while (std::getline(in, line))
+    {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!inElement)
+        {
+            auto name = MatchDepth1Open(line);
+            if (!name.empty()) { inElement = true; currentName = name; buffer.clear(); buffer.append(line).append("\n"); }
+            else if (!WriteAllToPipe(writeEnd, line) || !WriteAllToPipe(writeEnd, std::string("\n"))) { CloseHandle(writeEnd); return; }
+        }
+        else
+        {
+            buffer.append(line).append("\n");
+            if (IsDepth1Close(line, currentName))
+            {
+                inElement = false;
+                bool keep = true;
+                if (currentName == "Platform" || currentName == "PlatformCategory")
+                {
+                    auto nm = XmlUnescape(TrimCopy(ExtractTagValue(buffer, "Name")));
+                    if (IsHiddenName(ToLowerCopy(nm))) keep = false;
+                }
+                if (keep && !WriteAllToPipe(writeEnd, buffer)) { CloseHandle(writeEnd); return; }
+            }
+        }
+    }
+    CloseHandle(writeEnd);
+}
+
 // -------------------- gating + runtime toggle --------------------
 //
 // Two distinct phases:
@@ -854,16 +1033,41 @@ static HANDLE WINAPI Hook_CreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess,
 {
     if (!t_suppress && lpFileName != nullptr) {
         std::wstring path(lpFileName);
-        bool isPlatformXml = ContainsCI(path, L"\\Data\\Platforms\\") && EndsWithCI(path, L".xml");
         bool isWrite = (dwDesiredAccess & GENERIC_WRITE) != 0;
-        if (isPlatformXml && !isWrite && FilteringActive()) {
-            auto keptIds = GetOrComputeKeptIds(path);
-            if (keptIds) {
-                HANDLE pipe = OpenStreamingPipe(path, keptIds);
-                if (pipe != nullptr) {
-                    Log("[Redirect] " + Narrow(path) + " -> <pipe streaming, " +
-                        std::to_string(keptIds->size()) + " ids>");
-                    return pipe;
+        bool inPlatformsDir = ContainsCI(path, L"\\Data\\Platforms\\") && EndsWithCI(path, L".xml");
+        bool inPlaylistsDir = ContainsCI(path, L"\\Data\\Playlists\\") && EndsWithCI(path, L".xml");
+        bool isPlatformIndex = EndsWithCI(path, L"\\Data\\Platforms.xml");  // the index, NOT a per-platform file
+        if (!isWrite && FilteringActive()) {
+            // (1) Platforms.xml index — drop hidden platforms / categories from BigBox's filter list.
+            if (isPlatformIndex && !g_hiddenNames.empty()) {
+                HANDLE pipe = OpenProducerPipe([path](HANDLE w) { StreamFilteredPlatformIndex(w, path); });
+                if (pipe != nullptr) { Log("[Redirect] Platforms.xml index -> <pipe, hidden names pruned>"); return pipe; }
+            }
+            // (2) Per-platform file — purge wholesale if hidden, else the rating + blocked-id filter.
+            else if (inPlatformsDir) {
+                if (IsHiddenName(BaseNameNoExtLower(path))) {
+                    HANDLE pipe = OpenProducerPipe([](HANDLE w) { StreamEmptyRoot(w); });
+                    if (pipe != nullptr) { Log("[Redirect] hidden platform purged: " + Narrow(path)); return pipe; }
+                }
+                auto keptIds = GetOrComputeKeptIds(path);
+                if (keptIds) {
+                    HANDLE pipe = OpenStreamingPipe(path, keptIds);
+                    if (pipe != nullptr) {
+                        Log("[Redirect] " + Narrow(path) + " -> <pipe streaming, " +
+                            std::to_string(keptIds->size()) + " ids>");
+                        return pipe;
+                    }
+                }
+            }
+            // (3) Playlist file — purge wholesale if hidden, else prune blocked / hidden-platform entries.
+            else if (inPlaylistsDir) {
+                if (IsHiddenName(BaseNameNoExtLower(path))) {
+                    HANDLE pipe = OpenProducerPipe([](HANDLE w) { StreamEmptyRoot(w); });
+                    if (pipe != nullptr) { Log("[Redirect] hidden playlist purged: " + Narrow(path)); return pipe; }
+                }
+                else if (!g_blockedIds.empty() || !g_hiddenNames.empty()) {
+                    HANDLE pipe = OpenProducerPipe([path](HANDLE w) { StreamPrunedPlaylist(w, path); });
+                    if (pipe != nullptr) { Log("[Redirect] playlist pruned: " + Narrow(path)); return pipe; }
                 }
             }
         }

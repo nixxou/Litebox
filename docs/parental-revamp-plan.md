@@ -61,6 +61,39 @@ survives sessions and context compaction. Read it first each session.
   until the in-app Install button runs. Minor: the DB-*browse*-site blocked-flag edge (owned
   games only; rating rules already applied there).
 
+### One-module rework (2026-08-10, session 8)
+
+The per-app enable split was retired — parental control is now ONE switch: on = on everywhere.
+
+- **Scope collapse — DONE.** `ParentalConfig.LaunchBoxEnabled`/`BigBoxEnabled` → a single
+  `Enabled` (migrates from either legacy key). Panel shows one "Enable parental control"
+  checkbox; the `.dat` emits `Enabled=`; the ASI parses `enabled` (still tolerates the two
+  retired keys) and `FilteringActive()` gates BigBox on `enabled && lockPinSet`, LaunchBox on
+  `enabled`.
+- **Web lock distinction — VERIFIED + hardened.** Kiosk (`User-Agent` marker `LiteBoxKiosk`)
+  shares the desktop runtime lock (`ParentalFilter.Locked`); a browser uses its own signed
+  cookie — independent, as required. Fixed a real bug: `WebParentalState.IsHidden` delegated to
+  `ParentalBridge.IsNameHidden`, which reads the *desktop* lock — wrong list for a locked
+  browser while the desktop is unlocked, and it never applied hide-when-UNLOCKED at all. It now
+  selects the list from the CLIENT lock and applies both lists; the redundant `IsLocked &&`
+  guards at the call sites were dropped so the unlocked list enforces on direct URLs too.
+- **Hide platforms — "(BigBox)" dropped, applies everywhere.** Panel group renamed; caption
+  says it applies on LiteBox desktop, the web clients, and vanilla LB/BB via the native filter.
+  A note under "Hide when UNLOCKED" records that the native filter enforces the LOCKED list only
+  (hide-when-unlocked deferred for vanilla — too complex for the ASI loader).
+- **ASI hide-list purge — DONE.** `.dat` now emits `HideName=` (the LOCKED list). The ASI:
+  streams a hidden `Platforms\<name>.xml` / `Playlists\<name>.xml` empty; drops hidden
+  `<Platform>`/`<PlatformCategory>` from the `Data\Platforms.xml` index; prunes each
+  `<PlaylistGame>` whose `<GameId>` is blocked or whose `<GamePlatform>` is hidden. Rating-based
+  pruning inside playlists is the one known gap (needs a global cross-platform scan). Rebuilt
+  Release|x64, payload re-staged + deployed.
+- **LiteBox limited mode — strict lockdown.** In parental-Active mode the user can only select +
+  launch: global Options, the four Manage windows (Controllers/Emulators/Platforms/Playlists),
+  Manage Badges, and `GenerateCachedImages` all hard-refuse; the source-tree context menu (all
+  admin: edit/delete/copy/paste) is suppressed wholesale; the Tools + Badges top menus hide on
+  `ParentalBridge.StateChanged` and reappear on unlock. The padlock still unlocks first, so the
+  parental settings stay reachable.
+
 **The project is code-complete.** Everything in the plan is implemented and builds
 (LiteBox host + both native projects); only a live LB/BB validation pass is left.
 

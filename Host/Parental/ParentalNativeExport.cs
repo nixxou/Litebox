@@ -22,6 +22,11 @@
 //   PinSet=1                  (a BigBox LockPin is present — the BigBox cold-start gate)
 //   Rule=M*                   (repeated; wildcard rating patterns, * and ?)
 //   BlockedId=<guid>          (repeated; per-game "requires parental" IDs)
+//   HideName=<name>           (repeated; platform / category / playlist names hidden WHEN LOCKED —
+//                             the ASI purges the matching Platforms\<name>.xml / Playlists\<name>.xml
+//                             wholesale, drops them from the Platforms.xml index, and prunes any
+//                             PlaylistGame whose GamePlatform is hidden. Hide-when-UNLOCKED is NOT
+//                             exported — deferred for the vanilla-LB/BB native filter.)
 
 #nullable enable
 
@@ -64,6 +69,11 @@ internal static class ParentalNativeExport
                 if (!string.IsNullOrWhiteSpace(r)) sb.Append("Rule=").Append(OneLine(r)).Append("\r\n");
             foreach (var id in ParentalGameFlag.AllBlockedIds())
                 if (!string.IsNullOrWhiteSpace(id)) sb.Append("BlockedId=").Append(OneLine(id)).Append("\r\n");
+            // The LOCKED hide-list (platform / category / playlist names). The native filter purges these
+            // wholesale when locked. Hide-when-UNLOCKED (HiddenPlatformsBigBoxOff) is intentionally NOT
+            // exported — the ASI loader can't express "hide only while unlocked" (deferred; see the panel note).
+            foreach (var n in cfg.HiddenPlatformsBigBoxOn)
+                if (!string.IsNullOrWhiteSpace(n)) sb.Append("HideName=").Append(OneLine(n)).Append("\r\n");
 
             var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(tmp, sb.ToString(), new UTF8Encoding(false));

@@ -51,24 +51,37 @@ internal sealed partial class MainWindow
         var quit = M("Quit LiteBox", MenuIcons.Exit);
         quit.Click += (_, _) => Close();   // the FormClosing chain saves layout/selection and flushes
 
+        // Tools is the admin hub (Manage windows, Generate cache, ROM/Import/Scan/Clean, Options); Badges
+        // holds Manage Badges. Both are HIDDEN in parental limited mode (select + launch only). Held by
+        // reference — there are two Tools instances (the Menu dropdown + the standalone bar entry).
+        var menuTools = ToolsMenu("Tools");
         menu.Items.Add(Top("Menu",
             bigBox,
             achievements,
             ViewMenu("View"),
-            ToolsMenu("Tools"),
+            menuTools,
             HelpMenu("Help"),
             Sep(),
             quit));
 
         // The bar repeats the submenus LaunchBox considers worth one click.
-        menu.Items.Add(Top("Tools", Children(ToolsMenu("Tools"))));
+        var toolsTop = Top("Tools", Children(ToolsMenu("Tools")));
+        menu.Items.Add(toolsTop);
         menu.Items.Add(Top("View", Children(ViewMenu("View"))));
         // Arrange By fills itself on open (live catalog), so the bar entry is wired, not cloned.
         var arrangeTop = Top("Arrange By");
         WireArrangeDropDown(arrangeTop);
         menu.Items.Add(arrangeTop);
         menu.Items.Add(Top("Image Group", Children(ImageGroupMenu("Image Group"))));
-        menu.Items.Add(Top("Badges", Children(BadgesMenu("Badges"))));
+        var badgesTop = Top("Badges", Children(BadgesMenu("Badges")));
+        menu.Items.Add(badgesTop);
+
+        // Hide the admin menus while parental is Active (locked); re-shown on unlock. StateChanged is
+        // marshalled to the UI thread. The actions themselves also refuse (ParentalLimited) — this is UX.
+        var adminTops = new ToolStripItem[] { menuTools, toolsTop, badgesTop };
+        void ApplyParentalMenuLock() { bool lim = Media.ParentalBridge.Active; foreach (var it in adminTops) it.Visible = !lim; }
+        Media.ParentalBridge.StateChanged += () => { try { if (!IsDisposed) BeginInvoke((Action)ApplyParentalMenuLock); } catch { } };
+        ApplyParentalMenuLock();
 
         menu.Items.Add(new ToolStripSeparator());
         _menuStatus = new ToolStripLabel("") { ForeColor = SubFg, Margin = new Padding(6, 0, 0, 0) };
@@ -857,6 +870,7 @@ internal sealed partial class MainWindow
     /// two places to reach them.</summary>
     private void OpenManageBadges()
     {
+        if (ParentalLimited) return;   // limited mode: no management
         Badges.ManageBadgesWindow.Open(this,
             (_dm as HostDataManagerXml)?.ReadOnly ?? false,
             () => Safe(() => (IReadOnlyList<IGame>)(_dm?.GetAllGames() ?? Array.Empty<IGame>())) ?? Array.Empty<IGame>(),
@@ -956,6 +970,7 @@ internal sealed partial class MainWindow
         it.Click += (_, _) => Safe(() =>
         {
             bool ro = ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) || Media.ParentalBridge.Active;   // read-only OR parental limited
+            if (ParentalLimited) return;   // limited mode: no management
             using var w = new Controllers.ManageControllersWindow(ro);
             w.ShowDialog(this);
         });
@@ -972,8 +987,15 @@ internal sealed partial class MainWindow
     /// <summary>The sectioned options window — one path for the toolbar's gear and Tools ▸ Options…
     /// Scoped flush on close: the LB-settings ops go to Settings.xml right away (when safe); LiteBox
     /// INI options were already saved by ApplyFinished.</summary>
+    /// <summary>Limited mode: parental control is active (configured + locked). LiteBox then exposes ONLY
+    /// select-and-launch — every admin/management surface (global Options, the Manage windows, platform/
+    /// category/playlist edit, playlist copy/paste, image-cache generation) is refused. The unlock path is
+    /// the padlock (which unlocks BEFORE opening the parental settings), never these.</summary>
+    private bool ParentalLimited => Media.ParentalBridge.Active;
+
     private void OpenOptionsWindow()
     {
+        if (ParentalLimited) return;   // limited mode: no global options
         using var w = BuildOptionsWindow();
         w.ShowDialog(this);
         (_dm as Data.HostDataManagerXml)?.FlushLbSettingsIfSafe();
@@ -1075,7 +1097,8 @@ internal sealed partial class MainWindow
     private void OpenManageEmulators()
     {
         bool ro = ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) || Media.ParentalBridge.Active;   // read-only OR parental limited
-        using var w = new Emulators.ManageEmulatorsWindow(ro, Media.MediaResolver.LbRoot ?? "");
+        if (ParentalLimited) return;   // limited mode: no management
+            using var w = new Emulators.ManageEmulatorsWindow(ro, Media.MediaResolver.LbRoot ?? "");
         w.ShowDialog(this);
         (_dm as Data.HostDataManagerXml)?.FlushEmulatorsIfSafe();
     }
@@ -1088,6 +1111,7 @@ internal sealed partial class MainWindow
         it.Click += (_, _) => Safe(() =>
         {
             bool ro = ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) || Media.ParentalBridge.Active;   // read-only OR parental limited
+            if (ParentalLimited) return;   // limited mode: no management
             using var w = new Platforms.ManagePlatformsWindow(ro, Media.MediaResolver.LbRoot ?? "");
             w.ShowDialog(this);
             if (!w.Changed) return;
@@ -1105,6 +1129,7 @@ internal sealed partial class MainWindow
         it.Click += (_, _) => Safe(() =>
         {
             bool ro = ((_dm as Data.HostDataManagerXml)?.ReadOnly ?? true) || Media.ParentalBridge.Active;   // read-only OR parental limited
+            if (ParentalLimited) return;   // limited mode: no management
             using var w = new Platforms.ManagePlaylistsWindow(ro);
             w.ShowDialog(this);
             if (!w.Changed) return;

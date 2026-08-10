@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- filterprobe-plugin.dll — managed LaunchBox plugin for the single-managed-DLL timing experiment.
+       Its [ModuleInitializer] LoadLibrary's filterprobe.dll (next to it) and calls Probe_Install, so the
+       CreateFileW hook is armed at the EARLIEST managed entry point. A menu item shows how many
+       Platforms\*.xml opens were caught. Dual-target so it can be tried on either LB runtime. -->
+
+  <PropertyGroup>
+    <TargetFrameworks>net9.0-windows;net10.0-windows</TargetFrameworks>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>filterprobe-plugin</AssemblyName>
+    <RootNamespace>FilterProbe</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+
+    <Lb9Root  Condition="'$(Lb9Root)' == ''">G:\LB</Lb9Root>
+    <Lb10Root Condition="'$(Lb10Root)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\..\LB</Lb10Root>
+    <LbCoreDir Condition="'$(TargetFramework)' == 'net9.0-windows'">$(Lb9Root)\Core</LbCoreDir>
+    <LbCoreDir Condition="'$(LbCoreDir)' == ''">$(Lb10Root)\Core</LbCoreDir>
+    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Unbroken.LaunchBox.Plugins">
+      <HintPath>$(LbCoreDir)\Unbroken.LaunchBox.Plugins.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

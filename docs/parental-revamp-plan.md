@@ -109,7 +109,50 @@ Verify experimentally, not by reasoning:
 **Deliverable:** a short findings note appended here. If W0.1/W0.2 come back bad, the
 ASI-for-LaunchBox direction changes shape before we commit to it.
 
-#### WS0 findings — 2026-08-10 (code archaeology done; runtime verification PENDING)
+#### WS0 VERDICT — 2026-08-10: GREEN. Backup is safe; no backup guard needed.
+
+Settled by a throwaway Harmony probe (`project/ExtendDB/lb-backup-probe/`, an
+`ISystemMenuItemPlugin` patching every `Process.Start` + the `File`/`FileStream` read
+entry points, logging those touching `Data\Platforms\` / `*.7z`). Full capture:
+`scratchpad/ws0-probe-result.log`. The decisive line, from the auto-fired startup backup:
+
+```
+[Process.Start] file='…\LB\ThirdParty\7-Zip\7z.exe'
+  args='a "…\Backups\Automatic LaunchBox Startup Data Backup ….7z" "…\LB\Data\*" -r -y -aoa -bsp1 -mmt -m0=PPMd'
+    at Unbroken.LaunchBox.Windows.SevenZip.CreateArchive
+    at Unbroken.LaunchBox.Windows.DataBackup.Backup
+    at Unbroken.LaunchBox.Windows.DataBackup.AutoBackup
+```
+
+**W0.2 → SAFE.** LaunchBox backs up by SHELLING OUT to a child `7z.exe`
+(`DataBackup.AutoBackup → SevenZip.CreateArchive → Process.Start(7z.exe a …Backup.7z
+…\Data\*)`). The child reads `Data\*` off disk; our read-filter ASI lives in
+`LaunchBox.exe`/`BigBox.exe`, never in `7z.exe` — so the backup can never capture the
+filtered stream. **No backup guard required → WS5.3 is dropped.** (Both `7z.dll` and
+`7z.exe` ship under `ThirdParty\7-Zip\`; the backup uses the exe. The header of
+`ExtendDB/Patches/ProcessStartLogPatch.cs` — LB "shells out to 7z.exe" for the archive
+cache — is the same pattern, now confirmed for the Data backup too.)
+
+The clean division of labour this proves:
+- **Library load** = in-process `FileStream` → our ASI hook filters it → *desired*.
+- **Edit save** = in-process `File.Copy → Data\Platforms` → the managed write-guard
+  handles it (ExtendDB's `PlatformXmlWriteGuard`, installs in both processes).
+- **`.7z` backup** = child `7z.exe` → reads the real files → *safe for free*.
+
+Probe mechanics worth keeping (for W0.1 / WS5): LaunchBox instantiates an
+`ISystemMenuItemPlugin` LAZILY (on Tools-menu open / click), not at boot — so a probe
+must arm in the ctor and be triggered by a menu click; a headless launch+kill captures
+nothing. Keep HarmonyLib out of every type SIGNATURE (bodies only) or LB's plugin-scan
+`GetTypes()` throws and the plugin never loads.
+
+Still open (minor, non-blocking): **W0.1** — enumerate LB's *other* writes on an edit
+while locked (playlists/favorites/Settings.xml) beyond the known `Data\Platforms` copy.
+The write-guard chokepoint is confirmed; this is a completeness sweep for WS5.2, runnable
+with the same probe (patch `File.Copy`/`File.WriteAllText`, make an edit, read the log).
+
+<details><summary>Superseded pre-run analysis (kept for context)</summary>
+
+##### WS0 findings — 2026-08-10 (code archaeology done; runtime verification PENDING)
 
 *What the codebase establishes (no LaunchBox run needed):*
 - **The write chokepoint exists under LaunchBox.exe.** Saving a platform is
@@ -162,6 +205,8 @@ Playlists + root XMLs ≈ 75M — a full install copy is GB of media, not needed
 
 **Status: BLOCKED on a runtime pass.** WS1/WS2/WS3 are LiteBox-native and do NOT depend
 on this gate — safe to proceed with those while WS0's runtime pass is scheduled.
+
+</details>
 
 ### WS1 — Options panel cleanup (independent, low-risk, do early)
 - Strip the activation blabla → one line: *LiteBox uses BigBox's parental PIN; set /
@@ -219,7 +264,8 @@ New directories, inspired by ExtendDB, not sharing its build.
   + latch for **both** LB and BB; lock/unlock → `SetFiltering` + `ForceReload` +
   GameCache concerns; the **PIN entry UI under LaunchBox** (small dialog to lock/unlock);
   anti-tamper target = the LiteBox-owned artifact, not ExtendDB's.
-- **W5.3 — Backup guard** (from WS0 findings): prevent poisoned backups.
+- ~~**W5.3 — Backup guard**~~ — DROPPED. WS0 proved LaunchBox backs up via a child
+  `7z.exe` that reads the real files; the ASI never touches it, so backups are safe.
 
 ### WS6 — Install / uninstall flow
 - A button in LiteBox to deploy `litebox-parentalcontrol.asi` + `winhttp.dll` (ASI

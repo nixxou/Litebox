@@ -34,8 +34,51 @@ internal static class ParentalNativeInstall
     private const string HarmonyName = "0Harmony.dll";
     private const string PluginDir   = "litebox-parentalcontrol";   // under LB\Plugins
 
-    /// <summary>Where LiteBox ships the payload: Core\litebox\parental-native\.</summary>
+    /// <summary>Where LiteBox ships the payload: Core\litebox\parental-native\ — each file suffixed
+    /// ".api" (so the ASI loader / plugin scanner never picks them up from the shipped location), the
+    /// Install button strips it on deploy. Under Core\litebox\, so LiteBox's own uninstall wipes the
+    /// SOURCE for free; the DEPLOYED copies are removed via <see cref="DeployedRelPaths"/>.</summary>
     private static string SourceDir => Path.Combine(AppContext.BaseDirectory, "litebox", "parental-native");
+
+    private static readonly string[] Names = { AsiName, LoaderName, PluginName, HarmonyName };
+
+    /// <summary>Deployed target paths (relative to LB root) — for the LiteBox uninstaller to remove
+    /// whether or not the user ever ran Install.</summary>
+    public static System.Collections.Generic.IEnumerable<string> DeployedRelPaths()
+    {
+        yield return Path.Combine("Core", AsiName);
+        yield return Path.Combine("Core", LoaderName);
+        yield return Path.Combine("Plugins", PluginDir, PluginName);
+        yield return Path.Combine("Plugins", PluginDir, HarmonyName);
+    }
+
+    /// <summary>The deployed plugin folder (relative to LB root) — the uninstaller rmdir's it.</summary>
+    public static string DeployedPluginDirRel => Path.Combine("Plugins", PluginDir);
+
+    /// <summary>Ensure the payload SOURCE (the .api files) exists at Core\litebox\parental-native\. The light
+    /// zip ships them loose there (no-op); the standalone installer embeds them as resources — extract those
+    /// here at boot when the folder is missing them. Best-effort; called once from HostBoot.</summary>
+    public static void EnsureShipped()
+    {
+        try
+        {
+            if (PayloadAvailable) return;   // already loose (zip / dev deploy)
+            var dir = SourceDir;
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            bool any = false;
+            foreach (var name in Names)
+            {
+                using var s = asm.GetManifestResourceStream("parental-native/" + name + ".api");
+                if (s == null) continue;
+                Directory.CreateDirectory(dir);
+                using var f = File.Create(Path.Combine(dir, name + ".api"));
+                s.CopyTo(f);
+                any = true;
+            }
+            if (any) Log("extracted embedded payload -> " + dir);
+        }
+        catch (Exception ex) { Log("EnsureShipped failed: " + ex.Message); }
+    }
 
     private static string? Root => LbApiHost.Host.Media.MediaResolver.LbRoot;
 
@@ -61,8 +104,8 @@ internal static class ParentalNativeInstall
             try
             {
                 var s = SourceDir;
-                foreach (var f in new[] { AsiName, LoaderName, PluginName, HarmonyName })
-                    if (!File.Exists(Path.Combine(s, f))) return false;
+                foreach (var f in Names)
+                    if (!File.Exists(Path.Combine(s, f + ".api"))) return false;
                 return true;
             }
             catch { return false; }
@@ -132,7 +175,7 @@ internal static class ParentalNativeInstall
 
     private static void Copy(string srcDir, string dstDir, string name)
     {
-        var src = Path.Combine(srcDir, name);
+        var src = Path.Combine(srcDir, name + ".api");   // shipped with the .api suffix; deploy the real name
         var dst = Path.Combine(dstDir, name);
         var tmp = dst + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.Copy(src, tmp, overwrite: true);

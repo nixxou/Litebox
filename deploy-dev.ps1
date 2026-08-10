@@ -108,8 +108,23 @@ $t10 = Join-Path $env:TEMP 'litebox-dev10'
 if (-not $SkipNet9)  { Publish-Light 'net9.0-windows'  $t9 }
 if (-not $SkipNet10) { Publish-Light 'net10.0-windows' $t10 }
 
+# Native parental payload (.api) - shipped so the in-app Install button can deploy it on demand.
+# net10 ONLY: the write-guard plugin is net10 (LB 13.28); on a net9 host it wouldn't load, which would
+# let the ASI filter reads with no write-guard = data risk. Assemble first if native/payload is stale.
+function Deploy-ParentalNative([string]$lbRoot) {
+  $payload = Join-Path $here 'native\payload'
+  if (-not (Test-Path (Join-Path $payload 'litebox-parentalcontrol.asi.api'))) {
+    Write-Warning "  parental payload not staged (run native\assemble-payload.ps1) - skipping native-parental ship"
+    return
+  }
+  $dst = Join-Path $lbRoot 'Core\litebox\parental-native'
+  New-Item -ItemType Directory -Force -Path $dst | Out-Null
+  Copy-Item (Join-Path $payload '*.api') $dst -Force
+  Write-Host "  parental-native (.api) -> $dst" -ForegroundColor Green
+}
+
 if (-not $SkipNet9)  { Write-Host "-- deploy net9 -> $Lb9Root" -ForegroundColor Cyan;  Deploy-Host $t9  $Lb9Root;  Deploy-WebAssets $Lb9Root }
-if (-not $SkipNet10) { Write-Host "-- deploy net10 -> $Lb10Root" -ForegroundColor Cyan; Deploy-Host $t10 $Lb10Root; Deploy-WebAssets $Lb10Root }
+if (-not $SkipNet10) { Write-Host "-- deploy net10 -> $Lb10Root" -ForegroundColor Cyan; Deploy-Host $t10 $Lb10Root; Deploy-WebAssets $Lb10Root; Deploy-ParentalNative $Lb10Root }
 
 if ($Plugin) {
   Write-Host '-- build ExtendDB plugin' -ForegroundColor Cyan

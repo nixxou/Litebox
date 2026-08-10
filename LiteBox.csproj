@@ -312,6 +312,15 @@
     <EmbeddedResource Include="thirdparty\onnxruntime.dll.api"><LogicalName>natives/onnxruntime.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\DirectML.dll.api"><LogicalName>natives/DirectML.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\mobilenetv3s_embed.onnx"><LogicalName>natives/mobilenetv3s_embed.onnx</LogicalName></EmbeddedResource>
+    <!-- Native parental payload (WS5/WS6): the ASI + winhttp loader + the managed write-guard plugin + Harmony,
+         each with the .api suffix. Built by native/assemble-payload.ps1 into native\payload\ before the
+         standalone publish (build-release.ps1). ParentalNativeInstall.EnsureShipped extracts these to
+         Core\litebox\parental-native\ at boot; the in-app Install button then deploys them on demand. The light
+         zip ships them loose there instead (build-release.ps1). -->
+    <EmbeddedResource Include="native\payload\litebox-parentalcontrol.asi.api"><LogicalName>parental-native/litebox-parentalcontrol.asi.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="native\payload\winhttp.dll.api"><LogicalName>parental-native/winhttp.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="native\payload\litebox-parentalcontrol.dll.api"><LogicalName>parental-native/litebox-parentalcontrol.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="native\payload\0Harmony.dll.api"><LogicalName>parental-native/0Harmony.dll.api</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- Web frontend theme assets: embedded in the STANDALONE installer ONLY (the light zip ships them loose

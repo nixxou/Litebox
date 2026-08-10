@@ -484,6 +484,9 @@ internal static class HostBoot
             Data.LbVersion.Detect(lbRoot);
             Data.ProblemKeys.Build();
             Data.LiteBoxOptionsDb.Open();
+            // Make the native parental payload SOURCE present at Core\litebox\parental-native\ (the standalone
+            // installer embeds it; the light zip ships it loose) so the in-app Install button always has it.
+            try { Parental.ParentalNativeInstall.EnsureShipped(); } catch { }
             // Refresh the native ASI's flat config (LB\Core\litebox-parental.dat) once the LB root +
             // Options DB are up — only when parental is configured, so a non-parental install isn't
             // littered. Save() keeps it current afterwards. Best-effort; never blocks boot.

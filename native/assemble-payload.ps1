@@ -2,11 +2,12 @@
 <#
   assemble-payload.ps1 — gather the four native parental files LiteBox ships and deploys.
 
-  Output: native\payload\ (staging), containing
-    litebox-parentalcontrol.asi   (WS5.1 build)
-    litebox-parentalcontrol.dll   (WS5.2 build)
-    0Harmony.dll                  (Harmony, from the ExtendDB checkout)
-    winhttp.dll                   (Ultimate ASI Loader, from ExtendDB\thirdparty\winhttp.dll.api)
+  Output: native\payload\ (staging), each file suffixed .api so nothing loads it from the shipped
+  spot (the in-app Install button strips .api on deploy):
+    litebox-parentalcontrol.asi.api   (WS5.1 build)
+    litebox-parentalcontrol.dll.api   (WS5.2 build)
+    0Harmony.dll.api                  (Harmony, from the ExtendDB checkout)
+    winhttp.dll.api                   (Ultimate ASI Loader, from ExtendDB\thirdparty\winhttp.dll.api)
 
   LiteBox ships this folder as Core\litebox\parental-native\; the in-app Install button
   (ParentalNativeInstall) copies it into LB\Core + LB\Plugins. Re-run after rebuilding either
@@ -31,8 +32,8 @@ $missing = @()
 foreach ($name in $sources.Keys) {
   $src = $sources[$name]
   if (-not (Test-Path $src)) { $missing += "$name  <-  $src"; continue }
-  Copy-Item $src (Join-Path $out $name) -Force
-  Write-Host "  staged $name" -ForegroundColor Green
+  Copy-Item $src (Join-Path $out "$name.api") -Force
+  Write-Host "  staged $name.api" -ForegroundColor Green
 }
 if ($missing.Count -gt 0) {
   Write-Warning "missing sources (build the native projects first):`n  $($missing -join "`n  ")"

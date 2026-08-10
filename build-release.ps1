@@ -61,6 +61,19 @@ $payload = @(
   'onnxruntime.dll.api','DirectML.dll.api','mobilenetv3s_embed.onnx'
 )
 
+# Native parental payload (WS5/WS6): the ASI + winhttp loader + the write-guard plugin + Harmony, each .api.
+# Built by native\assemble-payload.ps1 into native\payload\ (run it after building the two native projects).
+# Shipped LOOSE in each zip under litebox\parental-native\, and EMBEDDED in the standalone installer (the
+# csproj parental-native/* block, which reads native\payload\). ParentalNativeInstall.EnsureShipped lands
+# them at Core\litebox\parental-native\; the in-app Install button deploys them into Core + Plugins on demand.
+$parentalPayloadDir = Join-Path $here 'native\payload'
+$parentalPayload = @('litebox-parentalcontrol.asi.api','winhttp.dll.api','litebox-parentalcontrol.dll.api','0Harmony.dll.api')
+foreach ($p in $parentalPayload) {
+  if (-not (Test-Path (Join-Path $parentalPayloadDir $p))) {
+    throw "parental payload missing: $p - run native\assemble-payload.ps1 (after building the two native projects) before build-release.ps1"
+  }
+}
+
 # The ONLY files the light build ships (everything else the publish produced is the .NET runtime, which
 # LaunchBox\Core already provides). deps.json + runtimeconfig.json make it self-contained-flat. These four
 # are BOTH the zip contents AND what the universal installer embeds (per TFM) and extracts into Core.
@@ -142,6 +155,10 @@ foreach ($t in $targets) {
     if (-not (Test-Path $src)) { throw "payload file missing: $src" }
     Copy-Item $src (Join-Path $tpDir $p)
   }
+  # Native parental payload (.api) LOOSE under litebox\parental-native\ (extracts to Core\litebox\parental-native\).
+  $pnDir = Join-Path $stageZip 'litebox\parental-native'
+  New-Item -ItemType Directory -Force $pnDir | Out-Null
+  foreach ($p in $parentalPayload) { Copy-Item (Join-Path $parentalPayloadDir $p) (Join-Path $pnDir $p) }
   # c) Web frontend theme assets (optional; gitignored web-assets\ on the build machine). Shipped under the
   #    zip's litebox\web-assets\ (extracts to Core\litebox\web-assets\); WebAssets.EnsureDeployed installs them
   #    to Core\litebox\web\ at boot. Under litebox\ so uninstall's rmdir sweeps it. Absent -> placeholder theme.

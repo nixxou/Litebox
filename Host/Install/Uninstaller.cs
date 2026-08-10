@@ -71,6 +71,13 @@ internal static class Uninstaller
         foreach (var dir in NativeInstaller.LiteBoxOnlySubDirs())
             sb.AppendLine($"rmdir /s /q \"{root}\\{dir}\" 2>nul");
 
+        // Always: the native parental payload the in-app button deploys ON DEMAND into Core + Plugins
+        // (the ASI + winhttp loader in Core, the write-guard plugin folder). del/rmdir no-op when the
+        // user never ran Install; the .api SOURCES under Core\litebox are already gone with the rmdir above.
+        foreach (var rel in Parental.ParentalNativeInstall.DeployedRelPaths())
+            sb.AppendLine($"del /q \"{root}\\{rel}\" 2>nul");
+        sb.AppendLine($"rmdir /s /q \"{root}\\{Parental.ParentalNativeInstall.DeployedPluginDirRel}\" 2>nul");
+
         // Opt-in: the ThirdParty tools SHARED with ExtendDB. Delete the files LiteBox deploys, then rmdir the
         // dirs EMPTY-ONLY (no /s) so a real ExtendDB's own content in them is never nuked.
         if (alsoSharedThirdParty)

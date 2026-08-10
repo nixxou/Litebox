@@ -113,11 +113,27 @@ namespace LiteBoxParental
                 var dat = string.IsNullOrEmpty(core) ? null : Path.Combine(core, "litebox-parental.dat");
                 if (dat != null && File.Exists(dat))
                 {
-                    // File EXISTS: a read failure here is INDETERMINATE (not "disabled"). Isolate it so a transient
-                    // sharing/permission/I/O error can't be mistaken for Enabled=0 and quietly drop protection.
-                    try
+                    // File EXISTS: a read failure is INDETERMINATE (not "disabled"), so it must not be mistaken for
+                    // Enabled=0 and quietly drop protection. The .dat is small + static (LiteBox writes it atomically
+                    // from another process), so a transient sharing/AV glitch clears fast — retry a few times before
+                    // giving up. Only a PERSISTENT failure (locked file / permissions) leaves us indeterminate.
+                    string[] lines = null;
+                    for (int attempt = 1; attempt <= 3 && lines == null; attempt++)
                     {
-                        foreach (var raw in File.ReadAllLines(dat))
+                        try { lines = File.ReadAllLines(dat); }
+                        catch (Exception ex)
+                        {
+                            if (attempt >= 3)
+                            {
+                                _configError = true;   // exists-but-unreadable after retries → indeterminate → fail closed
+                                Log.Line("[LockState] config read failed after retries (indeterminate, failing closed): " + ex.Message);
+                            }
+                            else { try { System.Threading.Thread.Sleep(50); } catch { } }
+                        }
+                    }
+                    if (lines != null)
+                    {
+                        foreach (var raw in lines)
                         {
                             var line = raw.Trim();
                             if (line.Length == 0 || line[0] == '#' || line[0] == ';') continue;
@@ -131,11 +147,6 @@ namespace LiteBoxParental
                             if (key == "enabled" || key == "launchboxenabled" || key == "bigboxenabled")
                                 _enabled = _enabled || on;
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        _configError = true;   // exists-but-unreadable → indeterminate → callers fail closed
-                        Log.Line("[LockState] config read error (indeterminate, failing closed): " + ex.Message);
                     }
                 }
                 // A missing file is a DEFINITE "not configured" (disabled), NOT indeterminate — the ASI has no

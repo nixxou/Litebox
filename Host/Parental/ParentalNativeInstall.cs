@@ -75,7 +75,19 @@ internal static class ParentalNativeInstall
     {
         try
         {
-            if (!SupportedOnThisRuntime) return;   // net9: the guard can't load here — never stage the payload
+            if (!SupportedOnThisRuntime)
+            {
+                // net9: the guard can't load here — never stage the payload. And if an EARLIER build already
+                // deployed it (Core\winhttp.dll + ASI + the net10 plugin), that is now a data-loss trap on this
+                // runtime (the ASI would filter while the guard sits unloadable), so actively remove it on
+                // upgrade. Passive "don't reinstall" is not enough — the already-deployed copy must go.
+                if (IsInstalled)
+                {
+                    var (ok, msg) = Uninstall();
+                    Log((ok ? "net9 auto-cleanup of native parental: " : "net9 auto-cleanup INCOMPLETE (close LaunchBox/BigBox): ") + msg);
+                }
+                return;
+            }
             if (PayloadAvailable) return;   // already loose (zip / dev deploy)
             var dir = SourceDir;
             var asm = System.Reflection.Assembly.GetExecutingAssembly();

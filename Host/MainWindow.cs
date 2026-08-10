@@ -1919,6 +1919,23 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 });
                 continue;
             }
+            // Our companion parental plugin: deployed for vanilla LaunchBox/BigBox by Options → Parental →
+            // Install, never loaded under LiteBox. Shown greyed so it isn't mistaken for a togglable plugin.
+            if (HostBoot.IsNativeParental(f))
+            {
+                flow.Controls.Add(new CheckBox
+                {
+                    Text = f + "   —  LiteBox parental (vanilla LaunchBox / BigBox)", AutoSize = true, ForeColor = SubFg,
+                    Enabled = false, Checked = false, Margin = new Padding(2, 5, 2, 0),
+                });
+                flow.Controls.Add(new Label
+                {
+                    Text = "Managed by Options → Parental → Install; enforces parental control inside vanilla LaunchBox/BigBox and is never loaded under LiteBox.",
+                    AutoSize = true, ForeColor = SubFg, Font = new Font("Segoe UI", 8f, FontStyle.Italic),
+                    Margin = new Padding(24, 0, 2, 6),
+                });
+                continue;
+            }
             var cb = new CheckBox
             {
                 Text = f, AutoSize = true, ForeColor = Fg, Margin = new Padding(2, 5, 2, 5),

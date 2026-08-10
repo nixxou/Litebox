@@ -37,6 +37,13 @@ internal static class HostBoot
     public const string ExtendDbFolder = "ExtendDB";
     public static bool IsExtendDb(string folderName) => folderName.Equals(ExtendDbFolder, StringComparison.OrdinalIgnoreCase);
 
+    // Our own companion parental plugin (deployed into <LB>\Plugins by the in-app Install button) exists
+    // ONLY to enforce parental control inside vanilla LaunchBox.exe / BigBox.exe. LiteBox does parental
+    // control natively AND writes Data\ legitimately, so loading it here would double-provide + let its
+    // write-guard block LiteBox's own saves. Never load it — same treatment as ExtendDB.
+    public const string NativeParentalFolder = "litebox-parentalcontrol";
+    public static bool IsNativeParental(string folderName) => folderName.Equals(NativeParentalFolder, StringComparison.OrdinalIgnoreCase);
+
     // ── Hands-free UI drivers (diagnostics / remote testing) ──────────────────
     // Once the main window is shown:
     //   --edit-game "<title|id>"      open Edit Game for that game (id exact → title exact → title contains)
@@ -560,12 +567,13 @@ internal static class HostBoot
         var enabled = pluginCfg.GetEnabledPluginsOrNull();
         List<string> names = enabled ?? ListPluginFolders(pluginsRoot);
 
-        // ExtendDB is integrated into LiteBox now → never load its plugin, whatever the enabled set says.
-        if (IntegrateExtendDb)
+        // Never load the plugins whose job LiteBox already does natively, whatever the enabled set says:
+        // ExtendDB (integrated), and our own companion parental plugin (vanilla-LB/BB only — loading it
+        // here would double-provide and let its write-guard block LiteBox's legitimate Data\ writes).
         {
             int before = names.Count;
-            names = names.Where(n => !IsExtendDb(n)).ToList();
-            if (names.Count != before) Console.WriteLine("[loader] ExtendDB skipped (functionality integrated into LiteBox)");
+            names = names.Where(n => !(IntegrateExtendDb && IsExtendDb(n)) && !IsNativeParental(n)).ToList();
+            if (names.Count != before) Console.WriteLine("[loader] integrated plugins skipped (ExtendDB / litebox-parentalcontrol — native to LiteBox)");
         }
 
         Console.WriteLine($"Plugins root: {pluginsRoot}");

@@ -57,10 +57,11 @@ foreach ($need in @((Join-Path $pluginBin 'filterprobe-plugin.dll'), $nativeDll)
 $dst = Join-Path $LbRoot 'Plugins\filterprobe'
 if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $dst | Out-Null
+# Managed plugin = the ONLY .dll in the folder (LaunchBox scans *.dll and would choke on a native one).
 Copy-Item (Join-Path $pluginBin 'filterprobe-plugin.dll') $dst -Force
-if (Test-Path (Join-Path $pluginBin 'filterprobe-plugin.deps.json')) { Copy-Item (Join-Path $pluginBin 'filterprobe-plugin.deps.json') $dst -Force }
-Copy-Item $nativeDll $dst -Force
-Write-Host "-- deployed probe -> Plugins\filterprobe\ (filterprobe-plugin.dll + filterprobe.dll)" -ForegroundColor Green
+# Native helper deployed as .bin (NOT .dll) so the plugin scanner skips it; the plugin LoadLibrary's it by path.
+Copy-Item $nativeDll (Join-Path $dst 'filterprobe-native.bin') -Force
+Write-Host "-- deployed probe -> Plugins\filterprobe\ (filterprobe-plugin.dll + filterprobe-native.bin)" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "NEXT:" -ForegroundColor Cyan

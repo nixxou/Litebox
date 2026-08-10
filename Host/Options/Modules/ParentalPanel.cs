@@ -1,13 +1,16 @@
-// Parental module config panel — full parity with ExtendDB's "Parental control" tab, native to LiteBox.
+// Parental module config panel — native to LiteBox.
 //
-// Four groups, built through ModulePanelKit for the shared ExtendDB-like dark look:
+// Four groups, built through ModulePanelKit for the shared dark look:
 //   • Activation    — enable for LaunchBox / BigBox, the shared PIN (+ confirm, reuses Host/Data/BigBoxPin —
-//                     BigBox's own parental PIN), BigBox write-mode, the two "allow while locked" toggles,
-//                     force-web (hide ALL games), and the "require PIN to install store games" gate.
+//                     BigBox's own parental PIN), and the two "allow while locked" toggles (star / favorite).
 //   • Filter rules  — Whitelist/Blacklist mode + a rating-pattern list (wildcards * and ?) with Add/Remove.
 //   • Hide platforms (BigBox) — a hide-when-LOCKED and a hide-when-UNLOCKED list, each a platform combo
 //                     (from PluginHelper.DataManager) + Add/Remove.
 //   • Lock control  — the pop-up hotkey (captured live) + Clear.
+//
+// Removed pending the vanilla-LB/BB revamp (WS5/WS6): the BigBox write-mode combo, "force web hide all",
+// and "require PIN to install". Their ParentalConfig fields survive (still read elsewhere) at their
+// defaults (Block / false / false) — the panel just no longer exposes them.
 //
 // Scalars persist to LiteBox.ini [Parental]; the three lists to parental-lists.json — both via
 // ParentalConfig.Save(). The PIN persists through BigBoxPin.Set(). After a save the panel calls
@@ -127,9 +130,8 @@ internal static class ParentalPanel
         // ═════════════════════════════════════════════════════════════════════
         var gAct = Group("Activation", rootY);
         int y1 = 24;
-        Cap(gAct, "Enable the parental filter for this LiteBox host (desktop + embedded web). The PIN is BigBox's "
-                + "own parental code (BigBox boots locked when it is set) — but filtering INSIDE vanilla "
-                + "LaunchBox/BigBox stays the ExtendDB plugin's job; LiteBox only manages the shared PIN.", 12, y1, 690); y1 += 46;
+        Cap(gAct, "Parental control for this LiteBox host (desktop + embedded web). The PIN is BigBox's own "
+                + "parental code — set or clear it below; BigBox boots locked when a PIN is set.", 12, y1, 690); y1 += 34;
 
         var chkLaunchBox = Chk(gAct, "Enable Parental Control for LaunchBox", 12, y1, cfg.LaunchBoxEnabled); y1 += 26;
 
@@ -149,21 +151,14 @@ internal static class ParentalPanel
         void DigitsOnly(object? s, KeyPressEventArgs e) { if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar)) e.Handled = true; }
         pin.KeyPress += DigitsOnly; pinConfirm.KeyPress += DigitsOnly;
 
-        var chkBigBox = Chk(gAct, "Enable for BigBox", 12, y1, cfg.BigBoxEnabled); y1 += 26;
+        var chkBigBox = Chk(gAct, "Enable for BigBox", 12, y1, cfg.BigBoxEnabled); y1 += 30;
 
-        // BigBox write-mode.
-        var lblWrite = Cap(gAct, "BigBox write-guard when a filtered library is saved", 12, y1); y1 += 18;
-        var cmbWrite = ModulePanelKit.Combo(dpiS, readOnly, width: 260);
-        cmbWrite.Location = new Point(S(12), S(y1));
-        cmbWrite.Items.AddRange(new object[] { "Block writes (safe — never rewrite the library)", "Merge the filtered subset back in" });
-        cmbWrite.SelectedIndex = cfg.BigBoxWriteMode == ParentalWriteMode.Merge ? 1 : 0;
-        ThemeCombo(cmbWrite); gAct.Controls.Add(cmbWrite); y1 += 32;
-
-        var chkAllowRatings = Chk(gAct, "Allow a locked user to change star ratings (web)", 12, y1, cfg.AllowLockedModifyRatings); y1 += 24;
-        var chkAllowFavorites = Chk(gAct, "Allow a locked user to change favorites (web)", 12, y1, cfg.AllowLockedModifyFavorites); y1 += 24;
-        var chkForceWeb = Chk(gAct, "Force Web — hide ALL games while locked (LaunchBox)", 12, y1, cfg.ForceWebHideAll); y1 += 20;
-        Cap(gAct, "Supersedes the rules: an empty desktop list stops game media loading into RAM.", 30, y1, 690); y1 += 26;
-        var chkBlockInstall = Chk(gAct, "Require the PIN to install store games while locked", 12, y1, cfg.BlockInstallWhenLocked); y1 += 30;
+        // The two "allow while locked" toggles — now govern all three surfaces (LiteBox desktop,
+        // BigBox-web, LaunchBox-web), not just the web (see ParentalWebWriteGuard + the desktop guard).
+        Cap(gAct, "While locked, a limited user may still be allowed to change these — on the LiteBox "
+                + "desktop AND the BigBox / LaunchBox web clients:", 12, y1, 690); y1 += 22;
+        var chkAllowRatings = Chk(gAct, "Allow a locked user to change star ratings", 12, y1, cfg.AllowLockedModifyRatings); y1 += 24;
+        var chkAllowFavorites = Chk(gAct, "Allow a locked user to change favorites", 12, y1, cfg.AllowLockedModifyFavorites); y1 += 30;
 
         CloseGroup(gAct, y1);
 
@@ -281,11 +276,6 @@ internal static class ParentalPanel
         {
             bool anyScope = chkLaunchBox.Checked || chkBigBox.Checked;
             pin.Enabled = pinConfirm.Enabled = showPin.Enabled = pinAvailable && !readOnly && anyScope;
-            bool lb = chkLaunchBox.Checked;
-            chkForceWeb.Enabled = !readOnly && lb;
-            if (!lb) chkForceWeb.Checked = false;
-            bool bb = chkBigBox.Checked;
-            lblWrite.Enabled = cmbWrite.Enabled = !readOnly && bb;
             pinNote.Text = !pinAvailable
                 ? "BigBoxSettings.xml was not found (BigBox has never run on this install) — the PIN cannot be set here."
                 : BigBoxPin.Current().Length > 0
@@ -332,14 +322,12 @@ internal static class ParentalPanel
                 }
             }
 
-            // Persist the config.
+            // Persist the config. ForceWebHideAll / BigBoxWriteMode / BlockInstallWhenLocked are no longer
+            // exposed (removed pending the vanilla-LB/BB revamp) — left untouched at their loaded defaults.
             cfg.LaunchBoxEnabled = lbOn;
             cfg.BigBoxEnabled = bbOn;
-            cfg.ForceWebHideAll = lbOn && chkForceWeb.Checked;
-            cfg.BigBoxWriteMode = cmbWrite.SelectedIndex == 1 ? ParentalWriteMode.Merge : ParentalWriteMode.Block;
             cfg.AllowLockedModifyRatings = chkAllowRatings.Checked;
             cfg.AllowLockedModifyFavorites = chkAllowFavorites.Checked;
-            cfg.BlockInstallWhenLocked = chkBlockInstall.Checked;
             cfg.Mode = cmbMode.SelectedIndex == 1 ? ParentalMode.Blacklist : ParentalMode.Whitelist;
             cfg.HotKey = (int)hotKey;
             cfg.Rules = lstRules.Items.Cast<object>().Select(o => o?.ToString() ?? "").Where(s => s.Trim().Length > 0).Select(s => s.Trim()).ToList();

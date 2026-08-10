@@ -2824,11 +2824,17 @@
     m.hidden = false;
   }
 
+  /* Search history is off-limits while parental is locked: re-running a past search must not surface
+     something the current ESRB/hide filters would block. Hide the tab, and bounce off it if we're on it. */
+  function lbAdvHistAllowed() { return !(parental && parental.active && parental.locked); }
+
   function renderLbAdv() {
     var tabs = document.getElementById("lb-adv-tabs"), body = document.getElementById("lb-adv-body");
     if (!tabs || !body) return;
+    if (lbAdvTab === "history" && !lbAdvHistAllowed()) lbAdvTab = "general";
     tabs.innerHTML = "";
     LB_ADV_TABS.forEach(function (t) {
+      if (t[0] === "history" && !lbAdvHistAllowed()) return;
       var b = document.createElement("button");
       b.type = "button"; b.className = "lb-adv-tab" + (t[0] === lbAdvTab ? " active" : "");
       b.textContent = t[1]; b.setAttribute("role", "tab");

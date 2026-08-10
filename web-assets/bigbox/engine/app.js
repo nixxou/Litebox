@@ -1537,10 +1537,17 @@
   }
   function closeAdvanced() { advOpen = false; if (advModalEl) advModalEl.classList.remove("open"); zone = "list"; paintRail(); }
 
+  /* Search history stays out of reach while parental is locked — replaying a saved search must not be a
+     back door around the server ESRB/hide filters. The tab index space is kept intact (dataset.i still maps
+     to ADV_TABS) so click/keyboard nav on the other tabs is unaffected; only the History cell is elided. */
+  function advHistAllowed() { return !(parental && parental.active && parental.locked); }
+
   function renderAdv() {
     if (!advModalEl) return;
+    if (ADV_TABS[advTab] === "history" && !advHistAllowed()) advTab = 0;
     var tabsEl = $(".adv-tabs", advModalEl); tabsEl.innerHTML = "";
     ADV_TABS.forEach(function (id, i) {
+      if (id === "history" && !advHistAllowed()) return;
       var t = document.createElement("div"); t.className = "adv-tab" + (i === advTab ? " active" : "");
       t.dataset.i = i; t.textContent = tA("adv." + id); tabsEl.appendChild(t);
     });
@@ -1696,7 +1703,9 @@
   }
   function advMoveTab(dir) {
     var onTabs = advFocus === -1;   // rester sur la rangée d'onglets pour pouvoir enchaîner
-    advTab = (advTab + dir + ADV_TABS.length) % ADV_TABS.length;
+    do {
+      advTab = (advTab + dir + ADV_TABS.length) % ADV_TABS.length;
+    } while (ADV_TABS[advTab] === "history" && !advHistAllowed());   // saute l'onglet History masqué (verrou parental)
     advFocus = onTabs ? -1 : 0;
     renderAdv();
   }

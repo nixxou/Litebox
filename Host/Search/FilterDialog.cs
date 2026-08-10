@@ -127,7 +127,9 @@ internal sealed class FilterDialog : Form
         Tab("publisher", "Publisher", BuildText(isPub: true));
         Tab("developer", "Developer", BuildText(isPub: false));
         Tab("orderby", "Order by", BuildOrderBy());
-        Tab("history", "History", BuildHistory());
+        // Parental limited mode: no search-history tab — re-running a past search must not be a way to
+        // surface something the current filters would hide. Selecting + launching is all that's allowed.
+        if (!Media.ParentalBridge.Active) Tab("history", "History", BuildHistory());
     }
 
     private void ShowTab(string key)

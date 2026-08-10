@@ -131,19 +131,34 @@ ASI-for-LaunchBox direction changes shape before we commit to it.
 - **W0.2** — observe how LB reads `Platforms\*.xml` when backing up: `CreateFileW`
   (→ our filter poisons the backup) vs `CopyFileExW` (→ bypasses the hook → safe).
 
-*Safe test protocol (NEVER on the real library):*
-1. Copy an LB install (or just `Data\`) to a throwaway location.
-2. Deploy the **existing vendored** `extenddb.asi` + `winhttp.dll` into `Core` as a
-   proxy for the mechanism (it already filters Platforms reads by rating), with a
-   config that hides some games.
-3. Record the on-disk `Platforms\<p>.xml` game count BEFORE any edit (must be unchanged
-   — the read filter redirects reads, never the file).
-4. Run LB.exe locked, make one edit (rename a visible game), re-inspect that XML: did
-   the hidden games survive? → **write-guard necessity test**.
-5. Trigger/await an LB backup; unzip `LB\Backups\<latest>` and compare a platform's game
-   count to the real file. → **poisoning test**.
-6. ProcMon filtered on the platform-XML path, locked: is the backup read a `CreateFile`
-   (poisoned) or `CopyFile` (safe)?
+*Safe test protocol — ProcMon only, NO filter, zero risk on the real install:*
+Environment (net10, confirmed 2026-08-10): install `…\scrapper-project\LB` (190
+platform XMLs); LaunchBox auto-backups to `LB\Backups\` as `.7z` on **startup AND
+shutdown**; ProcMon at `…\Downloads\ProcessMonitor\Procmon64.exe`.
+
+The decisive question is answerable WITHOUT ever activating a filter, so the real
+library is never at risk: **which process reads `Data\Platforms\*.xml` when the backup
+`.7z` is built** — `LaunchBox.exe` itself (in-process 7z lib → our CreateFileW hook
+would fire → POISONED) or a child `7z.exe`/`7za.exe` (ASI absent there → SAFE).
+1. Run `Procmon64.exe` (admin). Filter (Ctrl+L): `Path contains \Data\Platforms\ →
+   Include`, `Path ends with .7z → Include`. Keep the Process Name column visible.
+2. Capture (Ctrl+E), launch LaunchBox from that install, let it fully load (the Startup
+   backup fires early).
+3. For the `.7z` write under `Backups\` and the `Platforms\*.xml` ReadFile ops around
+   it, read the **Process Name**: LaunchBox.exe → poisoning REAL; a child 7z → safe.
+4. W0.1 write inventory: make one edit (a game's notes) + Save; note every `Data\` path
+   LaunchBox.exe writes (the temp→copy dance).
+5. Close LaunchBox (Shutdown backup fires); repeat the step-3 read.
+
+**Caveat — the vendored `extenddb.asi` filters BigBox ONLY.** Its `CreateFileW` read
+redirect installs only under `BigBox.exe` (`RunningInBigBox()` gate); under
+`LaunchBox.exe` it does anti-tamper + kiosk spawn-blocking, NOT the platform-XML read
+filter. So it cannot test LaunchBox read-filtering — that needs our OWN asi (WS5.1).
+The ProcMon step above needs no asi at all, so it stands regardless. A filtered
+LaunchBox confirmation waits for WS5.1; a filtered *BigBox* confirmation can use the
+vendored asi now (shared LaunchBox.dll backup/save code → the poisoning verdict carries
+over). Safety net for any filtered test: a cheap `Data\` XML backup (Platforms 74M +
+Playlists + root XMLs ≈ 75M — a full install copy is GB of media, not needed).
 
 **Status: BLOCKED on a runtime pass.** WS1/WS2/WS3 are LiteBox-native and do NOT depend
 on this gate — safe to proceed with those while WS0's runtime pass is scheduled.

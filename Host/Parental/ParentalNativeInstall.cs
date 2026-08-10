@@ -205,19 +205,29 @@ internal static class ParentalNativeInstall
             var pluginDst = Path.Combine(Root!, "Plugins", PluginDir);
 
             // The GUARD is safety-critical: the ASI's interlock trusts its FILE presence, so a wrong-TFM guard
-            // left in place would let the filter run unguarded (data-loss). If it needs replacing and we can't,
-            // FAIL CLOSED — remove the loader so the ASI never loads next launch — rather than report success.
+            // left in place would let the filter run unguarded (data-loss). We must end this method with the guard
+            // either CORRECT or ABSENT — never wrong-and-present. (We can't disarm via the loader: LiteBox itself
+            // holds Core\winhttp.dll open, so deleting it always fails. The guard, when wrong-TFM, is NOT loaded
+            // by anyone, so it IS deletable — and removing it makes the ASI's presence interlock refuse to filter.)
             var guardSrc = Path.Combine(SourceDir, PluginApiFile);
             var guardDst = Path.Combine(pluginDst, PluginName);
-            bool guardNeeds = File.Exists(guardSrc) && !(File.Exists(guardDst) && FilesEqual(guardSrc, guardDst));
-            if (guardNeeds && !TryCopyApi(SourceDir, pluginDst, PluginApiFile, PluginName))
+            bool guardUpToDate;
+            try { guardUpToDate = File.Exists(guardSrc) && File.Exists(guardDst) && FilesEqual(guardSrc, guardDst); }
+            catch { guardUpToDate = false; }   // can't verify (sharing/ACL/I-O) → treat as UNTRUSTED → replace
+            if (!guardUpToDate && !TryCopyApi(SourceDir, pluginDst, PluginApiFile, PluginName))
             {
-                bool loaderGone = TryDelete(Path.Combine(core, LoaderName));
-                Log($"[MIGRATION] guard replacement FAILED for {Tfm} — read filter DISABLED "
-                  + (loaderGone ? "(loader removed; reinstall from LiteBox Options)."
-                                : "AND loader removal FAILED (close LaunchBox/BigBox, then reinstall)."));
+                // Couldn't install the matching guard. Remove the wrong one so the ASI's write-guard-presence
+                // interlock refuses to filter (no guard file → no filtering → no data loss). A delete failure
+                // means the guard is LOCKED, i.e. loaded — which only a matching, working guard can be — so
+                // filtering is safe either way.
+                bool guardGone = TryDelete(guardDst);
+                Log($"[MIGRATION] guard replacement FAILED for {Tfm} — " + (guardGone
+                    ? "removed the wrong-runtime guard so the ASI won't filter (reinstall from LiteBox Options)."
+                    : "could NOT remove the deployed guard either (most likely it is LOADED = the running runtime's "
+                    + "guard, so filtering is safe; otherwise close LaunchBox/BigBox and reinstall from LiteBox Options)."));
                 return;
             }
+            bool guardNeeds = !guardUpToDate;   // (was replaced above if we reach here)
 
             // The rest are TFM-agnostic (native ASI / loader, net9-forward-compat Harmony) — a failed refresh
             // just keeps the working old copy, so best-effort is fine here.

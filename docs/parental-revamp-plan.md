@@ -32,19 +32,26 @@ survives sessions and context compaction. Read it first each session.
   managed plugin: the WriteGuard (Harmony `File.Copy` prefix blocks any copy into `Data\`
   while the library may be filtered — the W0.1 finding), the ASI bridge, and the BigBox
   lock/unlock → SetFiltering + ForceReload + latch wiring. `23c66c2`.
+- **WS6 — DONE.** `ParentalNativeInstall` deploys the ASI + winhttp loader into `LB\Core`
+  and the plugin + 0Harmony into `LB\Plugins\litebox-parentalcontrol\`, from the payload
+  LiteBox ships at `Core\litebox\parental-native\` (plugin before ASI so the interlock
+  holds; uninstall drops the loader first). An install/uninstall group in the parental
+  panel drives it. `native/assemble-payload.ps1` stages the four files (`-Deploy <LbRoot>`
+  drops them into a test install). `f015a4b`, `030a8a0`.
+- **Anti-tamper — DROPPED (user's call).** The ASI no longer aborts on a missing plugin.
+  Replaced by a **safety interlock**: the read-filter runs only when the write-guard plugin
+  dll is present — missing → it does not filter (fail safe to the real library, no data
+  risk). `ef2c38d`.
 - **REMAINING:**
-  - **WS6 — install/uninstall flow.** A LiteBox button to deploy the built ASI +
-    `winhttp.dll` (ASI loader, vendored at `ExtendDB/thirdparty/winhttp.dll.api`) into
-    `LB\Core\`, and the plugin + `0Harmony.dll` into `LB\Plugins\`; plus clean uninstall.
-    Reuse ExtendDB's `.api`-suffix + rename-on-deploy pattern (`Utils.InstallDlls`).
-  - **WS5.2 follow-ups** (see its README): the **LaunchBox unlock PIN dialog** (LB has no
-    lock events → stays filtered until an unlock), and **anti-tamper** — do NOT emit
-    `PluginPath` into `litebox-parental.dat` until WS6 deploys the plugin, or the ASI's
-    `EnforcePluginPresence` would `TerminateProcess` LB (plugin "missing").
-  - **Runtime validation** of the whole native chain in LaunchBox/BigBox — the safest
-    path is the WS0 probe approach on a `Data\` copy, or with the write-guard in place so a
-    filtered save can't persist. The `.dat` never enables filtering until parental is
-    configured, so a stock install is untouched.
+  - **WS5.2 follow-up** (see its README): the **LaunchBox unlock PIN dialog** — LB has no
+    lock/unlock events, so it stays filtered until an unlock; a Tools-menu PIN prompt →
+    `SetLocked(false)` is the follow-up (today unlocking a LaunchBox session is done from
+    LiteBox).
+  - **Runtime validation** of the whole native chain in LaunchBox/BigBox — the safety
+    interlock + the write-guard mean a filtered save can't persist even mid-bring-up, but
+    the filter/reload/lock behaviour still needs a live pass. The payload is already staged
+    in the net10 dev install (`Core\litebox\parental-native\`), inert until the in-app
+    Install button runs; the `.dat` never enables filtering until parental is configured.
   - **WS4 DB-site case** (owned games shown on the DB browse site) — minor.
   - Fold in the parity-audit fixes X1–X8.
 

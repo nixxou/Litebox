@@ -188,9 +188,15 @@ foreach ($t in $targets) {
     Copy-Item $src (Join-Path $tpDir $p)
   }
   # Native parental payload (.api) LOOSE under litebox\parental-native\ (extracts to Core\litebox\parental-native\).
-  $pnDir = Join-Path $stageZip 'litebox\parental-native'
-  New-Item -ItemType Directory -Force $pnDir | Out-Null
-  foreach ($p in $parentalPayload) { Copy-Item (Join-Path $parentalPayloadDir $p) (Join-Path $pnDir $p) }
+  # net10 ONLY: the write-guard plugin targets net10, so on a net9 (LB 13.27) Core it can't load — shipping it
+  # there would leave the ASI filtering with no guard (data-loss). net9 keeps LiteBox's own parental control.
+  if ($label -eq 'net10') {
+    $pnDir = Join-Path $stageZip 'litebox\parental-native'
+    New-Item -ItemType Directory -Force $pnDir | Out-Null
+    foreach ($p in $parentalPayload) { Copy-Item (Join-Path $parentalPayloadDir $p) (Join-Path $pnDir $p) }
+  } else {
+    Write-Host "  (native parental payload omitted for $label - net10-only feature)"
+  }
   # c) Web frontend theme assets (optional; gitignored web-assets\ on the build machine). Shipped under the
   #    zip's litebox\web-assets\ (extracts to Core\litebox\web-assets\); WebAssets.EnsureDeployed installs them
   #    to Core\litebox\web\ at boot. Under litebox\ so uninstall's rmdir sweeps it. Absent -> placeholder theme.

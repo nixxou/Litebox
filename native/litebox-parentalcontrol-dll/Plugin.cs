@@ -32,13 +32,22 @@ namespace LiteBoxParental
                     Log.Line($"=== litebox-parentalcontrol: host is {System.Diagnostics.Process.GetCurrentProcess().ProcessName} (not LaunchBox/BigBox) — fully inert ===");
                     return;
                 }
-                Log.Line($"=== litebox-parentalcontrol loaded (isBigBox={LockState.IsBigBox}, scopeActive={LockState.ScopeActive}) ===");
+                Log.Line($"=== litebox-parentalcontrol loaded (isBigBox={LockState.IsBigBox}, scopeActive={LockState.ScopeActive}, indeterminate={LockState.ConfigIndeterminate}) ===");
+                if (LockState.ConfigIndeterminate)
+                {
+                    // The config exists but we couldn't read it, so we can't prove parental is off — and the ASI
+                    // may already be filtering. Fail CLOSED: install the write-guard (WritesUnsafe is armed while
+                    // indeterminate) and DO NOT touch the ASI. A save can't persist a possibly-filtered library.
+                    new Harmony("litebox.parentalcontrol").PatchAll(typeof(Boot).Assembly);
+                    Log.Line("[Boot] config unreadable (indeterminate) — write-guard installed defensively; ASI left as-is.");
+                    return;
+                }
                 if (!LockState.ScopeActive)
                 {
-                    // Interlock, the safe direction: the write-guard is NOT being installed here, so the ASI must
-                    // NOT be filtering — a filtered read with no guard is exactly the data-loss path. Tell the ASI
-                    // to stop (idempotent when parental is genuinely off; decisive if a config-contract drift ever
-                    // let the ASI's `enabled` gate fire while this scope check did not). Fails to a leak, never loss.
+                    // Confirmed NOT configured (file missing, or read OK with Enabled off). The write-guard is not
+                    // installed, so the ASI must NOT be filtering — a filtered read with no guard is exactly the
+                    // data-loss path. Tell the ASI to stop (idempotent when parental is genuinely off; decisive if
+                    // a config-contract drift ever let the ASI's `enabled` gate fire while this check did not).
                     AsiBridge.SetFiltering(false);
                     Log.Line("[Boot] parental not configured for this process — write-guard NOT installed; ASI filter forced off (inert).");
                     return;

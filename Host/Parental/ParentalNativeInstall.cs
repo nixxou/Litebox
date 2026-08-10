@@ -42,6 +42,19 @@ internal static class ParentalNativeInstall
 
     private static readonly string[] Names = { AsiName, LoaderName, PluginName, HarmonyName };
 
+    /// <summary>Native parental control is offered ONLY on net10 (LaunchBox 13.28+). The managed write-guard
+    /// plugin targets net10; on a net9 Core it cannot load, and the ASI's presence interlock keys on the DLL
+    /// FILE — a present-but-unloadable guard would let the ASI filter reads with NO write-guard, and the next
+    /// LaunchBox/BigBox save would overwrite the real library with the filtered subset (irreversible loss).
+    /// LiteBox shares Core's runtime with LaunchBox/BigBox, so this build's own TFM is theirs. Uninstall stays
+    /// available on every runtime so a payload deployed by an earlier build can always be cleaned up.</summary>
+    public static bool SupportedOnThisRuntime =>
+#if NET10_0_OR_GREATER
+        true;
+#else
+        false;
+#endif
+
     /// <summary>Deployed target paths (relative to LB root) — for the LiteBox uninstaller to remove
     /// whether or not the user ever ran Install.</summary>
     public static System.Collections.Generic.IEnumerable<string> DeployedRelPaths()
@@ -62,6 +75,7 @@ internal static class ParentalNativeInstall
     {
         try
         {
+            if (!SupportedOnThisRuntime) return;   // net9: the guard can't load here — never stage the payload
             if (PayloadAvailable) return;   // already loose (zip / dev deploy)
             var dir = SourceDir;
             var asm = System.Reflection.Assembly.GetExecutingAssembly();
@@ -116,6 +130,8 @@ internal static class ParentalNativeInstall
     /// Returns (ok, message). Idempotent — re-copies over an existing install.</summary>
     public static (bool ok, string message) Install()
     {
+        if (!SupportedOnThisRuntime)
+            return (false, "Native parental control for vanilla LaunchBox / BigBox requires LaunchBox 13.28 or newer (.NET 10). LiteBox's own parental control still applies.");
         var core = CoreDir();
         if (core == null) return (false, "LaunchBox install folder not found.");
         if (!PayloadAvailable) return (false, "The native parental payload is missing next to LiteBox (Core\\litebox\\parental-native).");

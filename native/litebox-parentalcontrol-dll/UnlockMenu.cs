@@ -33,8 +33,10 @@ namespace LiteBoxParental
                 }
                 if (!LockState.Locked)   // currently unlocked → offer to re-lock (no PIN)
                 {
-                    LockState.SetLocked(true);
-                    Info("Parental control re-locked. The library is filtered again.");
+                    if (LockState.SetLocked(true))
+                        Info("Parental control re-locked. The library is filtered again.");
+                    else
+                        Warn("Re-locked, but the view may still show the full library until you refresh or restart LaunchBox.");
                     return;
                 }
                 // Locked → unlock via PIN.

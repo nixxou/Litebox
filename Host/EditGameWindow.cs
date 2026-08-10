@@ -106,6 +106,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
     // "‹multiple values›" placeholder, a text box can). See MaxPlayersText / LoadMetadata / SaveCurrent.
     private Control _maxPlayers = null!;
     private CheckBox _favorite = null!, _portable = null!, _installed = null!, _hide = null!, _broken = null!;
+    private CheckBox _reqParental = null!;   // per-game "requires parental rights" flag (LiteBox Options DB)
     private Label _dateAdded = null!, _dateModified = null!, _playCount = null!;
     private StarBar _starBar = null!;
 
@@ -899,7 +900,9 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         y += 24;
         _playCount = InfoLabel("Play Count(Time):", Lx, y, p);
         _broken = ChkBox("Broken", RFx + 8, y);
-        foreach (var cb in new[] { _favorite, _portable, _installed, _hide, _broken }) p.Controls.Add(cb);
+        _reqParental = ChkBox("Requires parental", RFx + 130, y);
+        _reqParental.ForeColor = LiteBoxTheme.Danger;   // it hides the game while locked — set it apart
+        foreach (var cb in new[] { _favorite, _portable, _installed, _hide, _broken, _reqParental }) p.Controls.Add(cb);
 
         return p;
     }
@@ -1076,6 +1079,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             SetCheck(_hide, MergeVal(g => g.Hide));
             SetCheck(_broken, MergeVal(g => g.Broken));
             SetCheck(_installed, MergeVal(g => g.Installed == true));
+            SetCheck(_reqParental, MergeVal(g => Parental.ParentalGameFlag.IsBlocked(g.Id)));
 
             if (IsMulti)
             {
@@ -1192,6 +1196,9 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             if (Writable(_hide) && _hide.CheckState != CheckState.Indeterminate) W(() => g.Hide = _hide.Checked);
             if (Writable(_broken) && _broken.CheckState != CheckState.Indeterminate) W(() => g.Broken = _broken.Checked);
             if (Writable(_installed) && _installed.CheckState != CheckState.Indeterminate) W(() => g.Installed = _installed.Checked);
+            // Not a LaunchBox property → LiteBox Options DB, not the IGame journal (W()).
+            if (Writable(_reqParental) && _reqParental.CheckState != CheckState.Indeterminate)
+                W(() => Parental.ParentalGameFlag.SetBlocked(g.Id, _reqParental.Checked));
         }
 
         bool Writable(Control c) => Modified(c) && !IsPlaceholder(c);

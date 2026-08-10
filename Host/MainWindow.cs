@@ -879,6 +879,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (ParentalBridge.ForceAll) return true;
         string plat = S(Safe(() => g.Platform));
         if (plat.Length > 0 && _parentalHiddenPlatforms.Contains(plat)) return true;
+        if (ParentalBridge.IsGameBlocked(S(Safe(() => g.Id)))) return true;   // per-game "requires parental" flag
         return !ParentalBridge.IsRatingAllowed(S(Safe(() => g.Rating)));
     }
 
@@ -1079,6 +1080,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private bool RelatedCandidateAllowed(CandidateGame c)
     {
         if (!ParentalBridge.Active) return true;
+        if (c.IsLocal && ParentalBridge.IsGameBlocked(c.Id)) return false;   // per-game "requires parental" flag
         if (!ParentalBridge.IsRatingAllowed(c.Rating ?? "")) return false;
         var plat = c.Platform ?? "";
         if (plat.Length > 0 && _parentalHiddenPlatforms.Contains(plat)) return false;

@@ -102,6 +102,11 @@ internal static class ParentalBridge
         return ParentalFilter.IsRatingAllowed(rating);
     }
 
+    /// <summary>True when this game carries the per-game "requires parental rights" flag
+    /// (<see cref="Parental.ParentalGameFlag"/>). Independent of the rating rules — callers hide the game
+    /// when EITHER this or the rating check says so. Only meaningful while parental is Active.</summary>
+    public static bool IsGameBlocked(string gameId) => Parental.ParentalGameFlag.IsBlocked(gameId);
+
     /// <summary>True when a platform / category / playlist with this name must be hidden.</summary>
     public static bool IsNameHidden(string name)
     {

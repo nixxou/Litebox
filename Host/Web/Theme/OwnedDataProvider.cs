@@ -421,7 +421,12 @@ internal static class OwnedDataProvider
     private static string SafeClearLogo(IPlatform p) { try { return p?.ClearLogoImagePath; } catch { return null; } }
 
     private static bool Allowed(IGame g, WebParentalState st)
-        => st == null || st.IsRatingAllowed(Safe(() => g.Rating));
+    {
+        if (st == null) return true;
+        // Per-game "requires parental rights" flag — hidden from a locked client, on top of the rating rules.
+        if (st.IsLocked && LbApiHost.Host.Parental.ParentalGameFlag.IsBlocked(Safe(() => g.Id))) return false;
+        return st.IsRatingAllowed(Safe(() => g.Rating));
+    }
 
     private static int CountAllowed(IEnumerable<IGame> games, WebParentalState st)
     {

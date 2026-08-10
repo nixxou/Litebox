@@ -98,6 +98,11 @@ internal static class OptionKeys
             Note: "global default seeded in LiteBox.ini; per-entity tier declared only so the resolver probe is legal."),
 
         // ── Per-game DATA (not option overrides) ──
+        // "Requires parental rights" per-game flag. LiteBox is the sole writer (Edit Game); read on the
+        // visibility hot path while parental is locked, and the whole blocked-ID set is exported to the
+        // native ASI (which can't read this SQLite store). See Host/Parental/ParentalGameFlag.
+        new("ParentalBlocked", Game, OptionType.Bool, OptionCache.Hot, "Parental/ParentalGameFlag",
+            Note: "per-game 'requires parental rights' flag; blocked-ID set exported to the ASI."),
         new("FieldLocks", Game, OptionType.Json, OptionCache.Cold, "Editor/LockStore", SharedWithPlugin: true,
             Note: "JSON {column:lockedValue}; columns = ExtendDB LockStorage.AllColumns. MUST stay Cold: plugin writes must always be seen fresh."),
         new("Model3dImages", Game, OptionType.Json, OptionCache.Hot, "Model3d/Model3dImageStore",

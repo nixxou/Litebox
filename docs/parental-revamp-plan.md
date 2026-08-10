@@ -21,13 +21,35 @@ survives sessions and context compaction. Read it first each session.
   `ParentalGameFlag` (Options DB, Game scope). Enforced on desktop list/tree, suggester,
   and the owned web view. `4471ba1`. (DB-site case still open — minor.)
 - **WS7 — DONE.** `ParentalNativeExport` writes `LB\Core\litebox-parental.dat` (scopes,
-  Mode, Rules, PinSet, BlockedId set) — the flat file the ASI will read. Regenerated on
+  Mode, Rules, PinSet, BlockedId set) — the flat file the ASI reads. Regenerated on
   Save / Edit-Game / boot. `d0576b1`.
-- **WS5 / WS6 — TODO.** The two native projects (C++ ASI + managed plugin) and the install
-  flow. The biggest lift and the hardest to test without running LB — do next.
+- **WS5.1 — DONE (builds; runtime untested).** `native/litebox-parentalcontrol-asi/` —
+  C++ ASI adapted from the proven extenddb.asi: reads `litebox-parental.dat`, keeps a game
+  iff rating passes AND its ID isn't blocked, active in BOTH LaunchBox.exe and BigBox.exe,
+  exports `litebox_parental_set_filtering` / `_open_real_file`. MSBuild Release|x64 →
+  `litebox-parentalcontrol.asi`, exports verified. `3f3013c`.
+- **WS5.2 — DONE core (builds; runtime untested).** `native/litebox-parentalcontrol-dll/` —
+  managed plugin: the WriteGuard (Harmony `File.Copy` prefix blocks any copy into `Data\`
+  while the library may be filtered — the W0.1 finding), the ASI bridge, and the BigBox
+  lock/unlock → SetFiltering + ForceReload + latch wiring. `23c66c2`.
+- **REMAINING:**
+  - **WS6 — install/uninstall flow.** A LiteBox button to deploy the built ASI +
+    `winhttp.dll` (ASI loader, vendored at `ExtendDB/thirdparty/winhttp.dll.api`) into
+    `LB\Core\`, and the plugin + `0Harmony.dll` into `LB\Plugins\`; plus clean uninstall.
+    Reuse ExtendDB's `.api`-suffix + rename-on-deploy pattern (`Utils.InstallDlls`).
+  - **WS5.2 follow-ups** (see its README): the **LaunchBox unlock PIN dialog** (LB has no
+    lock events → stays filtered until an unlock), and **anti-tamper** — do NOT emit
+    `PluginPath` into `litebox-parental.dat` until WS6 deploys the plugin, or the ASI's
+    `EnforcePluginPresence` would `TerminateProcess` LB (plugin "missing").
+  - **Runtime validation** of the whole native chain in LaunchBox/BigBox — the safest
+    path is the WS0 probe approach on a `Data\` copy, or with the write-guard in place so a
+    filtered save can't persist. The `.dat` never enables filtering until parental is
+    configured, so a stock install is untouched.
+  - **WS4 DB-site case** (owned games shown on the DB browse site) — minor.
+  - Fold in the parity-audit fixes X1–X8.
 
-Reusable: the throwaway `lb-backup-probe/` (Harmony probe) is the skeleton for the WS5.2
-managed plugin. `ParentalNativeExport`'s format is the WS5.1 ASI's input contract.
+Reusable: the throwaway `lb-backup-probe/` (Harmony probe) was the skeleton for WS5.2.
+`ParentalNativeExport`'s format is the ASI's input contract.
 
 Companion: [`parental-parity-audit.md`](parental-parity-audit.md) — the concrete
 desktop/web gap list (findings 1.1–1.7, fixes X1–X8). This plan does **not** repeat

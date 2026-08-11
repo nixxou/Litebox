@@ -312,19 +312,15 @@
     <EmbeddedResource Include="thirdparty\onnxruntime.dll.api"><LogicalName>natives/onnxruntime.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\DirectML.dll.api"><LogicalName>natives/DirectML.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\mobilenetv3s_embed.onnx"><LogicalName>natives/mobilenetv3s_embed.onnx</LogicalName></EmbeddedResource>
-    <!-- Native parental payload (WS5/WS6): the ASI + winhttp loader + the managed write-guard plugin + Harmony,
-         each with the .api suffix. Built by native/assemble-payload.ps1 into native\payload\ before the
-         standalone publish (build-release.ps1). ParentalNativeInstall.EnsureShipped extracts these to
-         Core\litebox\parental-native\ at boot; the in-app Install button then deploys them on demand. The light
-         zip ships them loose there instead (build-release.ps1). -->
-    <!-- The write-guard is dual-targeted: BOTH the net9 and net10 builds embed (both light hosts carry
-         both, so a migrated host always has its matching guard). EnsureShipped extracts every parental-native/*
-         resource; ParentalNativeInstall deploys the one matching this host's TFM. ASI/winhttp/0Harmony single. -->
-    <EmbeddedResource Include="native\payload\litebox-parentalcontrol.asi.api"><LogicalName>parental-native/litebox-parentalcontrol.asi.api</LogicalName></EmbeddedResource>
+    <!-- Native parental payload (single-artifact): the winhttp loader + the generic trigger .asi + the managed
+         dll + the native .bin (filter+guard), each with the .api suffix. Built by native/assemble-payload.ps1
+         into native\payload\ before the standalone publish (build-release.ps1). ParentalNativeInstall.EnsureShipped
+         extracts these to Core\litebox\parental-native\ at boot; the in-app Install button deploys them on demand.
+         The light zip ships them loose there instead (build-release.ps1). All runtime-agnostic — no per-TFM. -->
     <EmbeddedResource Include="native\payload\winhttp.dll.api"><LogicalName>parental-native/winhttp.dll.api</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="native\payload\litebox-parentalcontrol.net9.dll.api"><LogicalName>parental-native/litebox-parentalcontrol.net9.dll.api</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="native\payload\litebox-parentalcontrol.net10.dll.api"><LogicalName>parental-native/litebox-parentalcontrol.net10.dll.api</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="native\payload\0Harmony.dll.api"><LogicalName>parental-native/0Harmony.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="native\payload\litebox-parental.asi.api"><LogicalName>parental-native/litebox-parental.asi.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="native\payload\litebox-parental.dll.api"><LogicalName>parental-native/litebox-parental.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="native\payload\litebox-parental-native.bin.api"><LogicalName>parental-native/litebox-parental-native.bin.api</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- Web frontend theme assets: embedded in the STANDALONE installer ONLY (the light zip ships them loose

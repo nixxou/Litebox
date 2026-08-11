@@ -493,11 +493,9 @@ internal static class HostBoot
             Data.LiteBoxOptionsDb.Open();
             // Make the native parental payload SOURCE present at Core\litebox\parental-native\ (the standalone
             // installer embeds it; the light zip ships it loose) so the in-app Install button always has it.
+            // No migration step: the single-artifact payload is runtime-agnostic (one net9 managed dll + native
+            // stubs), so there is nothing per-TFM to re-deploy on an LB upgrade.
             try { Parental.ParentalNativeInstall.EnsureShipped(); } catch { }
-            // Migration: if the native filter is already installed, re-deploy the guard matching THIS host's
-            // runtime — self-heals after an LB upgrade across net9↔net10 (the previously-deployed guard would be
-            // the wrong TFM and fail to load). Best-effort; no-op when not installed.
-            try { Parental.ParentalNativeInstall.RefreshDeployedIfInstalled(); } catch { }
             // Refresh the native ASI's flat config (LB\Core\litebox-parental.dat) once the LB root +
             // Options DB are up — only when parental is configured, so a non-parental install isn't
             // littered. Save() keeps it current afterwards. Best-effort; never blocks boot.

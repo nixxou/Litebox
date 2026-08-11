@@ -113,7 +113,7 @@ if (-not $SkipNet10) { Publish-Light 'net10.0-windows' $t10 }
 # let the ASI filter reads with no write-guard = data risk. Assemble first if native/payload is stale.
 function Deploy-ParentalNative([string]$lbRoot) {
   $payload = Join-Path $here 'native\payload'
-  if (-not (Test-Path (Join-Path $payload 'litebox-parentalcontrol.asi.api'))) {
+  if (-not (Test-Path (Join-Path $payload 'litebox-parental-native.bin.api'))) {
     Write-Warning "  parental payload not staged (run native\assemble-payload.ps1) - skipping native-parental ship"
     return
   }

@@ -71,7 +71,7 @@ $payload = @(
 # csproj parental-native/* block, which reads native\payload\). ParentalNativeInstall.EnsureShipped lands
 # them at Core\litebox\parental-native\; the in-app Install button deploys them into Core + Plugins on demand.
 $parentalPayloadDir = Join-Path $here 'native\payload'
-$parentalPayload = @('litebox-parentalcontrol.asi.api','winhttp.dll.api','litebox-parentalcontrol.net9.dll.api','litebox-parentalcontrol.net10.dll.api','0Harmony.dll.api')
+$parentalPayload = @('winhttp.dll.api','litebox-parental.asi.api','litebox-parental.dll.api','litebox-parental-native.bin.api')
 
 # Rebuild the native payload from source FIRST so the shipped ASI + write-guard match the committed code
 # (the payload dir is gitignored; trusting a stale copy is how a fixed source ships with old behaviour).
@@ -84,17 +84,19 @@ function Find-MSBuild {
   return $null
 }
 if (-not $SkipNativeBuild) {
-  Write-Host '-- rebuilding native parental payload from source (ASI + write-guard plugin)' -ForegroundColor Cyan
-  $asiProj = Join-Path $here 'native\litebox-parentalcontrol-asi\litebox-parentalcontrol-asi.vcxproj'
-  $dllProj = Join-Path $here 'native\litebox-parentalcontrol-dll\litebox-parentalcontrol.csproj'
+  Write-Host '-- rebuilding native parental payload from source (trigger .asi + native .bin + managed dll)' -ForegroundColor Cyan
+  $triggerProj = Join-Path $here 'native\litebox-parental-trigger\litebox-parental-trigger.vcxproj'
+  $binProj     = Join-Path $here 'native\litebox-parental-native\litebox-parental-native.vcxproj'
+  $managedProj = Join-Path $here 'native\litebox-parental-managed\litebox-parental-managed.csproj'
   $msb = Find-MSBuild
   if (-not $msb) { throw 'MSBuild (VS C++ toolset) not found - install it, or pass -SkipNativeBuild to reuse a pre-staged native\payload.' }
-  & $msb $asiProj /p:Configuration=Release /p:Platform=x64 /nologo /v:m
-  if ($LASTEXITCODE -ne 0) { throw "native ASI build failed (exit $LASTEXITCODE)." }
-  # Forward the SAME LaunchBox SDK roots the hosts use — the guard is dual-targeted and picks its SDK per TFM
-  # from Lb9Root/Lb10Root, so without this it would compile against the csproj defaults, not the requested roots.
-  & dotnet build $dllProj -c Release -v q -nologo "-p:Lb9Root=$Lb9Root" "-p:Lb10Root=$Lb10Root"
-  if ($LASTEXITCODE -ne 0) { throw "native write-guard plugin build failed (exit $LASTEXITCODE)." }
+  & $msb $triggerProj /p:Configuration=Release /p:Platform=x64 /nologo /v:m
+  if ($LASTEXITCODE -ne 0) { throw "native trigger build failed (exit $LASTEXITCODE)." }
+  & $msb $binProj /p:Configuration=Release /p:Platform=x64 /nologo /v:m
+  if ($LASTEXITCODE -ne 0) { throw "native .bin build failed (exit $LASTEXITCODE)." }
+  # The managed dll is single net9; build against the 13.27 SDK (loads on both runtimes). Forward Lb9Root.
+  & dotnet build $managedProj -c Release -v q -nologo "-p:Lb9Root=$Lb9Root"
+  if ($LASTEXITCODE -ne 0) { throw "native managed dll build failed (exit $LASTEXITCODE)." }
   & (Join-Path $here 'native\assemble-payload.ps1')
   if ($LASTEXITCODE -ne 0) { throw 'native\assemble-payload.ps1 failed - payload not staged.' }
   Write-Host '   native payload rebuilt + staged.' -ForegroundColor Green

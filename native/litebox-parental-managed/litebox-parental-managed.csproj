@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- litebox-parental.dll — the managed half of the single-artifact parental control:
+         • StartupHook.Initialize (early, BCL+kernel32 only) LoadLibrary's + arms the native .bin;
+         • ISystemEventsPlugin / ISystemMenuItemPlugin (loaded later by the plugin scan, same instance) —
+           BigBox lock/unlock events + the LaunchBox Tools lock/unlock PIN menu.
+       Single net9.0-windows: a net9 assembly loads on both net9 (LB 13.27) and net10 (13.28+) runtimes, so
+       there is NO per-TFM build. No Harmony — the write-guard is native (the .bin's CopyFileExW hook). -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>litebox-parental</AssemblyName>
+    <RootNamespace>LiteBoxParental</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+
+    <!-- Build against the LOWEST LaunchBox SDK (13.27 / net9) so the assembly binds up to 13.28 at runtime. -->
+    <Lb9Root Condition="'$(Lb9Root)' == ''">G:\LB</Lb9Root>
+    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Unbroken.LaunchBox.Plugins">
+      <HintPath>$(Lb9Root)\Core\Unbroken.LaunchBox.Plugins.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- BouncyCastle ships in LB Core (asmVer 0.0.0.0 everywhere) — used to decrypt BigBox's LockPin. -->
+    <Reference Include="BouncyCastle.Crypto">
+      <HintPath>$(Lb9Root)\Core\BouncyCastle.Crypto.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

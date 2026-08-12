@@ -15,6 +15,7 @@ namespace LiteBoxParental
 
         public static void Arm()
         {
+            try { SelfHeal.Run(); } catch { }                // restore Core\ ASI files an LB update wiped (+ restart)
             try { AdminGuard.Install(); } catch { }          // SOFT: block admin windows while locked
             try { ManagedHardGuard.Install(); } catch { }    // HARD (managed twin): block library writes while locked
 

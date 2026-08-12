@@ -7,9 +7,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -72,6 +74,8 @@ namespace LiteBoxParental
                 }
                 if (tb == null) return;
 
+                WireClick(tb);   // clicking the status toggles lock/unlock instead of opening License Registration
+
                 if (tb.Text != text)
                 {
                     try { BindingOperations.ClearBinding(tb, TextBlock.TextProperty); } catch { }
@@ -86,6 +90,35 @@ namespace LiteBoxParental
             if (!LockState.ScopeActive) return null;
             return LockState.Locked ? "\U0001F512 Parental control: LOCKED"
                                     : "\U0001F513 Parental control: unlocked";
+        }
+
+        // The licence corner normally opens LaunchBox's "License Registration" window on click. Since we've turned
+        // it into the parental-status line, intercept the click and toggle lock/unlock instead — swallowing the
+        // event (PreviewMouseLeftButtonDown, tunnelling) BEFORE the licence command fires, so that window never
+        // opens from here. Wired once per TextBlock (a theme rebuild makes a fresh element → re-wired). When
+        // parental isn't scoped to this host, we DON'T handle the click, so LaunchBox's licence dialog still works.
+        private static readonly ConditionalWeakTable<TextBlock, object> _wired = new ConditionalWeakTable<TextBlock, object>();
+
+        private static void WireClick(TextBlock tb)
+        {
+            if (_wired.TryGetValue(tb, out _)) return;
+            _wired.Add(tb, s_marker);
+            try
+            {
+                tb.Background = Brushes.Transparent;      // make the whole element hit-testable, not just the glyphs
+                tb.Cursor = Cursors.Hand;
+                tb.PreviewMouseLeftButtonDown += OnStatusClick;
+            }
+            catch { }
+        }
+        private static readonly object s_marker = new object();
+
+        private static void OnStatusClick(object sender, MouseButtonEventArgs e)
+        {
+            if (!LockState.ScopeActive) return;   // not our line here — let LaunchBox open its licence dialog
+            e.Handled = true;                      // preempt the licence-registration command
+            try { UnlockMenuItem.Toggle(); } catch (Exception ex) { Log.Line("[Branding] toggle: " + ex.Message); }
+            Reapply();                             // reflect the new lock state in the corner immediately
         }
 
         // Language-INDEPENDENT: the licence label's Text is bound to the "LicenseText" view-model property (found

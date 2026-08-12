@@ -26,6 +26,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using LbApiHost.Host.Diag;
 
 namespace LbApiHost.Host.Parental;
@@ -54,13 +56,23 @@ internal static class ParentalNativeInstall
     }
 
     /// <summary>Deployed target paths (relative to LB root) — for the LiteBox uninstaller to remove
-    /// whether or not the user ever ran Install.</summary>
+    /// whether or not the user ever ran Install. Covers the LIVE files AND the cross-redundancy ".api"
+    /// backups (SelfHeal / the .asi restore them from each other), plus the runtime .dat backup. NEVER the
+    /// shared litebox-parental.dat itself (LiteBox keeps using it).</summary>
     public static System.Collections.Generic.IEnumerable<string> DeployedRelPaths()
     {
+        // live
         yield return Path.Combine("Core", LoaderName);
         yield return Path.Combine("Core", TriggerName);
         yield return Path.Combine("Plugins", PluginDir, ManagedName);
         yield return Path.Combine("Plugins", PluginDir, NativeBin);
+        // Core-side stash (backs up the plugin files)
+        yield return Path.Combine("Core", ManagedName + ".api");
+        yield return Path.Combine("Core", NativeBin + ".api");
+        // plugin-side stash (backs up the Core files) + the runtime config backup
+        yield return Path.Combine("Plugins", PluginDir, LoaderName + ".api");
+        yield return Path.Combine("Plugins", PluginDir, TriggerName + ".api");
+        yield return Path.Combine("Plugins", PluginDir, "litebox-parental.dat.api");
     }
 
     /// <summary>The deployed plugin folder (relative to LB root) — the uninstaller rmdir's it.</summary>
@@ -154,13 +166,26 @@ internal static class ParentalNativeInstall
         var pluginDst = Path.Combine(Root!, "Plugins", PluginDir);
         try
         {
+            var backupNote  = BackupDataXml();     // safety net BEFORE touching anything (best-effort)
+            var importsNote = DisableAutoImports(); // turn auto ROM imports off once (best-effort)
+
             Directory.CreateDirectory(pluginDst);
+            // LIVE files — plugin dll+bin FIRST so the trigger never points at a missing dll, then Core loader+trigger.
             CopyApi(SourceDir, pluginDst, ManagedName + ".api", ManagedName);
             CopyApi(SourceDir, pluginDst, NativeBin + ".api",   NativeBin);
             CopyApi(SourceDir, core,      LoaderName + ".api",  LoaderName);
             CopyApi(SourceDir, core,      TriggerName + ".api", TriggerName);
-            Log($"installed → Core + Plugins\\{PluginDir}");
-            return (true, "Native parental control installed. Restart LaunchBox / BigBox for it to take effect.");
+            // CROSS-REDUNDANCY STASHES so a LaunchBox update (wipes Core\) or a lost plugin dir can self-heal:
+            //   • Core keeps .api backups of the plugin files (dll, bin) — restored by the native .asi;
+            //   • the plugin folder keeps .api backups of the Core files (winhttp, asi) — restored by SelfHeal.
+            CopyApi(SourceDir, core,      ManagedName + ".api",  ManagedName + ".api");
+            CopyApi(SourceDir, core,      NativeBin + ".api",    NativeBin + ".api");
+            CopyApi(SourceDir, pluginDst, LoaderName + ".api",   LoaderName + ".api");
+            CopyApi(SourceDir, pluginDst, TriggerName + ".api",  TriggerName + ".api");
+
+            Log($"installed → Core + Plugins\\{PluginDir} (live + stashes)");
+            return (true, "Native parental control installed." + backupNote + importsNote
+                + " Restart LaunchBox / BigBox for it to take effect.");
         }
         catch (Exception ex)
         {
@@ -178,12 +203,30 @@ internal static class ParentalNativeInstall
         var problems = new List<string>();
         void Del(string path) { try { if (File.Exists(path)) File.Delete(path); } catch (Exception ex) { problems.Add(Path.GetFileName(path) + ": " + ex.Message); } }
 
-        Del(Path.Combine(core, TriggerName));   // first: no trigger → the startup hook never fires next launch
-        Del(Path.Combine(core, LoaderName));
         var pluginDst = Path.Combine(Root!, "Plugins", PluginDir);
+        // LIVE — trigger first so the startup hook never fires next launch, then loader, then plugin files.
+        Del(Path.Combine(core, TriggerName));
+        Del(Path.Combine(core, LoaderName));
         Del(Path.Combine(pluginDst, ManagedName));
         Del(Path.Combine(pluginDst, NativeBin));
-        try { if (Directory.Exists(pluginDst) && Directory.GetFileSystemEntries(pluginDst).Length == 0) Directory.Delete(pluginDst); } catch { }
+        // STASHES — must go too, or the .asi could resurrect the plugin from Core\*.api, and orphan .api files
+        // would keep the plugin folder from being removed.
+        Del(Path.Combine(core, ManagedName + ".api"));
+        Del(Path.Combine(core, NativeBin + ".api"));
+        Del(Path.Combine(pluginDst, LoaderName + ".api"));
+        Del(Path.Combine(pluginDst, TriggerName + ".api"));
+        Del(Path.Combine(pluginDst, "litebox-parental.dat.api"));   // runtime config backup SelfHeal writes
+        // Any leftover plugin logs, then the folder if now empty. The shared litebox-parental.dat in Core is
+        // NEVER touched — LiteBox keeps using it.
+        try
+        {
+            if (Directory.Exists(pluginDst))
+            {
+                foreach (var f in Directory.GetFiles(pluginDst, "*.log")) Del(f);
+                if (Directory.GetFileSystemEntries(pluginDst).Length == 0) Directory.Delete(pluginDst);
+            }
+        }
+        catch { }
 
         if (problems.Count > 0)
         {
@@ -200,6 +243,80 @@ internal static class ParentalNativeInstall
         if (string.IsNullOrEmpty(r)) return null;
         var core = Path.Combine(r!, "Core");
         return Directory.Exists(core) ? core : null;
+    }
+
+    // ── Pre-install extras (mirror the standalone installer) ─────────────────────
+
+    /// <summary>Before install, archive every .xml under Data\ (hierarchy preserved) into
+    /// Backups\ParentalControl-backupbeforeinstall-&lt;datetime&gt;.7z using the 7-Zip LaunchBox ships.
+    /// Best-effort; returns a short note appended to the install message.</summary>
+    private static string BackupDataXml()
+    {
+        try
+        {
+            var root = Root;
+            if (string.IsNullOrEmpty(root)) return "";
+            var data = Path.Combine(root!, "Data");
+            if (!Directory.Exists(data)) return "";
+            if (!Directory.EnumerateFiles(data, "*.xml", SearchOption.AllDirectories).Any()) return "";
+
+            var sevenZip = SevenZipPath(root!);
+            if (sevenZip == null) return " (Data XML not backed up — 7-Zip not found.)";
+            var backups = Path.Combine(root!, "Backups");
+            Directory.CreateDirectory(backups);
+            var archive = Path.Combine(backups, "ParentalControl-backupbeforeinstall-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".7z");
+
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = sevenZip, WorkingDirectory = root!,   // paths stored relative to root → "Data\...\*.xml"
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true,
+            };
+            psi.ArgumentList.Add("a"); psi.ArgumentList.Add(archive);
+            psi.ArgumentList.Add(@"Data\*.xml"); psi.ArgumentList.Add("-r");
+            using var p = System.Diagnostics.Process.Start(psi);
+            if (p == null) return " (Data XML backup could not start.)";
+            p.StandardOutput.ReadToEnd(); p.StandardError.ReadToEnd();
+            if (!p.WaitForExit(120000)) { try { p.Kill(); } catch { } return " (Data XML backup timed out.)"; }
+            if (p.ExitCode == 0 || p.ExitCode == 1) { Log("backed up Data XML → " + archive); return " Backed up Data XML."; }
+            return " (Data XML backup failed — 7-Zip exit " + p.ExitCode + ".)";
+        }
+        catch (Exception ex) { Log("backup failed: " + ex.Message); return ""; }
+    }
+
+    /// <summary>Disable LaunchBox's automatic ROM imports once at install (they'd mutate the library behind
+    /// parental control). Edits Data\Settings.xml on disk. Best-effort; returns a short note.</summary>
+    private static string DisableAutoImports()
+    {
+        try
+        {
+            var root = Root;
+            if (string.IsNullOrEmpty(root)) return "";
+            var path = Path.Combine(root!, "Data", "Settings.xml");
+            if (!File.Exists(path)) return "";
+            var xml = File.ReadAllText(path); var before = xml;
+            foreach (var name in new[] { "EnableAutomatedImports", "EnableRomAutoImports" })
+            {
+                var pat = "<" + name + @"\b[^>]*/>|<" + name + @"\b[^>]*>[^<]*</" + name + ">";
+                if (Regex.IsMatch(xml, pat)) xml = Regex.Replace(xml, pat, "<" + name + ">false</" + name + ">");
+            }
+            if (xml == before) return "";
+            File.WriteAllText(path, xml, new UTF8Encoding(false));
+            Log("disabled automatic ROM imports");
+            return " Disabled automatic ROM imports.";
+        }
+        catch (Exception ex) { Log("disable auto-imports failed: " + ex.Message); return ""; }
+    }
+
+    /// <summary>The 7-Zip LaunchBox ships (or a couple of fallbacks). Null when none is present.</summary>
+    private static string? SevenZipPath(string root)
+    {
+        foreach (var rel in new[] { @"ThirdParty\7-Zip\7z.exe", @"Core\7z.exe", @"Core\7za.exe", "7z.exe", "7za.exe" })
+        {
+            var p = Path.Combine(root, rel);
+            if (File.Exists(p)) return p;
+        }
+        return null;
     }
 
     /// <summary>Copy a shipped .api SOURCE (apiFile) to its deployed DEST name, atomically (tmp + move).</summary>

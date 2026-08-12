@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- litebox-parental-plugin.exe — standalone installer/uninstaller for the parental plugin, so it can be
+       distributed independently of LiteBox. Drop it at the LaunchBox ROOT and run it: it auto-detects the
+       install, or lets you pick the root LaunchBox.exe. Install writes the 4 payload files; Uninstall removes
+       them (asking for the PIN when one is set) but LEAVES Core\litebox-parental.dat so LiteBox keeps working.
+
+       Published SELF-CONTAINED single-file (the .NET runtime is bundled — end users need nothing installed).
+       The 4 payload files are EMBEDDED as resources (the same .api set assemble-payload.ps1 stages). -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>litebox-parental-plugin</AssemblyName>
+    <RootNamespace>LiteBoxParentalInstaller</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Ship the runtime with the exe. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- The payload — same four files LiteBox ships, embedded so the installer is self-sufficient. LogicalName is
+       the DEPLOYED filename (‘.api’ stripped); the code maps each to Core\ or Plugins\litebox-parental\.
+       assemble-payload.ps1 must have run (native projects built) before this project is built/published. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\payload\winhttp.dll.api">
+      <LogicalName>payload/winhttp.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\payload\litebox-parental.asi.api">
+      <LogicalName>payload/litebox-parental.asi</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\payload\litebox-parental.dll.api">
+      <LogicalName>payload/litebox-parental.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\payload\litebox-parental-native.bin.api">
+      <LogicalName>payload/litebox-parental-native.bin</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <!-- BouncyCastle: decrypt BigBox's Rijndael-256 <LockPin> to verify the PIN before an uninstall (the same
+       cipher the plugin/LiteBox use). Bundled into the single file. -->
+  <ItemGroup>
+    <Reference Include="BouncyCastle.Crypto">
+      <HintPath>..\litebox-parental-managed\vendor\BouncyCastle.Crypto.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

@@ -34,7 +34,11 @@ namespace LiteBoxParental
         public bool ShowInBigBox => false;               // BigBox has its own lock/unlock
         public bool AllowInBigBoxWhenLocked => false;
 
-        public void OnSelected()
+        public void OnSelected() => Toggle();
+
+        /// <summary>The lock/unlock action, shared by the Tools-menu item AND the click on the repurposed
+        /// license-status corner (Branding). Unlocked → re-lock (no PIN); locked → PIN prompt → unlock.</summary>
+        internal static void Toggle()
         {
             try
             {
@@ -46,7 +50,7 @@ namespace LiteBoxParental
                 if (!LockState.Locked)   // currently unlocked → offer to re-lock (no PIN)
                 {
                     if (LockState.SetLocked(true))
-                        Info("Parental control re-locked. The library is filtered again.");
+                        Notify.Info("\U0001F512 Parental control locked");
                     else
                         Warn("Re-locked, but the view may still show the full library until you refresh or restart LaunchBox.");
                     return;
@@ -61,7 +65,7 @@ namespace LiteBoxParental
                 {
                     PinLockout.Reset();
                     if (LockState.SetLocked(false))
-                        Info("Unlocked. Restart or refresh the view — the full library is back.");
+                        Notify.Info("\U0001F513 Parental control unlocked");
                     else
                         Warn("Couldn't safely unlock (library reload failed) — still locked to protect your data. Try again.");
                 }

@@ -65,7 +65,7 @@ internal sealed class ParentalConfig
     public bool BlockInstallWhenLocked { get; set; } = false;
 
     /// <summary>Whitelist or Blacklist semantics for <see cref="Rules"/>.</summary>
-    public ParentalMode Mode { get; set; } = ParentalMode.Whitelist;
+    public ParentalMode Mode { get; set; } = ParentalMode.Blacklist;
 
     /// <summary>Hide games marked not-installed (Installed=false) while parental is active. Default ON.</summary>
     public bool HideUninstalled { get; set; } = true;

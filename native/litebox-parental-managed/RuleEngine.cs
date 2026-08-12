@@ -22,10 +22,15 @@ namespace LiteBoxParental
         public static bool IsRatingAllowed(string rating, bool blacklist, IEnumerable<string> rules)
         {
             string r = rating ?? "";
-            bool matched = false;
+            bool matched = false, hasRule = false;
             if (rules != null)
                 foreach (var rule in rules)
+                {
+                    hasRule = true;
                     if (WildcardMatch(r, rule)) { matched = true; break; }
+                }
+            // Whitelist with NO rules = no rating filter (don't hide the whole library) — everything visible.
+            if (!blacklist && !hasRule) return true;
             return blacklist ? !matched : matched;
         }
 

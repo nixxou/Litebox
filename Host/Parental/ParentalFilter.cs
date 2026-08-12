@@ -120,6 +120,8 @@ internal static class ParentalFilter
     {
         if (!Active) return true;
         var cfg = ParentalConfig.Instance;
+        // Whitelist with NO rules = no rating filter (don't hide the whole library) — show all.
+        if (cfg.Mode == ParentalMode.Whitelist && !cfg.Rules.Any()) return true;
         string r = rating ?? "";
         bool matched = cfg.Rules.Any(rule => WildcardMatch(r, rule));
         return cfg.Mode == ParentalMode.Whitelist ? matched : !matched;

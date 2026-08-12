@@ -25,7 +25,7 @@ namespace LiteBoxParental
 
         // ── Model (mirrors the .dat keys) ────────────────────────────────────
         public bool Enabled;
-        public bool Blacklist;                 // Mode: false = Whitelist, true = Blacklist
+        public bool Blacklist = true;          // Mode: false = Whitelist, true = Blacklist — DEFAULT Blacklist
         public bool HideUninstalled = true;    // DEFAULT ON — hide games with Installed=false while parental active
         public bool AllowRatings, AllowFavorites, ForceWebHideAll, BlockInstall;   // LiteBox-web only — preserved
         public bool WriteModeMerge;            // WriteMode: false = Block, true = Merge (preserved)

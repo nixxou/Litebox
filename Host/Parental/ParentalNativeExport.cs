@@ -41,7 +41,7 @@ namespace LbApiHost.Host.Parental;
 internal sealed class ParentalDatData
 {
     public bool Enabled;
-    public ParentalMode Mode = ParentalMode.Whitelist;
+    public ParentalMode Mode = ParentalMode.Blacklist;
     public bool HideUninstalled = true;   // DEFAULT ON — hide games with Installed=false while parental active
     public bool AllowRatings, AllowFavorites, ForceWebHideAll, BlockInstall;
     public ParentalWriteMode WriteMode = ParentalWriteMode.Block;

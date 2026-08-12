@@ -14,9 +14,12 @@
 // only when this runs — never from the early StartupHook.
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Resources;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Windows;
@@ -36,6 +39,13 @@ namespace LiteBoxParental
 
         private const string MessageBoxWindowType =
             "Unbroken.LaunchBox.Windows.Desktop.DialogTheming.Controls.MessageBoxWindow";
+
+        // LaunchBox's "License Registration" is a WinForms Form (NOT a WPF Window), reached by clicking the
+        // top-right licence corner — which we've repurposed into the parental lock/unlock status. We patch
+        // Form.ShowDialog and swallow THIS form while parental is configured, so the corner click only toggles
+        // the lock (the WPF click can't reliably preempt a WinForms dialog opened on a different element/event).
+        private const string LicenseFormType =
+            "Unbroken.LaunchBox.Windows.Desktop.Forms.LicenseRegistrationForm";
 
         private const string ViewsNs = "Unbroken.LaunchBox.Windows.Desktop.Views.";
 
@@ -112,6 +122,17 @@ namespace LiteBoxParental
             var sh = AccessTools.Method(win, "Show", Type.EmptyTypes);
             if (sh != null) h.Patch(sh, prefix: new HarmonyMethod(typeof(AdminGuard).GetMethod(nameof(ShowPrefix), BindingFlags.Static | BindingFlags.NonPublic)));
 
+            // WinForms side: block the License Registration Form (the repurposed licence corner). Patch every
+            // ShowDialog overload (parameterless + IWin32Window); the prefix only vetoes that ONE form type, so
+            // our own WinForms dialogs and any other host form are untouched.
+            var formT = AccessTools.TypeByName("System.Windows.Forms.Form");
+            if (formT != null)
+            {
+                var fp = new HarmonyMethod(typeof(AdminGuard).GetMethod(nameof(FormShowDialogPrefix), BindingFlags.Static | BindingFlags.NonPublic));
+                foreach (var m in formT.GetMethods(BindingFlags.Public | BindingFlags.Instance).Where(mm => mm.Name == "ShowDialog"))
+                    try { h.Patch(m, prefix: fp); } catch (Exception ex) { Log.Line("[AdminGuard] Form.ShowDialog patch: " + ex.Message); }
+            }
+
             // Grey out admin items while locked — in BOTH right-click context menus (ContextMenu.Opened) AND the
             // top menu-bar / MENU / TOOLS drop-downs (MenuItem.SubmenuOpened). Class handlers fire for every menu,
             // so there is no obfuscated builder to find.
@@ -144,7 +165,7 @@ namespace LiteBoxParental
                 if (!(sender is ContextMenu cm)) return;
                 Branding.Reapply();                                                // keep the status-corner live
                 RefreshParentalLabels(cm.Items);                                    // keep our Unlock label live
-                if (TestConfig.SoftContextMenu) ProcessMenu(cm.Items, LockState.Locked);
+                if (TestConfig.SoftContextMenu) ProcessMenu(cm.Items, LockState.Locked, greyAll: false);
             }
             catch (Exception ex) { Log.Line("[AdminGuard] context-menu error: " + ex.Message); }
         }
@@ -157,7 +178,13 @@ namespace LiteBoxParental
                 if (!(sender is MenuItem mi)) return;
                 Branding.Reapply();                                                // keep the status-corner live
                 RefreshParentalLabels(mi.Items);                                    // keep our Unlock label live
-                if (TestConfig.SoftContextMenu) ProcessMenu(mi.Items, LockState.Locked);
+                if (!TestConfig.SoftContextMenu) return;
+                // The event hands us THIS menu's children directly. A safe container (View / Arrange By / Image
+                // Group / Badges) is short-circuited (its children are all safe, and "Media" would else be greyed
+                // like the game menu's). The Tools bucket greys ALL its children (greyAll).
+                var cls = Classify(mi.Header?.ToString());
+                if (cls == MenuClass.SafeContainer) return;
+                ProcessMenu(mi.Items, LockState.Locked, greyAll: cls == MenuClass.AdminContainer);
             }
             catch (Exception ex) { Log.Line("[AdminGuard] submenu error: " + ex.Message); }
         }
@@ -176,49 +203,150 @@ namespace LiteBoxParental
             }
         }
 
-        private static void ProcessMenu(ItemCollection items, bool locked)
+        // greyAll = we're inside the Tools bucket: grey every item (except our own Parental entries) regardless of
+        // whether its specific label is a known admin action.
+        private static void ProcessMenu(ItemCollection items, bool locked, bool greyAll)
         {
             foreach (var obj in items)
             {
                 if (!(obj is MenuItem mi)) continue;
-                if (locked && IsAdminMenuHeader(mi.Header?.ToString()))
+                var hdr = mi.Header?.ToString();
+                bool ours = hdr != null && hdr.ToLowerInvariant().Contains("parental control");   // never grey the Unlock key
+                var cls = Classify(hdr);
+                bool admin = !ours && (cls == MenuClass.Admin || (greyAll && cls != MenuClass.SafeContainer));
+
+                if (locked && admin)
                 {
                     if (mi.IsEnabled) { mi.IsEnabled = false; _greyed.AddOrUpdate(mi, _mark); }
-                    // don't recurse — the whole submenu is unreachable while greyed
+                    // greyed subtree is unreachable — don't descend
                 }
                 else
                 {
                     if (_greyed.TryGetValue(mi, out _)) { mi.IsEnabled = true; _greyed.Remove(mi); }   // undo OUR grey
-                    if (mi.HasItems) ProcessMenu(mi.Items, locked);
+                    // Descend into neutral containers (e.g. Tools) to reach nested items — but NEVER into a safe
+                    // container (its children are all safe, and one may share an admin label like "Media"). Once
+                    // inside Tools, greyAll stays on so the whole bucket is covered.
+                    if (cls != MenuClass.SafeContainer && mi.HasItems)
+                        ProcessMenu(mi.Items, locked, greyAll || cls == MenuClass.AdminContainer);
                 }
             }
         }
 
-        // Block-most / allow-few: while locked, EVERY menu item is admin EXCEPT a small safe set (navigation,
-        // view, launch, exit). This greys Install/Edit/Media/File Management/Add/Delete/Reset/Add-to-Playlist in
-        // the game menu, everything in Tools, "Tools" inside MENU, and Add/Edit/Delete on category/platform/playlist.
-        private static bool IsAdminMenuHeader(string header)
+        // ── Language-independent menu classification ─────────────────────────────
+        // Deciding admin/safe by the ENGLISH header text breaks the instant LaunchBox runs in another language
+        // (in French every item fell outside the English safe-list → everything greyed). We classify by the
+        // action's STABLE identity instead: labels come from Unbroken.LaunchBox.Properties.Strings (a resx). We
+        // read each label's ENGLISH (neutral) value to categorise it, then its value in the CURRENT language, and
+        // match menu headers against those localized values — so it works in every language.
+        //
+        //   • SafeContainer (View / Arrange By / Image Group / Badges / Help): left fully enabled AND never
+        //     descended into — its children are view/sort options, and this avoids greying View→"Media", which
+        //     shares the game menu's "Media" label.
+        //   • Admin (library-mutating actions: Edit, Media, File Management, Add, Manage Installation(s), Import,
+        //     Manage, Download, Image Packs, Audit, Media Cleanup, Cloud, Options, Export to Android): greyed.
+        //   • Neutral (Play, Launch With, Open…, Big Box, Quit, Search, Achievements, Select Random Game, our own
+        //     Parental items): enabled; neutral containers ARE descended into so nested admin items are caught.
+        private enum MenuClass { Neutral, Admin, SafeContainer, AdminContainer }
+
+        // Normalised ENGLISH labels — used to categorise the resx AND matched directly (English UI / map failure).
+        private static readonly string[] AdminEnglish =
         {
-            if (string.IsNullOrEmpty(header)) return false;
-            var h = header.Trim().ToLowerInvariant();
-            if (h.Length == 0) return false;
+            "edit", "media", "file management", "add", "add to playlist",
+            "manage installation(s)", "manage installations", "manage installation",
+            "import", "manage", "download", "image packs", "audit", "media cleanup",
+            "cloud", "options", "export to android",
+        };
+        private static readonly string[] SafeContainerEnglish = { "view", "arrange by", "image group", "badges", "help" };
+        // French fallback (read off the FR menus) — belt-and-braces if the resx map can't be built.
+        private static readonly string[] AdminFrench =
+        {
+            "éditer", "médias", "gestion de fichiers", "ajouter", "ajouter à la liste de lecture",
+            "importer", "gérer", "télécharger", "packs d'images", "audit", "nettoyage des média",
+            "nuage", "options", "exporter vers android",
+        };
+        private static readonly string[] SafeContainerFrench = { "vue", "organiser par", "groupe image", "badges", "aide" };
+        // The Tools menu is a whole admin BUCKET (Import, Manage, Scan, Achievements, Cleanup, Cloud, Options…) —
+        // rather than list each item (they vary by version), grey EVERYTHING inside it except our own Parental
+        // entries (which live there so the user can unlock). Matched language-independently like the rest.
+        private static readonly string[] AdminContainerEnglish = { "tools" };
+        private static readonly string[] AdminContainerFrench = { "outils" };
 
-            // SAFE — never grey (checked first).
-            if (h.Contains("parental control")       // OUR OWN items — above all the Unlock entry (never lock the key!)
-                || h.StartsWith("view")              // View, View Achievements Profile
-                || h.StartsWith("configure")         // Configure Layout
-                || h.StartsWith("arrange")           // Arrange By
-                || h.StartsWith("select random")
-                || h == "play" || h.StartsWith("play ")
-                || h == "help"
-                || h.StartsWith("quit")
-                || h.StartsWith("big box")
-                // text-editing menus (search box, etc.) — keep usable while locked
-                || h == "cut" || h == "copy" || h == "paste" || h == "undo" || h == "redo" || h == "select all")
-                return false;
+        private static readonly HashSet<string> _adminLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> _safeLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> _toolsLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static bool _labelsBuilt;
 
-            // Everything else in these menus is an administration action → grey it while locked.
-            return true;
+        private static void EnsureMenuLabels()
+        {
+            if (_labelsBuilt) return;
+            _labelsBuilt = true;
+            foreach (var s in AdminEnglish) _adminLabels.Add(s);
+            foreach (var s in AdminFrench) _adminLabels.Add(s);
+            foreach (var s in SafeContainerEnglish) _safeLabels.Add(s);
+            foreach (var s in SafeContainerFrench) _safeLabels.Add(s);
+            foreach (var s in AdminContainerEnglish) _toolsLabels.Add(s);
+            foreach (var s in AdminContainerFrench) _toolsLabels.Add(s);
+            try
+            {
+                var asm = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "Unbroken.LaunchBox");
+                var t = asm?.GetType("Unbroken.LaunchBox.Properties.Strings");
+                var rm = t?.GetProperty("ResourceManager", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as ResourceManager;
+                if (rm == null) { Log.Line("[AdminGuard] Strings map unavailable — menu grey-out uses EN+FR fallback"); return; }
+
+                // The culture the menus are actually shown in (Strings.Culture, else the thread UI culture).
+                CultureInfo cur = null;
+                try { cur = t.GetProperty("Culture", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as CultureInfo; } catch { }
+                cur = cur ?? CultureInfo.CurrentUICulture;
+
+                var neutral = rm.GetResourceSet(CultureInfo.InvariantCulture, true, true);
+                if (neutral == null) return;
+                var adminEn = new HashSet<string>(AdminEnglish, StringComparer.OrdinalIgnoreCase);
+                var safeEn = new HashSet<string>(SafeContainerEnglish, StringComparer.OrdinalIgnoreCase);
+                var toolsEn = new HashSet<string>(AdminContainerEnglish, StringComparer.OrdinalIgnoreCase);
+                int mapped = 0;
+                foreach (DictionaryEntry de in neutral)
+                {
+                    if (!(de.Value is string en)) continue;
+                    var enN = Norm(en);
+                    HashSet<string> target = toolsEn.Contains(enN) ? _toolsLabels
+                                           : adminEn.Contains(enN) ? _adminLabels
+                                           : safeEn.Contains(enN) ? _safeLabels : null;
+                    if (target == null) continue;
+                    var key = de.Key?.ToString();
+                    if (string.IsNullOrEmpty(key)) continue;
+                    string loc; try { loc = rm.GetString(key, cur) ?? en; } catch { loc = en; }
+                    var locN = Norm(loc);
+                    if (locN.Length == 0) continue;
+                    target.Add(locN);
+                    mapped++;
+                }
+                Log.Line("[AdminGuard] menu labels mapped for '" + cur.Name + "' (" + mapped + " localized)");
+            }
+            catch (Exception ex) { Log.Line("[AdminGuard] menu label map error: " + ex.Message); }
+        }
+
+        // Normalise for matching: lowercase, drop a trailing accelerator ("\tCtrl+P"), strip the WPF access-key
+        // marker ('_' as in "_Import"), and trailing ellipsis/dots/spaces. The resx values go through the SAME
+        // Norm, so both sides match regardless of decoration.
+        private static string Norm(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var h = s.ToLowerInvariant();
+            int tab = h.IndexOf('\t'); if (tab >= 0) h = h.Substring(0, tab);
+            h = h.Replace("_", "");
+            return h.Trim().TrimEnd('.', '…', ' ');
+        }
+
+        private static MenuClass Classify(string header)
+        {
+            if (string.IsNullOrEmpty(header)) return MenuClass.Neutral;
+            if (header.ToLowerInvariant().Contains("parental control")) return MenuClass.Neutral;   // OUR items — keep the Unlock entry reachable
+            EnsureMenuLabels();
+            var n = Norm(header);
+            if (_toolsLabels.Contains(n)) return MenuClass.AdminContainer;   // Tools — grey its whole contents
+            if (_adminLabels.Contains(n)) return MenuClass.Admin;
+            if (_safeLabels.Contains(n)) return MenuClass.SafeContainer;
+            return MenuClass.Neutral;
         }
 
         // ShowDialog() returns bool? — on veto, skip the original and report a cancellation.
@@ -230,6 +358,24 @@ namespace LiteBoxParental
         }
 
         private static bool ShowPrefix(object __instance) => !Veto(__instance);
+
+        // WinForms Form.ShowDialog(...) returns DialogResult. Veto ONLY the License Registration form while parental
+        // is configured (locked OR unlocked — the corner is ours in both states); report Cancel so the caller sees
+        // "no change". Everything else (our own dialogs, other host forms) passes through.
+        private static bool FormShowDialogPrefix(object __instance, ref System.Windows.Forms.DialogResult __result)
+        {
+            try
+            {
+                if (__instance == null || !LockState.ScopeActive) return true;
+                if ((__instance.GetType().FullName ?? "") == LicenseFormType)
+                {
+                    __result = System.Windows.Forms.DialogResult.Cancel;
+                    return false;   // skip the original — the corner click already toggled the lock
+                }
+            }
+            catch { }
+            return true;
+        }
 
         /// <summary>True ⇒ block this window. NEVER throws (a guard bug must not break LaunchBox → default allow).</summary>
         private static bool Veto(object window)

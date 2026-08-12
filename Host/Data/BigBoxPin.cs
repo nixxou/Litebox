@@ -21,6 +21,13 @@ namespace LbApiHost.Host.Data;
 
 internal static class BigBoxPin
 {
+    // Matches BigBox's <LockPin> element in BOTH forms it can take in BigBoxSettings.xml:
+    //   • self-closing / empty:  <LockPin />, <LockPin/>, <LockPin xmlns="…"/>   (no PIN set — BigBox's default)
+    //   • paired with a blob:    <LockPin>…</LockPin>, <LockPin attr>…</LockPin>
+    // Used for both read (capture group 1 = blob, empty for self-closing) and the surgical replace on write, so
+    // setting a PIN over a fresh <LockPin /> replaces it in place instead of inserting a SECOND element.
+    private const string LockPinElement = @"<LockPin\b[^>]*/>|<LockPin\b[^>]*>([^<]*)</LockPin>";
+
     private static string? SettingsPath()
     {
         try
@@ -43,7 +50,8 @@ internal static class BigBoxPin
         {
             var path = SettingsPath();
             if (path == null) return "";
-            var m = Regex.Match(File.ReadAllText(path), "<LockPin>([^<]*)</LockPin>");
+            var m = Regex.Match(File.ReadAllText(path), LockPinElement);
+            // Group 1 is only present on the paired form; a self-closing <LockPin /> matches with an empty group.
             return m.Success ? LbSettingsCrypto.DecryptBigBoxLockPin(m.Groups[1].Value.Trim()) : "";
         }
         catch { return ""; }
@@ -69,8 +77,10 @@ internal static class BigBoxPin
             string blob = string.IsNullOrEmpty(clearPin) ? "" : LbSettingsCrypto.EncryptBigBoxLockPin(clearPin);
             string replacement = $"<LockPin>{blob}</LockPin>";
 
-            string updated = Regex.IsMatch(xml, "<LockPin>[^<]*</LockPin>")
-                ? Regex.Replace(xml, "<LockPin>[^<]*</LockPin>", replacement)
+            // Replace the existing element in place — self-closing <LockPin /> included — so we never leave a
+            // duplicate. Only insert a fresh one when the element is genuinely absent.
+            string updated = Regex.IsMatch(xml, LockPinElement)
+                ? Regex.Replace(xml, LockPinElement, replacement)
                 : InsertIntoSettingsBlock(xml, replacement);
             if (updated == xml) return true;
 

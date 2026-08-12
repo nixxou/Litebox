@@ -219,6 +219,8 @@ static bool WildcardMatchCI(const std::string& text, const std::string& pattern)
 // Applies the configured Whitelist/Blacklist mode to a game's Rating.
 static bool IsRatingAllowed(const std::string& rating)
 {
+    // Whitelist with NO rules = no rating filter (don't hide the whole library) — keep every game.
+    if (g_mode == 0 && g_rules.empty()) return true;
     bool matched = false;
     for (const auto& rule : g_rules)
     {

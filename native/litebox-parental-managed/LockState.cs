@@ -15,7 +15,7 @@ namespace LiteBoxParental
     internal static class LockState
     {
         private static bool _configLoaded;
-        private static bool _enabled, _isBigBox, _isHost, _configError;
+        private static bool _enabled, _isBigBox, _isHost, _configError, _pinSet;
 
         private static bool _locked = true;            // runtime lock — starts locked
         // The anti-corruption WRITE LATCH now lives NATIVELY in the .bin (g_writesBlocked), armed/cleared via
@@ -33,7 +33,9 @@ namespace LiteBoxParental
         /// keeps the File.Copy guard off anything but LaunchBox.exe / BigBox.exe (never LiteBox.exe, which
         /// writes Data\ legitimately). MUST agree with the ASI's own `enabled` gate — they read the SAME file;
         /// a divergence (e.g. the ASI filters while this stays false) would leave a filtered library unguarded.</summary>
-        public static bool ScopeActive { get { EnsureConfig(); return _isHost && _enabled; } }
+        /// <summary>...AND a PIN is set. Without a PIN there is no way to UNLOCK, so enforcing parental would lock
+        /// the user out forever — so no PIN ⇒ fully inert, whatever the Enabled flag says.</summary>
+        public static bool ScopeActive { get { EnsureConfig(); return _isHost && _enabled && _pinSet; } }
 
         /// <summary>The config file EXISTS but couldn't be read (transient sharing / permission / I/O). We can't
         /// tell enabled from disabled — and the ASI may already have read Enabled=1 and be filtering — so this is
@@ -61,6 +63,7 @@ namespace LiteBoxParental
                 bool lockReloadOk = ForceReload();
                 bool effective    = readOn && lockReloadOk;   // honest: is the filtered view actually in place now?
                 Log.Line($"[LockState] LOCKED (effective={effective} readOn={readOn} reloadOk={lockReloadOk})");
+                try { Branding.Reapply(); } catch { }   // refresh the status-corner
                 return effective;
             }
 
@@ -74,6 +77,7 @@ namespace LiteBoxParental
                 AsiBridge.SetWritesBlocked(false);        // real library restored → writes safe now
                 _locked = false;
                 Log.Line("[LockState] unlocked (writes unblocked after reload)");
+                try { Branding.Reapply(); } catch { }   // refresh the status-corner
                 return true;
             }
 
@@ -86,7 +90,17 @@ namespace LiteBoxParental
 
         private static bool ForceReload()
         {
-            try { Unbroken.LaunchBox.Plugins.PluginHelper.DataManager.ForceReload(); Log.Line("[LockState] ForceReload done."); return true; }
+            try
+            {
+                Unbroken.LaunchBox.Plugins.PluginHelper.DataManager.ForceReload();
+                // Re-render the CURRENT LaunchBox view so the filtered/unfiltered library shows immediately
+                // (lock/unlock toggles the .bin's read filter live; without this the games only refresh on the
+                // next navigation). LaunchBox-only + UI-thread (the menu click is on it); null/BigBox → no-op.
+                try { Unbroken.LaunchBox.Plugins.PluginHelper.LaunchBoxMainViewModel?.RefreshData(); }
+                catch (Exception rex) { Log.Line("[LockState] RefreshData error: " + rex.Message); }
+                Log.Line("[LockState] ForceReload done.");
+                return true;
+            }
             catch (Exception ex) { Log.Line("[LockState] ForceReload error: " + ex.Message); return false; }
         }
 
@@ -140,9 +154,11 @@ namespace LiteBoxParental
                         }
                     }
                 }
+                // A PIN (BigBox LockPin) is required for parental to engage — no PIN, no unlock path, so no lock.
+                try { _pinSet = PinVerify.HasPin; } catch { _pinSet = false; }
                 // A missing file is a DEFINITE "not configured" (disabled), NOT indeterminate — the ASI has no
                 // config either and stays inert, so there is nothing to guard.
-                Log.Line($"[LockState] config: isBigBox={_isBigBox} enabled={_enabled} indeterminate={_configError}");
+                Log.Line($"[LockState] config: isBigBox={_isBigBox} enabled={_enabled} pinSet={_pinSet} indeterminate={_configError}");
             }
             catch (Exception ex) { Log.Line("[LockState] config load error: " + ex.Message); }
         }

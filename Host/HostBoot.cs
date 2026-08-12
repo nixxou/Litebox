@@ -41,8 +41,13 @@ internal static class HostBoot
     // ONLY to enforce parental control inside vanilla LaunchBox.exe / BigBox.exe. LiteBox does parental
     // control natively AND writes Data\ legitimately, so loading it here would double-provide + let its
     // write-guard block LiteBox's own saves. Never load it — same treatment as ExtendDB.
-    public const string NativeParentalFolder = "litebox-parentalcontrol";
-    public static bool IsNativeParental(string folderName) => folderName.Equals(NativeParentalFolder, StringComparison.OrdinalIgnoreCase);
+    public const string NativeParentalFolder = "litebox-parental";
+    // Skip our companion parental plugin folder — both the current name (litebox-parental) and the retired
+    // one (litebox-parentalcontrol) — so LiteBox never loads it (LiteBox does parental natively; loading the
+    // plugin here would double-provide its Tools menus and let its write-guard fight LiteBox's own saves).
+    public static bool IsNativeParental(string folderName) =>
+        folderName.Equals("litebox-parental", StringComparison.OrdinalIgnoreCase)
+        || folderName.Equals("litebox-parentalcontrol", StringComparison.OrdinalIgnoreCase);
 
     // ── Hands-free UI drivers (diagnostics / remote testing) ──────────────────
     // Once the main window is shown:
@@ -496,6 +501,11 @@ internal static class HostBoot
             // No migration step: the single-artifact payload is runtime-agnostic (one net9 managed dll + native
             // stubs), so there is nothing per-TFM to re-deploy on an LB upgrade.
             try { Parental.ParentalNativeInstall.EnsureShipped(); } catch { }
+            // Load the manual per-game block set from the shared .dat ONCE (never re-read on a platform
+            // reload) and stamp the runtime bit on every game row — must precede any export so the writer
+            // sees the real set instead of wiping the BlockedId= lines. Also imports a pre-.dat install's
+            // legacy Options-DB flags on first run. Runs regardless of the enable switch (blocks persist).
+            try { Parental.ParentalGameFlag.Init(store); } catch { }
             // Refresh the native ASI's flat config (LB\Core\litebox-parental.dat) once the LB root +
             // Options DB are up — only when parental is configured, so a non-parental install isn't
             // littered. Save() keeps it current afterwards. Best-effort; never blocks boot.

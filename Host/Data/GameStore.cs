@@ -65,6 +65,13 @@ internal struct GameRow
     // LaunchBox's XML; these must never leak into it).
     public bool HasManual, HasMultipleDocuments;
 
+    // "Requires parental rights" — a per-game manual restriction. Its PERSISTENT home is the shared
+    // Core\litebox-parental.dat (BlockedId= lines, read by the native .bin and the standalone plugin too);
+    // this bit is the RUNTIME form LiteBox reads on the hot visibility path (Host/Parental/ParentalGameFlag
+    // stamps it from the .dat set at boot). Runtime-derived like the two above — it must NEVER round-trip to
+    // the Platform XML, so it lives here, not in GFlags.
+    public bool ParentalBlocked;
+
     // The game's BADGE COMBINATION — an index into BadgeTable, 0 = not evaluated yet. Four bytes here
     // replace the per-game object graph the badge engine used to keep (~630 bytes each, 190 MB on a
     // 300k library). Tier 1 on purpose: a running game must not lose its badges, and re-deriving them

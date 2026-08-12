@@ -10,6 +10,9 @@
   <PropertyGroup>
     <TargetFramework>net9.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- WPF too: the admin-lock greys out LaunchBox's WPF context-menu items (Add to Playlist / Edit / Delete /
+         Reset …). No shipped dll — WPF is in the runtime LaunchBox already hosts. Never touched from StartupHook. -->
+    <UseWPF>true</UseWPF>
     <AssemblyName>litebox-parental</AssemblyName>
     <RootNamespace>LiteBoxParental</RootNamespace>
     <Nullable>disable</Nullable>
@@ -18,21 +21,36 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
 
-    <!-- Build against the LOWEST LaunchBox SDK (13.27 / net9) so the assembly binds up to 13.28 at runtime. -->
-    <Lb9Root Condition="'$(Lb9Root)' == ''">G:\LB</Lb9Root>
     <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- VENDORED against the LOWEST supported LaunchBox SDK (13.26.0.0): a plugin referencing that version
+         ROLLS FORWARD to 13.27/13.28 at runtime, but a higher-version reference can NOT bind down to 13.26.
+         So one build works on every 13.26+ install. Vendored (not $(Lb9Root)) so the build is reproducible and
+         version-pinned regardless of which LB is installed on the build machine. -->
     <Reference Include="Unbroken.LaunchBox.Plugins">
-      <HintPath>$(Lb9Root)\Core\Unbroken.LaunchBox.Plugins.dll</HintPath>
+      <HintPath>vendor\Unbroken.LaunchBox.Plugins.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <!-- BouncyCastle ships in LB Core (asmVer 0.0.0.0 everywhere) — used to decrypt BigBox's LockPin. -->
+    <!-- BouncyCastle (asmVer 0.0.0.0 everywhere) — used to decrypt/encrypt BigBox's LockPin. -->
     <Reference Include="BouncyCastle.Crypto">
-      <HintPath>$(Lb9Root)\Core\BouncyCastle.Crypto.dll</HintPath>
+      <HintPath>vendor\BouncyCastle.Crypto.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- Harmony (net9 build → loads on net9 + net10) drives the SOFT admin-lock: it patches WPF Window.ShowDialog
+         to block LaunchBox's admin windows while parental is locked. Referenced for compile, NOT copied — instead
+         EMBEDDED so the whole plugin ships as ONE dll (HarmonyLoader resolves it from the resource at runtime). -->
+    <Reference Include="0Harmony">
+      <HintPath>vendor\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="vendor\0Harmony.dll">
+      <LogicalName>litebox-parental.0Harmony.dll</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

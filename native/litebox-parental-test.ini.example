@@ -1,0 +1,37 @@
+# litebox-parental-test.ini  —  DEV / TEST ONLY.  NOT shipped in the payload/installer.
+#
+# Purpose: switch each parental protection ON/OFF independently to isolate behaviour while testing.
+# Absent (production) OR any missing key  =>  that protection is ON. So a normal install with no ini has
+# every guard active. Set a key to 0 (or false / no / off) to DISABLE it. Anything else = ON.
+#
+# Location: copy this file to  LB\Core\litebox-parental-test.ini  (next to LaunchBox.exe).
+# Read ONCE at LaunchBox/BigBox startup  =>  restart the app after editing.
+
+# ── SOFT  (admin-UI lock — managed / Harmony) ──────────────────────────────
+SoftAdminLock      = 1    # block the admin windows (Add/Edit/Manage/Options/Import/Media/Plugins/…) while locked
+SoftConfirmGuard   = 1    # force "No" on destructive delete confirmations (e.g. delete a game from the list)
+SoftContextMenu    = 1    # grey out admin items in right-click context menus AND the Tools / MENU drop-downs
+SoftStatusCorner   = 1    # replace the "Licensed to…/Free Version" corner with the live parental status
+
+# Optional fine control — let ONE admin window through while SoftAdminLock stays on (repeat as needed):
+# SoftAllowWindow  = OptionsView
+# SoftAllowWindow  = AddEditGameView
+
+# ── HARD  (managed twin — Harmony patch of System.IO) ──────────────────────
+HardManagedWrite   = 1    # block File.Copy / Move / Replace onto library XML while locked
+HardManagedDelete  = 1    # block File.Delete of library XML while locked
+
+# ── HARD  (native .bin) ────────────────────────────────────────────────────
+NativeReadFilter   = 1    # hide restricted games (the native XML read-filter — the actual game-hiding)
+NativeWriteGuard   = 1    # block library writes AND deletes at the Win32 level (CopyFileExW + DeleteFileW share one latch)
+
+# ── DIAGNOSTICS ────────────────────────────────────────────────────────────
+# NOTE: unlike the protections above, DebugLog defaults to OFF when this ini is absent (the shipped product
+# writes NO parental logs). It is ON here so a test run produces logs.
+DebugLog           = 1    # write the parental debug logs; 0 (or ini absent) = NO managed AND NO native .bin log
+
+# Notes:
+#  • Full read-only test WITHOUT hiding games:  NativeReadFilter=0  (leave the write guards on).
+#  • Let writes through for a data test:  NativeWriteGuard=0 AND HardManagedWrite=0 AND HardManagedDelete=0
+#    (both hard layers must be off — they double each other on purpose).
+#  • Native toggles are applied from the very first read (StartupHook) and held across lock/unlock (AsiBridge).

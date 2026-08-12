@@ -1196,13 +1196,12 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             if (Writable(_hide) && _hide.CheckState != CheckState.Indeterminate) W(() => g.Hide = _hide.Checked);
             if (Writable(_broken) && _broken.CheckState != CheckState.Indeterminate) W(() => g.Broken = _broken.Checked);
             if (Writable(_installed) && _installed.CheckState != CheckState.Indeterminate) W(() => g.Installed = _installed.Checked);
-            // Not a LaunchBox property → LiteBox Options DB, not the IGame journal (W()).
+            // Not a LaunchBox property → the shared parental .dat (BlockedId=), not the IGame journal (W()).
+            // SetBlocked flips the in-memory set + the game's row bit AND rewrites the .dat itself, so there
+            // is no separate export call here anymore.
             if (Writable(_reqParental) && _reqParental.CheckState != CheckState.Indeterminate)
                 W(() => Parental.ParentalGameFlag.SetBlocked(g.Id, _reqParental.Checked));
         }
-
-        // The blocked-ID set feeds the native ASI's flat file — refresh it once when the flag changed.
-        if (Writable(_reqParental)) { try { Parental.ParentalNativeExport.Write(); } catch { } }
 
         bool Writable(Control c) => Modified(c) && !IsPlaceholder(c);
         static void W(Action a) { try { a(); } catch { } }

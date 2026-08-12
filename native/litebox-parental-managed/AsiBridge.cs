@@ -61,6 +61,10 @@ namespace LiteBoxParental
         public static bool SetReadFiltering(bool on)
         {
             Init();
+            // DEV test ini can force the native read-filter OFF regardless of lock state (see TestConfig). This is
+            // the single choke point every caller (StartupHook, LockState) funnels through, so honouring it here
+            // keeps their logic untouched.
+            if (on) { TestConfig.EnsureLoaded(); if (!TestConfig.NativeReadFilter) { on = false; Log.Line("[AsiBridge] read-filtering forced OFF by test ini"); } }
             if (_setReadFiltering == null) { Log.Line("[AsiBridge] SetReadFiltering: export unavailable."); return false; }
             try { _setReadFiltering(on ? 1 : 0); return true; }
             catch (Exception ex) { Log.Line($"[AsiBridge] SetReadFiltering error: {ex.GetType().Name} {ex.Message}"); return false; }
@@ -70,6 +74,8 @@ namespace LiteBoxParental
         public static bool SetWritesBlocked(bool on)
         {
             Init();
+            // DEV test ini can force the native write guard OFF (see TestConfig) — same choke-point trick as reads.
+            if (on) { TestConfig.EnsureLoaded(); if (!TestConfig.NativeWriteGuard) { on = false; Log.Line("[AsiBridge] writes-blocked forced OFF by test ini"); } }
             if (_setWritesBlocked == null) { Log.Line("[AsiBridge] SetWritesBlocked: export unavailable."); return false; }
             try { _setWritesBlocked(on ? 1 : 0); return true; }
             catch (Exception ex) { Log.Line($"[AsiBridge] SetWritesBlocked error: {ex.GetType().Name} {ex.Message}"); return false; }

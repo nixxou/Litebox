@@ -78,6 +78,7 @@ internal static class ParentalFilter
     public static void NotifyConfigChanged()
     {
         ParentalConfig.Invalidate();
+        _hasPinCache = null;   // a PIN set/clear is a config change — re-read next time
         try { if (!ParentalConfig.Instance.AnyScopeEnabled) _locked = true; } catch { }
         try { StateChanged?.Invoke(); } catch { }
     }
@@ -88,14 +89,18 @@ internal static class ParentalFilter
     /// whether it participates. True when the parental module is enabled.</summary>
     public static bool Present => ModuleOn();
 
-    /// <summary>Parental control is configured (module on AND a scope switched on).</summary>
-    public static bool Enabled => ModuleOn() && ParentalConfig.Instance.AnyScopeEnabled;
+    /// <summary>Parental control is configured (module on, a scope switched on, AND a PIN set — without a PIN
+    /// there is no unlock path, so parental must never engage).</summary>
+    public static bool Enabled => ModuleOn() && ParentalConfig.Instance.AnyScopeEnabled && HasPin;
 
     /// <summary>Actively filtering this session (configured AND locked).</summary>
     public static bool Active => Enabled && _locked;
 
     /// <summary>The "force web" block-all is in effect (hide EVERY game, any rating).</summary>
     public static bool ForceAll => Active && ParentalConfig.Instance.ForceWebHideAll;
+
+    /// <summary>Hide not-installed games (Installed=false) — active only while parental is Active. Default ON.</summary>
+    public static bool HideUninstalled => Active && ParentalConfig.Instance.HideUninstalled;
 
     /// <summary>"Force web hide-all" is CONFIGURED (module + scope on) regardless of the DESKTOP lock —
     /// the web combines this with its own per-client lock state (a web-locked client sees nothing).</summary>
@@ -154,8 +159,19 @@ internal static class ParentalFilter
     /// <summary>True once the PIN is locked out until the next host restart.</summary>
     public static bool PinLockedOut => _pinLockedOut;
 
-    /// <summary>True when a PIN is configured (BigBox has one set).</summary>
-    public static bool HasPin => !string.IsNullOrEmpty(CurrentPin());
+    // Cached so the hot visibility path (Enabled → per-game) doesn't decrypt BigBoxSettings.xml each call.
+    // Cleared on NotifyConfigChanged (a PIN set/clear goes through the config save).
+    private static bool? _hasPinCache;
+
+    /// <summary>True when a PIN is configured (BigBox has one set). Cached.</summary>
+    public static bool HasPin
+    {
+        get
+        {
+            if (_hasPinCache == null) { try { _hasPinCache = !string.IsNullOrEmpty(CurrentPin()); } catch { _hasPinCache = false; } }
+            return _hasPinCache.Value;
+        }
+    }
 
     /// <summary>True when <paramref name="pin"/> matches BigBox's configured PIN.
     /// False when none is set or the input is wrong. Single comparison point.</summary>

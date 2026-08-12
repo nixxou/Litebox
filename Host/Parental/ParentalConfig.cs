@@ -5,13 +5,13 @@
 // Clean-room native port of the ExtendDB plugin's ParentalControlConfig. The MODEL
 // is reproduced faithfully (same knobs + semantics) so the host, the web frontends
 // and the launcher all agree with what LaunchBox-web/BigBox enforce — but nothing
-// here reflects into or depends on the plugin. Only the STORAGE backend differs:
+// here reflects into or depends on the plugin.
 //
-//   • The scalar switches (LaunchBox/BigBox enable, force-web, write-mode, the two
-//     "allow while locked" toggles, block-install, filter Mode, the lock hotkey) →
-//     LiteBox.ini [Parental] via LiteBoxConfig.GetSec/SetSec.
-//   • The three lists (rating rules + the two BigBox hide-lists) → a small JSON
-//     sidecar LiteBoxPaths.File("parental-lists.json") (System.Text.Json).
+// STORAGE: everything (scalars + the three lists) now lives in ONE shared flat file,
+// Core\litebox-parental.dat, read/written through Host/Parental/ParentalNativeExport.
+// That same file is what the native .bin reads before .NET and what the standalone
+// parental plugin edits — one source of truth, no more LiteBox.ini [Parental] +
+// parental-lists.json split. Load() parses it; Save() rewrites it atomically.
 //
 // The PIN itself is NOT stored here: it is BigBox's own parental PIN, read/written
 // through Host/Data/BigBoxPin (one PIN everywhere). The runtime lock state, the
@@ -24,9 +24,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Globalization;
-using System.IO;
-using System.Text.Json;
 using LbApiHost.Host;
 using LbApiHost.Host.Diag;
 
@@ -40,13 +37,11 @@ internal enum ParentalMode { Whitelist = 0, Blacklist = 1 }
 /// subset back in (experimental). Persisted for parity / future enforcement.</summary>
 internal enum ParentalWriteMode { Merge = 0, Block = 1 }
 
-/// <summary>Persisted parental-control settings. Scalars live in LiteBox.ini
-/// [Parental]; the three lists live in parental-lists.json. See file header.</summary>
+/// <summary>Persisted parental-control settings. Everything (scalars + lists) lives in the shared
+/// Core\litebox-parental.dat via ParentalNativeExport. See file header.</summary>
 internal sealed class ParentalConfig
 {
-    internal const string Section = "Parental";
-
-    // ── Scalars (LiteBox.ini [Parental]) ────────────────────────────────────
+    // ── Scalars ─────────────────────────────────────────────────────────────
 
     /// <summary>Parental control is configured. ONE switch — when on it applies everywhere (LiteBox
     /// desktop, the web frontends, and vanilla LaunchBox/BigBox via the native filter). There is no
@@ -72,11 +67,14 @@ internal sealed class ParentalConfig
     /// <summary>Whitelist or Blacklist semantics for <see cref="Rules"/>.</summary>
     public ParentalMode Mode { get; set; } = ParentalMode.Whitelist;
 
+    /// <summary>Hide games marked not-installed (Installed=false) while parental is active. Default ON.</summary>
+    public bool HideUninstalled { get; set; } = true;
+
     /// <summary>Global hotkey that pops the lock/unlock dialog, as the int value of a
     /// WinForms <c>Keys</c> (may carry modifier flags). 0 = no hotkey.</summary>
     public int HotKey { get; set; } = 0;
 
-    // ── Lists (parental-lists.json) ─────────────────────────────────────────
+    // ── Lists (shared .dat) ─────────────────────────────────────────────────
 
     /// <summary>Rating patterns; wildcards '*' (any run) and '?' (one char), matched
     /// case-insensitively against a game's rating.</summary>
@@ -88,7 +86,7 @@ internal sealed class ParentalConfig
     /// <summary>Platform / category names hidden from the BigBox filter page WHEN UNLOCKED.</summary>
     public List<string> HiddenPlatformsBigBoxOff { get; set; } = new();
 
-    /// <summary>Config-format version that last wrote parental-lists.json ("0.0.0" = pre-versioning).</summary>
+    /// <summary>Config-format version that last wrote the shared .dat ("0.0.0" = pre-versioning).</summary>
     public string ConfigVersion { get; set; } = "0.0.0";
 
     /// <summary>The config-level "configured" flag (alias of <see cref="Enabled"/>, kept for callers).
@@ -103,98 +101,43 @@ internal sealed class ParentalConfig
     /// <summary>Force a reload from disk on next access (after a Save from the config panel).</summary>
     public static void Invalidate() => _instance = null;
 
-    private static string ListsPath => LiteBoxPaths.File("parental-lists.json");
-
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
-
-    /// <summary>On-disk shape of parental-lists.json — only the lists persist here.</summary>
-    private sealed class ListStore
-    {
-        public string ConfigVersion { get; set; } = "0.0.0";
-        public List<string> Rules { get; set; } = new();
-        public List<string> HiddenPlatformsBigBoxOn { get; set; } = new();
-        public List<string> HiddenPlatformsBigBoxOff { get; set; } = new();
-    }
-
     private static ParentalConfig Load()
     {
         var c = new ParentalConfig();
         try
         {
-            var cfg = LiteBoxConfig.LoadForExe();
-            // Single switch now; migrate from the retired per-app scopes (either on → enabled).
-            c.Enabled = cfg.GetSecBool(Section, "Enabled",
-                cfg.GetSecBool(Section, "LaunchBoxEnabled", false) || cfg.GetSecBool(Section, "BigBoxEnabled", false));
-            c.ForceWebHideAll           = cfg.GetSecBool(Section, "ForceWebHideAll", false);
-            c.AllowLockedModifyRatings  = cfg.GetSecBool(Section, "AllowLockedModifyRatings", false);
-            c.AllowLockedModifyFavorites= cfg.GetSecBool(Section, "AllowLockedModifyFavorites", false);
-            c.BlockInstallWhenLocked    = cfg.GetSecBool(Section, "BlockInstallWhenLocked", false);
-            c.Mode = string.Equals(cfg.GetSec(Section, "Mode"), "Blacklist", StringComparison.OrdinalIgnoreCase)
-                ? ParentalMode.Blacklist : ParentalMode.Whitelist;
-            c.BigBoxWriteMode = string.Equals(cfg.GetSec(Section, "BigBoxWriteMode"), "Merge", StringComparison.OrdinalIgnoreCase)
-                ? ParentalWriteMode.Merge : ParentalWriteMode.Block;
-            c.HotKey = GetSecInt(cfg, "HotKey", 0);
-        }
-        catch (Exception ex) { Log("load scalars failed: " + ex.Message); }
-
-        try
-        {
-            if (File.Exists(ListsPath))
+            // Single shared source of truth: Core\litebox-parental.dat (read via ParentalNativeExport).
+            var d = ParentalNativeExport.Read();
+            if (d != null)
             {
-                var store = JsonSerializer.Deserialize<ListStore>(File.ReadAllText(ListsPath), JsonOpts);
-                if (store != null)
-                {
-                    c.ConfigVersion = store.ConfigVersion ?? "0.0.0";
-                    c.Rules = Clean(store.Rules);
-                    c.HiddenPlatformsBigBoxOn = Clean(store.HiddenPlatformsBigBoxOn);
-                    c.HiddenPlatformsBigBoxOff = Clean(store.HiddenPlatformsBigBoxOff);
-                }
+                c.Enabled                    = d.Enabled;
+                c.Mode                       = d.Mode;
+                c.HideUninstalled            = d.HideUninstalled;
+                c.AllowLockedModifyRatings   = d.AllowRatings;
+                c.AllowLockedModifyFavorites = d.AllowFavorites;
+                c.ForceWebHideAll            = d.ForceWebHideAll;
+                c.BlockInstallWhenLocked     = d.BlockInstall;
+                c.BigBoxWriteMode            = d.WriteMode;
+                c.HotKey                     = d.HotKey;
+                c.ConfigVersion              = d.ConfigVersion;
+                c.Rules                      = Clean(d.Rules);
+                c.HiddenPlatformsBigBoxOn    = Clean(d.HideOn);
+                c.HiddenPlatformsBigBoxOff   = Clean(d.HideOff);
             }
+            // No file yet (fresh install) → the defaults above stand; the first Save() writes the .dat.
         }
-        catch (Exception ex) { Log("load lists failed: " + ex.Message); }
-
+        catch (Exception ex) { Log("load failed: " + ex.Message); }
         return c;
     }
 
-    /// <summary>Persist the scalars to LiteBox.ini [Parental] and the lists to parental-lists.json.
-    /// The PIN is written separately through Host/Data/BigBoxPin (not here).</summary>
+    /// <summary>Persist to the shared Core\litebox-parental.dat. The PIN is written separately through
+    /// Host/Data/BigBoxPin (not here). `this` is the singleton the panel just mutated, so the writer reads
+    /// the new values in memory.</summary>
     public void Save()
     {
-        try
-        {
-            var cfg = LiteBoxConfig.LoadForExe();
-            cfg.SetSec(Section, "Enabled",                    B(Enabled));
-            cfg.SetSec(Section, "ForceWebHideAll",            B(ForceWebHideAll));
-            cfg.SetSec(Section, "AllowLockedModifyRatings",   B(AllowLockedModifyRatings));
-            cfg.SetSec(Section, "AllowLockedModifyFavorites", B(AllowLockedModifyFavorites));
-            cfg.SetSec(Section, "BlockInstallWhenLocked",     B(BlockInstallWhenLocked));
-            cfg.SetSec(Section, "Mode", Mode == ParentalMode.Blacklist ? "Blacklist" : "Whitelist");
-            cfg.SetSec(Section, "BigBoxWriteMode", BigBoxWriteMode == ParentalWriteMode.Merge ? "Merge" : "Block");
-            cfg.SetSec(Section, "HotKey", HotKey.ToString(CultureInfo.InvariantCulture));
-            cfg.Save();
-        }
-        catch (Exception ex) { Log("save scalars failed: " + ex.Message); }
-
-        try
-        {
-            var store = new ListStore
-            {
-                // Stamp the version WRITING the file (echoing the old value made the field inert —
-                // every file stayed "0.0.0" and carried no information). This file holds USER data:
-                // no reset gate — the stamp is provenance (format breaks = fresh install).
-                ConfigVersion = Data.ConfigVersioning.Stamp(),
-                Rules = Clean(Rules),
-                HiddenPlatformsBigBoxOn = Clean(HiddenPlatformsBigBoxOn),
-                HiddenPlatformsBigBoxOff = Clean(HiddenPlatformsBigBoxOff),
-            };
-            File.WriteAllText(ListsPath, JsonSerializer.Serialize(store, JsonOpts));
-            Log("saved lists to " + ListsPath);
-        }
-        catch (Exception ex) { Log("save lists failed: " + ex.Message); }
-
-        // Regenerate the flat file the native ASI reads (it can't read this ini / json / the Options DB).
-        // `this` is the singleton the panel just mutated, so the export reads the new values in memory.
-        try { ParentalNativeExport.Write(); } catch { }
+        try { ConfigVersion = Data.ConfigVersioning.Stamp(); } catch { }   // provenance stamp
+        try { ParentalNativeExport.Write(); }                              // the .dat IS the config now
+        catch (Exception ex) { Log("save failed: " + ex.Message); }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
@@ -212,11 +155,6 @@ internal sealed class ParentalConfig
         }
         return list;
     }
-
-    private static string B(bool v) => v ? "true" : "false";
-
-    private static int GetSecInt(LiteBoxConfig cfg, string key, int def)
-        => int.TryParse(cfg.GetSec(Section, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n : def;
 
     private static void Log(string msg) => LbLog.Info("parental", "config: " + msg);
 }

@@ -96,6 +96,12 @@ internal static class ParentalBridge
         get { try { return Parental.ParentalFilter.ForceAllConfigured; } catch { return false; } }
     }
 
+    /// <summary>Hide not-installed games (Installed=false) while parental is Active. Default ON.</summary>
+    public static bool HideUninstalled
+    {
+        get { try { return Parental.ParentalFilter.HideUninstalled; } catch { return false; } }
+    }
+
     public static bool IsRatingAllowed(string rating)
     {
         EnsureHooked();
@@ -106,6 +112,14 @@ internal static class ParentalBridge
     /// (<see cref="Parental.ParentalGameFlag"/>). Independent of the rating rules — callers hide the game
     /// when EITHER this or the rating check says so. Only meaningful while parental is Active.</summary>
     public static bool IsGameBlocked(string gameId) => Parental.ParentalGameFlag.IsBlocked(gameId);
+
+    /// <summary>Hot-path overload: read the flag straight off the extended game object (a GameRow bit stamped
+    /// at boot) instead of the string-id set lookup. Falls back to the id path for a foreign IGame.</summary>
+    public static bool IsGameBlocked(Unbroken.LaunchBox.Plugins.Data.IGame g)
+        => g is LbApiHost.Host.Data.HostGame hg ? hg.ParentalBlocked
+           : IsGameBlocked(g == null ? null : (Safe(() => g.Id)));
+
+    private static string Safe(Func<string> f) { try { return f() ?? ""; } catch { return ""; } }
 
     /// <summary>True when a platform / category / playlist with this name must be hidden.</summary>
     public static bool IsNameHidden(string name)

@@ -425,6 +425,8 @@ internal static class OwnedDataProvider
         if (st == null) return true;
         // Per-game "requires parental rights" flag — hidden from a locked client, on top of the rating rules.
         if (st.IsLocked && LbApiHost.Host.Parental.ParentalGameFlag.IsBlocked(Safe(() => g.Id))) return false;
+        // Hide not-installed games (Installed=false) from a locked client when the option is on (default).
+        if (st.IsLocked && LbApiHost.Host.Parental.ParentalConfig.Instance.HideUninstalled && SafeBoolN(() => g.Installed) == false) return false;
         return st.IsRatingAllowed(Safe(() => g.Rating));
     }
 

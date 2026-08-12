@@ -12,8 +12,13 @@ namespace LiteBoxParental
     /// (locked) and stays until an unlock via the Tools menu (UnlockMenu). BigBox drives lock/unlock here.</summary>
     public sealed class ParentalEventsPlugin : ISystemEventsPlugin
     {
+        // Arm the SOFT admin-lock + the managed HARD write-guard at plugin load (NOT in StartupHook — Harmony must
+        // never touch the early phase). Idempotent; LaunchBox/BigBox only; fully fail-safe.
+        public ParentalEventsPlugin() { ArmGuards(); }
+
         public void OnEventRaised(string eventType)
         {
+            ArmGuards();   // belt-and-suspenders: ensure armed even if the ctor ran before WPF was up
             try
             {
                 if (!LockState.ScopeActive) return;
@@ -33,6 +38,8 @@ namespace LiteBoxParental
             }
             catch (Exception ex) { Log.Line("[Events] " + eventType + " error: " + ex.Message); }
         }
+
+        private static void ArmGuards() => Guards.Arm();
 
         private static void SyncBigBox()
         {

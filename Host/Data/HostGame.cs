@@ -138,6 +138,11 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
     public bool HasManual => R.HasManual;
     public bool HasMultipleDocuments => R.HasMultipleDocuments;
 
+    /// <summary>Manual "requires parental rights" flag — the RUNTIME form of the shared .dat's BlockedId set
+    /// (stamped at boot by <see cref="Parental.ParentalGameFlag"/>). Read on the hot visibility path; the
+    /// persistent store is the .dat, so the setter also flips the row bit for an immediate repaint.</summary>
+    public bool ParentalBlocked { get => R.ParentalBlocked; set => _s.Rows[_i].ParentalBlocked = value; }
+
     /// <summary>Index into BadgeTable (0 = not evaluated). Written by the badge pass, read by every
     /// surface that draws badges — it is the whole per-game badge state, four bytes inside the row.</summary>
     public int BadgeCombo { get => R.BadgeCombo; set => _s.Rows[_i].BadgeCombo = value; }

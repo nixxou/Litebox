@@ -158,6 +158,7 @@ static int                             g_mode             = 0;      // 0 = White
 static std::vector<std::string>        g_rules;                     // Rule= wildcard patterns
 static std::unordered_set<std::string> g_blockedIds;                // BlockedId= per-game "requires parental" IDs
 static std::unordered_set<std::string> g_hiddenNames;               // HideName= platform/category/playlist names (lowercased) hidden WHEN LOCKED
+static bool                            g_hideUninstalled  = true;   // HideUninstalled=1 (DEFAULT ON): drop games with <Installed>false</Installed> while filtering
 static std::string                     g_pluginPath;                // PluginPath= (relative to LB\Core) — anti-tamper
 
 static std::string TrimCopy(const std::string& s)
@@ -270,6 +271,8 @@ static void LoadParentalConfig(const std::wstring& path)
         {
             if (!val.empty()) g_hiddenNames.insert(ToLowerCopy(val));  // matched case-insensitively vs file basenames / GamePlatform
         }
+        else if (key == "hideuninstalled")
+            g_hideUninstalled = ParseConfigBool(val);   // DEFAULT ON — absent key leaves it true
         else if (key == "pluginpath")
             g_pluginPath = val;
         // Version: ignored.
@@ -277,9 +280,9 @@ static void LoadParentalConfig(const std::wstring& path)
 
     char msg[256];
     snprintf(msg, sizeof(msg),
-             "[Boot] config loaded: Enabled=%d PinSet=%d mode=%s rules=%d blocked=%zu hidden=%zu",
+             "[Boot] config loaded: Enabled=%d PinSet=%d mode=%s rules=%d blocked=%zu hidden=%zu hideUninstalled=%d",
              g_enabled ? 1 : 0, g_pinSet ? 1 : 0,
-             g_mode == 1 ? "Blacklist" : "Whitelist", ruleCount, g_blockedIds.size(), g_hiddenNames.size());
+             g_mode == 1 ? "Blacklist" : "Whitelist", ruleCount, g_blockedIds.size(), g_hiddenNames.size(), g_hideUninstalled ? 1 : 0);
     Log(msg);
 }
 
@@ -467,9 +470,11 @@ ComputeKeptIds(const std::wstring& original)
                 totalGames++;
                 auto id = ExtractTagValue(buffer, "ID");
                 auto rating = ExtractTagValue(buffer, "Rating");
-                // Keep iff the rating passes the rules AND the game is not on the per-game blocked list.
+                // Keep iff the rating passes the rules AND the game is not on the per-game blocked list AND
+                // (when HideUninstalled is on) it is not an explicitly-uninstalled game (<Installed>false</Installed>).
                 bool blocked = !id.empty() && g_blockedIds.find(id) != g_blockedIds.end();
-                if (IsRatingAllowed(rating) && !blocked) {
+                bool uninstalled = g_hideUninstalled && ToLowerCopy(TrimCopy(ExtractTagValue(buffer, "Installed"))) == "false";
+                if (IsRatingAllowed(rating) && !blocked && !uninstalled) {
                     if (!id.empty()) ids->insert(id);
                 }
             }
@@ -1015,6 +1020,14 @@ extern "C" __declspec(dllexport) void __stdcall litebox_parental_set_writes_bloc
     g_writesBlocked = (on != 0);
     Log(std::string("[Control] set_writes_blocked -> ") + (g_writesBlocked ? "ON" : "off"));
 }
+// Toggle the .bin's own debug log (Core\litebox-parental.log). The managed StartupHook drives this from the
+// DEV test ini (DebugLog=0) so one switch silences BOTH the managed logs and this native one. Log the change
+// BEFORE flipping so an "off" transition is recorded.
+extern "C" __declspec(dllexport) void __stdcall litebox_parental_set_debug_log(int on)
+{
+    Log(std::string("[Control] set_debug_log -> ") + (on ? "ON" : "off"));
+    g_debugLog = (on != 0);
+}
 
 // -------------------- CreateFileW hook (reads only) --------------------
 
@@ -1127,6 +1140,31 @@ static HRESULT WINAPI Hook_CopyFile2(PCWSTR src, PCWSTR dst, COPYFILE2_EXTENDED_
     return g_orig_CopyFile2(src, dst, ep);
 }
 
+// DeleteFileW guard. Write-audit (2026-08) showed LaunchBox writes/creates every library XML via File.Copy
+// (CopyFileEx, hooked above) — but DELETES a platform file directly via File.Delete -> DeleteFileW when a
+// platform is removed or RENAMED (rename = write-new + delete-old), and in DataManager.RemoveEmptyPlatforms.
+// CopyFileEx never sees that, so without this hook a locked session could still lose a Platforms\*.xml (and
+// leave Platforms.xml pointing at a file we DID guard from rewrite → inconsistent). Same latch + scope + "pretend
+// success" convention as the copy guard: return TRUE without deleting, so the caller sees success and the real
+// file survives. Only library targets (Platforms\/Playlists\/Platforms.xml/Parents.xml) are touched — the many
+// transient Data\ deletes (UnsyncedChanges.xml, ImportBlacklist.xml, ImageQueue.xml) are NOT library files and
+// pass through, so LaunchBox's normal housekeeping is undisturbed.
+using DeleteFileW_t = BOOL (WINAPI*)(LPCWSTR);
+static DeleteFileW_t g_orig_DeleteFileW = nullptr;
+static BOOL WINAPI Hook_DeleteFileW(LPCWSTR path)
+{
+    if (!t_suppress && path != nullptr)
+    {
+        std::wstring p(path);
+        if (g_writesBlocked && IsLibraryWriteTarget(p))
+        {
+            Log(std::string("[Guard] BLOCKED DeleteFileW -> ") + Narrow(p) + " (locked; library file protected)");
+            return TRUE;   // pretend the delete succeeded; the real file is never removed
+        }
+    }
+    return g_orig_DeleteFileW(path);
+}
+
 // -------------------- exported bridge --------------------
 //
 // Opens the *real* file on disk, bypassing our own CreateFileW hook by calling the
@@ -1215,10 +1253,12 @@ extern "C" __declspec(dllexport) int __stdcall litebox_parental_arm()
     }
     g_isBigBox = RunningInBigBox();
 
-    if (!g_configPresent || !g_enabled)
+    // No PIN ⇒ inert. Parental can only be UNLOCKED with the BigBox LockPin; arming without one would filter the
+    // library with no way to lift it. PinSet is written to the .dat from the actual LockPin, so it is the gate.
+    if (!g_configPresent || !g_enabled || !g_pinSet)
     {
         Log(std::string("[Arm] attached to ") + (g_isBigBox ? "BigBox.exe" : "LaunchBox.exe")
-            + " — parental not configured, inert.");
+            + (g_enabled && !g_pinSet ? " — enabled but NO PIN set, inert (no unlock path)." : " — parental not configured, inert."));
         return 1;
     }
 
@@ -1245,6 +1285,7 @@ extern "C" __declspec(dllexport) int __stdcall litebox_parental_arm()
     {
         if (FARPROC p = GetProcAddress(k32, "CopyFileExW")) installHook((LPVOID)p, (LPVOID)&Hook_CopyFileExW, (LPVOID*)&g_orig_CopyFileExW, "CopyFileExW");
         if (FARPROC p = GetProcAddress(k32, "CopyFile2"))   installHook((LPVOID)p, (LPVOID)&Hook_CopyFile2,   (LPVOID*)&g_orig_CopyFile2,   "CopyFile2");
+        if (FARPROC p = GetProcAddress(k32, "DeleteFileW")) installHook((LPVOID)p, (LPVOID)&Hook_DeleteFileW, (LPVOID*)&g_orig_DeleteFileW, "DeleteFileW");
     }
 
     g_armed = true;

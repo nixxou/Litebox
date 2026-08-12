@@ -13,7 +13,7 @@
 // and "require PIN to install". Their ParentalConfig fields survive (still read elsewhere) at their
 // defaults (Block / false / false) — the panel just no longer exposes them.
 //
-// Scalars persist to LiteBox.ini [Parental]; the three lists to parental-lists.json — both via
+// The whole config (scalars + lists) persists to the shared Core\litebox-parental.dat via
 // ParentalConfig.Save(). The PIN persists through BigBoxPin.Set(). After a save the panel calls
 // ParentalFilter.NotifyConfigChanged() so the host tree/list filters and the web frontends re-read at once.
 
@@ -173,6 +173,8 @@ internal static class ParentalPanel
         cmbMode.Items.AddRange(new object[] { "Whitelist (show only matching ratings)", "Blacklist (hide matching ratings)" });
         cmbMode.SelectedIndex = cfg.Mode == ParentalMode.Blacklist ? 1 : 0;
         ThemeCombo(cmbMode); gRules.Controls.Add(cmbMode); y2 += 34;
+
+        var chkHideUninstalled = Chk(gRules, "Hide not-installed games (Installed = false) while locked", 12, y2, cfg.HideUninstalled); y2 += 30;
 
         Cap(gRules, "Rating patterns — wildcards * (any run) and ? (one char), matched against a game's rating (e.g. \"PEGI 18\", \"M\", \"Adult*\").", 12, y2, 690); y2 += 34;
         var lstRules = List(gRules, 12, y2, 360, 120);
@@ -367,6 +369,7 @@ internal static class ParentalPanel
             cfg.AllowLockedModifyRatings = chkAllowRatings.Checked;
             cfg.AllowLockedModifyFavorites = chkAllowFavorites.Checked;
             cfg.Mode = cmbMode.SelectedIndex == 1 ? ParentalMode.Blacklist : ParentalMode.Whitelist;
+            cfg.HideUninstalled = chkHideUninstalled.Checked;
             cfg.HotKey = (int)hotKey;
             cfg.Rules = lstRules.Items.Cast<object>().Select(o => o?.ToString() ?? "").Where(s => s.Trim().Length > 0).Select(s => s.Trim()).ToList();
             cfg.HiddenPlatformsBigBoxOn = lstHideOn.Items.Cast<object>().Select(o => o?.ToString() ?? "").Where(s => s.Trim().Length > 0).Select(s => s.Trim()).ToList();

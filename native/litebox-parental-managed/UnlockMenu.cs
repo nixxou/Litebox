@@ -14,9 +14,21 @@ namespace LiteBoxParental
 {
     public sealed class UnlockMenuItem : ISystemMenuItemPlugin
     {
-        // Caption is re-read each time LaunchBox builds the Tools menu, so it names JUST the action the
-        // click performs: "Unlock…" when locked (opens the PIN prompt), "Lock" when unlocked (immediate).
-        public string Caption => LockState.Locked ? "Parental control: Unlock…" : "Parental control: Lock";
+        // Caption is re-read each time LaunchBox builds the Tools menu, so it shows the LIVE lock STATUS and the
+        // action a click performs. Not-configured (parental off / no scope) is stated too, so the line never
+        // lies about what clicking will do.
+        public string Caption => CurrentLabel();
+
+        /// <summary>The live lock-status label. LaunchBox reads Caption only ONCE (at menu build) and caches it,
+        /// so AdminGuard also re-applies this to our menu item on every menu open to keep it current after a
+        /// lock/unlock. Single source of truth for the text.</summary>
+        internal static string CurrentLabel()
+        {
+            if (!LockState.ScopeActive) return "Parental control: not configured";
+            return LockState.Locked
+                ? "Parental control:  🔒 Locked  (click to unlock)"      // 🔒
+                : "Parental control:  🔓 Unlocked  (click to lock)";     // 🔓
+        }
         public Image IconImage => SystemIcons.Shield.ToBitmap();
         public bool ShowInLaunchBox => true;
         public bool ShowInBigBox => false;               // BigBox has its own lock/unlock

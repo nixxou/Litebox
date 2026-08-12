@@ -879,7 +879,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (ParentalBridge.ForceAll) return true;
         string plat = S(Safe(() => g.Platform));
         if (plat.Length > 0 && _parentalHiddenPlatforms.Contains(plat)) return true;
-        if (ParentalBridge.IsGameBlocked(S(Safe(() => g.Id)))) return true;   // per-game "requires parental" flag
+        if (ParentalBridge.IsGameBlocked(g)) return true;   // per-game "requires parental" flag (row bit)
+        if (ParentalBridge.HideUninstalled && Safe(() => g.Installed) == false) return true;   // hide not-installed games
         return !ParentalBridge.IsRatingAllowed(S(Safe(() => g.Rating)));
     }
 

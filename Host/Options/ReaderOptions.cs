@@ -45,6 +45,12 @@ internal static class ReaderOptions
 
         int S(int px) => (int)Math.Round(px * dpiS);
         var tabs = LbGlobalOptions.NewDarkTabControl(dpiS);
+        // Single row, unlike the other LB pages: those have ten-odd tabs that legitimately wrap, we
+        // have three. The pages are built while the control is still narrow, so with Multiline the
+        // three tabs wrapped onto TWO rows and the page area kept that taller-strip offset even once
+        // they fitted on one — the empty band under the tabs on first display (switching tabs
+        // recomputed it, which is why it seemed to fix itself).
+        tabs.Multiline = false;
         TabPage Page(string t)
         {
             var p = new TabPage(t)
@@ -56,21 +62,31 @@ internal static class ReaderOptions
             return p;
         }
 
-        // The pages are filled before the control has a handle (so no real size yet): the first paint
-        // could show an unpainted band until something forced a relayout — switching tabs did, which
-        // is why it "fixed itself". Do that relayout ourselves as soon as the section is shown.
+        // The pages are filled before the control has a handle (so with no real size), which left an
+        // unpainted band on the first draw until something forced a relayout — switching tabs did,
+        // which is why it looked like it fixed itself. Force that relayout ourselves.
+        //
+        // Hooked on PAINT (one-shot) rather than VisibleChanged: the options window builds every
+        // section up front and swaps them by RE-PARENTING, so a section shown after the window is
+        // already open never changes Visible and never got the fix. Paint fires on every path.
         void Settle()
         {
             try
             {
                 tabs.PerformLayout();
-                foreach (TabPage p in tabs.TabPages) p.PerformLayout();
+                foreach (TabPage p in tabs.TabPages) { p.PerformLayout(); p.Invalidate(true); }
                 tabs.Invalidate(true);
             }
             catch { }
         }
-        tabs.HandleCreated += (_, _) => { try { tabs.BeginInvoke(Settle); } catch { } };
-        tabs.VisibleChanged += (_, _) => { if (tabs.Visible) { try { tabs.BeginInvoke(Settle); } catch { } } };
+        PaintEventHandler? firstPaint = null;
+        firstPaint = (_, _) =>
+        {
+            tabs.Paint -= firstPaint;                       // one-shot: Settle repaints, no loop
+            try { tabs.BeginInvoke(Settle); } catch { }
+        };
+        tabs.Paint += firstPaint;
+        tabs.ParentChanged += (_, _) => { try { if (tabs.IsHandleCreated) tabs.BeginInvoke(Settle); } catch { } };
 
         var (readerPanel, applyReader) = UiKit.OptionRows.Build(BuildReaderItems(g), S);
         readerPanel.Dock = DockStyle.Fill;

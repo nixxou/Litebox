@@ -851,6 +851,35 @@ internal static class LbGlobalOptions
             BackColor = Color.FromArgb(30, 30, 30), ForeColor = Color.FromArgb(222, 222, 222),
             SizeMode = TabSizeMode.Normal, Padding = new Point(S(14), S(4)),
         };
+        // A Multiline strip computes its ROW COUNT from the control's width — and every section is
+        // populated while it is still narrow, so the strip could stay stuck on the wrapped (taller)
+        // row count once the section is shown at full width, leaving an empty band between the tabs
+        // and the page. Switching tabs recomputed it, which is why it looked like it fixed itself.
+        // Toggling Multiline is what forces the recount for the CURRENT width.
+        // The recount is triggered the way a user did it by hand — reselecting a tab. (Toggling
+        // Multiline also recomputes it, but that is a style change: it RECREATES the handle and left
+        // the section blank.) Once only, on the first real size, deferred so it runs after layout.
+        bool recounted = false;
+        tabs.SizeChanged += (_, _) =>
+        {
+            if (recounted || !tabs.Multiline || tabs.TabPages.Count < 2 || tabs.Width < S(80)) return;
+            recounted = true;
+            try
+            {
+                tabs.BeginInvoke(() =>
+                {
+                    try
+                    {
+                        int keep = tabs.SelectedIndex;
+                        tabs.SelectedIndex = keep == 0 ? 1 : 0;
+                        tabs.SelectedIndex = keep;
+                    }
+                    catch { }
+                });
+            }
+            catch { }
+        };
+
         tabs.DrawItem += (_, e) =>
         {
             if (e.Index < 0 || e.Index >= tabs.TabPages.Count) return;

@@ -45,12 +45,9 @@ internal static class ReaderOptions
 
         int S(int px) => (int)Math.Round(px * dpiS);
         var tabs = LbGlobalOptions.NewDarkTabControl(dpiS);
-        // Single row, unlike the other LB pages: those have ten-odd tabs that legitimately wrap, we
-        // have three. The pages are built while the control is still narrow, so with Multiline the
-        // three tabs wrapped onto TWO rows and the page area kept that taller-strip offset even once
-        // they fitted on one — the empty band under the tabs on first display (switching tabs
-        // recomputed it, which is why it seemed to fix itself).
-        tabs.Multiline = false;
+        // (The empty band that used to sit under these tabs was the shared Multiline strip keeping a
+        // wrapped row count from when the section was still narrow — fixed in NewDarkTabControl for
+        // every tabbed LB section, so nothing special is needed here.)
         TabPage Page(string t)
         {
             var p = new TabPage(t)

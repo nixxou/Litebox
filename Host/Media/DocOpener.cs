@@ -50,8 +50,10 @@ internal static class DocOpener
             Console.WriteLine($"[docs] open \"{Path.GetFileName(path)}\" → {(exe != null ? "LB Reader" : "shell")} ({why})");
             if (exe == ExternalReaderMarker)
             {
-                // Provider = ExternalReader: LB's configured external viewer wins over the shell.
+                // An external viewer wins over the shell: LB's configured one on 14+, LiteBox's own
+                // ini path when this LaunchBox has no Reader at all (see ReaderOptions).
                 var ext = ReaderSettingsDb.LoadGlobal()?.ExternalReaderExecutablePath ?? "";
+                if (ext.Length == 0) ext = LiteBoxConfig.LoadForExe().Get(Options.ReaderOptions.ExternalReaderKey, "") ?? "";
                 if (ext.Length > 0 && File.Exists(ext))
                 {
                     Process.Start(new ProcessStartInfo(ext, $"\"{path}\"") { UseShellExecute = false });
@@ -92,6 +94,15 @@ internal static class DocOpener
     /// set to the default application, unsupported format, pre-14 / Reader not deployed).</summary>
     private static (string? exe, string why) ResolveReader(string path)
     {
+        // No LaunchBox Reader on this install (pre-14, or not deployed): the only alternative to the
+        // shell is the external viewer LiteBox keeps in its own ini — LB's settings stay untouched.
+        if (!ReaderSettingsDb.Available)
+        {
+            var own = LiteBoxConfig.LoadForExe().Get(Options.ReaderOptions.ExternalReaderKey, "") ?? "";
+            return own.Length > 0 && File.Exists(own)
+                ? (ExternalReaderMarker, "external reader (LiteBox.ini)")
+                : (null, "no LaunchBox Reader on this install");
+        }
         if (!LiteBoxConfig.LoadForExe().GetBool("UseLbReaderForDocs", false)) return (null, "UseLbReaderForDocs=false");
         // LB's own provider choice (Options → Reader → Reader Provider) is honoured when the Reader
         // settings DB exists — one setting for both apps.

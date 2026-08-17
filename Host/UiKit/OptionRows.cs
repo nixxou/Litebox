@@ -61,6 +61,50 @@ internal static class OptionRows
                     applies.Add(() => ApplyIfChanged(it, tb.Text));
                     break;
                 }
+                case OptionKind.Path:
+                {
+                    // Textbox + Browse… on one line: the path stays typeable, the picker fills it in.
+                    var lbl = new Label { Text = it.Label, AutoSize = true, ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg };
+                    var pathRow = new FlowLayoutPanel
+                    {
+                        FlowDirection = FlowDirection.LeftToRight, WrapContents = false,
+                        AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = LiteBoxTheme.Bg,
+                        Margin = new Padding(0, S(4), 0, 0),
+                    };
+                    var tb = new TextBox
+                    {
+                        Width = S(480), Margin = new Padding(0),
+                        BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
+                        Text = it.Get(),
+                    };
+                    var browse = new Button
+                    {
+                        Text = "Browse…", AutoSize = true, Margin = new Padding(S(6), 0, 0, 0),
+                        FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg,
+                        FlatAppearance = { BorderSize = 0 }, Cursor = Cursors.Hand,
+                    };
+                    browse.Click += (_, _) =>
+                    {
+                        using var dlg = new OpenFileDialog
+                        {
+                            Title = it.Label,
+                            Filter = it.FileFilter ?? "Programs (*.exe)|*.exe|All files (*.*)|*.*",
+                            CheckFileExists = true,
+                        };
+                        try
+                        {
+                            var cur = tb.Text.Trim();
+                            var dir = cur.Length > 0 ? System.IO.Path.GetDirectoryName(cur) : null;
+                            if (!string.IsNullOrEmpty(dir) && System.IO.Directory.Exists(dir)) dlg.InitialDirectory = dir;
+                        }
+                        catch { }
+                        if (dlg.ShowDialog(tb.FindForm()) == DialogResult.OK) tb.Text = dlg.FileName;
+                    };
+                    pathRow.Controls.Add(tb); pathRow.Controls.Add(browse);
+                    row.Controls.Add(lbl); row.Controls.Add(pathRow);
+                    applies.Add(() => ApplyIfChanged(it, tb.Text));
+                    break;
+                }
                 case OptionKind.Number:
                 {
                     // Label beside a numeric spinner (digits only, clamped) — own left-to-right sub-flow.

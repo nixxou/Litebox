@@ -24,6 +24,7 @@ internal enum OptionKind
     Number,   // numeric-only spinner (NumericUpDown), clamped to [NumMin, NumMax]
     Choice,   // combobox over Choices
     Button,   // a plain button that runs OnClick (e.g. open a sub-dialog)
+    Path,     // textbox + Browse… (file picker), for an executable / file setting
 }
 
 internal sealed class OptionItem
@@ -46,6 +47,9 @@ internal sealed class OptionItem
     /// formatted invariant).</summary>
     public int NumMin, NumMax = 100, NumStep = 1;
 
+    /// <summary>Path kind: the OpenFileDialog filter for the Browse… picker (null = programs).</summary>
+    public string? FileFilter;
+
     public Func<string> Get = () => "";
     public Action<string> Set = _ => { };
     public Action? ApplyLive;
@@ -66,6 +70,13 @@ internal sealed class OptionItem
 
     public static OptionItem Text(string section, string label, Func<string> get, Action<string> set, string? help = null, Action? applyLive = null)
         => new(section, label, OptionKind.Text) { Help = help, Get = get, Set = set, ApplyLive = applyLive };
+
+    /// <summary>A file path with a Browse… picker beside the box (the value stays freely typeable).
+    /// <paramref name="filter"/> is an OpenFileDialog filter; the default offers programs.</summary>
+    public static OptionItem PathPick(string section, string label, Func<string> get, Action<string> set,
+                                      string? help = null, string? filter = null, Action? applyLive = null)
+        => new(section, label, OptionKind.Path)
+        { Help = help, Get = get, Set = set, ApplyLive = applyLive, FileFilter = filter };
 
     // Numeric spinner (digits only, clamped to [min, max]). Get/Set speak the integer as an invariant string.
     public static OptionItem Number(string section, string label, Func<int> get, Action<int> set,

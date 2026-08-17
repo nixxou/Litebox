@@ -55,6 +55,8 @@ internal static class GlobalDefaults
         // (supported formats only; silently shell elsewhere — see Media/DocOpener)
         ("UseLbReaderForDocs",              "false"),
         ("LbReaderFullscreen",              "true"),       // --fullscreen like LB itself (windowed opt-out)
+        // Viewer used when this LaunchBox has NO Reader (pre-14): empty = the file's default program
+        ("ExternalReaderPath",              ""),
         // Videos in the right pane
         ("VideoAutoplay",                   "false"),
         ("VideoAutoplaySound",              "false"),

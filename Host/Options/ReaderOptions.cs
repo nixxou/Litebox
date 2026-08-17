@@ -39,9 +39,8 @@ internal static class ReaderOptions
     /// Priorities) rather than the button-strip variant, so it doesn't stand out among them.</summary>
     public static void AddSections(OptionsWindow w, bool readOnly, float dpiS)
     {
-        if (!ReaderSettingsDb.Available) return;
-        var g = ReaderSettingsDb.LoadGlobal();
-        if (g == null) return;
+        var g = ReaderSettingsDb.Available ? ReaderSettingsDb.LoadGlobal() : null;
+        if (g == null) { AddExternalOnlySection(w, readOnly); return; }
 
         int S(int px) => (int)Math.Round(px * dpiS);
         var tabs = LbGlobalOptions.NewDarkTabControl(dpiS);
@@ -104,6 +103,26 @@ internal static class ReaderOptions
         });
     }
 
+    /// <summary>Pre-14 (or a v14 whose Reader isn't deployed): there is no LaunchBox Reader, so the
+    /// only thing to configure is an EXTERNAL viewer — no provider choice, and nothing is written on
+    /// LaunchBox's side: the path is LiteBox's own (LiteBox.ini), leaving LB's settings untouched.
+    /// Empty ⇒ documents open with the program Windows associates with them, as before.</summary>
+    private static void AddExternalOnlySection(OptionsWindow w, bool readOnly)
+    {
+        var cfg = LiteBoxConfig.LoadForExe();
+        w.AddSection("LB · Reader", new[]
+        {
+            OptionItem.PathPick("reader", "External reader executable",
+                () => cfg.Get(ExternalReaderKey, ""), v => cfg.Set(ExternalReaderKey, (v ?? "").Trim()),
+                "This LaunchBox has no built-in Reader (14.0 and later ship one), so LiteBox opens a "
+                + "game's manuals and documents with the program you set here. Leave it empty to use "
+                + "the program Windows associates with each file type."),
+        }, readOnly);
+    }
+
+    /// <summary>LiteBox.ini key holding the external viewer used when LB has no Reader.</summary>
+    internal const string ExternalReaderKey = "ExternalReaderPath";
+
     // ── Tab 1: the Reader page (same fields and wording as LB's own) ──────
 
     private static List<OptionItem> BuildReaderItems(ReaderGlobalSettings g)
@@ -127,7 +146,7 @@ internal static class ReaderOptions
                 () => g.ReaderProvider, v => g.ReaderProvider = v,
                 "Which viewer opens a game's manuals and documents. LiteBox follows this too — "
                 + "\"Default application\" means the program Windows associates with the file type."),
-            OptionItem.Text(S, "External reader executable",
+            OptionItem.PathPick(S, "External reader executable",
                 () => g.ExternalReaderExecutablePath, v => g.ExternalReaderExecutablePath = v,
                 "Used only when the provider is \"External reader\". The document path is passed as its argument."),
 

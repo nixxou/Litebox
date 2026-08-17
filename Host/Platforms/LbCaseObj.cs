@@ -78,7 +78,7 @@ internal static class LbCaseObj
         try
         {
             var win = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "Unbroken.LaunchBox.Windows")
-                      ?? Assembly.LoadFrom(System.IO.Path.Combine(AppContext.BaseDirectory, "Unbroken.LaunchBox.Windows.dll"));
+                      ?? Assembly.LoadFrom(System.IO.Path.Combine(PluginLoader.ResolveCoreDir(), "Unbroken.LaunchBox.Windows.dll"));
             var resName = win.GetManifestResourceNames().FirstOrDefault(n => n.EndsWith("JewelCaseSpines.resources", StringComparison.OrdinalIgnoreCase));
             if (resName == null) return;
             using var s = win.GetManifestResourceStream(resName);

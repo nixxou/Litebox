@@ -44,7 +44,9 @@ internal static class CoreModelHost
         _initTried = true;
         try
         {
-            string core = AppContext.BaseDirectory;
+            // The REAL LB Core: the exe's folder on a deployed install, the resolved LB root's Core
+            // in a dev bin\ run (same fallback chain as the plugin loader).
+            string core = PluginLoader.ResolveCoreDir();
             _win = Assembly.LoadFrom(Path.Combine(core, "Unbroken.LaunchBox.Windows.dll"));
             _baseAsm = Assembly.LoadFrom(Path.Combine(core, "Unbroken.LaunchBox.dll"));
             try { _localDb = Assembly.LoadFrom(Path.Combine(core, "Unbroken.LaunchBox.LocalDb.dll")); } catch { }
@@ -66,10 +68,25 @@ internal static class CoreModelHost
             // 1) NamingHelper.RootFolder
             TrySetStatic(_baseAsm.GetType("Unbroken.LaunchBox.NamingHelper"), "RootFolder", lbRoot);
 
-            // 2) LocalDbContext.DbFilePath
+            // 2) The metadata database. Two generations of the same step:
+            //    ≤13.28 — static LocalDbContext.DbFilePath.
+            //    14+    — LocalDbContextFactory.Initialize(dbFilePath), MANDATORY: every art-path
+            //             resolution creates a read context through the factory and throws
+            //             "LocalDbContextFactory.Initialize must be called" until it ran (this is
+            //             what silently blanked the whole oracle on v14 — RedrawModel swallowed the
+            //             throw per game and built nothing).
             string db = Path.Combine(lbRoot, "Metadata", "LaunchBox.Metadata.db");
             if (File.Exists(db))
+            {
                 TrySetStatic(_localDb?.GetType("Unbroken.LaunchBox.LocalDb.LocalDbContext"), "DbFilePath", db);
+                try
+                {
+                    _localDb?.GetType("Unbroken.LaunchBox.LocalDb.LocalDbContextFactory")
+                        ?.GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null)
+                        ?.Invoke(null, new object[] { db });
+                }
+                catch (Exception ex) { Console.WriteLine("[model3d] LocalDbContextFactory.Initialize: " + (ex.InnerException?.Message ?? ex.Message)); }
+            }
 
             // 3) GamesDb.GetPlatformScrapeValueFunc = identity — the load-bearing null-delegate fix.
             try

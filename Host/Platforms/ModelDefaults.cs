@@ -201,7 +201,7 @@ internal static class ModelDefaults
             Assembly? win = null;
             foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
                 if (string.Equals(a.GetName().Name, "Unbroken.LaunchBox.Windows", StringComparison.OrdinalIgnoreCase)) { win = a; break; }
-            win ??= Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "Unbroken.LaunchBox.Windows.dll"));
+            win ??= Assembly.LoadFrom(Path.Combine(PluginLoader.ResolveCoreDir(), "Unbroken.LaunchBox.Windows.dll"));
             var t = win.GetType("Unbroken.LaunchBox.Windows.Data.ModelSettings");
             _method = t?.GetMethod("GetDefaultSettings", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string), typeof(string) }, null);
             _props = t?.GetProperties(BindingFlags.Public | BindingFlags.Instance);

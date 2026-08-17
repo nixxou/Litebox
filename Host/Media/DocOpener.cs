@@ -39,7 +39,10 @@ internal static class DocOpener
             Console.WriteLine($"[docs] open \"{Path.GetFileName(path)}\" → {(exe != null ? "LB Reader" : "shell")} ({why})");
             if (exe != null)
             {
-                Process.Start(new ProcessStartInfo(exe, $"\"{path}\"") { UseShellExecute = false });
+                // -fullscreen: probed empirically (window covers the screen instead of the default
+                // windowed 26,26 frame; the document still loads). LbReaderFullscreen ini key.
+                bool fs = LiteBoxConfig.LoadForExe().GetBool("LbReaderFullscreen", false);
+                Process.Start(new ProcessStartInfo(exe, $"{(fs ? "-fullscreen " : "")}\"{path}\"") { UseShellExecute = false });
                 return;
             }
         }

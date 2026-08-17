@@ -46,6 +46,11 @@ internal static class LinkFavicon
             return;
         }
 
+        // Offline short-circuit (instant — NIC state only, no DNS/socket): fire nothing at all.
+        // Deliberately NOT recorded as a miss, so favicons simply resume if the network comes back
+        // later in the session. A LiteBox used fully offline never spawns a single fetch task.
+        try { if (!System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable()) return; } catch { return; }
+
         _ = Task.Run(async () =>
         {
             Image? img = null;

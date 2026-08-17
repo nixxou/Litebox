@@ -35,7 +35,8 @@ internal static class DocOpener
         if (string.IsNullOrEmpty(path)) return;
         try
         {
-            var exe = ReaderExeIfEnabled(path);
+            var (exe, why) = ResolveReader(path);
+            Console.WriteLine($"[docs] open \"{Path.GetFileName(path)}\" → {(exe != null ? "LB Reader" : "shell")} ({why})");
             if (exe != null)
             {
                 Process.Start(new ProcessStartInfo(exe, $"\"{path}\"") { UseShellExecute = false });
@@ -47,14 +48,14 @@ internal static class DocOpener
         catch (Exception ex) { Console.WriteLine("[docs] open failed: " + ex.Message); }
     }
 
-    /// <summary>The Reader exe to use for <paramref name="path"/>, or null → shell (option off,
-    /// unsupported format, pre-14 install / Reader not deployed).</summary>
-    private static string? ReaderExeIfEnabled(string path)
+    /// <summary>The Reader exe to use for <paramref name="path"/> (+ the routing reason for the
+    /// log), exe null → shell (option off, unsupported format, pre-14 / Reader not deployed).</summary>
+    private static (string? exe, string why) ResolveReader(string path)
     {
-        if (!LiteBoxConfig.LoadForExe().GetBool("UseLbReaderForDocs", false)) return null;
-        if (!ReaderExts.Contains(Path.GetExtension(path))) return null;
+        if (!LiteBoxConfig.LoadForExe().GetBool("UseLbReaderForDocs", false)) return (null, "UseLbReaderForDocs=false");
+        if (!ReaderExts.Contains(Path.GetExtension(path))) return (null, "format not Reader-supported: " + Path.GetExtension(path));
         string root = MediaResolver.LbRoot ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
         string exe = Path.Combine(root, "System", "Software", "LaunchBox Reader", "LaunchBox.Reader.exe");
-        return File.Exists(exe) ? exe : null;
+        return File.Exists(exe) ? (exe, "ok") : (null, "Reader not found: " + exe);
     }
 }

@@ -38,12 +38,19 @@ namespace LbApiHost.Host.Media;
 
 internal static class DocOpener
 {
-    /// <summary>Formats LB Reader 1.0.2 actually loads, probed on the real v14 install (title bar
-    /// carries the document name on success): pdf/txt/cbz/cbr + images. docx, html and md open an
-    /// EMPTY Reader — those stay on the shell. epub: untested here (no sample) but a documented
-    /// Reader format (14.0 changelog), so it routes too.</summary>
+    /// <summary>The Reader's SUPPORTED formats, per its own documentation: PDF documents, EPUB books,
+    /// comic archives (CBZ/CBR/CB7/CBT), archives (ZIP/RAR/7Z), images (JPG/PNG/GIF/BMP/WEBP — .jpeg
+    /// is the same format under its long extension), text (TXT/RTF), and folders of supported images.
+    /// Case-insensitive. Anything else falls back to the file's default program even when the Reader
+    /// is the provider — it would only show an empty window (verified empirically on docx/html/md).</summary>
     private static readonly HashSet<string> ReaderExts = new(StringComparer.OrdinalIgnoreCase)
-    { ".pdf", ".epub", ".txt", ".cbz", ".cbr", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp" };
+    {
+        ".pdf", ".epub",
+        ".cbz", ".cbr", ".cb7", ".cbt",
+        ".zip", ".rar", ".7z",
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp",
+        ".txt", ".rtf",
+    };
 
     /// <summary>Open a document (manual or additional document) per the configured mode.
     /// The optional metadata mirrors LB 14's own Reader invocation; <paramref name="launchWindow"/>
@@ -119,7 +126,10 @@ internal static class DocOpener
             if (string.Equals(g.ReaderProvider, "ExternalReader", StringComparison.OrdinalIgnoreCase))
                 return (ExternalReaderMarker, "provider = External reader");
         }
-        if (!ReaderExts.Contains(Path.GetExtension(path))) return (null, "format not Reader-supported: " + Path.GetExtension(path));
+        // A FOLDER of images is a supported Reader document too (its docs list it explicitly).
+        bool folderDoc = false; try { folderDoc = Directory.Exists(path); } catch { }
+        if (!folderDoc && !ReaderExts.Contains(Path.GetExtension(path)))
+            return (null, "format not Reader-supported: " + Path.GetExtension(path));
         string root = MediaResolver.LbRoot ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
         string exe = Path.Combine(root, "System", "Software", "LaunchBox Reader", "LaunchBox.Reader.exe");
         return File.Exists(exe) ? (exe, "ok") : (null, "Reader not found: " + exe);

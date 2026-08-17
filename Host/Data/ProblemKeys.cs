@@ -21,6 +21,20 @@ namespace LbApiHost.Host.Data;
 
 internal static class ProblemKeys
 {
+    // LB 14 AUDIT (2026-08, full key-set diff of a real 13.28 install vs a real 14.0 install):
+    // NO renames — nothing to add here. Settings.xml: 3 keys removed (FfmeVideoPriorities — the
+    // FFME engine is gone —, LocalDiagnosticKey, OverrideBetaLogging; none used by LiteBox) and
+    // 7 added (AlwaysShowArrangeScrollBar, FastBoxImageAlign, HasMigratedFastGridAspectRatio,
+    // SendErrorReports, SendPerformanceDiagnostics, UseArrangeScrollBar,
+    // UseHighFrameRateVlcRendering; LiteBox binds none of them). BigBoxSettings.xml: IDENTICAL
+    // key set (565 = 565, LockPin included). Every key LiteBox reads or writes — store accessors
+    // AND the direct readers (DOSBox opts, gameplay, Steam, RetroAchievements, EmuMovies,
+    // CloudAuthenticationToken, RegionPriorities, EnableAutomatedImports/EnableRomAutoImports) —
+    // exists in v14. Unknown keys round-trip through LbSettingsStore's full name→value load, so
+    // the 7 additions survive a LiteBox rewrite untouched.
+    // IF LiteBox ever binds a v14-only key, give it a _new14Keys bucket DB-managed when
+    // LbVersion.Product?.Major < 14 — same pattern as _new1328Keys below.
+
     // Settings.xml keys introduced on the LB 13.28 line (renamed or brand-new). Present and
     // understood by 13.28+, unknown to 13.27 — which would drop them on rewrite. When we run
     // against a pre-13.28 LB these are DB-managed; against 13.28+ they stay in shared XML.

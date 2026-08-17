@@ -51,6 +51,9 @@ internal static class GlobalDefaults
         ("CleanModel3d",                    "true"),
         ("CleanOptionsDb",                  "true"),
         ("ThumbAlphaFormat",                "png"),         // png | webp
+        // Documents: open manuals/additional documents with LB 14's Reader instead of the shell
+        // (supported formats only; silently shell elsewhere — see Media/DocOpener)
+        ("UseLbReaderForDocs",              "false"),
         // Videos in the right pane
         ("VideoAutoplay",                   "false"),
         ("VideoAutoplaySound",              "false"),

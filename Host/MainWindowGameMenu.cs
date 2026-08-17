@@ -209,8 +209,10 @@ internal sealed partial class MainWindow
         bool has3d = Safe(() => Model3d.Model3dCache.Resolve(g)) is { HasArt: true };
         media.DropDownItems.Add(Item("View 3D Box Model…", MenuIcons.View3dBox, () => OpenFullscreen3d(g), has3d));
 
+        // Manual + documents open through DocOpener (shell, or LB 14's Reader when the
+        // UseLbReaderForDocs ini key is on — one opener for every surface).
         string manual = S(Safe(() => g.GetManualPath()));
-        media.DropDownItems.Add(Item("View Manual…", MenuIcons.ViewManual, () => ShellOpen(manual),
+        media.DropDownItems.Add(Item("View Manual…", MenuIcons.ViewManual, () => Media.DocOpener.Open(manual),
             manual.Length > 0 && File.Exists(manual)));
 
         // LB parity (Media ▸, same slots): the game's Document records opened via the shell, and its
@@ -232,7 +234,7 @@ internal sealed partial class MainWindow
         foreach (var d in docs)
         {
             string abs = Safe(() => EditGameWindow.DocResolve(d.ApplicationPath)) ?? "";
-            docsMenu.DropDownItems.Add(Item(S(Safe(() => d.Name)), null, () => ShellOpen(abs),
+            docsMenu.DropDownItems.Add(Item(S(Safe(() => d.Name)), null, () => Media.DocOpener.Open(abs),
                 abs.Length > 0 && File.Exists(abs)));
         }
         media.DropDownItems.Add(docsMenu);

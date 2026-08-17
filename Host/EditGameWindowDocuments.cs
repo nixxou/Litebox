@@ -929,7 +929,9 @@ internal sealed partial class EditGameWindow
 
     private void DocOpen(string abs)
     {
-        try { Process.Start(new ProcessStartInfo { FileName = abs, UseShellExecute = true }); }
+        // Shell, or LB 14's Reader when the UseLbReaderForDocs ini key is on (Media/DocOpener —
+        // the same opener the pause screen and the game context menu use).
+        try { Media.DocOpener.Open(abs); }
         catch (Exception ex) { MessageBox.Show(this, "Couldn't open:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
     }
 

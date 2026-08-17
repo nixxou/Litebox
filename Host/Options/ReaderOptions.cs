@@ -47,10 +47,30 @@ internal static class ReaderOptions
         var tabs = LbGlobalOptions.NewDarkTabControl(dpiS);
         TabPage Page(string t)
         {
-            var p = new TabPage(t) { BackColor = ModulePanelKit.Bg, Padding = new Padding(S(2)) };
+            var p = new TabPage(t)
+            {
+                BackColor = ModulePanelKit.Bg, Padding = new Padding(S(2)),
+                UseVisualStyleBackColor = false,   // else the page paints itself in the LIGHT system style
+            };
             tabs.TabPages.Add(p);
             return p;
         }
+
+        // The pages are filled before the control has a handle (so no real size yet): the first paint
+        // could show an unpainted band until something forced a relayout — switching tabs did, which
+        // is why it "fixed itself". Do that relayout ourselves as soon as the section is shown.
+        void Settle()
+        {
+            try
+            {
+                tabs.PerformLayout();
+                foreach (TabPage p in tabs.TabPages) p.PerformLayout();
+                tabs.Invalidate(true);
+            }
+            catch { }
+        }
+        tabs.HandleCreated += (_, _) => { try { tabs.BeginInvoke(Settle); } catch { } };
+        tabs.VisibleChanged += (_, _) => { if (tabs.Visible) { try { tabs.BeginInvoke(Settle); } catch { } } };
 
         var (readerPanel, applyReader) = UiKit.OptionRows.Build(BuildReaderItems(g), S);
         readerPanel.Dock = DockStyle.Fill;

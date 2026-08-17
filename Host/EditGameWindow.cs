@@ -371,6 +371,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         // groups them by type, so sub-nodes only added clicks (unlike Images, where a category can hold dozens).
         media.Nodes.Add(N("Videos", "Videos"));
         media.Nodes.Add(N("Documents", "Documents"));
+        media.Nodes.Add(N("Links", "Links"));   // LB 14 parity: web links (Section=Link add-app records)
         media.Nodes.Add(N("Music", "Music"));
         media.Nodes.Add(N("3D Model Settings", "ModelSettings"));
         media.Nodes.Add(N("Image Query", "ImageQuery"));   // batch tool — works for 1..N selected games
@@ -423,6 +424,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "Images" => IsMulti ? BuildImagesMatrixPage() : BuildImagesPage(),   // multi → media-coverage matrix
                 "Videos" => IsMulti ? BuildVideosMatrixPage() : BuildVideosPage(),   // multi → video-coverage matrix
                 "Documents" => IsMulti ? Placeholder("Documents") : BuildDocumentsPage(),   // manual + additional documents
+                "Links" => IsMulti ? Placeholder("Links") : BuildLinksPage(),   // LB 14 web links
                 "Music" => IsMulti ? Placeholder("Music") : BuildMusicPage(),   // flat collection + designation + integrated player
                 "ModelSettings" => IsMulti ? Placeholder("3D Model Settings") : BuildModelSettingsPage(),
                 "ImageQuery" => BuildImageQueryPage(),   // works for 1..N games (single or multi selection)

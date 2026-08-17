@@ -174,9 +174,11 @@ internal sealed partial class EditGameWindow
         // but IsLikelyVersion has no concept of them (its rule predates that tab) and routes every one into
         // the "Apps" bucket below — exclude them here so they're managed exclusively by the dedicated Documents
         // page instead of ALSO being editable/deletable/launchable from this generic one.
-        // LB 14's Links (Section=="Link") are NOT excluded, deliberately: LiteBox has no dedicated Links
-        // page yet, so the Apps bucket is where a v14 link stays visible, editable and deletable. They are
-        // already excluded from every launch surface (play menus / autorun / M3U / web — IsNonLaunchable).
+        // LB 14's Links (effective Section=="Link") are NOT excluded, deliberately: LB 14 itself
+        // DOUBLE-LISTS a link on its Additional Apps page as well as its Links tab (observed on the
+        // v14 install), so LiteBox keeps the same behaviour — the dedicated Links page (see
+        // EditGameWindowLinks) is the primary editor, this bucket mirrors it. They remain excluded
+        // from every launch surface (play menus / autorun / M3U / web — IsNonLaunchable).
         apps = apps.Where(a => a is not Data.HostAdditionalApplication { IsDocument: true }).ToArray();
         // ORDRE DU FICHIER, comme LaunchBox : son dialogue presente les versions dans l ordre du
         // XML, sans tri — mesure sur capture, apres que deux lectures successives ont pris NOTRE

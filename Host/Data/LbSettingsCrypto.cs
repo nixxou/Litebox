@@ -44,8 +44,10 @@ internal static class LbSettingsCrypto
     private static string? _emuKeySeed;
     private static bool _emuKeyResolved;
 
+    // The RESOLVED LB root when the host booted one (MediaResolver.Init ran — covers a dev bin\ run
+    // pointed at any install via --library); exe\.. otherwise (installed layout: the exe IS in Core).
     private static string SettingsPath
-        => Path.Combine(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..")), "Data", "Settings.xml");
+        => Path.Combine(Media.MediaResolver.LbRoot ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..")), "Data", "Settings.xml");
 
     /// <summary>LaunchBox/Settings/ID in "N" form (no dashes), read from Data\Settings.xml and cached. Null when the
     /// file or the &lt;ID&gt; element is absent — the boot guard turns that into a user-facing message.</summary>

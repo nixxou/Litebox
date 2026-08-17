@@ -37,8 +37,10 @@ internal static class LbKeys
     public const string MameIv  = "d5c7c1658e2146ff998af26432c2b2a4";
 
     // ── Per-install values, read from Data\Settings.xml at runtime ────────────────────────────
+    // Resolved LB root first (dev bin\ runs pointed at an install via --library), exe\.. fallback
+    // (installed layout) — same pattern as LbSettingsCrypto.SettingsPath / SaveManager.LbRoot.
     private static string SettingsPath
-        => Path.Combine(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..")), "Data", "Settings.xml");
+        => Path.Combine(Media.MediaResolver.LbRoot ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..")), "Data", "Settings.xml");
 
     /// <summary>Read one direct child of LaunchBox/Settings by local name (trimmed), or "" if absent.</summary>
     private static string ReadSetting(string name)

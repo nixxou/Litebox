@@ -1164,10 +1164,11 @@ internal static class HostLaunch
         {
             var all = game.GetAllAdditionalApplications();
             if (all == null) return Array.Empty<IAdditionalApplication>();
-            // Documents (Section=="Document") are add-app records too, but never launchable apps/discs — every
-            // caller here means real apps (autorun-before/after) or discs (TryBuildM3u). Without this, TryBuildM3u
-            // would add a document file (a PDF, …) as a bogus disc in a multi-disc game's M3U playlist.
-            return all.Where(a => a is not Data.HostAdditionalApplication { IsDocument: true }).ToArray();
+            // Documents (Section=="Document") and Links (Section=="Link", LB 14) are add-app records too,
+            // but never launchable apps/discs — every caller here means real apps (autorun-before/after) or
+            // discs (TryBuildM3u). Without this, TryBuildM3u would add a document file (a PDF, …) or a URL
+            // as a bogus disc in a multi-disc game's M3U playlist.
+            return all.Where(a => a is not Data.HostAdditionalApplication { IsNonLaunchable: true }).ToArray();
         }
         catch { return Array.Empty<IAdditionalApplication>(); }
     }

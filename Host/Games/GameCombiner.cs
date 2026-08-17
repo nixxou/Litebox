@@ -42,7 +42,7 @@ namespace LbApiHost.Host.Games;
 
 internal static class GameCombiner
 {
-    public const string VersionSection = "Version";
+    public const string VersionSection = HostAdditionalApplication.VersionSection;
 
     /// <summary>Versions attached to a game — the additional applications LaunchBox marks
     /// Section=Version, as opposed to the Document ones the Manuals tab uses.</summary>

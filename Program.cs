@@ -105,8 +105,30 @@ AssemblyLoadContext.Default.Resolving += (ctx, name) =>
     if (pkt != null && pkt.Length > 0 && frameworkPkts.Contains(Convert.ToHexString(pkt).ToLowerInvariant()))
         return null;
     var candidate = Path.Combine(AppContext.BaseDirectory, name.Name + ".dll");
-    return File.Exists(candidate) ? ctx.LoadFromAssemblyPath(candidate) : null;
+    if (File.Exists(candidate)) return ctx.LoadFromAssemblyPath(candidate);
+    // DEV fallback (a bin\ run: selftests, probes, dev GUI): the exe folder has no LB assemblies —
+    // probe the TARGET LB's Core instead (PluginLoader.LbCoreDir when --library/--lbroot named one,
+    // else the dev-repo sibling LB). Installed runs never get here: BaseDirectory IS Core. Historically
+    // this was papered over by a stale SDK dll lying in bin\, which broke the moment versions diverged
+    // (a 13.28 copy shadowing the v14 install's SDK).
+    try
+    {
+        var core = PluginLoader.ResolveCoreDir();
+        var p = Path.Combine(core, name.Name + ".dll");
+        if (File.Exists(p)) return ctx.LoadFromAssemblyPath(p);
+    }
+    catch { }
+    return null;
 };
+
+// Dev runs name their target LB with --library <LB>\Data\Platforms (GUI) — pin that install's Core for
+// the resolver above BEFORE any SDK type JITs, so a v14 target resolves the v14 SDK (IPluginPaths, …)
+// instead of the dev-default LB's copy. Probes taking --lbroot pin it themselves at method entry.
+{
+    int li = Array.IndexOf(args, "--library");
+    if (li >= 0 && li + 1 < args.Length)
+        try { PluginLoader.LbCoreDir = Path.GetFullPath(Path.Combine(args[li + 1], "..", "..", "Core")); } catch { }
+}
 
 // Steam achievements helper: read ONE appid's achievement unlock state via Steamworks and print it as
 // JSON, then exit. Steamworks binds a single app per process, so LiteBox re-launches itself once per

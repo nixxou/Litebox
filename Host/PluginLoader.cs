@@ -46,8 +46,9 @@ internal static class PluginLoader
 
     /// <summary>LB's Core for dependency probing: the explicit <see cref="LbCoreDir"/> when set; else
     /// the exe's own folder when it IS Core (installed layout — LiteBox.exe lives beside LaunchBox.dll);
-    /// else the dev-repo sibling LB (a `dotnet run` from the repo, where the exe folder is bin\…).</summary>
-    private static string ResolveCoreDir()
+    /// else the dev-repo sibling LB (a `dotnet run` from the repo, where the exe folder is bin\…).
+    /// Also the DEV fallback of Program.cs's global assembly resolver (SDK & friends in bin runs).</summary>
+    internal static string ResolveCoreDir()
     {
         if (!string.IsNullOrEmpty(LbCoreDir) && Directory.Exists(LbCoreDir)) return LbCoreDir;
         string baseDir = AppContext.BaseDirectory.TrimEnd('\\', '/');

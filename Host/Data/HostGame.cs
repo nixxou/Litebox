@@ -369,12 +369,23 @@ internal sealed class HostAdditionalApplication : DummyAdditionalApplication
     public override DateTime? LastPlayed { get => _a.LastPlayed; set { _a.LastPlayed = value; Rec(); } }
     public override bool? Installed { get => _a.Installed; set { _a.Installed = value; Rec(); } }
 
-    // LaunchBox "Section" — NOT on the SDK IAdditionalApplication, but the marker the Documents tab uses:
-    // an additional application with Section=="Document" is a game DOCUMENT (not a launchable app). LiteBox's
-    // Documents page reads/sets it by casting IAdditionalApplication to this concrete type.
+    // LaunchBox "Section" — NOT on the SDK IAdditionalApplication; the core's own routing marker
+    // (enum Unbroken.LaunchBox.Data.AdditionalApplicationSection: Unknown=0, AdditionalApp=1,
+    // Version=2, Document=3, Link=4 — identical in 13.28 and 14). 13.28 mostly wrote "Unknown";
+    // v14's reworked Edit Game stamps the real value (its Documents and Links tabs write Document /
+    // Link). LiteBox's pages read/set it by casting IAdditionalApplication to this concrete type.
     public const string DocumentSection = "Document";
+    public const string VersionSection = "Version";
+    public const string LinkSection = "Link";
+    public const string AdditionalAppSection = "AdditionalApp";
     public string Section { get => _a.Section ?? ""; set { _a.Section = value; Rec(); } }
     public bool IsDocument => string.Equals(_a.Section, DocumentSection, StringComparison.OrdinalIgnoreCase);
+    public bool IsVersion => string.Equals(_a.Section, VersionSection, StringComparison.OrdinalIgnoreCase);
+    public bool IsLink => string.Equals(_a.Section, LinkSection, StringComparison.OrdinalIgnoreCase);
+    public bool IsAdditionalApp => string.Equals(_a.Section, AdditionalAppSection, StringComparison.OrdinalIgnoreCase);
+    /// <summary>Document or Link (v14): an add-app record that must never be treated as a launchable
+    /// app or disc — excluded from play menus, autorun hooks and M3U disc candidates alike.</summary>
+    public bool IsNonLaunchable => IsDocument || IsLink;
 
     /// <summary>Swap this record's position with another's in the game's additional-application list (the list
     /// order IS the XML/display order). Used by the Documents page to reorder documents. No-op across games.</summary>

@@ -44,11 +44,19 @@ internal sealed partial class EditGameWindow
 
     private IGame AppsGame => _editGames[0];
 
-    /// <summary>LaunchBox's version-vs-app routing rule (see the file header for the derivation).</summary>
+    /// <summary>LaunchBox's version-vs-app routing rule (see the file header for the derivation).
+    /// An EXPLICIT Section wins first: LB 14's reworked Edit Game stamps Version / AdditionalApp on
+    /// the records it manages (13.28 mostly wrote "Unknown", which — like an absent Section — falls
+    /// through to the empirical heuristic below, so pre-14 libraries route exactly as before).</summary>
     internal static bool IsLikelyVersion(IAdditionalApplication a)
     {
         try
         {
+            if (a is Data.HostAdditionalApplication h)
+            {
+                if (h.IsVersion) return true;
+                if (h.IsAdditionalApp) return false;
+            }
             return !a.AutoRunBefore && !a.AutoRunAfter
                    && (a.UseEmulator || !string.IsNullOrWhiteSpace(a.Version));
         }
@@ -169,6 +177,9 @@ internal sealed partial class EditGameWindow
         // but IsLikelyVersion has no concept of them (its rule predates that tab) and routes every one into
         // the "Apps" bucket below — exclude them here so they're managed exclusively by the dedicated Documents
         // page instead of ALSO being editable/deletable/launchable from this generic one.
+        // LB 14's Links (Section=="Link") are NOT excluded, deliberately: LiteBox has no dedicated Links
+        // page yet, so the Apps bucket is where a v14 link stays visible, editable and deletable. They are
+        // already excluded from every launch surface (play menus / autorun / M3U / web — IsNonLaunchable).
         apps = apps.Where(a => a is not Data.HostAdditionalApplication { IsDocument: true }).ToArray();
         // ORDRE DU FICHIER, comme LaunchBox : son dialogue presente les versions dans l ordre du
         // XML, sans tri — mesure sur capture, apres que deux lectures successives ont pris NOTRE

@@ -160,7 +160,8 @@ internal static class WebLaunchOptions
         return SafeBool(() => emulator.AutoExtract);
     }
 
-    // Non-document additional applications (documents are Section=="Document", not launchable versions).
+    // Launchable additional applications only (documents are Section=="Document", LB 14 links are
+    // Section=="Link" — neither is a launchable version).
     private static IEnumerable<IAdditionalApplication> AddApps(IGame game)
     {
         IAdditionalApplication[]? apps = null;
@@ -169,7 +170,7 @@ internal static class WebLaunchOptions
         foreach (var a in apps)
         {
             if (a == null) continue;
-            if (a is HostAdditionalApplication { IsDocument: true }) continue;
+            if (a is HostAdditionalApplication { IsNonLaunchable: true }) continue;
             yield return a;
         }
     }

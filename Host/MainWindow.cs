@@ -6683,14 +6683,15 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     /// Section=="Document") are additional-application records too, but they're manuals/guides to open, not
     /// versions of the game — excluded here so they don't show up as a bogus playable "version" that would try
     /// to launch the document file as if it were the game. (LaunchBox itself surfaces them under Media →
-    /// Additional Documents, never as a version, so this matches native behaviour.)</summary>
+    /// Additional Documents, never as a version, so this matches native behaviour.) Same for LB 14's
+    /// Links (Section=="Link"): URLs to open in a browser, never a playable version.</summary>
     private static IAdditionalApplication[] SafeAddApps(IGame g)
     {
         try
         {
             var all = g.GetAllAdditionalApplications();
             if (all == null) return Array.Empty<IAdditionalApplication>();
-            return all.Where(a => a is not Data.HostAdditionalApplication { IsDocument: true }).ToArray();
+            return all.Where(a => a is not Data.HostAdditionalApplication { IsNonLaunchable: true }).ToArray();
         }
         catch { return Array.Empty<IAdditionalApplication>(); }
     }

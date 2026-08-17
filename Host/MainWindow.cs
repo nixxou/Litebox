@@ -1887,7 +1887,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             Dock = DockStyle.Top, AutoSize = false, Height = 52, ForeColor = Warn, BackColor = Bg,
             Padding = new Padding(2, 2, 2, 8), Font = new Font("Segoe UI", 9f, FontStyle.Italic),
-            Text = "Plugins to load (subfolders of " + (HostBoot.PluginsRoot ?? @"<LB>\Plugins") + ").\r\n"
+            Text = "Plugins to load (subfolders of " + (HostBoot.PluginsRoot ?? @"<LB>\Plugins")
+                 + (HostBoot.SystemPluginsRoot != null ? @", plus LB 14's System\Plugins" : "") + ").\r\n"
                  + "Changes apply on the next LiteBox restart.",
         };
 
@@ -1897,14 +1898,22 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         bool defaultAll = enabled == null;
         var enabledSet = new HashSet<string>(enabled ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
 
+        // LB 14 system plugins (<LB>\System\Plugins — the integration plugins LB moved out of Plugins\).
+        // Same persisted names as pre-14, listed in their own group below. A name present in BOTH roots
+        // is shown once, there: the system copy is the one discovery actually loads.
+        var sysFolders = HostBoot.SystemPluginsRoot != null
+            ? HostBoot.ListPluginFolders(HostBoot.SystemPluginsRoot) : new List<string>();
+        var sysSet = new HashSet<string>(sysFolders, StringComparer.OrdinalIgnoreCase);
+
         var checks = new List<CheckBox>();
-        if (folders.Count == 0)
+        if (folders.Count == 0 && sysFolders.Count == 0)
         {
             flow.Controls.Add(new Label { AutoSize = true, ForeColor = SubFg, Margin = new Padding(2, 6, 2, 2),
                 Text = "No plugin folders found in " + root });
         }
         foreach (var f in folders)
         {
+            if (sysSet.Contains(f)) continue;   // stale pre-14 leftover — the System\Plugins copy loads
             // ExtendDB is integrated into LiteBox → shown greyed, never loaded, never part of the enabled set.
             if (HostBoot.IntegrateExtendDb && HostBoot.IsExtendDb(f))
             {
@@ -1945,6 +1954,27 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             };
             checks.Add(cb);
             flow.Controls.Add(cb);
+        }
+
+        if (sysFolders.Count > 0)
+        {
+            flow.Controls.Add(new Label
+            {
+                Text = @"LaunchBox 14 plugins (System\Plugins) — installed and updated by LaunchBox:",
+                AutoSize = true, ForeColor = SubFg, Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+                Margin = new Padding(2, 12, 2, 2),
+            });
+            foreach (var f in sysFolders)
+            {
+                // Text must stay the exact folder name — apply() persists cb.Text into EnabledPlugins=.
+                var cb = new CheckBox
+                {
+                    Text = f, AutoSize = true, ForeColor = Fg, Margin = new Padding(2, 5, 2, 5),
+                    Checked = defaultAll || enabledSet.Contains(f),
+                };
+                checks.Add(cb);
+                flow.Controls.Add(cb);
+            }
         }
 
         panel.Controls.Add(flow);

@@ -30,9 +30,12 @@ internal static class ProbeSaves
     {
         string lbRoot = GetArg(args, "--lbroot") ?? @"C:\Users\mehdi\source\repos\scrapper-project\LB";
         string core = Path.Combine(lbRoot, "Core");
+        PluginLoader.LbCoreDir = core;   // dependency probing must follow --lbroot, not the dev default
         string pluginsRoot = Path.Combine(lbRoot, "Plugins");
         var probeDirs = new List<string> { core };
         try { probeDirs.AddRange(Directory.GetDirectories(pluginsRoot).Where(d => d.Contains("LaunchBox Integration"))); } catch { }
+        // LB 14+ keeps its integration plugins under System\Plugins instead (dir absent pre-14).
+        try { probeDirs.AddRange(Directory.GetDirectories(Path.Combine(lbRoot, "System", "Plugins")).Where(d => d.Contains("LaunchBox Integration"))); } catch { }
         AssemblyLoadContext.Default.Resolving += (ctx, name) =>
         {
             foreach (var d in probeDirs)
@@ -84,9 +87,14 @@ internal static class ProbeSaves
 
         // --all-plugins: load EVERY plugin folder (ExtendDB included), like the real GUI — so we can
         // reproduce any interference (e.g. a plugin changing the CWD). Default: integration plugins only.
+        // Integration dirs live under Plugins\ (≤13.28) or System\Plugins\ (14+) — take both, absent = empty.
+        string sysPluginsRoot = Path.Combine(lbRoot, "System", "Plugins");
+        var sysIntegration = Directory.Exists(sysPluginsRoot)
+            ? Directory.GetDirectories(sysPluginsRoot).Where(d => d.Contains("LaunchBox Integration"))
+            : Enumerable.Empty<string>();
         var pluginDirs = args.Contains("--all-plugins")
-            ? new[] { pluginsRoot }.Concat(Directory.GetDirectories(pluginsRoot)).ToArray()
-            : Directory.GetDirectories(pluginsRoot).Where(d => d.Contains("LaunchBox Integration")).ToArray();
+            ? new[] { pluginsRoot }.Concat(Directory.GetDirectories(pluginsRoot)).Concat(sysIntegration).ToArray()
+            : Directory.GetDirectories(pluginsRoot).Where(d => d.Contains("LaunchBox Integration")).Concat(sysIntegration).ToArray();
         Console.WriteLine($"[probe] loading plugins from: {string.Join(", ", pluginDirs.Select(Path.GetFileName))}");
         var reg = PluginLoader.LoadFrom(pluginDirs);
         EmuPlugins.Configure(reg);

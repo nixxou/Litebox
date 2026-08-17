@@ -28,6 +28,9 @@ internal static class HostBoot
     /// <summary>The resolved &lt;LB&gt;\Plugins root, captured at boot so the
     /// Options → Plugins section lists the same folders the host loads from.</summary>
     public static string PluginsRoot { get; private set; }
+    /// <summary>LB 14+'s own plugin root (<c>&lt;LB&gt;\System\Plugins</c> — integration plugins moved
+    /// there from <c>Plugins\</c> in v14), or null pre-14 / when absent. Second discovery source.</summary>
+    public static string SystemPluginsRoot { get; private set; }
 
     // ── ExtendDB integration (integration-extenddb branch) ────────────────────
     // LiteBox is folding ExtendDB's functionality in natively. The plugin is therefore NEVER loaded here — its
@@ -575,9 +578,33 @@ internal static class HostBoot
             ?? Path.GetFullPath(Path.Combine(coreDir, "..", "Plugins"));
         PluginsRoot = pluginsRoot;   // exposed to the Options "Plugins" section
 
+        // LaunchBox 14 moved ITS OWN plugins (the "<Emulator> LaunchBox Integration" DLLs, GamesDB
+        // Discovery Lists) out of <LB>\Plugins into <LB>\System\Plugins\<Name>\ (the new manifest.json
+        // model); <LB>\Plugins now only holds third-party plugins. On a v14+ install that root joins
+        // discovery as a SECOND source. The folder NAMES are unchanged from the pre-14 layout, so an
+        // existing EnabledPlugins= ini keeps enabling/disabling them across the upgrade untouched.
+        // Gated on the PRODUCT VERSION (not mere existence): pre-14 behaviour stays byte-identical.
+        string sysPluginsRoot = null;
+        if (Data.LbVersion.Product?.Major >= 14)
+        {
+            var cand = Path.GetFullPath(Path.Combine(lbRoot ?? Path.Combine(coreDir, ".."), "System", "Plugins"));
+            if (Directory.Exists(cand)) sysPluginsRoot = cand;
+            else Console.WriteLine($"[loader] LB {Data.LbVersion.Product} but no System\\Plugins root at {cand}");
+        }
+        SystemPluginsRoot = sysPluginsRoot;
+
         var pluginCfg = LiteBoxConfig.LoadForExe();
         var enabled = pluginCfg.GetEnabledPluginsOrNull();
-        List<string> names = enabled ?? ListPluginFolders(pluginsRoot);
+
+        // name → folder over BOTH roots. On a name collision the LB-managed system copy wins: it is
+        // the one LaunchBox itself updates — a same-named folder left under Plugins\ is a stale pre-14
+        // remnant the LB updater didn't clean.
+        var dirByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var nm in ListPluginFolders(pluginsRoot)) dirByName[nm] = Path.Combine(pluginsRoot, nm);
+        if (sysPluginsRoot != null)
+            foreach (var nm in ListPluginFolders(sysPluginsRoot)) dirByName[nm] = Path.Combine(sysPluginsRoot, nm);
+
+        List<string> names = enabled ?? dirByName.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
         // Never load the plugins whose job LiteBox already does natively, whatever the enabled set says:
         // ExtendDB (integrated), and our own companion parental plugin (vanilla-LB/BB only — loading it
@@ -588,16 +615,16 @@ internal static class HostBoot
             if (names.Count != before) Console.WriteLine("[loader] integrated plugins skipped (ExtendDB / litebox-parentalcontrol — native to LiteBox)");
         }
 
-        Console.WriteLine($"Plugins root: {pluginsRoot}");
+        Console.WriteLine($"Plugins root: {pluginsRoot}"
+            + (sysPluginsRoot != null ? $"  +  {sysPluginsRoot}  (LB {Data.LbVersion.Product?.Major} system plugins)" : ""));
         Console.WriteLine($"Enabled plugins: [{string.Join(", ", names)}]"
             + (enabled == null ? "  (default: all present)" : ""));
 
         var pluginDirs = new List<string>();
         foreach (var nm in names)
         {
-            var d = Path.Combine(pluginsRoot, nm);
-            if (Directory.Exists(d)) pluginDirs.Add(d);
-            else Console.WriteLine($"  ! enabled plugin folder not found: {d}");
+            if (dirByName.TryGetValue(nm, out var d)) pluginDirs.Add(d);
+            else Console.WriteLine($"  ! enabled plugin folder not found: {Path.Combine(pluginsRoot, nm)}");
         }
 
         // Pin OUR (bundled, net10) WPF assemblies BEFORE any plugin is LoadFrom'd. Some LaunchBox plugins
@@ -640,6 +667,10 @@ internal static class HostBoot
         // raises LaunchBox notifications looks the assembly up by name, and some do it from their
         // constructor. See Host\Notifications\LaunchBoxShim.cs.
         Notifications.LaunchBoxShim.Install();
+
+        // Tell the loader where the REAL LB Core is (dependency probing) — it can't guess it in a
+        // dev run, where the exe's folder is the build output, not <LB>\Core.
+        if (lbRoot != null) PluginLoader.LbCoreDir = Path.Combine(lbRoot, "Core");
 
         var reg = PluginLoader.LoadFrom(pluginDirs);
         Console.WriteLine($"Loaded {reg.All.Count} plugin object(s): events={reg.SystemEvents.Count} sysmenu={reg.SystemMenus.Count} gamemenu={reg.GameMenus.Count} themeel={reg.ThemeElements.Count}");

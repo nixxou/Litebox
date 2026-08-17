@@ -26,7 +26,16 @@ internal static class EmuPluginProbe
     /// references EmulatorPlugin, which needs the SDK resolvable at method entry).</summary>
     public static int Run()
     {
+        // LB 14+ keeps the integration plugins under System\Plugins (same folder names); pre-14 under
+        // Plugins\. Pick whichever root actually has them — this probe only reads integration DLLs.
         var pluginsRoot = Path.Combine(LbRoot, "Plugins");
+        try
+        {
+            var sys = Path.Combine(LbRoot, "System", "Plugins");
+            if (Directory.Exists(sys) && Directory.GetDirectories(sys).Any(d => d.Contains("LaunchBox Integration")))
+                pluginsRoot = sys;
+        }
+        catch { }
         var core = Path.Combine(LbRoot, "Core");
         var probeDirs = new List<string> { core };
         try { probeDirs.AddRange(Directory.GetDirectories(pluginsRoot).Where(d => d.Contains("LaunchBox Integration"))); } catch { }

@@ -65,8 +65,13 @@
   <PropertyGroup>
     <Lb9Root  Condition="'$(Lb9Root)' == ''">G:\LB</Lb9Root>
     <Lb10Root Condition="'$(Lb10Root)' == ''">$(MSBuildThisFileDirectory)..\..\..\LB</Lb10Root>
+    <!-- LaunchBox 14 install: the net10 SDK COMPILE ref comes from here — v14's SDK adds members
+         (IPluginPaths ctor injection, see Host\PluginLoader.Instantiate) the 13.28 copy lacks. Still
+         version-agnostic at runtime (Private=false, resolved from the actual LB\Core): the net10 build
+         keeps running on 13.28, where the v14-only types are never touched (NoInlining isolation). -->
+    <Lb14Root Condition="'$(Lb14Root)' == ''">G:\LB1326</Lb14Root>
     <SdkRefDll Condition="'$(TargetFramework)' == 'net9.0-windows'">$(Lb9Root)\Core\Unbroken.LaunchBox.Plugins.dll</SdkRefDll>
-    <SdkRefDll Condition="'$(SdkRefDll)' == ''">$(Lb10Root)\Core\Unbroken.LaunchBox.Plugins.dll</SdkRefDll>
+    <SdkRefDll Condition="'$(SdkRefDll)' == ''">$(Lb14Root)\Core\Unbroken.LaunchBox.Plugins.dll</SdkRefDll>
     <!-- WinRT projections (Windows.Graphics.Capture — SmartCapture FPS detection). LaunchBox
          already ships Microsoft.Windows.SDK.NET + WinRT.Runtime in Core, so we compile against
          its copy and resolve at runtime — Private=false, nothing new deployed (same pattern). -->

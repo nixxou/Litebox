@@ -40,6 +40,21 @@ internal static class PluginLoader
     private static bool _resolverAdded;
     private static readonly List<string> _probeDirs = new();
 
+    /// <summary>The real LB Core folder, set by the host (HostBoot / probes) from the resolved LB root
+    /// BEFORE LoadFrom. Null → derived by <see cref="ResolveCoreDir"/>.</summary>
+    public static string LbCoreDir;
+
+    /// <summary>LB's Core for dependency probing: the explicit <see cref="LbCoreDir"/> when set; else
+    /// the exe's own folder when it IS Core (installed layout — LiteBox.exe lives beside LaunchBox.dll);
+    /// else the dev-repo sibling LB (a `dotnet run` from the repo, where the exe folder is bin\…).</summary>
+    private static string ResolveCoreDir()
+    {
+        if (!string.IsNullOrEmpty(LbCoreDir) && Directory.Exists(LbCoreDir)) return LbCoreDir;
+        string baseDir = AppContext.BaseDirectory.TrimEnd('\\', '/');
+        if (File.Exists(Path.Combine(baseDir, "LaunchBox.dll"))) return baseDir;
+        return @"C:\Users\mehdi\source\repos\scrapper-project\LB\Core";   // dev fallback (repo-sibling LB)
+    }
+
     public static PluginRegistry LoadFrom(IEnumerable<string> dirs)
     {
         var reg = new PluginRegistry();
@@ -82,7 +97,7 @@ internal static class PluginLoader
                     if (!ImplementsAnyPluginIface(t)) continue;
 
                     object inst;
-                    try { inst = Activator.CreateInstance(t); }
+                    try { inst = Instantiate(t, dll); }
                     catch (Exception ex)
                     {
                         Console.WriteLine($"[loader] ctor {t.FullName} failed: {ex.InnerException?.Message ?? ex.Message}");
@@ -95,6 +110,47 @@ internal static class PluginLoader
         }
         return reg;
     }
+
+    /// <summary>Creates the plugin instance the way LaunchBox does. ≤13.28: parameterless ctor only.
+    /// The v14 SDK adds constructor injection — "a plugin can request these paths by declaring a public
+    /// constructor with an IPluginPaths parameter" (SDK xml; the v14 RetroArch integration does exactly
+    /// that, and has NO parameterless ctor). The param type is matched BY NAME and the typed code lives
+    /// in a separate non-inlined method: this net10 build also runs against LB 13.28, whose SDK has no
+    /// IPluginPaths — touching the type here would blow up type-loading on first plugin load there.</summary>
+    private static object Instantiate(Type t, string dllPath)
+    {
+        if (t.GetConstructor(Type.EmptyTypes) != null) return Activator.CreateInstance(t);
+#if NET10_0_OR_GREATER   // the net9 target compiles against a 13.x SDK, which has no IPluginPaths
+        var ctor = t.GetConstructors().FirstOrDefault(c =>
+            c.GetParameters() is { Length: 1 } ps
+            && ps[0].ParameterType.FullName == "Unbroken.LaunchBox.Plugins.IPluginPaths");
+        if (ctor != null) return InstantiateWithPluginPaths(ctor, dllPath);
+#endif
+        return Activator.CreateInstance(t);   // no supported ctor → the usual informative throw
+    }
+
+#if NET10_0_OR_GREATER
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static object InstantiateWithPluginPaths(System.Reflection.ConstructorInfo ctor, string dllPath)
+    {
+        string installDir = Path.GetDirectoryName(Path.GetFullPath(dllPath));
+        // DataDirectory: LB 14 creates a <LB>\Local\Plugins root for plugin runtime data. Its exact
+        // per-plugin subfolder scheme is opaque (obfuscated core); we key by the plugin's FOLDER NAME —
+        // stable across updates, debuggable, and the contract only promises a persistent directory the
+        // plugin must itself create. LbCoreDir's parent is the LB root (set before LoadFrom).
+        string lbRoot = Path.GetFullPath(Path.Combine(ResolveCoreDir(), ".."));
+        string dataDir = Path.Combine(lbRoot, "Local", "Plugins", Path.GetFileName(installDir));
+        Console.WriteLine($"[loader] {ctor.DeclaringType!.Name}: IPluginPaths ctor (install={installDir}, data={dataDir})");
+        return ctor.Invoke(new object[] { new HostPluginPaths(installDir, dataDir) });
+    }
+
+    private sealed class HostPluginPaths : Unbroken.LaunchBox.Plugins.IPluginPaths
+    {
+        public HostPluginPaths(string install, string data) { InstallDirectory = install; DataDirectory = data; }
+        public string InstallDirectory { get; }
+        public string DataDirectory { get; }
+    }
+#endif
 
     private static bool ImplementsAnyPluginIface(Type t) =>
         typeof(ISystemEventsPlugin).IsAssignableFrom(t) ||
@@ -136,7 +192,7 @@ internal static class PluginLoader
         lock (_lock)
         {
             foreach (var d in dirs) if (!_probeDirs.Contains(d)) _probeDirs.Add(d);
-            const string core = @"C:\Users\mehdi\source\repos\scrapper-project\LB\Core";
+            string core = ResolveCoreDir();
             if (Directory.Exists(core) && !_probeDirs.Contains(core)) _probeDirs.Add(core);
             // LaunchBox resolves its bundled third-party assemblies (CefSharp,
             // libcef, etc.) from ThirdParty\Chromium — plugins reference them

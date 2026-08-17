@@ -395,9 +395,9 @@ internal static class PauseManager
 
     // ── Screen actions ──────────────────────────────────────────────────
 
-    /// <summary>"Additional Documents" pick: open the document (default viewer, or LB 14's Reader
-    /// when UseLbReaderForDocs is on — see Media/DocOpener), game STAYS paused — exactly the View
-    /// Manual behaviour (the overlay yields TopMost while unfocused so the viewer is readable).
+    /// <summary>"Additional Documents" pick: open the document per the configured Reader provider
+    /// (see Media/DocOpener), game STAYS paused — exactly the View Manual behaviour (the overlay
+    /// yields TopMost while unfocused so the viewer is readable).
     /// The emulator window is the launch anchor so the Reader lands on the GAME's monitor.</summary>
     private static void OpenDocument(string path)
     {
@@ -440,9 +440,9 @@ internal static class PauseManager
                     break;
 
                 case PauseAction.ViewManual:
-                    // The game STAYS paused (LB behaviour) — open the manual (default viewer, or
-                    // LB 14's Reader when UseLbReaderForDocs is on); the overlay yields TopMost
-                    // while unfocused (see the screen's Deactivate handler) so it's readable.
+                    // The game STAYS paused (LB behaviour) — open the manual per the configured
+                    // Reader provider; the overlay yields TopMost while unfocused (see the screen's
+                    // Deactivate handler) so it's readable.
                     try
                     {
                         var lg = LaunchedGame.Current;

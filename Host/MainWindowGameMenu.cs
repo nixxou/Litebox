@@ -209,9 +209,9 @@ internal sealed partial class MainWindow
         bool has3d = Safe(() => Model3d.Model3dCache.Resolve(g)) is { HasArt: true };
         media.DropDownItems.Add(Item("View 3D Box Model…", MenuIcons.View3dBox, () => OpenFullscreen3d(g), has3d));
 
-        // Manual + documents open through DocOpener (shell, or LB 14's Reader when the
-        // UseLbReaderForDocs ini key is on — one opener for every surface). The main window is the
-        // launch anchor: the Reader opens on LiteBox's monitor, LB-style.
+        // Manual + documents open through DocOpener (one opener for every surface, following the
+        // configured Reader provider). The main window is the launch anchor: the Reader opens on
+        // LiteBox's monitor, LB-style.
         string gTitle = S(Safe(() => g.Title)), gPlat = S(Safe(() => g.Platform));
         string manual = S(Safe(() => g.GetManualPath()));
         media.DropDownItems.Add(Item("View Manual…", MenuIcons.ViewManual,

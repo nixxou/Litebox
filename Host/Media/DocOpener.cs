@@ -1,6 +1,14 @@
-// How a game document opens: the system default app (shell) — or, opt-in via LiteBox.ini
-// UseLbReaderForDocs=true, LaunchBox 14's built-in Reader (System\Software\LaunchBox Reader),
-// the page-turn reading UI LB 14 ships for manuals/guides/magazines.
+// How a game document opens. The choice is CONFIGURED, not hardcoded, and it is LaunchBox's own
+// setting — Options → LB · Reader → "Reader provider", stored in the Reader's database and shared
+// by both apps (LiteBox briefly had its own UseLbReaderForDocs / LbReaderFullscreen ini keys for
+// this; they are retired, see GlobalDefaults):
+//
+//   LaunchBox Reader     → LB 14's built-in page-turn reader (System\Software\LaunchBox Reader)
+//   Default application  → the program Windows associates with the file
+//   External reader      → the executable configured beside it
+//
+// An install with NO Reader at all (pre-14) has no such setting, so LiteBox falls back to its own
+// ExternalReaderPath ini key when set, else the default program — LB's settings stay untouched.
 //
 // The Reader's REAL command-line contract, captured from a live LB 14 launch (Win32_Process
 // CommandLine while LB opened a manual):
@@ -13,7 +21,7 @@
 // by window-rect measurement). A bare path also works, but we speak the full contract.
 //
 // Only formats the Reader actually LOADS are routed to it; everything else keeps the shell even
-// when the option is on (an empty Reader window helps nobody). Fail-soft everywhere: option off,
+// when the Reader is the provider (an empty Reader window helps nobody). Fail-soft everywhere:
 // pre-14 install, Reader missing, launch failure — all fall back to the shell open.
 //
 // ONE opener for every surface (pause screen, game context menu, Documents page), so the option
@@ -68,12 +76,9 @@ internal static class DocOpener
                 if (!string.IsNullOrEmpty(gameTitle)) args.Append($" --game-title \"{Clean(gameTitle!)}\"");
                 if (!string.IsNullOrEmpty(platform)) args.Append($" --platform \"{Clean(platform!)}\"");
                 if (launchWindow != IntPtr.Zero) args.Append($" --launch-window-handle 0x{launchWindow.ToInt64():X}");
-                // Fullscreen follows LB'S OWN setting (Options → Reader → "Open in fullscreen",
-                // GlobalSettings.FullscreenByDefault) so both apps behave identically; the ini key is
-                // only the fallback when the Reader has no settings DB yet.
-                bool fs = ReaderSettingsDb.LoadGlobal()?.FullscreenByDefault
-                          ?? LiteBoxConfig.LoadForExe().GetBool("LbReaderFullscreen", true);
-                if (fs) args.Append(" --fullscreen");
+                // Fullscreen follows LB'S OWN setting (Options → LB · Reader → "Open in fullscreen",
+                // GlobalSettings.FullscreenByDefault) so both apps behave identically.
+                if (ReaderSettingsDb.LoadGlobal()?.FullscreenByDefault ?? true) args.Append(" --fullscreen");
                 Process.Start(new ProcessStartInfo(exe, args.ToString()) { UseShellExecute = false });
                 return;
             }
@@ -90,8 +95,8 @@ internal static class DocOpener
     private const string ExternalReaderMarker = "\0external";
 
     /// <summary>How <paramref name="path"/> must open (+ the routing reason for the log): the Reader
-    /// exe, <see cref="ExternalReaderMarker"/>, or null → shell (LiteBox's opt-in off, LB's provider
-    /// set to the default application, unsupported format, pre-14 / Reader not deployed).</summary>
+    /// exe, <see cref="ExternalReaderMarker"/>, or null → shell (provider set to the default
+    /// application, unsupported format, pre-14 / Reader not deployed).</summary>
     private static (string? exe, string why) ResolveReader(string path)
     {
         // No LaunchBox Reader on this install (pre-14, or not deployed): the only alternative to the
@@ -103,16 +108,16 @@ internal static class DocOpener
                 ? (ExternalReaderMarker, "external reader (LiteBox.ini)")
                 : (null, "no LaunchBox Reader on this install");
         }
-        if (!LiteBoxConfig.LoadForExe().GetBool("UseLbReaderForDocs", false)) return (null, "UseLbReaderForDocs=false");
-        // LB's own provider choice (Options → Reader → Reader Provider) is honoured when the Reader
-        // settings DB exists — one setting for both apps.
+        // On an install that HAS the Reader, the provider chosen in Options → LB · Reader decides,
+        // full stop — it is LaunchBox's own setting, shared by both apps. (LiteBox used to gate this
+        // behind its own UseLbReaderForDocs ini key; that key is retired, see GlobalDefaults.)
         var g = ReaderSettingsDb.LoadGlobal();
         if (g != null)
         {
             if (string.Equals(g.ReaderProvider, "DefaultApplication", StringComparison.OrdinalIgnoreCase))
-                return (null, "LB ReaderProvider=DefaultApplication");
+                return (null, "provider = Default application");
             if (string.Equals(g.ReaderProvider, "ExternalReader", StringComparison.OrdinalIgnoreCase))
-                return (ExternalReaderMarker, "LB ReaderProvider=ExternalReader");
+                return (ExternalReaderMarker, "provider = External reader");
         }
         if (!ReaderExts.Contains(Path.GetExtension(path))) return (null, "format not Reader-supported: " + Path.GetExtension(path));
         string root = MediaResolver.LbRoot ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));

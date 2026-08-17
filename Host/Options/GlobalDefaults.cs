@@ -51,11 +51,8 @@ internal static class GlobalDefaults
         ("CleanModel3d",                    "true"),
         ("CleanOptionsDb",                  "true"),
         ("ThumbAlphaFormat",                "png"),         // png | webp
-        // Documents: open manuals/additional documents with LB 14's Reader instead of the shell
-        // (supported formats only; silently shell elsewhere — see Media/DocOpener)
-        ("UseLbReaderForDocs",              "false"),
-        ("LbReaderFullscreen",              "true"),       // --fullscreen like LB itself (windowed opt-out)
-        // Viewer used when this LaunchBox has NO Reader (pre-14): empty = the file's default program
+        // Viewer used when this LaunchBox has NO Reader (pre-14): empty = the file's default program.
+        // With a Reader present it is LaunchBox's own setting that decides — see _retired below.
         ("ExternalReaderPath",              ""),
         // Videos in the right pane
         ("VideoAutoplay",                   "false"),
@@ -70,8 +67,18 @@ internal static class GlobalDefaults
         ("Model3dAutoDoubleJewel",          "true"),        // multi-disc: double jewel when the spine scan measures one
     };
 
-    /// <summary>Write every missing key with its default. One boot pass, idempotent — it only ever writes
-    /// on a fresh install or when a new option joins the table. Never throws.</summary>
+    /// <summary>Keys LiteBox no longer reads. Left behind in an existing ini they would look like live
+    /// settings the user can tune, so the boot pass DELETES them — the same "no key we only know in
+    /// code" rule, applied in reverse.
+    ///
+    /// UseLbReaderForDocs / LbReaderFullscreen: which viewer opens a document, and whether it opens
+    /// fullscreen, are LaunchBox's own settings (Options → LB · Reader, stored in the Reader's
+    /// database and shared by both apps). A LiteBox-side copy could only contradict them.</summary>
+    private static readonly string[] _retired = { "UseLbReaderForDocs", "LbReaderFullscreen" };
+
+    /// <summary>Write every missing key with its default, and drop the retired ones. One boot pass,
+    /// idempotent — it only ever writes on a fresh install, when a new option joins the table, or
+    /// once to clean a retired key. Never throws.</summary>
     public static void Seed(LiteBoxConfig ini)
     {
         if (ini == null) return;
@@ -80,6 +87,8 @@ internal static class GlobalDefaults
             int seeded = 0;
             foreach (var (key, def) in _defaults)
                 if (ini.Get(key) == null) { ini.Set(key, def); seeded++; }
+            foreach (var key in _retired)
+                if (ini.Get(key) != null) { ini.Remove(key); seeded++; Console.WriteLine($"[global-defaults] retired key removed: {key}"); }
             if (seeded > 0)
             {
                 ini.Save();

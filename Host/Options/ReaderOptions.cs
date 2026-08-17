@@ -13,10 +13,12 @@
 //   • Controller Mappings   GroupName / Description / SortOrder), so LiteBox never hardcodes the
 //                           action list and picks up whatever a Reader update adds.
 //
-// Mapping semantics follow LB's: a capture APPENDS an alternative to the action (its list reads
-// "Escape, X, V"), Clear empties it, Reset All drops every user override so the shipped defaults
-// apply again. Press-and-release records a Press mapping; keeping the input held records a Hold
-// (LongPress) mapping with the measured duration.
+// Mapping semantics follow LB's, pinned by diffing the Reader database around edits made in
+// LaunchBox itself: a capture APPENDS an alternative to the action (its list reads "Escape, Hold Z,
+// D1, Ctrl + D3"), Clear empties it, Reset All drops every user override so the shipped defaults
+// apply again. Press-and-release records a Press mapping; holding records a Hold (LongPress) with
+// LaunchBox's own 3000 ms duration. Modifiers are plain inputs of the chord (Ctrl + Shift + D3 =
+// Input1..3), and key names use the Reader's vocabulary — digits are D1..D0, keypad NumPad1…
 
 #nullable enable
 
@@ -32,25 +34,46 @@ namespace LbApiHost.Host.Options;
 
 internal static class ReaderOptions
 {
-    /// <summary>Adds the Reader section when this install exposes the Reader's settings store.</summary>
+    /// <summary>Adds the Reader section when this install exposes the Reader's settings store.
+    /// Built on the SAME dark TabControl as the other LB pages (Integrations, Gameplay, Media
+    /// Priorities) rather than the button-strip variant, so it doesn't stand out among them.</summary>
     public static void AddSections(OptionsWindow w, bool readOnly, float dpiS)
     {
         if (!ReaderSettingsDb.Available) return;
         var g = ReaderSettingsDb.LoadGlobal();
         if (g == null) return;
 
-        var tabs = new List<(string, object, Action?)>
+        int S(int px) => (int)Math.Round(px * dpiS);
+        var tabs = LbGlobalOptions.NewDarkTabControl(dpiS);
+        TabPage Page(string t)
         {
-            ("Reader", BuildReaderItems(g, readOnly), readOnly ? null : () => ReaderSettingsDb.SaveGlobal(g)),
-            ("Keyboard Mappings", BuildMappingPanel("Keyboard", readOnly, dpiS), null),
-            ("Controller Mappings", BuildMappingPanel("Controller", readOnly, dpiS), null),
-        };
-        w.AddTabbedSection("LB · Reader", tabs);
+            var p = new TabPage(t) { BackColor = ModulePanelKit.Bg, Padding = new Padding(S(2)) };
+            tabs.TabPages.Add(p);
+            return p;
+        }
+
+        var (readerPanel, applyReader) = UiKit.OptionRows.Build(BuildReaderItems(g), S);
+        readerPanel.Dock = DockStyle.Fill;
+        if (readOnly) readerPanel.Enabled = false;
+        Page("Reader").Controls.Add(readerPanel);
+
+        foreach (var device in new[] { "Keyboard", "Controller" })
+        {
+            var panel = BuildMappingPanel(device, readOnly, dpiS);
+            panel.Dock = DockStyle.Fill;
+            Page(device + " Mappings").Controls.Add(panel);
+        }
+
+        w.AddSection("LB · Reader", tabs, readOnly ? null : () =>
+        {
+            applyReader?.Invoke();
+            ReaderSettingsDb.SaveGlobal(g);
+        });
     }
 
     // ── Tab 1: the Reader page (same fields and wording as LB's own) ──────
 
-    private static List<OptionItem> BuildReaderItems(ReaderGlobalSettings g, bool readOnly)
+    private static List<OptionItem> BuildReaderItems(ReaderGlobalSettings g)
     {
         const string S = "reader";
         // A combo over an enum column: the user sees LB's wording, the DB keeps the enum value.
@@ -138,7 +161,7 @@ internal static class ReaderOptions
         head.Controls.Add(resetAll);
         resetAll.BringToFront();
 
-        var flow = new FlowLayoutPanel
+        var flow = new NoAutoScrollFlow
         {
             Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false,
             AutoScroll = true, BackColor = ModulePanelKit.Bg, Padding = new Padding(0, Sc(4), 0, 0),
@@ -148,6 +171,7 @@ internal static class ReaderOptions
 
         void Rebuild()
         {
+            var keepScroll = flow.AutoScrollPosition;   // rebuilding must not jump the list back to the top
             flow.SuspendLayout();
             foreach (Control c in flow.Controls.Cast<Control>().ToList()) { flow.Controls.Remove(c); c.Dispose(); }
             string? lastGroup = null;
@@ -166,6 +190,7 @@ internal static class ReaderOptions
                 flow.Controls.Add(BuildRow(deviceKind, groupKey, rows, readOnly, dpiS, Rebuild));
             }
             flow.ResumeLayout();
+            try { flow.AutoScrollPosition = new Point(-keepScroll.X, -keepScroll.Y); } catch { }
         }
 
         resetAll.Click += (_, _) =>
@@ -239,132 +264,167 @@ internal static class ReaderOptions
 
     // ── The capture control ──────────────────────────────────────────────
 
-    /// <summary>Shows an action's current inputs ("Escape, X, V") and captures a new one on click:
-    /// every key/button held together forms ONE chord (up to 3, LB's column count); releasing within
-    /// the hold threshold records a Press mapping, keeping it held records a Hold mapping carrying
-    /// the measured duration. Escape (keyboard) / B (controller) cancels.</summary>
+    /// <summary>Shows an action's current inputs the way LaunchBox does ("Escape, Hold Z, D1,
+    /// Ctrl + D3") and captures a new one on click.
+    ///
+    /// Capture rules, matched to what LaunchBox's own dialog writes (verified by diffing the Reader
+    /// database around real edits made there):
+    ///   • modifiers are ordinary inputs — Ctrl + Shift + D3 is stored as Input1..3 = Ctrl, Shift, D3,
+    ///     so a modifier alone never commits: the capture waits for the key it modifies;
+    ///   • the mapping is recorded on RELEASE — held past <see cref="HoldMs"/> it becomes a Hold
+    ///     (ActivationMode LongPress, HoldDurationMs 3000, LaunchBox's own value), else a Press;
+    ///   • key names use the Reader's vocabulary: digits are D1..D0, the numeric keypad NumPad1…,
+    ///     symbols Oem…/Add/Subtract.
+    /// Escape (keyboard) / B (controller) cancels without recording.</summary>
     private sealed class BindingCaptureBox : TextBox
     {
-        private const int HoldMs = 600;   // beyond this the mapping is recorded as a Hold
+        /// <summary>Held at least this long ⇒ a Hold mapping.</summary>
+        private const int HoldMs = 900;
+        /// <summary>What LaunchBox stores for a Hold mapping, whatever the measured time.</summary>
+        private const int LbHoldDurationMs = 3000;
 
         public event Action<(string I1, string I2, string I3, string Mode, int HoldMs)>? Captured;
 
         private readonly string _device;
         private readonly List<ReaderBinding> _rows;
         private bool _capturing;
-        private readonly List<string> _held = new();
-        private DateTime _firstDown;
+        private DateTime _downAt;
+        private List<string>? _pending;       // chord being held (modifiers first, main key last)
         private System.Windows.Forms.Timer? _padTimer;
-        private Pause.XInputPad? _pad;
+        private ushort _padHeld;              // controller buttons seen down during this capture
 
         public BindingCaptureBox(string device, List<ReaderBinding> rows, float dpiS)
         {
             _device = device; _rows = rows;
             BackColor = ModulePanelKit.Field; ForeColor = ModulePanelKit.Fg;
             BorderStyle = BorderStyle.FixedSingle; Font = new Font("Segoe UI", 9.5f);
+            ReadOnly = true; Cursor = Cursors.Hand;
             Text = Summary();
             Click += (_, _) => BeginCapture();
-            Enter += (_, _) => BeginCapture();
-            LostFocus += (_, _) => EndCapture(commit: false);
+            LostFocus += (_, _) => EndCapture(null);
+            KeyUp += OnKeyUp;
         }
 
         private string Summary()
-        {
-            if (_rows.Count == 0) return "";
-            return string.Join(", ", _rows.Select(r => r.Chord + (r.ActivationMode == "LongPress" ? " (hold)" : "")));
-        }
+            => string.Join(", ", _rows.Select(r => (r.ActivationMode == "LongPress" ? "Hold " : "") + r.Chord));
 
         private void BeginCapture()
         {
-            if (_capturing || ReadOnly && !Enabled) return;
-            _capturing = true;
-            _held.Clear();
-            _firstDown = default;
+            if (_capturing || !Enabled) return;
+            _capturing = true; _pending = null; _downAt = default; _padHeld = 0;
             Text = _device == "Keyboard" ? "Press a key…" : "Press a button…";
             BackColor = ModulePanelKit.Accent;
             if (_device == "Controller") StartPadPolling();
         }
 
-        private void EndCapture(bool commit, (string, string, string, string, int)? chord = null)
+        /// <summary>Ends the capture, recording <paramref name="chord"/> when one is supplied.</summary>
+        private void EndCapture((string, string, string, string, int)? chord)
         {
             if (!_capturing) return;
-            _capturing = false;
-            StopPadPolling();
+            _capturing = false; _pending = null;
+            try { _padTimer?.Stop(); } catch { }
             BackColor = ModulePanelKit.Field;
             Text = Summary();
-            if (commit && chord != null) Captured?.Invoke(chord.Value);
+            if (chord != null) Captured?.Invoke(chord.Value);
         }
 
-        // ── keyboard capture ──
+        private static (string, string, string, string, int) Chord(List<string> names, int heldMs)
+        {
+            bool hold = heldMs >= HoldMs;
+            return (names.ElementAtOrDefault(0) ?? "", names.ElementAtOrDefault(1) ?? "",
+                    names.ElementAtOrDefault(2) ?? "", hold ? "LongPress" : "Press", hold ? LbHoldDurationMs : 0);
+        }
+
+        // ── keyboard ──
+        // ProcessCmdKey sees the key DOWN (and swallows it so the dialog never acts on it); the
+        // mapping is committed from KeyUp, which is what makes hold-to-record possible.
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
             if (!_capturing || _device != "Keyboard") return base.ProcessCmdKey(ref msg, keyData);
             var key = keyData & Keys.KeyCode;
-            if (key == Keys.Escape) { EndCapture(commit: false); return true; }
-            if (_firstDown == default) _firstDown = DateTime.UtcNow;
+            if (key == Keys.Escape) { EndCapture(null); return true; }
+
             var names = new List<string>();
             if ((keyData & Keys.Control) != 0) names.Add("Ctrl");
             if ((keyData & Keys.Shift) != 0) names.Add("Shift");
             if ((keyData & Keys.Alt) != 0) names.Add("Alt");
             var main = KeyName(key);
-            if (main != null && !names.Contains(main)) names.Add(main);
-            if (names.Count == 0) return true;
-            while (names.Count > 3) names.RemoveAt(names.Count - 1);
-            int held = (int)(DateTime.UtcNow - _firstDown).TotalMilliseconds;
-            EndCapture(commit: true, (names.ElementAtOrDefault(0) ?? "", names.ElementAtOrDefault(1) ?? "",
-                                      names.ElementAtOrDefault(2) ?? "",
-                                      held >= HoldMs ? "LongPress" : "Press", held >= HoldMs ? held : 0));
+            // A modifier on its own is not a mapping — keep waiting for the key it modifies.
+            if (main == null || names.Contains(main)) return true;
+            names.Add(main);
+            while (names.Count > 3) names.RemoveAt(0);   // Input1..3 only; the main key stays
+            if (_pending == null) _downAt = DateTime.UtcNow;
+            _pending = names;
+            Text = string.Join(" + ", names) + " …";     // live feedback while held
             return true;
         }
 
-        /// <summary>WinForms Keys → the Reader's own input names (its stored vocabulary: Escape, Left,
-        /// PageUp, OemMinus, Subtract, Add, Space, …). Null for keys with no stable name.</summary>
+        private void OnKeyUp(object? sender, KeyEventArgs e)
+        {
+            if (!_capturing || _device != "Keyboard" || _pending == null) return;
+            e.Handled = true;
+            EndCapture(Chord(_pending, (int)(DateTime.UtcNow - _downAt).TotalMilliseconds));
+        }
+
+        /// <summary>WinForms Keys → the Reader's own input names, read off its bindings table and off
+        /// what LaunchBox writes: digits are D1..D0 (never "1"), keypad NumPad0..9, symbols OemMinus /
+        /// OemPlus / Add / Subtract. Null for keys with no name in that vocabulary.</summary>
         private static string? KeyName(Keys k) => k switch
         {
             Keys.Escape => "Escape", Keys.Space => "Space", Keys.Enter => "Enter", Keys.Tab => "Tab",
-            Keys.Back => "Backspace", Keys.Left => "Left", Keys.Right => "Right", Keys.Up => "Up", Keys.Down => "Down",
+            Keys.Back => "Backspace", Keys.Delete => "Delete", Keys.Insert => "Insert",
+            Keys.Left => "Left", Keys.Right => "Right", Keys.Up => "Up", Keys.Down => "Down",
             Keys.Home => "Home", Keys.End => "End", Keys.PageUp => "PageUp", Keys.PageDown => "PageDown",
             Keys.OemMinus => "OemMinus", Keys.Oemplus => "OemPlus", Keys.Add => "Add", Keys.Subtract => "Subtract",
+            Keys.Multiply => "Multiply", Keys.Divide => "Divide", Keys.Decimal => "Decimal",
+            Keys.OemQuestion => "OemQuestion", Keys.OemPeriod => "OemPeriod", Keys.Oemcomma => "OemComma",
+            Keys.OemSemicolon => "OemSemicolon", Keys.OemQuotes => "OemQuotes", Keys.Oemtilde => "OemTilde",
+            Keys.OemOpenBrackets => "OemOpenBrackets", Keys.OemCloseBrackets => "OemCloseBrackets",
+            Keys.OemPipe => "OemPipe", Keys.OemBackslash => "OemBackslash",
             Keys.ShiftKey or Keys.LShiftKey or Keys.RShiftKey => "Shift",
             Keys.ControlKey or Keys.LControlKey or Keys.RControlKey => "Ctrl",
             Keys.Menu or Keys.LMenu or Keys.RMenu => "Alt",
             >= Keys.A and <= Keys.Z => k.ToString(),
-            >= Keys.D0 and <= Keys.D9 => k.ToString().Substring(1),
+            >= Keys.D0 and <= Keys.D9 => k.ToString(),                       // D0..D9 verbatim
+            >= Keys.NumPad0 and <= Keys.NumPad9 => k.ToString(),             // NumPad0..NumPad9
             >= Keys.F1 and <= Keys.F12 => k.ToString(),
             _ => null,
         };
 
-        // ── controller capture (XInput polling, like the pause screen) ──
+        // ── controller ──
+        // Poll the RAW button mask so a hold can be measured: the chord grows while buttons are
+        // added, and the mapping is recorded once everything is released.
         private void StartPadPolling()
         {
-            _pad ??= new Pause.XInputPad();
-            _padTimer ??= new System.Windows.Forms.Timer { Interval = 60 };
+            _padTimer ??= new System.Windows.Forms.Timer { Interval = 50 };
             _padTimer.Tick -= OnPadTick;
             _padTimer.Tick += OnPadTick;
             _padTimer.Start();
         }
 
-        private void StopPadPolling() { try { _padTimer?.Stop(); } catch { } }
-
         private void OnPadTick(object? sender, EventArgs e)
         {
-            if (!_capturing || _pad == null) return;
-            var (_, pressed) = _pad.Poll();
-            if (pressed == 0) return;
-            if ((pressed & Pause.XInputPad.B) != 0 && _held.Count == 0) { EndCapture(commit: false); return; }
-            foreach (var (mask, name) in PadNames)
-                if ((pressed & mask) != 0 && !_held.Contains(name) && _held.Count < 3) _held.Add(name);
-            if (_held.Count == 0) return;
-            if (_firstDown == default) _firstDown = DateTime.UtcNow;
-            int held = (int)(DateTime.UtcNow - _firstDown).TotalMilliseconds;
-            EndCapture(commit: true, (_held.ElementAtOrDefault(0) ?? "", _held.ElementAtOrDefault(1) ?? "",
-                                      _held.ElementAtOrDefault(2) ?? "",
-                                      held >= HoldMs ? "LongPress" : "Press", held >= HoldMs ? held : 0));
+            if (!_capturing) return;
+            ushort now = Pause.XInputPad.ReadButtons0();
+            if (now != 0)
+            {
+                // Cancel on a lone B, like Escape on the keyboard.
+                if (now == Pause.XInputPad.B && _padHeld == 0) { EndCapture(null); return; }
+                if (_pending == null) _downAt = DateTime.UtcNow;
+                _padHeld |= now;
+                var names = new List<string>();
+                foreach (var (mask, name) in PadNames)
+                    if ((_padHeld & mask) != 0 && names.Count < 3) names.Add(name);
+                _pending = names;
+                Text = string.Join(" + ", names) + " …";
+                return;
+            }
+            if (_pending is { Count: > 0 })
+                EndCapture(Chord(_pending, (int)(DateTime.UtcNow - _downAt).TotalMilliseconds));
         }
 
-        /// <summary>XInput bit → the Reader's controller input names (its stored vocabulary, read off
-        /// the bindings table: A/B/X/Y, Start, Select, Dpad*, Left/RightShoulder, …). Stick-button
-        /// masks aren't exposed by XInputPad, so those two are captured through their raw bits.</summary>
+        /// <summary>XInput bit → the Reader's controller input names (its stored vocabulary: A/B/X/Y,
+        /// Start, Select, Dpad*, Left/RightShoulder, stick buttons).</summary>
         private const ushort LeftThumbMask = 0x0040, RightThumbMask = 0x0080;
         private static readonly (ushort mask, string name)[] PadNames =
         {
@@ -381,5 +441,13 @@ internal static class ReaderOptions
             if (disposing) { try { _padTimer?.Stop(); _padTimer?.Dispose(); } catch { } }
             base.Dispose(disposing);
         }
+    }
+
+    /// <summary>A scrolling stack that does NOT jump when a child takes focus: clicking a capture box
+    /// deep in the list used to scroll the panel to its end (WinForms scrolls the newly focused
+    /// nested control into view on its own).</summary>
+    private sealed class NoAutoScrollFlow : FlowLayoutPanel
+    {
+        protected override Point ScrollToControl(Control activeControl) => AutoScrollPosition;
     }
 }

@@ -840,8 +840,9 @@ internal static class LbGlobalOptions
         return list.ToArray();
     }
 
-    /// <summary>A dark, owner-drawn TabControl (the OS draws tabs light otherwise).</summary>
-    private static TabControl NewDarkTabControl(float dpiS)
+    /// <summary>A dark, owner-drawn TabControl (the OS draws tabs light otherwise). Shared with the
+    /// other LB sections (ReaderOptions) so every tabbed LB page looks the same.</summary>
+    internal static TabControl NewDarkTabControl(float dpiS)
     {
         int S(int px) => (int)Math.Round(px * dpiS);
         var tabs = new TabControl

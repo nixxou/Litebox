@@ -48,7 +48,17 @@ internal static class DocOpener
         {
             var (exe, why) = ResolveReader(path);
             Console.WriteLine($"[docs] open \"{Path.GetFileName(path)}\" → {(exe != null ? "LB Reader" : "shell")} ({why})");
-            if (exe != null)
+            if (exe == ExternalReaderMarker)
+            {
+                // Provider = ExternalReader: LB's configured external viewer wins over the shell.
+                var ext = ReaderSettingsDb.LoadGlobal()?.ExternalReaderExecutablePath ?? "";
+                if (ext.Length > 0 && File.Exists(ext))
+                {
+                    Process.Start(new ProcessStartInfo(ext, $"\"{path}\"") { UseShellExecute = false });
+                    return;
+                }
+            }
+            else if (exe != null)
             {
                 var args = new System.Text.StringBuilder();
                 args.Append($"--path \"{path}\"");
@@ -56,8 +66,12 @@ internal static class DocOpener
                 if (!string.IsNullOrEmpty(gameTitle)) args.Append($" --game-title \"{Clean(gameTitle!)}\"");
                 if (!string.IsNullOrEmpty(platform)) args.Append($" --platform \"{Clean(platform!)}\"");
                 if (launchWindow != IntPtr.Zero) args.Append($" --launch-window-handle 0x{launchWindow.ToInt64():X}");
-                // LB itself passes --fullscreen (LbReaderFullscreen=true is LB parity; windowed opt-out).
-                if (LiteBoxConfig.LoadForExe().GetBool("LbReaderFullscreen", true)) args.Append(" --fullscreen");
+                // Fullscreen follows LB'S OWN setting (Options → Reader → "Open in fullscreen",
+                // GlobalSettings.FullscreenByDefault) so both apps behave identically; the ini key is
+                // only the fallback when the Reader has no settings DB yet.
+                bool fs = ReaderSettingsDb.LoadGlobal()?.FullscreenByDefault
+                          ?? LiteBoxConfig.LoadForExe().GetBool("LbReaderFullscreen", true);
+                if (fs) args.Append(" --fullscreen");
                 Process.Start(new ProcessStartInfo(exe, args.ToString()) { UseShellExecute = false });
                 return;
             }
@@ -70,11 +84,25 @@ internal static class DocOpener
     /// <summary>Argument-safe: a stray quote in a title must not break the command line.</summary>
     private static string Clean(string s) => s.Replace('"', '\'');
 
-    /// <summary>The Reader exe to use for <paramref name="path"/> (+ the routing reason for the
-    /// log), exe null → shell (option off, unsupported format, pre-14 / Reader not deployed).</summary>
+    /// <summary>Sentinel: LB's provider says "an external viewer", handled by the caller.</summary>
+    private const string ExternalReaderMarker = "\0external";
+
+    /// <summary>How <paramref name="path"/> must open (+ the routing reason for the log): the Reader
+    /// exe, <see cref="ExternalReaderMarker"/>, or null → shell (LiteBox's opt-in off, LB's provider
+    /// set to the default application, unsupported format, pre-14 / Reader not deployed).</summary>
     private static (string? exe, string why) ResolveReader(string path)
     {
         if (!LiteBoxConfig.LoadForExe().GetBool("UseLbReaderForDocs", false)) return (null, "UseLbReaderForDocs=false");
+        // LB's own provider choice (Options → Reader → Reader Provider) is honoured when the Reader
+        // settings DB exists — one setting for both apps.
+        var g = ReaderSettingsDb.LoadGlobal();
+        if (g != null)
+        {
+            if (string.Equals(g.ReaderProvider, "DefaultApplication", StringComparison.OrdinalIgnoreCase))
+                return (null, "LB ReaderProvider=DefaultApplication");
+            if (string.Equals(g.ReaderProvider, "ExternalReader", StringComparison.OrdinalIgnoreCase))
+                return (ExternalReaderMarker, "LB ReaderProvider=ExternalReader");
+        }
         if (!ReaderExts.Contains(Path.GetExtension(path))) return (null, "format not Reader-supported: " + Path.GetExtension(path));
         string root = MediaResolver.LbRoot ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
         string exe = Path.Combine(root, "System", "Software", "LaunchBox Reader", "LaunchBox.Reader.exe");

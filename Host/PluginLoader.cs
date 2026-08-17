@@ -134,15 +134,39 @@ internal static class PluginLoader
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static object InstantiateWithPluginPaths(System.Reflection.ConstructorInfo ctor, string dllPath)
     {
-        string installDir = Path.GetDirectoryName(Path.GetFullPath(dllPath));
-        // DataDirectory: LB 14 creates a <LB>\Local\Plugins root for plugin runtime data. Its exact
-        // per-plugin subfolder scheme is opaque (obfuscated core); we key by the plugin's FOLDER NAME —
-        // stable across updates, debuggable, and the contract only promises a persistent directory the
-        // plugin must itself create. LbCoreDir's parent is the LB root (set before LoadFrom).
+        string installDir = Path.GetDirectoryName(Path.GetFullPath(dllPath))!;
+        // DataDirectory — LB's OWN convention, read off its resolver (PluginInstallLocationResolver
+        // .GetDataDirectory(pluginId, installLocationKey), invoked on the real v14 core):
+        //     <LB>\System\Plugins\.data\<PluginId>    for a plugin installed under System\Plugins
+        //     <LB>\Local\Plugins\.data\<PluginId>     for every other location
+        // The id is the manifest's PluginId (v14 plugins ship manifest.json). No manifest (a classic
+        // pre-14 user plugin) → key by folder name under the same root, so the path stays stable and
+        // obvious rather than inventing a GUID.
         string lbRoot = Path.GetFullPath(Path.Combine(ResolveCoreDir(), ".."));
-        string dataDir = Path.Combine(lbRoot, "Local", "Plugins", Path.GetFileName(installDir));
+        bool underSystem = installDir.Replace('/', '\\')
+            .Contains(@"\System\Plugins\", StringComparison.OrdinalIgnoreCase);
+        string dataRoot = underSystem
+            ? Path.Combine(lbRoot, "System", "Plugins", ".data")
+            : Path.Combine(lbRoot, "Local", "Plugins", ".data");
+        string dataDir = Path.Combine(dataRoot, ManifestPluginId(installDir) ?? Path.GetFileName(installDir));
         Console.WriteLine($"[loader] {ctor.DeclaringType!.Name}: IPluginPaths ctor (install={installDir}, data={dataDir})");
         return ctor.Invoke(new object[] { new HostPluginPaths(installDir, dataDir) });
+    }
+
+    /// <summary>The plugin's manifest PluginId (v14 manifest.json), or null when there is no manifest.
+    /// Parsed with a plain scan — no JSON dependency for one field, and a malformed manifest just
+    /// falls back to the folder name.</summary>
+    private static string? ManifestPluginId(string installDir)
+    {
+        try
+        {
+            var f = Path.Combine(installDir, "manifest.json");
+            if (!File.Exists(f)) return null;
+            var m = System.Text.RegularExpressions.Regex.Match(
+                File.ReadAllText(f), "\"PluginId\"\\s*:\\s*\"([0-9a-fA-F-]{36})\"");
+            return m.Success ? m.Groups[1].Value : null;
+        }
+        catch { return null; }
     }
 
     private sealed class HostPluginPaths : Unbroken.LaunchBox.Plugins.IPluginPaths

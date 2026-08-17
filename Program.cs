@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 // The app is a WinExe (no console by default → transparent when launched by the launcher). Only
 // show a console with --debug (or --headless diagnostics): attach to the launching terminal if any,
 // else allocate a fresh one, and route Console.Out/Error to it.
-bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--selftest-title-sort") || args.Contains("--selftest-game-sort") || args.Contains("--selftest-sort-parity") || args.Contains("--selftest-filter-parity") || args.Contains("--selftest-media-rename") || args.Contains("--selftest-lbxml") || args.Contains("--selftest-disc") || args.Contains("--selftest-m3u") || args.Contains("--selftest-savemove") || args.Contains("--selftest-safewrite") || args.Contains("--mame-submit") || args.Contains("--selftest-mediamerge") || args.Contains("--selftest-hiscore-dat") || args.Contains("--selftest-mame-plugin") || args.Contains("--selftest-playlist-copy") || args.Contains("--selftest-model3d") || args.Contains("--selftest-selection") || args.Contains("--selftest-bakeleak") || args.Contains("--selftest-filter-match") || args.Contains("--hiscore-dat") || args.Contains("--media-audit") || args.Contains("--disc-predict") || args.Contains("--combine-probe") || args.Contains("--rename-probe") || args.Contains("--expand-probe") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--pause-demo") || args.Contains("--open-doc") || args.Contains("--media-hash") || args.Contains("--dedup-test") || args.Contains("--render-jewel") || args.Contains("--render-glb") || args.Contains("--render-oracle");
+bool debugConsole = args.Contains("--debug") || args.Contains("--headless") || args.Contains("--selftest-writeback") || args.Contains("--selftest-title-sort") || args.Contains("--selftest-game-sort") || args.Contains("--selftest-sort-parity") || args.Contains("--selftest-filter-parity") || args.Contains("--selftest-media-rename") || args.Contains("--selftest-lbxml") || args.Contains("--selftest-disc") || args.Contains("--selftest-m3u") || args.Contains("--selftest-savemove") || args.Contains("--selftest-safewrite") || args.Contains("--mame-submit") || args.Contains("--selftest-mediamerge") || args.Contains("--selftest-hiscore-dat") || args.Contains("--selftest-mame-plugin") || args.Contains("--selftest-playlist-copy") || args.Contains("--selftest-model3d") || args.Contains("--selftest-selection") || args.Contains("--selftest-bakeleak") || args.Contains("--selftest-filter-match") || args.Contains("--hiscore-dat") || args.Contains("--media-audit") || args.Contains("--disc-predict") || args.Contains("--combine-probe") || args.Contains("--rename-probe") || args.Contains("--expand-probe") || args.Contains("--seed-writeback") || args.Contains("--dump-extra") || args.Contains("--dump-emupresets") || args.Contains("--store-sync") || args.Contains("--dump-uninstall-bat") || args.Contains("--deploy-natives") || args.Contains("--migrate") || args.Contains("--sweep-legacy") || args.Contains("--probe-saves") || args.Contains("--pause-demo") || args.Contains("--open-doc") || args.Contains("--reader-dump") || args.Contains("--media-hash") || args.Contains("--dedup-test") || args.Contains("--render-jewel") || args.Contains("--render-glb") || args.Contains("--render-oracle");
 if (debugConsole)
     DebugConsole.Enable();
 
@@ -226,6 +226,31 @@ if (args.Contains("--open-doc"))
         : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
     LbApiHost.Host.Media.MediaResolver.Init(probeRoot);
     LbApiHost.Host.Media.DocOpener.Open(args[oi + 1]);
+    return 0;
+}
+
+// Dump LB 14's Reader configuration as LiteBox reads it (Media/ReaderSettingsDb): the settings DB
+// path, the global settings row, and the effective keyboard/controller mapping groups.
+// Usage: --reader-dump [--lbroot <LB>]
+if (args.Contains("--reader-dump"))
+{
+    int ri = Array.IndexOf(args, "--lbroot");
+    LbApiHost.Host.Media.MediaResolver.Init(ri >= 0 && ri + 1 < args.Length ? args[ri + 1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..")));
+    Console.WriteLine("db: " + (LbApiHost.Host.Media.ReaderSettingsDb.DatabasePath ?? "<none>"));
+    var g = LbApiHost.Host.Media.ReaderSettingsDb.LoadGlobal();
+    if (g == null) Console.WriteLine("no global settings");
+    else foreach (var f in g.GetType().GetFields())
+        Console.WriteLine($"  {f.Name} = {f.GetValue(g)}");
+    foreach (var dev in new[] { "Keyboard", "Controller" })
+    {
+        var groups = LbApiHost.Host.Media.ReaderSettingsDb.EffectiveGroups(dev);
+        Console.WriteLine($"\n== {dev}: {groups.Count} action groups ==");
+        foreach (var (key, rows) in groups)
+            Console.WriteLine($"  [{rows[0].GroupName}] {rows[0].DisplayName} ({rows[0].BindingContext}) = "
+                + string.Join(", ", rows.ConvertAll(r => r.Chord + (r.ActivationMode == "LongPress" ? " (hold)" : "")))
+                + (rows[0].IsUserOverride ? "   *user*" : ""));
+    }
     return 0;
 }
 

@@ -35,6 +35,14 @@ internal static class EditPlatformModel
     internal static CoreModelHost.Preview? LastOracle;   // exposed for the --model3d-live probe's LB_ORACLE_DUMP=1
 
     // Model Type dropdown label → stored ModelType string.
+    //
+    // LB 14 adds "Cassette Case" → token "cassetteCase" (captured off a real v14 write). Its block:
+    // CassetteType (StraightBack|AngledBack|ClearStraightBack), CassettePosition (Automatic|Portrait|
+    // Landscape), CassetteWornPlastic ("Add Scuffs and Scratches"), CassetteCloudyPlastic, CaseColor
+    // doubling as the PLASTIC color, CoverColor, SpineForegroundColor (J-card text, ARGB, -1=white),
+    // and CassetteSpine/LogoRotation as PLAIN integers (single J-card spine, not the 4-side CSV).
+    // Not listed here until LiteBox renders/edits it — a stored cassetteCase joins the combo
+    // dynamically below and round-trips untouched.
     private static readonly (string label, string val)[] ModelTypes =
     {
         ("Box", "box"), ("DVD Case", "dvd"), ("Jewel Case", "jewelCase"),

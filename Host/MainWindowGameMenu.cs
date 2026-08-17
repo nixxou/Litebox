@@ -210,9 +210,12 @@ internal sealed partial class MainWindow
         media.DropDownItems.Add(Item("View 3D Box Model…", MenuIcons.View3dBox, () => OpenFullscreen3d(g), has3d));
 
         // Manual + documents open through DocOpener (shell, or LB 14's Reader when the
-        // UseLbReaderForDocs ini key is on — one opener for every surface).
+        // UseLbReaderForDocs ini key is on — one opener for every surface). The main window is the
+        // launch anchor: the Reader opens on LiteBox's monitor, LB-style.
+        string gTitle = S(Safe(() => g.Title)), gPlat = S(Safe(() => g.Platform));
         string manual = S(Safe(() => g.GetManualPath()));
-        media.DropDownItems.Add(Item("View Manual…", MenuIcons.ViewManual, () => Media.DocOpener.Open(manual),
+        media.DropDownItems.Add(Item("View Manual…", MenuIcons.ViewManual,
+            () => Media.DocOpener.Open(manual, "Manual", gTitle, gPlat, Handle),
             manual.Length > 0 && File.Exists(manual)));
 
         // LB parity (Media ▸, same slots): the game's Document records opened via the shell, and its
@@ -234,7 +237,9 @@ internal sealed partial class MainWindow
         foreach (var d in docs)
         {
             string abs = Safe(() => EditGameWindow.DocResolve(d.ApplicationPath)) ?? "";
-            docsMenu.DropDownItems.Add(Item(S(Safe(() => d.Name)), null, () => Media.DocOpener.Open(abs),
+            string dName = S(Safe(() => d.Name));
+            docsMenu.DropDownItems.Add(Item(dName, null,
+                () => Media.DocOpener.Open(abs, dName, gTitle, gPlat, Handle),
                 abs.Length > 0 && File.Exists(abs)));
         }
         media.DropDownItems.Add(docsMenu);

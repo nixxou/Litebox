@@ -54,7 +54,7 @@ internal static class GlobalDefaults
         // Documents: open manuals/additional documents with LB 14's Reader instead of the shell
         // (supported formats only; silently shell elsewhere — see Media/DocOpener)
         ("UseLbReaderForDocs",              "false"),
-        ("LbReaderFullscreen",              "false"),      // pass -fullscreen to the Reader
+        ("LbReaderFullscreen",              "true"),       // --fullscreen like LB itself (windowed opt-out)
         // Videos in the right pane
         ("VideoAutoplay",                   "false"),
         ("VideoAutoplaySound",              "false"),

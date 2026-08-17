@@ -397,14 +397,18 @@ internal static class PauseManager
 
     /// <summary>"Additional Documents" pick: open the document (default viewer, or LB 14's Reader
     /// when UseLbReaderForDocs is on — see Media/DocOpener), game STAYS paused — exactly the View
-    /// Manual behaviour (the overlay yields TopMost while unfocused so the viewer is readable).</summary>
+    /// Manual behaviour (the overlay yields TopMost while unfocused so the viewer is readable).
+    /// The emulator window is the launch anchor so the Reader lands on the GAME's monitor.</summary>
     private static void OpenDocument(string path)
     {
         lock (_lock)
         {
             if (_proc == null) return;
-            if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path))
-                Media.DocOpener.Open(path);
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return;
+            var snap = LaunchedGame.Current;
+            string? name = null;
+            try { name = snap?.Documents.FirstOrDefault(d => string.Equals(d.Path, path, StringComparison.OrdinalIgnoreCase)).Name; } catch { }
+            Media.DocOpener.Open(path, name, snap?.Title, snap?.Platform, EmulatorWindow());
         }
     }
 
@@ -441,9 +445,10 @@ internal static class PauseManager
                     // while unfocused (see the screen's Deactivate handler) so it's readable.
                     try
                     {
-                        var man = LaunchedGame.Current?.ManualPath;
+                        var lg = LaunchedGame.Current;
+                        var man = lg?.ManualPath;
                         if (!string.IsNullOrEmpty(man) && System.IO.File.Exists(man))
-                            Media.DocOpener.Open(man!);
+                            Media.DocOpener.Open(man!, "Manual", lg?.Title, lg?.Platform, EmulatorWindow());
                     }
                     catch (Exception ex) { Console.WriteLine("[pause] manual open failed: " + ex.Message); }
                     break;

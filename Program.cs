@@ -215,12 +215,16 @@ if (args.Contains("--pause-demo"))
 }
 
 // Headless probe of the document-open routing (Media/DocOpener): prints which route the path
-// takes (LB Reader vs shell + why) and opens it. Usage: --open-doc <file>
+// takes (LB Reader vs shell + why) and opens it. Usage: --open-doc <file> [--lbroot <LB>]
+// (--lbroot for bin runs; a deployed exe derives the root from its own location).
 if (args.Contains("--open-doc"))
 {
     int oi = Array.IndexOf(args, "--open-doc");
-    if (oi + 1 >= args.Length) { Console.WriteLine("usage: --open-doc <file>"); return 2; }
-    LbApiHost.Host.Media.MediaResolver.Init(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..")));
+    if (oi + 1 >= args.Length) { Console.WriteLine("usage: --open-doc <file> [--lbroot <LB>]"); return 2; }
+    int ri = Array.IndexOf(args, "--lbroot");
+    string probeRoot = ri >= 0 && ri + 1 < args.Length ? args[ri + 1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+    LbApiHost.Host.Media.MediaResolver.Init(probeRoot);
     LbApiHost.Host.Media.DocOpener.Open(args[oi + 1]);
     return 0;
 }

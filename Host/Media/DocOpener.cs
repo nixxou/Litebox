@@ -1,8 +1,16 @@
 // How a game document opens: the system default app (shell) — or, opt-in via LiteBox.ini
 // UseLbReaderForDocs=true, LaunchBox 14's built-in Reader (System\Software\LaunchBox Reader),
-// the page-turn reading UI LB 14 ships for manuals/guides/magazines. The Reader takes the
-// document path as its single argument (probed empirically: window title carries the document
-// name once it loads).
+// the page-turn reading UI LB 14 ships for manuals/guides/magazines.
+//
+// The Reader's REAL command-line contract, captured from a live LB 14 launch (Win32_Process
+// CommandLine while LB opened a manual):
+//
+//   --path "<file>" --document-title Manual --game-title "Age of Wonders" --platform Windows
+//   --launch-window-handle 0x140C22 --fullscreen
+//
+// --launch-window-handle is how the Reader lands on the SAME MONITOR as its launcher (and what
+// its lifetime is tied to); --fullscreen is what LB itself passes (windowed without it — probed
+// by window-rect measurement). A bare path also works, but we speak the full contract.
 //
 // Only formats the Reader actually LOADS are routed to it; everything else keeps the shell even
 // when the option is on (an empty Reader window helps nobody). Fail-soft everywhere: option off,
@@ -29,8 +37,11 @@ internal static class DocOpener
     private static readonly HashSet<string> ReaderExts = new(StringComparer.OrdinalIgnoreCase)
     { ".pdf", ".epub", ".txt", ".cbz", ".cbr", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp" };
 
-    /// <summary>Open a document (manual or additional document) per the configured mode.</summary>
-    public static void Open(string path)
+    /// <summary>Open a document (manual or additional document) per the configured mode.
+    /// The optional metadata mirrors LB 14's own Reader invocation; <paramref name="launchWindow"/>
+    /// puts the Reader on that window's monitor (the game's, in pause; LiteBox's elsewhere).</summary>
+    public static void Open(string path, string? docTitle = null, string? gameTitle = null,
+                            string? platform = null, IntPtr launchWindow = default)
     {
         if (string.IsNullOrEmpty(path)) return;
         try
@@ -39,10 +50,15 @@ internal static class DocOpener
             Console.WriteLine($"[docs] open \"{Path.GetFileName(path)}\" → {(exe != null ? "LB Reader" : "shell")} ({why})");
             if (exe != null)
             {
-                // -fullscreen: probed empirically (window covers the screen instead of the default
-                // windowed 26,26 frame; the document still loads). LbReaderFullscreen ini key.
-                bool fs = LiteBoxConfig.LoadForExe().GetBool("LbReaderFullscreen", false);
-                Process.Start(new ProcessStartInfo(exe, $"{(fs ? "-fullscreen " : "")}\"{path}\"") { UseShellExecute = false });
+                var args = new System.Text.StringBuilder();
+                args.Append($"--path \"{path}\"");
+                args.Append($" --document-title \"{Clean(docTitle ?? Path.GetFileNameWithoutExtension(path))}\"");
+                if (!string.IsNullOrEmpty(gameTitle)) args.Append($" --game-title \"{Clean(gameTitle!)}\"");
+                if (!string.IsNullOrEmpty(platform)) args.Append($" --platform \"{Clean(platform!)}\"");
+                if (launchWindow != IntPtr.Zero) args.Append($" --launch-window-handle 0x{launchWindow.ToInt64():X}");
+                // LB itself passes --fullscreen (LbReaderFullscreen=true is LB parity; windowed opt-out).
+                if (LiteBoxConfig.LoadForExe().GetBool("LbReaderFullscreen", true)) args.Append(" --fullscreen");
+                Process.Start(new ProcessStartInfo(exe, args.ToString()) { UseShellExecute = false });
                 return;
             }
         }
@@ -50,6 +66,9 @@ internal static class DocOpener
         try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
         catch (Exception ex) { Console.WriteLine("[docs] open failed: " + ex.Message); }
     }
+
+    /// <summary>Argument-safe: a stray quote in a title must not break the command line.</summary>
+    private static string Clean(string s) => s.Replace('"', '\'');
 
     /// <summary>The Reader exe to use for <paramref name="path"/> (+ the routing reason for the
     /// log), exe null → shell (option off, unsupported format, pre-14 / Reader not deployed).</summary>

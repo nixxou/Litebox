@@ -24,10 +24,14 @@
 param(
   [string]$Lb9Root  = 'G:\LB',
   [string]$Lb10Root = '',
+  # LaunchBox 14 test install (adapt-to-lbv14): the net10 build deploys HERE too - v14 testing
+  # happens on this install, so a dev deploy must always refresh it.
+  [string]$Lb14Root = 'G:\LB1326',
   [switch]$Plugin,
   [switch]$Kill,
   [switch]$SkipNet9,
-  [switch]$SkipNet10
+  [switch]$SkipNet10,
+  [switch]$SkipLb14
 )
 
 $ErrorActionPreference = 'Stop'
@@ -128,6 +132,10 @@ function Deploy-ParentalNative([string]$lbRoot) {
 
 if (-not $SkipNet9)  { Write-Host "-- deploy net9 -> $Lb9Root" -ForegroundColor Cyan;  Deploy-Host $t9  $Lb9Root;  Deploy-WebAssets $Lb9Root }
 if (-not $SkipNet10) { Write-Host "-- deploy net10 -> $Lb10Root" -ForegroundColor Cyan; Deploy-Host $t10 $Lb10Root; Deploy-WebAssets $Lb10Root; Deploy-ParentalNative $Lb10Root }
+if (-not $SkipNet10 -and -not $SkipLb14 -and (Test-Path $Lb14Root)) {
+  Write-Host "-- deploy net10 -> $Lb14Root (LB 14)" -ForegroundColor Cyan
+  Deploy-Host $t10 $Lb14Root; Deploy-WebAssets $Lb14Root; Deploy-ParentalNative $Lb14Root
+}
 
 if ($Plugin) {
   Write-Host '-- build ExtendDB plugin' -ForegroundColor Cyan

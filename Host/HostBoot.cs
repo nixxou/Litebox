@@ -71,7 +71,12 @@ internal static class HostBoot
     public static bool NotifyDemo;      // --notify-demo → raise one notification of each shape once the window is up
 
     /// <summary>Immediate subfolder names of <paramref name="root"/> (plugin folders),
-    /// sorted case-insensitively. Empty when the root is missing/unreadable.</summary>
+    /// sorted case-insensitively. Empty when the root is missing/unreadable.
+    ///
+    /// DOT-FOLDERS ARE NOT PLUGINS: LB 14 keeps each plugin's runtime data in a sibling
+    /// <c>.data\&lt;PluginId&gt;</c> folder of the plugin root (see PluginLoader's IPluginPaths).
+    /// Listing it would offer a bogus ".data" entry in Options → Plugins and make the loader
+    /// scan a data folder for plugin DLLs.</summary>
     public static List<string> ListPluginFolders(string root)
     {
         var list = new List<string>();
@@ -79,7 +84,11 @@ internal static class HostBoot
         {
             if (Directory.Exists(root))
                 foreach (var d in Directory.GetDirectories(root))
-                    list.Add(Path.GetFileName(d));
+                {
+                    var name = Path.GetFileName(d);
+                    if (name.Length == 0 || name[0] == '.') continue;
+                    list.Add(name);
+                }
         }
         catch { }
         list.Sort(StringComparer.OrdinalIgnoreCase);

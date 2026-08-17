@@ -32,6 +32,11 @@ internal sealed class LaunchedGame
     public string? BoxFrontPath;
     public string? ManualPath;   // pause screen "View Manual"
 
+    /// <summary>The game's additional DOCUMENTS (effective Section=Document add-app records):
+    /// display name + resolved absolute path, for the pause screen's "Additional Documents"
+    /// submenu. Only files that existed at capture — the store is gone once the game runs.</summary>
+    public List<(string Name, string Path)> Documents = new();
+
     // Per-GAME pause-screen overrides (<OverrideDefaultPauseScreenSettings> +
     // the three toggles on the <Game> element). The game's _extra fields are
     // Tier-2 (dropped at launch), so they MUST be captured here. When
@@ -114,6 +119,22 @@ internal sealed class LaunchedGame
             lg.ClearLogoPath ??= NonEmpty(Safe(() => game.ClearLogoImagePath));
             lg.BoxFrontPath ??= NonEmpty(Safe(() => game.FrontImagePath)) ?? NonEmpty(Safe(() => game.Box3DImagePath));
             lg.ManualPath ??= NonEmpty(Safe(() => game.ManualPath));
+
+            // Additional documents (effective Section=Document), resolved NOW — the pause screen
+            // must never touch the store. Same resolution as the Documents page / Media menu.
+            try
+            {
+                foreach (var a in game.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>())
+                {
+                    if (a is not Data.HostAdditionalApplication { IsDocument: true } h) continue;
+                    string abs = Safe(() => EditGameWindow.DocResolve(h.ApplicationPath)) ?? "";
+                    if (abs.Length == 0 || !System.IO.File.Exists(abs)) continue;
+                    string name = Safe(() => h.Name) ?? "";
+                    if (name.Length == 0) name = System.IO.Path.GetFileNameWithoutExtension(abs);
+                    lg.Documents.Add((name, abs));
+                }
+            }
+            catch { }
 
             // Per-game pause overrides (read via ILiteBoxFields — these XML fields
             // aren't on the SDK IGame, and the backing _extra dict is dropped at launch).

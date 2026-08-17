@@ -64,7 +64,11 @@ internal sealed class LegacyPauseScreen : IPauseScreen
         private static readonly Color BtnBg = Color.FromArgb(26, 26, 34);
 
         private readonly PauseContext _ctx;
-        private readonly List<(PauseAction action, Button btn)> _items = new();
+        // Menu entries as (fire, button) delegates: the same list renders the MAIN menu and the
+        // "Additional Documents" SUBMENU (console-style menu swap — one flat list at a time, the
+        // same Up/Down/Enter/Esc + pad navigation drives both levels).
+        private readonly List<(Action fire, Button btn)> _items = new();
+        private bool _inDocs;   // submenu shown → Esc / pad-B go BACK instead of resuming
         private int _sel;
         private Bitmap? _bg;   // pre-composited full-screen background (blitted as-is)
         private System.Windows.Forms.Timer? _padTimer;   // controller poll (overlay lifetime)
@@ -97,33 +101,7 @@ internal sealed class LegacyPauseScreen : IPauseScreen
             DoubleBuffered = true;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
 
-            // Buttons (the only real controls — opaque, no transparency cascade).
-            void Add(PauseAction a, string label, bool enabled = true)
-            {
-                if (!enabled) return;
-                var b = new Button
-                {
-                    Text = label,
-                    FlatStyle = FlatStyle.Flat,
-                    BackColor = BtnBg, ForeColor = Fg,
-                    FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(40, 40, 52) },
-                    Font = new Font("Segoe UI", 15f),
-                    Size = new Size(S(420), S(52)),
-                    TabStop = false,
-                };
-                b.Click += (_, _) => Fire(a);
-                _items.Add((a, b));
-                Controls.Add(b);
-            }
-
-            // LaunchBox's pause-menu order and labels.
-            Add(PauseAction.Resume, "Resume Game");
-            Add(PauseAction.ViewManual, "View Manual", _ctx.CanViewManual);
-            Add(PauseAction.Reset, "Reset Game", _ctx.CanReset);
-            Add(PauseAction.SaveState, "Save State", _ctx.CanSaveState);
-            Add(PauseAction.LoadState, "Load State", _ctx.CanLoadState);
-            Add(PauseAction.SwapDiscs, "Swap Discs", _ctx.CanSwapDiscs);
-            Add(PauseAction.ExitGame, "Exit Game");
+            BuildMainMenu();
 
             // While the manual viewer (or anything else) takes the foreground, yield
             // TopMost so it is actually readable above the overlay; reclaim on focus.
@@ -149,8 +127,8 @@ internal sealed class LegacyPauseScreen : IPauseScreen
                 var (dirY, pressed) = pad.Poll();
                 if (dirY < 0) Select((_sel - 1 + _items.Count) % _items.Count);
                 else if (dirY > 0) Select((_sel + 1) % _items.Count);
-                if ((pressed & XInputPad.A) != 0) Fire(_items[_sel].action);
-                else if ((pressed & (XInputPad.B | XInputPad.Start)) != 0) Fire(PauseAction.Resume);
+                if ((pressed & XInputPad.A) != 0) _items[_sel].fire();
+                else if ((pressed & (XInputPad.B | XInputPad.Start)) != 0) BackOrResume();
             };
             _padTimer.Start();
 
@@ -204,11 +182,11 @@ internal sealed class LegacyPauseScreen : IPauseScreen
         {
             switch (keyData)
             {
-                case Keys.Escape: Fire(PauseAction.Resume); return true;
+                case Keys.Escape: BackOrResume(); return true;
                 case Keys.Up: Select((_sel - 1 + _items.Count) % _items.Count); return true;
                 case Keys.Down: Select((_sel + 1) % _items.Count); return true;
                 case Keys.Enter:
-                case Keys.Space: Fire(_items[_sel].action); return true;
+                case Keys.Space: _items[_sel].fire(); return true;
             }
             return base.ProcessCmdKey(ref msg, keyData);
         }
@@ -253,6 +231,74 @@ internal sealed class LegacyPauseScreen : IPauseScreen
         {
             if (_bg != null) e.Graphics.DrawImageUnscaled(_bg, 0, 0);
             else e.Graphics.Clear(Bg);
+        }
+
+        // ── Menu construction (main + Documents submenu, one flat list at a time) ──
+
+        /// <summary>Replace the button list wholesale and re-centre it (menu swap).</summary>
+        private void SetMenu(IEnumerable<(string label, Action fire)> entries)
+        {
+            foreach (var (_, b) in _items) { try { Controls.Remove(b); b.Dispose(); } catch { } }
+            _items.Clear();
+            foreach (var (label, fire) in entries)
+            {
+                var b = new Button
+                {
+                    Text = label,
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = BtnBg, ForeColor = Fg,
+                    FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(40, 40, 52) },
+                    Font = new Font("Segoe UI", 15f),
+                    Size = new Size(S(420), S(52)),
+                    TabStop = false,
+                    AutoEllipsis = true,   // document names can be long
+                };
+                b.Click += (_, _) => fire();
+                _items.Add((fire, b));
+                Controls.Add(b);
+            }
+            LayoutMenu();
+            Select(0);
+        }
+
+        private void BuildMainMenu()
+        {
+            _inDocs = false;
+            var m = new List<(string, Action)> { ("Resume Game", () => Fire(PauseAction.Resume)) };
+            if (_ctx.CanViewManual) m.Add(("View Manual", () => Fire(PauseAction.ViewManual)));
+            // LB 14: the game's Document records get their own submenu (console-style swap).
+            if (_ctx.Documents.Count > 0) m.Add(("Additional Documents", BuildDocsMenu));
+            if (_ctx.CanReset) m.Add(("Reset Game", () => Fire(PauseAction.Reset)));
+            if (_ctx.CanSaveState) m.Add(("Save State", () => Fire(PauseAction.SaveState)));
+            if (_ctx.CanLoadState) m.Add(("Load State", () => Fire(PauseAction.LoadState)));
+            if (_ctx.CanSwapDiscs) m.Add(("Swap Discs", () => Fire(PauseAction.SwapDiscs)));
+            m.Add(("Exit Game", () => Fire(PauseAction.ExitGame)));
+            SetMenu(m);
+        }
+
+        private void BuildDocsMenu()
+        {
+            _inDocs = true;
+            var m = new List<(string, Action)>();
+            // The centred layout has no scrolling: cap the list so it always fits (a game with
+            // more documents than that is exotic; the first N stay reachable, XML order).
+            const int Max = 12;
+            foreach (var (name, path) in _ctx.Documents.Take(Max))
+            {
+                string p = path;   // capture per-entry
+                m.Add((name, () => { try { _ctx.OnOpenDocument?.Invoke(p); } catch { } }));
+            }
+            if (_ctx.Documents.Count > Max)
+                Console.WriteLine($"[pause] documents submenu capped at {Max} of {_ctx.Documents.Count}");
+            m.Add(("Back", BuildMainMenu));
+            SetMenu(m);
+        }
+
+        /// <summary>Esc / pad-B: leave the submenu when one is open, resume the game otherwise.</summary>
+        private void BackOrResume()
+        {
+            if (_inDocs) BuildMainMenu();
+            else Fire(PauseAction.Resume);
         }
 
         private void LayoutMenu()

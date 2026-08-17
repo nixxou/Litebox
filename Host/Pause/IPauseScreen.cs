@@ -45,6 +45,12 @@ internal sealed class PauseContext
     // Resume and ExitGame are always available; ViewManual when the game has one).
     public bool CanSaveState, CanLoadState, CanReset, CanSwapDiscs;
     public bool CanViewManual;
+    /// <summary>The game's additional documents (name + absolute path, from the LaunchedGame
+    /// snapshot). Non-empty → the screen offers an "Additional Documents" submenu whose picks
+    /// report through <see cref="OnOpenDocument"/> (the game STAYS paused, like View Manual).</summary>
+    public List<(string Name, string Path)> Documents = new();
+    /// <summary>Invoked (on the screen's UI thread) with the picked document's absolute path.</summary>
+    public Action<string>? OnOpenDocument;
     // Forceful activation (emulator field): keep stealing focus until the screen has it.
     public bool ForcefulActivation;
     /// <summary>The emulator's main window — the screen opens on ITS monitor

@@ -327,6 +327,7 @@ internal static class PauseManager
             BoxFrontPath = snap?.BoxFrontPath,
             SessionStartUtc = snap?.LaunchedAtUtc ?? DateTime.UtcNow,
             CanViewManual = !string.IsNullOrEmpty(snap?.ManualPath),
+            Documents = snap?.Documents ?? new List<(string, string)>(),
             CanSaveState = !AhkScript.IsScriptEmpty(ScriptStr("SaveStateAutoHotkeyScript")),
             CanLoadState = !AhkScript.IsScriptEmpty(ScriptStr("LoadStateAutoHotkeyScript")),
             CanReset = !AhkScript.IsScriptEmpty(ScriptStr("ResetAutoHotkeyScript")),
@@ -334,6 +335,7 @@ internal static class PauseManager
             ForcefulActivation = snap is { PauseOverride: true } ? snap.PauseForceful : FieldBool(_emu, "ForcefulPauseScreenActivation", forceDef),
             EmulatorMainWindow = EmulatorWindow(),
             OnAction = a => System.Threading.Tasks.Task.Run(() => OnScreenAction(a)),
+            OnOpenDocument = p => System.Threading.Tasks.Task.Run(() => OpenDocument(p)),
         };
         void ShowScreen() => UiThread.Invoke(() =>
         {
@@ -390,6 +392,23 @@ internal static class PauseManager
     }
 
     // ── Screen actions ──────────────────────────────────────────────────
+
+    /// <summary>"Additional Documents" submenu pick: open the document in its default viewer,
+    /// game STAYS paused — exactly the View Manual behaviour (the overlay yields TopMost while
+    /// unfocused so the viewer is readable; see the screen's Deactivate handler).</summary>
+    private static void OpenDocument(string path)
+    {
+        lock (_lock)
+        {
+            if (_proc == null) return;
+            try
+            {
+                if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path))
+                    Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            catch (Exception ex) { Console.WriteLine("[pause] document open failed: " + ex.Message); }
+        }
+    }
 
     private static void OnScreenAction(PauseAction a)
     {

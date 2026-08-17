@@ -44,19 +44,16 @@ internal sealed partial class EditGameWindow
 
     private IGame AppsGame => _editGames[0];
 
-    /// <summary>LaunchBox's version-vs-app routing rule (see the file header for the derivation).
-    /// An EXPLICIT Section wins first: LB 14's reworked Edit Game stamps Version / AdditionalApp on
-    /// the records it manages (13.28 mostly wrote "Unknown", which — like an absent Section — falls
-    /// through to the empirical heuristic below, so pre-14 libraries route exactly as before).</summary>
+    /// <summary>LaunchBox's version-vs-app routing rule. For LiteBox's own records this is now exactly
+    /// LB 14's GetSection routing (HostAdditionalApplication.EffectiveSection — explicit Section wins,
+    /// legacy records fall to the heuristic, verified against the real v14 core by reflection probe).
+    /// The inline heuristic below only remains for a foreign IAdditionalApplication implementation,
+    /// mirroring the empirical 13.28 rule in the file header.</summary>
     internal static bool IsLikelyVersion(IAdditionalApplication a)
     {
         try
         {
-            if (a is Data.HostAdditionalApplication h)
-            {
-                if (h.IsVersion) return true;
-                if (h.IsAdditionalApp) return false;
-            }
+            if (a is Data.HostAdditionalApplication h) return h.IsVersion;
             return !a.AutoRunBefore && !a.AutoRunAfter
                    && (a.UseEmulator || !string.IsNullOrWhiteSpace(a.Version));
         }

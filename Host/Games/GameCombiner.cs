@@ -460,6 +460,10 @@ internal static class GameCombiner
         return result;
     }
 
+    // Deliberately the EXPLICIT Section, not EffectiveSection: combine/expand only ever manipulates
+    // records the combiner (ours or LaunchBox's) stamped Section=Version itself. A legacy UseEmulator
+    // add-app routes to the Versions PAGE under LB 14's effective rule, but expanding it into a
+    // standalone game was never a combine — leave those untouched.
     private static bool IsVersion(HostAdditionalApplication a)
         => string.Equals(a.Section, VersionSection, StringComparison.OrdinalIgnoreCase);
 

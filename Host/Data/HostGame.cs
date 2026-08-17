@@ -379,12 +379,42 @@ internal sealed class HostAdditionalApplication : DummyAdditionalApplication
     public const string LinkSection = "Link";
     public const string AdditionalAppSection = "AdditionalApp";
     public string Section { get => _a.Section ?? ""; set { _a.Section = value; Rec(); } }
-    public bool IsDocument => string.Equals(_a.Section, DocumentSection, StringComparison.OrdinalIgnoreCase);
-    public bool IsVersion => string.Equals(_a.Section, VersionSection, StringComparison.OrdinalIgnoreCase);
-    public bool IsLink => string.Equals(_a.Section, LinkSection, StringComparison.OrdinalIgnoreCase);
-    public bool IsAdditionalApp => string.Equals(_a.Section, AdditionalAppSection, StringComparison.OrdinalIgnoreCase);
-    /// <summary>Document or Link (v14): an add-app record that must never be treated as a launchable
-    /// app or disc — excluded from play menus, autorun hooks and M3U disc candidates alike.</summary>
+
+    /// <summary>The section LaunchBox 14 EFFECTIVELY routes this record by — a replica of the core's
+    /// GameApplicationSections.GetSection, pinned by an empirical probe of the real v14 assemblies
+    /// (reflection-invoked on controlled records, 2026-08): an explicit Section other than Unknown
+    /// wins unconditionally (Version beats an autorun flag, AdditionalApp beats UseEmulator+Version);
+    /// a LEGACY record (Section absent or Unknown — everything a ≤13.28 library holds) classifies as
+    ///   http(s):// path → Link   (checked FIRST: beats autorun)
+    ///   autorun hook   → AdditionalApp   (beats the steam:// rule)
+    ///   UseEmulator or a Version string → Version
+    ///   steam:// path  → Version
+    ///   otherwise      → AdditionalApp.
+    /// Document is never inferred — explicit only. steam:///file:///schemeless www are NOT links.</summary>
+    public string EffectiveSection
+    {
+        get
+        {
+            string s = _a.Section;
+            if (!string.IsNullOrEmpty(s) && !string.Equals(s, "Unknown", StringComparison.OrdinalIgnoreCase))
+                return s;
+            string p = _a.ApplicationPath ?? "";
+            if (p.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || p.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return LinkSection;
+            if (_a.AutoRunBefore || _a.AutoRunAfter) return AdditionalAppSection;
+            if (_a.UseEmulator || !string.IsNullOrWhiteSpace(_a.Version)) return VersionSection;
+            if (p.StartsWith("steam://", StringComparison.OrdinalIgnoreCase)) return VersionSection;
+            return AdditionalAppSection;
+        }
+    }
+
+    public bool IsDocument => string.Equals(EffectiveSection, DocumentSection, StringComparison.OrdinalIgnoreCase);
+    public bool IsVersion => string.Equals(EffectiveSection, VersionSection, StringComparison.OrdinalIgnoreCase);
+    public bool IsLink => string.Equals(EffectiveSection, LinkSection, StringComparison.OrdinalIgnoreCase);
+    public bool IsAdditionalApp => string.Equals(EffectiveSection, AdditionalAppSection, StringComparison.OrdinalIgnoreCase);
+    /// <summary>Document or Link (per <see cref="EffectiveSection"/> — so a legacy record whose path
+    /// is an http(s) URL counts too): never a launchable app or disc — excluded from play menus,
+    /// autorun hooks and M3U disc candidates alike, matching LB 14's own routing.</summary>
     public bool IsNonLaunchable => IsDocument || IsLink;
 
     /// <summary>Swap this record's position with another's in the game's additional-application list (the list

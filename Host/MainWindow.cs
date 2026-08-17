@@ -2247,6 +2247,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (_dm is HostDataManagerXml hdm2)
         {
             Options.LbGlobalOptions.AddSections(w, hdm2.LbSettings, hdm2.ReadOnly, _cfg);   // share _cfg so ApplyFinished's Save persists the panel's LiteBox.ini edits (incl. the RA tab)
+            // LB 14's Reader (provider, defaults, keyboard/controller mappings) — edits LaunchBox's
+            // OWN Reader database, so both apps stay in sync. Self-hides on pre-14 installs.
+            Options.ReaderOptions.AddSections(w, hdm2.ReadOnly, LiteBoxTheme.DpiScale(this));
         }
 
         // Danger zone — full self-uninstall. Last section.

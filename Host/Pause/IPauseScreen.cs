@@ -46,11 +46,17 @@ internal sealed class PauseContext
     public bool CanSaveState, CanLoadState, CanReset, CanSwapDiscs;
     public bool CanViewManual;
     /// <summary>The game's additional documents (name + absolute path, from the LaunchedGame
-    /// snapshot). Non-empty → the screen offers an "Additional Documents" submenu whose picks
-    /// report through <see cref="OnOpenDocument"/> (the game STAYS paused, like View Manual).</summary>
+    /// snapshot). 1–2 entries render INLINE in the main list; 3+ get an "Additional Documents"
+    /// submenu. Picks report through <see cref="OnOpenDocument"/> (game STAYS paused, like
+    /// View Manual).</summary>
     public List<(string Name, string Path)> Documents = new();
     /// <summary>Invoked (on the screen's UI thread) with the picked document's absolute path.</summary>
     public Action<string>? OnOpenDocument;
+    /// <summary>The game's links (name + URL). ONE renders inline; 2+ get a "Links" submenu.
+    /// Picks report through <see cref="OnOpenLink"/> (browser opens, game stays paused).</summary>
+    public List<(string Name, string Url)> Links = new();
+    /// <summary>Invoked (on the screen's UI thread) with the picked link's URL.</summary>
+    public Action<string>? OnOpenLink;
     // Forceful activation (emulator field): keep stealing focus until the screen has it.
     public bool ForcefulActivation;
     /// <summary>The emulator's main window — the screen opens on ITS monitor

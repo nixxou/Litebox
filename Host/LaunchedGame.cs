@@ -37,6 +37,10 @@ internal sealed class LaunchedGame
     /// submenu. Only files that existed at capture — the store is gone once the game runs.</summary>
     public List<(string Name, string Path)> Documents = new();
 
+    /// <summary>The game's LINKS (effective Section=Link — explicit or legacy http(s) rows):
+    /// display name + URL, for the pause screen (opened in the browser, game stays paused).</summary>
+    public List<(string Name, string Url)> Links = new();
+
     // Per-GAME pause-screen overrides (<OverrideDefaultPauseScreenSettings> +
     // the three toggles on the <Game> element). The game's _extra fields are
     // Tier-2 (dropped at launch), so they MUST be captured here. When
@@ -126,12 +130,23 @@ internal sealed class LaunchedGame
             {
                 foreach (var a in game.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>())
                 {
-                    if (a is not Data.HostAdditionalApplication { IsDocument: true } h) continue;
-                    string abs = Safe(() => EditGameWindow.DocResolve(h.ApplicationPath)) ?? "";
-                    if (abs.Length == 0 || !System.IO.File.Exists(abs)) continue;
-                    string name = Safe(() => h.Name) ?? "";
-                    if (name.Length == 0) name = System.IO.Path.GetFileNameWithoutExtension(abs);
-                    lg.Documents.Add((name, abs));
+                    if (a is not Data.HostAdditionalApplication h) continue;
+                    if (h.IsDocument)
+                    {
+                        string abs = Safe(() => EditGameWindow.DocResolve(h.ApplicationPath)) ?? "";
+                        if (abs.Length == 0 || !System.IO.File.Exists(abs)) continue;
+                        string name = Safe(() => h.Name) ?? "";
+                        if (name.Length == 0) name = System.IO.Path.GetFileNameWithoutExtension(abs);
+                        lg.Documents.Add((name, abs));
+                    }
+                    else if (h.IsLink)
+                    {
+                        string url = Safe(() => h.ApplicationPath) ?? "";
+                        if (url.Length == 0) continue;
+                        string name = Safe(() => h.Name) ?? "";
+                        if (name.Length == 0) name = url;
+                        lg.Links.Add((name, url));
+                    }
                 }
             }
             catch { }

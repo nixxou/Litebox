@@ -328,6 +328,7 @@ internal static class PauseManager
             SessionStartUtc = snap?.LaunchedAtUtc ?? DateTime.UtcNow,
             CanViewManual = !string.IsNullOrEmpty(snap?.ManualPath),
             Documents = snap?.Documents ?? new List<(string, string)>(),
+            Links = snap?.Links ?? new List<(string, string)>(),
             CanSaveState = !AhkScript.IsScriptEmpty(ScriptStr("SaveStateAutoHotkeyScript")),
             CanLoadState = !AhkScript.IsScriptEmpty(ScriptStr("LoadStateAutoHotkeyScript")),
             CanReset = !AhkScript.IsScriptEmpty(ScriptStr("ResetAutoHotkeyScript")),
@@ -336,6 +337,7 @@ internal static class PauseManager
             EmulatorMainWindow = EmulatorWindow(),
             OnAction = a => System.Threading.Tasks.Task.Run(() => OnScreenAction(a)),
             OnOpenDocument = p => System.Threading.Tasks.Task.Run(() => OpenDocument(p)),
+            OnOpenLink = u => System.Threading.Tasks.Task.Run(() => OpenLink(u)),
         };
         void ShowScreen() => UiThread.Invoke(() =>
         {
@@ -407,6 +409,22 @@ internal static class PauseManager
                     Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
             }
             catch (Exception ex) { Console.WriteLine("[pause] document open failed: " + ex.Message); }
+        }
+    }
+
+    /// <summary>Link pick: open the URL in the default browser, game STAYS paused (the overlay
+    /// yields TopMost while unfocused, same as documents/manual).</summary>
+    private static void OpenLink(string url)
+    {
+        lock (_lock)
+        {
+            if (_proc == null) return;
+            try
+            {
+                if (!string.IsNullOrEmpty(url))
+                    Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            }
+            catch (Exception ex) { Console.WriteLine("[pause] link open failed: " + ex.Message); }
         }
     }
 

@@ -34,15 +34,21 @@ internal static class LinkFavicon
     /// this session already fetched it, else in the background (UI marshalled through
     /// <paramref name="ui"/>). Fail-soft: any miss just keeps the item's current image.</summary>
     public static void Attach(ToolStripMenuItem item, string url, Control ui)
+        => Attach(ui, url, img => { try { if (!item.IsDisposed) item.Image = img; } catch { } });
+
+    /// <summary>Generic form: <paramref name="apply"/> runs on <paramref name="ui"/>'s thread with
+    /// the 16×16 favicon when one lands (never for misses / offline). Same session cache, same
+    /// fail-soft, non-blocking rules — usable by any surface (pause-screen buttons, menus…).</summary>
+    public static void Attach(Control ui, string url, Action<Image> apply)
     {
-        if (item == null || ui == null || !Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
+        if (ui == null || apply == null || !Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
         if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return;
         string origin;
         try { origin = uri.GetLeftPart(UriPartial.Authority); } catch { return; }
 
         if (Session.TryGetValue(origin, out var cached))
         {
-            if (cached != null) item.Image = cached;
+            if (cached != null) apply(cached);
             return;
         }
 
@@ -65,7 +71,7 @@ internal static class LinkFavicon
             try
             {
                 if (!ui.IsDisposed && ui.IsHandleCreated)
-                    ui.BeginInvoke(() => { try { if (!item.IsDisposed) item.Image = img; } catch { } });
+                    ui.BeginInvoke(() => { try { apply(img); } catch { } });
             }
             catch { }
         });

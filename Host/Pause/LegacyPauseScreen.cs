@@ -68,7 +68,7 @@ internal sealed class LegacyPauseScreen : IPauseScreen
         // "Additional Documents" SUBMENU (console-style menu swap — one flat list at a time, the
         // same Up/Down/Enter/Esc + pad navigation drives both levels).
         private readonly List<(Action fire, Button btn)> _items = new();
-        private bool _inDocs;   // submenu shown → Esc / pad-B go BACK instead of resuming
+        private bool _inDocs;   // a submenu (Documents or Links) is shown → Esc / pad-B go BACK instead of resuming
         private int _sel;
         private Bitmap? _bg;   // pre-composited full-screen background (blitted as-is)
         private System.Windows.Forms.Timer? _padTimer;   // controller poll (overlay lifetime)
@@ -233,26 +233,37 @@ internal sealed class LegacyPauseScreen : IPauseScreen
             else e.Graphics.Clear(Bg);
         }
 
-        // ── Menu construction (main + Documents submenu, one flat list at a time) ──
+        // ── Menu construction (main + Documents / Links submenus, one flat list at a time) ──
 
-        /// <summary>Replace the button list wholesale and re-centre it (menu swap).</summary>
-        private void SetMenu(IEnumerable<(string label, Action fire)> entries)
+        private sealed record MenuEntry(string Label, string? Icon, Action Fire, string? FaviconUrl = null);
+
+        /// <summary>Replace the button list wholesale and re-centre it (menu swap). Icons render
+        /// left-aligned (text stays centred); a link entry starts with the chain glyph and swaps to
+        /// the site's favicon when its background fetch lands (session-cached, offline-safe —
+        /// see UiKit/LinkFavicon).</summary>
+        private void SetMenu(IEnumerable<MenuEntry> entries)
         {
             foreach (var (_, b) in _items) { try { Controls.Remove(b); b.Dispose(); } catch { } }
             _items.Clear();
-            foreach (var (label, fire) in entries)
+            foreach (var e in entries)
             {
                 var b = new Button
                 {
-                    Text = label,
+                    Text = e.Label,
                     FlatStyle = FlatStyle.Flat,
                     BackColor = BtnBg, ForeColor = Fg,
                     FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(40, 40, 52) },
                     Font = new Font("Segoe UI", 15f),
                     Size = new Size(S(420), S(52)),
                     TabStop = false,
-                    AutoEllipsis = true,   // document names can be long
+                    AutoEllipsis = true,   // document/link names can be long
+                    ImageAlign = ContentAlignment.MiddleLeft,
+                    Padding = new Padding(S(14), 0, 0, 0),
                 };
+                if (e.Icon != null) { try { b.Image = UiKit.MenuIcons.Get(e.Icon, S(22)); } catch { } }
+                if (e.FaviconUrl != null)
+                    UiKit.LinkFavicon.Attach(this, e.FaviconUrl, img => { try { if (!b.IsDisposed) b.Image = img; } catch { } });
+                var fire = e.Fire;
                 b.Click += (_, _) => fire();
                 _items.Add((fire, b));
                 Controls.Add(b);
@@ -261,36 +272,60 @@ internal sealed class LegacyPauseScreen : IPauseScreen
             Select(0);
         }
 
+        // The centred layout has no scrolling: cap submenu lists so they always fit.
+        private const int SubMax = 12;
+
         private void BuildMainMenu()
         {
             _inDocs = false;
-            var m = new List<(string, Action)> { ("Resume Game", () => Fire(PauseAction.Resume)) };
-            if (_ctx.CanViewManual) m.Add(("View Manual", () => Fire(PauseAction.ViewManual)));
-            // LB 14: the game's Document records get their own submenu (console-style swap).
-            if (_ctx.Documents.Count > 0) m.Add(("Additional Documents", BuildDocsMenu));
-            if (_ctx.CanReset) m.Add(("Reset Game", () => Fire(PauseAction.Reset)));
-            if (_ctx.CanSaveState) m.Add(("Save State", () => Fire(PauseAction.SaveState)));
-            if (_ctx.CanLoadState) m.Add(("Load State", () => Fire(PauseAction.LoadState)));
-            if (_ctx.CanSwapDiscs) m.Add(("Swap Discs", () => Fire(PauseAction.SwapDiscs)));
-            m.Add(("Exit Game", () => Fire(PauseAction.ExitGame)));
+            var m = new List<MenuEntry> { new("Resume Game", null, () => Fire(PauseAction.Resume)) };
+            if (_ctx.CanViewManual) m.Add(new("View Manual", UiKit.MenuIcons.ViewManual, () => Fire(PauseAction.ViewManual)));
+            // LB 14 documents & links. Few entries go INLINE (≤2 docs / 1 link — no submenu hop
+            // for a single item); more get their console-style submenu swap.
+            if (_ctx.Documents.Count is >= 1 and <= 2)
+                foreach (var (name, path) in _ctx.Documents)
+                    m.Add(DocEntry(name, path));
+            else if (_ctx.Documents.Count > 2)
+                m.Add(new("Additional Documents", UiKit.MenuIcons.AdditionalDocuments, BuildDocsMenu));
+            if (_ctx.Links.Count == 1)
+                m.Add(LinkEntry(_ctx.Links[0].Name, _ctx.Links[0].Url));
+            else if (_ctx.Links.Count > 1)
+                m.Add(new("Links", UiKit.MenuIcons.Link, BuildLinksMenu));
+            if (_ctx.CanReset) m.Add(new("Reset Game", null, () => Fire(PauseAction.Reset)));
+            if (_ctx.CanSaveState) m.Add(new("Save State", null, () => Fire(PauseAction.SaveState)));
+            if (_ctx.CanLoadState) m.Add(new("Load State", null, () => Fire(PauseAction.LoadState)));
+            if (_ctx.CanSwapDiscs) m.Add(new("Swap Discs", null, () => Fire(PauseAction.SwapDiscs)));
+            m.Add(new("Exit Game", null, () => Fire(PauseAction.ExitGame)));
             SetMenu(m);
         }
+
+        private MenuEntry DocEntry(string name, string path)
+            => new(name, UiKit.MenuIcons.AdditionalDocuments, () => { try { _ctx.OnOpenDocument?.Invoke(path); } catch { } });
+
+        private MenuEntry LinkEntry(string name, string url)
+            => new(name, UiKit.MenuIcons.Link, () => { try { _ctx.OnOpenLink?.Invoke(url); } catch { } }, FaviconUrl: url);
 
         private void BuildDocsMenu()
         {
             _inDocs = true;
-            var m = new List<(string, Action)>();
-            // The centred layout has no scrolling: cap the list so it always fits (a game with
-            // more documents than that is exotic; the first N stay reachable, XML order).
-            const int Max = 12;
-            foreach (var (name, path) in _ctx.Documents.Take(Max))
-            {
-                string p = path;   // capture per-entry
-                m.Add((name, () => { try { _ctx.OnOpenDocument?.Invoke(p); } catch { } }));
-            }
-            if (_ctx.Documents.Count > Max)
-                Console.WriteLine($"[pause] documents submenu capped at {Max} of {_ctx.Documents.Count}");
-            m.Add(("Back", BuildMainMenu));
+            var m = new List<MenuEntry>();
+            foreach (var (name, path) in _ctx.Documents.Take(SubMax))
+                m.Add(DocEntry(name, path));
+            if (_ctx.Documents.Count > SubMax)
+                Console.WriteLine($"[pause] documents submenu capped at {SubMax} of {_ctx.Documents.Count}");
+            m.Add(new("Back", null, BuildMainMenu));
+            SetMenu(m);
+        }
+
+        private void BuildLinksMenu()
+        {
+            _inDocs = true;
+            var m = new List<MenuEntry>();
+            foreach (var (name, url) in _ctx.Links.Take(SubMax))
+                m.Add(LinkEntry(name, url));
+            if (_ctx.Links.Count > SubMax)
+                Console.WriteLine($"[pause] links submenu capped at {SubMax} of {_ctx.Links.Count}");
+            m.Add(new("Back", null, BuildMainMenu));
             SetMenu(m);
         }
 

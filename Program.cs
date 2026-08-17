@@ -169,10 +169,13 @@ if (args.Contains("--write-ss-dev"))
 }
 
 // Visual probe of the LEGACY PAUSE SCREEN (no game needed): fake context, documents taken from
-// <--lbroot>\TestDocs when present (else three fake entries). Exercises the "Additional
-// Documents" submenu swap + navigation. Resume / Exit Game closes the demo.
+// <--lbroot>\TestDocs when present (else three fake entries). Exercises the inline-vs-submenu
+// rules (≤2 docs / 1 link inline; more → submenu swap), icons and the favicon fetch.
+// --demo-docs N / --demo-links N trim the lists to probe each shape. Resume / Exit closes.
 if (args.Contains("--pause-demo"))
 {
+    int ArgN(string name, int def)
+    { int i = Array.IndexOf(args, name); return i >= 0 && i + 1 < args.Length && int.TryParse(args[i + 1], out var n) ? n : def; }
     var docs = new List<(string Name, string Path)>();
     try
     {
@@ -185,11 +188,19 @@ if (args.Contains("--pause-demo"))
     catch { }
     if (docs.Count == 0)
         docs.AddRange(new[] { ("Manual (US)", @"C:\nonexistent\a.pdf"), ("Strategy Guide", @"C:\nonexistent\b.pdf"), ("Map", @"C:\nonexistent\c.png") });
+    var links = new List<(string Name, string Url)>
+    {
+        ("Official site (Wikipedia)", "https://www.wikipedia.org/"),
+        ("Longplay (YouTube)", "https://www.youtube.com/"),
+    };
+    docs = docs.Take(Math.Max(0, ArgN("--demo-docs", docs.Count))).ToList();
+    links = links.Take(Math.Max(0, ArgN("--demo-links", links.Count))).ToList();
     var demoCtx = new LbApiHost.Host.Pause.PauseContext
     {
         GameTitle = "Pause Demo", Platform = "LiteBox", Developer = "Probe", ReleaseYear = 2026,
-        SessionStartUtc = DateTime.UtcNow, CanViewManual = false, Documents = docs,
+        SessionStartUtc = DateTime.UtcNow, CanViewManual = false, Documents = docs, Links = links,
         OnOpenDocument = p => Console.WriteLine("[pause-demo] open: " + p),
+        OnOpenLink = u => Console.WriteLine("[pause-demo] link: " + u),
     };
     var screen = new LbApiHost.Host.Pause.LegacyPauseScreen();
     demoCtx.OnAction = a =>

@@ -250,6 +250,7 @@
     <EmbeddedResource Include="menu-icons\viewimages.png"><LogicalName>menu-icons/viewimages.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="menu-icons\view3dbox.png"><LogicalName>menu-icons/view3dbox.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="menu-icons\viewmanual.png"><LogicalName>menu-icons/viewmanual.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="menu-icons\link.png"><LogicalName>menu-icons/link.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="menu-icons\playmusic.png"><LogicalName>menu-icons/playmusic.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="menu-icons\flipbox.png"><LogicalName>menu-icons/flipbox.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="menu-icons\saveimageas.png"><LogicalName>menu-icons/saveimageas.png</LogicalName></EmbeddedResource>

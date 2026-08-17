@@ -25,6 +25,7 @@ internal static class MenuIcons
     public const string Add = "add";                                 // create a new game
     public const string AdditionalApps = "additionalapps";           // extra applications of a game
     public const string AdditionalDocuments = "additionaldocuments"; // manuals and documents
+    public const string Link = "link";                               // web links (Media ▸ Links; interlocked chain)
     public const string AdditionalVersions = "additionalversions";   // alternate versions
     public const string Combine = "combine";                         // merge the selection into one root game
     public const string Delete = "delete";

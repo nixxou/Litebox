@@ -236,13 +236,15 @@ internal sealed partial class MainWindow
                 abs.Length > 0 && File.Exists(abs)));
         }
         media.DropDownItems.Add(docsMenu);
-        // Forums is the closest web glyph we ship; a dedicated chain-link icon can join the
-        // menu-icons batch later (see UiKit/MenuIcons pipeline).
-        var linksMenu = new ToolStripMenuItem("Links") { Image = MenuIcons.Get(MenuIcons.Forums), Enabled = links.Count > 0 };
+        var linksMenu = new ToolStripMenuItem("Links") { Image = MenuIcons.Get(MenuIcons.Link), Enabled = links.Count > 0 };
         foreach (var l in links)
         {
             string url = S(Safe(() => l.ApplicationPath));
-            linksMenu.DropDownItems.Add(Item(S(Safe(() => l.Name)), null, () => ShellOpen(url), url.Length > 0));
+            // Chain glyph now; the site's real favicon swaps in when its background fetch lands
+            // (session-cached in memory only — see UiKit/LinkFavicon).
+            var li = Item(S(Safe(() => l.Name)), MenuIcons.Link, () => ShellOpen(url), url.Length > 0);
+            UiKit.LinkFavicon.Attach(li, url, this);
+            linksMenu.DropDownItems.Add(li);
         }
         media.DropDownItems.Add(linksMenu);
 

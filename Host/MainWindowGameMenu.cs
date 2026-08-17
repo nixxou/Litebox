@@ -213,6 +213,39 @@ internal sealed partial class MainWindow
         media.DropDownItems.Add(Item("View Manual…", MenuIcons.ViewManual, () => ShellOpen(manual),
             manual.Length > 0 && File.Exists(manual)));
 
+        // LB parity (Media ▸, same slots): the game's Document records opened via the shell, and its
+        // Link records opened in the browser — both routed by the EFFECTIVE section, exactly like the
+        // v14 right-click menu (verified against the real install). Submenu disabled when empty.
+        var docs = new List<Data.HostAdditionalApplication>();
+        var links = new List<Data.HostAdditionalApplication>();
+        try
+        {
+            foreach (var a in g.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>())
+            {
+                if (a is not Data.HostAdditionalApplication h) continue;
+                if (h.IsDocument) docs.Add(h);
+                else if (h.IsLink) links.Add(h);
+            }
+        }
+        catch { }
+        var docsMenu = new ToolStripMenuItem("Additional Documents") { Image = MenuIcons.Get(MenuIcons.AdditionalDocuments), Enabled = docs.Count > 0 };
+        foreach (var d in docs)
+        {
+            string abs = Safe(() => EditGameWindow.DocResolve(d.ApplicationPath)) ?? "";
+            docsMenu.DropDownItems.Add(Item(S(Safe(() => d.Name)), null, () => ShellOpen(abs),
+                abs.Length > 0 && File.Exists(abs)));
+        }
+        media.DropDownItems.Add(docsMenu);
+        // Forums is the closest web glyph we ship; a dedicated chain-link icon can join the
+        // menu-icons batch later (see UiKit/MenuIcons pipeline).
+        var linksMenu = new ToolStripMenuItem("Links") { Image = MenuIcons.Get(MenuIcons.Forums), Enabled = links.Count > 0 };
+        foreach (var l in links)
+        {
+            string url = S(Safe(() => l.ApplicationPath));
+            linksMenu.DropDownItems.Add(Item(S(Safe(() => l.Name)), null, () => ShellOpen(url), url.Length > 0));
+        }
+        media.DropDownItems.Add(linksMenu);
+
         string music = S(Safe(() => g.GetMusicPath()));
         media.DropDownItems.Add(Item("Play Music", MenuIcons.PlayMusic, () => ShellOpen(music),
             music.Length > 0 && File.Exists(music)));

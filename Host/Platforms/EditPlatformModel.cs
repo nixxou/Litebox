@@ -50,6 +50,17 @@ internal static class EditPlatformModel
     private static readonly int[] Rotations = { 0, 90, 180, 270 };
     private static readonly string[] SideNames = { "Left Side", "Top Side", "Right Side", "Bottom Side" };
 
+    /// <summary>The fields THIS editor derives from its controls. BuildFieldMap re-emits exactly
+    /// these and carries every other stored field through untouched (LB 14's Cassette* and
+    /// SpineForegroundColor, future additions) — absence of a managed field stays meaningful
+    /// (an unchecked "Force Model Size" removes ModelSizeString), foreign fields never die.</summary>
+    private static readonly HashSet<string> EditorFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ModelType", "ModelSizeString", "UseFullScanImages", "FullScanIsLandscape", "FullImageSpineWidth",
+        "CaseColor", "CoverColor", "DoubleSpineImageMode", "FrontSpineImage", "FrontSpineIsClear",
+        "LogoFont", "SpineRotation", "LogoRotation",
+    };
+
     // Embedded jewel-case spine presets LaunchBox ships (Unbroken.LaunchBox.Windows.Properties.JewelCaseSpines.resources —
     // enumerated with --model-spines). Each preset stores FrontSpineImage = "{Resources}\<platform>[ - <suffix>]" with
     // FrontSpineIsClear=True; the empty suffix ("Auto-Detect") is LB's own hardcoded default (GetDefaultSettings emits the
@@ -271,10 +282,18 @@ internal static class EditPlatformModel
         bool IsJewelFam(string t) => t is "jewelCase" or "doubleJewelCase" or "longJewelCase";
         bool BoxDvd(string t) => IsBox(t) || IsDvd(t);
 
-        // Model Type (always)
+        // Model Type (always). A stored type this editor doesn't know (LB 14's cassette, a future
+        // model) joins the combo AS ITSELF instead of being silently coerced to entry 0 — selecting
+        // it round-trips the value, LiteBox just has no controls (or renderer) for it yet.
+        var types = ModelTypes.ToList();
+        {
+            string stored = Get(cur, "ModelType");
+            if (stored.Length > 0 && !types.Any(t => string.Equals(t.val, stored, StringComparison.OrdinalIgnoreCase)))
+                types.Add(($"{stored} (LaunchBox — not rendered by LiteBox)", stored));
+        }
         var modelType = Combo(S(116), y, RE - S(116));
-        foreach (var t in ModelTypes) modelType.Items.Add(t.label);
-        modelType.SelectedIndex = Math.Max(0, Array.FindIndex(ModelTypes, t => string.Equals(t.val, Get(cur, "ModelType"), StringComparison.OrdinalIgnoreCase)));
+        foreach (var t in types) modelType.Items.Add(t.label);
+        modelType.SelectedIndex = Math.Max(0, types.FindIndex(t => string.Equals(t.val, Get(cur, "ModelType"), StringComparison.OrdinalIgnoreCase)));
         Row(_ => true, Lbl("Model Type:", X0, y), modelType); y += S(40);
 
         // Force Model Size (box, dvd): checkbox row + Width/Height/Depth row.
@@ -366,7 +385,7 @@ internal static class EditPlatformModel
         var initialSpine = ParseSpine(Get(cur, "FrontSpineImage"), GetBool(cur, "FrontSpineIsClear"));
         if (initialSpine.kind is "customSolid" or "customClear") spinePath.Text = Get(cur, "FrontSpineImage");
         if (initialSpine.preset >= 0) PopulateVersions(initialSpine.preset, initialSpine.suffix);
-        RebuildSpineStyle(ModelTypes[Math.Max(0, modelType.SelectedIndex)].val, initialSpine.kind);
+        RebuildSpineStyle(types[Math.Max(0, modelType.SelectedIndex)].val, initialSpine.kind);
 
         // ── jewel family: Cover color (full-width swatch) + Plain Text Title + font + text color (=CaseColor) ──
         var coverChkJ = Chk("Force Cover Background Color:", X0, y, coverColor.HasValue);
@@ -412,7 +431,7 @@ internal static class EditPlatformModel
         {
             bool on = overrideChk.Checked && !readOnly;
             modelType.Enabled = on;
-            string t = ModelTypes[Math.Max(0, modelType.SelectedIndex)].val;
+            string t = types[Math.Max(0, modelType.SelectedIndex)].val;
             int cy = firstRowY;
             foreach (var (ctrls, visible, baseY, height) in rows)
             {
@@ -456,7 +475,7 @@ internal static class EditPlatformModel
         modelType.SelectedIndexChanged += (_, _) =>
         {
             // No stored/forced size → track LB's per-type defaults (box 1/1/0.001, dvd 0.7/1/0.065).
-            string t = ModelTypes[Math.Max(0, modelType.SelectedIndex)].val;
+            string t = types[Math.Max(0, modelType.SelectedIndex)].val;
             if (!sizeChk.Checked && !hasStoredSize)
             { SetNum(w, IsDvd(t) ? 0.7m : 1m); SetNum(h, 1m); SetNum(d, IsDvd(t) ? 0.065m : 0.001m); }
             if (HasSpineStyle(t)) RebuildSpineStyle(t, CurKind());   // jewel↔double have different option lists
@@ -478,8 +497,18 @@ internal static class EditPlatformModel
         Dictionary<string, string>? BuildFieldMap()
         {
             if (!overrideChk.Checked) return null;
-            string t = ModelTypes[Math.Max(0, modelType.SelectedIndex)].val;
-            var f = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["ModelType"] = t };
+            string t = types[Math.Max(0, modelType.SelectedIndex)].val;
+            // Start from the STORED block and re-derive only the fields this editor manages: fields it
+            // doesn't know — LB 14's Cassette*/SpineForegroundColor, anything a future LB adds — must
+            // survive a LiteBox save instead of being dropped by a rebuilt-from-scratch map.
+            var f = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (own != null)
+                foreach (var kv in own)
+                    if (!EditorFields.Contains(kv.Key)
+                        && !string.Equals(kv.Key, "PlatformName", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(kv.Key, "GameId", StringComparison.OrdinalIgnoreCase))
+                        f[kv.Key] = kv.Value ?? "";
+            f["ModelType"] = t;
             if (BoxDvd(t) && sizeChk.Checked) f["ModelSizeString"] = $"{NumV(w)};{NumV(h)};{NumV(d)}";
             if (IsBox(t))
             {

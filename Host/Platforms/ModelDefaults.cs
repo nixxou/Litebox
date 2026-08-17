@@ -25,12 +25,16 @@ internal static class ModelDefaults
     private static bool _initTried;
     private static readonly ConcurrentDictionary<string, Dictionary<string, string>?> _cache = new(StringComparer.OrdinalIgnoreCase);
 
-    // XML field names we surface (ModelSize is skipped — ModelSizeString carries it).
+    // XML field names we surface (ModelSize is skipped — ModelSizeString carries it). The LB 14
+    // additions (Cassette*, SpineForegroundColor) are listed too: on a 13.28 core the properties
+    // simply don't exist and the loop skips them, on 14+ the defaults carry them like LB does.
     private static readonly HashSet<string> Fields = new(StringComparer.OrdinalIgnoreCase)
     {
         "ModelType", "ModelSizeString", "CaseColor", "CoverColor", "FrontSpineImage", "FrontSpineIsClear",
         "FullImageSpineWidth", "DoubleSpineImageMode", "LogoFont", "SpineRotation", "LogoRotation",
         "UseFullScanImages", "FullScanIsLandscape",
+        "CassetteType", "CassettePosition", "CassetteCloudyPlastic", "CassetteWornPlastic",
+        "CassetteLogoRotation", "CassetteSpineRotation", "SpineForegroundColor",
     };
 
     public static Dictionary<string, string>? TryGet(string? platformName, string? scrapeAs)

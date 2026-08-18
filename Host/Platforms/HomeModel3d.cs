@@ -1204,19 +1204,24 @@ internal sealed class HomeModel3d : IDisposable
                 }
             };
         }
-        // LB re-splits the mesh ("separate the cassette case interior structure"): the ENTIRE outer
-        // shell — front plate, side walls, back plate — is clear plastic, which is why the J-card
-        // spine reads through the case edge; CaseColor lives on the interior structure behind it.
-        // Painting the tray segment opaque (the first cut) blacked out every side view.
+        // Lid vs tray, LB's real split (dump: the 284-vert lid is #10CCCCCC clear plastic covering
+        // front + spine side + a lip over the back's flap strip; the 770-vert tray is CaseColor and
+        // IS the visible matte back). The first attempt painted the tray opaque and blacked out the
+        // side views — that failure came from the wrong axis mapping below, not from this split.
         Material bodyMat = wear != null ? WornMat(plasticColor)
             : Mat2(plasticColor, System.Windows.Media.Color.FromArgb(0x50, 0xDC, 0xE1, 0xE6), 28);
-        Material shellMat = cloudy
+        Material lidMat = cloudy
             ? Mat2(System.Windows.Media.Color.FromArgb(0x38, 0xF5, 0xF7, 0xFA), System.Windows.Media.Color.FromArgb(0x6E, 0xFF, 0xFF, 0xFF), 90)
             : Mat2(System.Windows.Media.Color.FromArgb(0x10, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250);
+        Material trayMat = clearCase
+            ? (cloudy ? Mat2(System.Windows.Media.Color.FromArgb(0x4A, 0xF0, 0xF3, 0xF8), System.Windows.Media.Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF), 80)
+                      : Mat2(System.Windows.Media.Color.FromArgb(0x15, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250))
+            : bodyMat;
         for (int i = 0; i < plastic.Children.Count; i++)
         {
             if (plastic.Children[i] is not GeometryModel3D gm) continue;
-            gm.Material = shellMat;
+            bool isLid = i < segNames.Count && segNames[i].IndexOf("Lid", StringComparison.OrdinalIgnoreCase) >= 0;
+            gm.Material = isLid ? lidMat : trayMat;
             gm.BackMaterial = gm.Material;
         }
         // The vendored OBJ sits in the mesh's NATIVE frame — real-world metres, Y = the 1.6 cm
@@ -1228,13 +1233,15 @@ internal sealed class HomeModel3d : IDisposable
         {
             var ptr = new Transform3DGroup();
             ptr.Children.Add(new TranslateTransform3D(-pb.X - pb.SizeX / 2, -pb.Y - pb.SizeY / 2, -pb.Z - pb.SizeZ / 2));
-            // +90 puts the lid plate at +Z (front); the RotZ(180) moves the tray's hinge cut-out to
-            // the TOP like the real case (LB's back fades near the top, ours showed a hard line at
-            // the bottom); the negative X scale un-mirrors the sides that the 180 flipped. The
-            // mirror is safe: every shell part carries the same material on both faces.
-            ptr.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(1, 0, 0), 90)));
-            ptr.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 0, 1), 180)));
-            ptr.Children.Add(new ScaleTransform3D(-0.3168 * 2 / pb.SizeX, 0.5 * 2 / pb.SizeZ, 0.0734 * 2 / pb.SizeY));
+            // The OBJ lies FLAT: 10.9 cm length on native X, 6.9 cm height on native Z, 1.6 cm
+            // thickness on native Y. LB stands it upright — native X→model Y, native Z→model X,
+            // native Y→model Z — which makes the scale essentially UNIFORM (×9.17 on every axis;
+            // the earlier mapping stretched 5.8×/14.5× and put every wall on a wrong side). The
+            // negative X scale lands the lid's deep lip on the SPINE side; the mirror is safe since
+            // each shell part carries the same material on both faces.
+            ptr.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 0, 1), 90)));
+            ptr.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), 90)));   // net: (x,y,z)→(z,x,y)
+            ptr.Children.Add(new ScaleTransform3D(-0.3168 * 2 / pb.SizeZ, 0.5 * 2 / pb.SizeX, 0.0734 * 2 / pb.SizeY));
             plastic.Transform = ptr;
         }
         // NOT added yet — WPF 3D draws in child order with a z-test, so the translucent shell must
@@ -1294,8 +1301,8 @@ internal sealed class HomeModel3d : IDisposable
         }
         var uv4 = new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) };
 
-        // Front (inside the case, under the lid). The art sits in a VIEWBOX on the bg — LB
-        // letterboxes rather than distorting (dump: Grid[bg, Viewbox[Img Fill]]).
+        // Front (inside the case, under the lid). LB's Viewbox STRETCHES the art edge-to-edge
+        // (flat oracle front render measured full-bleed — no letterbox).
         Quad(FaceMaterialVb(front, 1000, 1000, bg, landscape ? -90 : 0), paper,
              new[] { (-0.2839, 0.488, 0.0661), (0.313, 0.488, 0.0661), (-0.2839, -0.488, 0.0661), (0.313, -0.488, 0.0661) }, uv4);
         // Back flap, style-dependent reach (faces -Z: wound the other way so the front side is
@@ -1316,8 +1323,34 @@ internal sealed class HomeModel3d : IDisposable
             flapMat = new DiffuseMaterial(new VisualBrush(fg) { Stretch = System.Windows.Media.Stretch.Fill });
         }
         else flapMat = FaceMaterialNoImage(1000, 1000, bg);
-        void AddFlap() => Quad(flapMat, paper,
-             new[] { (flapEnd, 0.5, -0.0661), (-0.2839, 0.5, -0.0661), (flapEnd, -0.5, -0.0661), (-0.2839, -0.5, -0.0661) }, uv4);
+        void AddFlap()
+        {
+            if (!clearCase)
+            {
+                // What LB shows on a closed back is the flap THROUGH A WINDOW CUT into the tray's
+                // back plate ("cut the angled cassette case back window") — the full flap rect
+                // itself sits hidden behind the plate. Faked with a window-shaped panel floating
+                // just outside the plate; shapes measured off flat oracle back renders:
+                // straight = X[-0.2842..-0.1539] full height; angled = the same with its inner edge
+                // pushed to -0.0742 over the middle 65%, diagonals over the top/bottom ~17%.
+                var poly = angled
+                    ? new (double x, double y)[] { (-0.2842, 0.5), (-0.2046, 0.5), (-0.0742, 0.326), (-0.0742, -0.326), (-0.2046, -0.5), (-0.2842, -0.5) }
+                    : new (double x, double y)[] { (-0.2842, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.2842, -0.5) };
+                var wm = new MeshGeometry3D();
+                foreach (var (px, py) in poly)
+                {
+                    wm.Positions.Add(new Point3D(px, py, -0.0736));
+                    wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
+                    wm.Normals.Add(new Vector3D(0, 0, -1));
+                }
+                for (int i = 1; i + 1 < poly.Length; i++)
+                { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
+                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = flapMat });
+                return;
+            }
+            Quad(flapMat, paper,
+                 new[] { (flapEnd, 0.5, -0.0661), (-0.2839, 0.5, -0.0661), (flapEnd, -0.5, -0.0661), (-0.2839, -0.5, -0.0661) }, uv4);
+        }
         if (!clearCase) AddFlap();
         // Spine: clear logo, else the plain-text title in SpineForegroundColor, else bg alone. The 1000-wide
         // grid runs along the case's HEIGHT, so uv maps u onto Y (text upright when the case lies on its left
@@ -1389,18 +1422,12 @@ internal sealed class HomeModel3d : IDisposable
         }
         grp.Children.Add(new GeometryModel3D { Geometry = wrap, Material = spineMat, BackMaterial = paper });
 
-        // Interior structure (LB: "separate the cassette case interior structure"): the shell being
-        // clear plastic all around, the CaseColor lives on interior plates — a back plate just inside
-        // the shell (the case's visible back) and a right wall (the case's visible right edge; the
-        // LEFT edge is the J-card spine, which must stay visible through the plastic). A clear case
-        // shows its real interior, so it gets neither.
+        // Interior back plate: the tray's back plate has a CUT-OUT on the spine side (covered only
+        // by the lid's clear lip); this CaseColor plate just inside stops the J-card's paper
+        // backside from beaming through it. A clear case shows its real interior — no plate.
         if (!clearCase)
-        {
             Quad(bodyMat, bodyMat,
                  new[] { (0.3168, 0.5, -0.0650), (-0.3168, 0.5, -0.0650), (0.3168, -0.5, -0.0650), (-0.3168, -0.5, -0.0650) }, uv4);
-            Quad(bodyMat, bodyMat,
-                 new[] { (0.310, 0.5, 0.0661), (0.310, 0.5, -0.0661), (0.310, -0.5, 0.0661), (0.310, -0.5, -0.0661) }, uv4);
-        }
 
         // Draw order (child order in WPF 3D): the cassette, then the clear case's holed flap (its
         // window transparency must blend over the reels already drawn), then the translucent shell.
@@ -1437,6 +1464,7 @@ internal sealed class HomeModel3d : IDisposable
             grid.Children.Add(new System.Windows.Controls.Viewbox
             {
                 Child = im,
+                Stretch = System.Windows.Media.Stretch.Fill,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
                 VerticalAlignment = System.Windows.VerticalAlignment.Center,
             });

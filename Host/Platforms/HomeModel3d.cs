@@ -1346,21 +1346,30 @@ internal sealed class HomeModel3d : IDisposable
             // so the pow-250 sheen ignites uniformly across the WHOLE reveal and sweeps it as one
             // surface. It leans outward from the shell (inward would dive behind the tray plate).
             double ZOf(double x) => -0.0754 - (x + 0.2842) / 0.21 * 0.0058;
-            // Flat variant for pieces that must NOT ride the sloped profile: the corner masks
-            // mirror LB's FLAT recut tray plate — put on the tilted ZOf they ignited their broad
-            // pow-28 specular together with the glaze and read as the glass overflowing the
-            // diagonal, while LB's flat corners stay dark at those angles.
-            void AddPanelFlat((double x, double y)[] poly, double z, Material mat)
+            // Corner masks: FLAT (LB's recut tray plate is flat — riding the glaze's tilt made
+            // them ignite with its sheen) and TESSELLATED with the plate's own material — a bare
+            // 3-vertex triangle can only Gouraud-wash whole (pink flash with specular, dead-black
+            // hole without); a fine grid shades exactly like the neighbouring plate mesh.
+            void AddMaskGrid((double x, double y) apex, (double x, double y) far1, (double x, double y) far2, double z, Material mat)
             {
+                const int NU = 12, NV = 8;
                 var wm = new MeshGeometry3D();
-                foreach (var (px, py) in poly)
-                {
-                    wm.Positions.Add(new Point3D(px, py, z));
-                    wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
-                    wm.Normals.Add(new Vector3D(0, 0, -1));
-                }
-                for (int i = 1; i + 1 < poly.Length; i++)
-                { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
+                for (int v = 0; v <= NV; v++)
+                    for (int u = 0; u <= NU; u++)
+                    {
+                        double fu = (double)u / NU, fv = (double)v / NV;
+                        double tx = apex.x + (far1.x - apex.x) * fu, ty = apex.y + (far1.y - apex.y) * fu;
+                        double bx = apex.x + (far2.x - apex.x) * fu, by = apex.y + (far2.y - apex.y) * fu;
+                        wm.Positions.Add(new Point3D(tx + (bx - tx) * fv, ty + (by - ty) * fv, z));
+                        wm.TextureCoordinates.Add(new System.Windows.Point(ty + 0.5, (tx + 0.2842) / 0.23));
+                        wm.Normals.Add(new Vector3D(0, 0, -1));
+                    }
+                for (int v = 0; v < NV; v++)
+                    for (int u = 0; u < NU; u++)
+                    {
+                        int a = v * (NU + 1) + u, b = a + 1, c = a + (NU + 1), d = c + 1;
+                        foreach (var ix in new[] { c, b, d, c, a, b }) wm.TriangleIndices.Add(ix);
+                    }
                 grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });
             }
             void AddPanel((double x, double y)[] poly, Material mat)
@@ -1471,12 +1480,8 @@ internal sealed class HomeModel3d : IDisposable
                 // The tray's natural spine-side hole is FULL height, but the angled window narrows
                 // toward the corners -- mask the flap showing through the hole outside the window
                 // with CaseColor corner triangles, completing the hexagon LB cuts.
-                // PURE-DIFFUSE masks: with any specular at all, Gouraud interpolation from a single
-                // lit vertex of these small triangles washed a pink feather across them whenever the
-                // glaze's sheen was on -- reading as the glass overflowing the diagonal.
-                Material maskMat = new DiffuseMaterial(new SolidColorBrush(plasticColor));
-                AddPanelFlat(new (double, double)[] { (-0.2231, 0.5), (-0.156, 0.5), (-0.156, 0.4228) }, -0.0754, maskMat);
-                AddPanelFlat(new (double, double)[] { (-0.2231, -0.5), (-0.156, -0.4228), (-0.156, -0.5) }, -0.0754, maskMat);
+                AddMaskGrid((-0.2231, 0.5), (-0.156, 0.5), (-0.156, 0.4228), -0.0754, bodyMat);
+                AddMaskGrid((-0.2231, -0.5), (-0.156, -0.4228), (-0.156, -0.5), -0.0754, bodyMat);
             }
             else
                 AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, flapMat);

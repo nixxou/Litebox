@@ -1421,10 +1421,7 @@ internal sealed class HomeModel3d : IDisposable
                 // meets the top edge at x=-0.2231 and runs at slope -1.15 down to (-0.0742, 0.328).
                 // Every piece (this boundary AND the corner masks) shares this single line -- two
                 // slightly different diagonals made the glaze visibly overflow past the masks.
-                // Height clipped to ±0.492: the panels float slightly OUTSIDE the shell (the
-                // anti-z-fight offset), so at full height perspective pushed them past the case's
-                // silhouette — a red sliver hanging over the top/bottom edges in the A/B pair.
-                double YL(double x) => Math.Min(0.492, x <= -0.2231 ? 0.5 : 0.5 - (x + 0.2231) * 1.15);
+                double YL(double x) => x <= -0.2231 ? 0.5 : 0.5 - (x + 0.2231) * 1.15;
                 var wm = new MeshGeometry3D();
                 for (int v = 0; v <= NV; v++)
                     for (int u = 0; u <= NU; u++)
@@ -1483,11 +1480,11 @@ internal sealed class HomeModel3d : IDisposable
                 // The tray's natural spine-side hole is FULL height, but the angled window narrows
                 // toward the corners -- mask the flap showing through the hole outside the window
                 // with CaseColor corner triangles, completing the hexagon LB cuts.
-                AddMaskGrid((-0.2301, 0.492), (-0.156, 0.492), (-0.156, 0.4228), -0.0754, bodyMat);
-                AddMaskGrid((-0.2301, -0.492), (-0.156, -0.4228), (-0.156, -0.492), -0.0754, bodyMat);
+                AddMaskGrid((-0.2231, 0.5), (-0.156, 0.5), (-0.156, 0.4228), -0.0754, bodyMat);
+                AddMaskGrid((-0.2231, -0.5), (-0.156, -0.4228), (-0.156, -0.5), -0.0754, bodyMat);
             }
             else
-                AddPanel(new (double, double)[] { (-0.156, 0.492), (-0.1539, 0.492), (-0.1539, -0.492), (-0.156, -0.492) }, flapMat);
+                AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, flapMat);
         }
         if (!clearCase) AddFlap();
         // Spine: clear logo, else the plain-text title in SpineForegroundColor, else bg alone. The 1000-wide

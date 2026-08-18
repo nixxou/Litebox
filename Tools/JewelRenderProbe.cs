@@ -438,6 +438,7 @@ internal static class JewelRenderProbe
                 {
                     var model = Host.Model3d.GlbFile.LoadModel(glb);
                     if (model == null) { Console.WriteLine("[jewel-probe] GLB load null: " + glb); return; }
+                    if (args.Contains("dump")) DumpStructure(model as Model3DGroup);
                     png = RenderModel(model, yaw, pitch, dist, w, h);
                 }
                 catch (Exception ex) { Console.WriteLine("[jewel-probe] glb render: " + ex); }

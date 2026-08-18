@@ -1261,7 +1261,21 @@ internal sealed class HomeModel3d : IDisposable
             // WALLS running inward from the plate, and once the window is cut wider than that hole
             // they stood inside it as a vertical seam. Everything behind that depth inside the
             // window goes; the case's own side walls are far outside the window's x-range.
-            if (angled) CutShellWindow(plastic, angledWindow, sxM, syM, szM, cxN, cyN, czN, -0.045);
+            if (angled)
+            {
+                CutShellWindow(plastic, angledWindow, sxM, syM, szM, cxN, cyN, czN, -0.045);
+                // The natural hole's RIM WALL also survives in the two corners the window's
+                // diagonals cut off, and at grazing angles it caught the light as a grey wedge the
+                // oracle does not have (LB recut its plate right up to the diagonal, so no wall is
+                // left there). Two more convex cuts over the corner boxes take it out; the plate
+                // patches below fill what they open.
+                CutShellWindow(plastic, new (double x, double y)[]
+                    { (-0.2231, 0.5), (-0.1520, 0.5), (-0.1520, 0.4132), (-0.2231, 0.4132) },
+                    sxM, syM, szM, cxN, cyN, czN, -0.045);
+                CutShellWindow(plastic, new (double x, double y)[]
+                    { (-0.2231, -0.4132), (-0.1520, -0.4132), (-0.1520, -0.5), (-0.2231, -0.5) },
+                    sxM, syM, szM, cxN, cyN, czN, -0.045);
+            }
         }
         // NOT added yet — WPF 3D draws in child order with a z-test, so the translucent shell must
         // come AFTER every opaque part it covers (lid over the art, clear body over the tape) or
@@ -1404,8 +1418,17 @@ internal sealed class HomeModel3d : IDisposable
                 for (int v = 0; v <= NV; v++)
                     for (int u = 0; u <= NU; u++)
                     {
-                        double px = -0.3168 + (-0.0742 + 0.3168) * u / NU;
-                        double yl = YL(px);
+                        // Spine edge at -0.2842, the window edge MEASURED on flat oracle backs — not
+                        // the lid's -0.3162 reach: out there the shell is bevelled, so a flat pane
+                        // pokes out of the rounded corner (a plastic wedge past the silhouette in
+                        // tilted views).
+                        double px = -0.2872 + (-0.0712 + 0.2872) * u / NU;
+                        // Slightly OVERSIZED (0.003 in x, 0.004 along the diagonals, never past the
+                        // case ends): clipping the plate leaves T-junctions along the window rim,
+                        // and their hairline cracks showed the bare flap as a dotted line. With the
+                        // pane reaching just beyond the rim, a crack shows glass instead — and the
+                        // excess hides behind the plate, which is in front of it.
+                        double yl = Math.Min(0.5, YL(px) + 0.004);
                         double py = yl - 2 * yl * v / NV;
                         pane.Positions.Add(new Point3D(px, py, -0.0690));
                         pane.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
@@ -1435,7 +1458,11 @@ internal sealed class HomeModel3d : IDisposable
                             double ax = a.x + (b.x - a.x) * fu, ay = a.y + (b.y - a.y) * fu;
                             double bx = a.x + (c.x - a.x) * fu, by = a.y + (c.y - a.y) * fu;
                             double px2 = ax + (bx - ax) * fv, py2 = ay + (by - ay) * fv;
-                            pm.Positions.Add(new Point3D(px2, py2, -0.0734));
+                            // 0.0006 INSIDE the plate, not coplanar with it: the patch overlaps the
+                            // plate past the hole's edge, and at the same depth the two z-fought into
+                            // a dotted line along the window's rim. Recessed, the plate simply wins
+                            // where they overlap and the patch only shows inside the hole.
+                            pm.Positions.Add(new Point3D(px2, py2, -0.0728));
                             pm.TextureCoordinates.Add(new System.Windows.Point(py2 + 0.5, (px2 + 0.2842) / 0.23));
                             pm.Normals.Add(new Vector3D(0, 0, -1));
                         }
@@ -1443,12 +1470,19 @@ internal sealed class HomeModel3d : IDisposable
                         for (int j = 0; j < N; j++)
                         {
                             int q = i * (N + 1) + j, r = q + 1, s = q + (N + 1), t2 = s + 1;
-                            foreach (var ix in new[] { s, r, t2, s, q, r }) pm.TriangleIndices.Add(ix);
+                            // FRONT-facing with the plate's own outward normal: wound the other way
+                            // the patch was back-facing, so WPF lit it through the flipped normal and
+                            // the corner glowed as a grey wedge while the plate around it stayed dark.
+                            foreach (var ix in new[] { s, t2, r, s, r, q }) pm.TriangleIndices.Add(ix);
                         }
-                    grp.Children.Add(new GeometryModel3D { Geometry = pm, Material = bodyMat, BackMaterial = bodyMat });
+                    grp.Children.Add(new GeometryModel3D { Geometry = pm, Material = bodyMat });
                 }
-                AddPlatePatch((-0.2231, 0.5), (-0.1520, 0.5), (-0.1520, 0.4182));
-                AddPlatePatch((-0.2231, -0.5), (-0.1520, -0.4182), (-0.1520, -0.5));
+                // The hypotenuse bites 0.005 INTO the window: patch and plate sit at slightly
+                // different depths, so a shared edge showed the flap through the step as a dotted
+                // line at grazing angles. Overlapping the rim puts the patch in front of that seam
+                // (the sliver of window it eats is 5 thousandths wide).
+                AddPlatePatch((-0.2231, 0.495), (-0.1520, 0.5), (-0.1520, 0.4132));
+                AddPlatePatch((-0.2231, -0.495), (-0.1520, -0.4132), (-0.1520, -0.5));
             }
             else
                 AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, flapMat);

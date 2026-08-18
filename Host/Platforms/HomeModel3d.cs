@@ -1377,12 +1377,20 @@ internal sealed class HomeModel3d : IDisposable
                 // flap instead leaves NOTHING there — the case's black interior shows through, like
                 // the rest of the back. Three pieces: full under the plate, tapered across the
                 // diagonals, full again on the spine side.
+                // TWO pieces, and the tapered one follows the diagonal ALL the way to the flap's
+                // far edge. A first cut kept it full-height past x=-0.152, so flap still sat under
+                // the plate above the diagonals — and the clipper's T-junction hairlines let it
+                // through as little red dashes on the black back. With no flap up there at all, a
+                // hairline shows the case's black interior and disappears.
+                // Height stops at 0.485, under the strip of plate the cut deliberately spares along
+                // the case's ends: the flap used to run to 0.5 behind it, and the hairlines along
+                // that strip's cut boundary let it through as a dashed line across the top.
+                const double fy = 0.485;
+                double yEnd = fy - (flapEnd + 0.2231) * 1.15;
                 Quad(flapMat, paper,
-                     new[] { (flapEnd, 0.5, -0.0661), (-0.1520, 0.5, -0.0661), (flapEnd, -0.5, -0.0661), (-0.1520, -0.5, -0.0661) }, uv4);
+                     new[] { (-0.2231, fy, -0.0661), (-0.2839, fy, -0.0661), (-0.2231, -fy, -0.0661), (-0.2839, -fy, -0.0661) }, uv4);
                 Quad(flapMat, paper,
-                     new[] { (-0.1520, 0.4132, -0.0661), (-0.2231, 0.5, -0.0661), (-0.1520, -0.4132, -0.0661), (-0.2231, -0.5, -0.0661) }, uv4);
-                Quad(flapMat, paper,
-                     new[] { (-0.2231, 0.5, -0.0661), (-0.2839, 0.5, -0.0661), (-0.2231, -0.5, -0.0661), (-0.2839, -0.5, -0.0661) }, uv4);
+                     new[] { (flapEnd, yEnd, -0.0661), (-0.2231, fy, -0.0661), (flapEnd, -yEnd, -0.0661), (-0.2231, -fy, -0.0661) }, uv4);
             }
             else
                 Quad(flapMat, paper,
@@ -1620,6 +1628,13 @@ internal sealed class HomeModel3d : IDisposable
                 { outM.TriangleIndices.Add(b); outM.TriangleIndices.Add(b + i); outM.TriangleIndices.Add(b + i + 1); }
             }
 
+            // Clipped pieces are nudged a hair OUTWARD (0.0004 in model z). A clipped triangle
+            // introduces vertices in the middle of edges its untouched neighbours still span end to
+            // end, and those T-junctions rasterise with hairline gaps -- which showed as a dotted
+            // line of glass/interior along the cut on the black back. Sitting a fraction in front,
+            // the clipped pieces cover the seam; 0.0004 is far below anything visible but above the
+            // z-buffer's resolution here.
+            double nudge = -0.0004 / sz;
             bool cut = false;
             for (int t = 0; t + 2 < mesh.TriangleIndices.Count; t += 3)
             {
@@ -1631,20 +1646,26 @@ internal sealed class HomeModel3d : IDisposable
                     new Vtx(mesh.Positions[i2], hasN ? mesh.Normals[i2] : default, hasT ? mesh.TextureCoordinates[i2] : default),
                 };
                 // Only the back plate is cut; every other triangle survives verbatim.
-                bool plate = tri[0].P.Y <= nyCut && tri[1].P.Y <= nyCut && tri[2].P.Y <= nyCut
-                          && tri.TrueForAll(v => Math.Abs(v.P.X - cx) <= nxHalf);
+                bool plate = tri[0].P.Y <= nyCut && tri[1].P.Y <= nyCut && tri[2].P.Y <= nyCut;
                 if (!plate) { Emit(tri); continue; }
                 // Convex-polygon subtraction: peel off the part outside each window edge in turn;
                 // whatever is still inside after the last edge is the hole and gets dropped.
                 var work = tri;
+                var pieces = new List<List<Vtx>>();
                 foreach (var pl in planes)
                 {
                     var (outside, inside) = SplitByPlane(work, pl);
-                    if (outside.Count >= 3) Emit(outside);
+                    if (outside.Count >= 3) pieces.Add(outside);
                     work = inside;
                     if (work.Count < 3) break;
                 }
-                if (work.Count >= 3) cut = true;   // a real piece was removed
+                if (work.Count >= 3)
+                {
+                    cut = true;   // a real piece was removed -- emit the rest nudged forward
+                    foreach (var piece in pieces)
+                        Emit(piece.ConvertAll(v => new Vtx(new Point3D(v.P.X, v.P.Y + nudge, v.P.Z), v.N, v.T)));
+                }
+                else foreach (var piece in pieces) Emit(piece);
             }
             if (cut) gm.Geometry = outM;
         }

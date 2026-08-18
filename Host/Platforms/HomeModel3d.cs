@@ -1471,8 +1471,12 @@ internal sealed class HomeModel3d : IDisposable
                 // The tray's natural spine-side hole is FULL height, but the angled window narrows
                 // toward the corners -- mask the flap showing through the hole outside the window
                 // with CaseColor corner triangles, completing the hexagon LB cuts.
-                AddPanelFlat(new (double, double)[] { (-0.2231, 0.5), (-0.156, 0.5), (-0.156, 0.4228) }, -0.0754, bodyMat);
-                AddPanelFlat(new (double, double)[] { (-0.2231, -0.5), (-0.156, -0.4228), (-0.156, -0.5) }, -0.0754, bodyMat);
+                // PURE-DIFFUSE masks: with any specular at all, Gouraud interpolation from a single
+                // lit vertex of these small triangles washed a pink feather across them whenever the
+                // glaze's sheen was on -- reading as the glass overflowing the diagonal.
+                Material maskMat = new DiffuseMaterial(new SolidColorBrush(plasticColor));
+                AddPanelFlat(new (double, double)[] { (-0.2231, 0.5), (-0.156, 0.5), (-0.156, 0.4228) }, -0.0754, maskMat);
+                AddPanelFlat(new (double, double)[] { (-0.2231, -0.5), (-0.156, -0.4228), (-0.156, -0.5) }, -0.0754, maskMat);
             }
             else
                 AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, flapMat);

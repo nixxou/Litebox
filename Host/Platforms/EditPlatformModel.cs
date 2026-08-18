@@ -266,6 +266,9 @@ internal static class EditPlatformModel
                                                                         : (previewGameId, previewGameTitle);
         string CurrentSampleTitle() => CurrentSample().Title;
         Action? redrawPreview = null;   // set later; Refresh() invokes it on every option change
+        Action? refreshHook = null;     // = Refresh once every control exists — handlers created BEFORE the
+                                        // controls Refresh() reads (swatches, font buttons) go through this
+                                        // indirection or the compiler flags their captures as unassigned
 
         int y = S(6);
         var overrideChk = new CheckBox { Text = "Override Default Settings", Location = new Point(X0, y), AutoSize = true, ForeColor = Fg, BackColor = Bg, Checked = hasOwn };
@@ -428,7 +431,7 @@ internal static class EditPlatformModel
         var cassText = Chk("Use Plain Text Title Instead of Clear Logo", X0, y, cassFont.Length > 0);
         Row(IsCassette, cassText, Lbl("Text Foreground Color", XR, y)); y += S(26);
         var cassFontBtn = new Button { Text = cassFont.Length > 0 ? cassFont : "Title Font", Location = new Point(X0, y), Size = new Size(HW, S(36)), FlatStyle = FlatStyle.Flat, BackColor = Bg, ForeColor = SubFg, FlatAppearance = { BorderColor = SubFg, BorderSize = 1 } };
-        cassFontBtn.Click += (_, _) => { using var fd = new FontDialog(); try { if (cassFont.Length > 0) fd.Font = new Font(cassFont, 12f); } catch { } if (fd.ShowDialog() == DialogResult.OK) { cassFont = fd.Font.Name; cassFontBtn.Text = cassFont; } };
+        cassFontBtn.Click += (_, _) => { using var fd = new FontDialog(); try { if (cassFont.Length > 0) fd.Font = new Font(cassFont, 12f); } catch { } if (fd.ShowDialog() == DialogResult.OK) { cassFont = fd.Font.Name; cassFontBtn.Text = cassFont; refreshHook?.Invoke(); } };
         int spineFgArgb = int.TryParse(Get(cur, "SpineForegroundColor"), out var sfg) ? sfg : -1;
         var cassTextSwatch = Swatch(XR, y, RE - XR, S(36), Color.FromArgb(spineFgArgb), null);
         Row(IsCassette, cassFontBtn, cassTextSwatch); y += S(48);
@@ -446,7 +449,7 @@ internal static class EditPlatformModel
         var textTitle = Chk("Use Plain Text Title Instead of Clear Logo", X0, y, chosenFont.Length > 0);
         Row(IsJewelFam, textTitle, Lbl("Text Foreground Color", XR, y)); y += S(26);
         var fontBtn = new Button { Text = chosenFont.Length > 0 ? chosenFont : "Title Font", Location = new Point(X0, y), Size = new Size(HW, S(36)), FlatStyle = FlatStyle.Flat, BackColor = Bg, ForeColor = SubFg, FlatAppearance = { BorderColor = SubFg, BorderSize = 1 } };
-        fontBtn.Click += (_, _) => { using var fd = new FontDialog(); try { if (chosenFont.Length > 0) fd.Font = new Font(chosenFont, 12f); } catch { } if (fd.ShowDialog() == DialogResult.OK) { chosenFont = fd.Font.Name; fontBtn.Text = chosenFont; } };
+        fontBtn.Click += (_, _) => { using var fd = new FontDialog(); try { if (chosenFont.Length > 0) fd.Font = new Font(chosenFont, 12f); } catch { } if (fd.ShowDialog() == DialogResult.OK) { chosenFont = fd.Font.Name; fontBtn.Text = chosenFont; refreshHook?.Invoke(); } };
         var textSwatch = Swatch(XR, y, RE - XR, S(36), caseColor ?? Color.White, null);
         Row(IsJewelFam, fontBtn, textSwatch); y += S(48);
 
@@ -543,6 +546,21 @@ internal static class EditPlatformModel
         // Spine VERSION (Auto-Detect / North American / European …) — was never wired: BuildFieldMap reads it,
         // so the value persisted, but nothing redrew the preview, and switching NA↔EU looked like a no-op.
         spineVersion.SelectedIndexChanged += (_, _) => Refresh();
+        // Cassette + per-side controls, same story as spineVersion above: BuildFieldMap read them but
+        // nothing redrew, so every change looked like a no-op until the window was reopened.
+        foreach (var master in new[] { cassWorn, cassCloudy, cassCoverChk, cassText })
+            master.CheckedChanged += (_, _) => Refresh();
+        foreach (var cbo in new[] { cassTypeCbo, cassPosCbo, cassSpineRotCbo, cassLogoRotCbo })
+            cbo.SelectedIndexChanged += (_, _) => Refresh();
+        for (int i = 0; i < 4; i++)
+        {
+            var (sChk, sRot, lChk, lRot) = sideCtrls[i];
+            sChk.CheckedChanged += (_, _) => Refresh();
+            lChk.CheckedChanged += (_, _) => Refresh();
+            sRot.SelectedIndexChanged += (_, _) => Refresh();
+            lRot.SelectedIndexChanged += (_, _) => Refresh();
+        }
+        refreshHook = Refresh;
         Refresh();
 
         // Build the field→string map from the live controls (null when Override is off). Shared by Apply
@@ -587,7 +605,7 @@ internal static class EditPlatformModel
                 f["CassetteCloudyPlastic"] = cassCloudy.Checked ? "true" : "false";
                 f["CaseColor"] = PlatformModelStore.ToArgb(cassPlasticSwatch.BackColor);
                 if (cassCoverChk.Checked) f["CoverColor"] = PlatformModelStore.ToArgb(cassCoverSwatch.BackColor);
-                if (cassText.Checked && cassFont.Length > 0) f["LogoFont"] = cassFont;
+                if (cassText.Checked) f["LogoFont"] = cassFont.Length > 0 ? cassFont : "Segoe UI";   // ticking the box must have an effect even before a font is picked
                 f["SpineForegroundColor"] = PlatformModelStore.ToArgb(cassTextSwatch.BackColor);
                 f["CassetteSpineRotation"] = RotV(cassSpineRotCbo).ToString(CultureInfo.InvariantCulture);
                 f["CassetteLogoRotation"] = RotV(cassLogoRotCbo).ToString(CultureInfo.InvariantCulture);
@@ -673,7 +691,7 @@ internal static class EditPlatformModel
         Button Swatch(int x, int yy, int wd, int ht, Color init, CheckBox? pair)
         {
             var sw = new Button { Location = new Point(x, yy), Size = new Size(wd, ht), FlatStyle = FlatStyle.Flat, BackColor = init, FlatAppearance = { BorderColor = SubFg, BorderSize = 1 } };
-            sw.Click += (_, _) => { using var dcd = new ColorDialog { Color = sw.BackColor, FullOpen = true }; if (dcd.ShowDialog() == DialogResult.OK) { sw.BackColor = dcd.Color; if (pair != null) pair.Checked = true; } };
+            sw.Click += (_, _) => { using var dcd = new ColorDialog { Color = sw.BackColor, FullOpen = true }; if (dcd.ShowDialog() == DialogResult.OK) { sw.BackColor = dcd.Color; if (pair != null) pair.Checked = true; refreshHook?.Invoke(); } };
             return sw;
         }
     }

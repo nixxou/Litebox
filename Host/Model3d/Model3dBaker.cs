@@ -140,8 +140,13 @@ internal static class Model3dBaker
             foreach (var ix in mesh.TriangleIndices) m2.TriangleIndices.Add(ix);
             m2.Freeze();
             // Both sides for double-sided sources; single-sided faces (spine cap, split back walls) stay
-            // single-sided or the cap occludes the scan strips behind it.
-            var g2 = new GeometryModel3D { Geometry = m2, Material = mat, BackMaterial = gm.BackMaterial != null ? mat : null };
+            // single-sided or the cap occludes the scan strips behind it. A DISTINCT back material is
+            // flattened on its own — mirroring `mat` onto the back painted the cassette J-card's art on
+            // its paper backside, visible through the tray's hinge gap.
+            var g2 = new GeometryModel3D { Geometry = m2, Material = mat,
+                BackMaterial = gm.BackMaterial == null ? null
+                             : ReferenceEquals(gm.BackMaterial, gm.Material) ? mat
+                             : FlattenRuntimeMaterial(gm.BackMaterial) };
             g2.Freeze();
             grp.Children.Add(g2);
         }

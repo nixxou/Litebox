@@ -1351,14 +1351,17 @@ internal sealed class HomeModel3d : IDisposable
                     { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
                     grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = flapMat });
                 }
+                // −0.0730 = a hair's breadth inside the lip (−0.0734): the glass still renders over
+                // the panel, but the parallax gap a deeper recess opened at glancing angles (black
+                // slivers around the strip) is 18× smaller and reads as flush.
                 if (angled)
                 {
-                    AddPanel(new (double, double)[] { (-0.2842, 0.5), (-0.2046, 0.5), (-0.156, 0.422), (-0.156, -0.422), (-0.2046, -0.5), (-0.2842, -0.5) }, -0.0661);
+                    AddPanel(new (double, double)[] { (-0.2842, 0.5), (-0.2046, 0.5), (-0.156, 0.422), (-0.156, -0.422), (-0.2046, -0.5), (-0.2842, -0.5) }, -0.0730);
                     AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0742, -0.326), (-0.156, -0.422) }, -0.0736);
                 }
                 else
                 {
-                    AddPanel(new (double, double)[] { (-0.2842, 0.5), (-0.156, 0.5), (-0.156, -0.5), (-0.2842, -0.5) }, -0.0661);
+                    AddPanel(new (double, double)[] { (-0.2842, 0.5), (-0.156, 0.5), (-0.156, -0.5), (-0.2842, -0.5) }, -0.0730);
                     AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, -0.0736);
                 }
                 return;
@@ -1439,10 +1442,12 @@ internal sealed class HomeModel3d : IDisposable
 
         // Interior back plate: the tray's back plate has a CUT-OUT on the spine side (covered only
         // by the lid's clear lip); this CaseColor plate just inside stops the J-card's paper
-        // backside from beaming through it. A clear case shows its real interior — no plate.
+        // backside from beaming through it. It STOPS at the spine wrap's start (−0.2839) — running
+        // it under the wrap blacked out the wrap's rounded back portion, which LB shows spilling
+        // onto the back. A clear case shows its real interior — no plate.
         if (!clearCase)
             Quad(bodyMat, bodyMat,
-                 new[] { (0.3168, 0.5, -0.0650), (-0.3168, 0.5, -0.0650), (0.3168, -0.5, -0.0650), (-0.3168, -0.5, -0.0650) }, uv4);
+                 new[] { (0.3168, 0.5, -0.0650), (-0.2839, 0.5, -0.0650), (0.3168, -0.5, -0.0650), (-0.2839, -0.5, -0.0650) }, uv4);
 
         // Draw order (child order in WPF 3D): the cassette, then the clear case's holed flap (its
         // window transparency must blend over the reels already drawn), then the translucent shell.

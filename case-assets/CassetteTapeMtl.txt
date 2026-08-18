@@ -1,0 +1,3 @@
+# minimal tape material (texture applied in code)
+newmtl CassetteTapeBody
+Kd 0.05 0.05 0.05

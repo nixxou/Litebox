@@ -41,11 +41,11 @@ internal static class EditPlatformModel
     // Landscape), CassetteWornPlastic ("Add Scuffs and Scratches"), CassetteCloudyPlastic, CaseColor
     // doubling as the PLASTIC color, CoverColor, SpineForegroundColor (J-card text, ARGB, -1=white),
     // and CassetteSpine/LogoRotation as PLAIN integers (single J-card spine, not the 4-side CSV).
-    // Not listed here until LiteBox renders/edits it — a stored cassetteCase joins the combo
-    // dynamically below and round-trips untouched.
+    // Rendered by HomeModel3d.BuildCassette; the cassette-specific fields have no editor rows yet
+    // (set them in LaunchBox) — they are preserved verbatim through a LiteBox save (EditorFields).
     private static readonly (string label, string val)[] ModelTypes =
     {
-        ("Box", "box"), ("DVD Case", "dvd"), ("Jewel Case", "jewelCase"),
+        ("Box", "box"), ("Cassette Case", "cassetteCase"), ("DVD Case", "dvd"), ("Jewel Case", "jewelCase"),
         ("Double Jewel Case", "doubleJewelCase"), ("Long Jewel Case", "longJewelCase"),
     };
     private static readonly (string label, string val)[] SpineModes =

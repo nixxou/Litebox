@@ -188,6 +188,7 @@ internal sealed class HomeModel3d : IDisposable
             "dvd" => BuildDvd(map, gameTitle, art),
             "longJewelCase" => BuildLongJewel(map, gameTitle, art),
             "doubleJewelCase" => BuildDoubleJewel(map, gameTitle, art),
+            "cassetteCase" => BuildCassette(map, gameTitle, art),
             _ => BuildBox(map, gameTitle, art),
         };
     }
@@ -1125,6 +1126,164 @@ internal sealed class HomeModel3d : IDisposable
 
     // Grey-grid face (the insert back when no back image): brush = empty Grid with a solid background — kept as
     // a VisualBrush (not a plain SolidColorBrush) to mirror LB's structure exactly.
+    // ── CASSETTE CASE (LB 14's cassetteCase) — oracle-decoded 2026-08-18 (--render-oracle dump of every
+    //    style: StraightBack / AngledBack / ClearStraightBack, portrait + landscape, Age of Wonders):
+    //
+    //      leaf0 J-card FRONT  quad X[-0.2839..0.313] Y[±0.488] Z=+0.0661 — VisualBrush Grid 1000×1000,
+    //            bg colour + front art Fill; BackMaterial paper #FFE8E3D8.
+    //      leaf1 J-card BACK FLAP at Z=-0.0661 — bg only. X reach BY STYLE: Straight [-0.2839..-0.1368],
+    //            Angled [-0.2839..-0.0582], ClearStraightBack full width [-0.2839..0.313].
+    //      leaf2 J-card SPINE  X[-0.313..-0.2839] wrapping Z±0.0661 (24-vert rounded wrap in LB; a flat
+    //            left-facing quad here) — VisualBrush Grid 1000×169.4: bg + clear logo (Uniform), else
+    //            Text(title) in SpineForegroundColor (ARGB, -1 = white), else bg alone.
+    //      leaf3 TAPE inside   X[0.0142..0.0751] Y[±0.2478] Z[-0.0638..0.0294] — black-case: silhouette
+    //            #FF000000 + Specular #50DCE1E6 pow28; clear case: CassetteTape.png diffuse + gloss pow40.
+    //      leaf4 BODY (CassetteCaseObj) — CaseColor ("Plastic Color", default #FF000000) + Specular
+    //            #50DCE1E6 pow28; ClearStraightBack: #15CCCCCC + Specular #FF808080 pow250.
+    //      leaf5 LID  — #10CCCCCC + Specular #FF808080 pow250 (all styles).
+    //
+    //    CassettePosition Landscape = the whole model rotated -90° about Z (dump: X/Y bounds swap);
+    //    Automatic goes landscape when the FRONT art is wider than tall. CassetteWornPlastic /
+    //    CassetteCloudyPlastic (wear/haze overlays) and the Cassette*Rotation label spins are TODO —
+    //    they alter looks, never geometry.
+    private static Model3D? BuildCassette(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle,
+                                          Model3d.Model3dArt art)
+    {
+        string Get(string k) => map != null && map.TryGetValue(k, out var v) ? (v ?? "") : "";
+        string cassType = Get("CassetteType");
+        bool clearCase = string.Equals(cassType, "ClearStraightBack", StringComparison.OrdinalIgnoreCase);
+        bool angled = string.Equals(cassType, "AngledBack", StringComparison.OrdinalIgnoreCase);
+
+        System.Windows.Media.Color Argb(string key, System.Windows.Media.Color def)
+            => int.TryParse(Get(key), out var a)
+               ? System.Windows.Media.Color.FromArgb((byte)(a >> 24), (byte)(a >> 16), (byte)(a >> 8), (byte)a) : def;
+        var plasticColor = Argb("CaseColor", System.Windows.Media.Color.FromRgb(0, 0, 0));
+        var spineFg = Argb("SpineForegroundColor", System.Windows.Media.Colors.White);
+
+        var front = LoadBitmap(art.Front);
+        var logo = LoadBitmap(art.Logo);
+        var bg = System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D);
+        if (map != null && map.ContainsKey("CoverColor")) bg = Argb("CoverColor", bg);
+        else if (front != null) bg = CornerAverage(front);
+
+        var grp = new Model3DGroup();
+
+        // Plastic: body + lid from the vendored LB mesh, materials retargeted per style (the MTL's own
+        // colours are placeholders — LB always overrides them, per the dump).
+        var (plastic0, segNames) = LbCaseObj.LoadWithNames("CassetteCase");
+        if (plastic0 == null) return null;
+        var plastic = plastic0.Clone();   // the loader caches FROZEN groups — clone before retargeting materials
+        Material bodyMat = clearCase
+            ? Mat2(System.Windows.Media.Color.FromArgb(0x15, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250)
+            : Mat2(plasticColor, System.Windows.Media.Color.FromArgb(0x50, 0xDC, 0xE1, 0xE6), 28);
+        Material lidMat = Mat2(System.Windows.Media.Color.FromArgb(0x10, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250);
+        for (int i = 0; i < plastic.Children.Count; i++)
+        {
+            if (plastic.Children[i] is not GeometryModel3D gm) continue;
+            bool isLid = i < segNames.Count && segNames[i].IndexOf("Lid", StringComparison.OrdinalIgnoreCase) >= 0;
+            gm.Material = isLid ? lidMat : bodyMat;
+            gm.BackMaterial = gm.Material;
+        }
+        grp.Children.Add(plastic);
+
+        // Tape inside (bounds-fit into the dumped slot; silhouette in black cases, textured in clear).
+        var tape = LbCaseObj.Load("CassetteTape")?.Clone();   // frozen in the loader cache, same as above
+        if (tape != null)
+        {
+            Material tapeMat;
+            if (clearCase)
+            {
+                var tex = LbCaseObj.SpineImage("CassetteTape");   // case-assets png via the shared loader
+                tapeMat = tex != null
+                    ? new MaterialGroup { Children = { new DiffuseMaterial(new System.Windows.Media.ImageBrush(tex) { Stretch = System.Windows.Media.Stretch.Fill }),
+                                                       new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 40) } }
+                    : Mat2(System.Windows.Media.Color.FromRgb(0x20, 0x20, 0x20), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 40);
+            }
+            else tapeMat = Mat2(System.Windows.Media.Color.FromRgb(0, 0, 0), System.Windows.Media.Color.FromArgb(0x50, 0xDC, 0xE1, 0xE6), 28);
+            foreach (var c in tape.Children)
+                if (c is GeometryModel3D gm) { gm.Material = tapeMat; gm.BackMaterial = tapeMat; }
+            var tb = tape.Bounds;
+            if (!tb.IsEmpty && tb.SizeX > 0 && tb.SizeY > 0 && tb.SizeZ > 0)
+            {
+                // Fit the tape's native frame into the dumped slot.
+                var target = new Rect3D(0.0142, -0.2478, -0.0638, 0.0751 - 0.0142, 0.2478 * 2, 0.0294 + 0.0638);
+                var tr = new Transform3DGroup();
+                tr.Children.Add(new TranslateTransform3D(-tb.X - tb.SizeX / 2, -tb.Y - tb.SizeY / 2, -tb.Z - tb.SizeZ / 2));
+                double s = Math.Min(target.SizeY / tb.SizeY, Math.Min(target.SizeX / tb.SizeX, target.SizeZ / tb.SizeZ));
+                tr.Children.Add(new ScaleTransform3D(s, s, s));
+                tr.Children.Add(new TranslateTransform3D(target.X + target.SizeX / 2, target.Y + target.SizeY / 2, target.Z + target.SizeZ / 2));
+                tape.Transform = tr;
+            }
+            grp.Children.Add(tape);
+        }
+
+        // ── J-card ──
+        var paper = new DiffuseMaterial(new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE8, 0xE3, 0xD8)));
+        void Quad(Material mat, Material? back, (double x, double y, double z)[] p, (double u, double v)[] uv)
+        {
+            var mesh = new MeshGeometry3D();
+            for (int i = 0; i < p.Length; i++)
+            {
+                mesh.Positions.Add(new Point3D(p[i].x, p[i].y, p[i].z));
+                mesh.TextureCoordinates.Add(new System.Windows.Point(uv[i].u, uv[i].v));
+            }
+            foreach (var ix in new[] { 3, 0, 2, 3, 1, 0 }) mesh.TriangleIndices.Add(ix);
+            var a = new Vector3D(p[1].x - p[0].x, p[1].y - p[0].y, p[1].z - p[0].z);
+            var b = new Vector3D(p[2].x - p[0].x, p[2].y - p[0].y, p[2].z - p[0].z);
+            var n = Vector3D.CrossProduct(a, b);
+            var centre = new Vector3D((p[0].x + p[3].x) / 2, (p[0].y + p[3].y) / 2, (p[0].z + p[3].z) / 2);
+            if (Vector3D.DotProduct(n, centre) < 0) n = -n;
+            if (n.LengthSquared > 0) { n.Normalize(); for (int i = 0; i < 4; i++) mesh.Normals.Add(n); }
+            grp.Children.Add(new GeometryModel3D { Geometry = mesh, Material = mat, BackMaterial = back });
+        }
+        var uv4 = new[] { (0d, 0d), (1d, 0d), (0d, 1d), (1d, 1d) };
+
+        // Front (inside the case, under the lid).
+        Quad(FaceMaterial(front, System.Windows.Media.Stretch.Fill, 1000, 1000, bg), paper,
+             new[] { (-0.2839, 0.488, 0.0661), (0.313, 0.488, 0.0661), (-0.2839, -0.488, 0.0661), (0.313, -0.488, 0.0661) }, uv4);
+        // Back flap, style-dependent reach (faces -Z: wound the other way so the front side is outward).
+        double flapEnd = clearCase ? 0.313 : angled ? -0.0582 : -0.1368;
+        Quad(FaceMaterialNoImage(1000, 1000, bg), paper,
+             new[] { (flapEnd, 0.5, -0.0661), (-0.2839, 0.5, -0.0661), (flapEnd, -0.5, -0.0661), (-0.2839, -0.5, -0.0661) }, uv4);
+        // Spine: clear logo, else the plain-text title in SpineForegroundColor, else bg alone. The 1000-wide
+        // grid runs along the case's HEIGHT, so uv maps u onto Y (text upright when the case lies on its left
+        // side, exactly like a real J-card).
+        System.Windows.Media.Visual spineVisual;
+        var spineGrid = new System.Windows.Controls.Grid { Width = 1000, Height = 169.4, Background = new SolidColorBrush(bg) };
+        if (logo != null)
+            spineGrid.Children.Add(new System.Windows.Controls.Image
+            { Source = logo, Stretch = System.Windows.Media.Stretch.Uniform,
+              HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
+        else if (!string.IsNullOrEmpty(gameTitle))
+            spineGrid.Children.Add(new System.Windows.Controls.Viewbox
+            { Child = new System.Windows.Controls.TextBlock { Text = gameTitle, FontSize = 12, Foreground = new SolidColorBrush(spineFg) },
+              HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
+        spineVisual = spineGrid;
+        var spineMat = new DiffuseMaterial(new VisualBrush(spineVisual) { Stretch = System.Windows.Media.Stretch.Fill });
+        Quad(spineMat, paper,
+             new[] { (-0.313, 0.488, 0.0661), (-0.313, 0.488, -0.0661), (-0.313, -0.488, 0.0661), (-0.313, -0.488, -0.0661) },
+             new[] { (0d, 0d), (0d, 1d), (1d, 0d), (1d, 1d) });
+
+        // Position: Automatic goes landscape when the front art is wider than tall.
+        bool landscape = string.Equals(Get("CassettePosition"), "Landscape", StringComparison.OrdinalIgnoreCase)
+                         || (string.Equals(Get("CassettePosition"), "Automatic", StringComparison.OrdinalIgnoreCase) || Get("CassettePosition").Length == 0)
+                            && front != null && front.PixelWidth > front.PixelHeight;
+        if (landscape)
+            grp.Transform = new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 0, 1), -90));
+        return grp;
+    }
+
+    /// <summary>Diffuse + specular pair — the plastic material shape every cassette part uses.</summary>
+    private static Material Mat2(System.Windows.Media.Color diffuse, System.Windows.Media.Color specular, double power)
+        => new MaterialGroup
+        {
+            Children =
+            {
+                new DiffuseMaterial(new SolidColorBrush(diffuse)),
+                new SpecularMaterial(new SolidColorBrush(specular), power),
+            }
+        };
+
     private static Material FaceMaterialNoImage(double gridW, double gridH, System.Windows.Media.Color bg)
     {
         var grid = new System.Windows.Controls.Grid { Width = gridW, Height = gridH, Background = new SolidColorBrush(bg) };

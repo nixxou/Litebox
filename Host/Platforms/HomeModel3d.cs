@@ -1159,6 +1159,11 @@ internal sealed class HomeModel3d : IDisposable
                ? System.Windows.Media.Color.FromArgb((byte)(a >> 24), (byte)(a >> 16), (byte)(a >> 8), (byte)a) : def;
         var plasticColor = Argb("CaseColor", System.Windows.Media.Color.FromRgb(0, 0, 0));
         var spineFg = Argb("SpineForegroundColor", System.Windows.Media.Colors.White);
+        bool worn = string.Equals(Get("CassetteWornPlastic"), "true", StringComparison.OrdinalIgnoreCase);
+        bool cloudy = string.Equals(Get("CassetteCloudyPlastic"), "true", StringComparison.OrdinalIgnoreCase);
+        string logoFont = Get("LogoFont");
+        int spineRot = int.TryParse(Get("CassetteSpineRotation"), out var srr) ? ((srr % 360) + 360) % 360 : 0;
+        int logoRot = int.TryParse(Get("CassetteLogoRotation"), out var lrr) ? ((lrr % 360) + 360) % 360 : 0;
 
         var front = LoadBitmap(art.Front);
         var logo = LoadBitmap(art.Logo);
@@ -1173,10 +1178,33 @@ internal sealed class HomeModel3d : IDisposable
         var (plastic0, segNames) = LbCaseObj.LoadWithNames("CassetteCase");
         if (plastic0 == null) return null;
         var plastic = plastic0.Clone();   // the loader caches FROZEN groups — clone before retargeting materials
+        // Worn ("Add Scuffs and Scratches"): the wear texture rides BOTH channels — a 10%-opacity
+        // overlay on the plastic colour and the raw image as a TILED specular map (oracle-dump
+        // exact). Cloudy ("Cloudy Aged Plastic") changes only the LID: hazier diffuse #38F5F7FA,
+        // brighter lower-power specular #6EFFFFFF pow90.
+        var wear = worn && !clearCase ? LbCaseObj.SpineImage("CassetteWear") : null;
+        Material WornMat(System.Windows.Media.Color baseColor)
+        {
+            var wg = new System.Windows.Controls.Grid { Width = 384, Height = 384, Background = new SolidColorBrush(baseColor) };
+            wg.Children.Add(new System.Windows.Controls.Image { Source = wear, Stretch = System.Windows.Media.Stretch.Fill, Opacity = 0.1 });
+            return new MaterialGroup
+            {
+                Children =
+                {
+                    new DiffuseMaterial(new VisualBrush(wg) { Stretch = System.Windows.Media.Stretch.Fill }),
+                    new SpecularMaterial(new System.Windows.Media.ImageBrush(wear)
+                    { Stretch = System.Windows.Media.Stretch.Fill, TileMode = System.Windows.Media.TileMode.Tile,
+                      Viewport = new System.Windows.Rect(0, 0, 1, 1) }, 28),
+                }
+            };
+        }
         Material bodyMat = clearCase
             ? Mat2(System.Windows.Media.Color.FromArgb(0x15, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250)
+            : wear != null ? WornMat(plasticColor)
             : Mat2(plasticColor, System.Windows.Media.Color.FromArgb(0x50, 0xDC, 0xE1, 0xE6), 28);
-        Material lidMat = Mat2(System.Windows.Media.Color.FromArgb(0x10, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250);
+        Material lidMat = cloudy
+            ? Mat2(System.Windows.Media.Color.FromArgb(0x38, 0xF5, 0xF7, 0xFA), System.Windows.Media.Color.FromArgb(0x6E, 0xFF, 0xFF, 0xFF), 90)
+            : Mat2(System.Windows.Media.Color.FromArgb(0x10, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250);
         for (int i = 0; i < plastic.Children.Count; i++)
         {
             if (plastic.Children[i] is not GeometryModel3D gm) continue;
@@ -1193,13 +1221,17 @@ internal sealed class HomeModel3d : IDisposable
             Material tapeMat;
             if (clearCase)
             {
-                var tex = LbCaseObj.SpineImage("CassetteTape");   // case-assets png via the shared loader
+                var tex = LbCaseObj.SpineImage("CassetteTape");        // case-assets pngs via the shared loader
+                var gloss = LbCaseObj.SpineImage("CassetteTapeGloss"); // its specular map (oracle: Image 512-sq, pow 40)
+                Material spec = gloss != null
+                    ? new SpecularMaterial(new System.Windows.Media.ImageBrush(gloss) { Stretch = System.Windows.Media.Stretch.Fill }, 40)
+                    : new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 40);
                 tapeMat = tex != null
-                    ? new MaterialGroup { Children = { new DiffuseMaterial(new System.Windows.Media.ImageBrush(tex) { Stretch = System.Windows.Media.Stretch.Fill }),
-                                                       new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 40) } }
+                    ? new MaterialGroup { Children = { new DiffuseMaterial(new System.Windows.Media.ImageBrush(tex) { Stretch = System.Windows.Media.Stretch.Fill }), spec } }
                     : Mat2(System.Windows.Media.Color.FromRgb(0x20, 0x20, 0x20), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 40);
             }
-            else tapeMat = Mat2(System.Windows.Media.Color.FromRgb(0, 0, 0), System.Windows.Media.Color.FromArgb(0x50, 0xDC, 0xE1, 0xE6), 28);
+            else tapeMat = wear != null ? WornMat(System.Windows.Media.Color.FromRgb(0, 0, 0))
+                         : Mat2(System.Windows.Media.Color.FromRgb(0, 0, 0), System.Windows.Media.Color.FromArgb(0x50, 0xDC, 0xE1, 0xE6), 28);
             foreach (var c in tape.Children)
                 if (c is GeometryModel3D gm) { gm.Material = tapeMat; gm.BackMaterial = tapeMat; }
             var tb = tape.Bounds;
@@ -1249,15 +1281,26 @@ internal sealed class HomeModel3d : IDisposable
         // grid runs along the case's HEIGHT, so uv maps u onto Y (text upright when the case lies on its left
         // side, exactly like a real J-card).
         System.Windows.Media.Visual spineVisual;
+        // A set LogoFont = "Use Plain Text Title Instead of Clear Logo" (the jewel family's own
+        // convention). CassetteLogoRotation spins the clear logo, CassetteSpineRotation the text.
         var spineGrid = new System.Windows.Controls.Grid { Width = 1000, Height = 169.4, Background = new SolidColorBrush(bg) };
-        if (logo != null)
-            spineGrid.Children.Add(new System.Windows.Controls.Image
+        if (logo != null && logoFont.Length == 0)
+        {
+            var im = new System.Windows.Controls.Image
             { Source = logo, Stretch = System.Windows.Media.Stretch.Uniform,
-              HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
+              HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center };
+            if (logoRot != 0) im.LayoutTransform = new System.Windows.Media.RotateTransform(logoRot);
+            spineGrid.Children.Add(im);
+        }
         else if (!string.IsNullOrEmpty(gameTitle))
-            spineGrid.Children.Add(new System.Windows.Controls.Viewbox
-            { Child = new System.Windows.Controls.TextBlock { Text = gameTitle, FontSize = 12, Foreground = new SolidColorBrush(spineFg) },
-              HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
+        {
+            var tb = new System.Windows.Controls.TextBlock { Text = gameTitle, FontSize = 12, Foreground = new SolidColorBrush(spineFg) };
+            if (logoFont.Length > 0) { try { tb.FontFamily = new System.Windows.Media.FontFamily(logoFont); } catch { } }
+            var vb = new System.Windows.Controls.Viewbox
+            { Child = tb, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center };
+            if (spineRot != 0) vb.LayoutTransform = new System.Windows.Media.RotateTransform(spineRot);
+            spineGrid.Children.Add(vb);
+        }
         spineVisual = spineGrid;
         var spineMat = new DiffuseMaterial(new VisualBrush(spineVisual) { Stretch = System.Windows.Media.Stretch.Fill });
         Quad(spineMat, paper,

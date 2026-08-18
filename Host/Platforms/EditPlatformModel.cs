@@ -67,6 +67,8 @@ internal static class EditPlatformModel
         "ModelType", "ModelSizeString", "UseFullScanImages", "FullScanIsLandscape", "FullImageSpineWidth",
         "CaseColor", "CoverColor", "DoubleSpineImageMode", "FrontSpineImage", "FrontSpineIsClear",
         "LogoFont", "SpineRotation", "LogoRotation",
+        "CassetteType", "CassettePosition", "CassetteWornPlastic", "CassetteCloudyPlastic",
+        "CassetteSpineRotation", "CassetteLogoRotation", "SpineForegroundColor",
     };
 
     // Embedded jewel-case spine presets LaunchBox ships (Unbroken.LaunchBox.Windows.Properties.JewelCaseSpines.resources —
@@ -289,6 +291,7 @@ internal static class EditPlatformModel
         bool IsBox(string t) => t == "box"; bool IsDvd(string t) => t == "dvd";
         bool IsJewelFam(string t) => t is "jewelCase" or "doubleJewelCase" or "longJewelCase";
         bool BoxDvd(string t) => IsBox(t) || IsDvd(t);
+        bool IsCassette(string t) => t == "cassetteCase";
 
         // Model Type (always). A stored type this editor doesn't know (LB 14's cassette, a future
         // model) joins the combo AS ITSELF instead of being silently coerced to entry 0 — selecting
@@ -395,6 +398,45 @@ internal static class EditPlatformModel
         if (initialSpine.preset >= 0) PopulateVersions(initialSpine.preset, initialSpine.suffix);
         RebuildSpineStyle(types[Math.Max(0, modelType.SelectedIndex)].val, initialSpine.kind);
 
+        // ── cassette (LB 14): type / position combos, plastic colour, wear + haze toggles, cover
+        //    colour, plain-text title (font + SpineForegroundColor), spine/logo label rotation. The
+        //    stored vocabulary is the one LaunchBox writes (captured off a real v14 block).
+        var cassTypes = new (string label, string val)[]
+        { ("Straight Back", "StraightBack"), ("Angled Back", "AngledBack"), ("Clear Straight Back", "ClearStraightBack") };
+        var cassPositions = new (string label, string val)[]
+        { ("Automatic", "Automatic"), ("Portrait", "Portrait"), ("Landscape", "Landscape") };
+        var cassTypeCbo = Combo(S(150), y, RE - S(150));
+        foreach (var ct in cassTypes) cassTypeCbo.Items.Add(ct.label);
+        cassTypeCbo.SelectedIndex = Math.Max(0, Array.FindIndex(cassTypes, c => string.Equals(c.val, Get(cur, "CassetteType"), StringComparison.OrdinalIgnoreCase)));
+        Row(IsCassette, Lbl("Cassette Type:", X0, y), cassTypeCbo); y += S(36);
+        var cassPosCbo = Combo(S(150), y, RE - S(150));
+        foreach (var cp in cassPositions) cassPosCbo.Items.Add(cp.label);
+        cassPosCbo.SelectedIndex = Math.Max(0, Array.FindIndex(cassPositions, c => string.Equals(c.val, Get(cur, "CassettePosition"), StringComparison.OrdinalIgnoreCase)));
+        Row(IsCassette, Lbl("Position:", X0, y), cassPosCbo); y += S(40);
+        Row(IsCassette, Lbl("Plastic Color:", X0, y)); y += S(24);
+        var cassPlasticSwatch = Swatch(X0, y, W, S(36), caseColor ?? Color.Black, null);
+        Row(IsCassette, cassPlasticSwatch); y += S(44);
+        var cassWorn = Chk("Add Scuffs and Scratches to the Shell", X0, y, GetBool(cur, "CassetteWornPlastic"));
+        Row(IsCassette, cassWorn); y += S(26);
+        var cassCloudy = Chk("Cloudy Aged Plastic (Hazier, More Reflective)", X0, y, GetBool(cur, "CassetteCloudyPlastic"));
+        Row(IsCassette, cassCloudy); y += S(30);
+        var cassCoverChk = Chk("Force Cover Background Color:", X0, y, coverColor.HasValue);
+        Row(IsCassette, cassCoverChk); y += S(26);
+        var cassCoverSwatch = Swatch(X0, y, W, S(36), coverColor ?? Color.Black, cassCoverChk);
+        Row(IsCassette, cassCoverSwatch); y += S(44);
+        string cassFont = Get(cur, "LogoFont");
+        var cassText = Chk("Use Plain Text Title Instead of Clear Logo", X0, y, cassFont.Length > 0);
+        Row(IsCassette, cassText, Lbl("Text Foreground Color", XR, y)); y += S(26);
+        var cassFontBtn = new Button { Text = cassFont.Length > 0 ? cassFont : "Title Font", Location = new Point(X0, y), Size = new Size(HW, S(36)), FlatStyle = FlatStyle.Flat, BackColor = Bg, ForeColor = SubFg, FlatAppearance = { BorderColor = SubFg, BorderSize = 1 } };
+        cassFontBtn.Click += (_, _) => { using var fd = new FontDialog(); try { if (cassFont.Length > 0) fd.Font = new Font(cassFont, 12f); } catch { } if (fd.ShowDialog() == DialogResult.OK) { cassFont = fd.Font.Name; cassFontBtn.Text = cassFont; } };
+        int spineFgArgb = int.TryParse(Get(cur, "SpineForegroundColor"), out var sfg) ? sfg : -1;
+        var cassTextSwatch = Swatch(XR, y, RE - XR, S(36), Color.FromArgb(spineFgArgb), null);
+        Row(IsCassette, cassFontBtn, cassTextSwatch); y += S(48);
+        var cassSpineRotCbo = RotCombo(S, S(150), y, int.TryParse(Get(cur, "CassetteSpineRotation"), out var csr) ? csr : 0);
+        Row(IsCassette, Lbl("Spine Text Rotation:", X0, y), cassSpineRotCbo); y += S(34);
+        var cassLogoRotCbo = RotCombo(S, S(150), y, int.TryParse(Get(cur, "CassetteLogoRotation"), out var clr) ? clr : 0);
+        Row(IsCassette, Lbl("Spine Logo Rotation:", X0, y), cassLogoRotCbo); y += S(40);
+
         // ── jewel family: Cover color (full-width swatch) + Plain Text Title + font + text color (=CaseColor) ──
         var coverChkJ = Chk("Force Cover Background Color:", X0, y, coverColor.HasValue);
         Row(IsJewelFam, coverChkJ); y += S(26);
@@ -474,6 +516,9 @@ internal static class EditPlatformModel
             coverSwatchJ.Enabled = coverSwatchJ.Enabled && coverChkJ.Checked;
             fontBtn.Enabled = fontBtn.Enabled && textTitle.Checked;
             textSwatch.Enabled = textSwatch.Enabled && textTitle.Checked;
+            cassCoverSwatch.Enabled = cassCoverSwatch.Enabled && cassCoverChk.Checked;
+            cassFontBtn.Enabled = cassFontBtn.Enabled && cassText.Checked;
+            cassTextSwatch.Enabled = cassTextSwatch.Enabled && cassText.Checked;
 
             redrawPreview?.Invoke();   // live 3D preview follows every option change
         }
@@ -534,6 +579,20 @@ internal static class EditPlatformModel
                 if (coverChkD.Checked) f["CoverColor"] = PlatformModelStore.ToArgb(coverSwatchD.BackColor);
             }
             if (t == "doubleJewelCase") f["DoubleSpineImageMode"] = SpineModes[Math.Max(0, spineMode.SelectedIndex)].val;
+            if (IsCassette(t))
+            {
+                f["CassetteType"] = cassTypes[Math.Max(0, cassTypeCbo.SelectedIndex)].val;
+                f["CassettePosition"] = cassPositions[Math.Max(0, cassPosCbo.SelectedIndex)].val;
+                f["CassetteWornPlastic"] = cassWorn.Checked ? "true" : "false";
+                f["CassetteCloudyPlastic"] = cassCloudy.Checked ? "true" : "false";
+                f["CaseColor"] = PlatformModelStore.ToArgb(cassPlasticSwatch.BackColor);
+                if (cassCoverChk.Checked) f["CoverColor"] = PlatformModelStore.ToArgb(cassCoverSwatch.BackColor);
+                if (cassText.Checked && cassFont.Length > 0) f["LogoFont"] = cassFont;
+                f["SpineForegroundColor"] = PlatformModelStore.ToArgb(cassTextSwatch.BackColor);
+                f["CassetteSpineRotation"] = RotV(cassSpineRotCbo).ToString(CultureInfo.InvariantCulture);
+                f["CassetteLogoRotation"] = RotV(cassLogoRotCbo).ToString(CultureInfo.InvariantCulture);
+                return f;   // cassette shares no side groups / jewel rows — the map is complete here
+            }
             if (HasSpineStyle(t))
             {
                 var (img, clear) = SpineStyleValue(spineStyle, styleKinds, spinePath, spineVersion, t);

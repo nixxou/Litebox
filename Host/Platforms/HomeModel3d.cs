@@ -1165,6 +1165,13 @@ internal sealed class HomeModel3d : IDisposable
         int spineRot = int.TryParse(Get("CassetteSpineRotation"), out var srr) ? ((srr % 360) + 360) % 360 : 0;
         int logoRot = int.TryParse(Get("CassetteLogoRotation"), out var lrr) ? ((lrr % 360) + 360) % 360 : 0;
 
+        // LB's angled back WINDOW, in model x/y (refit from flat oracle back renders as one
+        // diagonal: meets the top edge at x=-0.2231, slope -1.15, down to the inner edge -0.0742).
+        // This single polygon drives everything: the hole cut through the shell AND the glass pane
+        // filling it, so no two pieces can disagree on the outline.
+        var angledWindow = new (double x, double y)[]
+        { (-0.3168, 0.5), (-0.2231, 0.5), (-0.0742, 0.3288), (-0.0742, -0.3288), (-0.2231, -0.5), (-0.3168, -0.5) };
+
         var front = LoadBitmap(art.Front);
         var logo = LoadBitmap(art.Logo);
         var bg = System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D);
@@ -1231,8 +1238,10 @@ internal sealed class HomeModel3d : IDisposable
         var pb = plastic.Bounds;
         if (!pb.IsEmpty && pb.SizeX > 0 && pb.SizeY > 0 && pb.SizeZ > 0)
         {
+            double cxN = pb.X + pb.SizeX / 2, cyN = pb.Y + pb.SizeY / 2, czN = pb.Z + pb.SizeZ / 2;
+            double sxM = -0.3168 * 2 / pb.SizeZ, syM = 0.5 * 2 / pb.SizeX, szM = 0.0734 * 2 / pb.SizeY;
             var ptr = new Transform3DGroup();
-            ptr.Children.Add(new TranslateTransform3D(-pb.X - pb.SizeX / 2, -pb.Y - pb.SizeY / 2, -pb.Z - pb.SizeZ / 2));
+            ptr.Children.Add(new TranslateTransform3D(-cxN, -cyN, -czN));
             // The OBJ lies FLAT: 10.9 cm length on native X, 6.9 cm height on native Z, 1.6 cm
             // thickness on native Y. LB stands it upright — native X→model Y, native Z→model X,
             // native Y→model Z — which makes the scale essentially UNIFORM (×9.17 on every axis;
@@ -1241,8 +1250,18 @@ internal sealed class HomeModel3d : IDisposable
             // each shell part carries the same material on both faces.
             ptr.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 0, 1), 90)));
             ptr.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), 90)));   // net: (x,y,z)→(z,x,y)
-            ptr.Children.Add(new ScaleTransform3D(-0.3168 * 2 / pb.SizeZ, 0.5 * 2 / pb.SizeX, 0.0734 * 2 / pb.SizeY));
+            ptr.Children.Add(new ScaleTransform3D(sxM, syM, szM));
             plastic.Transform = ptr;
+            // ANGLED BACK = a real HOLE cut through the shell's back plate (LB: "cut the angled
+            // cassette case back window"), not panels laid over it. Panels had to float OUTSIDE the
+            // shell to clear the opaque plate, so they stuck out ~5% of the case thickness and their
+            // rims parallaxed onto the bare flap at oblique angles (the artefacts hunted for hours).
+            // With the plate genuinely cut, the J-card flap already sitting inside shows through.
+            // -0.045 (not just the plate at -0.0734): the shell's natural spine-side hole has RIM
+            // WALLS running inward from the plate, and once the window is cut wider than that hole
+            // they stood inside it as a vertical seam. Everything behind that depth inside the
+            // window goes; the case's own side walls are far outside the window's x-range.
+            if (angled) CutShellWindow(plastic, angledWindow, sxM, syM, szM, cxN, cyN, czN, -0.045);
         }
         // NOT added yet — WPF 3D draws in child order with a z-test, so the translucent shell must
         // come AFTER every opaque part it covers (lid over the art, clear body over the tape) or
@@ -1333,45 +1352,9 @@ internal sealed class HomeModel3d : IDisposable
             Quad(flapMat, paper,
                  new[] { (flapEnd, 0.5, -0.0661), (-0.2839, 0.5, -0.0661), (flapEnd, -0.5, -0.0661), (-0.2839, -0.5, -0.0661) }, uv4);
             if (clearCase) return;
-            // The parts of LB's WINDOW that are CUT beyond the natural hole ("cut the angled
-            // cassette case back window") have opaque plate in front of the flap, so they float
-            // just outside the plate instead, glass-free like LB's: the fine matte border at the
-            // straight window's inner edge, and Angled's wide reveal (its inner edge pushed to
-            // -0.0742 over the middle 65% with diagonals over the top/bottom ~17% — both shapes
-            // measured off flat oracle back renders).
-            // Shared depth profile for every back-window piece: ONE continuous gentle slope from
-            // the spine edge to the window's inner edge. A piecewise flat+dive profile (LB's real
-            // lip shape) put a crease mid-pane where the auto normals averaged across the kink and
-            // the sheen broke into two visibly distinct parts; a single plane has a single normal,
-            // so the pow-250 sheen ignites uniformly across the WHOLE reveal and sweeps it as one
-            // surface. It leans outward from the shell (inward would dive behind the tray plate).
-            double ZOf(double x) => -0.0754 - (x + 0.2842) / 0.21 * 0.0058;
-            // Corner masks: FLAT (LB's recut tray plate is flat — riding the glaze's tilt made
-            // them ignite with its sheen) and TESSELLATED with the plate's own material — a bare
-            // 3-vertex triangle can only Gouraud-wash whole (pink flash with specular, dead-black
-            // hole without); a fine grid shades exactly like the neighbouring plate mesh.
-            void AddMaskGrid((double x, double y) apex, (double x, double y) far1, (double x, double y) far2, double z, Material mat)
-            {
-                const int NU = 12, NV = 8;
-                var wm = new MeshGeometry3D();
-                for (int v = 0; v <= NV; v++)
-                    for (int u = 0; u <= NU; u++)
-                    {
-                        double fu = (double)u / NU, fv = (double)v / NV;
-                        double tx = apex.x + (far1.x - apex.x) * fu, ty = apex.y + (far1.y - apex.y) * fu;
-                        double bx = apex.x + (far2.x - apex.x) * fu, by = apex.y + (far2.y - apex.y) * fu;
-                        wm.Positions.Add(new Point3D(tx + (bx - tx) * fv, ty + (by - ty) * fv, z));
-                        wm.TextureCoordinates.Add(new System.Windows.Point(ty + 0.5, (tx + 0.2842) / 0.23));
-                        wm.Normals.Add(new Vector3D(0, 0, -1));
-                    }
-                for (int v = 0; v < NV; v++)
-                    for (int u = 0; u < NU; u++)
-                    {
-                        int a = v * (NU + 1) + u, b = a + 1, c = a + (NU + 1), d = c + 1;
-                        foreach (var ix in new[] { c, b, d, c, a, b }) wm.TriangleIndices.Add(ix);
-                    }
-                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });
-            }
+            // Straight back keeps its thin matte border strip just outside the plate (its window is
+            // the shell's own natural hole, so nothing has to be cut).
+            double ZOf(double x) => x <= -0.16 ? -0.0754 : -0.0754 - (x + 0.16) / 0.0858 * 0.0058;
             void AddPanel((double x, double y)[] poly, Material mat)
             {
                 var wm = new MeshGeometry3D();
@@ -1382,82 +1365,20 @@ internal sealed class HomeModel3d : IDisposable
                 }
                 for (int i = 1; i + 1 < poly.Length; i++)
                 { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
-                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });   // auto normals follow the profile
-            }
-            // TESSELLATED panel (16x16). WPF 3D lights PER VERTEX: a pow-250 specular evaluated
-            // only at a big panel's 4 corners never lands on the highlight and renders dead-flat --
-            // which is exactly why the shell mesh's lip glosses while a 4-vertex pane next to it
-            // stayed matte. Depth comes from the shared ZOf profile.
-            void AddPanelGrid((double x, double y) tl, (double x, double y) tr, (double x, double y) br, (double x, double y) bl,
-                              Material mat)
-            {
-                const int NU = 16, NV = 16;
-                var wm = new MeshGeometry3D();
-                for (int v = 0; v <= NV; v++)
-                    for (int u = 0; u <= NU; u++)
-                    {
-                        double fu = (double)u / NU, fv = (double)v / NV;
-                        double px = (tl.x + (tr.x - tl.x) * fu) * (1 - fv) + (bl.x + (br.x - bl.x) * fu) * fv;
-                        double py = (tl.y + (tr.y - tl.y) * fu) * (1 - fv) + (bl.y + (br.y - bl.y) * fu) * fv;
-                        wm.Positions.Add(new Point3D(px, py, ZOf(px)));
-                        wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
-                    }
-                for (int v = 0; v < NV; v++)
-                    for (int u = 0; u < NU; u++)
-                    {
-                        int a = v * (NU + 1) + u, b = a + 1, c = a + (NU + 1), d = c + 1;
-                        foreach (var ix in new[] { c, b, d, c, a, b }) wm.TriangleIndices.Add(ix);
-                    }
-                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });   // auto normals follow the profile
-            }
-            // ONE mesh for the whole hexagonal reveal: columns across x, each spanning the
-            // hexagon's local height (full until the diagonals start, then tapering). A single
-            // mesh means shared vertices and coherent normals -- the two-grid + border-ring build
-            // showed its seams as shading lines.
-            void AddHexGrid(Material mat)
-            {
-                const int NU = 24, NV = 16;
-                // The window diagonal, refit from the flat oracle measurements as one line: it
-                // meets the top edge at x=-0.2231 and runs at slope -1.15 down to (-0.0742, 0.328).
-                // Every piece (this boundary AND the corner masks) shares this single line -- two
-                // slightly different diagonals made the glaze visibly overflow past the masks.
-                double YL(double x) => x <= -0.2231 ? 0.5 : 0.5 - (x + 0.2231) * 1.15;
-                var wm = new MeshGeometry3D();
-                for (int v = 0; v <= NV; v++)
-                    for (int u = 0; u <= NU; u++)
-                    {
-                        double px = -0.2842 + 0.21 * u / NU;
-                        double yl = YL(px);
-                        double py = yl - 2 * yl * v / NV;
-                        wm.Positions.Add(new Point3D(px, py, ZOf(px)));
-                        wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
-                    }
-                for (int v = 0; v < NV; v++)
-                    for (int u = 0; u < NU; u++)
-                    {
-                        int a = v * (NU + 1) + u, b = a + 1, c = a + (NU + 1), d = c + 1;
-                        foreach (var ix in new[] { c, b, d, c, a, b }) wm.TriangleIndices.Add(ix);
-                    }
                 grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });
             }
-            // Depth discipline: with the scene's near plane at 0.001, the z-buffer only resolves
-            // ~0.0004 at this distance — panels closer than that to the tray plate (−0.0734) or to
-            // each other z-fight and drop out (the glass pane lost every pixel at 0.0004). Every
-            // layer here keeps ≥0.002 of separation; the ~0.004 total overhang off the shell is
-            // invisible at preview scale.
             if (angled)
             {
-                // LB's cut reshapes the LID's lip too: glass covers the angled reveal up to a fine
-                // matte border along its edges. A separate translucent pane proved unreliable
-                // (alpha-16 brushes drop out of the baked pipeline), so the glazing is PRE-COMPOSED
-                // into an opaque material — bg blended 6.3% toward the lid plastic, plus the lid's
-                // specular — and the reveal is split into coplanar adjacent polygons: the glazed
-                // inner pane and the matte border ring (no overlap, no z-fighting).
-                // The pre-composed glass must track the LID's actual variant: normal glass is a 6.3%
-                // blend toward #CCCCCC with the tight pow-250 gloss, but CLOUDY plastic is a much
-                // heavier 22% milk toward #F5F7FA with the broad pow-90 sheen — without this, aged
-                // plastic left the reveal near-bare while LB's went milky.
-                double ga = cloudy ? 0x38 / 255.0 : 0x10 / 255.0;
+                // The glass filling the cut window. Pre-composed into an OPAQUE material (a real
+                // alpha-16 pane drops out of the baked pipeline) and tracking the lid's variant:
+                // normal glass is a 6.3% blend toward #CCCCCC with the tight pow-250 gloss, CLOUDY
+                // plastic a 22% milk toward #F5F7FA with the broad pow-90 sheen.
+                // TWO passes of glass, not one: LB's lip is a slab, so light crosses its back AND
+                // front face — the effective cover is 1-(1-a)², i.e. 39% for cloudy's 0x38 and 12%
+                // for plain glass's 0x10. Measured proof: LB's window reads (188,123,116) and
+                // 0.61·card + 0.39·milk on LB's own card colour gives (188,123,115).
+                double a1 = cloudy ? 0x38 / 255.0 : 0x10 / 255.0;
+                double ga = 1 - (1 - a1) * (1 - a1);
                 var tint = cloudy ? System.Windows.Media.Color.FromRgb(0xF5, 0xF7, 0xFA) : System.Windows.Media.Color.FromRgb(0xCC, 0xCC, 0xCC);
                 var gz = System.Windows.Media.Color.FromRgb(
                     (byte)Math.Min(255, bg.R * (1 - ga) + tint.R * ga),
@@ -1473,15 +1394,61 @@ internal sealed class HomeModel3d : IDisposable
                             : new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 250),
                     }
                 };
-                // The glass covers the WHOLE hexagonal reveal as ONE mesh -- LB's lip spans it
-                // entirely (vertex dump: x -0.3162 to -0.0729), and any split into sections showed
-                // its seams. The fine matte border was sacrificed for seamlessness.
-                AddHexGrid(glazed);
-                // The tray's natural spine-side hole is FULL height, but the angled window narrows
-                // toward the corners -- mask the flap showing through the hole outside the window
-                // with CaseColor corner triangles, completing the hexagon LB cuts.
-                AddMaskGrid((-0.2231, 0.5), (-0.156, 0.5), (-0.156, 0.4228), -0.0754, bodyMat);
-                AddMaskGrid((-0.2231, -0.5), (-0.156, -0.4228), (-0.156, -0.5), -0.0754, bodyMat);
+                // ONE tessellated pane over the whole window, INSIDE the shell (z -0.0700 sits
+                // between the plate's inner face and the flap at -0.0661) — LB's own lip lives at
+                // -0.0705. Tessellated because WPF lights per vertex: a 4-corner pane never catches
+                // the pow-250 highlight and renders dead flat next to the glossy shell.
+                const int NU = 24, NV = 16;
+                double YL(double x) => x <= -0.2231 ? 0.5 : 0.5 - (x + 0.2231) * 1.15;
+                var pane = new MeshGeometry3D();
+                for (int v = 0; v <= NV; v++)
+                    for (int u = 0; u <= NU; u++)
+                    {
+                        double px = -0.3168 + (-0.0742 + 0.3168) * u / NU;
+                        double yl = YL(px);
+                        double py = yl - 2 * yl * v / NV;
+                        pane.Positions.Add(new Point3D(px, py, -0.0690));
+                        pane.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
+                        pane.Normals.Add(new Vector3D(0, 0, -1));
+                    }
+                for (int v = 0; v < NV; v++)
+                    for (int u = 0; u < NU; u++)
+                    {
+                        int a = v * (NU + 1) + u, b = a + 1, c = a + (NU + 1), d = c + 1;
+                        foreach (var ix in new[] { c, b, d, c, a, b }) pane.TriangleIndices.Add(ix);
+                    }
+                grp.Children.Add(new GeometryModel3D { Geometry = pane, Material = glazed, BackMaterial = glazed });
+                // PLUG the corners. The shell's own spine-side hole is FULL height and reaches
+                // x=-0.155, so above/below the window's diagonals it still exposed the bare flap —
+                // the "triangle parasite" that survived every panel rework (its straight vertical
+                // left edge, measured at x≈-0.15, is that hole's edge, not any polygon of ours).
+                // These patches sit IN the plate's own plane with the plate's material, completing
+                // the recut LB ships as a modified mesh.
+                void AddPlatePatch((double x, double y) a, (double x, double y) b, (double x, double y) c)
+                {
+                    const int N = 10;
+                    var pm = new MeshGeometry3D();
+                    for (int i = 0; i <= N; i++)
+                        for (int j = 0; j <= N; j++)
+                        {
+                            double fu = (double)i / N, fv = (double)j / N;
+                            double ax = a.x + (b.x - a.x) * fu, ay = a.y + (b.y - a.y) * fu;
+                            double bx = a.x + (c.x - a.x) * fu, by = a.y + (c.y - a.y) * fu;
+                            double px2 = ax + (bx - ax) * fv, py2 = ay + (by - ay) * fv;
+                            pm.Positions.Add(new Point3D(px2, py2, -0.0734));
+                            pm.TextureCoordinates.Add(new System.Windows.Point(py2 + 0.5, (px2 + 0.2842) / 0.23));
+                            pm.Normals.Add(new Vector3D(0, 0, -1));
+                        }
+                    for (int i = 0; i < N; i++)
+                        for (int j = 0; j < N; j++)
+                        {
+                            int q = i * (N + 1) + j, r = q + 1, s = q + (N + 1), t2 = s + 1;
+                            foreach (var ix in new[] { s, r, t2, s, q, r }) pm.TriangleIndices.Add(ix);
+                        }
+                    grp.Children.Add(new GeometryModel3D { Geometry = pm, Material = bodyMat, BackMaterial = bodyMat });
+                }
+                AddPlatePatch((-0.2231, 0.5), (-0.1520, 0.5), (-0.1520, 0.4182));
+                AddPlatePatch((-0.2231, -0.5), (-0.1520, -0.4182), (-0.1520, -0.5));
             }
             else
                 AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, flapMat);
@@ -1575,6 +1542,123 @@ internal sealed class HomeModel3d : IDisposable
         if (landscape)
             grp.Transform = new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 0, 1), -90));
         return grp;
+    }
+
+    // ── Shell window cutting (LB: "cut the angled cassette case back window") ──────────────────
+    /// <summary>Subtract a convex window polygon (given in MODEL x/y) from the shell's BACK PLATE
+    /// triangles, leaving a real hole for the J-card flap behind it to show through. Runs in the
+    /// mesh's NATIVE space — the group transform and the loader's normals stay untouched — by
+    /// mapping each window edge to a half-plane over native (x,z): the transform is
+    /// modelX = sx·(nz−cz), modelY = sy·(nx−cx), modelZ = sz·(ny−cy).</summary>
+    private static void CutShellWindow(Model3DGroup shell, (double x, double y)[] win,
+                                       double sx, double sy, double sz,
+                                       double cx, double cy, double cz, double modelZCut,
+                                       double modelYKeep = 0.49)
+    {
+        // Orientation-agnostic: the half-plane test below assumes a counter-clockwise polygon.
+        double area2 = 0;
+        for (int i = 0; i < win.Length; i++)
+        {
+            var (ax, ay) = win[i]; var (bx, by) = win[(i + 1) % win.Length];
+            area2 += ax * by - bx * ay;
+        }
+        if (area2 < 0) win = win.Reverse().ToArray();
+
+        var planes = new List<(double A, double B, double D)>();
+        for (int i = 0; i < win.Length; i++)
+        {
+            var (px, py) = win[i];
+            var (qx, qy) = win[(i + 1) % win.Length];
+            planes.Add(((qx - px) * sy,
+                        -(qy - py) * sx,
+                        -(qx - px) * (sy * cx + py) + (qy - py) * (sx * cz + px)));
+        }
+        double nyCut = cy + modelZCut / sz;   // native Y below which a vertex is on the back plate
+        // The case's TOP/BOTTOM walls also lie fully behind that depth at their back end, and
+        // cutting them opened a hole through which the flap showed above the window (the stubborn
+        // 'triangle parasite'). Spare everything within modelYKeep of the case's ends: |modelY| =
+        // |sy·(nx−cx)|, and the sliver of plate this leaves is behind the wall anyway.
+        double nxHalf = modelYKeep / Math.Abs(sy);
+
+        foreach (var child in shell.Children)
+        {
+            if (child is not GeometryModel3D gm || gm.Geometry is not MeshGeometry3D mesh) continue;
+            if (mesh.TriangleIndices.Count < 3 || mesh.Positions.Count == 0) continue;
+            bool hasN = mesh.Normals.Count == mesh.Positions.Count;
+            bool hasT = mesh.TextureCoordinates.Count == mesh.Positions.Count;
+
+            var outM = new MeshGeometry3D();
+            void Emit(List<Vtx> poly)
+            {
+                int b = outM.Positions.Count;
+                foreach (var v in poly)
+                {
+                    outM.Positions.Add(v.P);
+                    if (hasN) outM.Normals.Add(v.N);
+                    if (hasT) outM.TextureCoordinates.Add(v.T);
+                }
+                for (int i = 1; i + 1 < poly.Count; i++)
+                { outM.TriangleIndices.Add(b); outM.TriangleIndices.Add(b + i); outM.TriangleIndices.Add(b + i + 1); }
+            }
+
+            bool cut = false;
+            for (int t = 0; t + 2 < mesh.TriangleIndices.Count; t += 3)
+            {
+                int i0 = mesh.TriangleIndices[t], i1 = mesh.TriangleIndices[t + 1], i2 = mesh.TriangleIndices[t + 2];
+                var tri = new List<Vtx>
+                {
+                    new Vtx(mesh.Positions[i0], hasN ? mesh.Normals[i0] : default, hasT ? mesh.TextureCoordinates[i0] : default),
+                    new Vtx(mesh.Positions[i1], hasN ? mesh.Normals[i1] : default, hasT ? mesh.TextureCoordinates[i1] : default),
+                    new Vtx(mesh.Positions[i2], hasN ? mesh.Normals[i2] : default, hasT ? mesh.TextureCoordinates[i2] : default),
+                };
+                // Only the back plate is cut; every other triangle survives verbatim.
+                bool plate = tri[0].P.Y <= nyCut && tri[1].P.Y <= nyCut && tri[2].P.Y <= nyCut
+                          && tri.TrueForAll(v => Math.Abs(v.P.X - cx) <= nxHalf);
+                if (!plate) { Emit(tri); continue; }
+                // Convex-polygon subtraction: peel off the part outside each window edge in turn;
+                // whatever is still inside after the last edge is the hole and gets dropped.
+                var work = tri;
+                foreach (var pl in planes)
+                {
+                    var (outside, inside) = SplitByPlane(work, pl);
+                    if (outside.Count >= 3) Emit(outside);
+                    work = inside;
+                    if (work.Count < 3) break;
+                }
+                if (work.Count >= 3) cut = true;   // a real piece was removed
+            }
+            if (cut) gm.Geometry = outM;
+        }
+    }
+
+    private readonly struct Vtx
+    {
+        public readonly Point3D P; public readonly Vector3D N; public readonly System.Windows.Point T;
+        public Vtx(Point3D p, Vector3D n, System.Windows.Point t) { P = p; N = n; T = t; }
+        public static Vtx Lerp(Vtx a, Vtx b, double u) => new Vtx(
+            new Point3D(a.P.X + (b.P.X - a.P.X) * u, a.P.Y + (b.P.Y - a.P.Y) * u, a.P.Z + (b.P.Z - a.P.Z) * u),
+            new Vector3D(a.N.X + (b.N.X - a.N.X) * u, a.N.Y + (b.N.Y - a.N.Y) * u, a.N.Z + (b.N.Z - a.N.Z) * u),
+            new System.Windows.Point(a.T.X + (b.T.X - a.T.X) * u, a.T.Y + (b.T.Y - a.T.Y) * u));
+    }
+
+    /// <summary>Sutherland-Hodgman split of a polygon by one half-plane over native (x,z), returning
+    /// the f&lt;0 part (outside the window) and the f≥0 part (inside it).</summary>
+    private static (List<Vtx> outside, List<Vtx> inside) SplitByPlane(List<Vtx> poly, (double A, double B, double D) pl)
+    {
+        var outside = new List<Vtx>(); var inside = new List<Vtx>();
+        for (int i = 0; i < poly.Count; i++)
+        {
+            var a = poly[i]; var b = poly[(i + 1) % poly.Count];
+            double fa = pl.A * a.P.X + pl.B * a.P.Z + pl.D;
+            double fb = pl.A * b.P.X + pl.B * b.P.Z + pl.D;
+            if (fa >= 0) inside.Add(a); else outside.Add(a);
+            if ((fa >= 0) != (fb >= 0) && Math.Abs(fa - fb) > 1e-12)
+            {
+                var m = Vtx.Lerp(a, b, fa / (fa - fb));
+                inside.Add(m); outside.Add(m);
+            }
+        }
+        return (outside, inside);
     }
 
     /// <summary>Diffuse + specular pair — the plastic material shape every cassette part uses.</summary>

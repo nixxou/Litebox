@@ -136,7 +136,11 @@ internal static class EditPlatformRenderProbe
             ? EditPlatformModel.BuildForGame(plat.Name ?? platformName, Guid.NewGuid().ToString(), false, 1f, null,
                                              Environment.GetEnvironmentVariable("LB_SAMPLE_TITLE") ?? "")
             : EditPlatformModel.Build(plat, false, 1f);
-        var form = new Form { FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.Manual, Location = new System.Drawing.Point(80, 80), Size = new System.Drawing.Size(1000, 700), BackColor = LiteBoxTheme.Bg, ShowInTaskbar = false, TopMost = true };
+        // LB_FORM_W/LB_FORM_H: bigger window = bigger preview zones in the screenshot (the A/B
+        // comparisons need more than ~300px per zone to judge materials).
+        int fw = int.TryParse(Environment.GetEnvironmentVariable("LB_FORM_W"), out var fwv) ? fwv : 1000;
+        int fh = int.TryParse(Environment.GetEnvironmentVariable("LB_FORM_H"), out var fhv) ? fhv : 700;
+        var form = new Form { FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.Manual, Location = new System.Drawing.Point(80, 80), Size = new System.Drawing.Size(fw, fh), BackColor = LiteBoxTheme.Bg, ShowInTaskbar = false, TopMost = true };
         panel.Dock = DockStyle.Fill; form.Controls.Add(panel);
         form.Shown += async (_, _) =>
         {
@@ -160,6 +164,9 @@ internal static class EditPlatformRenderProbe
                 double yaw = double.TryParse(Environment.GetEnvironmentVariable("LB_ORBIT_YAW"), out var oy) ? oy : 55;
                 double pitch = double.TryParse(Environment.GetEnvironmentVariable("LB_ORBIT_PITCH"), out var op) ? op : 18;
                 try { EditPlatformModel.LastOrbit?.Orbit(yaw, pitch); EditPlatformModel.LastOrbit?.Zoom(120); } catch { }
+                // The orbit only drives OUR zone; rotate the ORACLE zone by the same 7.5°-units so
+                // an A/B screenshot compares the same face (FlowModel.RotateModel: left/up).
+                try { EditPlatformModel.LastOracle?.Rotate(yaw, 0, pitch, 0); } catch { }
             }
             for (int i = 0; i < 10; i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(60); }
             Application.DoEvents();

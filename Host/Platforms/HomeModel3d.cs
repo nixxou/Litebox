@@ -1367,12 +1367,15 @@ internal sealed class HomeModel3d : IDisposable
                         double fu = (double)u / NU, fv = (double)v / NV;
                         double px = (tl.x + (tr.x - tl.x) * fu) * (1 - fv) + (bl.x + (br.x - bl.x) * fu) * fv;
                         double py = (tl.y + (tr.y - tl.y) * fu) * (1 - fv) + (bl.y + (br.y - bl.y) * fu) * fv;
-                        // Shallow PRISM profile across u (edges at zEdge, ridge at zPeak): LB's angled
-                        // lip is a ~4° double-slope surface, and those tilted normals are what catch
-                        // the directional light as a broad moving sheen — a dead-flat pane's pow-250
-                        // highlight almost never fires. Slopes point OUTWARD (peak more negative)
-                        // because inward would dive behind the opaque tray plate.
-                        double pz = zEdge + (zPeak - zEdge) * (1 - Math.Abs(2 * fu - 1));
+                        // SINGLE tilted facet across u (zEdge at u=0 → zInner at u=1): the vertex
+                        // dump shows LB's angled lip over the reveal is ONE ~4.4° slope (z −0.0638
+                        // at x=−0.16 diving to −0.0705 at the inner edge), not a ridged prism — a
+                        // single plane ignites its pow-250 sheen ALL AT ONCE across the whole pane,
+                        // which is why LB's glow covers the full triangle uniformly. (A first-cut
+                        // centre-ridge prism lit one half at a time, with a seam down the middle.)
+                        // The tilt matches LB's direction/angle so ignition angles match; it leans
+                        // outward from the shell because inward would dive behind the tray plate.
+                        double pz = zEdge + (zPeak - zEdge) * fu;
                         wm.Positions.Add(new Point3D(px, py, pz));
                         wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
                     }
@@ -1409,7 +1412,7 @@ internal sealed class HomeModel3d : IDisposable
                         new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 250),
                     }
                 };
-                AddPanelGrid((-0.156, 0.412), (-0.0802, 0.316), (-0.0802, -0.316), (-0.156, -0.412), -0.0754, -0.0788, glazed);
+                AddPanelGrid((-0.156, 0.412), (-0.0802, 0.316), (-0.0802, -0.316), (-0.156, -0.412), -0.0754, -0.0812, glazed);
                 AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0802, 0.316), (-0.156, 0.412) }, -0.0754, flapMat);
                 AddPanel(new (double, double)[] { (-0.0742, 0.326), (-0.0742, -0.326), (-0.0802, -0.316), (-0.0802, 0.316) }, -0.0754, flapMat);
                 AddPanel(new (double, double)[] { (-0.156, -0.412), (-0.0802, -0.316), (-0.0742, -0.326), (-0.156, -0.422) }, -0.0754, flapMat);

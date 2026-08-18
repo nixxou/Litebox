@@ -1169,7 +1169,13 @@ internal sealed class HomeModel3d : IDisposable
         var logo = LoadBitmap(art.Logo);
         var bg = System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D);
         if (map != null && map.ContainsKey("CoverColor")) bg = Argb("CoverColor", bg);
-        else if (front != null) bg = CornerAverage(front);
+        else if (front != null) bg = CardBgFromArt(front);
+        // Position: Automatic goes landscape when the front art is wider than tall. Decided HERE
+        // because the front material depends on it: the CASE rotates but the art must stay upright
+        // (LB keeps it readable), so the texture gets a counter-rotation.
+        bool landscape = string.Equals(Get("CassettePosition"), "Landscape", StringComparison.OrdinalIgnoreCase)
+                         || (string.Equals(Get("CassettePosition"), "Automatic", StringComparison.OrdinalIgnoreCase) || Get("CassettePosition").Length == 0)
+                            && front != null && front.PixelWidth > front.PixelHeight;
 
         var grp = new Model3DGroup();
 
@@ -1204,9 +1210,7 @@ internal sealed class HomeModel3d : IDisposable
         // Painting the tray segment opaque (the first cut) blacked out every side view.
         Material bodyMat = wear != null ? WornMat(plasticColor)
             : Mat2(plasticColor, System.Windows.Media.Color.FromArgb(0x50, 0xDC, 0xE1, 0xE6), 28);
-        Material shellMat = clearCase
-            ? Mat2(System.Windows.Media.Color.FromArgb(0x15, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250)
-            : cloudy
+        Material shellMat = cloudy
             ? Mat2(System.Windows.Media.Color.FromArgb(0x38, 0xF5, 0xF7, 0xFA), System.Windows.Media.Color.FromArgb(0x6E, 0xFF, 0xFF, 0xFF), 90)
             : Mat2(System.Windows.Media.Color.FromArgb(0x10, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250);
         for (int i = 0; i < plastic.Children.Count; i++)
@@ -1224,10 +1228,13 @@ internal sealed class HomeModel3d : IDisposable
         {
             var ptr = new Transform3DGroup();
             ptr.Children.Add(new TranslateTransform3D(-pb.X - pb.SizeX / 2, -pb.Y - pb.SizeY / 2, -pb.Z - pb.SizeZ / 2));
-            // +90: the lid plate lands at +Z (front). The height flip this brings (tray hinge cut-out
-            // at the bottom) is harmless: the interior plates below fill it.
+            // +90 puts the lid plate at +Z (front); the RotZ(180) moves the tray's hinge cut-out to
+            // the TOP like the real case (LB's back fades near the top, ours showed a hard line at
+            // the bottom); the negative X scale un-mirrors the sides that the 180 flipped. The
+            // mirror is safe: every shell part carries the same material on both faces.
             ptr.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(1, 0, 0), 90)));
-            ptr.Children.Add(new ScaleTransform3D(0.3168 * 2 / pb.SizeX, 0.5 * 2 / pb.SizeZ, 0.0734 * 2 / pb.SizeY));
+            ptr.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 0, 1), 180)));
+            ptr.Children.Add(new ScaleTransform3D(-0.3168 * 2 / pb.SizeX, 0.5 * 2 / pb.SizeZ, 0.0734 * 2 / pb.SizeY));
             plastic.Transform = ptr;
         }
         // NOT added yet — WPF 3D draws in child order with a z-test, so the translucent shell must
@@ -1289,7 +1296,7 @@ internal sealed class HomeModel3d : IDisposable
 
         // Front (inside the case, under the lid). The art sits in a VIEWBOX on the bg — LB
         // letterboxes rather than distorting (dump: Grid[bg, Viewbox[Img Fill]]).
-        Quad(FaceMaterialVb(front, 1000, 1000, bg), paper,
+        Quad(FaceMaterialVb(front, 1000, 1000, bg, landscape ? -90 : 0), paper,
              new[] { (-0.2839, 0.488, 0.0661), (0.313, 0.488, 0.0661), (-0.2839, -0.488, 0.0661), (0.313, -0.488, 0.0661) }, uv4);
         // Back flap, style-dependent reach (faces -Z: wound the other way so the front side is
         // outward). Angled = simply a WIDER rectangle (dump-verified; no diagonal). The clear case's
@@ -1319,7 +1326,7 @@ internal sealed class HomeModel3d : IDisposable
         // A set LogoFont = "Use Plain Text Title Instead of Clear Logo" (the jewel family's own
         // convention). CassetteLogoRotation spins the clear logo, CassetteSpineRotation the text.
         var spineScan = LoadBitmap(art.Spine);
-        var spineGrid = new System.Windows.Controls.Grid { Width = 1000, Height = spineScan != null ? 220 : 169.4, Background = new SolidColorBrush(spineScan != null ? CornerAverage(spineScan) : bg) };
+        var spineGrid = new System.Windows.Controls.Grid { Width = 1000, Height = spineScan != null ? 220 : 169.4, Background = new SolidColorBrush(spineScan != null ? (LinearAverage(spineScan) ?? bg) : bg) };
         if (spineScan != null)
         {
             // A real Box - Spine scan wins over logo/text (LB: Grid 1000x220, scan in a Viewbox).
@@ -1329,8 +1336,17 @@ internal sealed class HomeModel3d : IDisposable
             spineGrid.Children.Add(new System.Windows.Controls.Viewbox
             { Child = sim, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
         }
-        // NO clear-logo branch: the oracle renders the TEXT for a game that has a clear logo and no
-        // spine scan (AoW dump: Viewbox Text("Age of Wonders")) — LB's cascade is scan > title text.
+        else if (logo != null && logoFont.Length == 0)
+        {
+            // Clear logo, Uniform-centred in a Viewbox (oracle: Viewbox Img st=Uniform). One dump
+            // showed the TEXT here instead — that was LB caught mid-async-art-load, not the rule.
+            var lim = new System.Windows.Controls.Image
+            { Source = logo, Stretch = System.Windows.Media.Stretch.Uniform,
+              HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center };
+            if (logoRot != 0) lim.LayoutTransform = new System.Windows.Media.RotateTransform(logoRot);
+            spineGrid.Children.Add(new System.Windows.Controls.Viewbox
+            { Child = lim, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
+        }
         else if (!string.IsNullOrEmpty(gameTitle))
         {
             var tb = new System.Windows.Controls.TextBlock { Text = gameTitle, FontSize = 12, Foreground = new SolidColorBrush(spineFg) };
@@ -1392,10 +1408,6 @@ internal sealed class HomeModel3d : IDisposable
         if (clearCase) AddFlap();
         if (!DebugSkipPlastic) grp.Children.Add(plastic);   // `noplastic` probe flag: J-card + tape alone
 
-        // Position: Automatic goes landscape when the front art is wider than tall.
-        bool landscape = string.Equals(Get("CassettePosition"), "Landscape", StringComparison.OrdinalIgnoreCase)
-                         || (string.Equals(Get("CassettePosition"), "Automatic", StringComparison.OrdinalIgnoreCase) || Get("CassettePosition").Length == 0)
-                            && front != null && front.PixelWidth > front.PixelHeight;
         if (landscape)
             grp.Transform = new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 0, 1), -90));
         return grp;
@@ -1415,17 +1427,61 @@ internal sealed class HomeModel3d : IDisposable
     // Grid bg + centred Viewbox around the image — LB's cassette front/spine composition: the art
     // is uniform-fit and letterboxed on the bg colour instead of stretched.
     private static Material FaceMaterialVb(System.Windows.Media.Imaging.BitmapSource? img,
-                                           double gridW, double gridH, System.Windows.Media.Color bg)
+                                           double gridW, double gridH, System.Windows.Media.Color bg, double imgRotation = 0)
     {
         var grid = new System.Windows.Controls.Grid { Width = gridW, Height = gridH, Background = new SolidColorBrush(bg) };
         if (img != null)
+        {
+            var im = new System.Windows.Controls.Image { Source = img, Stretch = System.Windows.Media.Stretch.Fill };
+            if (imgRotation != 0) im.LayoutTransform = new System.Windows.Media.RotateTransform(imgRotation);
             grid.Children.Add(new System.Windows.Controls.Viewbox
             {
-                Child = new System.Windows.Controls.Image { Source = img, Stretch = System.Windows.Media.Stretch.Fill },
+                Child = im,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
                 VerticalAlignment = System.Windows.VerticalAlignment.Center,
             });
+        }
         return new DiffuseMaterial(new VisualBrush(grid) { Stretch = System.Windows.Media.Stretch.Fill });
+    }
+
+    /// <summary>The card colour LB derives from the art: gamma-correct (linear-space) average,
+    /// falling back to LB's navy constant #060A1D when the average is too grey or too dark to read
+    /// as "the box colour" (oracle: AoW's muddy grey-violet falls back, DK2's saturated red holds).</summary>
+    private static System.Windows.Media.Color CardBgFromArt(System.Windows.Media.Imaging.BitmapSource? img)
+    {
+        var c = LinearAverage(img);
+        if (c == null) return System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D);
+        int mx = Math.Max(c.Value.R, Math.Max(c.Value.G, c.Value.B));
+        int mn = Math.Min(c.Value.R, Math.Min(c.Value.G, c.Value.B));
+        return mx < 32 || (mx - mn) < mx * 0.35 ? System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D) : c.Value;
+    }
+
+    /// <summary>Average colour computed in linear light (gamma 2.2), over a 32-px thumbnail.
+    /// Matches LB's cassette card/spine backgrounds far better than a straight sRGB average,
+    /// which dilutes bright saturated art toward black.</summary>
+    private static System.Windows.Media.Color? LinearAverage(System.Windows.Media.Imaging.BitmapSource? img)
+    {
+        try
+        {
+            if (img == null) return null;
+            var small = new System.Windows.Media.Imaging.TransformedBitmap(img,
+                new System.Windows.Media.ScaleTransform(32.0 / Math.Max(1, img.PixelWidth), 32.0 / Math.Max(1, img.PixelHeight)));
+            var conv = new System.Windows.Media.Imaging.FormatConvertedBitmap(small, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+            int w = conv.PixelWidth, h = conv.PixelHeight;
+            if (w <= 0 || h <= 0) return null;
+            var buf = new byte[w * h * 4];
+            conv.CopyPixels(buf, w * 4, 0);
+            double r = 0, g = 0, b = 0; int n = w * h;
+            for (int i = 0; i < buf.Length; i += 4)
+            {
+                b += Math.Pow(buf[i] / 255.0, 2.2);
+                g += Math.Pow(buf[i + 1] / 255.0, 2.2);
+                r += Math.Pow(buf[i + 2] / 255.0, 2.2);
+            }
+            byte C(double v) => (byte)Math.Clamp((int)Math.Round(Math.Pow(v / n, 1 / 2.2) * 255), 0, 255);
+            return System.Windows.Media.Color.FromRgb(C(r), C(g), C(b));
+        }
+        catch { return null; }
     }
 
     private static Material FaceMaterialNoImage(double gridW, double gridH, System.Windows.Media.Color bg)

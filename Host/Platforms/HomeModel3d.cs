@@ -1363,8 +1363,25 @@ internal sealed class HomeModel3d : IDisposable
             // GOING under the plate — so a grazing view past the hole's edge parallaxes onto more
             // red flap instead of a black slit, exactly like LB. In clear cases the whole plate is
             // translucent and the full-width holed flap simply shows through.
-            Quad(flapMat, paper,
-                 new[] { (flapEnd, 0.5, -0.0661), (-0.2839, 0.5, -0.0661), (flapEnd, -0.5, -0.0661), (-0.2839, -0.5, -0.0661) }, uv4);
+            if (angled)
+            {
+                // ANGLED: the flap is cut back along the window's diagonals. The shell's own
+                // spine-side hole is full height, so a rectangular flap showed through it above and
+                // below the diagonals; patching that with plate-coloured pieces only traded one
+                // visible layer for another (the blue triangles of the debug build). Cutting the
+                // flap instead leaves NOTHING there — the case's black interior shows through, like
+                // the rest of the back. Three pieces: full under the plate, tapered across the
+                // diagonals, full again on the spine side.
+                Quad(flapMat, paper,
+                     new[] { (flapEnd, 0.5, -0.0661), (-0.1520, 0.5, -0.0661), (flapEnd, -0.5, -0.0661), (-0.1520, -0.5, -0.0661) }, uv4);
+                Quad(flapMat, paper,
+                     new[] { (-0.1520, 0.4132, -0.0661), (-0.2231, 0.5, -0.0661), (-0.1520, -0.4132, -0.0661), (-0.2231, -0.5, -0.0661) }, uv4);
+                Quad(flapMat, paper,
+                     new[] { (-0.2231, 0.5, -0.0661), (-0.2839, 0.5, -0.0661), (-0.2231, -0.5, -0.0661), (-0.2839, -0.5, -0.0661) }, uv4);
+            }
+            else
+                Quad(flapMat, paper,
+                     new[] { (flapEnd, 0.5, -0.0661), (-0.2839, 0.5, -0.0661), (flapEnd, -0.5, -0.0661), (-0.2839, -0.5, -0.0661) }, uv4);
             if (clearCase) return;
             // Straight back keeps its thin matte border strip just outside the plate (its window is
             // the shell's own natural hole, so nothing has to be cut).
@@ -1446,48 +1463,6 @@ internal sealed class HomeModel3d : IDisposable
                         foreach (var ix in new[] { c, b, d, c, a, b }) pane.TriangleIndices.Add(ix);
                     }
                 grp.Children.Add(new GeometryModel3D { Geometry = pane, Material = glazed, BackMaterial = glazed });
-                // PLUG the corners. The shell's own spine-side hole is FULL height and reaches
-                // x=-0.155, so above/below the window's diagonals it still exposed the bare flap —
-                // the "triangle parasite" that survived every panel rework (its straight vertical
-                // left edge, measured at x≈-0.15, is that hole's edge, not any polygon of ours).
-                // These patches sit IN the plate's own plane with the plate's material, completing
-                // the recut LB ships as a modified mesh.
-                void AddPlatePatch((double x, double y) a, (double x, double y) b, (double x, double y) c)
-                {
-                    const int N = 10;
-                    var pm = new MeshGeometry3D();
-                    for (int i = 0; i <= N; i++)
-                        for (int j = 0; j <= N; j++)
-                        {
-                            double fu = (double)i / N, fv = (double)j / N;
-                            double ax = a.x + (b.x - a.x) * fu, ay = a.y + (b.y - a.y) * fu;
-                            double bx = a.x + (c.x - a.x) * fu, by = a.y + (c.y - a.y) * fu;
-                            double px2 = ax + (bx - ax) * fv, py2 = ay + (by - ay) * fv;
-                            // 0.0006 INSIDE the plate, not coplanar with it: the patch overlaps the
-                            // plate past the hole's edge, and at the same depth the two z-fought into
-                            // a dotted line along the window's rim. Recessed, the plate simply wins
-                            // where they overlap and the patch only shows inside the hole.
-                            pm.Positions.Add(new Point3D(px2, py2, -0.0728));
-                            pm.TextureCoordinates.Add(new System.Windows.Point(py2 + 0.5, (px2 + 0.2842) / 0.23));
-                            pm.Normals.Add(new Vector3D(0, 0, -1));
-                        }
-                    for (int i = 0; i < N; i++)
-                        for (int j = 0; j < N; j++)
-                        {
-                            int q = i * (N + 1) + j, r = q + 1, s = q + (N + 1), t2 = s + 1;
-                            // FRONT-facing with the plate's own outward normal: wound the other way
-                            // the patch was back-facing, so WPF lit it through the flipped normal and
-                            // the corner glowed as a grey wedge while the plate around it stayed dark.
-                            foreach (var ix in new[] { s, t2, r, s, r, q }) pm.TriangleIndices.Add(ix);
-                        }
-                    grp.Children.Add(new GeometryModel3D { Geometry = pm, Material = bodyMat });
-                }
-                // The hypotenuse bites 0.005 INTO the window: patch and plate sit at slightly
-                // different depths, so a shared edge showed the flap through the step as a dotted
-                // line at grazing angles. Overlapping the rim puts the patch in front of that seam
-                // (the sliver of window it eats is 5 thousandths wide).
-                AddPlatePatch((-0.2231, 0.495), (-0.1520, 0.5), (-0.1520, 0.4132));
-                AddPlatePatch((-0.2231, -0.495), (-0.1520, -0.4132), (-0.1520, -0.5));
             }
             else
                 AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, flapMat);

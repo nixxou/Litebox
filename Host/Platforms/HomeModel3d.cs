@@ -1346,6 +1346,23 @@ internal sealed class HomeModel3d : IDisposable
             // so the pow-250 sheen ignites uniformly across the WHOLE reveal and sweeps it as one
             // surface. It leans outward from the shell (inward would dive behind the tray plate).
             double ZOf(double x) => -0.0754 - (x + 0.2842) / 0.21 * 0.0058;
+            // Flat variant for pieces that must NOT ride the sloped profile: the corner masks
+            // mirror LB's FLAT recut tray plate — put on the tilted ZOf they ignited their broad
+            // pow-28 specular together with the glaze and read as the glass overflowing the
+            // diagonal, while LB's flat corners stay dark at those angles.
+            void AddPanelFlat((double x, double y)[] poly, double z, Material mat)
+            {
+                var wm = new MeshGeometry3D();
+                foreach (var (px, py) in poly)
+                {
+                    wm.Positions.Add(new Point3D(px, py, z));
+                    wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
+                    wm.Normals.Add(new Vector3D(0, 0, -1));
+                }
+                for (int i = 1; i + 1 < poly.Length; i++)
+                { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
+                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });
+            }
             void AddPanel((double x, double y)[] poly, Material mat)
             {
                 var wm = new MeshGeometry3D();
@@ -1454,8 +1471,8 @@ internal sealed class HomeModel3d : IDisposable
                 // The tray's natural spine-side hole is FULL height, but the angled window narrows
                 // toward the corners -- mask the flap showing through the hole outside the window
                 // with CaseColor corner triangles, completing the hexagon LB cuts.
-                AddPanel(new (double, double)[] { (-0.2231, 0.5), (-0.156, 0.5), (-0.156, 0.4228) }, bodyMat);
-                AddPanel(new (double, double)[] { (-0.2231, -0.5), (-0.156, -0.4228), (-0.156, -0.5) }, bodyMat);
+                AddPanelFlat(new (double, double)[] { (-0.2231, 0.5), (-0.156, 0.5), (-0.156, 0.4228) }, -0.0754, bodyMat);
+                AddPanelFlat(new (double, double)[] { (-0.2231, -0.5), (-0.156, -0.4228), (-0.156, -0.5) }, -0.0754, bodyMat);
             }
             else
                 AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, flapMat);

@@ -1204,10 +1204,15 @@ internal sealed class HomeModel3d : IDisposable
             {
                 Children =
                 {
-                    new DiffuseMaterial(new VisualBrush(wg) { Stretch = System.Windows.Media.Stretch.Fill }),
+                    // Viewport 0.4 on BOTH channels — LB tiles the 384-px wear sheet 2.5x per axis
+                    // (dumped: viewport=0,0,0.4,0.4 RelativeToBoundingBox, tile=Tile). With one tile
+                    // per axis the scratches came out 2.5x too big and blurry next to LB's fine ones.
+                    new DiffuseMaterial(new VisualBrush(wg)
+                    { Stretch = System.Windows.Media.Stretch.Fill, TileMode = System.Windows.Media.TileMode.Tile,
+                      Viewport = new System.Windows.Rect(0, 0, 0.4, 0.4) }),
                     new SpecularMaterial(new System.Windows.Media.ImageBrush(wear)
                     { Stretch = System.Windows.Media.Stretch.Fill, TileMode = System.Windows.Media.TileMode.Tile,
-                      Viewport = new System.Windows.Rect(0, 0, 1, 1) }, 28),
+                      Viewport = new System.Windows.Rect(0, 0, 0.4, 0.4) }, 28),
                 }
             };
         }

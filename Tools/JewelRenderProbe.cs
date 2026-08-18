@@ -341,12 +341,12 @@ internal static class JewelRenderProbe
             case SolidColorBrush sb: return $"#{sb.Color.A:X2}{sb.Color.R:X2}{sb.Color.G:X2}{sb.Color.B:X2}(op={sb.Opacity:0.##})";
             case ImageBrush ib:
                 var src = ib.ImageSource as BitmapSource;
-                return $"Image({src?.PixelWidth}x{src?.PixelHeight}, stretch={ib.Stretch}, viewbox={ib.Viewbox}, tile={ib.TileMode})";
+                return $"Image({src?.PixelWidth}x{src?.PixelHeight}, stretch={ib.Stretch}, viewbox={ib.Viewbox}/{ib.ViewboxUnits}, viewport={ib.Viewport}/{ib.ViewportUnits}, tile={ib.TileMode})";
             case VisualBrush vb:
                 string vis = vb.Visual is System.Windows.FrameworkElement fe
                     ? $"{fe.GetType().Name} {fe.Width:0.#}x{fe.Height:0.#} [{DescribeVisualTree(fe)}]"
                     : vb.Visual?.GetType().Name ?? "null";
-                return $"Visual({vis}, stretch={vb.Stretch})";
+                return $"Visual({vis}, stretch={vb.Stretch}, viewport={vb.Viewport}/{vb.ViewportUnits}, tile={vb.TileMode})";
             default: return b.GetType().Name + $"(op={b.Opacity:0.##})";
         }
     }

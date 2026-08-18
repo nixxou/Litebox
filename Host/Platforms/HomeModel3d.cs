@@ -1403,9 +1403,11 @@ internal sealed class HomeModel3d : IDisposable
                     Children =
                     {
                         new DiffuseMaterial(new SolidColorBrush(gz)),
+                        // Specular doubled with the diffuse: the slab reflects off BOTH faces, which
+                        // is why LB's window catches the light far more than a single pane did.
                         cloudy
-                            ? new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x6E, 0xFF, 0xFF, 0xFF)), 90)
-                            : new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 250),
+                            ? new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xDC, 0xFF, 0xFF, 0xFF)), 90)
+                            : new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0xC0, 0xC0, 0xC0)), 250),
                     }
                 };
                 // ONE tessellated pane over the whole window, INSIDE the shell (z -0.0700 sits
@@ -1422,17 +1424,20 @@ internal sealed class HomeModel3d : IDisposable
                         // the lid's -0.3162 reach: out there the shell is bevelled, so a flat pane
                         // pokes out of the rounded corner (a plastic wedge past the silhouette in
                         // tilted views).
-                        double px = -0.2872 + (-0.0712 + 0.2872) * u / NU;
-                        // Slightly OVERSIZED (0.003 in x, 0.004 along the diagonals, never past the
-                        // case ends): clipping the plate leaves T-junctions along the window rim,
-                        // and their hairline cracks showed the bare flap as a dotted line. With the
-                        // pane reaching just beyond the rim, a crack shows glass instead — and the
-                        // excess hides behind the plate, which is in front of it.
-                        double yl = Math.Min(0.5, YL(px) + 0.004);
+                        double px = -0.2852 + (-0.0732 + 0.2852) * u / NU;
+                        double yl = YL(px) + 0.001;
                         double py = yl - 2 * yl * v / NV;
-                        pane.Positions.Add(new Point3D(px, py, -0.0690));
+                        // BEVELLED RIM. LB's glass covers the whole window, but its reflection stops
+                        // short of the edge and the last millimetre reads darker (oracle: 167,116,111
+                        // against 188,123,116 across the middle) — a slab with eased edges, not a
+                        // pane cut flush. The outer ring eases back toward the card, turning the
+                        // normals just enough to drop out of the highlight.
+                        double eu = Math.Min((double)u / NU, 1 - (double)u / NU);
+                        double ev = Math.Min((double)v / NV, 1 - (double)v / NV);
+                        double edge = Math.Min(eu, ev);
+                        double z = -0.0690 + (edge < 0.09 ? (0.09 - edge) / 0.09 * 0.0022 : 0);
+                        pane.Positions.Add(new Point3D(px, py, z));
                         pane.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
-                        pane.Normals.Add(new Vector3D(0, 0, -1));
                     }
                 for (int v = 0; v < NV; v++)
                     for (int u = 0; u < NU; u++)

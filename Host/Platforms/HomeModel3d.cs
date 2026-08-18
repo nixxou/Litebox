@@ -1339,12 +1339,13 @@ internal sealed class HomeModel3d : IDisposable
             // straight window's inner edge, and Angled's wide reveal (its inner edge pushed to
             // -0.0742 over the middle 65% with diagonals over the top/bottom ~17% — both shapes
             // measured off flat oracle back renders).
-            // Shared depth profile for every back-window piece: flat just outside the tray plate
-            // until x = -0.16, then LB's ~4.4-degree dive toward the window's inner edge (vertex
-            // dump of the angled lid: z -0.0638 at x=-0.16 to -0.0705 at the inner edge; ours leans
-            // outward from the shell because inward would dive behind the opaque plate). Adjacent
-            // pieces share this profile, so their common edges stay crack-free.
-            double ZOf(double x) => x <= -0.16 ? -0.0754 : -0.0754 - (x + 0.16) / 0.0858 * 0.0058;
+            // Shared depth profile for every back-window piece: ONE continuous gentle slope from
+            // the spine edge to the window's inner edge. A piecewise flat+dive profile (LB's real
+            // lip shape) put a crease mid-pane where the auto normals averaged across the kink and
+            // the sheen broke into two visibly distinct parts; a single plane has a single normal,
+            // so the pow-250 sheen ignites uniformly across the WHOLE reveal and sweeps it as one
+            // surface. It leans outward from the shell (inward would dive behind the tray plate).
+            double ZOf(double x) => -0.0754 - (x + 0.2842) / 0.21 * 0.0058;
             void AddPanel((double x, double y)[] poly, Material mat)
             {
                 var wm = new MeshGeometry3D();
@@ -1383,6 +1384,32 @@ internal sealed class HomeModel3d : IDisposable
                     }
                 grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });   // auto normals follow the profile
             }
+            // ONE mesh for the whole hexagonal reveal: columns across x, each spanning the
+            // hexagon's local height (full until the diagonals start, then tapering). A single
+            // mesh means shared vertices and coherent normals -- the two-grid + border-ring build
+            // showed its seams as shading lines.
+            void AddHexGrid(Material mat)
+            {
+                const int NU = 24, NV = 16;
+                double YL(double x) => x <= -0.2046 ? 0.5 : 0.5 - (x + 0.2046) / 0.1304 * 0.174;
+                var wm = new MeshGeometry3D();
+                for (int v = 0; v <= NV; v++)
+                    for (int u = 0; u <= NU; u++)
+                    {
+                        double px = -0.2842 + 0.21 * u / NU;
+                        double yl = YL(px);
+                        double py = yl - 2 * yl * v / NV;
+                        wm.Positions.Add(new Point3D(px, py, ZOf(px)));
+                        wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
+                    }
+                for (int v = 0; v < NV; v++)
+                    for (int u = 0; u < NU; u++)
+                    {
+                        int a = v * (NU + 1) + u, b = a + 1, c = a + (NU + 1), d = c + 1;
+                        foreach (var ix in new[] { c, b, d, c, a, b }) wm.TriangleIndices.Add(ix);
+                    }
+                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });
+            }
             // Depth discipline: with the scene's near plane at 0.001, the z-buffer only resolves
             // ~0.0004 at this distance — panels closer than that to the tray plate (−0.0734) or to
             // each other z-fight and drop out (the glass pane lost every pixel at 0.0004). Every
@@ -1408,15 +1435,10 @@ internal sealed class HomeModel3d : IDisposable
                         new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 250),
                     }
                 };
-                // The glass covers the WHOLE hexagonal reveal -- LB's lip spans it entirely (vertex
-                // dump: x -0.3162 to -0.0729), which is why the oracle's glow fills the full
-                // triangle instead of a bar. Two grids (rectangular section + diagonal-tapered
-                // section) + matte border strips along the diagonals/inner edge, all on ZOf.
-                AddPanelGrid((-0.2842, 0.5), (-0.2046, 0.5), (-0.2046, -0.5), (-0.2842, -0.5), glazed);
-                AddPanelGrid((-0.2046, 0.497), (-0.0802, 0.318), (-0.0802, -0.318), (-0.2046, -0.497), glazed);
-                AddPanel(new (double, double)[] { (-0.2046, 0.5), (-0.0742, 0.326), (-0.0802, 0.318), (-0.2046, 0.497) }, flapMat);
-                AddPanel(new (double, double)[] { (-0.0742, 0.326), (-0.0742, -0.326), (-0.0802, -0.318), (-0.0802, 0.318) }, flapMat);
-                AddPanel(new (double, double)[] { (-0.2046, -0.497), (-0.0802, -0.318), (-0.0742, -0.326), (-0.2046, -0.5) }, flapMat);
+                // The glass covers the WHOLE hexagonal reveal as ONE mesh -- LB's lip spans it
+                // entirely (vertex dump: x -0.3162 to -0.0729), and any split into sections showed
+                // its seams. The fine matte border was sacrificed for seamlessness.
+                AddHexGrid(glazed);
                 // The tray's natural spine-side hole is FULL height, but the angled window narrows
                 // toward the corners -- mask the flap showing through the hole outside the window
                 // with CaseColor corner triangles, completing the hexagon LB cuts.

@@ -1325,49 +1325,37 @@ internal sealed class HomeModel3d : IDisposable
         else flapMat = FaceMaterialNoImage(1000, 1000, bg);
         void AddFlap()
         {
-            if (!clearCase)
-            {
-                // What LB shows on a closed back is the flap THROUGH A WINDOW CUT into the tray's
-                // back plate ("cut the angled cassette case back window") — the full flap rect
-                // itself sits hidden behind the plate. Shapes measured off flat oracle back renders:
-                // straight = X[-0.2842..-0.1539] full height; angled = the same with its inner edge
-                // pushed to -0.0742 over the middle 65%, diagonals over the top/bottom ~17%.
-                //
-                // TWO panels: the tray plate's spine-side cut-out ends at X=-0.156, co-extensive
-                // with the lid's clear lip — inside that hole the panel sits at the REAL flap depth
-                // (-0.0661) so the glossy lip renders OVER it; the part beyond the hole (the fine
-                // matte border, and Angled's wide reveal) has opaque plate in front at that depth,
-                // so it floats just OUTSIDE the plate instead, glass-free exactly like LB's.
-                void AddPanel((double x, double y)[] poly, double z)
-                {
-                    var wm = new MeshGeometry3D();
-                    foreach (var (px, py) in poly)
-                    {
-                        wm.Positions.Add(new Point3D(px, py, z));
-                        wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
-                        wm.Normals.Add(new Vector3D(0, 0, -1));
-                    }
-                    for (int i = 1; i + 1 < poly.Length; i++)
-                    { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
-                    grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = flapMat });
-                }
-                // −0.0730 = a hair's breadth inside the lip (−0.0734): the glass still renders over
-                // the panel, but the parallax gap a deeper recess opened at glancing angles (black
-                // slivers around the strip) is 18× smaller and reads as flush.
-                if (angled)
-                {
-                    AddPanel(new (double, double)[] { (-0.2842, 0.5), (-0.2046, 0.5), (-0.156, 0.422), (-0.156, -0.422), (-0.2046, -0.5), (-0.2842, -0.5) }, -0.0730);
-                    AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0742, -0.326), (-0.156, -0.422) }, -0.0736);
-                }
-                else
-                {
-                    AddPanel(new (double, double)[] { (-0.2842, 0.5), (-0.156, 0.5), (-0.156, -0.5), (-0.2842, -0.5) }, -0.0730);
-                    AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, -0.0736);
-                }
-                return;
-            }
+            // The REAL flap rect at LB's depth. In closed cases it reads through the tray plate's
+            // natural spine-side hole (which ends at X=-0.156, under the lid's clear lip) and KEEPS
+            // GOING under the plate — so a grazing view past the hole's edge parallaxes onto more
+            // red flap instead of a black slit, exactly like LB. In clear cases the whole plate is
+            // translucent and the full-width holed flap simply shows through.
             Quad(flapMat, paper,
                  new[] { (flapEnd, 0.5, -0.0661), (-0.2839, 0.5, -0.0661), (flapEnd, -0.5, -0.0661), (-0.2839, -0.5, -0.0661) }, uv4);
+            if (clearCase) return;
+            // The parts of LB's WINDOW that are CUT beyond the natural hole ("cut the angled
+            // cassette case back window") have opaque plate in front of the flap, so they float
+            // just outside the plate instead, glass-free like LB's: the fine matte border at the
+            // straight window's inner edge, and Angled's wide reveal (its inner edge pushed to
+            // -0.0742 over the middle 65% with diagonals over the top/bottom ~17% — both shapes
+            // measured off flat oracle back renders).
+            void AddPanel((double x, double y)[] poly)
+            {
+                var wm = new MeshGeometry3D();
+                foreach (var (px, py) in poly)
+                {
+                    wm.Positions.Add(new Point3D(px, py, -0.0736));
+                    wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
+                    wm.Normals.Add(new Vector3D(0, 0, -1));
+                }
+                for (int i = 1; i + 1 < poly.Length; i++)
+                { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
+                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = flapMat });
+            }
+            if (angled)
+                AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0742, -0.326), (-0.156, -0.422) });
+            else
+                AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) });
         }
         if (!clearCase) AddFlap();
         // Spine: clear logo, else the plain-text title in SpineForegroundColor, else bg alone. The 1000-wide

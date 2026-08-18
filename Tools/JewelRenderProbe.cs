@@ -190,7 +190,11 @@ internal static class JewelRenderProbe
                     long until = Environment.TickCount64 + wait;
                     while (Environment.TickCount64 < until && prev.BuiltGeometry() == null) Pump(100);
                     Pump(400);                     // settle: textures land a beat after the group appears
-                    if (args.Contains("dump")) DumpStructure(prev.BuiltGeometry());   // exact quads + materials
+                    if (args.Contains("dump"))
+                    {
+                        DumpStructure(prev.BuiltGeometry());   // exact quads + materials
+                        DumpViewportRig(ui);                   // lights + camera live OUTSIDE the model group
+                    }
                     if (l != 0 || r != 0 || u != 0 || dn != 0) { prev.Rotate(l, r, u, dn); Pump(800); }
                     var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
                     rtb.Render(ui);
@@ -224,6 +228,40 @@ internal static class JewelRenderProbe
     // Internal: the WINDOWED probe (--model3d-live + LB_ORACLE_DUMP=1) calls it on the oracle zone's
     // geometry — the headless FlowModel never builds (its art/build hooks need a real window), so the
     // live window is where a trustworthy dump comes from.
+    // Walk the WPF visual tree to the Viewport3D(s) and print every light + the camera — the scene
+    // rig is as load-bearing for the A/B as the geometry, and it does NOT live in the model group.
+    private static void DumpViewportRig(System.Windows.DependencyObject root)
+    {
+        void WalkV(System.Windows.DependencyObject d)
+        {
+            if (d is System.Windows.Controls.Viewport3D vp)
+            {
+                if (vp.Camera is PerspectiveCamera pc)
+                    Console.WriteLine($"[oracle-rig] Camera pos=({pc.Position.X:0.###},{pc.Position.Y:0.###},{pc.Position.Z:0.###}) look=({pc.LookDirection.X:0.###},{pc.LookDirection.Y:0.###},{pc.LookDirection.Z:0.###}) fov={pc.FieldOfView:0.#} near={pc.NearPlaneDistance} far={pc.FarPlaneDistance}");
+                else Console.WriteLine($"[oracle-rig] Camera {vp.Camera?.GetType().Name}");
+                void WalkM(Model3D m, string path)
+                {
+                    if (m is Model3DGroup g) { for (int i = 0; i < g.Children.Count; i++) WalkM(g.Children[i], path + "/" + i); return; }
+                    if (m is Light li)
+                    {
+                        string extra = li switch
+                        {
+                            DirectionalLight dl => $" dir=({dl.Direction.X:0.###},{dl.Direction.Y:0.###},{dl.Direction.Z:0.###})",
+                            PointLight pl => $" pos=({pl.Position.X:0.###},{pl.Position.Y:0.###},{pl.Position.Z:0.###})",
+                            _ => "",
+                        };
+                        Console.WriteLine($"[oracle-rig] LIGHT {path} {li.GetType().Name} #{li.Color.A:X2}{li.Color.R:X2}{li.Color.G:X2}{li.Color.B:X2}{extra}  transform={(m.Transform == null || m.Transform.Value.IsIdentity ? "none" : m.Transform.Value.ToString())}");
+                    }
+                }
+                for (int i = 0; i < vp.Children.Count; i++)
+                    if (vp.Children[i] is ModelVisual3D mv && mv.Content != null) WalkM(mv.Content, $"visual{i}");
+            }
+            int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(d);
+            for (int i = 0; i < n; i++) WalkV(System.Windows.Media.VisualTreeHelper.GetChild(d, i));
+        }
+        try { WalkV(root); } catch (Exception ex) { Console.WriteLine("[oracle-rig] " + ex.Message); }
+    }
+
     internal static void DumpStructure(Model3DGroup? root)
     {
         if (root == null) { Console.WriteLine("[oracle-dump] no built geometry"); return; }
@@ -234,6 +272,18 @@ internal static class JewelRenderProbe
             if (m is Model3DGroup g)
             {
                 for (int i = 0; i < g.Children.Count; i++) Walk(g.Children[i], local, path + "/" + i);
+                return;
+            }
+            if (m is Light li)   // the scene's light rig is as load-bearing as its geometry — print it
+            {
+                string extra = li switch
+                {
+                    DirectionalLight dl => $" dir=({dl.Direction.X:0.###},{dl.Direction.Y:0.###},{dl.Direction.Z:0.###})",
+                    PointLight pl => $" pos=({pl.Position.X:0.###},{pl.Position.Y:0.###},{pl.Position.Z:0.###}) range={pl.Range:0.##}",
+                    SpotLight sl => $" pos=({sl.Position.X:0.###},{sl.Position.Y:0.###},{sl.Position.Z:0.###}) dir=({sl.Direction.X:0.###},{sl.Direction.Y:0.###},{sl.Direction.Z:0.###})",
+                    _ => "",
+                };
+                Console.WriteLine($"[oracle-dump] LIGHT {path} {li.GetType().Name} #{li.Color.A:X2}{li.Color.R:X2}{li.Color.G:X2}{li.Color.B:X2}{extra}");
                 return;
             }
             if (m is not GeometryModel3D gm || gm.Geometry is not MeshGeometry3D mesh || mesh.Positions.Count == 0) return;
@@ -436,6 +486,12 @@ internal static class JewelRenderProbe
             finally { try { File.Delete(tmp); } catch { } }
         }
 
+        // `livemat`: render BuildModel's LIVE output instead of the bake — what the app's preview
+        // shows. VisualBrush faces may rasterize empty headless, but solid/translucent materials
+        // (the shell, the lip glass) render as the user sees them, which the bake does not always
+        // reproduce faithfully (low-alpha brushes have been seen dropping out of the baked path).
+        if (Environment.GetCommandLineArgs().Contains("livemat") && live != null)
+            return RenderModel(live, yaw, pitch, dist, w, h);
         var model = Host.Model3d.Model3dBaker.BakeRuntimeModel(map, title, art);
         if (model == null) { Console.WriteLine("[jewel-probe] BakeRuntimeModel returned null"); return null; }
         return RenderModel(model, yaw, pitch, dist, w, h);

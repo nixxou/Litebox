@@ -1352,17 +1352,43 @@ internal sealed class HomeModel3d : IDisposable
                 { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
                 grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });
             }
+            // Depth discipline: with the scene's near plane at 0.001, the z-buffer only resolves
+            // ~0.0004 at this distance — panels closer than that to the tray plate (−0.0734) or to
+            // each other z-fight and drop out (the glass pane lost every pixel at 0.0004). Every
+            // layer here keeps ≥0.002 of separation; the ~0.004 total overhang off the shell is
+            // invisible at preview scale.
             if (angled)
             {
-                AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0742, -0.326), (-0.156, -0.422) }, -0.0736, flapMat);
-                // LB's cut reshapes the LID's lip too: the glass follows the angled reveal, stopping
-                // short of the window edge by the same fine matte border. A translucent lid-material
-                // panel floats over the reveal, its diagonal/inner edges inset ~0.006 (slight overlap
-                // with the real lip at −0.156 so no seam opens between them).
-                AddPanel(new (double, double)[] { (-0.157, 0.415), (-0.0802, 0.312), (-0.0802, -0.312), (-0.157, -0.415) }, -0.0740, lidMat);
+                // LB's cut reshapes the LID's lip too: glass covers the angled reveal up to a fine
+                // matte border along its edges. A separate translucent pane proved unreliable
+                // (alpha-16 brushes drop out of the baked pipeline), so the glazing is PRE-COMPOSED
+                // into an opaque material — bg blended 6.3% toward the lid plastic, plus the lid's
+                // specular — and the reveal is split into coplanar adjacent polygons: the glazed
+                // inner pane and the matte border ring (no overlap, no z-fighting).
+                var gz = System.Windows.Media.Color.FromRgb(
+                    (byte)Math.Min(255, bg.R * 0.937 + 204 * 0.063),
+                    (byte)Math.Min(255, bg.G * 0.937 + 204 * 0.063),
+                    (byte)Math.Min(255, bg.B * 0.937 + 204 * 0.063));
+                Material glazed = new MaterialGroup
+                {
+                    Children =
+                    {
+                        new DiffuseMaterial(new SolidColorBrush(gz)),
+                        new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 250),
+                    }
+                };
+                AddPanel(new (double, double)[] { (-0.156, 0.412), (-0.0802, 0.316), (-0.0802, -0.316), (-0.156, -0.412) }, -0.0754, glazed);
+                AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0802, 0.316), (-0.156, 0.412) }, -0.0754, flapMat);
+                AddPanel(new (double, double)[] { (-0.0742, 0.326), (-0.0742, -0.326), (-0.0802, -0.316), (-0.0802, 0.316) }, -0.0754, flapMat);
+                AddPanel(new (double, double)[] { (-0.156, -0.412), (-0.0802, -0.316), (-0.0742, -0.326), (-0.156, -0.422) }, -0.0754, flapMat);
+                // The tray's natural spine-side hole is FULL height, but the angled window narrows
+                // toward the corners — mask the flap showing through the hole outside the window
+                // with CaseColor corner triangles, completing the hexagon LB cuts.
+                AddPanel(new (double, double)[] { (-0.2046, 0.5), (-0.156, 0.5), (-0.156, 0.422) }, -0.0754, bodyMat);
+                AddPanel(new (double, double)[] { (-0.2046, -0.5), (-0.156, -0.422), (-0.156, -0.5) }, -0.0754, bodyMat);
             }
             else
-                AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, -0.0736, flapMat);
+                AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, -0.0754, flapMat);
         }
         if (!clearCase) AddFlap();
         // Spine: clear logo, else the plain-text title in SpineForegroundColor, else bg alone. The 1000-wide
@@ -1508,19 +1534,26 @@ internal sealed class HomeModel3d : IDisposable
         {
             if (img == null) return null;
             var small = new System.Windows.Media.Imaging.TransformedBitmap(img,
-                new System.Windows.Media.ScaleTransform(32.0 / Math.Max(1, img.PixelWidth), 32.0 / Math.Max(1, img.PixelHeight)));
+                new System.Windows.Media.ScaleTransform(64.0 / Math.Max(1, img.PixelWidth), 64.0 / Math.Max(1, img.PixelHeight)));
             var conv = new System.Windows.Media.Imaging.FormatConvertedBitmap(small, System.Windows.Media.PixelFormats.Bgra32, null, 0);
             int w = conv.PixelWidth, h = conv.PixelHeight;
             if (w <= 0 || h <= 0) return null;
             var buf = new byte[w * h * 4];
             conv.CopyPixels(buf, w * 4, 0);
-            double r = 0, g = 0, b = 0; int n = w * h;
+            // Near-black pixels are EXCLUDED (max channel <= 80): LB's card colour reads as "the
+            // colour of the printed art", undiluted by black borders and shadow masses — with the
+            // cut-off at 80 the gamma-correct average reproduces LB's dumped values to within a
+            // couple of counts (DK2 poster -> 151,44,28 vs LB's #972B1D).
+            double r = 0, g = 0, b = 0; int n = 0;
             for (int i = 0; i < buf.Length; i += 4)
             {
+                if (Math.Max(buf[i], Math.Max(buf[i + 1], buf[i + 2])) <= 80) continue;
                 b += Math.Pow(buf[i] / 255.0, 2.2);
                 g += Math.Pow(buf[i + 1] / 255.0, 2.2);
                 r += Math.Pow(buf[i + 2] / 255.0, 2.2);
+                n++;
             }
+            if (n == 0) return null;
             byte C(double v) => (byte)Math.Clamp((int)Math.Round(Math.Pow(v / n, 1 / 2.2) * 255), 0, 255);
             return System.Windows.Media.Color.FromRgb(C(r), C(g), C(b));
         }

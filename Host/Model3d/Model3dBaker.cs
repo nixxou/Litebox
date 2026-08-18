@@ -135,9 +135,23 @@ internal static class Model3dBaker
             var mat = FlattenRuntimeMaterial(gm.Material);
             var m2 = new MeshGeometry3D();
             for (int i = 0; i < mesh.Positions.Count; i++) m2.Positions.Add(local.Transform(mesh.Positions[i]));
+            // Carry the source normals (same rule as the GLB bake, including the mirrored-winding
+            // swap): dropping them let WPF derive flat per-face normals, so this path and the cached
+            // one shaded the same model differently — the fullscreen viewer's hi-res swap visibly
+            // changed the lighting mid-flight.
+            if (mesh.Normals.Count == mesh.Positions.Count)
+                foreach (var n in mesh.Normals)
+                { var v = local.Transform(n); v.Normalize(); m2.Normals.Add(v); }
             if (mesh.TextureCoordinates.Count == mesh.Positions.Count)
                 foreach (var uv in mesh.TextureCoordinates) m2.TextureCoordinates.Add(uv);
-            foreach (var ix in mesh.TriangleIndices) m2.TriangleIndices.Add(ix);
+            if (local.Determinant < 0 && mesh.Normals.Count == mesh.Positions.Count)
+                for (int i = 0; i + 2 < mesh.TriangleIndices.Count; i += 3)
+                {
+                    m2.TriangleIndices.Add(mesh.TriangleIndices[i]);
+                    m2.TriangleIndices.Add(mesh.TriangleIndices[i + 2]);
+                    m2.TriangleIndices.Add(mesh.TriangleIndices[i + 1]);
+                }
+            else foreach (var ix in mesh.TriangleIndices) m2.TriangleIndices.Add(ix);
             m2.Freeze();
             // Both sides for double-sided sources; single-sided faces (spine cap, split back walls) stay
             // single-sided or the cap occludes the scan strips behind it. A DISTINCT back material is
@@ -283,6 +297,15 @@ internal static class Model3dBaker
                 ? System.Linq.Enumerable.ToArray(mesh.TextureCoordinates) : Array.Empty<System.Windows.Point>();
             var tri = new int[mesh.TriangleIndices.Count];
             mesh.TriangleIndices.CopyTo(tri, 0);
+            // A MIRRORING transform (negative determinant — the cassette shell is mirrored onto its
+            // spine side) reverses the geometric winding, so the faces WPF then treats as front are
+            // the ones our outward normals point away from. Lighting reads those normals: diffuse
+            // dims and the specular dies outright, which is why the cached model looked flat next to
+            // the live one (the runtime bake carries no normals at all, so WPF derives them from the
+            // winding and never had the problem). Swapping two indices per triangle puts the winding
+            // back in agreement with the normals.
+            if (local.Determinant < 0)
+                for (int i = 0; i + 2 < tri.Length; i += 3) (tri[i + 1], tri[i + 2]) = (tri[i + 2], tri[i + 1]);
             meshes.Add(new BakedMesh(pos, nrm, uv, tri, matIx));
         }
         Walk(root, Matrix3D.Identity);

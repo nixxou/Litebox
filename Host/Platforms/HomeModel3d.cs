@@ -1391,7 +1391,11 @@ internal sealed class HomeModel3d : IDisposable
             void AddHexGrid(Material mat)
             {
                 const int NU = 24, NV = 16;
-                double YL(double x) => x <= -0.2046 ? 0.5 : 0.5 - (x + 0.2046) / 0.1304 * 0.174;
+                // The window diagonal, refit from the flat oracle measurements as one line: it
+                // meets the top edge at x=-0.2231 and runs at slope -1.15 down to (-0.0742, 0.328).
+                // Every piece (this boundary AND the corner masks) shares this single line -- two
+                // slightly different diagonals made the glaze visibly overflow past the masks.
+                double YL(double x) => x <= -0.2231 ? 0.5 : 0.5 - (x + 0.2231) * 1.15;
                 var wm = new MeshGeometry3D();
                 for (int v = 0; v <= NV; v++)
                     for (int u = 0; u <= NU; u++)
@@ -1450,8 +1454,8 @@ internal sealed class HomeModel3d : IDisposable
                 // The tray's natural spine-side hole is FULL height, but the angled window narrows
                 // toward the corners -- mask the flap showing through the hole outside the window
                 // with CaseColor corner triangles, completing the hexagon LB cuts.
-                AddPanel(new (double, double)[] { (-0.2046, 0.5), (-0.156, 0.5), (-0.156, 0.422) }, bodyMat);
-                AddPanel(new (double, double)[] { (-0.2046, -0.5), (-0.156, -0.422), (-0.156, -0.5) }, bodyMat);
+                AddPanel(new (double, double)[] { (-0.2231, 0.5), (-0.156, 0.5), (-0.156, 0.4228) }, bodyMat);
+                AddPanel(new (double, double)[] { (-0.2231, -0.5), (-0.156, -0.4228), (-0.156, -0.5) }, bodyMat);
             }
             else
                 AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, flapMat);

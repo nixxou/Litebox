@@ -1329,23 +1329,38 @@ internal sealed class HomeModel3d : IDisposable
             {
                 // What LB shows on a closed back is the flap THROUGH A WINDOW CUT into the tray's
                 // back plate ("cut the angled cassette case back window") — the full flap rect
-                // itself sits hidden behind the plate. Faked with a window-shaped panel floating
-                // just outside the plate; shapes measured off flat oracle back renders:
+                // itself sits hidden behind the plate. Shapes measured off flat oracle back renders:
                 // straight = X[-0.2842..-0.1539] full height; angled = the same with its inner edge
                 // pushed to -0.0742 over the middle 65%, diagonals over the top/bottom ~17%.
-                var poly = angled
-                    ? new (double x, double y)[] { (-0.2842, 0.5), (-0.2046, 0.5), (-0.0742, 0.326), (-0.0742, -0.326), (-0.2046, -0.5), (-0.2842, -0.5) }
-                    : new (double x, double y)[] { (-0.2842, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.2842, -0.5) };
-                var wm = new MeshGeometry3D();
-                foreach (var (px, py) in poly)
+                //
+                // TWO panels: the tray plate's spine-side cut-out ends at X=-0.156, co-extensive
+                // with the lid's clear lip — inside that hole the panel sits at the REAL flap depth
+                // (-0.0661) so the glossy lip renders OVER it; the part beyond the hole (the fine
+                // matte border, and Angled's wide reveal) has opaque plate in front at that depth,
+                // so it floats just OUTSIDE the plate instead, glass-free exactly like LB's.
+                void AddPanel((double x, double y)[] poly, double z)
                 {
-                    wm.Positions.Add(new Point3D(px, py, -0.0736));
-                    wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
-                    wm.Normals.Add(new Vector3D(0, 0, -1));
+                    var wm = new MeshGeometry3D();
+                    foreach (var (px, py) in poly)
+                    {
+                        wm.Positions.Add(new Point3D(px, py, z));
+                        wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
+                        wm.Normals.Add(new Vector3D(0, 0, -1));
+                    }
+                    for (int i = 1; i + 1 < poly.Length; i++)
+                    { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
+                    grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = flapMat });
                 }
-                for (int i = 1; i + 1 < poly.Length; i++)
-                { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
-                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = flapMat });
+                if (angled)
+                {
+                    AddPanel(new (double, double)[] { (-0.2842, 0.5), (-0.2046, 0.5), (-0.156, 0.422), (-0.156, -0.422), (-0.2046, -0.5), (-0.2842, -0.5) }, -0.0661);
+                    AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0742, -0.326), (-0.156, -0.422) }, -0.0736);
+                }
+                else
+                {
+                    AddPanel(new (double, double)[] { (-0.2842, 0.5), (-0.156, 0.5), (-0.156, -0.5), (-0.2842, -0.5) }, -0.0661);
+                    AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, -0.0736);
+                }
                 return;
             }
             Quad(flapMat, paper,

@@ -256,6 +256,15 @@ internal static class JewelRenderProbe
             Console.WriteLine($"[oracle-dump] leaf{leaf++} {path}  verts={mesh.Positions.Count} tris={mesh.TriangleIndices.Count / 3}");
             Console.WriteLine($"[oracle-dump]   X[{minX:0.####}..{maxX:0.####}] Y[{minY:0.####}..{maxY:0.####}] Z[{minZ:0.####}..{maxZ:0.####}]  uv {uv}");
             Console.WriteLine($"[oracle-dump]   mat={Describe(gm.Material)}  back={Describe(gm.BackMaterial)}");
+            // LB_DUMP_VERTS=1: full positions+uv for small meshes — the only way to recover non-
+            // rectangular shapes (the angled flap's diagonal) that bounds can't express.
+            if (Environment.GetEnvironmentVariable("LB_DUMP_VERTS") == "1" && mesh.Positions.Count <= 200)
+                for (int i = 0; i < mesh.Positions.Count; i++)
+                {
+                    var p = local.Transform(mesh.Positions[i]);
+                    string tuv = i < mesh.TextureCoordinates.Count ? $" uv({mesh.TextureCoordinates[i].X:0.###},{mesh.TextureCoordinates[i].Y:0.###})" : "";
+                    Console.WriteLine($"[oracle-dump]     v{i} ({p.X:0.####}, {p.Y:0.####}, {p.Z:0.####}){tuv}");
+                }
         }
         Walk(root, Matrix3D.Identity, "");
         Console.WriteLine($"[oracle-dump] total {leaf} leaves");

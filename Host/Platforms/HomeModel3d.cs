@@ -1423,16 +1423,24 @@ internal sealed class HomeModel3d : IDisposable
                 // into an opaque material — bg blended 6.3% toward the lid plastic, plus the lid's
                 // specular — and the reveal is split into coplanar adjacent polygons: the glazed
                 // inner pane and the matte border ring (no overlap, no z-fighting).
+                // The pre-composed glass must track the LID's actual variant: normal glass is a 6.3%
+                // blend toward #CCCCCC with the tight pow-250 gloss, but CLOUDY plastic is a much
+                // heavier 22% milk toward #F5F7FA with the broad pow-90 sheen — without this, aged
+                // plastic left the reveal near-bare while LB's went milky.
+                double ga = cloudy ? 0x38 / 255.0 : 0x10 / 255.0;
+                var tint = cloudy ? System.Windows.Media.Color.FromRgb(0xF5, 0xF7, 0xFA) : System.Windows.Media.Color.FromRgb(0xCC, 0xCC, 0xCC);
                 var gz = System.Windows.Media.Color.FromRgb(
-                    (byte)Math.Min(255, bg.R * 0.937 + 204 * 0.063),
-                    (byte)Math.Min(255, bg.G * 0.937 + 204 * 0.063),
-                    (byte)Math.Min(255, bg.B * 0.937 + 204 * 0.063));
+                    (byte)Math.Min(255, bg.R * (1 - ga) + tint.R * ga),
+                    (byte)Math.Min(255, bg.G * (1 - ga) + tint.G * ga),
+                    (byte)Math.Min(255, bg.B * (1 - ga) + tint.B * ga));
                 Material glazed = new MaterialGroup
                 {
                     Children =
                     {
                         new DiffuseMaterial(new SolidColorBrush(gz)),
-                        new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 250),
+                        cloudy
+                            ? new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x6E, 0xFF, 0xFF, 0xFF)), 90)
+                            : new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 250),
                     }
                 };
                 // The glass covers the WHOLE hexagonal reveal as ONE mesh -- LB's lip spans it

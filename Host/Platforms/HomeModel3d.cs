@@ -1352,6 +1352,38 @@ internal sealed class HomeModel3d : IDisposable
                 { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
                 grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });
             }
+            // TESSELLATED trapezoid panel. WPF 3D lights PER VERTEX: a pow-250 specular evaluated
+            // only at a big panel's 4 corners never lands on the highlight and renders dead-flat —
+            // which is exactly why the shell mesh's lip glosses while a 4-vertex pane next to it
+            // stayed matte. A 16×16 grid lets the tight highlight show, like LB's tessellated lip.
+            void AddPanelGrid((double x, double y) tl, (double x, double y) tr, (double x, double y) br, (double x, double y) bl,
+                              double zEdge, double zPeak, Material mat)
+            {
+                const int NU = 16, NV = 16;
+                var wm = new MeshGeometry3D();
+                for (int v = 0; v <= NV; v++)
+                    for (int u = 0; u <= NU; u++)
+                    {
+                        double fu = (double)u / NU, fv = (double)v / NV;
+                        double px = (tl.x + (tr.x - tl.x) * fu) * (1 - fv) + (bl.x + (br.x - bl.x) * fu) * fv;
+                        double py = (tl.y + (tr.y - tl.y) * fu) * (1 - fv) + (bl.y + (br.y - bl.y) * fu) * fv;
+                        // Shallow PRISM profile across u (edges at zEdge, ridge at zPeak): LB's angled
+                        // lip is a ~4° double-slope surface, and those tilted normals are what catch
+                        // the directional light as a broad moving sheen — a dead-flat pane's pow-250
+                        // highlight almost never fires. Slopes point OUTWARD (peak more negative)
+                        // because inward would dive behind the opaque tray plate.
+                        double pz = zEdge + (zPeak - zEdge) * (1 - Math.Abs(2 * fu - 1));
+                        wm.Positions.Add(new Point3D(px, py, pz));
+                        wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
+                    }
+                for (int v = 0; v < NV; v++)
+                    for (int u = 0; u < NU; u++)
+                    {
+                        int a = v * (NU + 1) + u, b = a + 1, c = a + (NU + 1), d = c + 1;
+                        foreach (var ix in new[] { c, b, d, c, a, b }) wm.TriangleIndices.Add(ix);
+                    }
+                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });   // auto normals follow the slopes
+            }
             // Depth discipline: with the scene's near plane at 0.001, the z-buffer only resolves
             // ~0.0004 at this distance — panels closer than that to the tray plate (−0.0734) or to
             // each other z-fight and drop out (the glass pane lost every pixel at 0.0004). Every
@@ -1377,7 +1409,7 @@ internal sealed class HomeModel3d : IDisposable
                         new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 250),
                     }
                 };
-                AddPanel(new (double, double)[] { (-0.156, 0.412), (-0.0802, 0.316), (-0.0802, -0.316), (-0.156, -0.412) }, -0.0754, glazed);
+                AddPanelGrid((-0.156, 0.412), (-0.0802, 0.316), (-0.0802, -0.316), (-0.156, -0.412), -0.0754, -0.0788, glazed);
                 AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0802, 0.316), (-0.156, 0.412) }, -0.0754, flapMat);
                 AddPanel(new (double, double)[] { (-0.0742, 0.326), (-0.0742, -0.326), (-0.0802, -0.316), (-0.0802, 0.316) }, -0.0754, flapMat);
                 AddPanel(new (double, double)[] { (-0.156, -0.412), (-0.0802, -0.316), (-0.0742, -0.326), (-0.156, -0.422) }, -0.0754, flapMat);

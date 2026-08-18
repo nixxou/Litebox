@@ -308,7 +308,7 @@ internal static class JewelRenderProbe
             Console.WriteLine($"[oracle-dump]   mat={Describe(gm.Material)}  back={Describe(gm.BackMaterial)}");
             // LB_DUMP_VERTS=1: full positions+uv for small meshes — the only way to recover non-
             // rectangular shapes (the angled flap's diagonal) that bounds can't express.
-            if (Environment.GetEnvironmentVariable("LB_DUMP_VERTS") == "1" && mesh.Positions.Count <= 200)
+            if (Environment.GetEnvironmentVariable("LB_DUMP_VERTS") == "1" && mesh.Positions.Count <= 300)
                 for (int i = 0; i < mesh.Positions.Count; i++)
                 {
                     var p = local.Transform(mesh.Positions[i]);

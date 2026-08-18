@@ -1339,23 +1339,30 @@ internal sealed class HomeModel3d : IDisposable
             // straight window's inner edge, and Angled's wide reveal (its inner edge pushed to
             // -0.0742 over the middle 65% with diagonals over the top/bottom ~17% — both shapes
             // measured off flat oracle back renders).
-            void AddPanel((double x, double y)[] poly)
+            void AddPanel((double x, double y)[] poly, double z, Material mat)
             {
                 var wm = new MeshGeometry3D();
                 foreach (var (px, py) in poly)
                 {
-                    wm.Positions.Add(new Point3D(px, py, -0.0736));
+                    wm.Positions.Add(new Point3D(px, py, z));
                     wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
                     wm.Normals.Add(new Vector3D(0, 0, -1));
                 }
                 for (int i = 1; i + 1 < poly.Length; i++)
                 { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
-                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = flapMat });
+                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });
             }
             if (angled)
-                AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0742, -0.326), (-0.156, -0.422) });
+            {
+                AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0742, -0.326), (-0.156, -0.422) }, -0.0736, flapMat);
+                // LB's cut reshapes the LID's lip too: the glass follows the angled reveal, stopping
+                // short of the window edge by the same fine matte border. A translucent lid-material
+                // panel floats over the reveal, its diagonal/inner edges inset ~0.006 (slight overlap
+                // with the real lip at −0.156 so no seam opens between them).
+                AddPanel(new (double, double)[] { (-0.157, 0.415), (-0.0802, 0.312), (-0.0802, -0.312), (-0.157, -0.415) }, -0.0740, lidMat);
+            }
             else
-                AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) });
+                AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, -0.0736, flapMat);
         }
         if (!clearCase) AddFlap();
         // Spine: clear logo, else the plain-text title in SpineForegroundColor, else bg alone. The 1000-wide

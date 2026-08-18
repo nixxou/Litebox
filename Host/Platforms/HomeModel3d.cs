@@ -1339,25 +1339,30 @@ internal sealed class HomeModel3d : IDisposable
             // straight window's inner edge, and Angled's wide reveal (its inner edge pushed to
             // -0.0742 over the middle 65% with diagonals over the top/bottom ~17% — both shapes
             // measured off flat oracle back renders).
-            void AddPanel((double x, double y)[] poly, double z, Material mat)
+            // Shared depth profile for every back-window piece: flat just outside the tray plate
+            // until x = -0.16, then LB's ~4.4-degree dive toward the window's inner edge (vertex
+            // dump of the angled lid: z -0.0638 at x=-0.16 to -0.0705 at the inner edge; ours leans
+            // outward from the shell because inward would dive behind the opaque plate). Adjacent
+            // pieces share this profile, so their common edges stay crack-free.
+            double ZOf(double x) => x <= -0.16 ? -0.0754 : -0.0754 - (x + 0.16) / 0.0858 * 0.0058;
+            void AddPanel((double x, double y)[] poly, Material mat)
             {
                 var wm = new MeshGeometry3D();
                 foreach (var (px, py) in poly)
                 {
-                    wm.Positions.Add(new Point3D(px, py, z));
+                    wm.Positions.Add(new Point3D(px, py, ZOf(px)));
                     wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
-                    wm.Normals.Add(new Vector3D(0, 0, -1));
                 }
                 for (int i = 1; i + 1 < poly.Length; i++)
                 { wm.TriangleIndices.Add(0); wm.TriangleIndices.Add(i); wm.TriangleIndices.Add(i + 1); }
-                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });
+                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });   // auto normals follow the profile
             }
-            // TESSELLATED trapezoid panel. WPF 3D lights PER VERTEX: a pow-250 specular evaluated
-            // only at a big panel's 4 corners never lands on the highlight and renders dead-flat —
+            // TESSELLATED panel (16x16). WPF 3D lights PER VERTEX: a pow-250 specular evaluated
+            // only at a big panel's 4 corners never lands on the highlight and renders dead-flat --
             // which is exactly why the shell mesh's lip glosses while a 4-vertex pane next to it
-            // stayed matte. A 16×16 grid lets the tight highlight show, like LB's tessellated lip.
+            // stayed matte. Depth comes from the shared ZOf profile.
             void AddPanelGrid((double x, double y) tl, (double x, double y) tr, (double x, double y) br, (double x, double y) bl,
-                              double zEdge, double zPeak, Material mat)
+                              Material mat)
             {
                 const int NU = 16, NV = 16;
                 var wm = new MeshGeometry3D();
@@ -1367,16 +1372,7 @@ internal sealed class HomeModel3d : IDisposable
                         double fu = (double)u / NU, fv = (double)v / NV;
                         double px = (tl.x + (tr.x - tl.x) * fu) * (1 - fv) + (bl.x + (br.x - bl.x) * fu) * fv;
                         double py = (tl.y + (tr.y - tl.y) * fu) * (1 - fv) + (bl.y + (br.y - bl.y) * fu) * fv;
-                        // SINGLE tilted facet across u (zEdge at u=0 → zInner at u=1): the vertex
-                        // dump shows LB's angled lip over the reveal is ONE ~4.4° slope (z −0.0638
-                        // at x=−0.16 diving to −0.0705 at the inner edge), not a ridged prism — a
-                        // single plane ignites its pow-250 sheen ALL AT ONCE across the whole pane,
-                        // which is why LB's glow covers the full triangle uniformly. (A first-cut
-                        // centre-ridge prism lit one half at a time, with a seam down the middle.)
-                        // The tilt matches LB's direction/angle so ignition angles match; it leans
-                        // outward from the shell because inward would dive behind the tray plate.
-                        double pz = zEdge + (zPeak - zEdge) * fu;
-                        wm.Positions.Add(new Point3D(px, py, pz));
+                        wm.Positions.Add(new Point3D(px, py, ZOf(px)));
                         wm.TextureCoordinates.Add(new System.Windows.Point(py + 0.5, (px + 0.2842) / 0.23));
                     }
                 for (int v = 0; v < NV; v++)
@@ -1385,7 +1381,7 @@ internal sealed class HomeModel3d : IDisposable
                         int a = v * (NU + 1) + u, b = a + 1, c = a + (NU + 1), d = c + 1;
                         foreach (var ix in new[] { c, b, d, c, a, b }) wm.TriangleIndices.Add(ix);
                     }
-                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });   // auto normals follow the slopes
+                grp.Children.Add(new GeometryModel3D { Geometry = wm, Material = mat });   // auto normals follow the profile
             }
             // Depth discipline: with the scene's near plane at 0.001, the z-buffer only resolves
             // ~0.0004 at this distance — panels closer than that to the tray plate (−0.0734) or to
@@ -1412,18 +1408,23 @@ internal sealed class HomeModel3d : IDisposable
                         new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80)), 250),
                     }
                 };
-                AddPanelGrid((-0.156, 0.412), (-0.0802, 0.316), (-0.0802, -0.316), (-0.156, -0.412), -0.0754, -0.0812, glazed);
-                AddPanel(new (double, double)[] { (-0.156, 0.422), (-0.0742, 0.326), (-0.0802, 0.316), (-0.156, 0.412) }, -0.0754, flapMat);
-                AddPanel(new (double, double)[] { (-0.0742, 0.326), (-0.0742, -0.326), (-0.0802, -0.316), (-0.0802, 0.316) }, -0.0754, flapMat);
-                AddPanel(new (double, double)[] { (-0.156, -0.412), (-0.0802, -0.316), (-0.0742, -0.326), (-0.156, -0.422) }, -0.0754, flapMat);
+                // The glass covers the WHOLE hexagonal reveal -- LB's lip spans it entirely (vertex
+                // dump: x -0.3162 to -0.0729), which is why the oracle's glow fills the full
+                // triangle instead of a bar. Two grids (rectangular section + diagonal-tapered
+                // section) + matte border strips along the diagonals/inner edge, all on ZOf.
+                AddPanelGrid((-0.2842, 0.5), (-0.2046, 0.5), (-0.2046, -0.5), (-0.2842, -0.5), glazed);
+                AddPanelGrid((-0.2046, 0.497), (-0.0802, 0.318), (-0.0802, -0.318), (-0.2046, -0.497), glazed);
+                AddPanel(new (double, double)[] { (-0.2046, 0.5), (-0.0742, 0.326), (-0.0802, 0.318), (-0.2046, 0.497) }, flapMat);
+                AddPanel(new (double, double)[] { (-0.0742, 0.326), (-0.0742, -0.326), (-0.0802, -0.318), (-0.0802, 0.318) }, flapMat);
+                AddPanel(new (double, double)[] { (-0.2046, -0.497), (-0.0802, -0.318), (-0.0742, -0.326), (-0.2046, -0.5) }, flapMat);
                 // The tray's natural spine-side hole is FULL height, but the angled window narrows
-                // toward the corners — mask the flap showing through the hole outside the window
+                // toward the corners -- mask the flap showing through the hole outside the window
                 // with CaseColor corner triangles, completing the hexagon LB cuts.
-                AddPanel(new (double, double)[] { (-0.2046, 0.5), (-0.156, 0.5), (-0.156, 0.422) }, -0.0754, bodyMat);
-                AddPanel(new (double, double)[] { (-0.2046, -0.5), (-0.156, -0.422), (-0.156, -0.5) }, -0.0754, bodyMat);
+                AddPanel(new (double, double)[] { (-0.2046, 0.5), (-0.156, 0.5), (-0.156, 0.422) }, bodyMat);
+                AddPanel(new (double, double)[] { (-0.2046, -0.5), (-0.156, -0.422), (-0.156, -0.5) }, bodyMat);
             }
             else
-                AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, -0.0754, flapMat);
+                AddPanel(new (double, double)[] { (-0.156, 0.5), (-0.1539, 0.5), (-0.1539, -0.5), (-0.156, -0.5) }, flapMat);
         }
         if (!clearCase) AddFlap();
         // Spine: clear logo, else the plain-text title in SpineForegroundColor, else bg alone. The 1000-wide

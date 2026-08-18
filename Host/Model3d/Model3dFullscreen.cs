@@ -27,15 +27,14 @@ internal sealed class Model3dFullscreen : Form
     {
         _game = game;
         FormBorderStyle = FormBorderStyle.None;
-        WindowState = FormWindowState.Maximized;
-        StartPosition = FormStartPosition.Manual;
-        BackColor = Color.Black;
+        UiKit.FullscreenPlacement.OnAppScreen(this);   // the monitor LiteBox/LaunchBox are on
+        BackColor = UiKit.LiteBoxTheme.PanelC;   // the detail panel's backdrop, not a black void
         ShowInTaskbar = false;
         KeyPreview = true;
 
         _home = new Platforms.HomeModel3d();
         _home.Control.Dock = DockStyle.Fill;
-        _home.SetBackground(Color.Black);
+        _home.SetBackground(UiKit.LiteBoxTheme.PanelC);
         _home.SetPose(Model3dBaker.DefaultYawDeg, Model3dBaker.DefaultPitchDeg);
         Controls.Add(_home.Control);
         _orbit = new Platforms.OrbitController();
@@ -60,7 +59,7 @@ internal sealed class Model3dFullscreen : Form
         _status = new Label
         {
             AutoSize = true, Text = "Loading HD textures…",
-            ForeColor = Color.FromArgb(150, 150, 155), BackColor = Color.Black,
+            ForeColor = Color.FromArgb(150, 150, 155), BackColor = UiKit.LiteBoxTheme.PanelC,
         };
         Controls.Add(_status);
         _status.BringToFront();

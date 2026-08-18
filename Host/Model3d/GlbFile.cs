@@ -36,7 +36,11 @@ internal sealed record BakedMesh(Point3D[] Pos, Vector3D[] Nrm, System.Windows.P
 /// <c>DoubleSided</c> mirrors the source GeometryModel3D's BackMaterial != null — single-sided faces
 /// (the jewel spine cap, the split back-insert walls) MUST stay single-sided through the GLB round
 /// trip, or the reloaded cap occludes the scan strips it is supposed to be culled in front of.</summary>
-internal sealed record BakedMaterial(Color Color, double Opacity, byte[]? TexturePng, bool DoubleSided = true);   // TexturePng = encoded bytes (PNG, or JPEG for opaque faces since baker v4)
+// TexturePng = encoded bytes (PNG, or JPEG for opaque faces since baker v4). SpecColor/SpecPower carry
+// the source material's SpecularMaterial through the GLB in glTF `extras` (baker v21): without them the
+// detail pane and the fullscreen viewer rendered pure diffuse and looked flat next to the live preview.
+internal sealed record BakedMaterial(Color Color, double Opacity, byte[]? TexturePng, bool DoubleSided = true,
+                                     Color SpecColor = default, double SpecPower = 0);
 
 /// <summary>The cache identity stored in a GLB's <c>extras.litebox</c> block.</summary>
 internal sealed record GlbInfo(string Key, string GameId, string Platform, string Title, int BakerVersion, string Manifest);
@@ -96,7 +100,10 @@ internal static class GlbFile
                 pbr = $"\"pbrMetallicRoughness\":{{\"baseColorFactor\":[{c}],\"metallicFactor\":0,\"roughnessFactor\":1}}";
             }
             string alphaMode = m.Opacity < 0.999 ? ",\"alphaMode\":\"BLEND\"" : "";
-            materialsJson.Add($"{{{pbr}{alphaMode},\"doubleSided\":{(m.DoubleSided ? "true" : "false")}}}");
+            string specExtras = m.SpecPower > 0
+                ? $",\"extras\":{{\"specRGBA\":[{m.SpecColor.R},{m.SpecColor.G},{m.SpecColor.B},{m.SpecColor.A}],\"specPow\":{m.SpecPower.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}"
+                : "";
+            materialsJson.Add($"{{{pbr}{alphaMode},\"doubleSided\":{(m.DoubleSided ? "true" : "false")}{specExtras}}}");
         }
 
         for (int s = 0; s < meshes.Count; s++)
@@ -288,6 +295,19 @@ internal static class GlbFile
                         (byte)(fc[1].GetDouble() * 255), (byte)(fc[2].GetDouble() * 255)));
                     brush.Freeze();
                     mat = new DiffuseMaterial(brush);
+                }
+                // Re-attach the specular the writer stashed in `extras` (absent in pre-v21 files —
+                // those stay diffuse-only, exactly as they baked).
+                if (m.TryGetProperty("extras", out var ex)
+                    && ex.TryGetProperty("specRGBA", out var sc) && ex.TryGetProperty("specPow", out var sp))
+                {
+                    var spb = new SolidColorBrush(Color.FromArgb(
+                        (byte)sc[3].GetInt32(), (byte)sc[0].GetInt32(), (byte)sc[1].GetInt32(), (byte)sc[2].GetInt32()));
+                    spb.Freeze();
+                    var grp2 = new MaterialGroup();
+                    grp2.Children.Add(mat);
+                    grp2.Children.Add(new SpecularMaterial(spb, sp.GetDouble()));
+                    mat = grp2;
                 }
                 mat.Freeze();
                 matList.Add(mat);

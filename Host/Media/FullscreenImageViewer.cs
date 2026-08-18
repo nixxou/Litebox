@@ -31,8 +31,7 @@ internal sealed class FullscreenImageViewer : Form
         _ix = Math.Max(0, Math.Min(paths.Count - 1, start));
 
         FormBorderStyle = FormBorderStyle.None;
-        WindowState = FormWindowState.Maximized;
-        StartPosition = FormStartPosition.Manual;
+        UiKit.FullscreenPlacement.OnAppScreen(this);   // the monitor LiteBox/LaunchBox are on
         BackColor = Color.Black;
         ShowInTaskbar = false;
         DoubleBuffered = true;

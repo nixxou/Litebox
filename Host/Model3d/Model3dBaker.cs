@@ -163,12 +163,18 @@ internal static class Model3dBaker
     {
         Color col = Color.FromRgb(0x80, 0x80, 0x80);
         double opacity = 1;
+        Color specCol = default; double specPow = 0;
         System.Windows.Media.Brush? tex = null;
         void Scan(Material? m)
         {
             switch (m)
             {
                 case MaterialGroup mg: foreach (var c in mg.Children) Scan(c); break;
+                case SpecularMaterial sm when sm.Brush is SolidColorBrush ssb:
+                    specCol = ssb.Color; specPow = sm.SpecularPower; break;
+                case SpecularMaterial sm2 when sm2.Brush is ImageBrush:
+                    // an image specular (the wear map) keeps its power, averaged to a plain white sheen
+                    specCol = Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF); specPow = sm2.SpecularPower; break;
                 case DiffuseMaterial dm:
                     switch (dm.Brush)
                     {
@@ -189,6 +195,16 @@ internal static class Model3dBaker
             var sb2 = new SolidColorBrush(Color.FromArgb((byte)Math.Round(Math.Clamp(opacity, 0, 1) * 255), col.R, col.G, col.B));
             sb2.Freeze();
             res = new DiffuseMaterial(sb2);
+        }
+        // Keep the sheen: dropping it left the fullscreen viewer's hi-res model pure diffuse, visibly
+        // flatter than the live preview it is supposed to match.
+        if (specPow > 0)
+        {
+            var spb = new SolidColorBrush(specCol); spb.Freeze();
+            var grp2 = new MaterialGroup();
+            grp2.Children.Add(res);
+            grp2.Children.Add(new SpecularMaterial(spb, specPow));
+            res = grp2;
         }
         res.Freeze();
         return res;
@@ -277,12 +293,18 @@ internal static class Model3dBaker
     {
         Color col = Color.FromRgb(0x80, 0x80, 0x80);
         double opacity = 1;
+        Color specCol = default; double specPow = 0;
         byte[]? tex = null;
         void Scan(Material? m)
         {
             switch (m)
             {
                 case MaterialGroup mg: foreach (var c in mg.Children) Scan(c); break;
+                case SpecularMaterial sm when sm.Brush is SolidColorBrush ssb:
+                    specCol = ssb.Color; specPow = sm.SpecularPower; break;
+                case SpecularMaterial sm2 when sm2.Brush is ImageBrush:
+                    // an image specular (the wear map) keeps its power, averaged to a plain white sheen
+                    specCol = Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF); specPow = sm2.SpecularPower; break;
                 case DiffuseMaterial dm:
                     switch (dm.Brush)
                     {
@@ -294,7 +316,7 @@ internal static class Model3dBaker
             }
         }
         Scan(mat);
-        return new BakedMaterial(col, opacity, tex);
+        return new BakedMaterial(col, opacity, tex, SpecColor: specCol, SpecPower: specPow);
     }
 
     private static byte[]? RasterizeVisual(System.Windows.FrameworkElement fe)

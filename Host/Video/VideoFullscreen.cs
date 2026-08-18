@@ -41,8 +41,7 @@ internal sealed class VideoFullscreen : Form
     public VideoFullscreen(string path, Image? still, bool sound, long startMs)
     {
         FormBorderStyle = FormBorderStyle.None;
-        WindowState = FormWindowState.Maximized;
-        StartPosition = FormStartPosition.Manual;
+        UiKit.FullscreenPlacement.OnAppScreen(this);   // the monitor LiteBox/LaunchBox are on
         BackColor = Color.Black;
         ShowInTaskbar = false;
         KeyPreview = true;

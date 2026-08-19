@@ -71,6 +71,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private readonly Dictionary<object, TreeNode> _treeNodeMap = new();   // node object → its TreeNode (selection restore)
     private readonly GameListView _games;
     private GameListIndexBar _gameIndex;         // LB 14's Game List Index — group markers where the scrollbar was
+    private bool _gameIndexOn;                   // the option's value — NOT _gameIndex.Visible, which is false while the form isn't shown yet
     // Poster (grid) view — a native virtual ListView mirroring the OLV's displayed (sorted+filtered)
     // order; owner-drawn box-art tiles. Toggled from VIEW ▸ Images View / List View.
     private PosterListView _poster;
@@ -381,16 +382,23 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _gameIndex = new GameListIndexBar
         {
             Dock = DockStyle.Right, BackColor = Center, Font = Font,
+            // Providers pick the ACTIVE view: the poster mirrors the list's displayed order
+            // (same index space), so the groups are shared and only the scroll plumbing switches.
             GroupsProvider = ComputeIndexGroups,
             RowCount = () => _games.VisibleGames.Count,
-            JumpToRow = r => _games.ScrollRowToTop(r),
-            TopRow = () => _games.TopRowIndex,
-            PageRows = () => _games.RowsPerPage,
+            JumpToRow = r => { if (_posterMode) _poster.ScrollItemToTop(r); else _games.ScrollRowToTop(r); },
+            TopRow = () => _posterMode ? _poster.FirstVisibleIndex : _games.TopRowIndex,
+            PageRows = () => _posterMode ? _poster.ItemsPerPage : _games.RowsPerPage,
         };
         inner.Panel1.Controls.Add(_gameIndex);
         _games.ViewChanged += () => { if (_gameIndex.Visible) _gameIndex.RefreshGroups(); };
         _games.Scrolled += () => { if (_gameIndex.Visible) _gameIndex.Invalidate(); };   // keep the thumb honest
+        _poster.Scrolled += () => { if (_gameIndex.Visible) _gameIndex.Invalidate(); };
+        _gameIndex.SizeChanged += (_, _) => LayoutPoster();   // the strip's width changes the grid's room
         ApplyGameListIndexOptions();
+        // Layout ran while the form was invisible (Control.Visible lies until Show), so the poster
+        // may have measured a barless width — one refresh once everything is really on screen.
+        Shown += (_, _) => { try { ApplyGameListIndexOptions(); } catch { } };
         // Launch buttons docked at the bottom of the details pane (always visible,
         // outside the scrolling detail grid). _detailHost (Fill) is added FIRST so
         // the bottom panel reserves its space and the grid fills the rest.
@@ -2038,6 +2046,26 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 + "a leading The/A/An and punctuation. advanced: use Sort Title when set, then remove bracket "
                 + "annotations and articles, separate punctuation, and convert Roman numerals II-VIII.",
                 applyLive: ApplyTitleSortNormalization),
+            // The pair binds LB 14's OWN Settings.xml keys, so LiteBox and LaunchBox edit the same
+            // switch. Against a pre-14 LB the keys are ProblemKeys-routed to LiteBox's DB (a 13.x
+            // rewrite would strip the unknown names) — same value, different shelf.
+            Options.OptionItem.Toggle("Display", "Game list index (replaces the scrollbars)",
+                () => LbSettings?.GetBool("UseArrangeScrollBar", true) ?? true,
+                v => LbSettings?.SetBool("UseArrangeScrollBar", v),
+                "LaunchBox's Game List Index (its 'Show Game List Index' option — the setting is shared): "
+                + "the list AND poster scrollbars become an index of the current Arrange By groups — letters when "
+                + "sorted by Title, the values themselves for any other sort. Click or drag it to jump "
+                + "straight to a group; a group too thin to spell its label keeps a dot marker (hover "
+                + "names it).",
+                applyLive: ApplyGameListIndexOptions),
+            Options.OptionItem.Toggle("Display", "Game list index: always show the markers",
+                () => LbSettings?.GetBool("AlwaysShowArrangeScrollBar", true) ?? true,
+                v => LbSettings?.SetBool("AlwaysShowArrangeScrollBar", v),
+                "LB's 'Always show the Game List Index' (shared setting). On (default): the markers stay "
+                + "visible and the strip keeps its room. Off: a slim blank strip until the pointer reaches "
+                + "the list's right edge. The dark background only ever appears while the index is being "
+                + "used, either way.",
+                applyLive: ApplyGameListIndexOptions),
             Options.OptionItem.Toggle("Display", "Use the image cache (degraded thumbnails)",
                 () => _cfg.UseImageCache, v => _cfg.UseImageCache = v,
                 applyLive: () => _useImageCache = _cfg.UseImageCache),
@@ -2092,26 +2120,6 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 "On (default): rows wrap long cell text onto a second line. Off: compact single-line rows, "
                 + "truncated with an ellipsis, more games on screen.",
                 applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
-            // The pair binds LB 14's OWN Settings.xml keys, so LiteBox and LaunchBox edit the same
-            // switch. Against a pre-14 LB the keys are ProblemKeys-routed to LiteBox's DB (a 13.x
-            // rewrite would strip the unknown names) — same value, different shelf.
-            Options.OptionItem.Toggle("Display", "Game list index (replaces the scrollbar)",
-                () => LbSettings?.GetBool("UseArrangeScrollBar", true) ?? true,
-                v => LbSettings?.SetBool("UseArrangeScrollBar", v),
-                "LaunchBox's Game List Index (its 'Show Game List Index' option — the setting is shared): "
-                + "the list's scrollbar becomes an index of the current Arrange By groups — letters when "
-                + "sorted by Title, the values themselves for any other sort. Click or drag it to jump "
-                + "straight to a group; a group too thin to spell its label keeps a dot marker (hover "
-                + "names it).",
-                applyLive: ApplyGameListIndexOptions),
-            Options.OptionItem.Toggle("Display", "Game list index: always show the markers",
-                () => LbSettings?.GetBool("AlwaysShowArrangeScrollBar", true) ?? true,
-                v => LbSettings?.SetBool("AlwaysShowArrangeScrollBar", v),
-                "LB's 'Always show the Game List Index' (shared setting). On (default): the markers stay "
-                + "visible and the strip keeps its room. Off: a slim blank strip until the pointer reaches "
-                + "the list's right edge. The dark background only ever appears while the index is being "
-                + "used, either way.",
-                applyLive: ApplyGameListIndexOptions),
             .. BadgeListOptions(),
         ];
 
@@ -3404,10 +3412,13 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (_gameIndex == null) return;
         // LB 14's own keys (shared Settings.xml on 14+, ProblemKeys-routed to our DB before that).
         bool on = LbSettings?.GetBool("UseArrangeScrollBar", true) ?? true;
+        _gameIndexOn = on;
         _games.HideVScroll = on;
+        if (_poster != null) _poster.HideVScroll = on;   // the poster grid loses its scrollbar too
         _gameIndex.AlwaysShow = LbSettings?.GetBool("AlwaysShowArrangeScrollBar", true) ?? true;
-        _gameIndex.Visible = on && !_posterMode;
-        if (on && !_posterMode) _gameIndex.RefreshGroups();
+        _gameIndex.Visible = on;
+        if (on) _gameIndex.RefreshGroups();
+        LayoutPoster();   // the grid's usable width follows the strip
     }
 
     private void ApplyFilter()
@@ -3556,8 +3567,132 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
         private int _anchor = -1;
 
+        // ── Game List Index support (grid flavour of GameListView's helpers) ──────────
+        [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+        [DllImport("user32.dll")] private static extern bool ShowScrollBar(IntPtr hWnd, int wBar, bool bShow);
+        [StructLayout(LayoutKind.Sequential)] private struct PT { public int X, Y; }
+        [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, ref PT pt);
+        private const int LVM_SCROLL_P = LVM_FIRST + 20, LVM_GETORIGIN_P = LVM_FIRST + 41;
+        private const int WM_NCCALCSIZE_P = 0x83, WM_MOUSEWHEEL_P = 0x020A, WM_VSCROLL_P = 0x0115;
+        private const int GWL_STYLE_P = -16, WS_VSCROLL_P = 0x00200000, SB_VERT_P = 1;
+
+        /// <summary>Current vertical scroll offset (LVM_GETORIGIN — valid in icon views).</summary>
+        private int ScrollTop()
+        {
+            var pt = new PT();
+            SendMessage(Handle, LVM_GETORIGIN_P, IntPtr.Zero, ref pt);
+            return pt.Y;
+        }
+
+        private bool _hideVScroll;
+        [System.ComponentModel.Browsable(false)]
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool HideVScroll
+        {
+            get => _hideVScroll;
+            set
+            {
+                if (_hideVScroll == value) return;
+                _hideVScroll = value;
+                ReassertScrollHiding();
+            }
+        }
+
+        /// <summary>Re-hide the scrollbar after anything that redraws the frame (SetWindowTheme,
+        /// handle recreation): ShowScrollBar + a frame-changed pass so WM_NCCALCSIZE strips the
+        /// style again.</summary>
+        public void ReassertScrollHiding()
+        {
+            if (!_hideVScroll || !IsHandleCreated) return;
+            try
+            {
+                ShowScrollBar(Handle, SB_VERT_P, false);
+                SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            }
+            catch { }
+        }
+
+        /// <summary>The viewport moved — lets the index bar keep its thumb honest.</summary>
+        public event Action Scrolled;
+
+        /// <summary>Columns per row and the row stride in px, measured off the native geometry
+        /// (item 0 vs the first item that wraps). (1, big) for a single-row grid.</summary>
+        private (int cols, int rowH) Grid()
+        {
+            int n = VirtualListSize;
+            if (n <= 0) return (1, 1);
+            var r0 = GetItemRect(0);
+            for (int i = 1; i < Math.Min(n, 256); i++)
+            {
+                var r = GetItemRect(i);
+                if (r.Y > r0.Y) return (i, r.Y - r0.Y);
+            }
+            return (Math.Max(1, n), int.MaxValue);
+        }
+
+        /// <summary>Index of the first item of the topmost visible grid row.</summary>
+        public int FirstVisibleIndex
+        {
+            get
+            {
+                if (!IsHandleCreated || VirtualListSize == 0) return 0;
+                try
+                {
+                    var (cols, rowH) = Grid();
+                    if (rowH <= 0 || rowH == int.MaxValue) return 0;
+                    return Math.Clamp(Math.Max(0, (ScrollTop() + rowH / 2) / rowH) * cols, 0, VirtualListSize - 1);
+                }
+                catch { return 0; }
+            }
+        }
+
+        /// <summary>Items one viewport holds (whole grid rows).</summary>
+        public int ItemsPerPage
+        {
+            get
+            {
+                if (!IsHandleCreated || VirtualListSize == 0) return 1;
+                try
+                {
+                    var (cols, rowH) = Grid();
+                    if (rowH <= 0 || rowH == int.MaxValue) return Math.Max(1, VirtualListSize);
+                    return Math.Max(1, ClientSize.Height / rowH) * cols;
+                }
+                catch { return 1; }
+            }
+        }
+
+        /// <summary>Pixel-scroll so <paramref name="index"/>'s grid row lands at the top (the
+        /// index bar's jump). LVM_SCROLL takes pixels in icon view.</summary>
+        public void ScrollItemToTop(int index)
+        {
+            if (!IsHandleCreated || VirtualListSize == 0) return;
+            index = Math.Clamp(index, 0, VirtualListSize - 1);
+            try
+            {
+                var (_, rowH) = Grid();
+                if (rowH == int.MaxValue) return;   // single row — nowhere to scroll
+                // Both rects live in the CURRENT client space; the grid's top margin in that space
+                // is item 0's Y plus the scroll already applied. Scrolling by the difference puts
+                // this item's row exactly where row 0 sits when the grid is unscrolled.
+                int margin = GetItemRect(0).Y + ScrollTop();
+                int dy = GetItemRect(index).Y - margin;
+                SendMessage(Handle, LVM_SCROLL_P, IntPtr.Zero, (IntPtr)dy);
+            }
+            catch { }
+        }
+
         protected override void WndProc(ref Message m)
         {
+            if (_hideVScroll && m.Msg == WM_NCCALCSIZE_P && IsHandleCreated)
+            {
+                int style = GetWindowLong(Handle, GWL_STYLE_P);
+                if ((style & WS_VSCROLL_P) != 0) SetWindowLong(Handle, GWL_STYLE_P, style & ~WS_VSCROLL_P);
+            }
+            if (m.Msg is WM_MOUSEWHEEL_P or WM_VSCROLL_P or WM_KEYDOWN)
+                Scrolled?.Invoke();
             if (VirtualListSize > 0 && (m.Msg == WM_LBUTTONDOWN || m.Msg == WM_KEYDOWN))
             {
                 bool shift = (ModifierKeys & Keys.Shift) != 0;
@@ -3767,11 +3902,16 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     {
         if (_poster == null || !_posterMode) return;
         var parent = _poster.Parent; if (parent == null) return;
-        int pw = parent.ClientSize.Width, ph = parent.ClientSize.Height;
+        // The index strip is DOCKED but the poster is not (Dock.None, centred by hand), so the
+        // grid must subtract the strip's width itself or it slides underneath.
+        int barW = _gameIndexOn && _gameIndex != null ? _gameIndex.Width : 0;
+        int pw = parent.ClientSize.Width - barW, ph = parent.ClientSize.Height;
         if (pw <= 0 || ph <= 0) return;
         int strideX = PCellW + PGap, strideY = PImgH + PLabelH + PGap;
         int count = _poster.VirtualListSize;
-        int sbw = SystemInformation.VerticalScrollBarWidth;
+        // With the index on there IS no native scrollbar — reserving its width would just skew
+        // the centring.
+        int sbw = barW > 0 ? 0 : SystemInformation.VerticalScrollBarWidth;
 
         int cols0 = Math.Max(1, pw / strideX);
         int rows = (count + cols0 - 1) / cols0;
@@ -3940,7 +4080,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     {
         if (_posterMode == on || _poster == null) return;
         _posterMode = on;
-        try { ApplyGameListIndexOptions(); } catch { }   // the index belongs to the list view only
+        try { ApplyGameListIndexOptions(); } catch { }   // re-aim the index's scroll plumbing at the new view
         try { SyncViewSwitchChecks(); } catch { }   // menu bar: Images View / List View check marks
         _cfg.SetBool("PosterMode", on); _cfg.Save();
         if (on)
@@ -3948,8 +4088,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             RefreshPoster();
             _games.Visible = false;          // hide the list behind: the poster's left margin would reveal it
             _poster.Visible = true; _poster.BringToFront();
+            _gameIndex?.BringToFront();   // the strip stays above whichever view is frontmost
             LayoutPoster();
             try { ApplyDarkScroll(_poster); } catch { }
+            try { _poster.ReassertScrollHiding(); } catch { }   // the theme pass can resurface the bar
             try { if (_poster.IsHandleCreated) EnableListViewDoubleBuffer(_poster); } catch { }   // SetWindowTheme can clear ex-styles
             try { ActiveControl = _poster; _poster.Focus(); } catch { }
         }

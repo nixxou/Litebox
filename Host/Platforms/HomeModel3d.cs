@@ -1526,9 +1526,12 @@ internal sealed class HomeModel3d : IDisposable
                 Child = tb,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
                 VerticalAlignment = System.Windows.VerticalAlignment.Center,
-                // A hair of breathing room at the ends and edges — LB never runs the title
-                // hard against the spine's borders.
-                Margin = new System.Windows.Thickness(14, 7, 14, 7),
+                // LB's exact text box (oracle dump, AoW Shadow Magic): Margin 20,0,20,0 and the
+                // Viewbox laid out 75.8 high in the 169.4 grid — the title only ever fills ~45%
+                // of the spine's width, which is why LB's text reads thinner than a full-height
+                // fit. MaxHeight pins that; long titles then shrink further by length.
+                Margin = new System.Windows.Thickness(20, 0, 20, 0),
+                MaxHeight = 75.8,
             };
             // 180: LB's spine title reads BOTTOM-TO-TOP (checked against the dual preview);
             // without the flip ours ran top-to-bottom.

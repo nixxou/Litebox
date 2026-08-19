@@ -375,7 +375,7 @@ internal static class JewelRenderProbe
                               $" w={im.Width:0.#} h={im.Height:0.#} m={im.Margin}{cell}{tf}{rtf} op={im.Opacity:0.##})");
                     break;
                 case System.Windows.Controls.TextBlock tb:
-                    parts.Add($"Text(\"{tb.Text}\" fg={(tb.Foreground as SolidColorBrush)?.Color}, font={tb.FontFamily} {tb.FontSize}pt {tb.FontWeight}/{tb.FontStyle}, wrap={tb.TextWrapping}, align={tb.TextAlignment}, pad={tb.Padding}, m={tb.Margin}, w={tb.Width} h={tb.Height})");
+                    parts.Add($"Text(\"{tb.Text}\" fg={(tb.Foreground as SolidColorBrush)?.Color}, font={tb.FontFamily} {tb.FontSize}pt {tb.FontWeight}/{tb.FontStyle}, wrap={tb.TextWrapping}, align={tb.TextAlignment}, pad={tb.Padding}, m={tb.Margin}, w={tb.Width} h={tb.Height} actual={tb.ActualWidth:0.#}x{tb.ActualHeight:0.#})");
                     break;
                 case System.Windows.Controls.Panel pn:
                     string bg = pn is { } && pn.Background is SolidColorBrush pb ? $"#{pb.Color.A:X2}{pb.Color.R:X2}{pb.Color.G:X2}{pb.Color.B:X2}" : pn.Background?.GetType().Name ?? "-";
@@ -383,6 +383,11 @@ internal static class JewelRenderProbe
                         ? " cols=" + string.Join("|", gg.ColumnDefinitions.Select(c => c.Width.ToString())) : "";
                     parts.Add($"{pn.GetType().Name}(bg={bg}{cols})");
                     foreach (object c in pn.Children) if (c is System.Windows.DependencyObject cd) Add(cd);
+                    break;
+                case System.Windows.Controls.Viewbox vb:
+                    parts.Add($"Viewbox(st={vb.Stretch}/{vb.StretchDirection} ha={vb.HorizontalAlignment} va={vb.VerticalAlignment}" +
+                              $" w={vb.Width:0.#} h={vb.Height:0.#} m={vb.Margin} actual={vb.ActualWidth:0.#}x{vb.ActualHeight:0.#})");
+                    if (vb.Child != null) Add(vb.Child);
                     break;
                 case System.Windows.Controls.Decorator dec:
                     parts.Add(dec.GetType().Name);

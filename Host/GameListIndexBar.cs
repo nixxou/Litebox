@@ -56,6 +56,17 @@ internal sealed class GameListIndexBar : Control
     }
     private bool _alwaysShow = true;
 
+    /// <summary>With AlwaysShow OFF: the retracted sliver still shows a dots-only MINI index (the
+    /// thumb included) instead of sitting blank. Its space is the reserved sliver either way.</summary>
+    [System.ComponentModel.Browsable(false)]
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool MiniWhenCollapsed
+    {
+        get => _mini;
+        set { if (_mini == value) return; _mini = value; Invalidate(); }
+    }
+    private bool _mini = true;
+
     /// <summary>The width the LAYOUT must reserve for the strip — constant per mode (fitted when
     /// always-shown, the slim collapsed sliver otherwise). Hover expansion is a pure OVERLAY above
     /// the content and never touches this: reflowing the grid mid-hover moved the tiles under the
@@ -213,7 +224,27 @@ internal sealed class GameListIndexBar : Control
             using (var bg = new SolidBrush(LiteBoxTheme.PanelC))
                 g.FillRectangle(bg, ClientRectangle);
 
-        if (!MarkersVisible || _groups.Count == 0 || _rows == 0) return;
+        if (_groups.Count == 0 || _rows == 0) return;
+        if (!MarkersVisible)
+        {
+            // Retracted mini index: the dot rail and the thumb, nothing else — a slim silhouette
+            // of the bar so the eye keeps the map without the labels' width.
+            if (!_mini) return;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            int mty = ThumbY();
+            if (mty >= 0)
+                using (var pos = new SolidBrush(Color.FromArgb(210, LiteBoxTheme.Accent)))
+                    g.FillRectangle(pos, 2, mty - 1, ClientSize.Width - 4, 3);
+            using var mtick = new SolidBrush(Color.FromArgb(150, LiteBoxTheme.SubFg));
+            float mcx = ClientSize.Width / 2f;
+            for (int i = 0; i < _groups.Count; i++)
+            {
+                int my = YOf(_groups[i].Index);
+                int d = _groups[i].Spell ? 3 : 2;   // family heads read a touch bigger
+                g.FillEllipse(mtick, mcx - d / 2f, my - d / 2f, d, d);
+            }
+            return;
+        }
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
 

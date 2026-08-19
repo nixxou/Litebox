@@ -2074,6 +2074,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 + "straight to a group; a group too thin to spell its label keeps a dot marker (hover "
                 + "names it).",
                 applyLive: ApplyGameListIndexOptions),
+            Options.OptionItem.Toggle("Display", "Game list index: mini bar when retracted",
+                () => _cfg.GetBool("GameListIndexMini", true), v => _cfg.SetBool("GameListIndexMini", v),
+                "Only matters with 'always show' OFF. On (default): the retracted strip still shows a "
+                + "slim dots-only index (its sliver of space stays reserved either way); hovering it "
+                + "unfolds the full bar over the content. Off: the retracted strip stays blank.",
+                applyLive: ApplyGameListIndexOptions),
             Options.OptionItem.Toggle("Display", "Game list index: always show the markers",
                 () => LbSettings?.GetBool("AlwaysShowArrangeScrollBar", true) ?? true,
                 v => LbSettings?.SetBool("AlwaysShowArrangeScrollBar", v),
@@ -3432,6 +3438,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _games.HideVScroll = on;
         if (_poster != null) _poster.HideVScroll = on;   // the poster grid loses its scrollbar too
         _gameIndex.AlwaysShow = LbSettings?.GetBool("AlwaysShowArrangeScrollBar", true) ?? true;
+        _gameIndex.MiniWhenCollapsed = _cfg.GetBool("GameListIndexMini", true);
         _gameIndex.Visible = on;
         if (on) _gameIndex.RefreshGroups();
         ApplyGameListIndexRoom();
@@ -4237,6 +4244,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         else
         {
             _poster.Visible = false; _games.Visible = true; _games.BringToFront();
+            _gameIndex?.BringToFront();   // above the list too — else the hover expansion unfolds UNDERNEATH it
             try { ActiveControl = _games; _games.Focus(); } catch { }
             // Leaving the poster RELEASES its image memory outright (user decision): a list-mode session
             // should not keep hundreds of MB of tiles idle for a view that is not on screen. Same full

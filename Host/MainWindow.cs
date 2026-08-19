@@ -387,6 +387,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             GroupsProvider = ComputeIndexGroups,
             RowCount = () => _games.VisibleGames.Count,
             JumpToRow = r => { if (_posterMode) _poster.ScrollItemToTop(r); else _games.ScrollRowToTop(r); },
+            SelectRow = r =>
+            {
+                if (_posterMode) _poster.SelectRange(r, r);   // fires SelectedIndexChanged → detail pane follows
+                else if (_games.GameAt(r) is { } g) _games.SelectGame(g, focus: false);
+            },
             TopRow = () => _posterMode ? _poster.FirstVisibleIndex : _games.TopRowIndex,
             PageRows = () => _posterMode ? _poster.ItemsPerPage : _games.RowsPerPage,
         };

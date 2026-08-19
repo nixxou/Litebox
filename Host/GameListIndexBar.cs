@@ -36,6 +36,9 @@ internal sealed class GameListIndexBar : Control
     public Func<int>? RowCount;
     /// <summary>Scroll the list so this row lands at the top.</summary>
     public Action<int>? JumpToRow;
+    /// <summary>Select this row in the central view. Fired on GROUP clicks (label or dot) only —
+    /// a continuous thumb drag scrolls without touching the selection.</summary>
+    public Action<int>? SelectRow;
     /// <summary>The row currently at the top of the list, for the position indicator.</summary>
     public Func<int>? TopRow;
     /// <summary>Rows one viewport holds. The thumb's range is rows − page — that is what lets a
@@ -332,6 +335,9 @@ internal sealed class GameListIndexBar : Control
         int i = GroupAt(y);
         if (i < 0 || i >= _groups.Count) return;
         try { JumpToRow?.Invoke(_groups[i].Index); } catch { }
+        // Clicking a marker also SELECTS the group's first game — scrolled to the top AND current,
+        // so the detail pane follows the jump. (After JumpToRow, so any EnsureVisible is a no-op.)
+        try { SelectRow?.Invoke(_groups[i].Index); } catch { }
         Invalidate();
     }
 

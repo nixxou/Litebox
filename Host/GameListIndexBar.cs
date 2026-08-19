@@ -160,6 +160,16 @@ internal sealed class GameListIndexBar : Control
         return best;
     }
 
+    private const int MarkerTol = 9;   // a click must land ON a marker (+/- this) to count as one
+
+    /// <summary>The group whose marker is within tolerance of <paramref name="y"/> — or -1: between
+    /// two distant markers NOTHING is eligible, clicking there must not snap to the nearest one.</summary>
+    private int GroupNear(int y)
+    {
+        int i = GroupAt(y);
+        return i >= 0 && Math.Abs(YOf(_groups[i].Index) - y) <= MarkerTol ? i : -1;
+    }
+
     private const int DotRail = 9;   // the dots' lane along the right edge; text ends before it
 
     /// <summary>The thumb's centre, on the SCROLL scale: top / (rows − page), so it reaches both
@@ -277,32 +287,40 @@ internal sealed class GameListIndexBar : Control
         if (e.Button != MouseButtons.Left) return;
         _dragging = true;
         Capture = true;
+        _downY = e.Y;
+        _dragMoved = false;
         // A quick SECOND press is not another grab: it means "put the thumb right here" — the
         // pointer position becomes the scroll position, no grab offset, no group snap.
         if (e.Clicks >= 2)
         {
             _grabOffset = 0;
+            _dragMoved = true;
             DragTo(e.Y);
             return;
         }
         // Pressing NEAR the thumb (not just dead on the 3px line) grabs it where it stands — no
         // snap, so a drag can start from a position between two markers without the list lurching
-        // first. Pressing farther away is a jump to the nearest group (the letter you aimed at),
-        // and the drag goes on from there.
+        // first.
         int ty = ThumbY();
-        bool onThumb = ty >= 0 && Math.Abs(e.Y - ty) <= GrabZone;
-        _grabOffset = onThumb ? e.Y - ty : 0;
-        if (!onThumb) JumpAt(e.Y);
+        if (ty >= 0 && Math.Abs(e.Y - ty) <= GrabZone) { _grabOffset = e.Y - ty; Invalidate(); return; }
+        _grabOffset = 0;
+        // A press only counts as a GROUP CLICK when it lands on a marker (+/- tolerance): between
+        // two distant markers a bare click does nothing — no snapping to whichever is nearest.
+        // Holding and MOVING from there still drags the thumb continuously.
+        int gi = GroupNear(e.Y);
+        if (gi >= 0) JumpTo(gi);
         Invalidate();
     }
     private int _grabOffset;             // pointer-to-thumb offset while dragging (0 = jumped)
+    private int _downY;                  // where the press landed — the tremor guard anchor
+    private bool _dragMoved;             // the press became a real drag (movement past the guard)
     private const int GrabZone = 18;     // px around the 3px thumb line that count as grabbing it —
                                          // wider than the line (nobody aims at 3px), 26 was too greedy
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        int i = GroupAt(e.Y);
+        int i = GroupNear(e.Y);   // hover follows the same eligibility as clicks — no far snapping
         if (i != _hover)
         {
             _hover = i;
@@ -310,9 +328,14 @@ internal sealed class GameListIndexBar : Control
             if (t != _tipText) { _tipText = t; if (t.Length > 0) _tip.SetToolTip(this, t); }
             Invalidate();
         }
-        // Any movement while pressed is a CONTINUOUS drag: the pointer maps straight to a scroll
-        // position, markers or not — the thumb parks wherever it is let go.
-        if (_dragging) DragTo(e.Y - _grabOffset);
+        // Movement while pressed is a CONTINUOUS drag — past a small tremor guard, so a click on
+        // a label does not turn into a drag because the hand shivered a pixel or two.
+        if (_dragging)
+        {
+            if (!_dragMoved && Math.Abs(e.Y - _downY) <= 4) return;
+            _dragMoved = true;
+            DragTo(e.Y - _grabOffset);
+        }
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -361,13 +384,14 @@ internal sealed class GameListIndexBar : Control
         return null;
     }
 
-    private void JumpAt(int y)
+    private void JumpTo(int i)
     {
-        int i = GroupAt(y);
         if (i < 0 || i >= _groups.Count) return;
+        // Scroll first: the group head goes to the TOP row (list top / poster top grid row); when
+        // the tail is shorter than a page the native clamp leaves it lower — bottom at worst,
+        // exactly the wanted exception. THEN select, so the detail pane follows and the
+        // selection code sees an already-visible item (its EnsureVisible is a no-op).
         try { JumpToRow?.Invoke(_groups[i].Index); } catch { }
-        // Clicking a marker also SELECTS the group's first game — scrolled to the top AND current,
-        // so the detail pane follows the jump. (After JumpToRow, so any EnsureVisible is a no-op.)
         try { SelectRow?.Invoke(_groups[i].Index); } catch { }
         Invalidate();
     }

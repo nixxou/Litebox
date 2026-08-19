@@ -227,22 +227,13 @@ internal sealed class GameListIndexBar : Control
         if (_groups.Count == 0 || _rows == 0) return;
         if (!MarkersVisible)
         {
-            // Retracted mini index: the dot rail and the thumb, nothing else — a slim silhouette
-            // of the bar so the eye keeps the map without the labels' width.
+            // Retracted mini index: ONLY the accent position line — a slim scrollbar silhouette.
+            // (It first drew the dot rail too; the dots crowding the sliver read as clutter.)
             if (!_mini) return;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
             int mty = ThumbY();
             if (mty >= 0)
                 using (var pos = new SolidBrush(Color.FromArgb(210, LiteBoxTheme.Accent)))
                     g.FillRectangle(pos, 2, mty - 1, ClientSize.Width - 4, 3);
-            using var mtick = new SolidBrush(Color.FromArgb(150, LiteBoxTheme.SubFg));
-            float mcx = ClientSize.Width / 2f;
-            for (int i = 0; i < _groups.Count; i++)
-            {
-                int my = YOf(_groups[i].Index);
-                int d = _groups[i].Spell ? 3 : 2;   // family heads read a touch bigger
-                g.FillEllipse(mtick, mcx - d / 2f, my - d / 2f, d, d);
-            }
             return;
         }
 

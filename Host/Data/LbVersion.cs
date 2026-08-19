@@ -27,10 +27,15 @@ internal static class LbVersion
     /// <summary>LaunchBox product version (LaunchBox.exe FileVersionInfo), or null if unreadable.</summary>
     public static Version? Product { get; private set; }
 
-    /// <summary>True on the LB 13.28+ line (the Settings.xml key rename baseline). The single
-    /// condition today; ProblemKeys derives its routing from this. May grow more nuanced later
+    /// <summary>True on the LB 13.28+ line (the Settings.xml key rename baseline).
+    /// ProblemKeys derives its routing from this. May grow more nuanced later
     /// (exact product version) without any caller changing — they ask ProblemKeys, not this.</summary>
     public static bool Is1328OrLater => DotNetMajor >= 10;
+
+    /// <summary>True against LaunchBox 14+ (the Game List Index keys baseline). An unreadable
+    /// product version counts as PRE-14: the safe default is routing v14-only keys to the DB
+    /// rather than writing names an older LB would strip on its next Settings.xml rewrite.</summary>
+    public static bool Is14OrLater => Product?.Major >= 14;
 
     private static bool _done;
 

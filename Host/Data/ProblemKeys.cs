@@ -31,9 +31,18 @@ internal static class ProblemKeys
     // AND the direct readers (DOSBox opts, gameplay, Steam, RetroAchievements, EmuMovies,
     // CloudAuthenticationToken, RegionPriorities, EnableAutomatedImports/EnableRomAutoImports) —
     // exists in v14. Unknown keys round-trip through LbSettingsStore's full name→value load, so
-    // the 7 additions survive a LiteBox rewrite untouched.
-    // IF LiteBox ever binds a v14-only key, give it a _new14Keys bucket DB-managed when
-    // LbVersion.Product?.Major < 14 — same pattern as _new1328Keys below.
+    // the additions survive a LiteBox rewrite untouched.
+    // Of the 7 added keys, LiteBox now binds TWO (the Game List Index pair) — the _new14Keys
+    // bucket below, exactly the pattern this audit called for.
+
+    // Settings.xml keys introduced by LaunchBox 14 that LiteBox binds. Understood by 14+,
+    // unknown to 13.x — which would strip them on rewrite. Against a pre-14 LB they are
+    // DB-managed; against 14+ they stay in shared XML so LB's own options edit the same value.
+    private static readonly string[] _new14Keys =
+    {
+        "UseArrangeScrollBar",          // LB: "Show Game List Index"
+        "AlwaysShowArrangeScrollBar",   // LB: "Always show the Game List Index"
+    };
 
     // Settings.xml keys introduced on the LB 13.28 line (renamed or brand-new). Present and
     // understood by 13.28+, unknown to 13.27 — which would drop them on rewrite. When we run
@@ -64,6 +73,9 @@ internal static class ProblemKeys
         // 13.28-line keys are only XML-safe on a 13.28+ LB; otherwise route them to the DB.
         if (!LbVersion.Is1328OrLater)
             foreach (var k in _new1328Keys) set.Add(k);
+        // v14-only keys likewise: XML-safe on 14+, DB-managed against anything older.
+        if (!LbVersion.Is14OrLater)
+            foreach (var k in _new14Keys) set.Add(k);
         _dbManaged = set;
         System.Console.WriteLine($"[problemkeys] db-managed keys ({set.Count}): {string.Join(", ", set)}");
     }

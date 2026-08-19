@@ -28,6 +28,9 @@ internal static class SettingDefaults
         ["UsePauseScreen"]                      = "true",
         ["PauseScreenFading"]                   = "true",
         ["PauseScreenMuting"]                   = "true",
+        // LB 14's Game List Index pair — both ON in a fresh v14 install (verified on a real one).
+        ["UseArrangeScrollBar"]                 = "true",
+        ["AlwaysShowArrangeScrollBar"]          = "true",
     };
 
     public static string? Get(string key) => _d.TryGetValue(key, out var v) ? v : null;

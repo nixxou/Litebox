@@ -2092,18 +2092,25 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 "On (default): rows wrap long cell text onto a second line. Off: compact single-line rows, "
                 + "truncated with an ellipsis, more games on screen.",
                 applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
+            // The pair binds LB 14's OWN Settings.xml keys, so LiteBox and LaunchBox edit the same
+            // switch. Against a pre-14 LB the keys are ProblemKeys-routed to LiteBox's DB (a 13.x
+            // rewrite would strip the unknown names) — same value, different shelf.
             Options.OptionItem.Toggle("Display", "Game list index (replaces the scrollbar)",
-                () => _cfg.GetBool("GameListIndex", true), v => _cfg.SetBool("GameListIndex", v),
-                "LaunchBox's Game List Index: the list's scrollbar becomes an index of the current "
-                + "Arrange By groups — letters when sorted by Title, the values themselves for any other "
-                + "sort. Click or drag it to jump straight to a group; a group too thin to spell its label "
-                + "keeps a dot marker (hover names it).",
+                () => LbSettings?.GetBool("UseArrangeScrollBar", true) ?? true,
+                v => LbSettings?.SetBool("UseArrangeScrollBar", v),
+                "LaunchBox's Game List Index (its 'Show Game List Index' option — the setting is shared): "
+                + "the list's scrollbar becomes an index of the current Arrange By groups — letters when "
+                + "sorted by Title, the values themselves for any other sort. Click or drag it to jump "
+                + "straight to a group; a group too thin to spell its label keeps a dot marker (hover "
+                + "names it).",
                 applyLive: ApplyGameListIndexOptions),
             Options.OptionItem.Toggle("Display", "Game list index: always show the markers",
-                () => _cfg.GetBool("GameListIndexAlwaysShow", true), v => _cfg.SetBool("GameListIndexAlwaysShow", v),
-                "On (default): the markers stay visible and the strip keeps its room. Off: a slim blank "
-                + "strip until the pointer reaches the list's right edge. The dark background only ever "
-                + "appears while the index is being used, either way.",
+                () => LbSettings?.GetBool("AlwaysShowArrangeScrollBar", true) ?? true,
+                v => LbSettings?.SetBool("AlwaysShowArrangeScrollBar", v),
+                "LB's 'Always show the Game List Index' (shared setting). On (default): the markers stay "
+                + "visible and the strip keeps its room. Off: a slim blank strip until the pointer reaches "
+                + "the list's right edge. The dark background only ever appears while the index is being "
+                + "used, either way.",
                 applyLive: ApplyGameListIndexOptions),
             .. BadgeListOptions(),
         ];
@@ -3395,9 +3402,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private void ApplyGameListIndexOptions()
     {
         if (_gameIndex == null) return;
-        bool on = _cfg.GetBool("GameListIndex", true);
+        // LB 14's own keys (shared Settings.xml on 14+, ProblemKeys-routed to our DB before that).
+        bool on = LbSettings?.GetBool("UseArrangeScrollBar", true) ?? true;
         _games.HideVScroll = on;
-        _gameIndex.AlwaysShow = _cfg.GetBool("GameListIndexAlwaysShow", true);
+        _gameIndex.AlwaysShow = LbSettings?.GetBool("AlwaysShowArrangeScrollBar", true) ?? true;
         _gameIndex.Visible = on && !_posterMode;
         if (on && !_posterMode) _gameIndex.RefreshGroups();
     }

@@ -263,8 +263,8 @@ internal sealed class GameListIndexBar : Control
         Invalidate();
     }
     private int _grabOffset;             // pointer-to-thumb offset while dragging (0 = jumped)
-    private const int GrabZone = 26;     // px around the 3px thumb line that count as grabbing it —
-                                         // deliberately much wider than the line, nobody aims at 3px
+    private const int GrabZone = 18;     // px around the 3px thumb line that count as grabbing it —
+                                         // wider than the line (nobody aims at 3px), 26 was too greedy
 
     protected override void OnMouseMove(MouseEventArgs e)
     {

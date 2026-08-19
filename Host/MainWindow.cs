@@ -3948,7 +3948,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // extra columns, spend the margin on tiles instead of empty centring slack — the index
         // strip's reserved width stops costing a whole column. With room to spare the gap stays
         // nominal. (The trailing gap doesn't need to fit: the last column ends at its tiles.)
-        int minGap = Math.Max(4, PGap * 2 / 5);
+        int minGap = 1;   // Mehdi's call: in the worst case the tiles may all but touch
         int cols = Math.Max(1, (effW + minGap) / (PCellW + minGap));
         int gap = cols <= 1 ? PGap
                 : Math.Min(PGap, Math.Max(minGap, (effW - cols * PCellW) / (cols - 1)));

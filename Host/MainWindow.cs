@@ -3658,18 +3658,32 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         public int NativeColumns => Grid().cols;
 
         /// <summary>Columns per row and the row stride in px, measured off the native geometry
-        /// (item 0 vs the first item that wraps). (1, big) for a single-row grid.</summary>
+        /// (item 0 vs the first item that wraps). (1, big) for a single-row grid. CACHED per
+        /// (count, client width): the index bar reads this on every thumb repaint while
+        /// scrolling, and the raw scan is up to 256 GetItemRect messages.</summary>
+        private (int cols, int rowH) _gridCache = (0, 0);
+        private (int n, int w) _gridCacheKey = (-1, -1);
+
+        /// <summary>Drop the measured-grid cache — call after anything that re-tiles without
+        /// changing count or width (icon spacing pushes).</summary>
+        public void InvalidateGridCache() => _gridCacheKey = (-1, -1);
+
         private (int cols, int rowH) Grid()
         {
             int n = VirtualListSize;
             if (n <= 0) return (1, 1);
+            var key = (n, ClientSize.Width);
+            if (key == _gridCacheKey) return _gridCache;
             var r0 = GetItemRect(0);
+            var res = (Math.Max(1, n), int.MaxValue);
             for (int i = 1; i < Math.Min(n, 256); i++)
             {
                 var r = GetItemRect(i);
-                if (r.Y > r0.Y) return (i, r.Y - r0.Y);
+                if (r.Y > r0.Y) { res = (i, r.Y - r0.Y); break; }
             }
-            return (Math.Max(1, n), int.MaxValue);
+            _gridCacheKey = key;
+            _gridCache = res;
+            return res;
         }
 
         /// <summary>Index of the first item of the topmost visible grid row.</summary>
@@ -4010,7 +4024,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     {
         if (_posterSpacingX == cx || _poster == null || !_poster.IsHandleCreated) return;
         _posterSpacingX = cx;
-        try { SetIconSpacing(_poster, cx, cy); _poster.Invalidate(); } catch { }
+        try { SetIconSpacing(_poster, cx, cy); _poster.InvalidateGridCache(); _poster.Invalidate(); } catch { }
     }
 
     /// <summary>While the index strip is EXPANDED over the grid (hover/drag in auto-hide mode), a

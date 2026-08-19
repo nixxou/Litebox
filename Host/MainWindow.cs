@@ -3325,6 +3325,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     /// of each first-segment family is eligible to spell its text ("Action; Adventure" spells
     /// "Action"; the following "Action; Casual" keeps a dot) — LaunchBox's rule; the tooltip still
     /// names every group in full.</summary>
+    private static readonly char[] FamilyCuts = { ';', '/' };
+
     private IReadOnlyList<(string Label, string Tip, int Index, bool Spell)> ComputeIndexGroups()
     {
         var view = _games?.VisibleGames;
@@ -3336,7 +3338,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             string l = label(view[i]) ?? "";
             if (string.Equals(l, last, StringComparison.Ordinal)) continue;
-            int cut = l.IndexOf(';');
+            // Family = the first value, and only its LEFT half when it is itself compound: the
+            // arcade genres "Fighter / Versus", "Fighter / 2D", … all spell a single "Fighter".
+            int cut = l.IndexOfAny(FamilyCuts);
             string family = (cut < 0 ? l : l[..cut]).Trim();
             bool spell = !string.Equals(family, lastFamily, StringComparison.OrdinalIgnoreCase);
             groups.Add((family, l, i, spell));

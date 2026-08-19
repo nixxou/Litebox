@@ -72,6 +72,9 @@ internal sealed class GameListIndexBar : Control
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        // No double-click semantics: the second press of a fast pair must be an ordinary MouseDown
+        // (another jump / grab), not a WM_LBUTTONDBLCLK that the bar has no handler for.
+        SetStyle(ControlStyles.StandardDoubleClick, false);
         TabStop = false;   // pointer stays the plain arrow, like LB's index
         Width = MinW;
     }

@@ -385,9 +385,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             RowCount = () => _games.VisibleGames.Count,
             JumpToRow = r => _games.ScrollRowToTop(r),
             TopRow = () => _games.TopRowIndex,
+            PageRows = () => _games.RowsPerPage,
         };
         inner.Panel1.Controls.Add(_gameIndex);
         _games.ViewChanged += () => { if (_gameIndex.Visible) _gameIndex.RefreshGroups(); };
+        _games.Scrolled += () => { if (_gameIndex.Visible) _gameIndex.Invalidate(); };   // keep the thumb honest
         ApplyGameListIndexOptions();
         // Launch buttons docked at the bottom of the details pane (always visible,
         // outside the scrolling detail grid). _detailHost (Fill) is added FIRST so

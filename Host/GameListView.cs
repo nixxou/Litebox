@@ -69,6 +69,7 @@ internal sealed class GameListView : ListView
 
     private const int LVM_FIRST = 0x1000;
     private const int LVM_GETTOPINDEX = LVM_FIRST + 39;
+    private const int LVM_GETCOUNTPERPAGE = LVM_FIRST + 40;
     private const int LVM_SCROLL = LVM_FIRST + 20;
     private const int WM_NCCALCSIZE = 0x83;
     private const int GWL_STYLE = -16;
@@ -914,6 +915,11 @@ internal sealed class GameListView : ListView
     public int TopRowIndex => IsHandleCreated
         ? (int)SendMessage(Handle, LVM_GETTOPINDEX, IntPtr.Zero, IntPtr.Zero) : 0;
 
+    /// <summary>Rows a full viewport holds — the index bar's thumb range is rows − page, so the
+    /// thumb can reach both ends exactly like a scrollbar's.</summary>
+    public int RowsPerPage => IsHandleCreated
+        ? Math.Max(1, (int)SendMessage(Handle, LVM_GETCOUNTPERPAGE, IntPtr.Zero, IntPtr.Zero)) : 1;
+
     /// <summary>Scroll so <paramref name="row"/> lands at the top of the viewport (the index bar's
     /// jump). Pixel-scrolls by whole rows from wherever the list is now.</summary>
     public void ScrollRowToTop(int row)
@@ -928,6 +934,10 @@ internal sealed class GameListView : ListView
         SendMessage(Handle, LVM_SCROLL, IntPtr.Zero, (IntPtr)((row - top) * rowH));
     }
 
+    /// <summary>The viewport moved (wheel, keys, programmatic scroll) — lets the index bar keep its
+    /// thumb honest without polling.</summary>
+    public event Action Scrolled;
+
     protected override void WndProc(ref Message m)
     {
         if (_hideVScroll && m.Msg == WM_NCCALCSIZE && IsHandleCreated)
@@ -935,6 +945,8 @@ internal sealed class GameListView : ListView
             int style = GetWindowLong(Handle, GWL_STYLE);
             if ((style & WS_VSCROLL) != 0) SetWindowLong(Handle, GWL_STYLE, style & ~WS_VSCROLL);
         }
+        if (m.Msg is 0x020A /*WM_MOUSEWHEEL*/ or 0x0115 /*WM_VSCROLL*/ or 0x0100 /*WM_KEYDOWN*/)
+            Scrolled?.Invoke();
         if (m.Msg == WM_CONTEXTMENU && IsHandleCreated)
         {
             IntPtr header = SendMessage(Handle, LVM_GETHEADER, IntPtr.Zero, IntPtr.Zero);

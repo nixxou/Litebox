@@ -36,6 +36,9 @@ internal sealed class GameListIndexBar : Control
     public Action<int>? JumpToRow;
     /// <summary>The row currently at the top of the list, for the position indicator.</summary>
     public Func<int>? TopRow;
+    /// <summary>Rows one viewport holds. The thumb's range is rows − page — that is what lets a
+    /// drag place the view anywhere, ends included, exactly like a scrollbar.</summary>
+    public Func<int>? PageRows;
 
     /// <summary>On: markers stay painted and the strip keeps its fitted width. Off: a slim blank
     /// strip until the pointer reaches it — LaunchBox's "Always show the Game List Index" toggle.</summary>
@@ -118,6 +121,37 @@ internal sealed class GameListIndexBar : Control
         return best;
     }
 
+    private const int ThumbHalf = 6;
+
+    /// <summary>The thumb's centre, on the SCROLL scale: top / (rows − page), so it reaches both
+    /// ends of the strip. Group markers live on the row scale — the two agree at the top and drift
+    /// a little toward the bottom, the same tension every scrollbar-with-marks has.</summary>
+    private int ThumbY()
+    {
+        int top = -1, page = 1;
+        try { top = TopRow?.Invoke() ?? -1; page = Math.Max(1, PageRows?.Invoke() ?? 1); } catch { }
+        if (top < 0) return -1;
+        int maxTop = Math.Max(0, _rows - page);
+        if (maxTop == 0) return -1;   // everything fits — no scroll position to show
+        int h = Math.Max(1, ClientSize.Height - Pad * 2);
+        double f = Math.Clamp(top / (double)maxTop, 0, 1);
+        return Pad + (int)Math.Round(f * (h - 1));
+    }
+
+    /// <summary>Continuous drag: map the pointer straight to a top row on the scroll scale — the
+    /// thumb parks anywhere, between two markers included, like LaunchBox's.</summary>
+    private void DragTo(int y)
+    {
+        if (_rows <= 0) return;
+        int page = 1;
+        try { page = Math.Max(1, PageRows?.Invoke() ?? 1); } catch { }
+        int maxTop = Math.Max(0, _rows - page);
+        int h = Math.Max(1, ClientSize.Height - Pad * 2);
+        double f = Math.Clamp((y - Pad) / (double)(h - 1), 0, 1);
+        try { JumpToRow?.Invoke((int)Math.Round(f * maxTop)); } catch { }
+        Invalidate();
+    }
+
     // ── paint ─────────────────────────────────────────────────────────────────
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -134,13 +168,13 @@ internal sealed class GameListIndexBar : Control
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        // Current position: a soft bar behind the markers, so the index doubles as a scroll indicator.
-        int top = -1;
-        try { top = TopRow?.Invoke() ?? -1; } catch { }
-        if (top >= 0)
+        // Current position: a soft thumb behind the markers, so the index doubles as a scroll
+        // indicator — and a drag handle (grab it anywhere, park it anywhere, groups or not).
+        int ty = ThumbY();
+        if (ty >= 0)
         {
-            using var pos = new SolidBrush(Color.FromArgb(36, LiteBoxTheme.Fg));
-            g.FillRectangle(pos, 0, Math.Max(0, YOf(top) - 6), ClientSize.Width, 12);
+            using var pos = new SolidBrush(Color.FromArgb(_dragging ? 60 : 36, LiteBoxTheme.Fg));
+            g.FillRectangle(pos, 0, Math.Max(0, ty - ThumbHalf), ClientSize.Width, ThumbHalf * 2);
         }
 
         using var tick = new SolidBrush(Color.FromArgb(150, LiteBoxTheme.SubFg));
@@ -181,8 +215,15 @@ internal sealed class GameListIndexBar : Control
         if (e.Button != MouseButtons.Left) return;
         _dragging = true;
         Capture = true;
-        JumpAt(e.Y);
+        // Pressing ON the thumb grabs it where it stands — no snap, so a drag can start from a
+        // position between two markers without the list lurching first. Pressing anywhere else is
+        // a jump to the nearest group (the letter you aimed at), and the drag goes on from there.
+        int ty = ThumbY();
+        _grabOffset = ty >= 0 && Math.Abs(e.Y - ty) <= ThumbHalf ? e.Y - ty : 0;
+        if (_grabOffset == 0 && (ty < 0 || Math.Abs(e.Y - ty) > ThumbHalf)) JumpAt(e.Y);
+        Invalidate();
     }
+    private int _grabOffset;   // pointer-to-thumb-centre offset while dragging (0 = jumped)
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
@@ -195,7 +236,9 @@ internal sealed class GameListIndexBar : Control
             if (t != _tipText) { _tipText = t; if (t.Length > 0) _tip.SetToolTip(this, t); }
             Invalidate();
         }
-        if (_dragging) JumpAt(e.Y);
+        // Any movement while pressed is a CONTINUOUS drag: the pointer maps straight to a scroll
+        // position, markers or not — the thumb parks wherever it is let go.
+        if (_dragging) DragTo(e.Y - _grabOffset);
     }
 
     protected override void OnMouseUp(MouseEventArgs e)

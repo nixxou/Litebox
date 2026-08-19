@@ -187,24 +187,44 @@ internal sealed class GameListIndexBar : Control
         // text never crushes into the dots — LB's alignment.
         int lineH = Font.Height;
         int rx = ClientSize.Width - 4;
-        int lastLabelBottom = int.MinValue;
+
+        // Pass 1 — which spell-eligible labels actually get room. NOT first-come-first-served: a
+        // label that lacks room but whose family holds ≥50% more games than the one occupying the
+        // slice EVICTS it (cascading upward while it keeps out-weighing), so a three-game family
+        // can't silence the three-hundred-game one right under it.
+        var placed = new List<(int gi, int top, int bottom, int weight)>();
+        for (int i = 0; i < _groups.Count; i++)
+        {
+            if (!_groups[i].Spell) continue;
+            int next = _rows;
+            for (int j = i + 1; j < _groups.Count; j++)
+                if (_groups[j].Spell) { next = _groups[j].Index; break; }
+            int weight = Math.Max(1, next - _groups[i].Index);
+            int y = YOf(_groups[i].Index);
+            int top = y - lineH / 2, bottom = y + lineH / 2;
+            if (top < 0 || bottom > ClientSize.Height) continue;
+            while (placed.Count > 0 && top <= placed[^1].bottom
+                   && (long)weight * 2 > (long)placed[^1].weight * 3)
+                placed.RemoveAt(placed.Count - 1);
+            if (placed.Count == 0 || top > placed[^1].bottom)
+                placed.Add((i, top, bottom, weight));
+        }
+        var spelled = new HashSet<int>();
+        foreach (var p in placed) spelled.Add(p.gi);
+
+        // Pass 2 — draw: the chosen labels as text, everything else as the dot rail. The hovered
+        // group always shows its text (a transient emphasis, allowed to overlap).
         for (int i = 0; i < _groups.Count; i++)
         {
             var (label, _, row, spell) = _groups[i];
             int y = YOf(row);
             bool hot = i == _hover && _pointerIn;
-
-            // A spelled label needs its own slice of height; when the previous one already used it
-            // (or the group is dot-only — a later member of its family) the group keeps a tick,
-            // still hoverable and clickable, tooltip intact.
-            bool room = spell && y - lineH / 2 >= lastLabelBottom + 1 && y + lineH / 2 <= ClientSize.Height;
-            if (room || (hot && spell))
+            if (spelled.Contains(i) || (hot && spell))
             {
                 var r = new Rectangle(0, y - lineH / 2, rx - DotRail, lineH);
                 TextRenderer.DrawText(g, label, Font, r, hot ? LiteBoxTheme.Fg : LiteBoxTheme.SubFg,
                                       TextFormatFlags.Right | TextFormatFlags.VerticalCenter
                                       | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                if (room) lastLabelBottom = y + lineH / 2;
             }
             else
             {

@@ -27,9 +27,11 @@ namespace LbApiHost.Host;
 
 internal sealed class GameListIndexBar : Control
 {
-    /// <summary>(label, first row index) per group, in display order. Supplied by the owner so the
-    /// bar never has to know how the list is sorted or filtered.</summary>
-    public Func<IReadOnlyList<(string Label, int Index)>>? GroupsProvider;
+    /// <summary>One entry per group, in display order: the text to draw, the full value for the
+    /// tooltip, the group's first row, and whether this group may SPELL its text (only the first
+    /// group of each first-segment family does — the rest stay dots whatever the room). Supplied by
+    /// the owner so the bar never has to know how the list is sorted or filtered.</summary>
+    public Func<IReadOnlyList<(string Label, string Tip, int Index, bool Spell)>>? GroupsProvider;
     /// <summary>Rows in the current view — the denominator for every marker position.</summary>
     public Func<int>? RowCount;
     /// <summary>Scroll the list so this row lands at the top.</summary>
@@ -51,7 +53,8 @@ internal sealed class GameListIndexBar : Control
     }
     private bool _alwaysShow = true;
 
-    private IReadOnlyList<(string Label, int Index)> _groups = Array.Empty<(string, int)>();
+    private IReadOnlyList<(string Label, string Tip, int Index, bool Spell)> _groups
+        = Array.Empty<(string, string, int, bool)>();
     private int _rows;
     private int _hover = -1;          // group under the pointer (-1 none)
     private bool _dragging;
@@ -79,10 +82,10 @@ internal sealed class GameListIndexBar : Control
     {
         try
         {
-            _groups = GroupsProvider?.Invoke() ?? Array.Empty<(string, int)>();
+            _groups = GroupsProvider?.Invoke() ?? Array.Empty<(string, string, int, bool)>();
             _rows = Math.Max(0, RowCount?.Invoke() ?? 0);
         }
-        catch { _groups = Array.Empty<(string, int)>(); _rows = 0; }
+        catch { _groups = Array.Empty<(string, string, int, bool)>(); _rows = 0; }
         FitWidth();
         Invalidate();
     }
@@ -90,8 +93,9 @@ internal sealed class GameListIndexBar : Control
     private void FitWidth()
     {
         int w = MinW;
-        foreach (var (label, _) in _groups)
-            w = Math.Max(w, TextRenderer.MeasureText(label, Font).Width + 8);
+        foreach (var (label, _, _, spell) in _groups)
+            if (spell)
+                w = Math.Max(w, TextRenderer.MeasureText(label, Font).Width + DotRail + 8);
         _fit = Math.Min(w, MaxW);
         int want = _alwaysShow || _pointerIn || _dragging ? _fit : CollapsedW;
         if (want != Width) Width = want;
@@ -119,6 +123,8 @@ internal sealed class GameListIndexBar : Control
         }
         return best;
     }
+
+    private const int DotRail = 9;   // the dots' lane along the right edge; text ends before it
 
     /// <summary>The thumb's centre, on the SCROLL scale: top / (rows − page), so it reaches both
     /// ends of the strip. Group markers live on the row scale — the two agree at the top and drift
@@ -177,23 +183,24 @@ internal sealed class GameListIndexBar : Control
         using var tick = new SolidBrush(Color.FromArgb(150, LiteBoxTheme.SubFg));
         using var tickHot = new SolidBrush(LiteBoxTheme.Fg);
 
-        // Text and dots hang on the RIGHT edge, LB's alignment (the dots form a rail along the
-        // strip's edge and each label ends against it).
+        // Dots form a rail along the RIGHT edge; each label ends a small gap BEFORE the rail so
+        // text never crushes into the dots — LB's alignment.
         int lineH = Font.Height;
         int rx = ClientSize.Width - 4;
         int lastLabelBottom = int.MinValue;
         for (int i = 0; i < _groups.Count; i++)
         {
-            var (label, row) = _groups[i];
+            var (label, _, row, spell) = _groups[i];
             int y = YOf(row);
             bool hot = i == _hover && _pointerIn;
 
-            // A label needs its own slice of height; when the previous one already used it the
-            // group keeps a tick — still hoverable and clickable, nothing dropped but the text.
-            bool room = y - lineH / 2 >= lastLabelBottom + 1 && y + lineH / 2 <= ClientSize.Height;
-            if (room || hot)
+            // A spelled label needs its own slice of height; when the previous one already used it
+            // (or the group is dot-only — a later member of its family) the group keeps a tick,
+            // still hoverable and clickable, tooltip intact.
+            bool room = spell && y - lineH / 2 >= lastLabelBottom + 1 && y + lineH / 2 <= ClientSize.Height;
+            if (room || (hot && spell))
             {
-                var r = new Rectangle(0, y - lineH / 2, rx, lineH);
+                var r = new Rectangle(0, y - lineH / 2, rx - DotRail, lineH);
                 TextRenderer.DrawText(g, label, Font, r, hot ? LiteBoxTheme.Fg : LiteBoxTheme.SubFg,
                                       TextFormatFlags.Right | TextFormatFlags.VerticalCenter
                                       | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
@@ -234,7 +241,7 @@ internal sealed class GameListIndexBar : Control
         if (i != _hover)
         {
             _hover = i;
-            string t = i >= 0 && i < _groups.Count ? _groups[i].Label : "";
+            string t = i >= 0 && i < _groups.Count ? _groups[i].Tip : "";
             if (t != _tipText) { _tipText = t; if (t.Length > 0) _tip.SetToolTip(this, t); }
             Invalidate();
         }

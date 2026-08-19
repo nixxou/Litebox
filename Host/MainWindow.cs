@@ -3320,26 +3320,33 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     }
 
     // ── Game List Index (LB 14) ───────────────────────────────────────────────
-    /// <summary>One (label, first row) per group of the CURRENT sort, over the displayed view.
-    /// Sorted by Title the labels are letters; any other sort groups by its own displayed value —
-    /// LaunchBox's rule for its index.</summary>
-    private IReadOnlyList<(string Label, int Index)> ComputeIndexGroups()
+    /// <summary>One marker per group of the CURRENT sort, over the displayed view. Sorted by Title
+    /// the groups are letters; any other sort groups by its displayed value. Only the FIRST group
+    /// of each first-segment family is eligible to spell its text ("Action; Adventure" spells
+    /// "Action"; the following "Action; Casual" keeps a dot) — LaunchBox's rule; the tooltip still
+    /// names every group in full.</summary>
+    private IReadOnlyList<(string Label, string Tip, int Index, bool Spell)> ComputeIndexGroups()
     {
         var view = _games?.VisibleGames;
-        if (view == null || view.Count == 0) return Array.Empty<(string, int)>();
+        if (view == null || view.Count == 0) return Array.Empty<(string, string, int, bool)>();
         var label = IndexLabelFor(_curSortKey);
-        var groups = new List<(string, int)>();
-        string last = null;
+        var groups = new List<(string, string, int, bool)>();
+        string last = null, lastFamily = null;
         for (int i = 0; i < view.Count; i++)
         {
             string l = label(view[i]) ?? "";
-            if (!string.Equals(l, last, StringComparison.Ordinal)) { groups.Add((l, i)); last = l; }
+            if (string.Equals(l, last, StringComparison.Ordinal)) continue;
+            int cut = l.IndexOf(';');
+            string family = (cut < 0 ? l : l[..cut]).Trim();
+            bool spell = !string.Equals(family, lastFamily, StringComparison.OrdinalIgnoreCase);
+            groups.Add((family, l, i, spell));
+            last = l; lastFamily = family;
         }
         // A near-unique sort (full dates, DB ids) makes one group per row; thin what the bar has to
         // hold so hover search and paint stay O(small). Every kept marker still jumps exactly.
         if (groups.Count > 300)
         {
-            var thin = new List<(string, int)>(300);
+            var thin = new List<(string, string, int, bool)>(300);
             for (int i = 0; i < 300; i++) thin.Add(groups[(int)((long)i * groups.Count / 300)]);
             groups = thin;
         }
@@ -3356,22 +3363,22 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             // The group label is what the sort column DISPLAYS (so Genre groups read "Fighter / 2D",
             // not a raw value), falling back to the sort getter for keys without a column.
-            // LB spells out only the FIRST value of a multi-value field ("Action; Adventure" groups
-            // under "Action") — the sort orders by the full string anyway, so the first segment is
-            // what actually alphabetises the block.
-            static string First(string t)
+            // VNDB tags ride inside GenresString as "vndb-…" segments (see ParseGenres); the index
+            // groups on the REAL genres only, so a game's tag soup never becomes a family.
+            static string Clean(string t)
             {
                 if (string.IsNullOrEmpty(t)) return "(None)";
-                int i = t.IndexOf(';');
-                return (i < 0 ? t : t[..i]).Trim();
+                if (t.IndexOf("vndb-", StringComparison.OrdinalIgnoreCase) >= 0)
+                    t = ParseGenres(t).genres;
+                return string.IsNullOrEmpty(t) ? "(None)" : t;
             }
             var colKey = ColumnKeyForSort(key);
             var col = _games.AllColumns.FirstOrDefault(c => string.Equals(c.Key, colKey, StringComparison.OrdinalIgnoreCase));
             if (col?.Text != null)
-                return g => First(Safe(() => col.Text(g)));
+                return g => Clean(Safe(() => col.Text(g)));
             var getter = SortGetterFor(key);
             if (getter != null)
-                return g => First(Safe(() => getter(g))?.ToString());
+                return g => Clean(Safe(() => getter(g))?.ToString());
         }
         return g =>
         {

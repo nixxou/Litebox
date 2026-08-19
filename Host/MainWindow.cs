@@ -72,6 +72,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private readonly GameListView _games;
     private GameListIndexBar _gameIndex;         // LB 14's Game List Index — group markers where the scrollbar was
     private bool _gameIndexOn;                   // the option's value — NOT _gameIndex.Visible, which is false while the form isn't shown yet
+    private int _posterBaseX;                    // poster X as LayoutPoster placed it (before any overlay nudge)
+    private int _posterGridRight;                // right edge of the last tile column, parent coords
     // Poster (grid) view — a native virtual ListView mirroring the OLV's displayed (sorted+filtered)
     // order; owner-drawn box-art tiles. Toggled from VIEW ▸ Images View / List View.
     private PosterListView _poster;
@@ -402,6 +404,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _games.Scrolled += () => { if (_gameIndex.Visible) _gameIndex.Invalidate(); };   // keep the thumb honest
         _poster.Scrolled += () => { if (_gameIndex.Visible) _gameIndex.Invalidate(); };
         _gameIndex.ReservedWidthChanged += ApplyGameListIndexRoom;   // labels refit → the views re-pad
+        // The hover expansion overlays the grid; if it would COVER the last tile column, slide the
+        // whole grid left into its own centring slack (a pure translation: the column count — and
+        // with it the drag mapping — never changes). Bar Resize = display width change.
+        _gameIndex.Resize += (_, _) => NudgePosterForOverlay();
         ApplyGameListIndexOptions();
         // Layout ran while the form was invisible (Control.Visible lies until Show), so the poster
         // may have measured a barless width — one refresh once everything is really on screen.
@@ -3942,6 +3948,23 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         int left = Math.Max(0, (effW - gridW) / 2);     // shift right by half the slack
         var b = new Rectangle(left, 0, pw - left, ph);  // extend to the right edge (scrollbar there)
         if (_poster.Bounds != b) _poster.Bounds = b;
+        _posterBaseX = left;
+        _posterGridRight = left + gridW;
+        NudgePosterForOverlay();   // the bar may already be expanded over the fresh layout
+    }
+
+    /// <summary>While the index strip is EXPANDED over the grid (hover/drag in auto-hide mode), a
+    /// tile column can end up underneath it. Slide the grid left into its own centring slack until
+    /// the last column clears the strip — a pure TRANSLATION (Bounds.X only): the width, and so the
+    /// column count and the drag mapping, stay exactly as laid out. When the slack runs out the
+    /// last column stays partially covered — the best available. Collapse restores the base X.</summary>
+    private void NudgePosterForOverlay()
+    {
+        if (_poster == null || !_posterMode || _gameIndex == null) return;
+        int barLeft = _gameIndexOn && _gameIndex.Visible ? _gameIndex.Left : int.MaxValue;
+        int covered = Math.Max(0, _posterGridRight - barLeft);
+        int x = _posterBaseX - Math.Min(covered, _posterBaseX);
+        if (_poster.Left != x) _poster.Left = x;
     }
 
     // ── Central-panel zoom (Ctrl +/- , Ctrl-wheel, Ctrl-0) ────────────────────────────────────

@@ -70,6 +70,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private readonly TreeView _sources;
     private readonly Dictionary<object, TreeNode> _treeNodeMap = new();   // node object → its TreeNode (selection restore)
     private readonly GameListView _games;
+    private GameListIndexBar _gameIndex;         // LB 14's Game List Index — group markers where the scrollbar was
     // Poster (grid) view — a native virtual ListView mirroring the OLV's displayed (sorted+filtered)
     // order; owner-drawn box-art tiles. Toggled from VIEW ▸ Images View / List View.
     private PosterListView _poster;
@@ -375,6 +376,19 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         inner.Panel1.BackColor = Center;      // centre column — #2A2B34 (shows in the poster-grid side margins too)
         inner.Panel1.Controls.Add(_poster);   // hidden until poster mode; same cell as the list
         inner.Panel1.Controls.Add(_games);
+        // The Game List Index stands where the scrollbar was: added AFTER the Fill controls so its
+        // Dock.Right strip is laid out first and the list fills the remainder.
+        _gameIndex = new GameListIndexBar
+        {
+            Dock = DockStyle.Right, BackColor = Center, Font = Font,
+            GroupsProvider = ComputeIndexGroups,
+            RowCount = () => _games.VisibleGames.Count,
+            JumpToRow = r => _games.ScrollRowToTop(r),
+            TopRow = () => _games.TopRowIndex,
+        };
+        inner.Panel1.Controls.Add(_gameIndex);
+        _games.ViewChanged += () => { if (_gameIndex.Visible) _gameIndex.RefreshGroups(); };
+        ApplyGameListIndexOptions();
         // Launch buttons docked at the bottom of the details pane (always visible,
         // outside the scrolling detail grid). _detailHost (Fill) is added FIRST so
         // the bottom panel reserves its space and the grid fills the rest.
@@ -2076,6 +2090,19 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 "On (default): rows wrap long cell text onto a second line. Off: compact single-line rows, "
                 + "truncated with an ellipsis, more games on screen.",
                 applyLive: () => _games.TwoLineRows = _cfg.GetBool("TwoLineRows", true)),
+            Options.OptionItem.Toggle("Display", "Game list index (replaces the scrollbar)",
+                () => _cfg.GetBool("GameListIndex", true), v => _cfg.SetBool("GameListIndex", v),
+                "LaunchBox's Game List Index: the list's scrollbar becomes an index of the current "
+                + "Arrange By groups — letters when sorted by Title, the values themselves for any other "
+                + "sort. Click or drag it to jump straight to a group; a group too thin to spell its label "
+                + "keeps a dot marker (hover names it).",
+                applyLive: ApplyGameListIndexOptions),
+            Options.OptionItem.Toggle("Display", "Game list index: always show the markers",
+                () => _cfg.GetBool("GameListIndexAlwaysShow", true), v => _cfg.SetBool("GameListIndexAlwaysShow", v),
+                "On (default): the markers stay visible and the strip keeps its room. Off: a slim blank "
+                + "strip until the pointer reaches the list's right edge. The dark background only ever "
+                + "appears while the index is being used, either way.",
+                applyLive: ApplyGameListIndexOptions),
             .. BadgeListOptions(),
         ];
 
@@ -3290,6 +3317,69 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         ApplyFilter();   // sets the filter predicate + rebuilds the view (single pass)
     }
 
+    // ── Game List Index (LB 14) ───────────────────────────────────────────────
+    /// <summary>One (label, first row) per group of the CURRENT sort, over the displayed view.
+    /// Sorted by Title the labels are letters; any other sort groups by its own displayed value —
+    /// LaunchBox's rule for its index.</summary>
+    private IReadOnlyList<(string Label, int Index)> ComputeIndexGroups()
+    {
+        var view = _games?.VisibleGames;
+        if (view == null || view.Count == 0) return Array.Empty<(string, int)>();
+        var label = IndexLabelFor(_curSortKey);
+        var groups = new List<(string, int)>();
+        string last = null;
+        for (int i = 0; i < view.Count; i++)
+        {
+            string l = label(view[i]) ?? "";
+            if (!string.Equals(l, last, StringComparison.Ordinal)) { groups.Add((l, i)); last = l; }
+        }
+        // A near-unique sort (full dates, DB ids) makes one group per row; thin what the bar has to
+        // hold so hover search and paint stay O(small). Every kept marker still jumps exactly.
+        if (groups.Count > 300)
+        {
+            var thin = new List<(string, int)>(300);
+            for (int i = 0; i < 300; i++) thin.Add(groups[(int)((long)i * groups.Count / 300)]);
+            groups = thin;
+        }
+        return groups;
+    }
+
+    private Func<IGame, string> IndexLabelFor(string key)
+    {
+        bool alpha = string.IsNullOrEmpty(key)
+            || string.Equals(key, "title", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(key, GameSortCatalog.Default, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(key, GameSortCatalog.Manual, StringComparison.OrdinalIgnoreCase);
+        if (!alpha)
+        {
+            // The group label is what the sort column DISPLAYS (so Genre groups read "Fighter / 2D",
+            // not a raw value), falling back to the sort getter for keys without a column.
+            var colKey = ColumnKeyForSort(key);
+            var col = _games.AllColumns.FirstOrDefault(c => string.Equals(c.Key, colKey, StringComparison.OrdinalIgnoreCase));
+            if (col?.Text != null)
+                return g => { string t = Safe(() => col.Text(g)); return string.IsNullOrEmpty(t) ? "(None)" : t; };
+            var getter = SortGetterFor(key);
+            if (getter != null)
+                return g => { var v = Safe(() => getter(g)); var t = v?.ToString(); return string.IsNullOrEmpty(t) ? "(None)" : t; };
+        }
+        return g =>
+        {
+            string t = CompareName(g);
+            char c = t?.Length > 0 ? char.ToUpperInvariant(t[0]) : '#';
+            return char.IsLetter(c) ? c.ToString() : "#";   // digits and symbols share LB's # bucket
+        };
+    }
+
+    private void ApplyGameListIndexOptions()
+    {
+        if (_gameIndex == null) return;
+        bool on = _cfg.GetBool("GameListIndex", true);
+        _games.HideVScroll = on;
+        _gameIndex.AlwaysShow = _cfg.GetBool("GameListIndexAlwaysShow", true);
+        _gameIndex.Visible = on && !_posterMode;
+        if (on && !_posterMode) _gameIndex.RefreshGroups();
+    }
+
     private void ApplyFilter()
     {
         if (_games == null) return;
@@ -3820,6 +3910,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     {
         if (_posterMode == on || _poster == null) return;
         _posterMode = on;
+        try { ApplyGameListIndexOptions(); } catch { }   // the index belongs to the list view only
         try { SyncViewSwitchChecks(); } catch { }   // menu bar: Images View / List View check marks
         _cfg.SetBool("PosterMode", on); _cfg.Save();
         if (on)

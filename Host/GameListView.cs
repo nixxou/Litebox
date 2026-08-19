@@ -51,6 +51,12 @@ internal sealed class GameListView : ListView
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     private static extern int SetWindowTheme(IntPtr hWnd, string app, string idList);
+    [DllImport("user32.dll")]
+    private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll")]
+    private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+    [DllImport("user32.dll")]
+    private static extern bool ShowScrollBar(IntPtr hWnd, int wBar, bool bShow);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct LVITEM
@@ -62,6 +68,12 @@ internal sealed class GameListView : ListView
     }
 
     private const int LVM_FIRST = 0x1000;
+    private const int LVM_GETTOPINDEX = LVM_FIRST + 39;
+    private const int LVM_SCROLL = LVM_FIRST + 20;
+    private const int WM_NCCALCSIZE = 0x83;
+    private const int GWL_STYLE = -16;
+    private const int WS_VSCROLL = 0x00200000;
+    private const int SB_VERT = 1;
     private const int LVM_SETITEMSTATE = LVM_FIRST + 43;
     private const int LVM_SETEXTENDEDLISTVIEWSTYLE = LVM_FIRST + 54;
     private const int LVM_GETHEADER = LVM_FIRST + 31;
@@ -872,8 +884,57 @@ internal sealed class GameListView : ListView
         if (games.Length > 0) GameRightClicked?.Invoke(games, PointToScreen(e.Location));
     }
 
+    // ── Game List Index support ───────────────────────────────────────────────
+    // The index bar REPLACES the scrollbar (LB 14's Game List Index), so the native one has to go.
+    // A ListView re-adds WS_VSCROLL whenever it recomputes its layout; stripping the style during
+    // WM_NCCALCSIZE — the exact moment the frame is measured — keeps it off for good. Scrolling
+    // itself (wheel, keys, LVM_SCROLL) never needed the bar.
+    private bool _hideVScroll;
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool HideVScroll
+    {
+        get => _hideVScroll;
+        set
+        {
+            if (_hideVScroll == value) return;
+            _hideVScroll = value;
+            if (!IsHandleCreated) return;
+            try
+            {
+                if (value) ShowScrollBar(Handle, SB_VERT, false);
+                SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+                             0x0020 /*FRAMECHANGED*/ | 0x0001 /*NOSIZE*/ | 0x0002 /*NOMOVE*/ | 0x0004 /*NOZORDER*/);
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>Row index currently at the top of the viewport.</summary>
+    public int TopRowIndex => IsHandleCreated
+        ? (int)SendMessage(Handle, LVM_GETTOPINDEX, IntPtr.Zero, IntPtr.Zero) : 0;
+
+    /// <summary>Scroll so <paramref name="row"/> lands at the top of the viewport (the index bar's
+    /// jump). Pixel-scrolls by whole rows from wherever the list is now.</summary>
+    public void ScrollRowToTop(int row)
+    {
+        if (!IsHandleCreated || _view.Length == 0) return;
+        row = Math.Clamp(row, 0, _view.Length - 1);
+        int top = TopRowIndex;
+        if (top == row) return;
+        int rowH;
+        try { rowH = GetItemRect(top).Height; } catch { return; }
+        if (rowH <= 0) return;
+        SendMessage(Handle, LVM_SCROLL, IntPtr.Zero, (IntPtr)((row - top) * rowH));
+    }
+
     protected override void WndProc(ref Message m)
     {
+        if (_hideVScroll && m.Msg == WM_NCCALCSIZE && IsHandleCreated)
+        {
+            int style = GetWindowLong(Handle, GWL_STYLE);
+            if ((style & WS_VSCROLL) != 0) SetWindowLong(Handle, GWL_STYLE, style & ~WS_VSCROLL);
+        }
         if (m.Msg == WM_CONTEXTMENU && IsHandleCreated)
         {
             IntPtr header = SendMessage(Handle, LVM_GETHEADER, IntPtr.Zero, IntPtr.Zero);

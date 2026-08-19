@@ -244,6 +244,14 @@ internal sealed class GameListIndexBar : Control
         if (e.Button != MouseButtons.Left) return;
         _dragging = true;
         Capture = true;
+        // A quick SECOND press is not another grab: it means "put the thumb right here" — the
+        // pointer position becomes the scroll position, no grab offset, no group snap.
+        if (e.Clicks >= 2)
+        {
+            _grabOffset = 0;
+            DragTo(e.Y);
+            return;
+        }
         // Pressing NEAR the thumb (not just dead on the 3px line) grabs it where it stands — no
         // snap, so a drag can start from a position between two markers without the list lurching
         // first. Pressing farther away is a jump to the nearest group (the letter you aimed at),

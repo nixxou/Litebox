@@ -56,7 +56,9 @@ internal static class LbCaseObj
             mtlText = System.Text.RegularExpressions.Regex.Replace(mtlText, @"\{\{\{(\w+)\}\}\}",
                 m => vars.TryGetValue(m.Groups[1].Value, out var v) ? v : "0.5 0.5 0.5");
         var mats = mtlText != null ? ParseMtl(mtlText) : new Dictionary<string, Material>(StringComparer.OrdinalIgnoreCase);
-        var (grp, names) = ParseObj(objText, mats);
+        // Verbatim LB dumps ("...Lb") and the tape family carry WPF top-left UVs already — no flip.
+        var (grp, names) = ParseObj(objText, mats, flipV: !(baseName.EndsWith("Lb", StringComparison.OrdinalIgnoreCase)
+                                                            || baseName.StartsWith("CassetteTape", StringComparison.OrdinalIgnoreCase)));
         // FROZEN: the cache is shared across THREADS (UI previews + the GLB bake STA worker — whichever
         // populates it first would otherwise own the objects and the other thread throws "different thread
         // owns it"). Every caller Clone()s before mutating (the DVD wrap material swap works on the clone),
@@ -317,7 +319,7 @@ internal static class LbCaseObj
     private static byte B(double v) => (byte)Math.Clamp(Math.Round(v * 255), 0, 255);
 
     // ── OBJ ──
-    private static (Model3DGroup, List<string>) ParseObj(string text, Dictionary<string, Material> mats)
+    private static (Model3DGroup, List<string>) ParseObj(string text, Dictionary<string, Material> mats, bool flipV = true)
     {
         var vs = new List<Point3D>();
         var vts = new List<System.Windows.Point>();
@@ -371,7 +373,10 @@ internal static class LbCaseObj
             switch (p[0])
             {
                 case "v": vs.Add(new Point3D(D(p[1]), D(p[2]), D(p[3]))); break;
-                case "vt": vts.Add(new System.Windows.Point(D(p[1]), 1 - D(p[2]))); break;   // OBJ origin bottom-left → WPF top-left
+                // OBJ origin bottom-left → WPF top-left. EXCEPTION: the tape atlas was authored
+                // top-left already (LB resource) — flipping it painted the label onto the tape's
+                // edges; empirical A/B against the clear-case oracle settles the convention.
+                case "vt": vts.Add(new System.Windows.Point(D(p[1]), flipV ? 1 - D(p[2]) : D(p[2]))); break;
                 case "vn": vns.Add(new Vector3D(D(p[1]), D(p[2]), D(p[3]))); break;
                 case "usemtl":
                     string mn = p.Length > 1 ? p[1] : "";

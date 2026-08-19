@@ -1188,7 +1188,13 @@ internal sealed class HomeModel3d : IDisposable
 
         // Plastic: body + lid from the vendored LB mesh, materials retargeted per style (the MTL's own
         // colours are placeholders — LB always overrides them, per the dump).
-        var (plastic0, segNames) = LbCaseObj.LoadWithNames("CassetteCase");
+        // CLEAR case: the shell is LB's own, dumped verbatim (3 segments exactly as LB paints
+        // them: milky tray part / near-clear back+walls / clear lid). Guessing the split from our
+        // fused vendored OBJ painted the opening wall milky where LB has it near-clear.
+        var (plastic0, segNames) = clearCase && LbCaseObj.LoadWithNames("CassetteShellClearLb").group != null
+            ? LbCaseObj.LoadWithNames("CassetteShellClearLb")
+            : LbCaseObj.LoadWithNames("CassetteCase");
+        bool verbatimShell = clearCase && segNames.Count > 0 && segNames[0].StartsWith("ClearSeg", StringComparison.OrdinalIgnoreCase);
         if (plastic0 == null) return null;
         var plastic = plastic0.Clone();   // the loader caches FROZEN groups — clone before retargeting materials
         // Worn ("Add Scuffs and Scratches"): the wear texture rides BOTH channels — a 10%-opacity
@@ -1225,15 +1231,30 @@ internal sealed class HomeModel3d : IDisposable
         Material lidMat = cloudy
             ? Mat2(System.Windows.Media.Color.FromArgb(0x38, 0xF5, 0xF7, 0xFA), System.Windows.Media.Color.FromArgb(0x6E, 0xFF, 0xFF, 0xFF), 90)
             : Mat2(System.Windows.Media.Color.FromArgb(0x10, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250);
+        // CLEAR case tray: the oracle paints it in TWO materials -- the BACK PLATE nearly clear
+        // (#15CCCCCC pow250: the tape reads through the back) and the REST of the tray MILKY
+        // (#96D0D4DA pow90: walls and rim frost over). One flat #15CCCCCC everywhere left the
+        // opening wall with a pow-250 highlight that washed the flank white next to LB's soft grey.
         Material trayMat = clearCase
             ? (cloudy ? Mat2(System.Windows.Media.Color.FromArgb(0x4A, 0xF0, 0xF3, 0xF8), System.Windows.Media.Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF), 80)
                       : Mat2(System.Windows.Media.Color.FromArgb(0x15, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250))
             : bodyMat;
+        Material trayMilkMat = cloudy
+            ? Mat2(System.Windows.Media.Color.FromArgb(0xB0, 0xE8, 0xEC, 0xF2), System.Windows.Media.Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF), 80)
+            : Mat2(System.Windows.Media.Color.FromArgb(0x96, 0xD0, 0xD4, 0xDA), System.Windows.Media.Color.FromArgb(0xFF, 0x7F, 0x7F, 0x7F), 90);
         for (int i = 0; i < plastic.Children.Count; i++)
         {
             if (plastic.Children[i] is not GeometryModel3D gm) continue;
-            bool isLid = i < segNames.Count && segNames[i].IndexOf("Lid", StringComparison.OrdinalIgnoreCase) >= 0;
-            gm.Material = isLid ? lidMat : trayMat;
+            if (verbatimShell)
+            {
+                // Oracle order: seg0 milky tray part, seg1 near-clear back plate+walls, seg2 lid.
+                gm.Material = i == 0 ? trayMilkMat : i == 1 ? trayMat : lidMat;
+            }
+            else
+            {
+                bool isLid = i < segNames.Count && segNames[i].IndexOf("Lid", StringComparison.OrdinalIgnoreCase) >= 0;
+                gm.Material = isLid ? lidMat : (clearCase ? trayMilkMat : trayMat);
+            }
             gm.BackMaterial = gm.Material;
         }
         // The vendored OBJ sits in the mesh's NATIVE frame — real-world metres, Y = the 1.6 cm
@@ -1241,7 +1262,7 @@ internal sealed class HomeModel3d : IDisposable
         // then a per-axis bounds-fit onto the dumped shell extents (±0.3168, ±0.5, ±0.0734 —
         // deliberately non-uniform, LB stretches the case into its portrait presentation).
         var pb = plastic.Bounds;
-        if (!pb.IsEmpty && pb.SizeX > 0 && pb.SizeY > 0 && pb.SizeZ > 0)
+        if (!verbatimShell && !pb.IsEmpty && pb.SizeX > 0 && pb.SizeY > 0 && pb.SizeZ > 0)
         {
             double cxN = pb.X + pb.SizeX / 2, cyN = pb.Y + pb.SizeY / 2, czN = pb.Z + pb.SizeZ / 2;
             double sxM = -0.3168 * 2 / pb.SizeZ, syM = 0.5 * 2 / pb.SizeX, szM = 0.0734 * 2 / pb.SizeY;
@@ -1290,7 +1311,7 @@ internal sealed class HomeModel3d : IDisposable
         // at all, while the clear dump shows the tape FULL SIZE, filling the interior (X ±0.2936,
         // Y ±0.461, Z ±0.055) with CassetteTape.png diffuse + its gloss map as specular pow 40.
         Model3DGroup? tape = null;
-        if (clearCase && (tape = LbCaseObj.Load("CassetteTape")?.Clone()) != null)   // loader cache is frozen — clone
+        if (clearCase && (tape = (LbCaseObj.Load("CassetteTapeLb") ?? LbCaseObj.Load("CassetteTape"))?.Clone()) != null)   // loader cache is frozen — clone
         {
             var tex = LbCaseObj.SpineImage("CassetteTape");        // case-assets pngs via the shared loader
             var gloss = LbCaseObj.SpineImage("CassetteTapeGloss"); // its specular map (oracle: Image 512-sq, pow 40)
@@ -1303,7 +1324,11 @@ internal sealed class HomeModel3d : IDisposable
             foreach (var c in tape.Children)
                 if (c is GeometryModel3D gm) { gm.Material = tapeMat; gm.BackMaterial = tapeMat; }
             var tb = tape.Bounds;
-            if (!tb.IsEmpty && tb.SizeX > 0 && tb.SizeY > 0 && tb.SizeZ > 0)
+            // The LB-dumped tape (CassetteTapeLb) is exported VERBATIM in model space — its bounds
+            // already sit inside the case; any refit would double-transform it. Only the legacy
+            // vendored OBJ (real-world cm, lying flat) needs standing up and fitting.
+            bool preFitted = tb.SizeX < 2;   // model space is ~0.6 wide; the cm OBJ is ~10
+            if (!preFitted && !tb.IsEmpty && tb.SizeX > 0 && tb.SizeY > 0 && tb.SizeZ > 0)
             {
                 // The tape OBJ is in its own frame (X = the 10 cm length, Y = width, Z = thickness).
                 // Swap length onto the model's HEIGHT (the case stands portrait), then stretch per-axis
@@ -1509,8 +1534,12 @@ internal sealed class HomeModel3d : IDisposable
             spineGrid.Children.Add(new System.Windows.Controls.Viewbox
             { Child = lim, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
         }
-        else if (!string.IsNullOrEmpty(gameTitle))
+        else if (!string.IsNullOrEmpty(gameTitle) && !clearCase)
         {
+            // CLEAR case: the oracle's spine renders as the plain milky card colour — no title
+            // (checked at spine-facing yaw: a flat gradient, no glyphs). The text block below is
+            // for closed backs only.
+
             // LB's exact text (oracle dump): Segoe UI 120pt Normal, centred, NoWrap, white. The size
             // matters even inside a Viewbox: 12pt glyphs get ClearType-hinted at 12pt and then scaled,
             // which reads fatter than LB's natively-large text.

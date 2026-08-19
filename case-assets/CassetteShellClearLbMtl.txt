@@ -1,0 +1,7 @@
+# materials replaced in code
+newmtl ClearSeg0
+Kd 0.8 0.8 0.8
+newmtl ClearSeg1
+Kd 0.8 0.8 0.8
+newmtl ClearSeg2
+Kd 0.8 0.8 0.8

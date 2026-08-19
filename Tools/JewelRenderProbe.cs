@@ -306,15 +306,46 @@ internal static class JewelRenderProbe
             Console.WriteLine($"[oracle-dump] leaf{leaf++} {path}  verts={mesh.Positions.Count} tris={mesh.TriangleIndices.Count / 3}");
             Console.WriteLine($"[oracle-dump]   X[{minX:0.####}..{maxX:0.####}] Y[{minY:0.####}..{maxY:0.####}] Z[{minZ:0.####}..{maxZ:0.####}]  uv {uv}");
             Console.WriteLine($"[oracle-dump]   mat={Describe(gm.Material)}  back={Describe(gm.BackMaterial)}");
-            // LB_DUMP_VERTS=1: full positions+uv for small meshes — the only way to recover non-
-            // rectangular shapes (the angled flap's diagonal) that bounds can't express.
-            if (Environment.GetEnvironmentVariable("LB_DUMP_VERTS") == "1" && mesh.Positions.Count <= 300)
+            // LB_DUMP_TEX=<dir>: save every ImageBrush texture in this leaf's materials as PNG —
+            // the way to vendor LB's own atlases (the tape) instead of approximating them.
+            if (Environment.GetEnvironmentVariable("LB_DUMP_TEX") is { Length: > 0 } texDir)
+            {
+                void SaveTex(Material? m, string tag)
+                {
+                    if (m is MaterialGroup mg2) { int gi = 0; foreach (var c in mg2.Children) SaveTex(c, tag + "-" + gi++); return; }
+                    System.Windows.Media.Brush? br = m is DiffuseMaterial dm2 ? dm2.Brush : m is SpecularMaterial sm3 ? sm3.Brush : null;
+                    if (br is not System.Windows.Media.ImageBrush ib2 || ib2.ImageSource is not System.Windows.Media.Imaging.BitmapSource bs2) return;
+                    try
+                    {
+                        System.IO.Directory.CreateDirectory(texDir);
+                        var enc2 = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                        enc2.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bs2));
+                        string fp = System.IO.Path.Combine(texDir, $"leaf{leaf - 1}-{tag}.png");
+                        using var fs2 = System.IO.File.Create(fp);
+                        enc2.Save(fs2);
+                        Console.WriteLine($"[oracle-dump]   tex saved {fp} ({bs2.PixelWidth}x{bs2.PixelHeight})");
+                    }
+                    catch (Exception ex2) { Console.WriteLine("[oracle-dump]   tex save failed: " + ex2.Message); }
+                }
+                SaveTex(gm.Material, "mat");
+            }
+            // LB_DUMP_VERTS: full positions+uv (+triangles) — the only way to recover non-
+            // rectangular shapes and to EXPORT a leaf verbatim. "1" keeps the historical 300-vert
+            // cap; a larger number raises it (e.g. 3000 to pull the cassette tape mesh whole).
+            int vcap = int.TryParse(Environment.GetEnvironmentVariable("LB_DUMP_VERTS"), out var vc) ? (vc <= 1 ? 300 : vc) : 0;
+            if (vcap > 0 && mesh.Positions.Count <= vcap)
+            {
                 for (int i = 0; i < mesh.Positions.Count; i++)
                 {
                     var p = local.Transform(mesh.Positions[i]);
-                    string tuv = i < mesh.TextureCoordinates.Count ? $" uv({mesh.TextureCoordinates[i].X:0.###},{mesh.TextureCoordinates[i].Y:0.###})" : "";
-                    Console.WriteLine($"[oracle-dump]     v{i} ({p.X:0.####}, {p.Y:0.####}, {p.Z:0.####}){tuv}");
+                    string tuv = i < mesh.TextureCoordinates.Count ? $" uv({mesh.TextureCoordinates[i].X:0.#####},{mesh.TextureCoordinates[i].Y:0.#####})" : "";
+                    string tn = i < mesh.Normals.Count ? $" n({mesh.Normals[i].X:0.####},{mesh.Normals[i].Y:0.####},{mesh.Normals[i].Z:0.####})" : "";
+                    Console.WriteLine($"[oracle-dump]     v{i} ({p.X:0.#####}, {p.Y:0.#####}, {p.Z:0.#####}){tuv}{tn}");
                 }
+                var sb = new System.Text.StringBuilder("[oracle-dump]     tris ");
+                for (int i = 0; i < mesh.TriangleIndices.Count; i++) { sb.Append(mesh.TriangleIndices[i]); sb.Append(i % 3 == 2 ? ';' : ','); }
+                Console.WriteLine(sb.ToString());
+            }
         }
         Walk(root, Matrix3D.Identity, "");
         Console.WriteLine($"[oracle-dump] total {leaf} leaves");

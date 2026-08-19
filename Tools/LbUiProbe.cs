@@ -16,6 +16,70 @@ namespace LbApiHost.Tools;
 
 internal static class LbUiProbe
 {
+    /// <summary>--lb-color <image> [...]: call LB's own ColorHelper.GetBackgroundColor on each image
+    /// and print the result — the ground truth for the cassette/no-spine card colour, whose method
+    /// body is virtualized (undecompilable) but perfectly callable in-process.</summary>
+    public static int RunColor(string[] args, int idx)
+    {
+        string core = Host.PluginLoader.ResolveCoreDir() ?? AppContext.BaseDirectory;
+        int rc = 1;
+        var t = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                // Bare reflection NREs inside the method — it leans on LB runtime state that only
+                // spins up during a real model build. Run one throwaway oracle build first (create,
+                // Redraw, pump until geometry exists), exactly what --render-oracle does.
+                try
+                {
+                    var prev = Host.Platforms.CoreModelHost.Preview.Create();
+                    if (prev != null)
+                    {
+                        var host = prev.Control as System.Windows.Forms.Integration.ElementHost;
+                        using var f = new System.Windows.Forms.Form { Width = 220, Height = 220, ShowInTaskbar = false, WindowState = System.Windows.Forms.FormWindowState.Minimized };
+                        if (host != null) { host.Dock = System.Windows.Forms.DockStyle.Fill; f.Controls.Add(host); }
+                        f.Show();
+                        prev.Redraw(new System.Collections.Generic.Dictionary<string, string> { ["ModelType"] = "jewelCase" }, "Final Fantasy 7", "Sony Playstation");
+                        long until0 = Environment.TickCount64 + 6000;
+                        while (Environment.TickCount64 < until0 && prev.BuiltGeometry() == null)
+                        {
+                            System.Windows.Forms.Application.DoEvents();
+                            System.Threading.Thread.Sleep(15);
+                        }
+                        Console.WriteLine("[lb-color] warmup geometry: " + (prev.BuiltGeometry() != null));
+                    }
+                }
+                catch (Exception wex) { Console.WriteLine("[lb-color] warmup failed: " + wex.Message); }
+                var asm = Assembly.LoadFrom(Path.Combine(core, "LaunchBox.dll"));
+                var ch = asm.GetType("Unbroken.LaunchBox.Windows.Desktop.ColorHelper");
+                var mi = ch?.GetMethod("GetBackgroundColor", BindingFlags.Public | BindingFlags.Static);
+                if (mi == null) { Console.WriteLine("[lb-color] GetBackgroundColor not found"); return; }
+                foreach (var img in args.Skip(idx + 1).Where(a => File.Exists(a)))
+                {
+                    var bi = new System.Windows.Media.Imaging.BitmapImage();
+                    bi.BeginInit();
+                    bi.UriSource = new Uri(Path.GetFullPath(img));
+                    bi.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    bi.EndInit();
+                    var conv = new System.Windows.Media.Imaging.FormatConvertedBitmap(
+                        bi, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+                    conv.Freeze();
+                    var col = (System.Windows.Media.Color)mi.Invoke(null, new object[] { conv })!;
+                    Console.WriteLine($"[lb-color] {Path.GetFileName(img)} -> #{col.R:X2}{col.G:X2}{col.B:X2} ({col.R},{col.G},{col.B})");
+                }
+                rc = 0;
+            }
+            catch (Exception ex)
+            {
+                for (Exception? e = ex; e != null; e = e.InnerException)
+                    Console.WriteLine("[lb-color] " + e.GetType().Name + ": " + e.Message + Environment.NewLine + e.StackTrace);
+            }
+        });
+        t.SetApartmentState(System.Threading.ApartmentState.STA);
+        t.Start(); t.Join();
+        return rc;
+    }
+
     public static int Run(string[] args, int idx)
     {
         var frags = args.Skip(idx + 1).Where(a => !a.StartsWith("-")).ToArray();

@@ -375,7 +375,7 @@ internal static class JewelRenderProbe
                               $" w={im.Width:0.#} h={im.Height:0.#} m={im.Margin}{cell}{tf}{rtf} op={im.Opacity:0.##})");
                     break;
                 case System.Windows.Controls.TextBlock tb:
-                    parts.Add($"Text(\"{tb.Text}\" fg={(tb.Foreground as SolidColorBrush)?.Color})");
+                    parts.Add($"Text(\"{tb.Text}\" fg={(tb.Foreground as SolidColorBrush)?.Color}, font={tb.FontFamily} {tb.FontSize}pt {tb.FontWeight}/{tb.FontStyle}, wrap={tb.TextWrapping}, align={tb.TextAlignment}, pad={tb.Padding}, m={tb.Margin}, w={tb.Width} h={tb.Height})");
                     break;
                 case System.Windows.Controls.Panel pn:
                     string bg = pn is { } && pn.Background is SolidColorBrush pb ? $"#{pb.Color.A:X2}{pb.Color.R:X2}{pb.Color.G:X2}{pb.Color.B:X2}" : pn.Background?.GetType().Name ?? "-";

@@ -1511,7 +1511,15 @@ internal sealed class HomeModel3d : IDisposable
         }
         else if (!string.IsNullOrEmpty(gameTitle))
         {
-            var tb = new System.Windows.Controls.TextBlock { Text = gameTitle, FontSize = 12, Foreground = new SolidColorBrush(spineFg) };
+            // LB's exact text (oracle dump): Segoe UI 120pt Normal, centred, NoWrap, white. The size
+            // matters even inside a Viewbox: 12pt glyphs get ClearType-hinted at 12pt and then scaled,
+            // which reads fatter than LB's natively-large text.
+            var tb = new System.Windows.Controls.TextBlock
+            {
+                Text = gameTitle, FontSize = 120, Foreground = new SolidColorBrush(spineFg),
+                TextWrapping = System.Windows.TextWrapping.NoWrap,
+                TextAlignment = System.Windows.TextAlignment.Center,
+            };
             if (logoFont.Length > 0) { try { tb.FontFamily = new System.Windows.Media.FontFamily(logoFont); } catch { } }
             var vb = new System.Windows.Controls.Viewbox
             { Child = tb, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center };
@@ -1736,13 +1744,61 @@ internal sealed class HomeModel3d : IDisposable
     /// <summary>The card colour LB derives from the art: gamma-correct (linear-space) average,
     /// falling back to LB's navy constant #060A1D when the average is too grey or too dark to read
     /// as "the box colour" (oracle: AoW's muddy grey-violet falls back, DK2's saturated red holds).</summary>
+    // The cassette card colour. LB's own derivation is virtualized (undecompilable) and defied a
+    // dozen black-box probes (it is position-dependent and non-additive — neither an average, a
+    // histogram mode, nor any fixed sampling reproduces it). This approximation is calibrated on
+    // four oracle-dumped ground truths instead:
+    //   DK Gold (dark art)      LB #200B08 — a mostly-dark art must come out DARK, not the bright
+    //                            average of its highlights (the old formula's 2x-too-bright flap);
+    //   Beneath a Steel Sky     LB #8D8A83 — a grey art stays grey (no navy fallback: that rule
+    //                            belonged to another model family and broke these);
+    //   Dragonsphere            LB #909194 — a black SCAN BORDER must not darken a light art,
+    //                            hence the border trim before anything is measured;
+    //   Dungeon Keeper 2        LB #972B1D — vivid art keeps the bright linear-light average that
+    //                            already matched.
+    // Rule: trim the uniform near-black border, take the linear-light average of the non-dark
+    // pixels, then attenuate by (keep/0.6)^3 when non-dark pixels are the minority — a dark-
+    // dominated cover darkens hard, anything mostly lit keeps its full brightness.
     private static System.Windows.Media.Color CardBgFromArt(System.Windows.Media.Imaging.BitmapSource? img)
     {
-        var c = LinearAverage(img);
-        if (c == null) return System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D);
-        int mx = Math.Max(c.Value.R, Math.Max(c.Value.G, c.Value.B));
-        int mn = Math.Min(c.Value.R, Math.Min(c.Value.G, c.Value.B));
-        return mx < 32 || (mx - mn) < mx * 0.35 ? System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D) : c.Value;
+        try
+        {
+            if (img == null) return System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D);
+            var conv = new System.Windows.Media.Imaging.FormatConvertedBitmap(
+                new System.Windows.Media.Imaging.TransformedBitmap(img,
+                    new System.Windows.Media.ScaleTransform(64.0 / Math.Max(1, img.PixelWidth), 64.0 / Math.Max(1, img.PixelHeight))),
+                PixelFormats.Bgra32, null, 0);
+            int w = conv.PixelWidth, h = conv.PixelHeight;
+            if (w <= 2 || h <= 2) return System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D);
+            var buf = new byte[w * h * 4];
+            conv.CopyPixels(buf, w * 4, 0);
+            int MaxAt(int x, int y) { int i = (y * w + x) * 4; return Math.Max(buf[i], Math.Max(buf[i + 1], buf[i + 2])); }
+            bool RowDark(int y) { int sum = 0; for (int x = 0; x < w; x++) sum += MaxAt(x, y); return sum < 26 * w; }
+            bool ColDark(int x) { int sum = 0; for (int y = 0; y < h; y++) sum += MaxAt(x, y); return sum < 26 * h; }
+            int t = 0, b = h - 1, l = 0, r = w - 1;
+            while (t < b && RowDark(t)) t++;
+            while (b > t && RowDark(b)) b--;
+            while (l < r && ColDark(l)) l++;
+            while (r > l && ColDark(r)) r--;
+            double lr = 0, lg = 0, lb2 = 0; int kept = 0, total = 0;
+            for (int y = t; y <= b; y++)
+                for (int x = l; x <= r; x++)
+                {
+                    total++;
+                    int i = (y * w + x) * 4;
+                    if (Math.Max(buf[i], Math.Max(buf[i + 1], buf[i + 2])) <= 80) continue;
+                    kept++;
+                    lb2 += Math.Pow(buf[i] / 255.0, 2.2);
+                    lg += Math.Pow(buf[i + 1] / 255.0, 2.2);
+                    lr += Math.Pow(buf[i + 2] / 255.0, 2.2);
+                }
+            if (kept == 0 || total == 0) return System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D);
+            double keep = kept / (double)total;
+            double fac = keep >= 0.6 ? 1.0 : Math.Pow(keep / 0.6, 2.5);
+            byte C(double linSum) => (byte)Math.Clamp(Math.Round(Math.Pow(linSum / kept, 1 / 2.2) * 255 * fac), 0, 255);
+            return System.Windows.Media.Color.FromRgb(C(lr), C(lg), C(lb2));
+        }
+        catch { return System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D); }
     }
 
     /// <summary>Average colour computed in linear light (gamma 2.2), over a 32-px thumbnail.

@@ -3933,24 +3933,48 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         int barW = _gameIndexOn && _gameIndex != null ? _gameIndex.ReservedWidth : 0;
         int pw = parent.ClientSize.Width - barW, ph = parent.ClientSize.Height;
         if (pw <= 0 || ph <= 0) return;
-        int strideX = PCellW + PGap, strideY = PImgH + PLabelH + PGap;
+        int strideY = PImgH + PLabelH + PGap;
         int count = _poster.VirtualListSize;
         // With the index on there IS no native scrollbar — reserving its width would just skew
         // the centring.
         int sbw = barW > 0 ? 0 : SystemInformation.VerticalScrollBarWidth;
 
-        int cols0 = Math.Max(1, pw / strideX);
+        int cols0 = Math.Max(1, pw / (PCellW + PGap));
         int rows = (count + cols0 - 1) / cols0;
         bool scroll = (long)rows * strideY > ph;        // would the grid overflow vertically?
         int effW = pw - (scroll ? sbw : 0);             // width usable for columns
-        int cols = Math.Max(1, effW / strideX);
+
+        // The inter-tile gap is ELASTIC: when squeezing it (down to a floor) buys one or more
+        // extra columns, spend the margin on tiles instead of empty centring slack — the index
+        // strip's reserved width stops costing a whole column. With room to spare the gap stays
+        // nominal. (The trailing gap doesn't need to fit: the last column ends at its tiles.)
+        int minGap = Math.Max(4, PGap * 2 / 5);
+        int cols = Math.Max(1, (effW + minGap) / (PCellW + minGap));
+        int gap = cols <= 1 ? PGap
+                : Math.Min(PGap, Math.Max(minGap, (effW - cols * PCellW) / (cols - 1)));
+        int strideX = PCellW + gap;
+        ApplyPosterIconSpacing(strideX, strideY);
         int gridW = cols * strideX;
-        int left = Math.Max(0, (effW - gridW) / 2);     // shift right by half the slack
+        // Centre on gridW INCLUDING the trailing gap — centring on the bare tile extent shifted
+        // the control 7px right, and that width loss tipped comctl's items-per-row just under
+        // cols (it keeps an internal margin): a five-column layout painted four.
+        int left = Math.Max(0, (effW - gridW) / 2);
         var b = new Rectangle(left, 0, pw - left, ph);  // extend to the right edge (scrollbar there)
         if (_poster.Bounds != b) _poster.Bounds = b;
         _posterBaseX = left;
-        _posterGridRight = left + gridW;
+        _posterGridRight = left + gridW - gap;          // last tile's right edge, no trailing gap
         NudgePosterForOverlay();   // the bar may already be expanded over the fresh layout
+    }
+
+    private int _posterSpacingX;   // last icon spacing pushed to the native grid (0 = never)
+
+    /// <summary>Push the elastic horizontal spacing to the native list when it changed. The
+    /// vertical stride stays nominal — only the inter-column margin breathes.</summary>
+    private void ApplyPosterIconSpacing(int cx, int cy)
+    {
+        if (_posterSpacingX == cx || _poster == null || !_poster.IsHandleCreated) return;
+        _posterSpacingX = cx;
+        try { SetIconSpacing(_poster, cx, cy); _poster.Invalidate(); } catch { }
     }
 
     /// <summary>While the index strip is EXPANDED over the grid (hover/drag in auto-hide mode), a
@@ -4036,6 +4060,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             if (oldHiml != IntPtr.Zero) ImageList_Destroy(oldHiml);
         }
         try { if (_poster.IsHandleCreated) SetIconSpacing(_poster, PCellW + PGap, PImgH + PLabelH + PGap); } catch { }
+        _posterSpacingX = PCellW + PGap;   // keep the elastic-gap cache honest (LayoutPoster re-squeezes right after)
         // The whole ladder, at this geometry: the one line that says what the slider actually buys.
         var ladder = new System.Text.StringBuilder();
         for (int lv = 1; lv <= 10; lv++)

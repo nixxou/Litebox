@@ -74,6 +74,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private bool _gameIndexOn;                   // the option's value — NOT _gameIndex.Visible, which is false while the form isn't shown yet
     private int _posterBaseX;                    // poster X as LayoutPoster placed it (before any overlay nudge)
     private int _posterGridRight;                // right edge of the last tile column, parent coords
+    private int _posterCols;                     // column count LayoutPoster settled on (pinned during overlay squeezes)
+    private int _posterGap;                      // inter-tile gap LayoutPoster settled on
+    private bool _posterSqueezed;                // an overlay squeeze changed spacing/bounds — LayoutPoster restores
     // Poster (grid) view — a native virtual ListView mirroring the OLV's displayed (sorted+filtered)
     // order; owner-drawn box-art tiles. Toggled from VIEW ▸ Images View / List View.
     private PosterListView _poster;
@@ -3982,6 +3985,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         }
         _posterBaseX = left;
         _posterGridRight = left + gridW - gap;          // last tile's right edge, no trailing gap
+        _posterCols = cols;
+        _posterGap = gap;
+        _posterSqueezed = false;
         NudgePosterForOverlay();   // the bar may already be expanded over the fresh layout
     }
 
@@ -3997,17 +4003,59 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     }
 
     /// <summary>While the index strip is EXPANDED over the grid (hover/drag in auto-hide mode), a
-    /// tile column can end up underneath it. Slide the grid left into its own centring slack until
-    /// the last column clears the strip — a pure TRANSLATION (Bounds.X only): the width, and so the
-    /// column count and the drag mapping, stay exactly as laid out. When the slack runs out the
-    /// last column stays partially covered — the best available. Collapse restores the base X.</summary>
+    /// tile column can end up underneath it. Two escapes, in order, both keeping the COLUMN COUNT
+    /// pinned so the drag mapping never moves: slide the grid left into its centring slack, then
+    /// SQUEEZE the inter-tile gap (down to 1px) to shorten the row itself. Only when both run out
+    /// does the last column stay partially covered. Collapse restores the laid-out state.</summary>
     private void NudgePosterForOverlay()
     {
         if (_poster == null || !_posterMode || _gameIndex == null) return;
-        int barLeft = _gameIndexOn && _gameIndex.Visible ? _gameIndex.Left : int.MaxValue;
-        int covered = Math.Max(0, _posterGridRight - barLeft);
-        int x = _posterBaseX - Math.Min(covered, _posterBaseX);
-        if (_poster.Left != x) _poster.Left = x;
+        if (!(_gameIndexOn && _gameIndex.Visible)) return;
+        bool expanded = _gameIndex.Width > _gameIndex.ReservedWidth + 2;
+        if (!expanded)
+        {
+            // Collapsed again: undo the squeeze via a full relayout, or just the translation.
+            if (_posterSqueezed) LayoutPoster();
+            else if (_poster.Left != _posterBaseX) _poster.Left = _posterBaseX;
+            return;
+        }
+
+        var parent = _poster.Parent; if (parent == null) return;
+        int avail = _gameIndex.Left;   // the grid must end before the expanded strip
+        int cols = Math.Max(1, _posterCols);
+
+        // 1) translation covers it? extent at the LAID-OUT gap, trailing gap excluded.
+        int extentBase = cols * PCellW + (cols - 1) * _posterGap;
+        if (_posterBaseX + extentBase <= avail || extentBase <= avail)
+        {
+            // A previous squeeze is undone by a full relayout, whose own trailing Nudge re-places
+            // everything with fresh numbers — continuing here would reuse stale ones.
+            if (_posterSqueezed) { LayoutPoster(); return; }
+            int lx = Math.Max(0, Math.Min(_posterBaseX, avail - extentBase));
+            if (_poster.Left != lx) _poster.Left = lx;
+            return;
+        }
+
+        // 2) squeeze: the tightest gap that clears the strip, floored at 1px — cols stays pinned.
+        int gap = cols <= 1 ? _posterGap
+                : Math.Clamp((avail - cols * PCellW) / Math.Max(1, cols - 1), 1, _posterGap);
+        int stride = PCellW + gap;
+        int extent = cols * PCellW + (cols - 1) * gap;
+        int left = Math.Max(0, Math.Min(_posterBaseX, avail - extent));
+        ApplyPosterIconSpacing(stride, PImgH + PLabelH + PGap);
+        // Width chosen so comctl keeps EXACTLY cols columns at this stride (its wrap anticipates a
+        // scrollbar; NativeColumns verifies and hands back more width if a column still dropped).
+        int wrapMargin = SystemInformation.VerticalScrollBarWidth + 4;
+        int width = Math.Min(parent.ClientSize.Width - left, cols * stride + wrapMargin + 8);
+        _poster.Bounds = new Rectangle(left, 0, width, parent.ClientSize.Height);
+        for (int i = 0; i < 2; i++)
+        {
+            int actual = _poster.NativeColumns;
+            if (actual >= cols || left + width >= parent.ClientSize.Width) break;
+            width = Math.Min(parent.ClientSize.Width - left, width + stride / 2);
+            _poster.Bounds = new Rectangle(left, 0, width, parent.ClientSize.Height);
+        }
+        _posterSqueezed = true;
     }
 
     // ── Central-panel zoom (Ctrl +/- , Ctrl-wheel, Ctrl-0) ────────────────────────────────────

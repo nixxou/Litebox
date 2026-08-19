@@ -1522,8 +1522,17 @@ internal sealed class HomeModel3d : IDisposable
             };
             if (logoFont.Length > 0) { try { tb.FontFamily = new System.Windows.Media.FontFamily(logoFont); } catch { } }
             var vb = new System.Windows.Controls.Viewbox
-            { Child = tb, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center };
-            if (spineRot != 0) vb.LayoutTransform = new System.Windows.Media.RotateTransform(spineRot);
+            {
+                Child = tb,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                // A hair of breathing room at the ends and edges — LB never runs the title
+                // hard against the spine's borders.
+                Margin = new System.Windows.Thickness(14, 7, 14, 7),
+            };
+            // 180: LB's spine title reads BOTTOM-TO-TOP (checked against the dual preview);
+            // without the flip ours ran top-to-bottom.
+            vb.LayoutTransform = new System.Windows.Media.RotateTransform(180 + spineRot);
             spineGrid.Children.Add(vb);
         }
         spineVisual = spineGrid;

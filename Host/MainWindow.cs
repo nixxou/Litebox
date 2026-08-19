@@ -3956,21 +3956,25 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // strip's reserved width stops costing a whole column. With room to spare the gap stays
         // nominal. (The trailing gap doesn't need to fit: the last column ends at its tiles.)
         int minGap = 1;   // Mehdi's call: in the worst case the tiles may all but touch
-        // cols and gap must agree INCLUDING the trailing gap — comctl wraps on clientW / spacing,
-        // so a count packed at minGap then spaced back to nominal overflows the wrap and the last
-        // column jumps to the next row, leaving a dead lane (seen live).
         // comctl's items-per-row test anticipates a vertical scrollbar even when the style is
-        // stripped: it wraps on roughly clientW − (scrollbar + edge). Pack against that width or
-        // the last counted column jumps to the next row and leaves a dead lane (measured live:
-        // seven columns fit, six painted).
+        // stripped (wraps on roughly clientW − (scrollbar + edge)), and cols/gap must agree
+        // INCLUDING the trailing gap — both learned live from dead-lane regressions.
         int wrapMargin = SystemInformation.VerticalScrollBarWidth + 4;
         int usable = Math.Max(PCellW, effW - wrapMargin);
-        int cols = Math.Max(1, usable / (PCellW + minGap));
+        int Fit(int w, int g) => Math.Max(1, Math.Max(PCellW, w - wrapMargin) / (PCellW + g));
+        // NOMINAL gap and balanced margins by default. The gap squeezes (down to 1px) ONLY when
+        // the index strip's reserved width actually COSTS columns against a strip-less layout —
+        // max-packing unconditionally crammed 1px gaps everywhere and ate the left margin.
+        int colsNoStrip = Fit(parent.ClientSize.Width - (barW > 0 && scroll ? SystemInformation.VerticalScrollBarWidth : 0), PGap);
+        int cols = Fit(effW, PGap);
+        if (cols < colsNoStrip) cols = Math.Min(colsNoStrip, Fit(effW, minGap));
         int gap = Math.Min(PGap, Math.Max(minGap, (usable - cols * PCellW) / cols));
         int strideX = PCellW + gap;
         ApplyPosterIconSpacing(strideX, strideY);
         int gridW = cols * strideX;
-        int left = Math.Max(0, (effW - gridW) / 2);     // shift right by half the slack
+        // Centre on the VISUAL extent (no trailing gap), bounded so the wrap keeps its columns.
+        int left = Math.Max(0, (effW - (gridW - gap)) / 2);
+        left = Math.Max(0, Math.Min(left, pw - gridW - wrapMargin));
         _poster.Bounds = new Rectangle(left, 0, pw - left, ph);   // extend to the right edge (scrollbar there)
         // comctl's items-per-row test carries an INTERNAL margin no formula sees — measure what it
         // actually wrapped and, when a column we counted on jumped away, hand the slack back as

@@ -1796,7 +1796,68 @@ internal sealed class HomeModel3d : IDisposable
             double keep = kept / (double)total;
             double fac = keep >= 0.6 ? 1.0 : Math.Pow(keep / 0.6, 2.5);
             byte C(double linSum) => (byte)Math.Clamp(Math.Round(Math.Pow(linSum / kept, 1 / 2.2) * 255 * fac), 0, 255);
-            return System.Windows.Media.Color.FromRgb(C(lr), C(lg), C(lb2));
+            var baseCol = System.Windows.Media.Color.FromRgb(C(lr), C(lg), C(lb2));
+
+            // LB's real function is a dominant-colour CLUSTERING (it lands on colours no average
+            // can reach — BG2's teal, CP77's pure yellow — and the oracle proved it). One clustering
+            // rule is grafted onto the base: when the base colour came out NEAR-GREY but the art has
+            // a strongly-saturated dominant cluster, LB shows that hue — the Age of Wonders II
+            // poster (dark blues + a red dragon) must give a brick RED, not the pink the average
+            // makes of it. The base keeps every case that already matched (DK2, greys, dark
+            // covers): only dull-base + vivid-cluster switches.
+            int bMax = Math.Max(baseCol.R, Math.Max(baseCol.G, baseCol.B));
+            int bMin = Math.Min(baseCol.R, Math.Min(baseCol.G, baseCol.B));
+            double baseSat = bMax == 0 ? 0 : (bMax - bMin) / (double)bMax;
+            if (baseSat < 0.40)
+            {
+                // 4x4x4 histogram over the trimmed region — cheap, deterministic clustering.
+                var cnt = new int[64]; var cr = new long[64]; var cg = new long[64]; var cb = new long[64];
+                double plainLum = 0; int pn = 0;
+                for (int y = t; y <= b; y++)
+                    for (int x = l; x <= r; x++)
+                    {
+                        int i = (y * w + x) * 4;
+                        int bb = buf[i], gg = buf[i + 1], rr = buf[i + 2];
+                        plainLum += (rr + gg + bb) / 3.0; pn++;
+                        int bucket = (rr >> 6) * 16 + (gg >> 6) * 4 + (bb >> 6);
+                        cnt[bucket]++; cr[bucket] += rr; cg[bucket] += gg; cb[bucket] += bb;
+                    }
+                plainLum = pn > 0 ? plainLum / pn / 255.0 : 0;
+                double bestScore = 0; double bh = 0, bs = 0, bv = 0;
+                for (int i = 0; i < 64; i++)
+                {
+                    if (cnt[i] == 0) continue;
+                    double frac = cnt[i] / (double)pn;
+                    if (frac < 0.08) continue;
+                    double rr = cr[i] / (double)cnt[i] / 255, gg = cg[i] / (double)cnt[i] / 255, bb = cb[i] / (double)cnt[i] / 255;
+                    double mx = Math.Max(rr, Math.Max(gg, bb)), mn = Math.Min(rr, Math.Min(gg, bb));
+                    double sat = mx <= 0 ? 0 : (mx - mn) / mx;
+                    if (sat < 0.75 || mx < 0.15) continue;
+                    double score = frac * sat;
+                    if (score <= bestScore) continue;
+                    bestScore = score;
+                    double hDeg = mx == mn ? 0
+                        : mx == rr ? 60 * (((gg - bb) / (mx - mn)) % 6)
+                        : mx == gg ? 60 * ((bb - rr) / (mx - mn) + 2)
+                        : 60 * ((rr - gg) / (mx - mn) + 4);
+                    bh = (hDeg + 360) % 360; bs = sat; bv = mx;
+                }
+                if (bestScore > 0)
+                {
+                    double v = Math.Min(bMax / 255.0, Math.Sqrt(Math.Max(0.001, bv * plainLum)));
+                    double c2 = v * bs, hp = bh / 60.0, xw = c2 * (1 - Math.Abs(hp % 2 - 1)), m = v - c2;
+                    (double rr, double gg, double bb) = hp switch
+                    {
+                        < 1 => (c2, xw, 0.0), < 2 => (xw, c2, 0.0), < 3 => (0.0, c2, xw),
+                        < 4 => (0.0, xw, c2), < 5 => (xw, 0.0, c2), _ => (c2, 0.0, xw),
+                    };
+                    return System.Windows.Media.Color.FromRgb(
+                        (byte)Math.Clamp(Math.Round((rr + m) * 255), 0, 255),
+                        (byte)Math.Clamp(Math.Round((gg + m) * 255), 0, 255),
+                        (byte)Math.Clamp(Math.Round((bb + m) * 255), 0, 255));
+                }
+            }
+            return baseCol;
         }
         catch { return System.Windows.Media.Color.FromRgb(0x06, 0x0A, 0x1D); }
     }

@@ -56,6 +56,15 @@ internal sealed class GameListIndexBar : Control
     }
     private bool _alwaysShow = true;
 
+    /// <summary>The width the LAYOUT must reserve for the strip — constant per mode (fitted when
+    /// always-shown, the slim collapsed sliver otherwise). Hover expansion is a pure OVERLAY above
+    /// the content and never touches this: reflowing the grid mid-hover moved the tiles under the
+    /// pointer, so a drag no longer matched where things would land once the hover ended.</summary>
+    public int ReservedWidth => _alwaysShow ? _fit : CollapsedW;
+    /// <summary>Raised when ReservedWidth changes (option flip, labels refit) — the owner re-pads
+    /// the views then. Never raised by hover.</summary>
+    public event Action? ReservedWidthChanged;
+
     private IReadOnlyList<(string Label, string Tip, int Index, bool Spell)> _groups
         = Array.Empty<(string, string, int, bool)>();
     private int _rows;
@@ -98,13 +107,34 @@ internal sealed class GameListIndexBar : Control
 
     private void FitWidth()
     {
+        int reservedBefore = ReservedWidth;
         int w = MinW;
         foreach (var (label, _, _, spell) in _groups)
             if (spell)
                 w = Math.Max(w, TextRenderer.MeasureText(label, Font).Width + DotRail + 8);
         _fit = Math.Min(w, MaxW);
-        int want = _alwaysShow || _pointerIn || _dragging ? _fit : CollapsedW;
-        if (want != Width) Width = want;
+        if (ReservedWidth != reservedBefore)
+            try { ReservedWidthChanged?.Invoke(); } catch { }
+        Place();
+    }
+
+    /// <summary>Own layout — the strip is NOT docked (a dock reflows its siblings on every width
+    /// change, hover included). It pins itself to the parent's right edge at its DISPLAY width:
+    /// the reserved width normally, the fitted width while hovered or dragging — that expansion
+    /// overlays the content, exactly LB's dark band.</summary>
+    private void Place()
+    {
+        if (Parent == null) return;
+        int disp = _alwaysShow || _pointerIn || _dragging ? _fit : CollapsedW;
+        disp = Math.Min(disp, Math.Max(1, Parent.ClientSize.Width));
+        var b = new Rectangle(Parent.ClientSize.Width - disp, 0, disp, Parent.ClientSize.Height);
+        if (Bounds != b) Bounds = b;
+    }
+
+    protected override void OnParentChanged(EventArgs e)
+    {
+        base.OnParentChanged(e);
+        if (Parent != null) { Parent.Resize += (_, _) => Place(); Place(); }
     }
 
     private bool MarkersVisible => _alwaysShow || _pointerIn || _dragging;
@@ -291,7 +321,7 @@ internal sealed class GameListIndexBar : Control
         if (!_dragging) return;
         _dragging = false;
         Capture = false;
-        FitWidth();
+        Place();
         Invalidate();
     }
 
@@ -300,13 +330,14 @@ internal sealed class GameListIndexBar : Control
         base.OnMouseEnter(e);
         _pointerIn = true;
         RefreshGroups();   // groups may be stale (scroll/sort since last hover) — one cheap pass
+        Place();           // expand OVER the content; the layout underneath must not move
     }
 
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
         _hover = -1;
-        if (!_dragging) { _pointerIn = false; FitWidth(); }
+        if (!_dragging) { _pointerIn = false; Place(); }
         Invalidate();
     }
 

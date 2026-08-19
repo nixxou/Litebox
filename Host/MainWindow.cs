@@ -377,11 +377,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         inner.Panel1.BackColor = Center;      // centre column — #2A2B34 (shows in the poster-grid side margins too)
         inner.Panel1.Controls.Add(_poster);   // hidden until poster mode; same cell as the list
         inner.Panel1.Controls.Add(_games);
-        // The Game List Index stands where the scrollbar was: added AFTER the Fill controls so its
-        // Dock.Right strip is laid out first and the list fills the remainder.
+        // The Game List Index stands where the scrollbar was. NOT docked: it places itself on the
+        // panel's right edge, and the views make room via Panel1.Padding — so a hover expansion is
+        // a pure overlay and never reflows the grid or the columns under the pointer.
         _gameIndex = new GameListIndexBar
         {
-            Dock = DockStyle.Right, BackColor = Center, Font = Font,
+            BackColor = Center, Font = Font,
             // Providers pick the ACTIVE view: the poster mirrors the list's displayed order
             // (same index space), so the groups are shared and only the scroll plumbing switches.
             GroupsProvider = ComputeIndexGroups,
@@ -396,10 +397,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             PageRows = () => _posterMode ? _poster.ItemsPerPage : _games.RowsPerPage,
         };
         inner.Panel1.Controls.Add(_gameIndex);
+        _gameIndex.BringToFront();   // above both views — its hover expansion overlays them
         _games.ViewChanged += () => { if (_gameIndex.Visible) _gameIndex.RefreshGroups(); };
         _games.Scrolled += () => { if (_gameIndex.Visible) _gameIndex.Invalidate(); };   // keep the thumb honest
         _poster.Scrolled += () => { if (_gameIndex.Visible) _gameIndex.Invalidate(); };
-        _gameIndex.SizeChanged += (_, _) => LayoutPoster();   // the strip's width changes the grid's room
+        _gameIndex.ReservedWidthChanged += ApplyGameListIndexRoom;   // labels refit → the views re-pad
         ApplyGameListIndexOptions();
         // Layout ran while the form was invisible (Control.Visible lies until Show), so the poster
         // may have measured a barless width — one refresh once everything is really on screen.
@@ -3423,7 +3425,20 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _gameIndex.AlwaysShow = LbSettings?.GetBool("AlwaysShowArrangeScrollBar", true) ?? true;
         _gameIndex.Visible = on;
         if (on) _gameIndex.RefreshGroups();
-        LayoutPoster();   // the grid's usable width follows the strip
+        ApplyGameListIndexRoom();
+    }
+
+    /// <summary>Give the strip its RESERVED width (constant per mode): the list frees it through
+    /// the panel's right padding, the poster through LayoutPoster. Hover expansion overlays and
+    /// never comes through here.</summary>
+    private void ApplyGameListIndexRoom()
+    {
+        if (_gameIndex == null) return;
+        int room = _gameIndexOn ? _gameIndex.ReservedWidth : 0;
+        var parent = _gameIndex.Parent;
+        if (parent != null && parent.Padding.Right != room)
+            parent.Padding = new Padding(0, 0, room, 0);
+        LayoutPoster();
     }
 
     private void ApplyFilter()
@@ -3909,7 +3924,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         var parent = _poster.Parent; if (parent == null) return;
         // The index strip is DOCKED but the poster is not (Dock.None, centred by hand), so the
         // grid must subtract the strip's width itself or it slides underneath.
-        int barW = _gameIndexOn && _gameIndex != null ? _gameIndex.Width : 0;
+        int barW = _gameIndexOn && _gameIndex != null ? _gameIndex.ReservedWidth : 0;
         int pw = parent.ClientSize.Width - barW, ph = parent.ClientSize.Height;
         if (pw <= 0 || ph <= 0) return;
         int strideX = PCellW + PGap, strideY = PImgH + PLabelH + PGap;

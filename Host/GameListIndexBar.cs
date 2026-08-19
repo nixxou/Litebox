@@ -69,8 +69,7 @@ internal sealed class GameListIndexBar : Control
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-        TabStop = false;
-        Cursor = Cursors.Hand;
+        TabStop = false;   // pointer stays the plain arrow, like LB's index
         Width = MinW;
     }
 
@@ -121,8 +120,6 @@ internal sealed class GameListIndexBar : Control
         return best;
     }
 
-    private const int ThumbHalf = 6;
-
     /// <summary>The thumb's centre, on the SCROLL scale: top / (rows − page), so it reaches both
     /// ends of the strip. Group markers live on the row scale — the two agree at the top and drift
     /// a little toward the bottom, the same tension every scrollbar-with-marks has.</summary>
@@ -168,20 +165,22 @@ internal sealed class GameListIndexBar : Control
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        // Current position: a soft thumb behind the markers, so the index doubles as a scroll
-        // indicator — and a drag handle (grab it anywhere, park it anywhere, groups or not).
+        // Current position: a thin accent line, LB's look — the drag handle for free scrolling.
         int ty = ThumbY();
         if (ty >= 0)
         {
-            using var pos = new SolidBrush(Color.FromArgb(_dragging ? 60 : 36, LiteBoxTheme.Fg));
-            g.FillRectangle(pos, 0, Math.Max(0, ty - ThumbHalf), ClientSize.Width, ThumbHalf * 2);
+            using var pos = new SolidBrush(_dragging ? LiteBoxTheme.Accent
+                                                     : Color.FromArgb(210, LiteBoxTheme.Accent));
+            g.FillRectangle(pos, 2, ty - 1, ClientSize.Width - 4, 3);
         }
 
         using var tick = new SolidBrush(Color.FromArgb(150, LiteBoxTheme.SubFg));
         using var tickHot = new SolidBrush(LiteBoxTheme.Fg);
 
+        // Text and dots hang on the RIGHT edge, LB's alignment (the dots form a rail along the
+        // strip's edge and each label ends against it).
         int lineH = Font.Height;
-        int cx = ClientSize.Width / 2;
+        int rx = ClientSize.Width - 4;
         int lastLabelBottom = int.MinValue;
         for (int i = 0; i < _groups.Count; i++)
         {
@@ -194,16 +193,16 @@ internal sealed class GameListIndexBar : Control
             bool room = y - lineH / 2 >= lastLabelBottom + 1 && y + lineH / 2 <= ClientSize.Height;
             if (room || hot)
             {
-                var r = new Rectangle(0, y - lineH / 2, ClientSize.Width, lineH);
+                var r = new Rectangle(0, y - lineH / 2, rx, lineH);
                 TextRenderer.DrawText(g, label, Font, r, hot ? LiteBoxTheme.Fg : LiteBoxTheme.SubFg,
-                                      TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
+                                      TextFormatFlags.Right | TextFormatFlags.VerticalCenter
                                       | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
                 if (room) lastLabelBottom = y + lineH / 2;
             }
             else
             {
                 int d = hot ? 5 : 3;
-                g.FillEllipse(hot ? tickHot : tick, cx - d / 2f, y - d / 2f, d, d);
+                g.FillEllipse(hot ? tickHot : tick, rx - d, y - d / 2f, d, d);
             }
         }
     }
@@ -215,15 +214,18 @@ internal sealed class GameListIndexBar : Control
         if (e.Button != MouseButtons.Left) return;
         _dragging = true;
         Capture = true;
-        // Pressing ON the thumb grabs it where it stands — no snap, so a drag can start from a
-        // position between two markers without the list lurching first. Pressing anywhere else is
-        // a jump to the nearest group (the letter you aimed at), and the drag goes on from there.
+        // Pressing NEAR the thumb (not just dead on the 3px line) grabs it where it stands — no
+        // snap, so a drag can start from a position between two markers without the list lurching
+        // first. Pressing farther away is a jump to the nearest group (the letter you aimed at),
+        // and the drag goes on from there.
         int ty = ThumbY();
-        _grabOffset = ty >= 0 && Math.Abs(e.Y - ty) <= ThumbHalf ? e.Y - ty : 0;
-        if (_grabOffset == 0 && (ty < 0 || Math.Abs(e.Y - ty) > ThumbHalf)) JumpAt(e.Y);
+        bool onThumb = ty >= 0 && Math.Abs(e.Y - ty) <= GrabZone;
+        _grabOffset = onThumb ? e.Y - ty : 0;
+        if (!onThumb) JumpAt(e.Y);
         Invalidate();
     }
-    private int _grabOffset;   // pointer-to-thumb-centre offset while dragging (0 = jumped)
+    private int _grabOffset;             // pointer-to-thumb offset while dragging (0 = jumped)
+    private const int GrabZone = 14;     // px around the thumb line that count as grabbing it
 
     protected override void OnMouseMove(MouseEventArgs e)
     {

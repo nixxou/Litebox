@@ -3356,13 +3356,22 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             // The group label is what the sort column DISPLAYS (so Genre groups read "Fighter / 2D",
             // not a raw value), falling back to the sort getter for keys without a column.
+            // LB spells out only the FIRST value of a multi-value field ("Action; Adventure" groups
+            // under "Action") — the sort orders by the full string anyway, so the first segment is
+            // what actually alphabetises the block.
+            static string First(string t)
+            {
+                if (string.IsNullOrEmpty(t)) return "(None)";
+                int i = t.IndexOf(';');
+                return (i < 0 ? t : t[..i]).Trim();
+            }
             var colKey = ColumnKeyForSort(key);
             var col = _games.AllColumns.FirstOrDefault(c => string.Equals(c.Key, colKey, StringComparison.OrdinalIgnoreCase));
             if (col?.Text != null)
-                return g => { string t = Safe(() => col.Text(g)); return string.IsNullOrEmpty(t) ? "(None)" : t; };
+                return g => First(Safe(() => col.Text(g)));
             var getter = SortGetterFor(key);
             if (getter != null)
-                return g => { var v = Safe(() => getter(g)); var t = v?.ToString(); return string.IsNullOrEmpty(t) ? "(None)" : t; };
+                return g => First(Safe(() => getter(g))?.ToString());
         }
         return g =>
         {

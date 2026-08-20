@@ -182,6 +182,8 @@ internal sealed class HomeModel3d : IDisposable
     {
         string type = map != null && map.TryGetValue("ModelType", out var t) ? t : "box";
         type = RefineCaseType(type, art);
+        if (Environment.GetEnvironmentVariable("LB_CASS_DIAG") == "1")
+            Console.WriteLine($"[cassette] BuildModel type='{type}' (map {(map == null ? "null" : map.Count + " keys")})");
         return type switch
         {
             "jewelCase" => BuildJewel(map, gameTitle, art),
@@ -1143,9 +1145,9 @@ internal sealed class HomeModel3d : IDisposable
     //      leaf5 LID  — #10CCCCCC + Specular #FF808080 pow250 (all styles).
     //
     //    CassettePosition Landscape = the whole model rotated -90° about Z (dump: X/Y bounds swap);
-    //    Automatic goes landscape when the FRONT art is wider than tall. CassetteWornPlastic /
-    //    CassetteCloudyPlastic (wear/haze overlays) and the Cassette*Rotation label spins are TODO —
-    //    they alter looks, never geometry.
+    //    Automatic goes landscape when the FRONT art is wider than tall. CassetteSpine/LogoRotation
+    //    are the spine's two DRAW slots (scan / logo-or-text): a rotation value = drawn, the literal
+    //    "off" = unchecked, absent = legacy block → drawn at 0 (LB parity).
     private static Model3D? BuildCassette(System.Collections.Generic.Dictionary<string, string>? map, string? gameTitle,
                                           Model3d.Model3dArt art)
     {
@@ -1162,6 +1164,14 @@ internal sealed class HomeModel3d : IDisposable
         bool worn = string.Equals(Get("CassetteWornPlastic"), "true", StringComparison.OrdinalIgnoreCase);
         bool cloudy = string.Equals(Get("CassetteCloudyPlastic"), "true", StringComparison.OrdinalIgnoreCase);
         string logoFont = Get("LogoFont");
+        // The two spine DRAW slots (LB's "Spine" group): each Cassette*Rotation field holds the slot's
+        // rotation when drawn, and the literal string "off" when its checkbox is unchecked — read off a
+        // REAL v14 write (<CassetteSpineRotation>off</...>). An ABSENT field is a legacy block from
+        // before the checkboxes existed and means DRAWN (rotation 0): FlowModel renders null exactly
+        // like 0 (oracle-dumped), which is what keeps pre-14 blocks looking unchanged.
+        // Slot 1 = the Box - Spine scan; slot 2 = the clear logo, or the plain-text title with LogoFont.
+        bool drawSpineImg = !string.Equals(Get("CassetteSpineRotation").Trim(), "off", StringComparison.OrdinalIgnoreCase);
+        bool drawLogoSlot = !string.Equals(Get("CassetteLogoRotation").Trim(), "off", StringComparison.OrdinalIgnoreCase);
         int spineRot = int.TryParse(Get("CassetteSpineRotation"), out var srr) ? ((srr % 360) + 360) % 360 : 0;
         int logoRot = int.TryParse(Get("CassetteLogoRotation"), out var lrr) ? ((lrr % 360) + 360) % 360 : 0;
 
@@ -1228,19 +1238,24 @@ internal sealed class HomeModel3d : IDisposable
         // side views — that failure came from the wrong axis mapping below, not from this split.
         Material bodyMat = wear != null ? WornMat(plasticColor)
             : Mat2(plasticColor, System.Windows.Media.Color.FromArgb(0x50, 0xDC, 0xE1, 0xE6), 28);
+        // CLOUDY, LiteBox-toned (user call): LB's own haze reads too strong, so every cloudy surface
+        // keeps only HALF the opacity it ADDED over its clear counterpart (lid 0x10→0x38 becomes
+        // 0x10→0x24) and loses ~15% of its specular alpha. Halving the increment, not the raw alpha,
+        // is what keeps cloudy hazier than plain — a flat halving would have made the milky tray
+        // CLEARER than its non-cloudy self.
         Material lidMat = cloudy
-            ? Mat2(System.Windows.Media.Color.FromArgb(0x38, 0xF5, 0xF7, 0xFA), System.Windows.Media.Color.FromArgb(0x6E, 0xFF, 0xFF, 0xFF), 90)
+            ? Mat2(System.Windows.Media.Color.FromArgb(0x24, 0xF5, 0xF7, 0xFA), System.Windows.Media.Color.FromArgb(0x5E, 0xFF, 0xFF, 0xFF), 90)
             : Mat2(System.Windows.Media.Color.FromArgb(0x10, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250);
         // CLEAR case tray: the oracle paints it in TWO materials -- the BACK PLATE nearly clear
         // (#15CCCCCC pow250: the tape reads through the back) and the REST of the tray MILKY
         // (#96D0D4DA pow90: walls and rim frost over). One flat #15CCCCCC everywhere left the
         // opening wall with a pow-250 highlight that washed the flank white next to LB's soft grey.
         Material trayMat = clearCase
-            ? (cloudy ? Mat2(System.Windows.Media.Color.FromArgb(0x4A, 0xF0, 0xF3, 0xF8), System.Windows.Media.Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF), 80)
+            ? (cloudy ? Mat2(System.Windows.Media.Color.FromArgb(0x2F, 0xF0, 0xF3, 0xF8), System.Windows.Media.Color.FromArgb(0x52, 0xFF, 0xFF, 0xFF), 80)
                       : Mat2(System.Windows.Media.Color.FromArgb(0x15, 0xCC, 0xCC, 0xCC), System.Windows.Media.Color.FromArgb(0xFF, 0x80, 0x80, 0x80), 250))
             : bodyMat;
         Material trayMilkMat = cloudy
-            ? Mat2(System.Windows.Media.Color.FromArgb(0xB0, 0xE8, 0xEC, 0xF2), System.Windows.Media.Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF), 80)
+            ? Mat2(System.Windows.Media.Color.FromArgb(0xA3, 0xE8, 0xEC, 0xF2), System.Windows.Media.Color.FromArgb(0x52, 0xFF, 0xFF, 0xFF), 80)
             : Mat2(System.Windows.Media.Color.FromArgb(0x96, 0xD0, 0xD4, 0xDA), System.Windows.Media.Color.FromArgb(0xFF, 0x7F, 0x7F, 0x7F), 90);
         for (int i = 0; i < plastic.Children.Count; i++)
         {
@@ -1443,10 +1458,11 @@ internal sealed class HomeModel3d : IDisposable
                 // normal glass is a 6.3% blend toward #CCCCCC with the tight pow-250 gloss, CLOUDY
                 // plastic a 22% milk toward #F5F7FA with the broad pow-90 sheen.
                 // TWO passes of glass, not one: LB's lip is a slab, so light crosses its back AND
-                // front face — the effective cover is 1-(1-a)², i.e. 39% for cloudy's 0x38 and 12%
-                // for plain glass's 0x10. Measured proof: LB's window reads (188,123,116) and
-                // 0.61·card + 0.39·milk on LB's own card colour gives (188,123,115).
-                double a1 = cloudy ? 0x38 / 255.0 : 0x10 / 255.0;
+                // front face — the effective cover is 1-(1-a)², i.e. 12% for plain glass's 0x10.
+                // (Measured against LB: its window reads (188,123,116), and 0.61·card + 0.39·milk on
+                // LB's card colour gives (188,123,115) — that 39% was cloudy at LB's original 0x38.)
+                // Cloudy now tracks the toned-down lid at 0x24, so the pane covers ~26% instead.
+                double a1 = cloudy ? 0x24 / 255.0 : 0x10 / 255.0;
                 double ga = 1 - (1 - a1) * (1 - a1);
                 var tint = cloudy ? System.Windows.Media.Color.FromRgb(0xF5, 0xF7, 0xFA) : System.Windows.Media.Color.FromRgb(0xCC, 0xCC, 0xCC);
                 var gz = System.Windows.Media.Color.FromRgb(
@@ -1461,7 +1477,7 @@ internal sealed class HomeModel3d : IDisposable
                         // Specular doubled with the diffuse: the slab reflects off BOTH faces, which
                         // is why LB's window catches the light far more than a single pane did.
                         cloudy
-                            ? new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xDC, 0xFF, 0xFF, 0xFF)), 90)
+                            ? new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xBC, 0xFF, 0xFF, 0xFF)), 90)
                             : new SpecularMaterial(new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, 0xC0, 0xC0, 0xC0)), 250),
                     }
                 };
@@ -1511,41 +1527,75 @@ internal sealed class HomeModel3d : IDisposable
         // side, exactly like a real J-card).
         System.Windows.Media.Visual spineVisual;
         // A set LogoFont = "Use Plain Text Title Instead of Clear Logo" (the jewel family's own
-        // convention). CassetteLogoRotation spins the clear logo, CassetteSpineRotation the text.
-        var spineScan = LoadBitmap(art.Spine);
+        // convention): the SECOND slot then draws the title instead of the clear logo, spun by that
+        // slot's own rotation (CassetteLogoRotation). CassetteSpineRotation spins the scan.
+        // Auto-orientation is a DEFAULT, not a law: at rotation 0 (the untouched combo) a lying-down
+        // scan is stood upright (UprightSpine, like the other builders) — but any explicit rotation
+        // is the user overriding us, so the scan is taken raw and spun exactly as asked.
+        var spineScan = drawSpineImg ? LoadBitmap(art.Spine) : null;   // slot off → the scan never loads
+        if (spineRot == 0) spineScan = UprightSpine(spineScan);
+        // Slot 2, once checked, always draws SOMETHING: the clear logo when there is one, else the
+        // title as a fallback — "Use Plain Text" only forces the title over an existing logo, it is
+        // not what enables the text. A checked slot with no logo and no title left the spine blank,
+        // which read as a bug (Guilty Gear X2 Reload, clear case). LiteBox-only: LB leaves it bare.
+        bool slotLogo = drawLogoSlot && logo != null && logoFont.Length == 0;
+        bool slotText = drawLogoSlot && !slotLogo && !string.IsNullOrEmpty(gameTitle);
+        // Probe diag (env LB_CASS_DIAG=1): which spine branch this build takes, and why.
+        if (Environment.GetEnvironmentVariable("LB_CASS_DIAG") == "1")
+            Console.WriteLine($"[cassette] spine: drawSpine={drawSpineImg} drawLogo={drawLogoSlot} scan={(spineScan != null)} " +
+                              $"logo={(logo != null)} logoFont='{logoFont}' title='{gameTitle}' clearCase={clearCase} → " +
+                              (spineScan != null ? "SCAN" : slotLogo ? "LOGO" : slotText ? "TEXT" : "BARE"));
         var spineGrid = new System.Windows.Controls.Grid { Width = 1000, Height = spineScan != null ? 220 : 169.4, Background = new SolidColorBrush(spineScan != null ? (LinearAverage(spineScan) ?? bg) : bg) };
         if (spineScan != null)
         {
             // A real Box - Spine scan wins over logo/text (LB: Grid 1000x220, scan in a Viewbox).
             // The scan is stored portrait; lay it along the spine's length (the grid's 1000 axis).
+            // 270, not 90: LB's scan reads TOP-TO-BOTTOM on the spine (checked on the dual preview,
+            // Dungeon Keeper 2) — at 90 ours ran bottom-to-top, 180° off the oracle.
             var sim = new System.Windows.Controls.Image { Source = spineScan, Stretch = System.Windows.Media.Stretch.Fill };
-            sim.LayoutTransform = new System.Windows.Media.RotateTransform(90 + spineRot);
+            sim.LayoutTransform = new System.Windows.Media.RotateTransform(270 + spineRot);
             spineGrid.Children.Add(new System.Windows.Controls.Viewbox
             { Child = sim, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
         }
-        else if (logo != null && logoFont.Length == 0)
+        else if (slotLogo)
         {
             // Clear logo, Uniform-centred in a Viewbox (oracle: Viewbox Img st=Uniform). One dump
             // showed the TEXT here instead — that was LB caught mid-async-art-load, not the rule.
             var lim = new System.Windows.Controls.Image
             { Source = logo, Stretch = System.Windows.Media.Stretch.Uniform,
               HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center };
+            // Same default-only auto-orientation as the scan: at rotation 0 a PORTRAIT logo is laid
+            // along the spine (90°) instead of shrinking into the 75.8-high box; an explicit rotation
+            // replaces the automatism entirely.
             if (logoRot != 0) lim.LayoutTransform = new System.Windows.Media.RotateTransform(logoRot);
+            else if (logo.PixelHeight > logo.PixelWidth) lim.LayoutTransform = new System.Windows.Media.RotateTransform(90);
             spineGrid.Children.Add(new System.Windows.Controls.Viewbox
-            { Child = lim, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center });
+            {
+                Child = lim,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center, VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                // LB boxes the clear logo exactly like the plain-text title (oracle dump: Viewbox
+                // m=20,0,20,0 laid out 75.8 high in the 169.4 grid) — full-height ours read oversized.
+                Margin = new System.Windows.Thickness(20, 0, 20, 0),
+                MaxHeight = 75.8,
+            });
         }
-        else if (!string.IsNullOrEmpty(gameTitle) && !clearCase)
+        else if (slotText)
         {
-            // CLEAR case: the oracle's spine renders as the plain milky card colour — no title
-            // (checked at spine-facing yaw: a flat gradient, no glyphs). The text block below is
-            // for closed backs only.
-
+            // The clear case gets the title like any other style (verified on the dual preview: Age
+            // of Wonders, ClearStraightBack — LB paints the teal title where we painted nothing).
             // LB's exact text (oracle dump): Segoe UI 120pt Normal, centred, NoWrap, white. The size
             // matters even inside a Viewbox: 12pt glyphs get ClearType-hinted at 12pt and then scaled,
             // which reads fatter than LB's natively-large text.
+            // DEFAULT white flips to black on a very light card — same default-only principle as the
+            // auto-rotations: an explicitly chosen colour is never second-guessed (a chosen white is
+            // indistinguishable from the default, so it flips too — the readable outcome either way).
+            var textFg = spineFg;
+            if (textFg.R == 255 && textFg.G == 255 && textFg.B == 255
+                && (0.299 * bg.R + 0.587 * bg.G + 0.114 * bg.B) / 255.0 > 0.7)
+                textFg = System.Windows.Media.Colors.Black;
             var tb = new System.Windows.Controls.TextBlock
             {
-                Text = gameTitle, FontSize = 120, Foreground = new SolidColorBrush(spineFg),
+                Text = gameTitle, FontSize = 120, Foreground = new SolidColorBrush(textFg),
                 TextWrapping = System.Windows.TextWrapping.NoWrap,
                 TextAlignment = System.Windows.TextAlignment.Center,
             };
@@ -1563,8 +1613,9 @@ internal sealed class HomeModel3d : IDisposable
                 MaxHeight = 75.8,
             };
             // 180: LB's spine title reads BOTTOM-TO-TOP (checked against the dual preview);
-            // without the flip ours ran top-to-bottom.
-            vb.LayoutTransform = new System.Windows.Media.RotateTransform(180 + spineRot);
+            // without the flip ours ran top-to-bottom. The extra spin is the SLOT's rotation — the
+            // text lives in the logo slot, so CassetteLogoRotation drives it (not the scan's).
+            vb.LayoutTransform = new System.Windows.Media.RotateTransform(180 + logoRot);
             spineGrid.Children.Add(vb);
         }
         spineVisual = spineGrid;

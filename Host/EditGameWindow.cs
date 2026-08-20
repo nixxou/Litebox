@@ -426,7 +426,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "Documents" => IsMulti ? Placeholder("Documents") : BuildDocumentsPage(),   // manual + additional documents
                 "Links" => IsMulti ? Placeholder("Links") : BuildLinksPage(),   // LB 14 web links
                 "Music" => IsMulti ? Placeholder("Music") : BuildMusicPage(),   // flat collection + designation + integrated player
-                "ModelSettings" => IsMulti ? Placeholder("3D Model Settings") : BuildModelSettingsPage(),
+                "ModelSettings" => IsMulti ? BuildModelSettingsMultiPage() : BuildModelSettingsPage(),   // multi → base-game picker + apply-to-all
                 "ImageQuery" => BuildImageQueryPage(),   // works for 1..N games (single or multi selection)
                 "Launching" => BuildLaunchingPage(),   // main page supports multi (merged fields); sub-pages below stay solo
                 "DOSBox" => BuildDosBoxPage(),   // main DOSBox page supports multi (3-state Use-DOSBox + merged paths)
@@ -503,6 +503,141 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
 
         root.Controls.Add(setPanel);
         root.Controls.Add(strip);
+        return root;
+    }
+
+    // ── 3D Model Settings — MULTI-select page. The selection is grouped by settings SIGNATURE (each
+    // game's stored ModelSettings block, canonicalised; "no override" is itself a signature — shared by
+    // every game without a block, whatever its platform). Green header: all games agree, the panel just
+    // shows the common settings. Red header: they differ, and a combo offers ONE representative game per
+    // signature — picking one reloads the panel with ITS settings. Touch anything (an option OR the
+    // combo) and the page arms: OK writes the panel's resulting block to EVERY selected game (Override
+    // unchecked = clears every override). Untouched, OK writes nothing — like the rest of the window.
+    // No Image Selection tab here: image picks are per-game files, meaningless to copy across games.
+    private Control BuildModelSettingsMultiPage()
+    {
+        var games = new List<(string Plat, string Id, string Title)>();
+        foreach (var g in _editGames)
+        {
+            string plat = Safe(() => g.Platform) ?? "", id = Safe(() => g.Id) ?? "", title = Safe(() => g.Title) ?? "";
+            if (id.Length > 0) games.Add((plat, id, title));
+        }
+        if (games.Count == 0) return Placeholder("3D Model Settings");
+
+        static string SigOf(string plat, string id)
+        {
+            var b = Platforms.PlatformModelStore.ReadGame(plat, id);
+            if (b == null) return "";   // no override — one shared signature
+            return string.Join("\n", b.Where(kv => !string.Equals(kv.Key, "GameId", StringComparison.OrdinalIgnoreCase)
+                                                && !string.Equals(kv.Key, "PlatformName", StringComparison.OrdinalIgnoreCase))
+                                      .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                                      .Select(kv => kv.Key.ToLowerInvariant() + "=" + (kv.Value ?? "")));
+        }
+
+        // Group by signature, first-seen order; the representative is each group's first game.
+        var order = new List<string>();
+        var bySig = new Dictionary<string, List<(string Plat, string Id, string Title)>>();
+        foreach (var t in games)
+        {
+            string sig = SigOf(t.Plat, t.Id);
+            if (!bySig.TryGetValue(sig, out var l)) { bySig[sig] = l = new(); order.Add(sig); }
+            l.Add(t);
+        }
+        bool sharedSettings = order.Count == 1;
+        bool multiPlat = games.Select(t => t.Plat).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1;
+        var green = Color.FromArgb(120, 200, 130);
+        var red = Color.FromArgb(235, 130, 120);
+
+        var root = new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg };
+        var strip = new Panel { Dock = DockStyle.Top, Height = S(sharedSettings ? 34 : 66), BackColor = LiteBoxTheme.Bg };
+        var status = new Label
+        {
+            Location = new Point(S(10), S(8)), AutoSize = true, BackColor = LiteBoxTheme.Bg,
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+        };
+        strip.Controls.Add(status);
+        var host = new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg };
+        root.Controls.Add(host);
+        root.Controls.Add(strip);
+
+        bool dirty = false;
+        Action? applyCur = null;
+        void SetStatus()
+        {
+            if (dirty) { status.Text = $"These settings will be applied to ALL {games.Count} selected games on OK."; status.ForeColor = red; }
+            else if (sharedSettings) { status.Text = "All selected games share the same 3D model settings."; status.ForeColor = green; }
+            else { status.Text = $"The selected games do NOT share the same 3D model settings ({order.Count} variants) — pick the game to use as the base."; status.ForeColor = red; }
+        }
+        void MarkDirty() { if (_readOnly || dirty) return; dirty = true; SetStatus(); }
+
+        // Dispose the replaced panel explicitly — its 3D preview frees its renderer on Dispose, and a
+        // control detached by Controls.Clear() is otherwise never disposed.
+        void SwapHost(Control panel)
+        {
+            panel.Dock = DockStyle.Fill;
+            var old = host.Controls.Count > 0 ? host.Controls[0] : null;
+            host.SuspendLayout();
+            host.Controls.Clear();
+            host.Controls.Add(panel);
+            host.ResumeLayout();
+            old?.Dispose();
+        }
+
+        void LoadRep((string Plat, string Id, string Title) rep)
+        {
+            string scrapeAs = "";
+            try { scrapeAs = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetPlatformByName(rep.Plat)?.ScrapeAs ?? ""; } catch { }
+            var (panel, apply) = Platforms.EditPlatformModel.BuildForGames(rep.Plat, rep.Id,
+                games.Select(t => (t.Plat, t.Id)).ToArray(), _readOnly, _s, scrapeAs, rep.Title, MarkDirty);
+            applyCur = apply;
+            SwapHost(panel);
+        }
+
+        // The "<do nothing>" resting state: no base picked, no panel, nothing armed — OK writes nothing.
+        void ShowIdle()
+        {
+            dirty = false; applyCur = null; SetStatus();
+            var p = new Panel { BackColor = LiteBoxTheme.Bg };
+            p.Controls.Add(new Label
+            {
+                Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = SubFg, BackColor = LiteBoxTheme.Bg, Font = new Font("Segoe UI", 10f, FontStyle.Italic),
+                Text = "Pick a base game above to edit the 3D model settings of all selected games.",
+            });
+            SwapHost(p);
+        }
+
+        if (!sharedSettings)
+        {
+            var reps = order.Select(sig => (Sig: sig, Rep: bySig[sig][0], Count: bySig[sig].Count)).ToList();
+            var baseLbl = new Label
+            {
+                Text = "Base game:", Location = new Point(S(10), S(38)), AutoSize = true,
+                ForeColor = SubFg, BackColor = LiteBoxTheme.Bg,
+            };
+            var combo = new ComboBox
+            {
+                Location = new Point(S(88), S(34)), Width = S(460), DropDownStyle = ComboBoxStyle.DropDownList,
+                FlatStyle = FlatStyle.Flat, BackColor = LiteBoxTheme.Panel2, ForeColor = Fg,
+            };
+            combo.Items.Add("<do nothing>");   // the default: no base, OK leaves every game's model alone
+            foreach (var r in reps)
+                combo.Items.Add($"{r.Rep.Title}{(multiPlat ? $" [{r.Rep.Plat}]" : "")}  ({r.Count} game{(r.Count > 1 ? "s" : "")}{(r.Sig.Length == 0 ? ", no override" : "")})");
+            combo.SelectedIndex = 0;   // before the handler is wired — the initial selection must not arm
+            combo.SelectedIndexChanged += (_, _) =>
+            {
+                if (combo.SelectedIndex < 0) return;
+                if (combo.SelectedIndex == 0) { ShowIdle(); return; }   // back to <do nothing> disarms
+                MarkDirty();   // choosing a base = "make every game like this one" — arms the apply
+                LoadRep(reps[combo.SelectedIndex - 1].Rep);
+            };
+            strip.Controls.Add(baseLbl);
+            strip.Controls.Add(combo);
+        }
+
+        SetStatus();
+        if (sharedSettings) LoadRep(bySig[order[0]][0]); else ShowIdle();
+        _applyModelSettings = () => { if (dirty) applyCur?.Invoke(); };
         return root;
     }
 

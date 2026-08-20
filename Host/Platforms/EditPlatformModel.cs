@@ -156,6 +156,39 @@ internal static class EditPlatformModel
                      platBlock != null);
     }
 
+    /// <summary>Multi-select variant (Edit N Games): the SAME per-game panel, pre-filled from ONE
+    /// representative game (same fallback rules as BuildForGame), but Apply writes the resulting block
+    /// to EVERY target game — each under its own platform file. Override unchecked clears the override
+    /// on all of them. <paramref name="onChanged"/> fires on every USER edit (never during construction):
+    /// the Edit Game window arms its apply-to-all on it. No Image Selection here — picks are per-game.</summary>
+    public static (Control panel, Action apply) BuildForGames(string basePlatform, string baseGameId,
+        IReadOnlyList<(string Platform, string GameId)> targets, bool readOnly, float s,
+        string? scrapeAs, string? baseTitle, Action? onChanged)
+    {
+        var platBlock = PlatformModelStore.Read(basePlatform);
+        var (panel, apply, _) = BuildCore(PlatformModelStore.ReadGame(basePlatform, baseGameId),
+            platBlock ?? ModelDefaults.TryGet(basePlatform, scrapeAs ?? "") ?? CtorDefaults(),
+            f =>
+            {
+                int failed = 0;
+                foreach (var (p, id) in targets)
+                {
+                    if (PlatformModelStore.WriteGame(p, id, f))
+                    { try { var gg = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(id); if (gg != null) Model3d.Model3dKeyIndex.DropGame(gg); } catch { } }
+                    else failed++;
+                }
+                if (failed > 0)
+                {
+                    if (Data.WriteGuard.Refuse(out var why)) Data.WriteGuard.WarnBlocked("3D model settings", why);
+                    else Data.WriteGuard.WarnBlocked("3D model settings",
+                        $"The write to the platform XML failed for {failed} of {targets.Count} games. Check that the files exist and are writable, then try again.");
+                }
+            },
+            readOnly, s, basePlatform, baseTitle ?? "", PreviewIdOf(baseGameId), basePlatform, null,
+            platBlock != null, onChanged);
+        return (panel, apply);
+    }
+
     /// <summary>The id to resolve the preview's art with — only when it designates a game that EXISTS.
     /// EditPlatformRenderProbe opens this panel with a Guid.NewGuid() placeholder (it needs a key to store an
     /// override under, not a game), and an id no game answers to resolves to nothing at all once the game
@@ -240,7 +273,8 @@ internal static class EditPlatformModel
                                                            string previewPlatform, string previewGameTitle, Guid previewGameId,
                                                            string? _unused,
                                                            Func<Dictionary<string, string>?>? imgOv,
-                                                           bool fallbackIsOverride = false)
+                                                           bool fallbackIsOverride = false,
+                                                           Action? onChanged = null)
     {
         int S(int px) => (int)Math.Round(px * s);
         var cur = own ?? fallback;   // displayed values: own override, else the parent level's (game←platform)
@@ -266,6 +300,7 @@ internal static class EditPlatformModel
                                                                         : (previewGameId, previewGameTitle);
         string CurrentSampleTitle() => CurrentSample().Title;
         Action? redrawPreview = null;   // set later; Refresh() invokes it on every option change
+        bool ready = false;             // false until the initial Refresh() ran — gates onChanged to USER edits
         Action? refreshHook = null;     // = Refresh once every control exists — handlers created BEFORE the
                                         // controls Refresh() reads (swatches, font buttons) go through this
                                         // indirection or the compiler flags their captures as unassigned
@@ -435,10 +470,26 @@ internal static class EditPlatformModel
         int spineFgArgb = int.TryParse(Get(cur, "SpineForegroundColor"), out var sfg) ? sfg : -1;
         var cassTextSwatch = Swatch(XR, y, RE - XR, S(36), Color.FromArgb(spineFgArgb), null);
         Row(IsCassette, cassFontBtn, cassTextSwatch); y += S(48);
-        var cassSpineRotCbo = RotCombo(S, S(150), y, int.TryParse(Get(cur, "CassetteSpineRotation"), out var csr) ? csr : 0);
-        Row(IsCassette, Lbl("Spine Text Rotation:", X0, y), cassSpineRotCbo); y += S(34);
-        var cassLogoRotCbo = RotCombo(S, S(150), y, int.TryParse(Get(cur, "CassetteLogoRotation"), out var clr) ? clr : 0);
-        Row(IsCassette, Lbl("Spine Logo Rotation:", X0, y), cassLogoRotCbo); y += S(40);
+        // ── cassette "Spine" group (LB's own layout): two DRAW slots, each a checkbox + rotation.
+        // CassetteSpine/LogoRotation hold the rotation when drawn and the literal "off" when the
+        // checkbox is unchecked (read off a REAL v14 write); an ABSENT field is a legacy block and
+        // means drawn (LB's renderer treats null like 0 — oracle-verified). The second slot is the
+        // clear logo OR the plain-text title: its label follows the Use Plain Text checkbox.
+        string casSpineRaw = Get(cur, "CassetteSpineRotation"), casLogoRaw = Get(cur, "CassetteLogoRotation");
+        bool CasOn(string raw) => !string.Equals(raw.Trim(), "off", StringComparison.OrdinalIgnoreCase);
+        var cassGrp = new Panel { Location = new Point(X0, y), Size = new Size(W, S(92)), BackColor = GroupBody };
+        cassGrp.Controls.Add(new Label { Dock = DockStyle.Top, Height = S(24), Text = "  Spine", BackColor = Panel2, ForeColor = Fg, TextAlign = ContentAlignment.MiddleLeft });
+        var cassDrawSpine = new CheckBox { Text = "Draw Spine Image", Location = new Point(S(8), S(31)), AutoSize = true, ForeColor = Fg, BackColor = GroupBody, Checked = CasOn(casSpineRaw) };
+        var cassSpineRotCbo = RotCombo(S, W - S(70), S(31), int.TryParse(casSpineRaw, out var csr) ? csr : 0);
+        var cassDrawLogo = new CheckBox { Text = "Draw Clear Logo Image", Location = new Point(S(8), S(59)), AutoSize = true, ForeColor = Fg, BackColor = GroupBody, Checked = CasOn(casLogoRaw) };
+        var cassLogoRotCbo = RotCombo(S, W - S(70), S(59), int.TryParse(casLogoRaw, out var clr) ? clr : 0);
+        cassGrp.Controls.Add(cassDrawSpine);
+        cassGrp.Controls.Add(new Label { Text = "Rotation:", Location = new Point(W - S(128), S(34)), AutoSize = true, ForeColor = SubFg, BackColor = GroupBody });
+        cassGrp.Controls.Add(cassSpineRotCbo);
+        cassGrp.Controls.Add(cassDrawLogo);
+        cassGrp.Controls.Add(new Label { Text = "Rotation:", Location = new Point(W - S(128), S(62)), AutoSize = true, ForeColor = SubFg, BackColor = GroupBody });
+        cassGrp.Controls.Add(cassLogoRotCbo);
+        Row(IsCassette, cassGrp); y += S(100);
 
         // ── jewel family: Cover color (full-width swatch) + Plain Text Title + font + text color (=CaseColor) ──
         var coverChkJ = Chk("Force Cover Background Color:", X0, y, coverColor.HasValue);
@@ -522,8 +573,12 @@ internal static class EditPlatformModel
             cassCoverSwatch.Enabled = cassCoverSwatch.Enabled && cassCoverChk.Checked;
             cassFontBtn.Enabled = cassFontBtn.Enabled && cassText.Checked;
             cassTextSwatch.Enabled = cassTextSwatch.Enabled && cassText.Checked;
+            // LB parity: the second Spine slot is the clear logo OR the plain-text title — one option,
+            // whose label follows the Use Plain Text checkbox (observed on the real v14 dialog).
+            cassDrawLogo.Text = cassText.Checked ? "Draw Plain Text Title" : "Draw Clear Logo Image";
 
             redrawPreview?.Invoke();   // live 3D preview follows every option change
+            if (ready) onChanged?.Invoke();
         }
         overrideChk.CheckedChanged += (_, _) => Refresh();
         foreach (var master in new[] { sizeChk, fullScanB, fullScanD, boxColorChk, caseChk, coverChkD, coverChkJ, textTitle })
@@ -548,7 +603,7 @@ internal static class EditPlatformModel
         spineVersion.SelectedIndexChanged += (_, _) => Refresh();
         // Cassette + per-side controls, same story as spineVersion above: BuildFieldMap read them but
         // nothing redrew, so every change looked like a no-op until the window was reopened.
-        foreach (var master in new[] { cassWorn, cassCloudy, cassCoverChk, cassText })
+        foreach (var master in new[] { cassWorn, cassCloudy, cassCoverChk, cassText, cassDrawSpine, cassDrawLogo })
             master.CheckedChanged += (_, _) => Refresh();
         foreach (var cbo in new[] { cassTypeCbo, cassPosCbo, cassSpineRotCbo, cassLogoRotCbo })
             cbo.SelectedIndexChanged += (_, _) => Refresh();
@@ -562,6 +617,7 @@ internal static class EditPlatformModel
         }
         refreshHook = Refresh;
         Refresh();
+        ready = true;
 
         // Build the field→string map from the live controls (null when Override is off). Shared by Apply
         // (persist) and the live preview (redraw).
@@ -607,8 +663,10 @@ internal static class EditPlatformModel
                 if (cassCoverChk.Checked) f["CoverColor"] = PlatformModelStore.ToArgb(cassCoverSwatch.BackColor);
                 if (cassText.Checked) f["LogoFont"] = cassFont.Length > 0 ? cassFont : "Segoe UI";   // ticking the box must have an effect even before a font is picked
                 f["SpineForegroundColor"] = PlatformModelStore.ToArgb(cassTextSwatch.BackColor);
-                f["CassetteSpineRotation"] = RotV(cassSpineRotCbo).ToString(CultureInfo.InvariantCulture);
-                f["CassetteLogoRotation"] = RotV(cassLogoRotCbo).ToString(CultureInfo.InvariantCulture);
+                // Draw slots, LB's own encoding (read off a real v14 write): the rotation when checked,
+                // the literal "off" when not — never omitted, or LB would read the legacy default (drawn).
+                f["CassetteSpineRotation"] = cassDrawSpine.Checked ? RotV(cassSpineRotCbo).ToString(CultureInfo.InvariantCulture) : "off";
+                f["CassetteLogoRotation"] = cassDrawLogo.Checked ? RotV(cassLogoRotCbo).ToString(CultureInfo.InvariantCulture) : "off";
                 return f;   // cassette shares no side groups / jewel rows — the map is complete here
             }
             if (HasSpineStyle(t))

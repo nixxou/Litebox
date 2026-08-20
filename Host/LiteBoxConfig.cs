@@ -294,6 +294,12 @@ internal sealed class LiteBoxConfig
     // the home-made 3D builders against the original. Everything oracle-related is lazy: while false
     // (the default) no core assembly is loaded and no oracle code path runs.
     public bool Model3dLbOracle { get => GetBool("Model3dLbOracle", false); set => SetBool("Model3dLbOracle", value); }
+
+    /// <summary>Edit Game (multi-selection) → Images: split the Screenshots column into "Game Title",
+    /// "Game Over" and "Other Screenshot" (every remaining configured type of that family). Off = the
+    /// one merged column. Set from the matrix's own checkbox, remembered across sessions.</summary>
+    public bool ImagesMatrixExpandScreenshots
+    { get => GetBool("ImagesMatrixExpandScreenshots", false); set => SetBool("ImagesMatrixExpandScreenshots", value); }
     // Automatic Progress Tracking triggers (the RULES live in LB's Settings.xml; these choose WHEN
     // LiteBox runs them). Boot sweep = whole library in the background at startup (off by default —
     // avoidable cost on huge libraries); on-select = re-evaluate a game while its detail pane loads

@@ -43,10 +43,18 @@ internal sealed partial class EditGameWindow
         public MetadataDb.WebImage? Web;     // web stand-in when the cell is empty and a source is on
         public int WebCount;                 // web candidates available for the category
         public string? WebSrc;               // which SOURCE won the cell: "lbdb"/"web"/"emu"/"steam"
+        // Runners-up, only when the column's budget is above one — the cell still SHOWS a single
+        // stand-in (there is room for one thumbnail), but "Download all" takes these too. Null at a
+        // budget of 1, which is the ordinary case, so no memory is spent on a 3000-game selection.
+        public List<MetadataDb.WebImage>? WebMore;
     }
 
     private DataGridView? _mxGrid;
-    private List<string> _mxCats = new();
+    private List<string> _mxCats = new();                                // one entry per column: its HEADER
+    /// <summary>Per column, what it actually reads: the regroupement it belongs to (which is what a
+    /// click opens and what the stand-in sources are asked for) and, when the column is a SPLIT of that
+    /// family, the types it keeps. Null types = the whole regroupement, the ordinary case.</summary>
+    private List<(string Cat, List<string>? Types)> _mxSpec = new();
     private readonly object _mxLock = new();                             // _mxRows is touched from the UI thread (paint) AND the batch thread
     private readonly Dictionary<int, MxCell[]> _mxRows = new();          // row → cells (computed on demand)
     // Thumbnails. A 3000-game selection addresses ~35k cells, so BOTH the cache and the fetch queue must be
@@ -112,7 +120,7 @@ internal sealed partial class EditGameWindow
     // ── Page ──────────────────────────────────────────────────────────────────
     private Control BuildImagesMatrixPage()
     {
-        _mxCats = ImgRegroupements().ToList();
+        MxBuildColumns();
         _mxRows.Clear();
 
         var root = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
@@ -195,6 +203,9 @@ internal sealed partial class EditGameWindow
         grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(34, 34, 44);
         grid.ColumnHeadersDefaultCellStyle.ForeColor = Fg;
         grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+        // Room on the right of every header for its budget spin box (a grid child, see MxBuildCountBoxes):
+        // without it a long header runs under the box instead of ellipsising before it.
+        grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(0, 0, S(52), 0);
         grid.ColumnHeadersHeight = S(30);
         grid.RowTemplate.Height = S(MxRowH);
 
@@ -225,15 +236,38 @@ internal sealed partial class EditGameWindow
         };
 
         // Keep the visible-row window fresh: the fetch workers use it to always serve what's on screen first.
-        grid.Scroll += (_, _) => MxUpdateVisible(grid);
-        grid.Resize += (_, _) => MxUpdateVisible(grid);
-        grid.HandleCreated += (_, _) => MxUpdateVisible(grid);
+        // The header spin boxes ride along: they are grid children, so every horizontal move has to carry them.
+        grid.Scroll += (_, _) => { MxUpdateVisible(grid); MxLayoutCountBoxes(); };
+        grid.Resize += (_, _) => { MxUpdateVisible(grid); MxLayoutCountBoxes(); };
+        grid.HandleCreated += (_, _) => { MxUpdateVisible(grid); MxLayoutCountBoxes(); };
+        grid.ColumnWidthChanged += (_, _) => MxLayoutCountBoxes();
 
         grid.RowCount = _editGames.Count;
         _mxGrid = grid;
         MxUpdateVisible(grid);
+        MxBuildCountBoxes(grid);
+
+        // Footer: split the Screenshots column per type. A global LiteBox option, not a per-window one —
+        // whoever wants their screenshots apart wants it every time, so the state outlives the window.
+        var foot = new Panel { Dock = DockStyle.Bottom, Height = S(28), BackColor = Bg };
+        var chkSplit = new CheckBox
+        {
+            Text = "Expand screenshots by type", AutoSize = true, ForeColor = SubFg, BackColor = Bg,
+            Font = new Font("Segoe UI", 8.5f), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
+            Location = new Point(S(4), S(4)),
+        };
+        try { chkSplit.Checked = LiteBoxConfig.LoadForExe().ImagesMatrixExpandScreenshots; } catch { }
+        chkSplit.CheckedChanged += (_, _) =>
+        {
+            try { var cfg = LiteBoxConfig.LoadForExe(); cfg.ImagesMatrixExpandScreenshots = chkSplit.Checked; cfg.Save(); } catch { }
+            // Rebuild the page: the COLUMNS change, and every cached row was computed against the old
+            // ones. Dropping the cached page is what makes ShowPage build a fresh matrix.
+            try { _pages.Remove("Images"); ShowPage("Images"); } catch { }
+        };
+        foot.Controls.Add(chkSplit);
 
         root.Controls.Add(grid);   // Fill first …
+        root.Controls.Add(foot);   // … then the footer …
         root.Controls.Add(bar);    // … Top last
 
         chkLbDb.CheckedChanged += (_, _) =>
@@ -315,6 +349,193 @@ internal sealed partial class EditGameWindow
     // model). So as soon as WE touched a platform — a download / move / delete — its cache is STALE and would
     // still report the old images. In that case read the disk for that row instead, so the grid updates
     // immediately after a download.
+    /// <summary>The columns, from the image regroupements — with the SCREENSHOT family optionally split
+    /// into "Game Title", "Game Over" and "Other Screenshot" (everything else configured in that family).
+    /// The split is presentation only: each part still belongs to its regroupement, so clicking a cell
+    /// opens the same category editor and the database sources answer for the same slot.</summary>
+    private void MxBuildColumns()
+    {
+        _mxCats = new List<string>();
+        _mxSpec = new List<(string, List<string>?)>();
+        bool expand = false;
+        try { expand = LiteBoxConfig.LoadForExe().ImagesMatrixExpandScreenshots; } catch { }
+
+        foreach (var cat in MxRegroupementOrder())
+        {
+            var types = ImgTypesOf(cat);
+            // The family is found by NAME (LB's own "Screenshots"), and the two named parts by the type
+            // they end with — so a library that renamed or reordered its types still splits correctly,
+            // and one that has neither simply keeps a single "Other Screenshot" column.
+            bool isShots = cat.IndexOf("screenshot", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!expand || !isShots || types.Count == 0)
+            {
+                _mxCats.Add(cat);
+                _mxSpec.Add((cat, null));
+                continue;
+            }
+            static bool Is(string type, string tail) => type.TrimEnd().EndsWith(tail, StringComparison.OrdinalIgnoreCase);
+            var title = types.Where(t => Is(t, "Game Title")).ToList();
+            var over = types.Where(t => Is(t, "Game Over")).ToList();
+            var other = types.Where(t => !Is(t, "Game Title") && !Is(t, "Game Over")).ToList();
+            void Part(string header, List<string> ts)
+            { if (ts.Count == 0) return; _mxCats.Add(header); _mxSpec.Add((cat, ts)); }
+            Part("Game Title", title);
+            Part("Game Over", over);
+            Part("Other Screenshot", other);
+        }
+        MxLoadCounts();
+    }
+
+    /// <summary>The regroupements in COLUMN order: LaunchBox's own, with the two the eye expects beside
+    /// their sibling moved there — Clear Logo right after Back, Box Spine right after Marquee.</summary>
+    private static List<string> MxRegroupementOrder()
+    {
+        var list = ImgRegroupements().ToList();
+        void MoveAfter(string what, string after)
+        {
+            int from = list.FindIndex(c => string.Equals(c, what, StringComparison.OrdinalIgnoreCase));
+            int to = list.FindIndex(c => string.Equals(c, after, StringComparison.OrdinalIgnoreCase));
+            if (from < 0 || to < 0 || from == to + 1) return;
+            var v = list[from];
+            list.RemoveAt(from);
+            to = list.FindIndex(c => string.Equals(c, after, StringComparison.OrdinalIgnoreCase));   // shifted by the removal
+            list.Insert(to + 1, v);
+        }
+        MoveAfter("ClearLogo", "Back");
+        MoveAfter("BoxSpine", "Marquee");
+        return list;
+    }
+
+    // ── Per-column image budget ───────────────────────────────────────────────
+    //
+    // How many images that column is allowed to bring in: the number of stand-ins it may show and the
+    // number "Download all" may fetch per empty cell. ZERO means the column shows LOCAL images only and
+    // downloads nothing — the way to say "I don't collect these". Stored globally, one key per COLUMN
+    // header, which is what keeps "Screenshots" and "Other Screenshot" apart when the split is on.
+    private readonly List<int> _mxCounts = new();
+    private readonly List<NumericUpDown> _mxCountBoxes = new();
+
+    /// <summary>Default budget for a column: one image, except the slots most libraries don't collect.</summary>
+    private static int MxDefaultCount(string header)
+        => header is "BoxFull" or "Box3d" or "CartFront" or "CartBack" or "Cart3d" ? 0 : 1;
+
+    private static string MxCountKey(string header)
+        => "ImagesMatrixCount." + new string(header.Where(char.IsLetterOrDigit).ToArray());
+
+    private void MxLoadCounts()
+    {
+        _mxCounts.Clear();
+        LiteBoxConfig? cfg = null;
+        try { cfg = LiteBoxConfig.LoadForExe(); } catch { }
+        foreach (var h in _mxCats)
+        {
+            int def = MxDefaultCount(h);
+            int v = def;
+            try { if (cfg != null) v = cfg.GetInt(MxCountKey(h), def); } catch { }
+            _mxCounts.Add(Math.Max(0, Math.Min(99, v)));
+        }
+    }
+
+    private int MxCountOf(int col) => col >= 0 && col < _mxCounts.Count ? _mxCounts[col] : 1;
+
+    /// <summary>One spin box per column, floated over the RIGHT of its header. A DataGridView has no
+    /// notion of a control in a header, so these are children of the grid itself, kept in place by
+    /// <see cref="MxLayoutCountBoxes"/> on every scroll, resize and column-width change.</summary>
+    private void MxBuildCountBoxes(DataGridView grid)
+    {
+        foreach (var n in _mxCountBoxes) { try { grid.Controls.Remove(n); n.Dispose(); } catch { } }
+        _mxCountBoxes.Clear();
+
+        for (int i = 0; i < _mxCats.Count; i++)
+        {
+            int col = i;
+            var n = new NumericUpDown
+            {
+                Minimum = 0, Maximum = 99, Value = MxCountOf(col),
+                Width = S(44), Height = S(20),
+                BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 8f), TextAlign = HorizontalAlignment.Center,
+                Enabled = !_readOnly,
+            };
+            _tips.SetToolTip(n, "Images to bring in for this column — stand-ins shown and downloaded per game.\n0 = local images only: nothing shown, nothing downloaded.");
+            n.ValueChanged += (_, _) =>
+            {
+                int v = (int)n.Value;
+                if (col >= _mxCounts.Count || _mxCounts[col] == v) return;
+                _mxCounts[col] = v;
+                try { var cfg = LiteBoxConfig.LoadForExe(); cfg.SetInt(MxCountKey(_mxCats[col]), v); cfg.Save(); } catch { }
+                MxInvalidateAllRows();   // the stand-ins for that column change (0 wipes them)
+            };
+            _mxCountBoxes.Add(n);
+            grid.Controls.Add(n);
+        }
+        MxLayoutCountBoxes();
+    }
+
+    private void MxLayoutCountBoxes()
+    {
+        var grid = _mxGrid;
+        if (grid == null || !grid.IsHandleCreated) return;
+        for (int i = 0; i < _mxCountBoxes.Count; i++)
+        {
+            var n = _mxCountBoxes[i];
+            Rectangle r;
+            try { r = grid.GetColumnDisplayRectangle(i + 1, true); } catch { r = Rectangle.Empty; }   // +1: the frozen Game column
+            // Width 0 = scrolled out of sight; a sliver too narrow to hold the box is hidden as well,
+            // otherwise it would overlap its neighbour's header.
+            if (r.Width < n.Width + S(8)) { n.Visible = false; continue; }
+            n.Visible = true;
+            n.Location = new Point(r.Right - n.Width - S(4), Math.Max(0, (grid.ColumnHeadersHeight - n.Height) / 2));
+            n.BringToFront();
+        }
+    }
+
+    /// <summary>Diagnostic driver (MainWindow's LB_IMGDL_TEST): resolve the ExtendDB stand-in for one
+    /// game + regroupement and run the REAL download on it, tracing every gate. Opens no window — a
+    /// failure that only happens on one image is far easier to read here than through the matrix.</summary>
+    internal static void DiagDownloadSlot(IGame g, string regroupement, Form owner)
+    {
+        var w = new EditGameWindow(new[] { g }, Array.Empty<IGame>(), false);
+        try
+        {
+            int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
+            string plat = Safe(() => g.Platform) ?? "";
+            Console.WriteLine($"[imgdl] dbId={dbId} platform={plat}");
+            Console.WriteLine($"[imgdl] extendedDb={MetadataDb.ExtendedDbPath ?? "(none)"} moduleActive={MediaApiBridge.ModuleActive}");
+            if (dbId <= 0) { Console.WriteLine("[imgdl] no LaunchBox database id — the DB sources have nothing to look up"); return; }
+
+            var all = MetadataDb.ImagesForGame(MetadataDb.ExtendedDbPath, dbId);
+            Console.WriteLine($"[imgdl] ExtendDB rows for this game: {all.Count}");
+            var types = ImgTypesOf(regroupement);
+            var ordered = MxWebSlotOrder(all, types, out int cnt);
+            Console.WriteLine($"[imgdl] candidates for \"{regroupement}\": {cnt}");
+            foreach (var c in ordered.Take(5))
+                Console.WriteLine($"[imgdl]   type={c.Type} region={(string.IsNullOrEmpty(c.Region) ? "(blank)" : c.Region)} origin={c.Origin} isLb={c.IsLaunchbox} file={c.FileName}");
+            if (ordered.Count == 0) return;
+
+            w._imgGame = g;   // ImgFetchWebBytes reads the platform off this
+            bool ok = w.ImgDownloadOne(g, ordered[0], dbId, plat);
+            Console.WriteLine($"[imgdl] RESULT: {(ok ? "downloaded" : "FAILED")}");
+        }
+        finally { try { w.Dispose(); } catch { } }
+    }
+
+    /// <summary>Which type FOLDER a path sits in, among <paramref name="types"/> — the folder itself, or
+    /// its parent when the file lives in a region sub-folder. String work only: the matrix reads its
+    /// paths from the game cache and must not go back to the disk to learn what they are.</summary>
+    private static bool MxPathIsOfType(string path, HashSet<string> types)
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(path);
+            if (dir == null) return false;
+            if (types.Contains(Path.GetFileName(dir))) return true;
+            string? up = Path.GetDirectoryName(dir);
+            return up != null && types.Contains(Path.GetFileName(up));
+        }
+        catch { return false; }
+    }
+
     private MxCell[] MxRow(int row)
     {
         lock (_mxLock) { if (_mxRows.TryGetValue(row, out var cached)) return cached; }
@@ -329,16 +550,23 @@ internal sealed partial class EditGameWindow
 
         for (int c = 0; c < _mxCats.Count; c++)
         {
-            string cat = _mxCats[c];
+            var (cat, only) = _mxSpec[c];
             if (cacheUsable)
             {
                 // Already ordered type → region → number, so [0] IS GetBestImageTypeFirst (the ★★ pick).
+                // A split column keeps that order and just drops the types it isn't about, so its own
+                // first entry is the ★★ pick for the slice.
                 var all = GameCacheBridge.AllImagesTypeFirst(plat, id, cat, 999);
+                if (only != null)
+                {
+                    var keep = new HashSet<string>(only, StringComparer.OrdinalIgnoreCase);
+                    all = all.Where(p => MxPathIsOfType(p, keep)).ToList();
+                }
                 cells[c] = new MxCell { Path = all.Count > 0 ? all[0] : null, Count = all.Count };
             }
             else
             {
-                var types = ImgTypesOf(cat);
+                var types = only ?? ImgTypesOf(cat);
                 var ofCat = scan!.Where(f => types.Any(t => string.Equals(t, f.Type, StringComparison.OrdinalIgnoreCase))).ToList();
                 cells[c] = new MxCell { Path = ImgLbSlotPick(ofCat, types), Count = ofCat.Count };
             }
@@ -385,33 +613,42 @@ internal sealed partial class EditGameWindow
             for (int c = 0; c < _mxCats.Count; c++)
             {
                 if (cells[c].Count > 0 || cells[c].Web != null) continue;   // owned, or a prior source already stood in
-                var types = ImgTypesOf(_mxCats[c]);
+                int budget = MxCountOf(c);
+                if (budget <= 0) continue;                                   // "I don't collect these": local only
+                var types = _mxSpec[c].Types ?? ImgTypesOf(_mxSpec[c].Cat);   // a split column asks for ITS types only
+
+                // Take the slot's image plus as many runners-up as the column's budget allows.
+                void Fill(List<MetadataDb.WebImage> ordered, int cnt, string source)
+                {
+                    if (ordered.Count == 0) return;
+                    cells[c].Web = ordered[0];
+                    cells[c].WebCount = cnt;
+                    cells[c].WebSrc = source;
+                    cells[c].WebMore = budget > 1 && ordered.Count > 1
+                        ? ordered.Skip(1).Take(budget - 1).ToList() : null;
+                }
 
                 if (src == "lbdb")
                 {
                     if (dbId <= 0) continue;
                     lbList ??= LoadDb(MetadataDb.LaunchBoxDbPath());
-                    var pick = MxWebSlotPick(lbList, types, out int cnt);
-                    if (pick != null) { cells[c].Web = pick; cells[c].WebCount = cnt; cells[c].WebSrc = "lbdb"; }
+                    Fill(MxWebSlotOrder(lbList, types, out int cnt), cnt, "lbdb");
                 }
                 else if (src == "web")
                 {
                     if (dbId <= 0) continue;
                     webList ??= LoadDb(MetadataDb.ExtendedDbPath);
-                    var pick = MxWebSlotPick(webList, types, out int cnt);
-                    if (pick != null) { cells[c].Web = pick; cells[c].WebCount = cnt; cells[c].WebSrc = "web"; }
+                    Fill(MxWebSlotOrder(webList, types, out int cnt), cnt, "web");
                 }
                 else if (src == "emu")
                 {
                     if (emuList == null) { lock (_mxLock) _mxEmuMedia.TryGetValue(row, out emuList); emuList ??= new(); }
-                    var pick = MxEmuSlotPick(emuList, dbId, types, out int cnt);
-                    if (pick != null) { cells[c].Web = pick; cells[c].WebCount = cnt; cells[c].WebSrc = "emu"; }
+                    Fill(MxEmuSlotOrder(emuList, dbId, types, out int cnt), cnt, "emu");
                 }
                 else // "steam"
                 {
                     if (steamList == null) { lock (_mxLock) _mxSteamMedia.TryGetValue(row, out steamList); steamList ??= new(); }
-                    var pick = MxWebSlotPick(steamList, types, out int cnt);   // Steam media is already WebImage
-                    if (pick != null) { cells[c].Web = pick; cells[c].WebCount = cnt; cells[c].WebSrc = "steam"; }
+                    Fill(MxWebSlotOrder(steamList, types, out int cnt), cnt, "steam");   // Steam media is already WebImage
                 }
             }
         }
@@ -768,10 +1005,16 @@ internal sealed partial class EditGameWindow
 
         // Download the stand-ins currently filling the gaps — whatever source won each cell (purple or blue),
         // per the enabled sources and their order.
+        // One job per image: the slot's stand-in, plus the runners-up a column whose budget is above one
+        // asked to bring in. A column at zero contributed no stand-in at all, so it adds nothing here.
         var jobs = new List<(int row, MetadataDb.WebImage web)>();
         for (int row = 0; row < _editGames.Count; row++)
             foreach (var c in MxRow(row))
-                if (c.Count == 0 && c.Web.HasValue) jobs.Add((row, c.Web.Value));
+            {
+                if (c.Count != 0 || !c.Web.HasValue) continue;
+                jobs.Add((row, c.Web.Value));
+                if (c.WebMore != null) foreach (var extra in c.WebMore) jobs.Add((row, extra));
+            }
 
         if (jobs.Count == 0)
         {
@@ -782,7 +1025,7 @@ internal sealed partial class EditGameWindow
         int games = jobs.Select(j => j.row).Distinct().Count();
         int emuN = jobs.Count(j => string.Equals(j.web.Origin, "emumovies", StringComparison.OrdinalIgnoreCase));
         string mix = emuN == 0 ? "" : emuN == jobs.Count ? " (all EmuMovies)" : $" ({jobs.Count - emuN} database, {emuN} EmuMovies)";
-        if (MessageBox.Show(this, $"Download {jobs.Count} image(s){mix} across {games} game(s)?\n\nOne image per empty category — the one LaunchBox would use for that slot.",
+        if (MessageBox.Show(this, $"Download {jobs.Count} image(s){mix} across {games} game(s)?\n\nPer empty category, as many as that column's number allows — starting with the one LaunchBox would use for the slot.",
                 "Download all missing", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1) != DialogResult.Yes)
             return;
 
@@ -858,10 +1101,20 @@ internal sealed partial class EditGameWindow
     /// candidates the whole category has.</summary>
     private static MetadataDb.WebImage? MxWebSlotPick(List<MetadataDb.WebImage> web, List<string> types, out int count)
     {
+        var ordered = MxWebSlotOrder(web, types, out count);
+        return ordered.Count > 0 ? ordered[0] : null;
+    }
+
+    /// <summary>The category's web candidates in the order LaunchBox would pick them (type priority, then
+    /// region priority) — [0] is the slot's image, the rest are the runners-up a column with a budget
+    /// above one downloads next.</summary>
+    private static List<MetadataDb.WebImage> MxWebSlotOrder(List<MetadataDb.WebImage> web, List<string> types, out int count)
+    {
         var typeSet = new HashSet<string>(types, StringComparer.OrdinalIgnoreCase);
         var ofCat = web.Where(w => typeSet.Contains(w.Type)).ToList();
         count = ofCat.Count;
-        if (ofCat.Count == 0) return null;
+        var res = new List<MetadataDb.WebImage>(ofCat.Count);
+        if (ofCat.Count == 0) return res;
 
         var order = LbRegions.Order(LbApiHost.Host.Gc.SettingsWatcher.GetRegionPriorities());
         foreach (var type in types)   // regroupement priority order
@@ -874,11 +1127,12 @@ internal sealed partial class EditGameWindow
                     // GamesDb: a blank DB region IS "World" (not the root). Mapping it to "none" would rank it
                     // dead last instead of at World's place in the priority list.
                     var reg = string.IsNullOrEmpty(w.Region) ? "World" : w.Region;
-                    if (string.Equals(reg, region, StringComparison.OrdinalIgnoreCase)) return w;
+                    if (string.Equals(reg, region, StringComparison.OrdinalIgnoreCase)) res.Add(w);
                 }
-            return ofType[0];   // its region isn't in the order at all — still the winning type
+            foreach (var w in ofType) if (!res.Contains(w)) res.Add(w);   // regions outside the order, still this type
         }
-        return ofCat[0];
+        foreach (var w in ofCat) if (!res.Contains(w)) res.Add(w);        // types outside the priority list
+        return res;
     }
 
     /// <summary>The EmuMovies image LaunchBox would use for a slot (same type-then-region rule as the database
@@ -886,26 +1140,39 @@ internal sealed partial class EditGameWindow
     /// through the same paint / fetch / download path as the purple one.</summary>
     private MetadataDb.WebImage? MxEmuSlotPick(List<EmuMoviesCatalog.EmuMedia> emu, int dbId, List<string> types, out int count)
     {
+        var ordered = MxEmuSlotOrder(emu, dbId, types, out count);
+        return ordered.Count > 0 ? ordered[0] : null;
+    }
+
+    /// <summary>The EmuMovies candidates for the slot, best first — same type-then-region rule as the
+    /// database sources, listed rather than reduced so a column budget above one has runners-up.</summary>
+    private List<MetadataDb.WebImage> MxEmuSlotOrder(List<EmuMoviesCatalog.EmuMedia> emu, int dbId, List<string> types, out int count)
+    {
         var typeSet = new HashSet<string>(types, StringComparer.OrdinalIgnoreCase);
         var ofCat = emu.Where(m => typeSet.Contains(m.LbType)).ToList();
         count = ofCat.Count;
-        if (ofCat.Count == 0) return null;
+        var res = new List<MetadataDb.WebImage>(ofCat.Count);
+        if (ofCat.Count == 0) return res;
 
         var order = LbRegions.Order(LbApiHost.Host.Gc.SettingsWatcher.GetRegionPriorities());
-        EmuMoviesCatalog.EmuMedia m2 = ofCat[0];
+        var taken = new List<EmuMoviesCatalog.EmuMedia>();
+        void Take(EmuMoviesCatalog.EmuMedia m)
+        {
+            if (taken.Contains(m)) return;
+            taken.Add(m);
+            res.Add(new MetadataDb.WebImage(dbId, m.Url, m.LbType, m.Region, m.Crc, "emumovies", 0, m.Ext, m.FileSize));
+        }
         foreach (var type in types)
         {
             var ofType = ofCat.Where(m => string.Equals(m.LbType, type, StringComparison.OrdinalIgnoreCase)).ToList();
             if (ofType.Count == 0) continue;
-            m2 = ofType[0];
             foreach (var region in order)
-            {
-                int at = ofType.FindIndex(m => string.Equals(string.IsNullOrEmpty(m.Region) ? "World" : m.Region, region, StringComparison.OrdinalIgnoreCase));
-                if (at >= 0) { m2 = ofType[at]; break; }
-            }
-            break;
+                foreach (var m in ofType)
+                    if (string.Equals(string.IsNullOrEmpty(m.Region) ? "World" : m.Region, region, StringComparison.OrdinalIgnoreCase)) Take(m);
+            foreach (var m in ofType) Take(m);
         }
-        return new MetadataDb.WebImage(dbId, m2.Url, m2.LbType, m2.Region, m2.Crc, "emumovies", 0, m2.Ext, m2.FileSize);
+        foreach (var m in ofCat) Take(m);
+        return res;
     }
 
     // ── "Show EmuMovies images": resolve each game live, then fill gaps ─────────
@@ -1010,7 +1277,7 @@ internal sealed partial class EditGameWindow
     private void MxOpenCell(int row, int col)
     {
         if (row < 0 || col < 1 || row >= _editGames.Count) return;
-        string cat = _mxCats[col - 1];
+        string cat = _mxSpec[col - 1].Cat;   // a split column opens its FAMILY's editor, all types shown
         var game = _editGames[row];
         var cell = MxRow(row)[col - 1];
 

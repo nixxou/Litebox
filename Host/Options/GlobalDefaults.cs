@@ -65,6 +65,7 @@ internal static class GlobalDefaults
         ("Model3dLbOracle",                 "false"),       // dev: LaunchBox comparison zone in Edit Platform
         ("Model3dAutoJewelCase",            "true"),        // Saturn/Sega CD: jewel case when the art fits it better
         ("Model3dAutoDoubleJewel",          "true"),        // multi-disc: double jewel when the spine scan measures one
+        ("ImagesMatrixExpandScreenshots",   "false"),       // multi-edit Images: Screenshots split per type
     };
 
     /// <summary>Keys LiteBox no longer reads. Left behind in an existing ini they would look like live

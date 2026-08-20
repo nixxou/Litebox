@@ -163,6 +163,13 @@ internal static class MediaFetch
     /// the first 2xx response — or null when nothing succeeds. HLS manifests (.m3u8 / .m3u) are skipped (the raw
     /// manifest bytes are useless to save). Call off the UI thread.
     /// </summary>
+    /// <summary>Per-request trace (env LB_IMGDL_DIAG=1). This walk fails silently by design — one dead
+    /// source must not stop a batch — so without it "the image just doesn't come down" is all anyone sees.</summary>
+    private static void Diag(string msg)
+    {
+        if (Environment.GetEnvironmentVariable("LB_IMGDL_DIAG") == "1") Console.WriteLine("[mediafetch] " + msg);
+    }
+
     public static byte[]? FetchBytes(MetadataDb.WebImage w, string platform)
     {
         _ = platform; // URLs don't depend on the platform today; accepted for API symmetry / future use.
@@ -177,15 +184,22 @@ internal static class MediaFetch
             // One policy snapshot per request (the store may swap mid-flight; we keep a consistent view).
             var policy = MediaPolicyStore.GetForWeb();
             var chain = policy.ChainFor(ctx, w.Origin);
-            if (BlockedBySsPolicy(policy, chain)) return null;
+            Diag($"origin={w.Origin} ctx={ctx} chain=[{string.Join(" → ", chain)}]");
+            if (BlockedBySsPolicy(policy, chain))
+            {
+                Diag($"BLOCKED by BlockIfScreenscraperFail: userAccount={(BaseCredentials.UserAccount() != null)} "
+                   + $"devCreds={(BaseCredentials.DevCreds() != null)} ssAllowed={ScreenscraperShouldAllow()}");
+                return null;
+            }
 
             foreach (var kind in chain)
             {
                 var (url, referer) = BuildUrl(kind, w, dbId);
-                if (string.IsNullOrEmpty(url)) continue;
-                if (IsHlsManifestUrl(url)) continue;
+                if (string.IsNullOrEmpty(url)) { Diag($"{kind}: no URL for this row"); continue; }
+                if (IsHlsManifestUrl(url)) { Diag($"{kind}: HLS manifest, skipped"); continue; }
 
                 var (bytes, status, transportOk) = TryFetch(url, referer);
+                Diag($"{kind}: status={status} transportOk={transportOk} bytes={(bytes?.Length.ToString() ?? "null")} url={url}");
 
                 // Per-kind circuit-breaker hooks (parity with the plugin).
                 if (kind == MediaSourceKind.MalkavThumb && status == 403) MarkMalkavBlocked();
@@ -476,7 +490,7 @@ internal static class MediaFetch
     private static string MirrorImageBase()
     {
         var v = BaseCredentials.RemoteImageBaseUrl();
-        return string.IsNullOrWhiteSpace(v) ? "https://extenddb.com" : v.TrimEnd('/');
+        return string.IsNullOrWhiteSpace(v) ? BaseCredentials.DefaultRemoteImageBase : v.TrimEnd('/');
     }
 
     /// <summary>Thumb base — host portion (scheme + authority) of the image base only; thumbs live at /thumbs/.</summary>

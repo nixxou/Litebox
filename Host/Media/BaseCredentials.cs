@@ -58,15 +58,28 @@ internal static class BaseCredentials
 
     /// <summary>Base URL of the ExtendDB image mirror, verbatim from config (any /image/&lt;prefix&gt; routing
     /// segment included). Defaults to the public host. Trailing slash trimmed.</summary>
+    /// <summary>The mirror's production base, INCLUDING the path prefix the CDN rewrites on — the same
+    /// value the ExtendDB plugin ships (ExtendDBConfig.RemoteImageBaseUrl). The site serves plain HTTP:
+    /// it has no HTTPS listener at all, so the scheme is not a detail.</summary>
+    public const string DefaultRemoteImageBase = "http://extenddb.com/image/xtnd";
+
+    /// <summary>The value an early LiteBox build wrote when it had no config to read: host-only and
+    /// HTTPS, so every full-size mirror fetch died on connect and every thumb URL with it. It was taken
+    /// from the plugin's empty-config guard rather than its actual default. Stored ini files still carry
+    /// it, and a stored value wins over a default — so it is read as "never set".</summary>
+    private const string LegacyBadImageBase = "https://extenddb.com";
+
     public static string RemoteImageBaseUrl()
     {
         try
         {
             var v = LiteBoxConfig.LoadForExe().GetSec(Section, "RemoteImageBaseUrl", "") ?? "";
-            v = v.Trim();
-            return string.IsNullOrEmpty(v) ? "https://extenddb.com" : v.TrimEnd('/');
+            v = v.Trim().TrimEnd('/');
+            if (v.Length == 0 || string.Equals(v, LegacyBadImageBase, StringComparison.OrdinalIgnoreCase))
+                return DefaultRemoteImageBase;
+            return v;
         }
-        catch { return "https://extenddb.com"; }
+        catch { return DefaultRemoteImageBase; }
     }
 
     // ── ScreenScraper developer credentials (encrypted, gitignored .dat) ──────

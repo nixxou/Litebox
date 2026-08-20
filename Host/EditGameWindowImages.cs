@@ -1297,16 +1297,20 @@ internal sealed partial class EditGameWindow
             // row while ExtendDB's fetcher is reachable — those have no valid CDN URL. Launchbox rows always
             // fall back to the CDN.
             bool nonLb = !w.IsLaunchbox;
+            ImgDlLog($"[imgfetch] wizardPath={MediaApiBridge.UseWizardPath} apiAvailable={MediaApiBridge.Available} nonLb={nonLb}");
             if (MediaApiBridge.UseWizardPath || (nonLb && MediaApiBridge.Available))
             {
                 var b = MediaApiBridge.FetchBytes(w, Safe(() => ImgGame.Platform) ?? "");
+                ImgDlLog($"[imgfetch] wizard fetch -> {(b == null ? "null" : b.Length + " bytes")}");
                 if (b != null && b.Length > 0) return b;
-                if (nonLb) return null;            // no CDN for non-launchbox origins
+                if (nonLb) { ImgDlLog("[imgfetch] non-LaunchBox origin: no CDN fallback, giving up"); return null; }
             }
             _imgHttp ??= NewHttp();
-            return _imgHttp.GetByteArrayAsync(w.Url).GetAwaiter().GetResult();
+            var bytes = _imgHttp.GetByteArrayAsync(w.Url).GetAwaiter().GetResult();
+            ImgDlLog($"[imgfetch] CDN GET -> {(bytes == null ? "null" : bytes.Length + " bytes")}");
+            return bytes;
         }
-        catch { return null; }
+        catch (Exception ex) { ImgDlLog($"[imgfetch] threw {ex.GetType().Name}: {ex.Message}"); return null; }
     }
 
     // ── Web-image preview disk cache: <LB>\Plugins\ExtendDB\cache\thumbs\webimg ───────────────────────────────
@@ -1442,10 +1446,22 @@ internal sealed partial class EditGameWindow
             "LiteBox", MessageBoxButtons.OK, fail > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }
 
+    /// <summary>Trace of a download's decision points (env LB_IMGDL_DIAG=1). Every failure here is a
+    /// silent `return false` by design — the batch must not stop on one bad row — which leaves nothing
+    /// to look at when ONE image refuses to land. This says which gate closed.</summary>
+    private static void ImgDlLog(string msg)
+    {
+        if (Environment.GetEnvironmentVariable("LB_IMGDL_DIAG") == "1") Console.WriteLine("[imgdl] " + msg);
+    }
+
     private bool ImgDownloadOne(IGame g, MetadataDb.WebImage w, int dbId, string plat)
     {
         try
         {
+            ImgDlLog($"start \"{Safe(() => g.Title)}\" type={w.Type} region={(string.IsNullOrEmpty(w.Region) ? "(blank→World)" : w.Region)} "
+                   + $"origin={w.Origin} isLb={w.IsLaunchbox} dbId={dbId} plat={plat}");
+            ImgDlLog($"  url={w.Url}");
+            ImgDlLog($"  fileName={w.FileName}");
             string idStr = Safe(() => g.Id) ?? "";
             string sani = MediaResolver.Sanitize(Safe(() => g.Title) ?? "");
             // GamesDb: a blank DB region IS "World", and LaunchBox stores World images under <type>\World\
@@ -1453,28 +1469,38 @@ internal sealed partial class EditGameWindow
             // that genuinely carry no region.
             string region = string.IsNullOrEmpty(w.Region) ? "World" : w.Region;
             string? baseFolder = MediaResolver.TypeFolder(plat, w.Type);
-            if (string.IsNullOrEmpty(baseFolder)) return false;
+            if (string.IsNullOrEmpty(baseFolder)) { ImgDlLog($"  FAIL: no folder for type \"{w.Type}\" on platform \"{plat}\""); return false; }
             string dir = ImgSearchDir(baseFolder, region);
             Directory.CreateDirectory(dir);
+            ImgDlLog($"  dir={dir}");
             // Extension the ExtendDB way (ExtractFileType): "filetype=" URL param first, else last dot minus
             // query — the FileName is a source URL for non-launchbox origins, so its tail is unreliable.
             string ext = ImageFileType.Extract(w.FileName);
             if (string.IsNullOrEmpty(ext)) ext = ".jpg";
             byte[]? bytes = ImgFetchWebBytes(w);   // ExtendDB per-origin fetcher when the module is on, else CDN
-            if (bytes == null || bytes.Length == 0) return false;
+            if (bytes == null || bytes.Length == 0) { ImgDlLog("  FAIL: fetch returned nothing (see the [imgfetch] lines above)"); return false; }
+            ImgDlLog($"  fetched {bytes.Length} bytes");
             // Only write/stamp if the bytes actually decode as an image: a CDN can answer HTTP 200 with an HTML
             // error/redirect/consent-wall body for a stale or moved URL, which would otherwise be written verbatim
             // under a guessed extension and get CRC/dimension metadata stamped on it as if it were real artwork.
             try { using var ms = new MemoryStream(bytes); using var probe = Image.FromStream(ms); }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                // Usually an HTML error/consent page served with HTTP 200 — the head of it names the culprit.
+                string head = "";
+                try { head = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(160, bytes.Length)).Replace('\n', ' ').Replace('\r', ' '); } catch { }
+                ImgDlLog($"  FAIL: the bytes are not an image ({ex.GetType().Name}); head=\"{head}\"");
+                return false;
+            }
             string prefix = ImgPrefix(plat, idStr, sani, null, dir);
             int num = ImgMaxNum(dir, prefix) + 1;
             string target = Path.Combine(dir, $"{prefix}-{num:D2}{ext}");
             File.WriteAllBytes(target, bytes);
             ImageAdsWriter.WriteForDownload(target, w, dbId, plat);   // ":crc32" + ":info" in ExtendDB format
+            ImgDlLog($"  OK -> {target}");
             return true;
         }
-        catch { return false; }
+        catch (Exception ex) { ImgDlLog($"  FAIL: {ex.GetType().Name}: {ex.Message}"); return false; }
     }
 
     private static System.Net.Http.HttpClient NewHttp()

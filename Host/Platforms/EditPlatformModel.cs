@@ -162,7 +162,7 @@ internal static class EditPlatformModel
     /// on all of them. <paramref name="onChanged"/> fires on every USER edit (never during construction):
     /// the Edit Game window arms its apply-to-all on it. No Image Selection here — picks are per-game.</summary>
     public static (Control panel, Action apply) BuildForGames(string basePlatform, string baseGameId,
-        IReadOnlyList<(string Platform, string GameId)> targets, bool readOnly, float s,
+        IReadOnlyList<(string Platform, string GameId, string Title)> targets, bool readOnly, float s,
         string? scrapeAs, string? baseTitle, Action? onChanged)
     {
         var platBlock = PlatformModelStore.Read(basePlatform);
@@ -171,7 +171,7 @@ internal static class EditPlatformModel
             f =>
             {
                 int failed = 0;
-                foreach (var (p, id) in targets)
+                foreach (var (p, id, _) in targets)
                 {
                     if (PlatformModelStore.WriteGame(p, id, f))
                     { try { var gg = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(id); if (gg != null) Model3d.Model3dKeyIndex.DropGame(gg); } catch { } }
@@ -185,7 +185,10 @@ internal static class EditPlatformModel
                 }
             },
             readOnly, s, basePlatform, baseTitle ?? "", PreviewIdOf(baseGameId), basePlatform, null,
-            platBlock != null, onChanged);
+            platBlock != null, onChanged,
+            // "Switch Sample Game" walks the SELECTION here: the settings stay the base game's, the
+            // preview shows what they look like on each game being edited.
+            targets.Select(t => (PreviewIdOf(t.GameId), t.Title ?? "", t.Platform ?? "")).ToList());
         return (panel, apply);
     }
 
@@ -274,7 +277,8 @@ internal static class EditPlatformModel
                                                            string? _unused,
                                                            Func<Dictionary<string, string>?>? imgOv,
                                                            bool fallbackIsOverride = false,
-                                                           Action? onChanged = null)
+                                                           Action? onChanged = null,
+                                                           IReadOnlyList<(Guid Id, string Title, string Platform)>? samples = null)
     {
         int S(int px) => (int)Math.Round(px * s);
         var cur = own ?? fallback;   // displayed values: own override, else the parent level's (game←platform)
@@ -292,12 +296,19 @@ internal static class EditPlatformModel
         var home = homeOut; var orbit = orbitOut; var live = liveOut;   // stable locals (out vars can't be captured); live = LB-ORACLE zone (null when off)
         root.Controls.Add(left);
         root.Controls.Add(preview);      // preview docks right first, left fills the rest
-        // Sample-game rotation state: platform preview cycles through titles-with-box-art; game preview is fixed.
-        var sampleGames = string.IsNullOrEmpty(_unused) ? SampleGames(previewPlatform, 24)
-                                                        : new List<(Guid Id, string Title)> { (previewGameId, previewGameTitle) };
-        int sampleIdx = Math.Max(0, sampleGames.FindIndex(g => string.Equals(g.Title, previewGameTitle, StringComparison.OrdinalIgnoreCase)));
-        (Guid Id, string Title) CurrentSample() => sampleGames.Count > 0 ? sampleGames[sampleIdx % sampleGames.Count]
-                                                                        : (previewGameId, previewGameTitle);
+        // Sample-game rotation state: a MULTI-selection cycles through the games being edited (the
+        // caller hands them over), the platform preview through titles-with-box-art, and a single
+        // game preview is fixed. Each sample carries its own platform: a selection can span several,
+        // and the art must resolve against the game's own, not the base game's.
+        var sampleGames =
+            samples is { Count: > 0 } ? new List<(Guid Id, string Title, string Platform)>(samples)
+            : string.IsNullOrEmpty(_unused)
+                ? SampleGames(previewPlatform, 24).Select(g => (g.Id, g.Title, previewPlatform)).ToList()
+                : new List<(Guid Id, string Title, string Platform)> { (previewGameId, previewGameTitle, previewPlatform) };
+        int sampleIdx = sampleGames.FindIndex(g => g.Id != Guid.Empty && g.Id == previewGameId);
+        if (sampleIdx < 0) sampleIdx = Math.Max(0, sampleGames.FindIndex(g => string.Equals(g.Title, previewGameTitle, StringComparison.OrdinalIgnoreCase)));
+        (Guid Id, string Title, string Platform) CurrentSample() => sampleGames.Count > 0 ? sampleGames[sampleIdx % sampleGames.Count]
+                                                                        : (previewGameId, previewGameTitle, previewPlatform);
         string CurrentSampleTitle() => CurrentSample().Title;
         Action? redrawPreview = null;   // set later; Refresh() invokes it on every option change
         bool ready = false;             // false until the initial Refresh() ran — gates onChanged to USER edits
@@ -721,9 +732,10 @@ internal static class EditPlatformModel
             var map = ApplyMapExtra(own ?? fallback);
             bool overridden = own != null || fallbackIsOverride;
             var sample = CurrentSample();
-            try { home.Build(map, sample.Title, previewPlatform, imgOv?.Invoke(), sample.Id, overridden); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
+            string samplePlat = sample.Platform.Length > 0 ? sample.Platform : previewPlatform;
+            try { home.Build(map, sample.Title, samplePlat, imgOv?.Invoke(), sample.Id, overridden); } catch (Exception ex) { Console.WriteLine("[model3d] preview: " + ex.Message); }
             // ═══ LB-ORACLE ═══ mirror every redraw into the LaunchBox zone (no-op when the flag is off).
-            try { live?.Redraw(map, CurrentSampleTitle(), previewPlatform); } catch { }
+            try { live?.Redraw(map, CurrentSampleTitle(), samplePlat); } catch { }
         }
         // Redraw after every option change (Refresh calls RedrawPreview) + once the host handle exists.
         redrawPreview = RedrawPreview;

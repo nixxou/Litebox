@@ -178,6 +178,19 @@ internal sealed class Model3dBlock : Panel
                 var model = GlbFile.LoadModel(glb);   // frozen → UI-thread safe
                 if (model != null && _token == token) Apply(token, null, model);
                 else if (thumb == null && model == null) Collapse(token);
+
+                // A HIT is shown first for speed, but "present" is not "current": new art, changed model
+                // settings or a newer baker all leave the old GLB sitting in the game's slot. Existence
+                // alone used to end the story here, so a freshly downloaded back never reached the model —
+                // it took a bulk regenerate. Validate AFTER painting and swap in the re-bake.
+                if (existed && _token == token && !Model3dCache.IsCurrent(idn)
+                    && Model3dCache.Ensure(g, stillWanted: () => _token == token) != null && _token == token)
+                {
+                    var freshThumb = Model3dCache.ReadThumbPng(glb);
+                    if (freshThumb != null && _token == token) Apply(token, ThumbImage(freshThumb), null);
+                    var fresh = GlbFile.LoadModel(glb);
+                    if (fresh != null && _token == token) Apply(token, null, fresh);
+                }
             }
             catch (Exception ex) { Console.WriteLine("[model3d] block: " + ex.Message); Collapse(token); }
         }, System.Threading.CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.LongRunning,

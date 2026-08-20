@@ -595,6 +595,69 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         Shown += (_, _) =>
         {
             ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); ApplyDarkScroll(_related.ScrollHost); RelayoutDetail();
+            // Why is THIS game's 3D model what it is: the slots it resolved, the key they produce, and
+            // whether the cached GLB still answers to that key. Reading it beats guessing at a stale bake.
+            var m3dInfo = Environment.GetEnvironmentVariable("LB_MODEL3D_INFO");
+            if (!string.IsNullOrEmpty(m3dInfo))
+            {
+                try
+                {
+                    var g = FindGameForCli(m3dInfo);
+                    if (g == null) Console.WriteLine($"[m3d] game not found: \"{m3dInfo}\"");
+                    else
+                    {
+                        var idn = Model3d.Model3dCache.Resolve(g);
+                        if (idn == null) Console.WriteLine("[m3d] Resolve returned null (no platform/title/id)");
+                        else
+                        {
+                            Console.WriteLine($"[m3d] {Safe(() => g.Title)} · hasArt={idn.HasArt} key={idn.Key}");
+                            Console.WriteLine($"[m3d]   front = {idn.Art.Front ?? "(none)"}");
+                            Console.WriteLine($"[m3d]   back  = {idn.Art.Back ?? "(none)"}");
+                            Console.WriteLine($"[m3d]   spine = {idn.Art.Spine ?? "(none)"}");
+                            Console.WriteLine($"[m3d]   logo  = {idn.Art.Logo ?? "(none)"}");
+                            Console.WriteLine($"[m3d]   full  = {idn.Art.Full ?? "(none)"}  fullScan={idn.Art.FullScan}");
+                            Console.WriteLine($"[m3d]   glb   = {idn.GlbPath} exists={System.IO.File.Exists(idn.GlbPath)}");
+                            Console.WriteLine($"[m3d]   current={Model3d.Model3dCache.IsCurrent(idn)}");
+                            var info = Model3d.GlbFile.ReadInfo(idn.GlbPath);
+                            Console.WriteLine(info == null ? "[m3d]   stored: (no header)"
+                                : $"[m3d]   stored: baker={info.BakerVersion} (now {Model3d.Model3dCache.BakerVersion}) key={info.Key}");
+                            // LB_MODEL3D_BAKE=1: do what the detail pane now does with a stale model —
+                            // re-bake it — and report whether that actually brings the slot up to date.
+                            if (Environment.GetEnvironmentVariable("LB_MODEL3D_BAKE") == "1")
+                            {
+                                var sw = System.Diagnostics.Stopwatch.StartNew();
+                                string? baked = Model3d.Model3dCache.Ensure(g);
+                                sw.Stop();
+                                var after = Model3d.Model3dCache.Resolve(g);
+                                Console.WriteLine($"[m3d]   Ensure -> {(baked == null ? "null" : "ok")} in {sw.ElapsedMilliseconds} ms; "
+                                    + $"current now={(after != null && Model3d.Model3dCache.IsCurrent(after))}");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex) { Console.WriteLine("[m3d] " + ex.Message); }
+                BeginInvoke((Action)(() => { Console.WriteLine("[m3d] done"); Close(); }));
+            }
+            // LB_IMGDL_TEST="<game>|<regroupement>": resolve the ExtendDB stand-in for that slot and try
+            // to download it, with LB_IMGDL_DIAG tracing on — reproduces "this one image won't come down"
+            // without driving the matrix by hand.
+            var dlTest = Environment.GetEnvironmentVariable("LB_IMGDL_TEST");
+            if (!string.IsNullOrEmpty(dlTest))
+            {
+                Environment.SetEnvironmentVariable("LB_IMGDL_DIAG", "1");
+                var parts = dlTest.Split('|');
+                string wanted = parts[0], cat = parts.Length > 1 ? parts[1] : "Front";
+                var g = FindGameForCli(wanted);
+                if (g == null) Console.WriteLine($"[imgdl] game not found: \"{wanted}\"");
+                else
+                {
+                    Console.WriteLine($"[imgdl] === {Safe(() => g.Title)} · {cat} ===");
+                    try { EditGameWindow.DiagDownloadSlot(g, cat, this); }
+                    catch (Exception ex) { Console.WriteLine("[imgdl] driver: " + ex); }
+                }
+                Console.WriteLine("[imgdl] done");
+                BeginInvoke((Action)Close);
+            }
             if (Environment.GetEnvironmentVariable("LB_WHEEL_SELFTEST") == "1") RunWheelSelfTest();
             var idxDiag = Environment.GetEnvironmentVariable("LB_INDEX_DIAG");
             if (!string.IsNullOrEmpty(idxDiag)) RunIndexDiag(idxDiag);
@@ -6519,7 +6582,16 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (it == null) return;
         string glb = Media.Media3dItem.GlbPath(it);
         bool exists; try { exists = File.Exists(glb); } catch { exists = false; }
-        if (exists) return;
+        // Present is not current: art added since the bake (or changed model settings, or a newer baker)
+        // leaves a stale GLB in the game's slot, and stopping at File.Exists showed it forever — only a
+        // bulk regenerate ever caught up. One header read says which, and a stale one falls through to
+        // the re-bake below exactly like a missing one.
+        if (exists)
+        {
+            bool current = true;
+            try { var idn = Model3d.Model3dCache.Resolve(g); current = idn == null || Model3d.Model3dCache.IsCurrent(idn); } catch { }
+            if (current) return;
+        }
         // LongRunning: Ensure BLOCKS on the serialized STA bake queue — parking pool threads there
         // during fast scrolling starved the pool and froze the transit image loader. The stale-check
         // also drops the bake entirely once the selection has moved on.
@@ -8779,6 +8851,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         public void ShowPseudoModal(Form owner)
         {
             _blockedOwner = owner;
+            // Modeless: CenterParent would be ignored and Windows would drop this on the primary
+            // monitor, not the one LiteBox is on. Place it ourselves.
+            DialogPlacement.CenterOnOwner(this, owner);
             try { EnableWindow(owner.Handle, false); } catch { }
             Show(owner);
         }

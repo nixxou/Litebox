@@ -147,10 +147,12 @@ internal sealed class RaProfileWindow : LiteBoxForm
         }
         var w = new RaProfileWindow(games, localArt, openGame);
         _open = w;
-        // Shown WITH the owner so CenterParent has something to centre on, then un-owned immediately: an
-        // owned window floats above its owner forever, so clicking a game would raise LiteBox behind a
-        // window that refuses to get out of the way. Un-owned it drops behind like any other window, and
-        // it still has a taskbar button to come back by.
+        // Placed by hand: CenterParent does nothing for a MODELESS window (ShowDialog-only), so this
+        // used to open wherever Windows liked — the primary monitor, not LiteBox's.
+        // Shown WITH the owner, then un-owned immediately: an owned window floats above its owner
+        // forever, so clicking a game would raise LiteBox behind a window that refuses to get out of
+        // the way. Un-owned it drops behind like any other window, and it still has a taskbar button.
+        UiKit.DialogPlacement.CenterOnOwner(w, owner as Form);
         w.Show(owner);
         try { w.Owner = null; } catch { }
     }

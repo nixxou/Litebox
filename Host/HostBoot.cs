@@ -240,6 +240,41 @@ internal static class HostBoot
             Diag.ModelProbe.Export(GetArg(args, "--model-export") ?? Path.Combine(coreDir, "model-export"));
             return 0;
         }
+        // --checkbox-probe <out.png>: render the themed checkbox in every state on the dark canvas —
+        // the only way to LOOK at a paint-only change without driving the real UI by hand.
+        if (args.Contains("--checkbox-probe"))
+        {
+            string outPng = GetArg(args, "--checkbox-probe") ?? Path.Combine(coreDir, "checkbox-probe.png");
+            var t = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    Application.EnableVisualStyles();
+                    using var f = new Form { FormBorderStyle = FormBorderStyle.None, ClientSize = new System.Drawing.Size(320, 170), BackColor = UiKit.LiteBoxTheme.Bg };
+                    CheckBox Cb(string text, CheckState st, int y, bool on = true)
+                    {
+                        var c = new CheckBox { Text = text, CheckState = st, Location = new System.Drawing.Point(16, y), AutoSize = true, ForeColor = UiKit.LiteBoxTheme.Fg, BackColor = UiKit.LiteBoxTheme.Bg, ThreeState = true, Enabled = on };
+                        f.Controls.Add(c); return c;
+                    }
+                    Cb("Unchecked", CheckState.Unchecked, 16);
+                    Cb("Checked", CheckState.Checked, 46);
+                    Cb("Indeterminate (mixed)", CheckState.Indeterminate, 76);
+                    Cb("Checked, disabled", CheckState.Checked, 106, on: false);
+                    Cb("Flat style, checked", CheckState.Checked, 136).FlatStyle = FlatStyle.Flat;
+                    UiKit.ThemedCheckBox.StyleAll(f);
+                    _ = f.Handle;
+                    f.Show(); Application.DoEvents(); System.Threading.Thread.Sleep(300); Application.DoEvents();
+                    using var bmp = new System.Drawing.Bitmap(f.ClientSize.Width, f.ClientSize.Height);
+                    f.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height));
+                    bmp.Save(outPng, System.Drawing.Imaging.ImageFormat.Png);
+                    Console.WriteLine("[checkbox] wrote " + outPng);
+                }
+                catch (Exception ex) { Console.WriteLine("[checkbox] " + ex.Message); }
+            });
+            t.SetApartmentState(System.Threading.ApartmentState.STA);
+            t.Start(); t.Join(TimeSpan.FromSeconds(20));
+            return 0;
+        }
         // --model-settings-type: reflect the core's ModelSettings type and print every public property
         // (name : type). Answers what a field can hold before guessing at its encoding — the cassette
         // Draw slots turned out to be STRINGS carrying "off", not the nullable numbers they looked like.

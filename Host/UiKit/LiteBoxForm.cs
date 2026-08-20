@@ -35,6 +35,11 @@ internal class LiteBoxForm : Form
         Font = new Font("Segoe UI", 9.5f);
         ShowIcon = false; ShowInTaskbar = false;
         KeyPreview = true;
+        // These windows keep MaximizeBox off for a clean title bar, which also kills the
+        // double-click-to-maximize gesture. Give the gesture back (resizable windows only).
+        TitleBarMaximize.Enable(this);
+        // Readable checkboxes on the dark canvas, for whatever this window builds — now or later.
+        ThemedCheckBox.StyleAll(this);
     }
 
     /// <summary>Scales a pure chrome pixel dimension for the current DPI. See <see cref="DpiScale"/>.</summary>

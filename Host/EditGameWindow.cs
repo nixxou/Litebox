@@ -238,6 +238,9 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         Font = new Font("Segoe UI", 9.5f);
         ShowIcon = false; ShowInTaskbar = false;
         MaximizeBox = false; MinimizeBox = false;
+        // No maximize BUTTON, but the double-click gesture still works — the media matrices in
+        // particular are worth a full screen.
+        UiKit.TitleBarMaximize.Enable(this);
         KeyPreview = true;
 
         // ── Left navigation tree ─────────────────────────────────────────
@@ -439,6 +442,10 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             _pages[key] = page;
             if (_readOnly) DisableInputs(page);
         }
+        // A tick has to be visible on this canvas — Windows' own glyph washes out to grey here. Swept
+        // on every show, not only on build: two pages are built in the constructor and would never
+        // pass through the branch above. The sweep styles each control at most once.
+        try { UiKit.ThemedCheckBox.StyleAll(page); } catch { }
         _host.SuspendLayout();
         _host.Controls.Clear();
         page.Dock = DockStyle.Fill;
@@ -588,7 +595,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             string scrapeAs = "";
             try { scrapeAs = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetPlatformByName(rep.Plat)?.ScrapeAs ?? ""; } catch { }
             var (panel, apply) = Platforms.EditPlatformModel.BuildForGames(rep.Plat, rep.Id,
-                games.Select(t => (t.Plat, t.Id)).ToArray(), _readOnly, _s, scrapeAs, rep.Title, MarkDirty);
+                games.Select(t => (t.Plat, t.Id, t.Title)).ToArray(), _readOnly, _s, scrapeAs, rep.Title, MarkDirty);
             applyCur = apply;
             SwapHost(panel);
         }

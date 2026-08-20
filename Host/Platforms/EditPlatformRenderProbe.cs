@@ -156,6 +156,12 @@ internal static class EditPlatformRenderProbe
                 var mt = FindModelTypeCombo(panel);
                 if (mt != null) { int ix = mt.Items.IndexOf(forceType); if (ix >= 0) mt.SelectedIndex = ix; }
             }
+            // LB_CHECK="text|text…": tick checkboxes by (prefix of) their label AFTER the type force — to
+            // drive per-type rows (e.g. "Use Plain Text Title") through the REAL control path.
+            var forceChecks = Environment.GetEnvironmentVariable("LB_CHECK");
+            if (!string.IsNullOrEmpty(forceChecks))
+                foreach (var t in forceChecks.Split('|'))
+                { var c = FindCheckBox(panel, t.Trim()); if (c != null) c.Checked = true; else Console.WriteLine($"[live] LB_CHECK: no checkbox '{t}'"); }
             for (int i = 0; i < 40; i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(60); }
             // Optionally drive the shared orbit (env LB_ORBIT_TEST=1) to verify both zones move in sync.
             // LB_ORBIT_YAW / LB_ORBIT_PITCH override the angles (degrees) to aim at a specific face.
@@ -178,6 +184,7 @@ internal static class EditPlatformRenderProbe
                 { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(100); }
                 Tools.JewelRenderProbe.DumpStructure(EditPlatformModel.LastOracle?.BuiltGeometry());
             }
+            try { Console.WriteLine("[live] oracle bounds: " + EditPlatformModel.LastOracle?.ModelBounds()); } catch { }
             try
             {
                 using var bmp = new System.Drawing.Bitmap(form.Width, form.Height);
@@ -201,18 +208,20 @@ internal static class EditPlatformRenderProbe
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
 
-    private static CheckBox? FindOverride(Control root)
+    private static CheckBox? FindOverride(Control root) => FindCheckBox(root, "Override");
+
+    private static CheckBox? FindCheckBox(Control root, string textPrefix)
     {
         foreach (Control c in root.Controls)
         {
-            if (c is CheckBox cb && cb.Text.StartsWith("Override", StringComparison.OrdinalIgnoreCase)) return cb;
-            var f = FindOverride(c); if (f != null) return f;
+            if (c is CheckBox cb && cb.Text.StartsWith(textPrefix, StringComparison.OrdinalIgnoreCase)) return cb;
+            var f = FindCheckBox(c, textPrefix); if (f != null) return f;
         }
         return null;
     }
 
     private static ComboBox? FindModelTypeCombo(Control root)
-        => root.Controls.OfType<ComboBox>().FirstOrDefault(c => c.Items.Count == 5 && c.Items.Contains("Box"))
+        => root.Controls.OfType<ComboBox>().FirstOrDefault(c => c.Items.Count >= 5 && c.Items.Contains("Box"))
            ?? root.Controls.Cast<Control>().Select(FindModelTypeCombo).FirstOrDefault(c => c != null);
 
     private static ComboBox? FindSpineStyleCombo(Control root)

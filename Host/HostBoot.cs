@@ -240,6 +240,25 @@ internal static class HostBoot
             Diag.ModelProbe.Export(GetArg(args, "--model-export") ?? Path.Combine(coreDir, "model-export"));
             return 0;
         }
+        // --model-settings-type: reflect the core's ModelSettings type and print every public property
+        // (name : type). Answers what a field can hold before guessing at its encoding — the cassette
+        // Draw slots turned out to be STRINGS carrying "off", not the nullable numbers they looked like.
+        if (args.Contains("--model-settings-type"))
+        {
+            try
+            {
+                var win = System.Reflection.Assembly.LoadFrom(Path.Combine(coreDir, "Unbroken.LaunchBox.Windows.dll"));
+                var ms = win.GetType("Unbroken.LaunchBox.Windows.Data.ModelSettings");
+                if (ms == null) { Console.WriteLine("[ms-type] ModelSettings type not found"); return 1; }
+                foreach (var p in ms.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance).OrderBy(p => p.Name))
+                {
+                    var u = Nullable.GetUnderlyingType(p.PropertyType);
+                    Console.WriteLine($"[ms-type] {p.Name} : {(u != null ? u.Name + "?" : p.PropertyType.Name)}");
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[ms-type] " + ex.Message); }
+            return 0;
+        }
         // --model-defaults [platform]: drive ModelSettings.GetDefaultSettings to dump the hardcoded per-platform
         // box-model defaults → <Core>\model-defaults.log. See ModelProbe.Defaults.
         if (args.Contains("--model-defaults"))

@@ -250,29 +250,35 @@ internal static class CoreModelHost
     internal sealed class Preview : IDisposable
     {
         private readonly ElementHost _host;
-        private readonly object _flow;   // FlowModel instance (WPF UserControl)
+        private object _flow;            // FlowModel instance (WPF UserControl) — REPLACED on every Redraw
+        private readonly bool _nativeRotate;
 
         public Control Control => _host;
 
-        private Preview(ElementHost host, object flow) { _host = host; _flow = flow; }
+        private Preview(ElementHost host, object flow, bool nativeRotate) { _host = host; _flow = flow; _nativeRotate = nativeRotate; }
 
         public static Preview? Create(bool nativeRotate = false)
         {
             if (!Available || _flowType == null) return null;
             try
             {
-                object? flow;
-                var c = _flowType.GetConstructor(new[] { typeof(bool) });
-                flow = c != null ? c.Invoke(new object[] { true }) : Activator.CreateInstance(_flowType);
+                var flow = NewFlow(nativeRotate);
                 if (flow is not System.Windows.UIElement ui) return null;
-                // nativeRotate: keep LB's built-in mouse rotation (the dual-zone harness lets each zone rotate
-                // itself). Historically disabled so a shared orbit camera drove both zones — that machinery is
-                // gone, so default remains false for any probe that wants a still model.
-                try { _flowType.GetProperty("CanManuallyRotate", BindingFlags.Public | BindingFlags.Instance)?.SetValue(flow, nativeRotate); } catch { }
                 var host = new ElementHost { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.FromArgb(28, 28, 30), Child = ui };
-                return new Preview(host, flow);
+                return new Preview(host, flow, nativeRotate);
             }
             catch (Exception ex) { Console.WriteLine("[model3d] preview create: " + (ex.InnerException?.ToString() ?? ex.ToString())); return null; }
+        }
+
+        // nativeRotate: keep LB's built-in mouse rotation (the dual-zone harness lets each zone rotate
+        // itself). Historically disabled so a shared orbit camera drove both zones — that machinery is
+        // gone, so default remains false for any probe that wants a still model.
+        private static object? NewFlow(bool nativeRotate)
+        {
+            var c = _flowType!.GetConstructor(new[] { typeof(bool) });
+            var flow = c != null ? c.Invoke(new object[] { true }) : Activator.CreateInstance(_flowType);
+            try { _flowType.GetProperty("CanManuallyRotate", BindingFlags.Public | BindingFlags.Instance)?.SetValue(flow, nativeRotate); } catch { }
+            return flow;
         }
 
         /// <summary>Rebuild the model from the current option map + the game to texture with. gameTitle empty →
@@ -302,7 +308,30 @@ internal static class CoreModelHost
                         if (pp.Name.IndexOf("Path", StringComparison.OrdinalIgnoreCase) >= 0 && pp.PropertyType == typeof(string) && pp.GetIndexParameters().Length == 0)
                             try { Console.WriteLine($"[model3d] game.{pp.Name} = {pp.GetValue(game) ?? "(null)"}"); }
                             catch (Exception ex) { Console.WriteLine($"[model3d] game.{pp.Name} threw: {ex.InnerException?.Message}"); }
-                _redraw!.Invoke(_flow, new[] { game, settings });
+                // FlowModel only ever honours its FIRST RedrawModel in this host: later calls return
+                // without error and the initial build stays on screen (probe-verified — fresh game
+                // instances, fresh ids and fresh settings all skipped alike, freezing the dual-zone
+                // oracle on whatever the dialog opened with). A dev harness wants correctness over
+                // cost, so build a brand-new FlowModel per redraw; the manual mouse rotation resets
+                // with it, which the A/B workflow can live with. RedrawModel is only invoked once the
+                // fresh control is LOADED — the first flow's first redraw always came after the form
+                // was shown, which may be exactly why only that one ever worked.
+                bool trace = Environment.GetEnvironmentVariable("LB_ORACLE_TRACE") == "1";
+                if (NewFlow(_nativeRotate) is System.Windows.FrameworkElement fe)
+                {
+                    _flow = fe; _host.Child = fe;
+                    var g = game; var s = settings;
+                    string mt = settingsMap != null && settingsMap.TryGetValue("ModelType", out var mtv) ? mtv : "(none)";
+                    void Fire(string when)
+                    {
+                        try { _redraw!.Invoke(fe, new[] { g, s }); if (trace) Console.WriteLine($"[oracle] redraw {when} flow#{fe.GetHashCode():x8} type={mt}"); }
+                        catch (Exception ex) { Console.WriteLine($"[model3d] redraw({when}): " + (ex.InnerException?.Message ?? ex.Message)); }
+                    }
+                    if (fe.IsLoaded) Fire("loaded");
+                    else { if (trace) Console.WriteLine($"[oracle] defer flow#{fe.GetHashCode():x8} type={mt}"); fe.Loaded += (_, _) => Fire("deferred"); }
+                }
+                else
+                    _redraw!.Invoke(_flow, new[] { game, settings });
             }
             catch (Exception ex) { Console.WriteLine("[model3d] redraw: " + (ex.InnerException?.Message ?? ex.Message)); }
         }

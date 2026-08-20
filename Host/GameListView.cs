@@ -934,6 +934,26 @@ internal sealed class GameListView : ListView
         SendMessage(Handle, LVM_SCROLL, IntPtr.Zero, (IntPtr)((row - top) * rowH));
     }
 
+    /// <summary>Scroll by N wheel lines (negative = up). The index bar drives the wheel through
+    /// this instead of forwarding WM_MOUSEWHEEL to the list: with its scrollbar style stripped the
+    /// list is free to ignore that message, and a wheel over the strip did nothing at all.</summary>
+    public void ScrollLines(int lines) { if (lines != 0) ScrollRowToTop(TopRowIndex + lines); }
+
+    /// <summary>Park the viewport at a fraction (0..1) of its scroll range — the index bar's
+    /// free drag. Report view scrolls by whole rows, so this is row-granular by nature.</summary>
+    public void ScrollToFraction(double f)
+        => ScrollRowToTop((int)Math.Round(Math.Clamp(f, 0, 1) * Math.Max(0, _view.Length - RowsPerPage)));
+
+    /// <summary>Where the viewport sits in its scroll range (0..1) — drives the index thumb.</summary>
+    public double ScrollFraction
+    {
+        get
+        {
+            int max = Math.Max(0, _view.Length - RowsPerPage);
+            return max <= 0 ? 0 : Math.Clamp(TopRowIndex / (double)max, 0, 1);
+        }
+    }
+
     /// <summary>The viewport moved (wheel, keys, programmatic scroll) — lets the index bar keep its
     /// thumb honest without polling.</summary>
     public event Action Scrolled;

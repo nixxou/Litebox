@@ -44,6 +44,16 @@ internal sealed class GameListIndexBar : Control
     /// <summary>Rows one viewport holds. The thumb's range is rows − page — that is what lets a
     /// drag place the view anywhere, ends included, exactly like a scrollbar.</summary>
     public Func<int>? PageRows;
+    /// <summary>Park the view at a fraction (0..1) of its scroll range. Pixel-precise where the
+    /// view allows (the poster grid), which is what makes a drag CONTINUOUS on a short list —
+    /// row-index scrolling moved it in visible notches.</summary>
+    public Action<double>? ScrollToFraction;
+    /// <summary>Where the view sits in its scroll range (0..1) — the thumb follows this, so it
+    /// tracks a free drag instead of snapping to whole rows.</summary>
+    public Func<double>? ScrollFraction;
+    /// <summary>Scroll the view by N wheel lines (negative = up). Only the owner knows what a
+    /// line means in the active view (a row here, a grid row there).</summary>
+    public Action<int>? ScrollLines;
 
     /// <summary>On: markers stay painted and the strip keeps its fitted width. Off: a slim blank
     /// strip until the pointer reaches it — LaunchBox's "Always show the Game List Index" toggle.</summary>
@@ -98,8 +108,21 @@ internal sealed class GameListIndexBar : Control
         // No double-click semantics: the second press of a fast pair must be an ordinary MouseDown
         // (another jump / grab), not a WM_LBUTTONDBLCLK that the bar has no handler for.
         SetStyle(ControlStyles.StandardDoubleClick, false);
+        // Never take focus: clicking the strip must not pull it off the list, or the arrow keys
+        // (and the wheel, which Windows delivers to the FOCUSED control) stop reaching the games.
+        SetStyle(ControlStyles.Selectable, false);
         TabStop = false;   // pointer stays the plain arrow, like LB's index
         Width = MinW;
+        _leaveWatch.Tick += (_, _) =>
+        {
+            try { if (ClientRectangle.Contains(PointToClient(Cursor.Position))) { _leaveWatch.Stop(); return; } }
+            catch { }   // back over the strip itself — ordinary enter/leave tracking takes over
+            if (StillNear()) return;
+            _leaveWatch.Stop();
+            _pointerIn = false; _hover = -1;
+            Place();
+            Invalidate();
+        };
     }
 
     /// <summary>Re-read the groups from the owner and refit the width. Cheap enough to call on
@@ -174,11 +197,48 @@ internal sealed class GameListIndexBar : Control
     private const int MarkerTol = 9;   // a click must land ON a marker (+/- this) to count as one
 
     /// <summary>The group whose marker is within tolerance of <paramref name="y"/> — or -1: between
-    /// two distant markers NOTHING is eligible, clicking there must not snap to the nearest one.</summary>
+    /// two distant markers NOTHING is eligible, clicking there must not snap to the nearest one.
+    /// Used for CLICKS and hover only; a drag never consults it.</summary>
     private int GroupNear(int y)
     {
         int i = GroupAt(y);
         return i >= 0 && Math.Abs(YOf(_groups[i].Index) - y) <= MarkerTol ? i : -1;
+    }
+
+    /// <summary>What a press at (<paramref name="x"/>, <paramref name="y"/>) hits, deciding by the
+    /// LANE the pointer is in. Dots live in the rail along the right edge, labels in the text area
+    /// left of it — two different columns — so a dot sitting a few pixels above a label no longer
+    /// steals that label's click: aim at the text and the text answers, whatever is beside it.
+    /// The label's whole lane counts, not just its glyphs, so clicking well left of a short label
+    /// still reaches it.</summary>
+    private int GroupHit(int x, int y)
+    {
+        int railLeft = ClientSize.Width - 4 - DotRail;   // exactly where the label rects stop (OnPaint)
+        if (x >= railLeft) return GroupNear(y);          // in the rail: the dots answer, by proximity
+        foreach (var (gi, top, bottom) in _bands)        // in the text lane: only what is spelled there
+            if (y >= top && y <= bottom) return gi;
+        return -1;                                       // bare space: a free position, not a snap
+    }
+
+    /// <summary>The label bands of the LAST paint (group index + its text rect's vertical span) —
+    /// hit-testing reads the layout that was actually drawn instead of recomputing the eviction
+    /// pass, so what the eye sees and what the click lands on can never disagree.</summary>
+    private readonly List<(int gi, int top, int bottom)> _bands = new();
+
+    /// <summary>Diagnostic (see MainWindow's LB_INDEX_DIAG driver): the raw numbers behind the
+    /// thumb and the markers, so a "the letter and the position disagree" report can be measured
+    /// instead of eyeballed off a screenshot.</summary>
+    public string DiagDump()
+    {
+        var sb = new System.Text.StringBuilder();
+        int top = -1, page = -1;
+        try { top = TopRow?.Invoke() ?? -1; page = PageRows?.Invoke() ?? -1; } catch { }
+        double sf = double.NaN;
+        try { if (ScrollFraction != null) sf = ScrollFraction(); } catch { }
+        sb.AppendLine($"[index] rows={_rows} top={top} page={page} scrollFrac={sf:0.0000} thumbY={ThumbY()} barH={ClientSize.Height} pad={Pad}");
+        foreach (var (label, tip, idx, spell) in _groups)
+            sb.AppendLine($"[index]   '{label}' idx={idx} y={YOf(idx)} frac={(_rows <= 1 ? 0 : idx / (double)(_rows - 1)):0.0000} spell={spell}");
+        return sb.ToString();
     }
 
     private const int DotRail = 9;   // the dots' lane along the right edge; text ends before it
@@ -194,21 +254,28 @@ internal sealed class GameListIndexBar : Control
         int maxTop = Math.Max(0, _rows - page);
         if (maxTop == 0) return -1;   // everything fits — no scroll position to show
         int h = Math.Max(1, ClientSize.Height - Pad * 2);
-        double f = Math.Clamp(top / (double)maxTop, 0, 1);
-        return Pad + (int)Math.Round(f * (h - 1));
+        // The view's OWN fraction when it can report one: a pixel-scrolled grid sits between rows,
+        // and a thumb computed from the top row would tick from row to row under a smooth drag.
+        double f = double.NaN;
+        if (ScrollFraction != null) try { f = ScrollFraction(); } catch { f = double.NaN; }
+        if (double.IsNaN(f)) f = top / (double)maxTop;
+        return Pad + (int)Math.Round(Math.Clamp(f, 0, 1) * (h - 1));
     }
 
-    /// <summary>Continuous drag: map the pointer straight to a top row on the scroll scale — the
-    /// thumb parks anywhere, between two markers included, like LaunchBox's.</summary>
+    /// <summary>Where a press or a drag at <paramref name="y"/> takes the view: exactly where the
+    /// pointer is. NO magnet here — a drag follows the hand and nothing else. Snapping belongs to
+    /// a CLICK on a marker (see OnMouseDown), where the intent is unambiguous.</summary>
     private void DragTo(int y)
     {
         if (_rows <= 0) return;
-        int page = 1;
-        try { page = Math.Max(1, PageRows?.Invoke() ?? 1); } catch { }
-        int maxTop = Math.Max(0, _rows - page);
         int h = Math.Max(1, ClientSize.Height - Pad * 2);
         double f = Math.Clamp((y - Pad) / (double)(h - 1), 0, 1);
-        try { JumpToRow?.Invoke((int)Math.Round(f * maxTop)); } catch { }
+        // Fractional scrolling keeps a short list CONTINUOUS: mapping to a top row instead meant a
+        // 11-row grid had eight stops for a 600px strip, and the drag moved in visible jumps.
+        if (ScrollToFraction != null) { try { ScrollToFraction(f); } catch { } Invalidate(); return; }
+        int page = 1;
+        try { page = Math.Max(1, PageRows?.Invoke() ?? 1); } catch { }
+        try { JumpToRow?.Invoke((int)Math.Round(f * Math.Max(0, _rows - page))); } catch { }
         Invalidate();
     }
 
@@ -278,7 +345,8 @@ internal sealed class GameListIndexBar : Control
                 placed.Add((i, top, bottom, weight));
         }
         var spelled = new HashSet<int>();
-        foreach (var p in placed) spelled.Add(p.gi);
+        _bands.Clear();
+        foreach (var p in placed) { spelled.Add(p.gi); _bands.Add((p.gi, p.top, p.bottom)); }
 
         // Pass 2 — draw: the chosen labels as text, everything else as the dot rail. The hovered
         // group always shows its text (a transient emphasis, allowed to overlap).
@@ -326,11 +394,12 @@ internal sealed class GameListIndexBar : Control
         int ty = ThumbY();
         if (ty >= 0 && Math.Abs(e.Y - ty) <= GrabZone) { _grabOffset = e.Y - ty; Invalidate(); return; }
         _grabOffset = 0;
-        // A press only counts as a GROUP CLICK when it lands on a marker (+/- tolerance): between
-        // two distant markers a bare click does nothing — no snapping to whichever is nearest.
-        // Holding and MOVING from there still drags the thumb continuously.
-        int gi = GroupNear(e.Y);
+        // On a marker (+/- tolerance) the press is a GROUP CLICK: scroll there AND select. In the
+        // empty space between two markers it is a plain position — the view goes exactly where the
+        // pointer is, instead of the press being swallowed as it used to be.
+        int gi = GroupHit(e.X, e.Y);
         if (gi >= 0) JumpTo(gi);
+        else { _dragMoved = true; DragTo(e.Y); }   // already moved: no tremor guard on what follows
         Invalidate();
     }
     private int _grabOffset;             // pointer-to-thumb offset while dragging (0 = jumped)
@@ -342,7 +411,7 @@ internal sealed class GameListIndexBar : Control
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        int i = GroupNear(e.Y);   // hover follows the same eligibility as clicks — no far snapping
+        int i = GroupHit(e.X, e.Y);   // hover follows the same lanes as clicks — what lights up is what answers
         if (i != _hover)
         {
             _hover = i;
@@ -366,6 +435,9 @@ internal sealed class GameListIndexBar : Control
         if (!_dragging) return;
         _dragging = false;
         Capture = false;
+        // A drag routinely ends with the pointer off the strip: hand it to the grace band rather
+        // than collapsing under the hand that was just using it.
+        if (StillNear()) _leaveWatch.Start(); else _pointerIn = false;
         Place();
         Invalidate();
     }
@@ -373,6 +445,7 @@ internal sealed class GameListIndexBar : Control
     protected override void OnMouseEnter(EventArgs e)
     {
         base.OnMouseEnter(e);
+        _leaveWatch.Stop();   // back on the strip before the grace band ran out
         _pointerIn = true;
         RefreshGroups();   // groups may be stale (scroll/sort since last hover) — one cheap pass
         Place();           // expand OVER the content; the layout underneath must not move
@@ -382,28 +455,47 @@ internal sealed class GameListIndexBar : Control
     {
         base.OnMouseLeave(e);
         _hover = -1;
+        // Leaving by a few pixels must not slam the strip shut: an expanded index is a target the
+        // hand is still aiming at, and the labels sit at its LEFT edge — the side you drift over
+        // on the way in. Keep it open while the pointer stays in the grace band and poll for the
+        // real exit (there is no MouseLeave to wait for out there — we are already outside).
+        if (!_dragging && StillNear()) { _leaveWatch.Start(); Invalidate(); return; }
         if (!_dragging) { _pointerIn = false; Place(); }
         Invalidate();
     }
 
-    /// <summary>The wheel belongs to the list beside the strip — the index is a jump control, not a
-    /// scrollbar, and swallowing the wheel would make it a dead zone at the list's edge.</summary>
-    protected override void OnMouseWheel(MouseEventArgs e)
+    private const int LeaveSlack = 40;   // px LEFT of the strip that still count as being on it
+    private readonly System.Windows.Forms.Timer _leaveWatch = new() { Interval = 60 };
+
+    /// <summary>Is the pointer still on the strip or in its grace band? A drag always counts —
+    /// the pointer routinely runs outside the strip while the button is down.</summary>
+    private bool StillNear()
     {
-        var list = FindList();
-        if (list == null) { base.OnMouseWheel(e); return; }
-        SendMessage(list.Handle, 0x020A /*WM_MOUSEWHEEL*/,
-            (IntPtr)(e.Delta << 16),
-            (IntPtr)((Cursor.Position.Y << 16) | (Cursor.Position.X & 0xFFFF)));
-        Invalidate();   // the position indicator moved
+        if (_dragging) return true;
+        if (!IsHandleCreated) return false;
+        try
+        {
+            var p = PointToClient(Cursor.Position);
+            return p.X >= -LeaveSlack && p.X <= ClientSize.Width
+                && p.Y >= -4 && p.Y <= ClientSize.Height + 4;
+        }
+        catch { return false; }
     }
 
-    private Control? FindList()
+    /// <summary>The wheel belongs to the list beside the strip — the index is a jump control, not a
+    /// scrollbar, and swallowing the wheel would make it a dead zone at the list's edge.
+    ///
+    /// Scrolls the view through the owner's own plumbing rather than re-posting WM_MOUSEWHEEL to
+    /// it: both views run with their scrollbar style stripped, and a list view in that state is
+    /// free to ignore a wheel message — which is exactly what made the strip a dead zone.</summary>
+    protected override void OnMouseWheel(MouseEventArgs e)
     {
-        if (Parent == null) return null;
-        foreach (Control c in Parent.Controls)
-            if (c is ListView lv && lv.Visible) return lv;
-        return null;
+        int notches = e.Delta / 120;
+        if (notches == 0 || ScrollLines == null) { base.OnMouseWheel(e); return; }
+        int lines = SystemInformation.MouseWheelScrollLines;
+        if (lines <= 0) lines = 3;   // "one screen at a time" (-1) — treat as a sane default
+        try { ScrollLines(-notches * lines); } catch { }
+        Invalidate();   // the position indicator moved
     }
 
     private void JumpTo(int i)
@@ -420,10 +512,8 @@ internal sealed class GameListIndexBar : Control
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _tip.Dispose();
+        if (disposing) { _tip.Dispose(); _leaveWatch.Dispose(); }
         base.Dispose(disposing);
     }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 }

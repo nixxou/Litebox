@@ -400,6 +400,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             },
             TopRow = () => _posterMode ? _poster.FirstVisibleIndex : _games.TopRowIndex,
             PageRows = () => _posterMode ? _poster.ItemsPerPage : _games.RowsPerPage,
+            // Free positioning + the wheel go through the view's own scroller: the poster grid
+            // moves by PIXELS there, which is what keeps a drag continuous on a short list.
+            ScrollToFraction = f => { if (_posterMode) _poster.ScrollToFraction(f); else _games.ScrollToFraction(f); },
+            ScrollFraction = () => _posterMode ? _poster.ScrollFraction : _games.ScrollFraction,
+            ScrollLines = n => { if (_posterMode) _poster.ScrollLines(n); else _games.ScrollLines(n); },
         };
         inner.Panel1.Controls.Add(_gameIndex);
         _gameIndex.BringToFront();   // above both views — its hover expansion overlays them
@@ -411,6 +416,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // whole grid left into its own centring slack (a pure translation: the column count — and
         // with it the drag mapping — never changes). Bar Resize = display width change.
         _gameIndex.Resize += (_, _) => NudgePosterForOverlay();
+        // The wheel over the strip, whatever state it is in. Windows delivers WM_MOUSEWHEEL to the
+        // FOCUSED control — which is neither the strip nor, necessarily, the list — so relying on
+        // the strip's own handler left it a dead zone, most visibly while COLLAPSED (a 14px sliver
+        // that owns no scrolling of its own). A thread filter catches the wheel wherever it landed
+        // and applies it to the active view whenever the pointer is over the strip's lane.
+        _wheelFilter = new IndexWheelFilter(this);
+        Application.AddMessageFilter(_wheelFilter);
+        FormClosed += (_, _) => { try { Application.RemoveMessageFilter(_wheelFilter); } catch { } };
         ApplyGameListIndexOptions();
         // Layout ran while the form was invisible (Control.Visible lies until Show), so the poster
         // may have measured a barless width — one refresh once everything is really on screen.
@@ -582,6 +595,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         Shown += (_, _) =>
         {
             ApplyDarkScroll(_games); ApplyDarkScroll(_sources); ApplyDarkScroll(_notes); ApplyDarkScroll(_detailHost); ApplyDarkScroll(_related.ScrollHost); RelayoutDetail();
+            if (Environment.GetEnvironmentVariable("LB_WHEEL_SELFTEST") == "1") RunWheelSelfTest();
+            var idxDiag = Environment.GetEnvironmentVariable("LB_INDEX_DIAG");
+            if (!string.IsNullOrEmpty(idxDiag)) RunIndexDiag(idxDiag);
             // Hands-free UI drivers (diagnostics): --edit-game/--edit-page and --options — see HostBoot.
             if (!string.IsNullOrEmpty(HostBoot.AutoEditGame))
             {
@@ -3662,28 +3678,40 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         /// (count, client width): the index bar reads this on every thumb repaint while
         /// scrolling, and the raw scan is up to 256 GetItemRect messages.</summary>
         private (int cols, int rowH) _gridCache = (0, 0);
-        private (int n, int w) _gridCacheKey = (-1, -1);
+        private (int n, int w, int itemH) _gridCacheKey = (-1, -1, -1);
 
         /// <summary>Drop the measured-grid cache — call after anything that re-tiles without
         /// changing count or width (icon spacing pushes).</summary>
-        public void InvalidateGridCache() => _gridCacheKey = (-1, -1);
+        public void InvalidateGridCache() => _gridCacheKey = (-1, -1, -1);
 
         private (int cols, int rowH) Grid()
         {
             int n = VirtualListSize;
             if (n <= 0) return (1, 1);
-            var key = (n, ClientSize.Width);
-            if (key == _gridCacheKey) return _gridCache;
+            // The item's own height joins the key: a spacing push that forgets to invalidate would
+            // otherwise leave a stale stride in place, and NOTHING downstream can tell — every
+            // position simply reads a few percent off (a 226px stride against a real 240px one put
+            // the index thumb a hundred games past where the eye was, on a 3000-game library).
             var r0 = GetItemRect(0);
-            var res = (Math.Max(1, n), int.MaxValue);
+            var key = (n, ClientSize.Width, r0.Height);
+            if (key == _gridCacheKey) return _gridCache;
+            int cols = Math.Max(1, n);
             for (int i = 1; i < Math.Min(n, 256); i++)
+                if (GetItemRect(i).Y > r0.Y) { cols = i; break; }
+            int rowH = int.MaxValue;
+            if (cols < n)
             {
-                var r = GetItemRect(i);
-                if (r.Y > r0.Y) { res = (i, r.Y - r0.Y); break; }
+                // Stride over the LONGEST baseline available rather than the next row alone: one
+                // adjacent reading taken mid-relayout would skew every row index that follows,
+                // while a first-to-last measurement averages the grid as it actually stands.
+                int lastRowStart = (n - 1) / cols * cols;
+                int rows = lastRowStart / cols;
+                rowH = rows > 0 ? (GetItemRect(lastRowStart).Y - r0.Y) / rows
+                                : Math.Max(1, GetItemRect(cols).Y - r0.Y);
             }
             _gridCacheKey = key;
-            _gridCache = res;
-            return res;
+            _gridCache = (cols, rowH);
+            return _gridCache;
         }
 
         /// <summary>Index of the first item of the topmost visible grid row.</summary>
@@ -3738,12 +3766,96 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             catch { }
         }
 
+        /// <summary>Diagnostic: the raw grid geometry behind FirstVisibleIndex / ScrollFraction.</summary>
+        public string DiagGeom(int probe)
+        {
+            try
+            {
+                var (cols, rowH) = Grid();
+                probe = Math.Clamp(probe, 0, Math.Max(0, VirtualListSize - 1));
+                var r0 = GetItemRect(0);
+                var rp = GetItemRect(probe);
+                return $"n={VirtualListSize} cols={cols} rowH={rowH} scrollTop={ScrollTop()} clientH={ClientSize.Height} "
+                     + $"maxScroll={MaxScroll()} item0.Y={r0.Y} item0.H={r0.Height} item{probe}.Y={rp.Y} "
+                     + $"firstVisible={FirstVisibleIndex} itemsPerPage={ItemsPerPage} frac={ScrollFraction:0.0000}";
+            }
+            catch (Exception ex) { return "DiagGeom: " + ex.Message; }
+        }
+
+        /// <summary>Total scrollable pixels — content height beyond one viewport.</summary>
+        private int MaxScroll()
+        {
+            var (cols, rowH) = Grid();
+            if (rowH <= 0 || rowH == int.MaxValue) return 0;
+            int rows = (VirtualListSize + cols - 1) / cols;
+            int margin = GetItemRect(0).Y + ScrollTop();   // the grid's top inset, scroll-independent
+            return Math.Max(0, margin + rows * rowH - ClientSize.Height);
+        }
+
+        /// <summary>Scroll by N wheel lines — a "line" is one grid ROW here (negative = up). The
+        /// index bar drives the wheel through this instead of forwarding WM_MOUSEWHEEL, which a
+        /// list view with its scrollbar style stripped is free to ignore.</summary>
+        public void ScrollLines(int lines)
+        {
+            if (!IsHandleCreated || VirtualListSize == 0 || lines == 0) return;
+            try
+            {
+                var (_, rowH) = Grid();
+                if (rowH <= 0 || rowH == int.MaxValue) return;
+                SendMessage(Handle, LVM_SCROLL_P, IntPtr.Zero, (IntPtr)(lines * rowH));
+            }
+            catch { }
+        }
+
+        /// <summary>Park the viewport at a fraction (0..1) of its scroll range, in PIXELS — what
+        /// lets an index drag stop between two grid rows. Mapping the drag to an item index and
+        /// scrolling that row to the top made a short grid move in visible notches: five item
+        /// indices share one row, and every row snapped to the top of the view.</summary>
+        public void ScrollToFraction(double f)
+        {
+            if (!IsHandleCreated || VirtualListSize == 0) return;
+            try
+            {
+                int target = (int)Math.Round(Math.Clamp(f, 0, 1) * MaxScroll());
+                SendMessage(Handle, LVM_SCROLL_P, IntPtr.Zero, (IntPtr)(target - ScrollTop()));
+            }
+            catch { }
+        }
+
+        /// <summary>Where the viewport sits in its scroll range (0..1) — drives the index thumb, so
+        /// the thumb tracks a pixel-precise drag instead of jumping row to row.</summary>
+        public double ScrollFraction
+        {
+            get
+            {
+                if (!IsHandleCreated || VirtualListSize == 0) return 0;
+                try { int max = MaxScroll(); return max <= 0 ? 0 : Math.Clamp(ScrollTop() / (double)max, 0, 1); }
+                catch { return 0; }
+            }
+        }
+
         protected override void WndProc(ref Message m)
         {
             if (_hideVScroll && m.Msg == WM_NCCALCSIZE_P && IsHandleCreated)
             {
                 int style = GetWindowLong(Handle, GWL_STYLE_P);
                 if ((style & WS_VSCROLL_P) != 0) SetWindowLong(Handle, GWL_STYLE_P, style & ~WS_VSCROLL_P);
+            }
+            // The wheel, by hand. comctl's ICON view refuses to scroll on WM_MOUSEWHEEL once
+            // WS_VSCROLL is stripped (probe-verified: the message moves the report list but leaves
+            // the grid exactly where it was), so the poster was wheel-dead over its whole surface
+            // — the index strip merely made it visible. Scroll by whole grid rows and swallow it.
+            if (m.Msg == WM_MOUSEWHEEL_P)
+            {
+                int notches = unchecked((short)((long)m.WParam >> 16)) / 120;
+                if (notches != 0)
+                {
+                    int lines = SystemInformation.MouseWheelScrollLines;
+                    if (lines <= 0) lines = 3;   // "one screen at a time" (-1) — the usual default
+                    ScrollLines(-notches * lines);
+                    Scrolled?.Invoke();
+                    return;
+                }
             }
             if (m.Msg is WM_MOUSEWHEEL_P or WM_VSCROLL_P or WM_KEYDOWN)
                 Scrolled?.Invoke();
@@ -3894,6 +4006,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             if (!od) SendMessage(lv.Handle, LVM_SETIMAGELIST, (IntPtr)LVSIL_NORMAL, _himl);   // our native list (WinForms left null)
             SetIconSpacing(lv, PCellW + PGap, PImgH + PLabelH + PGap);
+            lv.InvalidateGridCache();   // every spacing push re-tiles: no measured stride survives it
             EnableListViewDoubleBuffer(lv);
         };
         return lv;
@@ -4151,7 +4264,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             try { if (_poster.IsHandleCreated) SendMessage(_poster.Handle, LVM_SETIMAGELIST, (IntPtr)LVSIL_NORMAL, _himl); } catch { }
             if (oldHiml != IntPtr.Zero) ImageList_Destroy(oldHiml);
         }
-        try { if (_poster.IsHandleCreated) SetIconSpacing(_poster, PCellW + PGap, PImgH + PLabelH + PGap); } catch { }
+        try { if (_poster.IsHandleCreated) { SetIconSpacing(_poster, PCellW + PGap, PImgH + PLabelH + PGap); _poster.InvalidateGridCache(); } } catch { }
         _posterSpacingX = PCellW + PGap;   // keep the elastic-gap cache honest (LayoutPoster re-squeezes right after)
         // The whole ladder, at this geometry: the one line that says what the slider actually buys.
         var ladder = new System.Text.StringBuilder();
@@ -4234,6 +4347,129 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         int delta = unchecked((short)((long)m.WParam >> 16));
         ChangeZoom(delta > 0 ? +1 : -1);
         return true;
+    }
+
+    private IndexWheelFilter _wheelFilter;
+
+    /// <summary>Diagnostic (env LB_WHEEL_SELFTEST=1): exercises the index strip's wheel path in
+    /// BOTH views without injected input — UIPI blocks that against an elevated LiteBox, so a
+    /// synthetic wheel from outside never arrives. Parks our own cursor on the strip, hands the
+    /// filter a fabricated WM_MOUSEWHEEL, and reports whether the view actually moved.</summary>
+    private async void RunWheelSelfTest()
+    {
+        async System.Threading.Tasks.Task Settle(int ms)
+        { for (int i = 0; i < Math.Max(1, ms / 50); i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(50); } }
+
+        await Settle(2500);
+        foreach (bool poster in new[] { false, true })
+        {
+            try { SetPosterMode(poster); } catch (Exception ex) { Console.WriteLine("[wheel] mode: " + ex.Message); }
+            await Settle(1800);
+            string mode = poster ? "poster" : "list";
+            var bar = _gameIndex;
+            int Pos() { try { return poster ? _poster.FirstVisibleIndex : _games.TopRowIndex; } catch { return -1; } }
+            Console.WriteLine($"[wheel] --- {mode}: indexOn={_gameIndexOn} visible={bar?.Visible} barW={bar?.Width} reserved={bar?.ReservedWidth}");
+
+            int p0 = Pos();
+            try { if (poster) _poster.ScrollLines(3); else _games.ScrollLines(3); }
+            catch (Exception ex) { Console.WriteLine("[wheel] ScrollLines threw: " + ex.Message); }
+            await Settle(700);
+            Console.WriteLine($"[wheel] {mode}: ScrollLines(3) {p0} -> {Pos()}");
+
+            // Does the VIEW scroll on a wheel message of its own? Both views run with WS_VSCROLL
+            // stripped, and a list view in that state may simply refuse to scroll — which would
+            // make the wheel dead over the grid itself, not just over the strip.
+            Control view = poster ? _poster : (Control)_games;
+            int pw = Pos();
+            var vc = view.PointToScreen(new Point(view.Width / 2, view.Height / 2));
+            try { SendMessage(view.Handle, 0x020A, (IntPtr)(-120 << 16), (IntPtr)((vc.Y << 16) | (vc.X & 0xFFFF))); } catch { }
+            await Settle(700);
+            Console.WriteLine($"[wheel] {mode}: native WM_MOUSEWHEEL on the view {pw} -> {Pos()}");
+
+            if (bar == null) continue;
+            try { Cursor.Position = bar.PointToScreen(new Point(Math.Max(1, bar.Width / 2), bar.Height / 2)); } catch { }
+            await Settle(500);
+            int p1 = Pos();
+            bool handled = false;
+            var msg = Message.Create(bar.Handle, 0x020A, (IntPtr)(-120 << 16), IntPtr.Zero);
+            try { handled = _wheelFilter.PreFilterMessage(ref msg); }
+            catch (Exception ex) { Console.WriteLine("[wheel] filter threw: " + ex.Message); }
+            await Settle(700);
+            Console.WriteLine($"[wheel] {mode}: filter handled={handled}  {p1} -> {Pos()}");
+        }
+        Console.WriteLine("[wheel] done");
+        try { Close(); } catch { }
+    }
+
+    /// <summary>Diagnostic (env LB_INDEX_DIAG=&lt;letter&gt;): parks the poster so that the named
+    /// group's FIRST game sits on the last visible row — the moment the eye says "we are just
+    /// reaching N" — then dumps the thumb's position against every marker's. Measures the two
+    /// scales the strip juggles instead of guessing at them from a screenshot.</summary>
+    private async void RunIndexDiag(string letter)
+    {
+        async System.Threading.Tasks.Task Settle(int ms)
+        { for (int i = 0; i < Math.Max(1, ms / 50); i++) { Application.DoEvents(); await System.Threading.Tasks.Task.Delay(50); } }
+
+        await Settle(3000);
+        try { SetPosterMode(true); } catch { }
+        await Settle(2000);
+        try
+        {
+            var groups = ComputeIndexGroups();
+            int gi = -1;
+            for (int i = 0; i < groups.Count; i++)
+                if ((groups[i].Label ?? "").StartsWith(letter, StringComparison.OrdinalIgnoreCase)) { gi = i; break; }
+            if (gi < 0) { Console.WriteLine($"[index] no group starting with '{letter}'"); Close(); return; }
+            int cols = _poster.NativeColumns, page = _poster.ItemsPerPage;
+            int target = groups[gi].Index;
+            _poster.ScrollItemToTop(Math.Max(0, target - (page - cols)));   // that game on the LAST visible row
+            await Settle(1200);
+            Console.WriteLine($"[index] target '{groups[gi].Label}' idx={target} asked ScrollItemToTop({Math.Max(0, target - (page - cols))})");
+            Console.WriteLine("[index] geom " + _poster.DiagGeom(target));
+            Console.Write(_gameIndex.DiagDump());
+        }
+        catch (Exception ex) { Console.WriteLine("[index] " + ex.Message); }
+        Console.WriteLine("[index] done");
+        try { Close(); } catch { }
+    }
+
+    /// <summary>Routes a wheel whose pointer sits over the Game List Index strip to the active
+    /// view. The strip's LANE is used, not the control's bounds: collapsed it is a 14px sliver, and
+    /// the wheel must work there exactly as it does over the expanded labels.</summary>
+    private sealed class IndexWheelFilter : IMessageFilter
+    {
+        private const int WM_MOUSEWHEEL = 0x020A;
+        private readonly MainWindow _w;
+        public IndexWheelFilter(MainWindow w) => _w = w;
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            if (m.Msg != WM_MOUSEWHEEL) return false;
+            var bar = _w._gameIndex;
+            if (bar == null || !_w._gameIndexOn || !bar.IsHandleCreated) return false;
+            // A modal dialog of ours is up: its own scrolling wins, never the list behind it.
+            if (Form.ActiveForm != _w) return false;
+            var host = bar.Parent;
+            if (host == null || !host.IsHandleCreated) return false;
+            Point p;
+            try { p = host.PointToClient(Cursor.Position); } catch { return false; }
+            if (!host.ClientRectangle.Contains(p)) return false;
+            int lane = Math.Max(bar.Width, bar.ReservedWidth);   // expanded width, else the sliver
+            if (p.X < host.ClientSize.Width - lane) return false;
+
+            int notches = unchecked((short)((long)m.WParam >> 16)) / 120;
+            if (notches == 0) return false;
+            int lines = SystemInformation.MouseWheelScrollLines;
+            if (lines <= 0) lines = 3;   // "one screen at a time" (-1) — treat as the usual default
+            try
+            {
+                if (_w._posterMode) _w._poster.ScrollLines(-notches * lines);
+                else _w._games.ScrollLines(-notches * lines);
+            }
+            catch { }
+            try { bar.Invalidate(); } catch { }   // the position indicator moved
+            return true;                          // handled — never dispatched twice
+        }
     }
 
     private void SetPosterMode(bool on)

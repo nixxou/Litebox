@@ -744,11 +744,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             {
                 try
                 {
-                    var g = FindGameForCli(HostBoot.AutoEditGame);
-                    if (g != null)
+                    // Several titles separated by "|" open the MULTI editor — the only way to drive the
+                    // multi-selection pages (coverage matrices, batch downloads) without a human clicking.
+                    var wanted = HostBoot.AutoEditGame.Split('|', StringSplitOptions.RemoveEmptyEntries);
+                    var picked = wanted.Select(FindGameForCli).Where(x => x != null).Cast<IGame>().ToArray();
+                    if (picked.Length > 0)
                     {
-                        Console.WriteLine($"[edit-game] opening \"{Safe(() => g.Title)}\" page={HostBoot.AutoEditPage ?? "(default)"}");
-                        BeginInvoke((Action)(() => EditGameWindow.Open(new[] { g }, Array.Empty<IGame>(), false, this, HostBoot.AutoEditPage)));
+                        Console.WriteLine($"[edit-game] opening {picked.Length} game(s) [{string.Join(", ", picked.Select(x => Safe(() => x.Title)))}] page={HostBoot.AutoEditPage ?? "(default)"}");
+                        BeginInvoke((Action)(() => EditGameWindow.Open(picked, Array.Empty<IGame>(), false, this, HostBoot.AutoEditPage)));
                     }
                     else Console.WriteLine($"[edit-game] game not found: \"{HostBoot.AutoEditGame}\"");
                 }

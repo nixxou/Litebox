@@ -426,9 +426,9 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "ControllerSupport" => IsMulti ? BuildControllerSupportMultiPage() : BuildControllerSupportPage(),
                 "Images" => IsMulti ? BuildImagesMatrixPage() : BuildImagesPage(),   // multi → media-coverage matrix
                 "Videos" => IsMulti ? BuildVideosMatrixPage() : BuildVideosPage(),   // multi → video-coverage matrix
-                "Documents" => IsMulti ? Placeholder("Documents") : BuildDocumentsPage(),   // manual + additional documents
+                "Documents" => IsMulti ? BuildDocumentsMatrixPage() : BuildDocumentsPage(),   // multi → manual coverage + batch download
                 "Links" => IsMulti ? Placeholder("Links") : BuildLinksPage(),   // LB 14 web links
-                "Music" => IsMulti ? Placeholder("Music") : BuildMusicPage(),   // flat collection + designation + integrated player
+                "Music" => IsMulti ? BuildMusicMatrixPage() : BuildMusicPage(),   // multi → music coverage + batch download
                 "ModelSettings" => IsMulti ? BuildModelSettingsMultiPage() : BuildModelSettingsPage(),   // multi → base-game picker + apply-to-all
                 "ImageQuery" => BuildImageQueryPage(),   // works for 1..N games (single or multi selection)
                 "Launching" => BuildLaunchingPage(),   // main page supports multi (merged fields); sub-pages below stay solo

@@ -459,10 +459,20 @@ internal sealed partial class EditGameWindow
         {
             string err = outcome?.Error ?? "";
             string extra = string.IsNullOrWhiteSpace(err) ? "" : "\n\n" + err;
-            bool gated = err.IndexOf("format is not available", StringComparison.OrdinalIgnoreCase) >= 0
-                      || err.IndexOf("Sign in", StringComparison.OrdinalIgnoreCase) >= 0
-                      || err.IndexOf("age", StringComparison.OrdinalIgnoreCase) >= 0;
-            string hint = gated
+            // "Requested format is not available" is NOT a gate — yt-dlp says that when the SELECTOR matched
+            // nothing, and listing it here as a symptom of age-restriction sent the reader off to set browser
+            // cookies for a video nobody was gating. The two are told apart now, and "age" as a bare substring
+            // goes with it: it matches "message", "storage" and "Page" just as happily.
+            bool noFormat = err.IndexOf("format is not available", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool gated = err.IndexOf("Sign in", StringComparison.OrdinalIgnoreCase) >= 0
+                      || err.IndexOf("confirm your age", StringComparison.OrdinalIgnoreCase) >= 0
+                      || err.IndexOf("age-restricted", StringComparison.OrdinalIgnoreCase) >= 0
+                      || err.IndexOf("members-only", StringComparison.OrdinalIgnoreCase) >= 0
+                      || err.IndexOf("private video", StringComparison.OrdinalIgnoreCase) >= 0;
+            string hint =
+                  noFormat && !FfmpegService.Available
+                ? "\n\nThis video has no single-file stream: YouTube serves its picture and its sound separately, and joining them needs ffmpeg — which is not in LaunchBox\\ThirdParty\\FFMPEG. Until it is, only videos that still offer a combined stream can be downloaded."
+                : gated
                 ? "\n\nYouTube is gating this video (age-restricted / protected). Set Firefox cookies in ⚙ Options — or just use “▶ Play in LiteBox” to watch it (some videos YouTube won't let yt-dlp download at all)."
                 : "";
             MessageBox.Show(this, "The YouTube download failed." + extra + hint, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);

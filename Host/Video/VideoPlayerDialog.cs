@@ -349,7 +349,7 @@ internal sealed class VideoPlayerDialog : Form
             MessageBox.Show(this,
                 _keys.Count < 2
                     ? "This video has fewer than two keyframes, so there is nothing to cut on without re-encoding it."
-                    : "ffprobe couldn't read this video's duration.",
+                    : "ffmpeg couldn't read this video's duration.",
                 "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }

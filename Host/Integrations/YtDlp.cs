@@ -20,6 +20,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using LbApiHost.Host.Diag;
 using LbApiHost.Host.Video;
 
 namespace LbApiHost.Host.Integrations;
@@ -273,7 +274,7 @@ internal static class YtDlp
     // deliver a progressive stream (single file, video+audio already muxed — capped ~720p by YouTube).
     public static string FormatSelector(string quality)
     {
-        bool merge = FfmpegService.Available;
+        bool merge = FfmpegService.Available;   // ffmpeg.exe on disk; nothing here needs ffprobe any more
         int? cap = quality?.Trim().ToLowerInvariant() switch
         {
             "2160p" or "4k" => 2160,
@@ -303,13 +304,30 @@ internal static class YtDlp
         IProgress<double>? progress = null, IProgress<string>? phase = null, CancellationToken ct = default)
     {
         var o = await DownloadOnce(urlOrId, quality, outFileNoExt, cookies, progress, phase, ct).ConfigureAwait(false);
-        if (o.Path == null && cookies == CookieBrowser.None && !ct.IsCancellationRequested && LooksAuthGated(o.Error))
+        if (o.Path != null || ct.IsCancellationRequested) return o;
+
+        if (cookies == CookieBrowser.None && LooksAuthGated(o.Error))
         {
             phase?.Report("Retrying with Firefox cookies…");
             var o2 = await DownloadOnce(urlOrId, quality, outFileNoExt, CookieBrowser.Firefox, progress, phase, ct).ConfigureAwait(false);
             if (o2.Path != null) return o2;
             // Firefox absent / no cookie DB → the retry's error is noise; keep the original (the real reason).
             return LooksNoCookieStore(o2.Error) ? o : o2;
+        }
+
+        // The symmetric case, and the surprising one: cookies can make YouTube serve LESS. A signed-in request
+        // gets the real streams only if the client can produce a PO token, which yt-dlp cannot; without one the
+        // answer is storyboards and nothing else, and the selector has nothing to match. Measured on one trailer:
+        // 39 formats anonymously (32 video, 7 audio), 4 mhtml storyboards with a Firefox session. Whoever set
+        // the cookie option did it to make downloads work, so failing here with "format is not available" is the
+        // worst possible answer — drop the session and ask again as a stranger.
+        if (cookies != CookieBrowser.None && LooksNoFormat(o.Error))
+        {
+            phase?.Report("Retrying without cookies…");
+            var o3 = await DownloadOnce(urlOrId, quality, outFileNoExt, CookieBrowser.None, progress, phase, ct).ConfigureAwait(false);
+            if (o3.Path != null) return o3;
+            // Anonymous failed too: the original error is about the video, not about the session.
+            return o;
         }
         return o;
     }
@@ -318,6 +336,11 @@ internal static class YtDlp
         (e.Contains("Sign in", StringComparison.OrdinalIgnoreCase) || e.Contains("confirm your age", StringComparison.OrdinalIgnoreCase)
       || e.Contains("members-only", StringComparison.OrdinalIgnoreCase) || e.Contains("private video", StringComparison.OrdinalIgnoreCase)
       || e.Contains("cookies", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>yt-dlp matched no format — either the video really offers none we can use, or the session we
+    /// asked with was served storyboards only.</summary>
+    private static bool LooksNoFormat(string? e) => e != null &&
+        e.Contains("format is not available", StringComparison.OrdinalIgnoreCase);
 
     private static bool LooksNoCookieStore(string? e) => e != null &&
         (e.Contains("could not find", StringComparison.OrdinalIgnoreCase) || e.Contains("does not support", StringComparison.OrdinalIgnoreCase)
@@ -328,6 +351,7 @@ internal static class YtDlp
     {
         if (!Available) return new DownloadOutcome(null, "yt-dlp isn't installed.");
         if (string.IsNullOrWhiteSpace(urlOrId)) return new DownloadOutcome(null, "No URL.");
+
         var args = new List<string>
         {
             "--no-playlist", "--no-warnings", "--no-simulate", "--newline",
@@ -450,6 +474,13 @@ internal static class YtDlp
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
 
+        // What we ACTUALLY ran. Two rounds of debugging a failed download were spent guessing at this: the
+        // dialog shows yt-dlp's last line and nothing else, so a failure that reproduces differently from a
+        // hand-typed command — same video, a different error — leaves nowhere to look. Through LbLog, so a
+        // normal launch writes nothing and only --debug pays for it. No secret is in here: the cookie flag
+        // names a browser, it does not carry its cookies.
+        LbLog.Info("ytdlp", "run: " + string.Join(" ", args));
+
         using var proc = new Process { StartInfo = psi };
         var outBuf = new StringBuilder();
         var errBuf = new StringBuilder();
@@ -460,6 +491,11 @@ internal static class YtDlp
         proc.BeginErrorReadLine();
         try { await proc.WaitForExitAsync(ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { try { if (!proc.HasExited) proc.Kill(true); } catch { } throw; }
-        return (proc.ExitCode, outBuf.ToString(), errBuf.ToString());
+        string err = errBuf.ToString();
+        // On failure, everything yt-dlp said — the dialog keeps only the ERROR line, and the lines above it
+        // are the ones that say WHICH player client answered and what it returned.
+        if (proc.ExitCode != 0)
+            LbLog.Info("ytdlp", "exit " + proc.ExitCode + Environment.NewLine + err.TrimEnd());
+        return (proc.ExitCode, outBuf.ToString(), err);
     }
 }

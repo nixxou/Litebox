@@ -36,6 +36,13 @@ internal sealed class GameListIndexBar : Control
     public Func<int>? RowCount;
     /// <summary>Scroll the list so this row lands at the top.</summary>
     public Action<int>? JumpToRow;
+
+    /// <summary>Bring a row into view CENTRED, for a click on a label or a dot. Kept apart from
+    /// <see cref="JumpToRow"/> on purpose: that one carries a scroll POSITION, computed from where the
+    /// pointer is along the rail, and centring it would put the view half a page away from the thumb the
+    /// user is dragging. A click names an ELEMENT instead, and an element is best looked at in the middle
+    /// of the page. Falls back to JumpToRow when no host provides it.</summary>
+    public Action<int>? CenterRow;
     /// <summary>Select this row in the central view. Fired on GROUP clicks (label or dot) only —
     /// a continuous thumb drag scrolls without touching the selection.</summary>
     public Action<int>? SelectRow;
@@ -243,9 +250,18 @@ internal sealed class GameListIndexBar : Control
 
     private const int DotRail = 9;   // the dots' lane along the right edge; text ends before it
 
-    /// <summary>The thumb's centre, on the SCROLL scale: top / (rows − page), so it reaches both
-    /// ends of the strip. Group markers live on the row scale — the two agree at the top and drift
-    /// a little toward the bottom, the same tension every scrollbar-with-marks has.</summary>
+    /// <summary>The thumb, on the SAME scale as the labels: the row at the CENTRE of the page, placed
+    /// through idx / (rows − 1) exactly as YOf places a group.
+    ///
+    /// It used to sit on the scroll scale instead — top / (rows − page) — and the two only agreed at the
+    /// top of the strip, drifting further apart the lower you went. No choice of scroll position could
+    /// settle that: sending a clicked group to the first row left the thumb BELOW its label, sending it to
+    /// the middle left the thumb ABOVE. Asking both the same question — which row am I looking at? — with
+    /// the same denominator makes a click on a label land the thumb on that label, by construction.
+    ///
+    /// The price is that the thumb no longer travels the full strip: at the very bottom the centre row is
+    /// half a page short of the last one. That is honest — there really are items below the middle of the
+    /// view — and the last labels sitting under the thumb say so.</summary>
     private int ThumbY()
     {
         int top = -1, page = 1;
@@ -253,13 +269,18 @@ internal sealed class GameListIndexBar : Control
         if (top < 0) return -1;
         int maxTop = Math.Max(0, _rows - page);
         if (maxTop == 0) return -1;   // everything fits — no scroll position to show
+
+        // The view's OWN fraction when it can report one: a pixel-scrolled grid sits between rows, and a
+        // thumb computed from the top row alone would tick from row to row under a smooth drag.
+        double topRow = top;
+        if (ScrollFraction != null)
+            try { double f = ScrollFraction(); if (!double.IsNaN(f)) topRow = Math.Clamp(f, 0, 1) * maxTop; }
+            catch { }
+
         int h = Math.Max(1, ClientSize.Height - Pad * 2);
-        // The view's OWN fraction when it can report one: a pixel-scrolled grid sits between rows,
-        // and a thumb computed from the top row would tick from row to row under a smooth drag.
-        double f = double.NaN;
-        if (ScrollFraction != null) try { f = ScrollFraction(); } catch { f = double.NaN; }
-        if (double.IsNaN(f)) f = top / (double)maxTop;
-        return Pad + (int)Math.Round(Math.Clamp(f, 0, 1) * (h - 1));
+        double centre = topRow + (page - 1) / 2.0;
+        double g = _rows <= 1 ? 0 : Math.Clamp(centre / (_rows - 1), 0, 1);
+        return Pad + (int)Math.Round(g * (h - 1));
     }
 
     /// <summary>Where a press or a drag at <paramref name="y"/> takes the view: exactly where the
@@ -269,13 +290,23 @@ internal sealed class GameListIndexBar : Control
     {
         if (_rows <= 0) return;
         int h = Math.Max(1, ClientSize.Height - Pad * 2);
-        double f = Math.Clamp((y - Pad) / (double)(h - 1), 0, 1);
-        // Fractional scrolling keeps a short list CONTINUOUS: mapping to a top row instead meant a
-        // 11-row grid had eight stops for a 600px strip, and the drag moved in visible jumps.
-        if (ScrollToFraction != null) { try { ScrollToFraction(f); } catch { } Invalidate(); return; }
+        // Read the pointer on the LABEL scale, so the row it names is the row under the finger — then put
+        // that row at the CENTRE of the page, which is where the thumb reports from. Drag, click, thumb
+        // and labels then all speak of the same row, and the thumb stays under the pointer.
+        double g = Math.Clamp((y - Pad) / (double)(h - 1), 0, 1);
         int page = 1;
         try { page = Math.Max(1, PageRows?.Invoke() ?? 1); } catch { }
-        try { JumpToRow?.Invoke((int)Math.Round(f * Math.Max(0, _rows - page))); } catch { }
+        int maxTop = Math.Max(0, _rows - page);
+        double topRow = Math.Clamp(g * Math.Max(0, _rows - 1) - (page - 1) / 2.0, 0, maxTop);
+        // Fractional scrolling keeps a short list CONTINUOUS: mapping to a top row instead meant a
+        // 11-row grid had eight stops for a 600px strip, and the drag moved in visible jumps.
+        if (ScrollToFraction != null)
+        {
+            try { ScrollToFraction(maxTop <= 0 ? 0 : topRow / maxTop); } catch { }
+            Invalidate();
+            return;
+        }
+        try { JumpToRow?.Invoke((int)Math.Round(topRow)); } catch { }
         Invalidate();
     }
 
@@ -501,11 +532,18 @@ internal sealed class GameListIndexBar : Control
     private void JumpTo(int i)
     {
         if (i < 0 || i >= _groups.Count) return;
-        // Scroll first: the group head goes to the TOP row (list top / poster top grid row); when
-        // the tail is shorter than a page the native clamp leaves it lower — bottom at worst,
-        // exactly the wanted exception. THEN select, so the detail pane follows and the
-        // selection code sees an already-visible item (its EnsureVisible is a no-op).
-        try { JumpToRow?.Invoke(_groups[i].Index); } catch { }
+        // Scroll first: the group head goes to the MIDDLE row of the page. Putting it at the top read
+        // badly — the position marker on the rail ended up well below the label just clicked, because the
+        // label points at the top of the view while the marker points at its centre. Near either end there
+        // is no middle to reach and the native clamp leaves the row high or low, which is the wanted
+        // exception. THEN select, so the detail pane follows and the selection code sees an
+        // already-visible item (its EnsureVisible is a no-op).
+        try
+        {
+            if (CenterRow != null) CenterRow(_groups[i].Index);
+            else JumpToRow?.Invoke(_groups[i].Index);
+        }
+        catch { }
         try { SelectRow?.Invoke(_groups[i].Index); } catch { }
         Invalidate();
     }

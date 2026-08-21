@@ -458,6 +458,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             GroupsProvider = ComputeIndexGroups,
             RowCount = () => _games.VisibleGames.Count,
             JumpToRow = r => { if (_posterMode) _poster.ScrollItemToTop(r); else _games.ScrollRowToTop(r); },
+            CenterRow = r => { if (_posterMode) _poster.ScrollItemToCenter(r); else _games.ScrollRowToCenter(r); },
             SelectRow = r =>
             {
                 if (_posterMode) _poster.SelectRange(r, r);   // fires SelectedIndexChanged → detail pane follows
@@ -4075,6 +4076,25 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 }
                 catch { return 1; }
             }
+        }
+
+        /// <summary>Bring an item's grid row to the MIDDLE of the visible rows. Same clamping story as
+        /// the list: at either end the control refuses to scroll past its range and the row lands high or
+        /// low, which is exactly what should happen there.</summary>
+        public void ScrollItemToCenter(int index)
+        {
+            if (!IsHandleCreated || VirtualListSize == 0) return;
+            index = Math.Clamp(index, 0, VirtualListSize - 1);
+            try
+            {
+                var (_, rowH) = Grid();
+                if (rowH == int.MaxValue || rowH <= 0) return;   // single row — nowhere to scroll
+                int margin = GetItemRect(0).Y + ScrollTop();
+                int visibleRows = Math.Max(1, ClientSize.Height / rowH);
+                int dy = GetItemRect(index).Y - margin - (visibleRows - 1) / 2 * rowH;
+                SendMessage(Handle, LVM_SCROLL_P, IntPtr.Zero, (IntPtr)dy);
+            }
+            catch { }
         }
 
         /// <summary>Pixel-scroll so <paramref name="index"/>'s grid row lands at the top (the

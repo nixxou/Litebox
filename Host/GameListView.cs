@@ -1018,6 +1018,15 @@ internal sealed class GameListView : ListView
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool GetScrollInfo(IntPtr h, int bar, ref SCROLLINFO si);
     private const int SIF_ALL = 0x17, SB_HORZ = 0;
 
+    /// <summary>Bring a row to the MIDDLE of the page. Near the ends there is no middle to reach:
+    /// asking for a negative top clamps to the first row, and asking past the end clamps to the last
+    /// page — the row then sits high or low, which is the only sensible answer there.</summary>
+    public void ScrollRowToCenter(int row)
+    {
+        if (!IsHandleCreated || _view.Length == 0) return;
+        ScrollRowToTop(row - (Math.Max(1, RowsPerPage) - 1) / 2);
+    }
+
     /// <summary>Scroll by N wheel lines (negative = up). The index bar drives the wheel through
     /// this instead of forwarding WM_MOUSEWHEEL to the list: with its scrollbar style stripped the
     /// list is free to ignore that message, and a wheel over the strip did nothing at all.</summary>

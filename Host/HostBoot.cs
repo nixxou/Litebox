@@ -240,6 +240,39 @@ internal static class HostBoot
             Diag.ModelProbe.Export(GetArg(args, "--model-export") ?? Path.Combine(coreDir, "model-export"));
             return 0;
         }
+        // --imgwrite-selftest <dir>: the two rules the add-image write path must hold — never overwrite
+        // a name already taken, never leave a format the library cannot read.
+        if (args.Contains("--imgwrite-selftest"))
+        {
+            string dir = GetArg(args, "--imgwrite-selftest") ?? Path.Combine(Path.GetTempPath(), "litebox-imgwrite");
+            string lbR = Path.GetFullPath(Path.Combine(coreDir, ".."));
+            try { Media.MediaResolver.Init(lbR); } catch { }
+            try { EditGameWindow.DiagImageWriteSelfTest(dir); }
+            catch (Exception ex) { Console.WriteLine("[imgwrite] " + ex.Message); }
+            return 0;
+        }
+        // --addimage-probe <image> <out.png>: open the Add-image dialog on a local file and screenshot
+        // it — the crop frame and the size row are pure paint/layout, so they must be LOOKED at.
+        if (args.Contains("--addimage-probe"))
+        {
+            int ai = Array.IndexOf(args, "--addimage-probe");
+            string src = ai + 1 < args.Length ? args[ai + 1] : "";
+            string outPng = ai + 2 < args.Length ? args[ai + 2] : Path.Combine(coreDir, "addimage-probe.png");
+            var th = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    Application.EnableVisualStyles();
+                    var types = new[] { "Box - Front", "Box - Back", "Screenshot - Gameplay" };
+                    var regions = new[] { "none", "World", "North America", "Europe" };
+                    AddImageDialog.ProbeShot(src, outPng, types, regions);
+                }
+                catch (Exception ex) { Console.WriteLine("[addimg] " + ex.Message); }
+            });
+            th.SetApartmentState(System.Threading.ApartmentState.STA);
+            th.Start(); th.Join(TimeSpan.FromSeconds(30));
+            return 0;
+        }
         // --checkbox-probe <out.png>: render the themed checkbox in every state on the dark canvas —
         // the only way to LOOK at a paint-only change without driving the real UI by hand.
         if (args.Contains("--checkbox-probe"))

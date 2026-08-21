@@ -463,8 +463,7 @@ internal sealed partial class EditGameWindow
         // Pick TYPE + REGION first (seeded from the image on screen), THEN the file(s).
         string defType = _imgNavList.Count > 0 ? _imgNavList[_imgNavIdx].Type : "Box - Front";
         string defRegion = _imgNavList.Count > 0 ? _imgNavList[_imgNavIdx].Region : "World";
-        if (!ImgPickTypeRegion(defType, defRegion, out string type, out string region)) return;
-        if (!ImgCopyFilesInto(g, plat, idStr, sani, type, region, out string? lastTarget)) return;
+        if (!ImgAddThrough(defType, defRegion, null, g, plat, idStr, sani, out string? lastTarget)) return;
 
         ImgAfterOp(plat);
         int at = lastTarget == null ? -1 : _imgNavList.FindIndex(f => string.Equals(f.Path, lastTarget, StringComparison.OrdinalIgnoreCase));
@@ -482,70 +481,157 @@ internal sealed partial class EditGameWindow
         string sani = MediaResolver.Sanitize(Safe(() => g.Title) ?? "");
         var types = ImgTypesOf(regroupement);
         if (types.Count == 0) return;
-        if (!ImgPickTypeRegion(types[0], "World", out string type, out string region, types)) return;
-        if (!ImgCopyFilesInto(g, plat, idStr, sani, type, region, out _)) return;
+        if (!ImgAddThrough(types[0], "World", types, g, plat, idStr, sani, out _)) return;
         ImgAfterOp(plat);   // rebuilds the current category page (or the matrix modal, via ImgAfterOp's hook)
     }
 
-    /// <summary>Prompt for image file(s) and copy them into the type/region folder (GUID-aware naming, next
-    /// number on disk). Returns true if at least one landed; <paramref name="lastTarget"/> = the last copied path.</summary>
-    private bool ImgCopyFilesInto(IGame g, string plat, string idStr, string sani, string type, string region, out string? lastTarget)
+    /// <summary>The Add flow: one window for the slot (type + region), the source (file or URL) and the
+    /// optional crop/resize, then the write. A processed image arrives as bytes and is written directly;
+    /// untouched files are copied byte-for-byte, which is what keeps a plain "add these five scans" from
+    /// re-encoding anything. <paramref name="allowedTypes"/> restricts the Type dropdown to a category's
+    /// own types (the category page's Add), null offers them all.</summary>
+    private bool ImgAddThrough(string defType, string defRegion, IReadOnlyList<string>? allowedTypes,
+                               IGame g, string plat, string idStr, string sani, out string? lastTarget)
     {
         lastTarget = null;
-        string? baseFolder = MediaResolver.TypeFolder(plat, type);
+        var typeList = allowedTypes is { Count: > 0 } ? allowedTypes : MediaResolver.ImageTypeNames();
+        var res = AddImageDialog.Ask(this, defType, defRegion, typeList, ImgMenuRegions());
+        if (res == null) return false;
+
+        string? baseFolder = MediaResolver.TypeFolder(plat, res.Type);
         if (string.IsNullOrEmpty(baseFolder)) { MessageBox.Show(this, "Couldn't resolve the image folder.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning); return false; }
-        string folder = ImgSearchDir(baseFolder, region);
-
-        using var ofd = new OpenFileDialog { Title = "Add image(s)", Filter = "Images (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg", CheckFileExists = true, Multiselect = true };
-        if (ofd.ShowDialog(this) != DialogResult.OK) return false;
-
-        int ok = 0;
+        string folder = ImgSearchDir(baseFolder, res.Region);
         try { Directory.CreateDirectory(folder); } catch { }
-        foreach (var file in ofd.FileNames)
+
+        if (res.Processed != null)
         {
             try
             {
-                string prefix = ImgPrefix(plat, idStr, sani, file, folder);
-                int num = ImgMaxNum(folder, prefix) + 1;
-                string target = Path.Combine(folder, $"{prefix}-{num:D2}{Path.GetExtension(file)}");
-                File.Copy(file, target, overwrite: false);
-                lastTarget = target; ok++;
+                lastTarget = ImgWriteNew(folder, ImgPrefix(plat, idStr, sani, null, folder), res.Extension,
+                                         fs => fs.Write(res.Processed, 0, res.Processed.Length));
+                return true;
+            }
+            catch (Exception ex)
+            { MessageBox.Show(this, "Add image failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); return false; }
+        }
+
+        int ok = 0;
+        foreach (var file in res.Files)
+        {
+            try
+            {
+                lastTarget = ImgPlaceSourceFile(file, folder, ImgPrefix(plat, idStr, sani, file, folder));
+                ok++;
             }
             catch (Exception ex) { MessageBox.Show(this, "Add image failed:\n" + Path.GetFileName(file) + "\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
         return ok > 0;
     }
 
-    /// <summary>Type + Region picker (before the file dialog), seeded with the current image's slot. When
-    /// <paramref name="allowedTypes"/> is given, the Type dropdown is restricted to those (used by a category
-    /// page's Add button, which only offers the types of that regroupement).</summary>
-    private bool ImgPickTypeRegion(string defType, string defRegion, out string type, out string region, IReadOnlyList<string>? allowedTypes = null)
+    /// <summary>Put one picked file into the library and return where it landed. A format nothing
+    /// downstream reads is worse than a refusal — MediaResolver and the game cache only ever look at
+    /// .jpg/.jpeg/.png — so a BMP is re-encoded as PNG rather than copied verbatim into invisibility.
+    /// Anything already readable is copied BYTE FOR BYTE: re-encoding a file the user chose would lose
+    /// quality for nothing.</summary>
+    private static string ImgPlaceSourceFile(string file, string folder, string prefix)
     {
-        type = defType; region = defRegion;
-        using var f = NewDialog("Image type & region", 440, 210);
-        var lblT = new Label { Text = "Type:", Location = new Point(S(14), S(18)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
-        var cboT = new ComboBox { Location = new Point(S(110), S(15)), Width = S(304), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat };
-        var typeList = (allowedTypes != null && allowedTypes.Count > 0) ? allowedTypes : MediaResolver.ImageTypeNames();
-        foreach (var t in typeList) cboT.Items.Add(t);
-        if (cboT.Items.Count > 0) { int di = cboT.Items.IndexOf(defType); cboT.SelectedIndex = di >= 0 ? di : 0; }
+        string ext = Path.GetExtension(file);
+        if (!MediaResolver.ImageExts.Contains(ext))
+            return ImgWriteNew(folder, prefix, ".png", fs =>
+            {
+                using var src = Image.FromFile(file);
+                using var copy = new Bitmap(src);   // detach: Image.FromFile keeps the file locked
+                copy.Save(fs, System.Drawing.Imaging.ImageFormat.Png);
+            });
 
-        var lblR = new Label { Text = "Region:", Location = new Point(S(14), S(58)), AutoSize = true, ForeColor = Fg, BackColor = Bg };
-        var cboR = new ComboBox { Location = new Point(S(110), S(55)), Width = S(304), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat };
-        foreach (var r in ImgMenuRegions()) cboR.Items.Add(r == "none" ? "No Region" : r);
-        int dr = ImgMenuRegions().FindIndex(r => string.Equals(r, defRegion, StringComparison.OrdinalIgnoreCase));
-        cboR.SelectedIndex = dr >= 0 ? dr : 0;
+        return ImgWriteNew(folder, prefix, ext, fs =>
+        {
+            using var input = File.OpenRead(file);
+            input.CopyTo(fs);
+        });
+    }
 
-        bool okd = false;
-        DialogButtons(f, out var ok, out var cancel);
-        ok.Click += (_, _) => { okd = true; f.DialogResult = DialogResult.OK; f.Close(); };
-        cancel.Click += (_, _) => { f.DialogResult = DialogResult.Cancel; f.Close(); };
-        f.Controls.Add(lblT); f.Controls.Add(cboT); f.Controls.Add(lblR); f.Controls.Add(cboR);
-        if (f.ShowDialog(this) != DialogResult.OK || !okd) return false;
+    /// <summary>Self-test for the two write rules (env LB_IMGWRITE_SELFTEST=&lt;dir&gt;): a name already
+    /// taken must not be overwritten, and a format the library cannot read must not land as-is.</summary>
+    internal static void DiagImageWriteSelfTest(string dir)
+    {
+        Directory.CreateDirectory(dir);
+        foreach (var f in Directory.GetFiles(dir)) { try { File.Delete(f); } catch { } }
 
-        type = cboT.SelectedItem as string ?? defType;
-        var regions = ImgMenuRegions();
-        region = (cboR.SelectedIndex >= 0 && cboR.SelectedIndex < regions.Count) ? regions[cboR.SelectedIndex] : defRegion;
-        return true;
+        // 1) Collision: two slots already taken, plus one the scan cannot predict.
+        using (var bmp = new Bitmap(4, 4)) { bmp.Save(Path.Combine(dir, "Probe-01.png"), System.Drawing.Imaging.ImageFormat.Png); }
+        using (var bmp = new Bitmap(4, 4)) { bmp.Save(Path.Combine(dir, "Probe-02.png"), System.Drawing.Imaging.ImageFormat.Png); }
+        string first;
+        using (var s = ImgCreateNext(dir, "Probe", ".png", out first)) s.WriteByte(0);
+        Console.WriteLine($"[imgwrite] next free slot = {Path.GetFileName(first)} (expect Probe-03.png)");
+        Console.WriteLine($"[imgwrite] Probe-01 still {new FileInfo(Path.Combine(dir, "Probe-01.png")).Length} bytes (expect > 1, i.e. untouched)");
+
+        // 2) BMP in, PNG out — and the bytes must really be a PNG, not a renamed BMP.
+        string bmpPath = Path.Combine(dir, "source.bmp");
+        using (var b = new Bitmap(8, 6)) { b.SetPixel(0, 0, Color.Red); b.Save(bmpPath, System.Drawing.Imaging.ImageFormat.Bmp); }
+        string landed = ImgPlaceSourceFile(bmpPath, dir, "Conv");
+        var head = File.ReadAllBytes(landed);
+        bool isPng = head.Length > 8 && head[0] == 0x89 && head[1] == 0x50 && head[2] == 0x4E && head[3] == 0x47;
+        Console.WriteLine($"[imgwrite] bmp landed as {Path.GetFileName(landed)} · PNG signature={isPng} · readable-by-resolver={MediaResolver.ImageExts.Contains(Path.GetExtension(landed))}");
+
+        // 3) A supported format stays byte-for-byte.
+        string src = Path.Combine(dir, "keep.png");
+        using (var b = new Bitmap(5, 5)) b.Save(src, System.Drawing.Imaging.ImageFormat.Png);
+        string kept = ImgPlaceSourceFile(src, dir, "Keep");
+        Console.WriteLine($"[imgwrite] png copied identical={File.ReadAllBytes(src).SequenceEqual(File.ReadAllBytes(kept))} -> {Path.GetFileName(kept)}");
+
+        // 4) A FAILED write must leave nothing: the reserved name has to disappear, or — since the
+        //    resolver prefers the lowest number — a truncated "-01" would mask every later retry.
+        bool threw = false;
+        try { ImgWriteNew(dir, "Fail", ".png", fs => { fs.WriteByte(1); throw new IOException("simulated disk failure"); }); }
+        catch (IOException) { threw = true; }
+        bool leftover = Directory.GetFiles(dir, "Fail-*").Length > 0;
+        Console.WriteLine($"[imgwrite] failed write threw={threw} leftover={leftover} (expect True/False)");
+        string retry = ImgWriteNew(dir, "Fail", ".png", fs => fs.WriteByte(2));
+        Console.WriteLine($"[imgwrite] retry after failure -> {Path.GetFileName(retry)} (expect Fail-01.png, i.e. no corpse in front of it)");
+    }
+
+    /// <summary>Reserve the next free "&lt;prefix&gt;-NN&lt;ext&gt;" in <paramref name="dir"/> and open it for
+    /// writing. The number comes from a directory scan, which is a GUESS the moment anything else can
+    /// write there (LaunchBox, another LiteBox operation) — so the file is CREATED atomically and a
+    /// taken name simply moves to the next. The alternative, computing a name and then writing to it,
+    /// truncates whatever arrived in between; File.Copy refuses that, and a byte-writing path must not
+    /// be the one place in the flow that silently replaces a user's image.</summary>
+    /// <summary>Reserve a slot, write it, and leave NOTHING behind if the write fails. The reservation
+    /// has to create the file to be atomic, so a failure half-way (disk full, unreadable source, a
+    /// decode that gives up) would otherwise leave a truncated "-01" — and MediaResolver prefers the
+    /// LOWEST number, so that corpse would mask every later retry at "-02" instead of being replaced.
+    /// The user would see a broken image, fix it, and still see a broken image.
+    ///
+    /// Delete-on-failure rather than write-to-temp-then-promote: the two cover the same real failures,
+    /// and only a crash mid-write separates them — which would leave an orphan temp file instead of a
+    /// truncated image, trading one kind of litter for another. Flushed to disk before the handle
+    /// closes, so "the write returned" means the bytes are down.</summary>
+    private static string ImgWriteNew(string dir, string prefix, string ext, Action<FileStream> write)
+    {
+        var fs = ImgCreateNext(dir, prefix, ext, out string target);
+        try
+        {
+            using (fs) { write(fs); fs.Flush(true); }
+            return target;
+        }
+        catch
+        {
+            try { File.Delete(target); } catch { }
+            throw;
+        }
+    }
+
+    private static FileStream ImgCreateNext(string dir, string prefix, string ext, out string target)
+    {
+        int start = ImgMaxNum(dir, prefix) + 1;
+        for (int n = start; n < start + 500; n++)
+        {
+            string path = Path.Combine(dir, $"{prefix}-{n:D2}{ext}");
+            try { var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None); target = path; return fs; }
+            catch (IOException) when (File.Exists(path)) { }   // taken since the scan — try the next
+        }
+        throw new IOException($"No free slot for \"{prefix}-NN{ext}\" in {dir}.");
     }
 
     private string? ImgPickType(string defaultType)

@@ -286,7 +286,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private SplitContainer _innerSplit;          // middle list | right details — % persisted
     // Slim scrollbars, one switch per host, ini-only (no Options row: these are for advanced users, and
     // the shipped answer is yes). Read once because each decides how its control is BUILT.
-    private bool _slimDetail, _slimNotes, _slimTree;
+    private bool _slimDetail, _slimNotes, _slimTree, _slimList;
+    private SlimScrollBar _listHBar;              // the game list keeps only a horizontal one
 
     private SlimScrollPanel _detailHost;          // scroll viewport hosting the detail grid (slim bar when content overflows)
     private SlimScrollBar _detailBar;             // the 4px overlay standing in for the native 17px one
@@ -386,6 +387,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _slimDetail = _cfg.GetBool("SlimScrollDetail", true);
         _slimNotes = _cfg.GetBool("SlimScrollNotes", true);
         _slimTree = _cfg.GetBool("SlimScrollTree", true);
+        _slimList = _cfg.GetBool("SlimScrollList", true);
         _zoom = Math.Clamp(_cfg.GetInt("ZoomPercent", 100) / 100.0, 0.5, 2.0);   // read BEFORE BuildPoster so its image list is sized for the saved zoom
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
         _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
@@ -470,6 +472,19 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             ScrollLines = n => { if (_posterMode) _poster.ScrollLines(n); else _games.ScrollLines(n); },
         };
         inner.Panel1.Controls.Add(_gameIndex);
+        if (_slimList)
+        {
+            // Only the horizontal one: the list's vertical scrolling belongs to the index rail on the
+            // right, which is a scrollbar in its own right and already owns that job.
+            _games.HideHScroll = true;
+            _listHBar = new SlimScrollBar(vertical: false) { WheelStep = 48 };
+            inner.Panel1.Controls.Add(_listHBar);
+            _listHBar.BringToFront();
+            _listHBar.ScrollTo += x => { try { _games.ScrollHTo(x); } catch { } };
+            _games.Scrolled += SyncListBar;
+            _games.SizeChanged += (_, _) => SyncListBar();
+            _games.LocationChanged += (_, _) => SyncListBar();
+        }
         _gameIndex.BringToFront();   // above both views — its hover expansion overlays them
         _games.ViewChanged += () => { if (_gameIndex.Visible) _gameIndex.RefreshGroups(); };
         _games.Scrolled += () => { if (_gameIndex.Visible) _gameIndex.Invalidate(); };   // keep the thumb honest
@@ -3407,6 +3422,26 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // OLV coalesces SelectionChanged (fires ~½s after SetObjects), so a node
     // click would otherwise clear the pane just after ShowNodeDetails filled it.
     // When nothing is selected in the list, keep showing the current node.
+    /// <summary>Hand the list's horizontal range to its overlay bar. The wheel never reaches this one
+    /// unless the pointer is on it (SlimScrollBar's router asks the OS what is under the cursor), so a
+    /// notch anywhere over the list still goes to the list, and scrolls it vertically.</summary>
+    private void SyncListBar()
+    {
+        if (!_slimList || _listHBar == null || _games == null || _games.IsDisposed) return;
+        try
+        {
+            _listHBar.Edge = _games.Bounds;
+            if (_games.HScrollInfo(out int page, out int content, out int pos))
+            {
+                _listHBar.SetRange(page, content, pos);
+                if (_listHBar.Visible) _listHBar.Reposition();
+            }
+            else _listHBar.SetRange(0, 0, 0);
+
+        }
+        catch { }
+    }
+
     private void OnGameSelectionChanged()
     {
         // Hand the selection to the serialized loader instead of loading on the UI thread (or spawning
@@ -4923,6 +4958,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             _games.Visible = false;          // hide the list behind: the poster's left margin would reveal it
             _poster.Visible = true; _poster.BringToFront();
             _gameIndex?.BringToFront();   // the strip stays above whichever view is frontmost
+            if (_listHBar != null) _listHBar.Visible = false;   // belongs to the list, which is not on screen
             LayoutPoster();
             try { ApplyDarkScroll(_poster); } catch { }
             try { _poster.ReassertScrollHiding(); } catch { }   // the theme pass can resurface the bar
@@ -4933,6 +4969,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             _poster.Visible = false; _games.Visible = true; _games.BringToFront();
             _gameIndex?.BringToFront();   // above the list too — else the hover expansion unfolds UNDERNEATH it
+            // ...and the list's own bar with it: BringToFront on the list just put it BEHIND the list,
+            // where it is perfectly present and perfectly invisible.
+            _listHBar?.BringToFront();
+            SyncListBar();
             try { ActiveControl = _games; _games.Focus(); } catch { }
             // Leaving the poster RELEASES its image memory outright (user decision): a list-mode session
             // should not keep hundreds of MB of tiles idle for a view that is not on screen. Same full

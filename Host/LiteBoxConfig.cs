@@ -123,6 +123,7 @@ internal sealed class LiteBoxConfig
         _kv["SlimScrollDetail"] = "true";
         _kv["SlimScrollNotes"] = "true";
         _kv["SlimScrollTree"] = "true";
+        _kv["SlimScrollList"] = "true";
         _kv["PosterSelectionPlate"] = "true";
         _kv["DebugLog"] = "false";
         try
@@ -167,6 +168,9 @@ internal sealed class LiteBoxConfig
             sb.AppendLine(";                         the native bar being shown PERMANENTLY there, even over text that fits.");
             sb.AppendLine("; SlimScrollTree        : same, for the platform tree on the left. One switch for both of its");
             sb.AppendLine(";                         bars: they are hidden by the same change, and cannot be split.");
+            sb.AppendLine("; SlimScrollList        : same, for the game list in the middle — its horizontal bar only.");
+            sb.AppendLine(";                         The list scrolls vertically through the A-Z index rail on its right,");
+            sb.AppendLine(";                         which is already a scrollbar of its own.");
             sb.AppendLine("; PosterSelectionPlate  : in poster view, selecting a game colours the tile BACKGROUND and");
             sb.AppendLine(";                         leaves the artwork alone, instead of Windows tinting the whole tile");
             sb.AppendLine(";                         blue. Set false for the plain Windows highlight.");
@@ -192,6 +196,7 @@ internal sealed class LiteBoxConfig
             sb.AppendLine($"SlimScrollDetail={_kv["SlimScrollDetail"]}");
             sb.AppendLine($"SlimScrollNotes={_kv["SlimScrollNotes"]}");
             sb.AppendLine($"SlimScrollTree={_kv["SlimScrollTree"]}");
+            sb.AppendLine($"SlimScrollList={_kv["SlimScrollList"]}");
             sb.AppendLine($"PosterSelectionPlate={_kv["PosterSelectionPlate"]}");
             sb.AppendLine($"GameRunningText={_kv["GameRunningText"]}");
             sb.AppendLine($"GameRunningColor={_kv["GameRunningColor"]}");

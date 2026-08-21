@@ -74,6 +74,7 @@ internal sealed class GameListView : ListView
     private const int WM_NCCALCSIZE = 0x83;
     private const int GWL_STYLE = -16;
     private const int WS_VSCROLL = 0x00200000;
+    private const int WS_HSCROLL = 0x00100000;
     private const int SB_VERT = 1;
     private const int LVM_SETITEMSTATE = LVM_FIRST + 43;
     private const int LVM_SETEXTENDEDLISTVIEWSTYLE = LVM_FIRST + 54;
@@ -220,6 +221,28 @@ internal sealed class GameListView : ListView
     private const int FitCandidates = 8;   // longest-by-length cells kept per column as measure candidates
     private const int FitPad = 14;         // cell padding + a little slack so nothing truncates
     private const int MinCol = 24;         // never collapse a visible column below this
+    private const int FitSlack = 1;        // stay one pixel inside the client — see Slack()
+
+    /// <summary>How much of the client width the columns must leave alone.
+    ///
+    /// One pixel because comctl raises the horizontal scrollbar when the columns total the client width
+    /// EXACTLY — measured: sumCols == client == 1605, bar up, nothing to scroll.
+    ///
+    /// Plus the vertical scrollbar when the control believes it has one. With HideVScroll on we strip the
+    /// style from WM_NCCALCSIZE, so ClientSize.Width never shrinks — but comctl decides the HORIZONTAL bar
+    /// against its own idea of the usable width, which is still short by a scrollbar. That gap is invisible
+    /// to every managed measurement, and is why filling ClientSize.Width exactly always left a stray bar.</summary>
+    private int Slack()
+    {
+        int s = FitSlack;
+        if (!_hideVScroll || !IsHandleCreated) return s;
+        // NOT the WS_VSCROLL style bit: we strip it from WM_NCCALCSIZE, so by the time this runs it is
+        // gone and comctl has yet to put it back — it reads clean whatever the truth is. Ask instead how
+        // many rows fit in a page, which is the same question comctl answers for itself.
+        int perPage = (int)SendMessage(Handle, LVM_GETCOUNTPERPAGE, IntPtr.Zero, IntPtr.Zero);
+        if (perPage > 0 && VirtualListSize > perPage) s += SystemInformation.VerticalScrollBarWidth;
+        return s;
+    }
     private bool _autoFitting;             // true while WE assign header widths → ignore our own ColumnWidthChanged
     private static readonly Comparison<string> ByLenDesc = (a, b) => b.Length.CompareTo(a.Length);
 
@@ -247,6 +270,9 @@ internal sealed class GameListView : ListView
         _autoFitting = true;
         try { foreach (var c in _visCols) if (c.Header != null) c.Header.Width = c.Width > 0 ? c.Width : 100; }
         finally { _autoFitting = false; }
+        // Column widths just moved, so the horizontal range did too — whoever draws a scrollbar for it
+        // needs to hear about that as much as about an actual scroll.
+        Scrolled?.Invoke();
     }
 
     // Display option "Two-line rows" (default on). On → rows are tall enough that the native ListView
@@ -560,7 +586,11 @@ internal sealed class GameListView : ListView
             if (stretch?.Header != null)
             {
                 int baseW = stretch.Width > 0 ? stretch.Width : 100;
-                int w = Math.Max(baseW, ClientSize.Width - othersWidth);        // B: fill leftover, floored at user width
+                // FitSlack, and it is not cosmetic: comctl raises the horizontal scrollbar when the columns
+                // total the client width EXACTLY — measured, sumCols == client == 1605 with the bar up and
+                // nothing to scroll. Filling one pixel short is the difference between a clean list and a
+                // scrollbar over content that fits.
+                int w = Math.Max(baseW, ClientSize.Width - othersWidth - Slack());   // B: fill leftover, floored at user width
                 if (stretch.Header.Width != w) stretch.Header.Width = w;
             }
         }
@@ -934,6 +964,60 @@ internal sealed class GameListView : ListView
         SendMessage(Handle, LVM_SCROLL, IntPtr.Zero, (IntPtr)((row - top) * rowH));
     }
 
+    private bool _hideHScroll;
+
+    /// <summary>Take the native HORIZONTAL bar away so a slim overlay can stand in for it. Same trick as
+    /// HideVScroll: the style has to be stripped from WM_NCCALCSIZE, because the control puts it back the
+    /// moment the columns change.</summary>
+    [System.ComponentModel.Browsable(false)]
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool HideHScroll
+    {
+        get => _hideHScroll;
+        set
+        {
+            if (_hideHScroll == value) return;
+            _hideHScroll = value;
+            if (!IsHandleCreated) return;
+            try
+            {
+                ShowScrollBar(Handle, SB_HORZ, !value);
+                SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>The horizontal scroll range, straight from the control. Still answered once the style is
+    /// stripped — verified on the tree, which needed the same thing — and false when there is nothing to
+    /// scroll, which is what tells the overlay to hide.</summary>
+    public bool HScrollInfo(out int page, out int content, out int pos)
+    {
+        page = content = pos = 0;
+        if (!IsHandleCreated) return false;
+        var si = new SCROLLINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<SCROLLINFO>(), fMask = SIF_ALL };
+        if (!GetScrollInfo(Handle, SB_HORZ, ref si)) return false;
+        page = si.nPage; content = si.nMax - si.nMin + 1; pos = si.nPos;
+        return page > 0 && content > page;
+    }
+
+    /// <summary>Move the horizontal viewport to an absolute position, in the same pixels the range uses.
+    /// LVM_SCROLL rather than WM_HSCROLL: it is the control's own primitive and does not care whether a
+    /// scrollbar style is present.</summary>
+    public void ScrollHTo(int x)
+    {
+        if (!IsHandleCreated) return;
+        if (!HScrollInfo(out _, out _, out int cur)) return;
+        SendMessage(Handle, LVM_SCROLL, (IntPtr)(x - cur), IntPtr.Zero);
+        Scrolled?.Invoke();
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct SCROLLINFO { public int cbSize, fMask, nMin, nMax, nPage, nPos, nTrackPos; }
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool GetScrollInfo(IntPtr h, int bar, ref SCROLLINFO si);
+    private const int SIF_ALL = 0x17, SB_HORZ = 0;
+
     /// <summary>Scroll by N wheel lines (negative = up). The index bar drives the wheel through
     /// this instead of forwarding WM_MOUSEWHEEL to the list: with its scrollbar style stripped the
     /// list is free to ignore that message, and a wheel over the strip did nothing at all.</summary>
@@ -960,12 +1044,31 @@ internal sealed class GameListView : ListView
 
     protected override void WndProc(ref Message m)
     {
-        if (_hideVScroll && m.Msg == WM_NCCALCSIZE && IsHandleCreated)
+        if ((_hideVScroll || _hideHScroll) && m.Msg == WM_NCCALCSIZE && IsHandleCreated)
         {
             int style = GetWindowLong(Handle, GWL_STYLE);
-            if ((style & WS_VSCROLL) != 0) SetWindowLong(Handle, GWL_STYLE, style & ~WS_VSCROLL);
+            int want = style;
+            if (_hideVScroll) want &= ~WS_VSCROLL;
+            if (_hideHScroll) want &= ~WS_HSCROLL;
+            if (want != style) SetWindowLong(Handle, GWL_STYLE, want);
         }
-        if (m.Msg is 0x020A /*WM_MOUSEWHEEL*/ or 0x0115 /*WM_VSCROLL*/ or 0x0100 /*WM_KEYDOWN*/)
+        // The wheel, by hand, whenever the scrollbar style is stripped: the list then IGNORES
+        // WM_MOUSEWHEEL outright — measured, the message arrives and the top row does not move — the same
+        // way the poster grid and the source tree do. ScrollLines already exists for the index bar, which
+        // had to solve this for its own lane; the list body needs it just as much.
+        if (m.Msg == 0x020A /*WM_MOUSEWHEEL*/ && _hideVScroll)
+        {
+            int notches = unchecked((short)((long)m.WParam >> 16)) / 120;
+            if (notches != 0)
+            {
+                int lines = SystemInformation.MouseWheelScrollLines;
+                if (lines <= 0) lines = 3;   // "one screen at a time" (-1) — treat as the usual default
+                ScrollLines(-notches * lines);
+            }
+            Scrolled?.Invoke();
+            return;
+        }
+        if (m.Msg is 0x020A /*WM_MOUSEWHEEL*/ or 0x0115 /*WM_VSCROLL*/ or 0x0114 /*WM_HSCROLL*/ or 0x0100 /*WM_KEYDOWN*/)
             Scrolled?.Invoke();
         if (m.Msg == WM_CONTEXTMENU && IsHandleCreated)
         {

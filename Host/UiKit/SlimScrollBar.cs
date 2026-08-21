@@ -115,9 +115,14 @@ internal sealed class SlimScrollBar : Control
             using (var tb = new SolidBrush(TrackColour))
                 g.FillRectangle(tb, ClientRectangle);
 
+        // The 1px inset is only affordable once the bar is wide enough to spare it. At rest it left a thumb
+        // ONE pixel across, which the rounding then antialiased into a washed-out smear — measured at
+        // #494952 where the thumb colour is #68687 0. The horizontal bar, being a thin line along the
+        // bottom edge, was invisible outright.
+        int inset = Thickness >= 6 ? 1 : 0;
         var r = _vertical
-            ? new Rectangle(1, pos, Math.Max(1, Width - 2), len)
-            : new Rectangle(pos, 1, len, Math.Max(1, Height - 2));
+            ? new Rectangle(inset, pos, Math.Max(1, Width - inset * 2), len)
+            : new Rectangle(pos, inset, len, Math.Max(1, Height - inset * 2));
         int radius = Math.Max(1, (_vertical ? r.Width : r.Height) / 2);
         var colour = _dragging ? ThumbDrag : _hover ? ThumbHover : ThumbRest;
         using var brush = new SolidBrush(colour);

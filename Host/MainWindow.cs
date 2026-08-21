@@ -652,8 +652,24 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 else
                 {
                     Console.WriteLine($"[imgdl] === {Safe(() => g.Title)} · {cat} ===");
+                    // What the poster resolves for that slot, before and immediately after — the same call
+                    // the tiles make, so this IS the bug the media-cache patch fixes: a download used to
+                    // leave "after" identical to "before" until something rebuilt the whole platform.
+                    string before = CacheSourceFor(g, cat);
+                    Console.WriteLine($"[imgdl] slot before: {before ?? "(none)"}");
                     try { EditGameWindow.DiagDownloadSlot(g, cat, this); }
                     catch (Exception ex) { Console.WriteLine("[imgdl] driver: " + ex); }
+                    string after = CacheSourceFor(g, cat);
+                    Console.WriteLine($"[imgdl] slot after:  {after ?? "(none)"}");
+                    // A third field "purge" deletes what the run just downloaded and re-resolves: it takes
+                    // the library back where it was, and checks the other direction of the patch on the way.
+                    if (parts.Length > 2 && parts[2].Equals("purge", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrEmpty(after) && !string.Equals(after, before, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { File.Delete(after); } catch (Exception ex) { Console.WriteLine("[imgdl] purge: " + ex.Message); }
+                        Media.GameCacheBridge.PatchImage(after, out _);
+                        Console.WriteLine($"[imgdl] slot purged: {CacheSourceFor(g, cat) ?? "(none)"}");
+                    }
                 }
                 Console.WriteLine("[imgdl] done");
                 BeginInvoke((Action)Close);

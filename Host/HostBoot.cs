@@ -926,6 +926,16 @@ internal static class HostBoot
             store?.LogStats();
             if (args.Contains("--gcdump")) LbApiHost.Host.Diag.GameCacheProbe.Dump();
 
+            // --patch-selftest [<game title>]: the incremental media-cache patch, checked against a real
+            // scan of the same platform. Writes and removes its own 2×2 PNGs in an empty slot.
+            if (args.Contains("--patch-selftest"))
+                LbApiHost.Host.Gc.GameCachePatchSelfTest.Run(GetArg(args, "--patch-selftest"));
+
+            // --patch-bench [platform]: per-file patch vs the one platform sweep it replaces — the number
+            // that decides whether a bulk edit session is better off patching or re-scanning.
+            if (args.Contains("--patch-bench"))
+                LbApiHost.Host.Gc.GameCachePatchSelfTest.Bench(GetArg(args, "--patch-bench"));
+
             if (args.Contains("--drop") && store != null)
             {
                 store.DropOptional();

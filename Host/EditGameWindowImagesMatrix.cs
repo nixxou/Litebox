@@ -545,7 +545,10 @@ internal sealed partial class EditGameWindow
         Guid.TryParse(Safe(() => g.Id) ?? "", out var id);
         var cells = new MxCell[_mxCats.Count];
 
-        bool cacheUsable = GameCacheBridge.Ready(plat) && !_imgTouchedPlatforms.Contains(plat);
+        // The cache stays usable across our own downloads: each written file is patched into it as it
+        // lands (ImgCacheTouch). Only a platform we could NOT keep in step falls back to the disk scan.
+        bool cacheUsable = GameCacheBridge.Ready(plat)
+                           && !_imgTouchedPlatforms.Contains(plat) && !_imgPatchFailed.ContainsKey(plat);
         List<ImgFile>? scan = cacheUsable ? null : ImgScan(g);   // one disk scan for the whole row
 
         for (int c = 0; c < _mxCats.Count; c++)
@@ -1040,10 +1043,9 @@ internal sealed partial class EditGameWindow
         dlg.FormClosing += (_, _) => cts.Cancel();
 
         int ok = 0, fail = 0;
-        // ImgDownloadOne is the LOW-LEVEL write (no ImgAfterOp), so it does NOT mark the platform dirty.
-        // Collect them here and merge on the UI thread — _imgTouchedPlatforms is read by MxRow while the grid
-        // repaints behind this modal, so it must not be mutated from the worker.
-        var touchedPlats = new List<string>();
+        // Nothing to collect here any more: ImgDownloadOne patches each written file into the media cache
+        // as it lands (thread-safe, and the concurrent set it reports failures into is too), so the rows
+        // below just have to be re-read — the cache they read is already right.
 
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -1055,11 +1057,7 @@ internal sealed partial class EditGameWindow
                 string plat = Safe(() => g.Platform) ?? "";
                 int dbId = Safe(() => g.LaunchBoxDbId) ?? -1;
 
-                if (ImgDownloadOne(g, web, dbId, plat))
-                {
-                    ok++;
-                    if (!string.IsNullOrEmpty(plat) && !touchedPlats.Contains(plat)) touchedPlats.Add(plat);
-                }
+                if (ImgDownloadOne(g, web, dbId, plat)) ok++;
                 else fail++;
 
                 int done = i + 1, o = ok, f = fail;
@@ -1086,11 +1084,7 @@ internal sealed partial class EditGameWindow
         dlg.ShowDialog(this);
         cts.Cancel();
 
-        // Mark the platforms dirty (UI thread): triggers the deferred GameCache rebuild on close AND makes
-        // MxRow read the disk instead of the now-stale cache.
-        foreach (var p in touchedPlats) _imgTouchedPlatforms.Add(p);
-
-        MxInvalidateAllRows();   // touched platforms → rows now re-read the disk
+        MxInvalidateAllRows();   // the rows are stale, the cache behind them is not — re-read and repaint
         MxSetStatus($"{ok} image(s) downloaded" + (fail > 0 ? $", {fail} failed" : ""));
         MessageBox.Show(this, $"Downloaded {ok} image(s)." + (fail > 0 ? $"\n{fail} failed." : ""),
             "LiteBox", MessageBoxButtons.OK, fail > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);

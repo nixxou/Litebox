@@ -36,7 +36,14 @@ internal sealed partial class EditGameWindow
     private IGame ImgGame => _imgGame ?? _editGames[0];
     private IGame? _imgGame;
 
+    /// <summary>Platforms whose media cache must be RE-SCANNED on the way out. Videos and the odd image
+    /// file the incremental patch cannot place land here; a plain image add / delete / move does not —
+    /// ImgCacheTouch has already brought the cache in line with it, file by file.</summary>
     private readonly HashSet<string> _imgTouchedPlatforms = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Same list, for the writers that run OFF the UI thread (the bulk download worker). Merged
+    /// with the one above at close; kept apart because that one is read by the matrix while it repaints.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _imgPatchFailed = new(StringComparer.OrdinalIgnoreCase);
     // Lock buttons per regroupement, for "Lock All" to re-style them all at once.
     private readonly Dictionary<string, List<(Button btn, string path)>> _imgLockBtns = new();
 
@@ -291,11 +298,10 @@ internal sealed partial class EditGameWindow
     {
         if (_readOnly || _imgSel.Count == 0) return;
         var g = ImgGame;
-        string plat = Safe(() => g.Platform) ?? "";
         var sel = ImgScan(g).Where(f => _imgSel.Contains(f.Path)).ToList();
         foreach (var img in sel) ImgDoTransfer(g, img, targetType ?? img.Type, targetRegion ?? img.Region, copy);
         _imgSel.Clear(); _imgSelMode = false;
-        ImgAfterOp(plat);
+        ImgAfterOp();
     }
 
     private void ImgBulkDelete()
@@ -304,9 +310,10 @@ internal sealed partial class EditGameWindow
         if (MessageBox.Show(this, $"Delete {_imgSel.Count} selected image(s) from disk?\n\nThis cannot be undone.",
                 "Delete selected", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
         int fail = 0;
-        foreach (var p in _imgSel.ToList()) { try { File.Delete(p); } catch { fail++; } }
+        string bulkPlat = Safe(() => ImgGame.Platform) ?? "";
+        foreach (var p in _imgSel.ToList()) { try { File.Delete(p); ImgCacheTouch(bulkPlat, p); } catch { fail++; } }
         _imgSel.Clear(); _imgSelMode = false;
-        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
+        ImgAfterOp();
         if (fail > 0) MessageBox.Show(this, $"{fail} file(s) couldn't be deleted (locked / in use).", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
@@ -315,7 +322,7 @@ internal sealed partial class EditGameWindow
         if (!ImageLockBridge.Available || _imgSel.Count == 0) return;
         foreach (var p in _imgSel.ToList()) { if (doLock) ImageLockBridge.Lock(p); else ImageLockBridge.Unlock(p); }
         _imgSelMode = false; _imgSel.Clear();
-        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");   // rebuild → lock glyphs refresh
+        ImgAfterOp();   // rebuild → lock glyphs refresh
     }
 
     private int ImgPadX => S(12);
@@ -465,7 +472,7 @@ internal sealed partial class EditGameWindow
         string defRegion = _imgNavList.Count > 0 ? _imgNavList[_imgNavIdx].Region : "World";
         if (!ImgAddThrough(defType, defRegion, null, g, plat, idStr, sani, out string? lastTarget)) return;
 
-        ImgAfterOp(plat);
+        ImgAfterOp();
         int at = lastTarget == null ? -1 : _imgNavList.FindIndex(f => string.Equals(f.Path, lastTarget, StringComparison.OrdinalIgnoreCase));
         if (at >= 0) ImgNavShow(at);
     }
@@ -482,7 +489,7 @@ internal sealed partial class EditGameWindow
         var types = ImgTypesOf(regroupement);
         if (types.Count == 0) return;
         if (!ImgAddThrough(types[0], "World", types, g, plat, idStr, sani, out _)) return;
-        ImgAfterOp(plat);   // rebuilds the current category page (or the matrix modal, via ImgAfterOp's hook)
+        ImgAfterOp();   // rebuilds the current category page (or the matrix modal, via ImgAfterOp's hook)
     }
 
     /// <summary>The Add flow: one window for the slot (type + region), the source (file or URL) and the
@@ -509,6 +516,7 @@ internal sealed partial class EditGameWindow
             {
                 lastTarget = ImgWriteNew(folder, ImgPrefix(plat, idStr, sani, null, folder), res.Extension,
                                          fs => fs.Write(res.Processed, 0, res.Processed.Length));
+                ImgCacheTouch(plat, lastTarget);
                 return true;
             }
             catch (Exception ex)
@@ -521,6 +529,7 @@ internal sealed partial class EditGameWindow
             try
             {
                 lastTarget = ImgPlaceSourceFile(file, folder, ImgPrefix(plat, idStr, sani, file, folder));
+                ImgCacheTouch(plat, lastTarget);
                 ok++;
             }
             catch (Exception ex) { MessageBox.Show(this, "Add image failed:\n" + Path.GetFileName(file) + "\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -675,7 +684,8 @@ internal sealed partial class EditGameWindow
         var old = _imgNavPic.Image; _imgNavPic.Image = null; old?.Dispose();
         try { File.Delete(img.Path); }
         catch (Exception ex) { MessageBox.Show(this, "Delete failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
-        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
+        ImgCacheTouch(Safe(() => ImgGame.Platform) ?? "", img.Path);
+        ImgAfterOp();
         ImgNavShow(Math.Min(keep, _imgNavList.Count - 1));
     }
 
@@ -687,8 +697,9 @@ internal sealed partial class EditGameWindow
                 "Remove All Images", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
         var old = _imgNavPic.Image; _imgNavPic.Image = null; old?.Dispose();
         int fail = 0;
-        foreach (var f in _imgNavList.ToList()) { try { File.Delete(f.Path); } catch { fail++; } }
-        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
+        string navPlat = Safe(() => ImgGame.Platform) ?? "";
+        foreach (var f in _imgNavList.ToList()) { try { File.Delete(f.Path); ImgCacheTouch(navPlat, f.Path); } catch { fail++; } }
+        ImgAfterOp();
         if (fail > 0) MessageBox.Show(this, $"{fail} file(s) couldn't be deleted.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
@@ -1158,7 +1169,7 @@ internal sealed partial class EditGameWindow
         bool ok;
         try { ok = ImgDownloadOne(g, w, dbId, Safe(() => g.Platform) ?? ""); }   // origin=steam → direct GET + ADS
         finally { UseWaitCursor = false; }
-        if (ok) ImgAfterOp(Safe(() => g.Platform) ?? "");
+        if (ok) ImgAfterOp();
         else MessageBox.Show(this, "The Steam download failed.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
@@ -1297,7 +1308,8 @@ internal sealed partial class EditGameWindow
 
             var wi = new MetadataDb.WebImage(dbId, m.Url, m.LbType, m.Region, m.Crc, "emumovies", 0, m.Ext, m.FileSize);
             ImageAdsWriter.WriteForDownload(target, wi, dbId, plat);
-            ImgAfterOp(plat);
+            ImgCacheTouch(plat, target);
+            ImgAfterOp();
         }
         catch (Exception ex) { MessageBox.Show(this, "Download failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
@@ -1527,7 +1539,7 @@ internal sealed partial class EditGameWindow
         try { foreach (var w in picks) { if (ImgDownloadOne(g, w, dbId, plat)) ok++; else fail++; } }
         finally { UseWaitCursor = false; }
         if (_imgSelMode) ImgExitSelectMode();
-        ImgAfterOp(plat);
+        ImgAfterOp();
         MessageBox.Show(this, $"Downloaded {ok} image(s)." + (fail > 0 ? $"\n{fail} failed." : ""),
             "LiteBox", MessageBoxButtons.OK, fail > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }
@@ -1583,6 +1595,9 @@ internal sealed partial class EditGameWindow
             string target = Path.Combine(dir, $"{prefix}-{num:D2}{ext}");
             File.WriteAllBytes(target, bytes);
             ImageAdsWriter.WriteForDownload(target, w, dbId, plat);   // ":crc32" + ":info" in ExtendDB format
+            // The low-level write is also where the cache learns about the file — this method is the one
+            // the bulk "download all missing" worker calls, thousands of times, off the UI thread.
+            ImgCacheTouch(plat, target);
             ImgDlLog($"  OK -> {target}");
             return true;
         }
@@ -1876,6 +1891,9 @@ internal sealed partial class EditGameWindow
             {
                 try { File.Delete(img.Path); } catch { }
             }
+            // Both ends of the op, once the files have settled — and here rather than in the callers: the
+            // bulk action pushes a whole selection through this one method.
+            ImgCacheTouch(plat, target, copy ? null : img.Path);
             return true;
         }
         catch { return false; }
@@ -1885,7 +1903,7 @@ internal sealed partial class EditGameWindow
     {
         if (_readOnly) return;
         var g = ImgGame;
-        if (ImgDoTransfer(g, img, targetType, targetRegion, copy)) ImgAfterOp(Safe(() => g.Platform) ?? "");
+        if (ImgDoTransfer(g, img, targetType, targetRegion, copy)) ImgAfterOp();
     }
 
     private void ImgDeleteOne(ImgFile img)
@@ -1895,7 +1913,8 @@ internal sealed partial class EditGameWindow
                 "Delete Image", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
         try { File.Delete(img.Path); }
         catch (Exception ex) { MessageBox.Show(this, "Delete failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
-        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
+        ImgCacheTouch(Safe(() => ImgGame.Platform) ?? "", img.Path);
+        ImgAfterOp();
     }
 
     private void ImgDeleteAllExcept(ImgFile keep, string regroupement)
@@ -1910,8 +1929,9 @@ internal sealed partial class EditGameWindow
         if (MessageBox.Show(this, $"This will delete {victims.Count} image(s) from the \"{regroupement}\" slot.\n\nThis cannot be undone.",
                 "Delete all except this", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
         int fail = 0;
-        foreach (var v in victims) { try { File.Delete(v.Path); } catch { fail++; } }
-        ImgAfterOp(Safe(() => ImgGame.Platform) ?? "");
+        string exceptPlat = Safe(() => ImgGame.Platform) ?? "";
+        foreach (var v in victims) { try { File.Delete(v.Path); ImgCacheTouch(exceptPlat, v.Path); } catch { fail++; } }
+        ImgAfterOp();
         if (fail > 0) MessageBox.Show(this, $"{fail} file(s) couldn't be deleted (locked / in use).", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
@@ -1929,7 +1949,8 @@ internal sealed partial class EditGameWindow
             int num = ImgMaxNum(dir, prefix) + 1;
             string target = Path.Combine(dir, $"{prefix}-{num:D2}{ext}");
             File.Move(img.Path, target, overwrite: false);
-            ImgAfterOp(Safe(() => g.Platform) ?? "");
+            ImgCacheTouch(Safe(() => g.Platform) ?? "", target, img.Path);   // a rename: both names change hands
+            ImgAfterOp();
         }
         catch (Exception ex) { MessageBox.Show(this, "Toggle GUID failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
@@ -1960,16 +1981,22 @@ internal sealed partial class EditGameWindow
                 if (int.TryParse(name.Substring(d + 1), out int n) && n >= target.Value) toShift.Add((f, n));
             }
             toShift.Sort((a, b) => b.num.CompareTo(a.num));
+            // Every name this cascade touches — the one being moved, and both ends of each bump — has to
+            // reach the media cache, or it keeps pointing at numbers that no longer exist.
+            var renamed = new List<string> { img.Path };
             foreach (var (path, num) in toShift)
             {
                 string fe = Path.GetExtension(path);
                 string on = Path.GetFileNameWithoutExtension(path);
                 int d = on.LastIndexOf('-');
                 string np = Path.Combine(dir, $"{on.Substring(0, d)}-{(num + 1):D2}{fe}");
-                if (path != np) File.Move(path, np, overwrite: true);
+                if (path != np) { File.Move(path, np, overwrite: true); renamed.Add(path); renamed.Add(np); }
             }
-            File.Move(temp, Path.Combine(dir, $"{prefix}-{target:D2}{ext}"), overwrite: true);
-            ImgAfterOp(Safe(() => g.Platform) ?? "");
+            string finalPath = Path.Combine(dir, $"{prefix}-{target:D2}{ext}");
+            File.Move(temp, finalPath, overwrite: true);
+            renamed.Add(finalPath);
+            ImgCacheTouch(Safe(() => g.Platform) ?? "", renamed.ToArray());
+            ImgAfterOp();
         }
         catch (Exception ex) { MessageBox.Show(this, "Set number failed:\n" + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
@@ -2071,11 +2098,35 @@ internal sealed partial class EditGameWindow
         f.ShowDialog(this);
     }
 
-    // ── After an op: remember the platform + rebuild the visible category ─────
-    private void ImgAfterOp(string plat)
+    /// <summary>Image file(s) we just created, overwrote or deleted — tell the media cache about them NOW.
+    /// Each one is patched into the cached array of the game it belongs to (a few microseconds, one stat),
+    /// so the very next lookup — the poster re-resolving its tiles the instant this window closes — sees
+    /// the new file. Before this, the only signal was a whole-platform re-scan queued at close, which the
+    /// repaint lost the race against every time: the tile re-cached the OLD art and kept it for the rest
+    /// of the session. What the patch cannot place (an unknown folder, a game the cache does not know yet)
+    /// falls back to that re-scan, for that platform alone.
+    ///
+    /// Pass BOTH ends of a move: the file that appeared and the one that vanished.</summary>
+    private void ImgCacheTouch(string plat, params string?[] paths)
     {
-        if (!string.IsNullOrEmpty(plat)) _imgTouchedPlatforms.Add(plat);
+        if (paths == null) return;
+        foreach (var p in paths)
+        {
+            if (string.IsNullOrEmpty(p)) continue;
+            if (GameCacheBridge.PatchImage(p, out var resolved)) continue;
+            // The patch knows which platform the file really belongs to (a move can cross platforms);
+            // the caller's is the fallback when it could not place the file at all.
+            string dirty = !string.IsNullOrEmpty(resolved) ? resolved : plat;
+            if (!string.IsNullOrEmpty(dirty)) _imgPatchFailed[dirty] = 0;
+        }
+    }
 
+    // ── After an op: rebuild the visible category ────────────────────────────
+    // The cache is NOT invalidated here: the ops themselves report their files through ImgCacheTouch,
+    // which patches it in place. Ops that touch no file at all (locking, for instance) come through
+    // here too and must not cost a platform re-scan.
+    private void ImgAfterOp()
+    {
         // The media matrix opens a category in a MODAL: the tree's selected node is still "Images", so refresh
         // the modal's page rather than the (non-existent) tree page.
         if (_imgModalHolder != null && _imgModalCat != null) { ImgModalRefresh(); return; }
@@ -2100,14 +2151,18 @@ internal sealed partial class EditGameWindow
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
-        // One de-duplicated media-cache rebuild per touched platform (ExtendDB's GameCache OR our HostGameCache
-        // port — GameCacheBridge dispatches). Non-blocking; if ExtendDB's watcher already queued it, no-op.
-        foreach (var plat in _imgTouchedPlatforms)
+        // One de-duplicated media-cache rebuild per platform we could NOT keep in step file by file
+        // (ExtendDB's GameCache OR our HostGameCache port — GameCacheBridge dispatches). Non-blocking; if
+        // ExtendDB's watcher already queued it, no-op. On the ordinary image session this loop is EMPTY:
+        // ImgCacheTouch has already patched every file into the cache, so nothing is left to re-scan — and
+        // nothing is left racing the poster's repaint either, which is the whole point.
+        foreach (var plat in _imgTouchedPlatforms.Concat(_imgPatchFailed.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             try { var p = PluginHelper.DataManager?.GetPlatformByName(plat); if (p != null) GameCacheBridge.RebuildPlatform(p); }
             catch { }
         }
         _imgTouchedPlatforms.Clear();
+        _imgPatchFailed.Clear();
         ImgStopLongPress();
         try { _imgqConn?.Dispose(); } catch { } _imgqConn = null;   // close the Image Query in-memory SQLite
         try { _imgHttp?.Dispose(); } catch { } _imgHttp = null;      // close the web-image HTTP client

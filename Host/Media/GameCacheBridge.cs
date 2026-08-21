@@ -102,6 +102,25 @@ internal static class GameCacheBridge
         }
     }
 
+    /// <summary>ONE image file was just written or deleted — bring the host media cache in line with it,
+    /// in place, instead of re-scanning its whole platform. True means the cache now agrees with the disk
+    /// (including "there was nothing to do"); false means it may not, and the caller owes
+    /// <paramref name="platform"/> a <see cref="RebuildPlatform"/> — see Gc/GameCachePatch for the rules.
+    ///
+    /// Why the caller cannot just rebuild and move on: the rebuild is asynchronous, and the UI re-resolves
+    /// its art the instant the editor closes — through a cache that has not been re-scanned yet. That race
+    /// is what left freshly downloaded posters showing the old image (or none) until the Image Group was
+    /// changed. Patching happens as the file is written, so there is nothing left to lose.</summary>
+    public static bool PatchImage(string fullPath, out string platform)
+    {
+        platform = null;
+        // Two states, and no third: LiteBox either runs the host cache or none at all. ExtendDB is not a
+        // case here — the loader never loads it (HostBoot.IntegrateExtendDb), its job being native now.
+        if (!HostGameCache.Enabled) return true;           // no cache: every lookup already walks the disk
+        if (!LbApiHost.Host.Gc.GameCache.IsGlobalReady) return false;   // the first scan is still running — let a rebuild settle it
+        return GameCachePatch.Image(fullPath, out platform);
+    }
+
     /// <summary>True iff ExtendDB's GameCache is loaded, globally ready, and holds this platform.</summary>
     private static bool ExtendReady(string platformName)
     {

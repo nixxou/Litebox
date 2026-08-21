@@ -347,7 +347,9 @@ LIMIT @limit";
             if (copy) File.Copy(m.DiskPath, target, overwrite: replace);
             else File.Move(m.DiskPath, target, overwrite: replace);
             if (doLock && ImageLockBridge.Available) ImageLockBridge.Lock(target);
-            if (!string.IsNullOrEmpty(plat)) _imgTouchedPlatforms.Add(plat);
+            // Both ends: the source can be another game's file — another PLATFORM's, even — and a move
+            // takes it away from whoever had it. ImgCacheTouch resolves each path on its own.
+            ImgCacheTouch(plat, target, copy ? null : m.DiskPath);
             return true;
         }
         catch { return false; }

@@ -37,6 +37,14 @@ internal static class StoreSupport
     { try { return game == null ? StoreKind.None : KindOf(game.Source); } catch { return StoreKind.None; } }
 
     /// <summary>Extracts the Steam appid from "steam://rungameid/{appid}".</summary>
+    /// <summary>The store's name as a human reads it. Lived inline in the Play button until the
+    /// context menu needed to say the same word; a second copy is how the two drift apart.</summary>
+    public static string DisplayName(StoreKind kind) => kind switch
+    {
+        StoreKind.Gog => "GOG", StoreKind.Steam => "Steam", StoreKind.Epic => "Epic",
+        StoreKind.Uplay => "Ubisoft", StoreKind.Ea => "EA", _ => "Store",
+    };
+
     public static string? SteamAppId(string? applicationPath)
     {
         if (string.IsNullOrEmpty(applicationPath)) return null;

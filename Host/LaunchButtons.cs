@@ -304,7 +304,7 @@ internal sealed class LaunchButtons : Panel
         if (_storeKind != StoreKind.None)
         {
             bool installed = Safe(() => _game?.Installed) == true;
-            string store = _storeKind switch { StoreKind.Gog => "GOG", StoreKind.Steam => "Steam", StoreKind.Epic => "Epic", StoreKind.Uplay => "Ubisoft", StoreKind.Ea => "EA", _ => "Store" };
+            string store = StoreSupport.DisplayName(_storeKind);
             _play.Text = installed ? "▶  Play (" + store + ")" : "↓  Install on " + store;
             _play.BackColor = installed ? PlayCol : InstallCol;   // muted yellow for Install
             _caret.Visible = false;
@@ -630,15 +630,31 @@ internal sealed class LaunchButtons : Panel
     }
 
     // ── Store launch / install ────────────────────────────────────────
-    private void OnStorePlay()
+    private void OnStorePlay() { if (_game != null) StoreAction(_game, _storeKind); }
+
+    /// <summary>Run the store Play-or-Install action for <paramref name="game"/>, for callers that are
+    /// not the button. The game context menu is one: it used to offer a plain "Play" that went straight
+    /// to PlayGame, which for a store game skips everything below — the install URI the client needs,
+    /// the parental install gate, and the launch lifecycle. Takes the game and kind as arguments rather
+    /// than reading the fields, because the caller's game can be ahead of the one the button is showing
+    /// (the detail pane loads on a delay). Returns false when this is not a store game at all.</summary>
+    public bool TryStoreAction(IGame? game)
     {
-        bool installed = Safe(() => _game?.Installed) == true;
-        var appPath = Safe(() => _game?.ApplicationPath) ?? "";
+        var kind = StoreSupport.KindOf(game);
+        if (game == null || kind == StoreKind.None) return false;
+        StoreAction(game, kind);
+        return true;
+    }
+
+    private void StoreAction(IGame game, StoreKind kind)
+    {
+        bool installed = Safe(() => game.Installed) == true;
+        var appPath = Safe(() => game.ApplicationPath) ?? "";
         if (installed)
         {
             // Route through the store launch lifecycle (running screen + play-time + exit watch).
             // Fall back to a plain ShellOpen if no launcher was wired (e.g. a non-GUI host).
-            if (_storeLaunch != null) _storeLaunch(_game!);
+            if (_storeLaunch != null) _storeLaunch(game);
             else if (!StoreSupport.ShellOpen(appPath))
                 MessageBox.Show("Couldn't launch this game. Is it still installed?",
                     "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -654,8 +670,8 @@ internal sealed class LaunchButtons : Panel
         }
 
         // Not installed → delegate the install to the store client via its URI (the client owns the download).
-        var gogAppId = (_game as ILiteBoxGame)?.GetField("GogAppId");
-        var uri = StoreSupport.InstallUri(_storeKind, gogAppId, StoreSupport.SteamAppId(appPath),
+        var gogAppId = (game as ILiteBoxGame)?.GetField("GogAppId");
+        var uri = StoreSupport.InstallUri(kind, gogAppId, StoreSupport.SteamAppId(appPath),
                                           StoreSupport.EpicAppName(appPath), StoreSupport.UplayId(appPath), StoreSupport.EaId(appPath));
         if (string.IsNullOrEmpty(uri) || !StoreSupport.ShellOpen(uri))
         {
@@ -664,7 +680,7 @@ internal sealed class LaunchButtons : Panel
             return;
         }
         // The client now owns the install; LiteBox re-detects state on next launch / refresh.
-        string msg = _storeKind switch
+        string msg = kind switch
         {
             StoreKind.Gog   => "Opening GOG Galaxy — click Install there to download the game.",
             StoreKind.Steam => "Opening Steam's install dialog.",

@@ -64,8 +64,26 @@ internal sealed partial class MainWindow
     // ── the two shapes ───────────────────────────────────────────────────────
     private void BuildSingleGameMenu(ContextMenuStrip menu, IGame g, bool ro)
     {
-        var play = new ToolStripMenuItem("Play") { Font = new Font(Font, FontStyle.Bold), Image = MenuIcons.Get(MenuIcons.Play) };
-        play.Click += (_, _) => LaunchSelected();
+        // A store game that is not on the disk cannot be played, and this menu said "Play" anyway —
+        // the Play button in the detail pane, reading the same two facts, was offering "Install on GOG"
+        // at that very moment. Worse than the wording: the click went to PlayGame, which knows nothing
+        // of install URIs or the parental install gate. Both now go through the same action.
+        var storeKind = StoreSupport.KindOf(g);
+        bool storeInstalled = storeKind != StoreKind.None && Safe(() => g.Installed) == true;
+        bool installing = storeKind != StoreKind.None && !storeInstalled;
+        string playCap = storeKind == StoreKind.None ? "Play"
+                       : storeInstalled ? "Play (" + StoreSupport.DisplayName(storeKind) + ")"
+                       : "Install on " + StoreSupport.DisplayName(storeKind);
+        var play = new ToolStripMenuItem(playCap)
+        {
+            Font = new Font(Font, FontStyle.Bold),
+            Image = MenuIcons.Get(installing ? MenuIcons.Download : MenuIcons.Play),
+        };
+        play.Click += (_, _) =>
+        {
+            if (storeKind != StoreKind.None && _launchButtons != null && _launchButtons.TryStoreAction(g)) return;
+            LaunchSelected();
+        };
         menu.Items.Add(play);
 
         var apps = SafeAddApps(g);

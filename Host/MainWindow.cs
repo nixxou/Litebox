@@ -1335,6 +1335,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         };
         _mediaVideo.FullscreenRequested = OpenFullscreenVideo;
         media.Controls.Add(_mediaVideo);
+        // Audio ownership: whoever took the audio (a sounded video, the Edit/Options windows, a game, the
+        // web kiosk) calls back here when its claim ends. See Media/AmbientAudio.
+        Media.AmbientAudio.MusicRestore = RestoreAmbientMusic;
+        Media.AmbientAudio.MediaRestore = RestoreAmbientMedia;
         // Fullscreen viewers (LB parity): double-click an image → the image viewer; the 3D overlay's
         // badge or a double-click → the fullscreen model (reloaded at source texture resolution).
         media.DoubleClicked = OpenFullscreenImage;
@@ -2501,7 +2505,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 () => _cfg.VideoAutoplaySound, v => _cfg.VideoAutoplaySound = v,
                 "Only affects AUTOPLAY: off (default) an automatically started video is muted — a list that "
                 + "talks while you scroll is unbearable. A video you start by CLICKING always has sound.",
-                applyLive: () => { if (_mediaVideo != null) _mediaVideo.AutoplaySound = _cfg.VideoAutoplaySound; }),
+                applyLive: () => { if (_mediaVideo != null) _mediaVideo.AutoplaySound = VideoAutoplaySoundNow(); },
+                companion: Options.OptionItem.Toggle("Display", "…if no music is playing",
+                    () => _cfg.VideoAutoplaySoundIfNoMusic, v => _cfg.VideoAutoplaySoundIfNoMusic = v,
+                    "Ambient game music wins: a video that lands in the zone by itself stays muted while the "
+                    + "game's music plays, and takes the sound only when the game has none. Off: the video takes "
+                    + "the audio and the music stays quiet for as long as it is the main media.")),
             .. BadgeHeroOptions(),
             Options.OptionItem.Number("Display", "Detail load delay (ms)",
                 () => _cfg.DetailLoadDelayMs, v => _cfg.DetailLoadDelayMs = v,
@@ -6899,12 +6908,21 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (_strip.Flow.Controls[ix] is MediaThumb th) th.SetImage(LoadThumbOrFull(item, keepAlpha: false));
     }
 
+    /// <summary>Autoplay-with-sound as it applies RIGHT NOW: the option, qualified by "…if no music is
+    /// playing" — with that on, music that is playing (or on its way) keeps the audio and the video stays
+    /// muted. An explicitly picked video ignores all of this: see ShowVideoOverlay.</summary>
+    private bool VideoAutoplaySoundNow()
+        => _cfg.VideoAutoplaySound && (!_cfg.VideoAutoplaySoundIfNoMusic || !Media.GameMusicPlayer.Claimed);
+
     // ── video overlay (a video sentinel is the current main media) ───────────────
-    private void ShowVideoOverlay(string item)
+    private void ShowVideoOverlay(string item, bool userPicked = false)
     {
         if (_mediaVideo == null) return;
-        _mediaVideo.Autoplay = _cfg.VideoAutoplay;
-        _mediaVideo.AutoplaySound = _cfg.VideoAutoplaySound;
+        // Clicking a video tile IS starting it: it plays, and it plays audible, whatever the two autoplay
+        // options say — those govern the video that merely ARRIVES in the zone when a selection settles.
+        // (Same rule as the ▶ over the still frame; only the entry point differs.)
+        _mediaVideo.Autoplay = _cfg.VideoAutoplay || userPicked;
+        _mediaVideo.AutoplaySound = VideoAutoplaySoundNow() || userPicked;
         _mediaVideo.BringToFront();
         // The still frame only if it is ALREADY extracted — otherwise black + ▶, and the deferred pass
         // hands it over when it lands (SetStillFor).
@@ -6916,6 +6934,33 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (_mediaVideo == null || (!_mediaVideo.Visible && !_mediaVideo.HasContent)) return;
         _mediaVideo.Clear();
         _mediaVideo.Visible = false;
+    }
+
+    // ── giving the audio back (Media/AmbientAudio) ──────────────────────────────
+    /// <summary>A claim on the audio ended (a video muted or finished, a game exited, Edit/Options closed):
+    /// re-evaluate the ambient music for whatever is selected right now. Idempotent — GameMusicPlayer keeps
+    /// the running track when the game is the same.</summary>
+    private void RestoreAmbientMusic()
+    {
+        if (IsDisposed || _closing) return;
+        if (InvokeRequired) { try { BeginInvoke((Action)RestoreAmbientMusic); } catch { } return; }
+        if (IsDisposed || _closing || Media.AmbientAudio.Held) return;
+        UpdateGameMusic(_detailsShown as IGame);
+    }
+
+    /// <summary>The other half, after a HOLD only: a hold stops PLAYBACK, which tears the video down
+    /// (VlcService.Stopping → VideoBlock.Clear). Put the main zone back the way it was — images are
+    /// untouched by a hold, so only a video item needs anything doing.</summary>
+    private void RestoreAmbientMedia()
+    {
+        if (IsDisposed || _closing) return;
+        if (InvokeRequired) { try { BeginInvoke((Action)RestoreAmbientMedia); } catch { } return; }
+        if (IsDisposed || _closing || Media.AmbientAudio.Held) return;
+        if (_detailsShown is not IGame g || !ReferenceEquals(g, _mediaItemsGame)) return;
+        var items = _mediaItems;
+        if (items == null || _mediaSel < 0 || _mediaSel >= items.Count) return;
+        if (!Media.MediaVideoItem.Is(items[_mediaSel])) return;
+        SetMainMedia(items[_mediaSel], full: true, _detailsLoadToken);
     }
 
     // ── fullscreen viewers (LB parity) ───────────────────────────────────────
@@ -6954,8 +6999,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         if (!Media.MediaVideoItem.Is(item)) return;
         long at = _mediaVideo.PositionMs;
         _mediaVideo.PauseIfPlaying();
+        // Sound: carry over what the pane was doing. Re-reading VideoAutoplaySound here would take the
+        // sound AWAY from a video the user had just started audible — the option is about autoplay, and
+        // going fullscreen is anything but automatic.
         using var v = new Video.VideoFullscreen(Media.MediaVideoItem.PathOf(item),
-                                                Media.MediaVideoItem.CachedThumb(item), _cfg.VideoAutoplaySound, at);
+                                                Media.MediaVideoItem.CachedThumb(item), !_mediaVideo.IsMuted, at);
         v.ShowDialog(this);
         _mediaVideo.ResumeAt(v.ExitPositionMs, v.ContinuePlaying, v.ExitEnded);
     }
@@ -6963,7 +7011,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private void OpenFullscreenFromThumb(string item)
     {
         if (_detailsShown is not IGame g || _mediaItems == null) return;
-        SetMainMedia(item, full: true, _detailsLoadToken);
+        SetMainMedia(item, full: true, _detailsLoadToken, userPicked: true);
 
         if (Media.Media3dItem.Is(item))
             OpenFullscreen3d(g);
@@ -6975,7 +7023,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     // Sets the main media. NOTE: single extension point — a future video item would be
     // detected here and hosted in the 16:9 zone instead of an image.
-    private void SetMainMedia(string src, bool full, int token)
+    // userPicked: the user PICKED this item (a strip thumb), as opposed to it arriving as the main media
+    // when the selection settled. For a video that is the difference between the autoplay rules and an
+    // explicit play request — which always plays, and always with sound.
+    private void SetMainMedia(string src, bool full, int token, bool userPicked = false)
     {
         if (_mediaItems != null) { int ix = _mediaItems.FindIndex(s => string.Equals(s, src, StringComparison.OrdinalIgnoreCase)); if (ix >= 0) _mediaSel = ix; }
         HighlightStrip();
@@ -6991,7 +7042,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // A video takes the main zone over: still frame + ▶, and playback when Autoplay is on.
         if (Media.MediaVideoItem.Is(src))
         {
-            ShowVideoOverlay(src);
+            ShowVideoOverlay(src, userPicked);
             return;
         }
         HideVideoOverlay();
@@ -7191,7 +7242,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 Badge3d = Media.Media3dItem.Is(src),   // little "3D" tag, bottom-right of the tile
                 BadgePlay = Media.MediaVideoItem.Is(src),   // ▶ over video tiles (drawn, never baked into the cached frame)
             };
-            th.Click += (_, _) => SetMainMedia(captured, full: true, _detailsLoadToken);
+            th.Click += (_, _) => SetMainMedia(captured, full: true, _detailsLoadToken, userPicked: true);
             th.MouseDoubleClick += (_, e) =>
             {
                 if (e.Button == MouseButtons.Left) OpenFullscreenFromThumb(captured);
@@ -7730,6 +7781,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             if (target != null) { _games.SelectGame(target, false); ShowDetails(target); }
             else if (_games.VisibleGames.Count > 0) { _games.SelectFirst(); }
         }
+        // The launch silenced the music and tore the video down (VlcService.Stopping). Give both back —
+        // the re-selection above only happens in the UnloadListDuringGame case.
+        RestoreAmbientMedia();
+        RestoreAmbientMusic();
         // Resume the poll if a store game is the current subject (covers UnloadListDuringGame off too).
         SetStorePoll(_heroGame != null && StoreSupport.KindOf(_heroGame) != StoreKind.None);
     }

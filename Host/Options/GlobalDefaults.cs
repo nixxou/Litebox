@@ -57,6 +57,7 @@ internal static class GlobalDefaults
         // Videos in the right pane
         ("VideoAutoplay",                   "false"),
         ("VideoAutoplaySound",              "false"),
+        ("VideoAutoplaySoundIfNoMusic",     "false"),
         // 3D case model: when is one worth showing AND baking (the front is always required)
         ("Model3dRequireBack",              "false"),
         ("Model3dRequireSpine",             "false"),

@@ -226,6 +226,11 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         FullW = S(704);
         RowH = S(32); FieldH = S(24);
 
+        // The editor takes the user away from the media zone entirely: silence the ambient music AND the
+        // playing video for as long as it is open (both come back on close). Its own document/music
+        // previews own the audio from here.
+        Media.AmbientAudio.HoldFor(this);
+
         _editGames = games;
         _visible = visible ?? Array.Empty<IGame>();
         _readOnly = readOnly;

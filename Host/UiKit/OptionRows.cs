@@ -44,8 +44,32 @@ internal static class OptionRows
                         ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg,
                         Checked = string.Equals(it.Get(), "true", StringComparison.OrdinalIgnoreCase),
                     };
-                    row.Controls.Add(cb);
                     applies.Add(() => ApplyIfChanged(it, cb.Checked ? "true" : "false"));
+
+                    // A companion QUALIFIES this toggle, so it belongs beside it, not under it: both go into a
+                    // left-to-right line, and the qualifier is greyed while the toggle it qualifies is off.
+                    if (it.Companion is { Kind: OptionKind.Bool } comp)
+                    {
+                        cb.MaximumSize = Size.Empty;   // no wrapping inside a horizontal line
+                        var cb2 = new CheckBox
+                        {
+                            Text = comp.Label, AutoSize = true, Margin = new Padding(S(20), 0, 0, 0),
+                            ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg,
+                            Checked = string.Equals(comp.Get(), "true", StringComparison.OrdinalIgnoreCase),
+                            Enabled = cb.Checked,
+                        };
+                        cb.CheckedChanged += (_, _) => cb2.Enabled = cb.Checked;
+                        var pair = new FlowLayoutPanel
+                        {
+                            FlowDirection = FlowDirection.LeftToRight, WrapContents = false,
+                            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                            BackColor = LiteBoxTheme.Bg, Margin = new Padding(0),
+                        };
+                        pair.Controls.Add(cb); pair.Controls.Add(cb2);
+                        row.Controls.Add(pair);
+                        applies.Add(() => ApplyIfChanged(comp, cb2.Checked ? "true" : "false"));
+                    }
+                    else row.Controls.Add(cb);
                     break;
                 }
                 case OptionKind.Text:
@@ -190,11 +214,14 @@ internal static class OptionRows
                 row.Controls.Add(ni);
             }
 
-            if (!string.IsNullOrEmpty(it.Help))
+            // The companion's help follows the row's own, under the pair — same indent, so the two read as
+            // one paragraph about one setting.
+            foreach (var text in new[] { it.Help, it.Companion?.Help })
             {
+                if (string.IsNullOrEmpty(text)) continue;
                 var help = new Label
                 {
-                    Text = it.Help, AutoSize = true, Margin = new Padding(S(18), S(2), 0, 0),
+                    Text = text, AutoSize = true, Margin = new Padding(S(18), S(2), 0, 0),
                     ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg, Font = new Font("Segoe UI", 8.25f),
                     MaximumSize = new Size(wrapWidth, 0),
                 };

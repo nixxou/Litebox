@@ -47,7 +47,8 @@ internal sealed class VideoBlock : Panel
     private int _token;
     private bool _seeking, _hasContent, _muted = true, _playRequested, _ended;
     private bool _pauseWhenReady, _markEndedWhenReady, _fullscreenMode;
-    private long _durMs, _pauseAtMs;
+    private bool _audioOff;                   // the open player was built with :no-audio (it started muted)
+    private long _durMs, _pauseAtMs, _startAtMs;
 
     /// <summary>The block has a video to show — drives its visibility in the media box.</summary>
     public bool HasContent => _hasContent;
@@ -221,11 +222,12 @@ internal sealed class VideoBlock : Panel
     /// <summary>Leave the video behind (another media item, another game, a node).</summary>
     public void Clear()
     {
+        if (!_muted) LbApiHost.Host.Media.AmbientAudio.Release();   // it held the audio — hand it back
         _token++;
         _tick.Stop();
         _playRequested = false;
         _ended = _pauseWhenReady = _markEndedWhenReady = false;
-        _durMs = 0;
+        _durMs = _startAtMs = 0;
         StopPlayer();
         _path = null;
         SetStill(null);
@@ -243,11 +245,13 @@ internal sealed class VideoBlock : Panel
         _path = path;
         _playRequested = false;
         _ended = _pauseWhenReady = _markEndedWhenReady = false;
-        _durMs = 0;
+        _durMs = _startAtMs = 0;
         SetStill(still);
         _still.Visible = true;
         if (!_hasContent) { _hasContent = true; ContentChanged?.Invoke(); }
-        if (Autoplay) { SetMuted(!AutoplaySound); Play(); }
+        // ApplyMute, not SetMuted: Play() follows immediately and opens the stream with the right audio
+        // setting — no point rebuilding a player that does not exist yet.
+        if (Autoplay) { ApplyMute(!AutoplaySound); Play(); }
     }
 
     /// <summary>Late-arriving still frame (the deferred extraction landed) — only applied if it is still
@@ -301,6 +305,9 @@ internal sealed class VideoBlock : Panel
 
     /// <summary>The last frame is displayed after natural completion. Play from here restarts at zero.</summary>
     public bool HasEnded => _ended;
+
+    /// <summary>Whether this video is silent right now — the fullscreen hand-off carries it over.</summary>
+    public bool IsMuted => _muted;
 
     /// <summary>Apply the state returned by a fullscreen player to this block.</summary>
     public void ResumeAt(long ms, bool play, bool ended = false)
@@ -391,11 +398,11 @@ internal sealed class VideoBlock : Panel
         if (_ended)
         {
             _ended = false;
-            SetMuted(false);
+            ApplyMute(false);
             Play();   // an ended VLC player is not reliably resumable: rebuild naturally starts at zero
             return;
         }
-        if (_mp == null) { SetMuted(false); Play(); return; }
+        if (_mp == null) { ApplyMute(false); Play(); return; }
         try
         {
             if (_mp.IsPlaying)
@@ -427,12 +434,22 @@ internal sealed class VideoBlock : Panel
         {
             StopPlayer();
             _mp = new MediaPlayer(lib) { EnableKeyInput = false, EnableMouseInput = false, Hwnd = _surface.Handle };
-            _mp.Mute = _muted;
+            // Muting BEFORE playback is a documented no-op in libvlc: libvlc_audio_set_mute finds no audio
+            // output yet and silently does nothing — which is how a "muted" autoplay ended up talking over
+            // the ambient music with the button showing 🔇. The reliable form is the PER-MEDIA option below,
+            // applied when the stream is opened (the same trick the thumbnailer uses). A player opened that
+            // way has no audio pipeline to turn back on, so un-muting rebuilds it — see SetMuted.
+            _audioOff = _muted;
             // Fires on a VLC thread → hop to the UI thread before touching anything of ours.
             _mp.Playing += (_, _) => Post(() =>
             {
                 if (_token != token) return;
                 _still.Visible = false;
+                if (_startAtMs > 0)
+                {
+                    long from = _startAtMs; _startAtMs = 0;
+                    try { if (_mp != null) _mp.Time = from; } catch { }   // rebuilt for sound: carry on where we were
+                }
                 if (_pauseWhenReady)
                 {
                     long at = _pauseAtMs;
@@ -472,6 +489,7 @@ internal sealed class VideoBlock : Panel
                 }
             });
             using var media = new VlcMedia(lib, _path, FromType.FromPath);
+            if (_audioOff) media.AddOption(":no-audio");
             _mp.Play(media);
             _tick.Start();
         }
@@ -480,6 +498,7 @@ internal sealed class VideoBlock : Panel
 
     private void ShowEndedState()
     {
+        if (!_muted) LbApiHost.Host.Media.AmbientAudio.Release();   // the video is over: music may come back
         _tick.Stop();
         _ended = true;
         _playRequested = false;
@@ -496,6 +515,7 @@ internal sealed class VideoBlock : Panel
     {
         if (_path == null || IsDisposed) return;
         _ended = false;
+        _startAtMs = 0;
         _pauseAtMs = Math.Max(0, ms);
         _pauseWhenReady = true;
         _markEndedWhenReady = markEnded;
@@ -510,15 +530,41 @@ internal sealed class VideoBlock : Panel
         _time.Text = $"{d} / {d}";
     }
 
-    private void SetMuted(bool on)
+    // A video with sound OWNS the audio: the ambient music goes quiet, and gets it back the moment the
+    // video is muted again, ends, or goes away. Every sound path funnels through here (autoplay-with-sound,
+    // the explicit ▶, the hover-bar unmute) — fullscreen included, it is this same control.
+    /// <summary>Mute state and its audio-ownership side effects, WITHOUT touching the open player. For the
+    /// paths where Play() follows immediately and opens the stream with the right audio setting.</summary>
+    private void ApplyMute(bool on)
     {
+        bool washeld = !_muted;
         _muted = on;
         _muteBtn.Text = on ? "🔇" : "🔊";
-        try { if (_mp != null) _mp.Mute = on; } catch { }
-        // A video with sound owns the audio: ambient game music goes quiet. Every sound-on path funnels
-        // here (autoplay-with-sound, the explicit ▶, the hover-bar unmute) — fullscreen included, it is
-        // this same control.
-        if (!on) try { LbApiHost.Host.Media.GameMusicPlayer.Stop(); } catch { }
+        if (!on) LbApiHost.Host.Media.AmbientAudio.Take();
+        else if (washeld) LbApiHost.Host.Media.AmbientAudio.Release();
+    }
+
+    /// <summary>Mute/unmute a video that is ALREADY open — which means REBUILDING it at its current
+    /// position, both ways: mute here is the per-media :no-audio option, decided when the stream is opened.
+    ///
+    /// NEVER MediaPlayer.Mute (nor .Volume). libvlc's Windows output is mmdevice, and mmdevice implements
+    /// both through ISimpleAudioVolume on the process's audio SESSION — one session for every stream VLC
+    /// opens, since they all share its fixed session GUID. So muting one video muted the WHOLE of LiteBox in
+    /// the Windows mixer, ambient music included, and the flag outlived the player that set it (Windows even
+    /// remembers per-app mixer state across restarts). That is the bug this block exists to avoid: the
+    /// rebuild costs one Play() on a local file, the session flag cost the app its sound.</summary>
+    private void SetMuted(bool on)
+    {
+        if (_mp != null && !_ended && _audioOff != on)
+        {
+            bool playing = _playRequested || IsPlaying;
+            long at = PositionMs;
+            ApplyMute(on);
+            if (playing) { _startAtMs = at; Play(); }
+            else RestartPausedAt(at, markEnded: false);
+            return;
+        }
+        ApplyMute(on);   // no player, or the open stream already matches: nothing to rebuild
     }
 
     private void UpdateProgress()
@@ -576,6 +622,8 @@ internal sealed class VideoBlock : Panel
     {
         if (disposing)
         {
+            // The fullscreen player is a VideoBlock too: closing it on a sounded video ends that claim.
+            try { if (!_muted) LbApiHost.Host.Media.AmbientAudio.Release(); } catch { }
             try { VlcService.Stopping -= OnVlcStopping; } catch { }
             try { StopPlayer(); } catch { }
             try { _tick.Dispose(); } catch { }

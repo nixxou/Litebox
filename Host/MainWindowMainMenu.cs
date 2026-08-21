@@ -583,21 +583,26 @@ internal sealed partial class MainWindow
             // A video only claims the audio when it autoplays WITH SOUND — muted, or waiting behind
             // its ▶, it leaves the music alone. So stay silent while that is possible: confirmed
             // (mainIsVideo true) or not yet known (null).
-            if (_cfg.VideoAutoplay && _cfg.VideoAutoplaySound && mainIsVideo != false)
+            // …unless "…if no music is playing" is on, which REVERSES the priority: the music goes ahead
+            // and the video is the one that stays muted (VideoAutoplaySoundNow asks GameMusicPlayer.Claimed).
+            if (_cfg.VideoAutoplay && _cfg.VideoAutoplaySound && !_cfg.VideoAutoplaySoundIfNoMusic && mainIsVideo != false)
             { Media.GameMusicPlayer.Stop(); return; }
             bool shuffle = s.GetBool("ShuffleMusic", true);
             string id = Safe(() => g.Id) ?? "";
             var captured = g;
             int token = _detailsLoadToken;
+            // Claim the audio BEFORE the walk: the video overlay may be shown while it is still running, and
+            // must see that music is on its way rather than a silent player.
+            Media.GameMusicPlayer.Expect(id);
             System.Threading.Tasks.Task.Run(() =>
             {
                 try
                 {
                     var tracks = MusicTracksFor(captured);
-                    if (token != _detailsLoadToken || _closing) return;   // selection moved on mid-walk
-                    Media.GameMusicPlayer.Play(id, tracks, shuffle);
+                    if (token != _detailsLoadToken || _closing) { Media.GameMusicPlayer.Drop(id); return; }
+                    Media.GameMusicPlayer.Play(id, tracks, shuffle);   // an empty list stops — and drops the claim
                 }
-                catch { }
+                catch { Media.GameMusicPlayer.Drop(id); }
             });
         }
         catch { }

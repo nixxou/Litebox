@@ -50,6 +50,11 @@ internal sealed class OptionItem
     /// <summary>Path kind: the OpenFileDialog filter for the Browse… picker (null = programs).</summary>
     public string? FileFilter;
 
+    /// <summary>Bool kind only: a SECOND checkbox rendered on the same line, to the right — a qualifier of
+    /// this one ("…with sound" → "…if no music is playing"). It is greyed while this one is unchecked, and
+    /// its own Help is printed under the pair.</summary>
+    public OptionItem? Companion;
+
     public Func<string> Get = () => "";
     public Action<string> Set = _ => { };
     public Action? ApplyLive;
@@ -59,13 +64,15 @@ internal sealed class OptionItem
     { Section = section; Label = label; Kind = kind; }
 
     // Bool helpers (stored as "true"/"false").
-    public static OptionItem Toggle(string section, string label, Func<bool> get, Action<bool> set, string? help = null, Action? applyLive = null)
+    public static OptionItem Toggle(string section, string label, Func<bool> get, Action<bool> set, string? help = null,
+                                    Action? applyLive = null, OptionItem? companion = null)
         => new(section, label, OptionKind.Bool)
         {
             Help = help,
             Get = () => get() ? "true" : "false",
             Set = v => set(string.Equals(v, "true", StringComparison.OrdinalIgnoreCase)),
             ApplyLive = applyLive,
+            Companion = companion,
         };
 
     public static OptionItem Text(string section, string label, Func<string> get, Action<string> set, string? help = null, Action? applyLive = null)

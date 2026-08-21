@@ -287,6 +287,10 @@ internal sealed class LiteBoxConfig
     /// <summary>Autoplay WITH SOUND. Off: an autoplayed video starts muted (scrolling a list should not
     /// talk). A video the user starts by CLICKING always has sound, whatever this says.</summary>
     public bool VideoAutoplaySound { get => GetBool("VideoAutoplaySound", false); set => SetBool("VideoAutoplaySound", value); }
+    /// <summary>Qualifies <see cref="VideoAutoplaySound"/>: the ambient game music WINS. An autoplayed video
+    /// stays muted while the music is playing (or on its way) and only takes the sound when there is none.
+    /// Off: the video takes the audio and the music stays quiet for as long as it is the main media.</summary>
+    public bool VideoAutoplaySoundIfNoMusic { get => GetBool("VideoAutoplaySoundIfNoMusic", false); set => SetBool("VideoAutoplaySoundIfNoMusic", value); }
 
     // ── When is a 3D case model worth showing (and baking)? ──────────────────
     // Flat globals, hence the ini (media-layout.json exists for the LIST-shaped layout, not for these).

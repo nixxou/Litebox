@@ -30,6 +30,10 @@ internal sealed class OptionsWindow : LiteBoxForm
 
     public OptionsWindow(string title)
     {
+        // Same rule as the game editor: this shell is Options AND every Edit Platform / Playlist /
+        // Category / Emulator window, and none of them is a place to keep music and a video running.
+        Media.AmbientAudio.HoldFor(this);
+
         Text = title;
         Size = new Size(S(1160), S(800));
         MinimumSize = new Size(S(860), S(560));

@@ -6,12 +6,17 @@
 // order, wrapping). Play() with the key of the game ALREADY playing only refreshes the track list and
 // shuffle flag — selecting the same game twice must not restart its music.
 //
-// Silence rules live at the CALLERS, all funnelled through Stop():
+// Silence rules live at the CALLERS, all funnelled through Stop() — and most of them now go through the
+// Media/AmbientAudio broker, which also knows how to give the music BACK when the claim ends:
 //   • selection moved to a node / nothing        → MainWindow (ShowNodeDetails / ShowDetails(null))
 //   • a game launches                            → VlcService.Stopping (subscribed here), raised by
 //                                                  StopPlayback/Shutdown on launch
 //   • a web kiosk opens (LiteBox Web / BigBox)   → WebKioskWindow.Toggle + KioskBridge toggles
-//   • a video plays WITH SOUND                   → VideoBlock.SetMuted(false) / Play() unmuted
+//   • Edit or Options opens                      → AmbientAudio.HoldFor — stops the video too, and hands
+//                                                  both back when the window closes
+//   • a video plays WITH SOUND                   → VideoBlock.ApplyMute(false) → AmbientAudio.Take.
+//                                                  A MUTED video leaves the music alone: the mute is a
+//                                                  per-media :no-audio, not a flag set before playback
 //
 // Every entry point is fail-soft and lock-guarded; the EndReached continuation hops to the thread
 // pool first (calling back into libvlc from its own event thread deadlocks — same lesson as
@@ -37,7 +42,23 @@ internal static class GameMusicPlayer
     private static int _ix;
     private static bool _shuffle;
     private static string? _key;      // identity of the game whose music is playing (its Id)
+    private static string? _expect;   // a game whose tracks are being resolved — the claim, placed up front
     private static bool _hooked;
+
+    /// <summary>The ambient music is playing, OR a track resolution is in flight that is about to start it.
+    /// The claim is placed SYNCHRONOUSLY by the caller before the (IO-bound) walk, because the video overlay
+    /// asks this question in between: seeing a silent player, it would steal the audio from music already on
+    /// its way. See MainWindow.UpdateGameMusic / VideoAutoplaySoundIfNoMusic.</summary>
+    public static bool Claimed { get { lock (_lock) return _expect != null || _mp != null; } }
+
+    /// <summary>Claim the audio for <paramref name="key"/> before resolving its tracks off-thread.</summary>
+    public static void Expect(string key) { lock (_lock) _expect = key; }
+
+    /// <summary>Drop a claim that came to nothing (the selection moved on mid-walk).</summary>
+    public static void Drop(string key)
+    {
+        lock (_lock) { if (string.Equals(_expect, key, StringComparison.OrdinalIgnoreCase)) _expect = null; }
+    }
 
     /// <summary>Start (or keep) the music for one game. <paramref name="key"/> identifies the game;
     /// the same key keeps the current track running and only refreshes the list/shuffle flag.
@@ -49,6 +70,7 @@ internal static class GameMusicPlayer
             .ToList();
         lock (_lock)
         {
+            if (string.Equals(_expect, key, StringComparison.OrdinalIgnoreCase)) _expect = null;   // claim honoured
             if (!_hooked) { try { VlcService.Stopping += () => Stop(); _hooked = true; } catch { } }
             if (list.Count == 0) { StopLocked(); return; }
             if (_mp != null && string.Equals(_key, key, StringComparison.OrdinalIgnoreCase))
@@ -103,6 +125,7 @@ internal static class GameMusicPlayer
     private static void StopLocked()
     {
         _key = null;
+        _expect = null;
         _tracks = new List<string>();
         StopPlayerLocked();
     }

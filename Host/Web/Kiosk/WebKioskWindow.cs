@@ -222,6 +222,9 @@ internal sealed class WebKioskWindow : Form
         // Mark the floor so the page replays what was silenced in between. See NotificationsApi.
         try { NotificationsApi.KioskOpened(); } catch { }
         FormClosed += (_, _) => { try { NotificationsApi.KioskClosed(); } catch { } };
+        // The kiosk owned the audio while it was up (Toggle stopped the music). Registered AFTER the
+        // handler that clears _instance, so IsOpen — and therefore AmbientAudio.Held — is already false.
+        FormClosed += (_, _) => { try { LbApiHost.Host.Media.AmbientAudio.Release(); } catch { } };
 
         Shown += async (_, _) => await InitAsync();
         // NB: closing the kiosk does NOT re-lock — the kiosk shares the desktop runtime lock (same user),

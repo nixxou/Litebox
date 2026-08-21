@@ -59,17 +59,50 @@ namespace LbApiHost.Host.Gc
     }
 
     /// <summary>Region + image-regroupement priorities read from &lt;LB&gt;\Data\Settings.xml — ports the two
-    /// SettingsWatcher methods the GameCache consumes (cached once; LB needs a restart to change them).</summary>
+    /// SettingsWatcher methods the GameCache consumes.
+    ///
+    /// The XML is NOT the whole truth: LiteBox journals its settings edits and can only write them back
+    /// once LaunchBox releases the files, so a value the user has just changed lives in the journal for
+    /// as long as LaunchBox stays open. Reading the raw file made these two lists disagree with the very
+    /// options page that set them — the Add-image dialog kept offering two regions while Options showed
+    /// five, restart included, because a restart does not flush anything either. <see cref="Overlay"/>
+    /// is the journal-aware reader (installed at boot), and <see cref="Invalidate"/> drops the caches
+    /// when a setting is applied, so the change lands without waiting for anything.</summary>
     internal static class SettingsWatcher
     {
         private static readonly object _lock = new();
         private static List<string> _regions;
         private static Dictionary<string, List<string>> _regroup;
 
+        /// <summary>Reads one Settings.xml field the way the OPTIONS window sees it (file + pending
+        /// journal): true when it HAS the field, value included even when empty. Null until installed;
+        /// a field it does not hold falls through to the raw file.</summary>
+        public delegate bool TryRead(string key, out string value);
+        public static TryRead OverlayTry;
+
+        /// <summary>Forget the cached lists: the next read re-reads. Call after applying settings.</summary>
+        public static void Invalidate() { lock (_lock) { _regions = null; _regroup = null; } }
+
+        // Invalidate ourselves whenever a setting moves, instead of trusting every writer to remember
+        // this cache exists. A self-test caught exactly that: a change announced without the matching
+        // Invalidate left these lists on their pre-edit values while every other reader had moved on.
+        static SettingsWatcher()
+        {
+            try { Data.LiveSettings.Changed += Invalidate; } catch { }
+        }
+
         private static string SettingsFile => Path.Combine(GcPaths.LBPath, "Data", "Settings.xml");
 
         private static string GetData(string key)
         {
+            // The journal-aware view first: it is the one the user's own options window edits. An
+            // EMPTY answer counts — a cleared list is a choice, and falling through to the file here
+            // would let a stale value override it.
+            try
+            {
+                if (OverlayTry != null && OverlayTry(key, out var v)) return v;
+            }
+            catch { }
             try
             {
                 var f = SettingsFile;

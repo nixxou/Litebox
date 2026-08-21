@@ -1083,7 +1083,13 @@ internal static class HostLaunch
             if (File.Exists(f))
             {
                 var s = XDocument.Load(f).Root?.Element("Settings");
-                bool B(string k, bool d) { var v = (string)s?.Element(k); return v == null ? d : v.Equals("true", StringComparison.OrdinalIgnoreCase); }
+                // Live value first, file second: these four are edited in LiteBox's own options, and
+                // an edit only reaches the XML once LaunchBox lets go of it (Data.LiveSettings).
+                bool B(string k, bool d)
+                {
+                    var v = Data.LiveSettings.Get(k) ?? (string)s?.Element(k);
+                    return v == null ? d : v.Equals("true", StringComparison.OrdinalIgnoreCase);
+                }
                 show = B("ShowCommands", false);
                 exit = B("ExitDosBox", true);
                 pe = B("PauseBeforeCommands", false);

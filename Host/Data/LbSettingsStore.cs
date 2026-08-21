@@ -249,6 +249,30 @@ internal sealed class LbSettingsStore
     // A key the current LaunchBox can't safely host in its XML (ProblemKeys, version-gated)
     // is read/written from LiteBox's own DB instead — shared-with-LB by default, DB only when
     // the running LB would drop/ignore the key. One choke point: every global setting flows here.
+    /// <summary>Every field as loaded — Settings.xml overlaid with the pending journal. A copy, so a
+    /// reader can hold it without seeing later edits half-applied.</summary>
+    public Dictionary<string, string> Fields => new(_f, StringComparer.Ordinal);
+
+    /// <summary>The stored value EXACTLY as held — no defaults, no fallback — and whether the field is
+    /// held at all. <see cref="Get"/> answers with a default for a missing field, which would tell a
+    /// caller "the value is empty" when the truth is "there is no such field"; the two must not be
+    /// confused by anything deciding whether to read the file itself.</summary>
+    public bool TryGetRaw(string field, out string value)
+    {
+        value = "";
+        if (string.IsNullOrEmpty(field)) return false;
+        if (ProblemKeys.IsDbManaged(field))
+        {
+            var db = LiteBoxOptionsDb.GetGlobal(field);
+            if (db == null) return false;
+            value = db;
+            return true;
+        }
+        if (!_f.TryGetValue(field, out var v)) return false;
+        value = v ?? "";
+        return true;
+    }
+
     public string Get(string field, string fallback = "")
     {
         // Centralised default (SettingDefaults) applies when the value is absent from BOTH
@@ -271,6 +295,11 @@ internal sealed class LbSettingsStore
         if (ProblemKeys.IsDbManaged(field)) { LiteBoxOptionsDb.SetGlobal(field, value ?? ""); return; }
         _f[field] = value ?? "";
         _store?.RecordEntityModify("Settings", "Settings", field, value ?? "");
+        // Anything that memoises a value derived from Settings.xml must re-read now — otherwise it
+        // serves the pre-edit value for the rest of the session (the GameCache priority lists, the
+        // media resolver's region order, …).
+        try { Gc.SettingsWatcher.Invalidate(); } catch { }
+        try { LiveSettings.RaiseChanged(); } catch { }
     }
 
     public void SetBool(string field, bool value) => Set(field, value ? "true" : "false");

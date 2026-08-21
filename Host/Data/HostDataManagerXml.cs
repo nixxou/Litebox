@@ -77,8 +77,31 @@ internal sealed class HostDataManagerXml : DummyDataManager
     /// button, so the next selection seeds pure defaults instead of the last launch.</summary>
     public void ClearLastLaunch(string gameId) { try { _store?.ClearLaunch(gameId); } catch { } }
 
-    /// <summary>LaunchBox's global settings (LB\Data\Settings.xml), lazily loaded.</summary>
-    public LbSettingsStore LbSettings => _lbSettings ??= new LbSettingsStore(_dataDir, _store);
+    /// <summary>LaunchBox's global settings (LB\Data\Settings.xml), lazily loaded. Building it also
+    /// hands the GameCache shims a journal-aware reader: they used to parse the raw XML, which lies
+    /// about anything edited while LaunchBox holds the files (see Gc.SettingsWatcher.Overlay).</summary>
+    public LbSettingsStore LbSettings
+    {
+        get
+        {
+            if (_lbSettings == null)
+            {
+                _lbSettings = new LbSettingsStore(_dataDir, _store);
+                var s = _lbSettings;
+                // Raw, so "field absent" stays distinguishable from "field explicitly empty".
+                LiveSettings.Reader = key => { try { return s.TryGetRaw(key, out var v) ? v : null; } catch { return null; } };
+                LiveSettings.Snapshot = () => { try { return s.Fields; } catch { return new Dictionary<string, string>(); } };
+                Gc.SettingsWatcher.OverlayTry = LiveSettings.TryGet;
+                Gc.SettingsWatcher.Invalidate();
+                // Whoever read a setting BEFORE this point did so without the journal — MediaResolver
+                // caches its region order at boot, and this getter runs later. Announcing the change
+                // makes the wiring independent of who initialises first, which is the property that
+                // matters: a fixed boot order is one refactor away from silently breaking again.
+                LiveSettings.RaiseChanged();
+            }
+            return _lbSettings;
+        }
+    }
     private LbSettingsStore _lbSettings;
     private readonly string _dataDir;
 

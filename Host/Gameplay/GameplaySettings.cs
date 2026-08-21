@@ -507,6 +507,15 @@ internal static class GameplaySettings
     // ── Settings.xml read (fresh) ────────────────────────────────────────────
     private static Dictionary<string, string> ReadSettings()
     {
+        // The store's view when it exists: Settings.xml PLUS the edits still in the journal. Parsing
+        // the file alone served the pre-edit values for as long as LaunchBox held it (Data.LiveSettings).
+        try
+        {
+            var live = Data.LiveSettings.Snapshot?.Invoke();
+            if (live is { Count: > 0 }) return live;
+        }
+        catch { }
+
         var d = new Dictionary<string, string>(StringComparer.Ordinal);
         try
         {

@@ -73,6 +73,8 @@ internal static class MediaResolver
 
     private static string _lbRoot;
     private static string[] _regions = Array.Empty<string>(); // priority order; root handled separately
+    /// <summary>The region priority order in force right now (diagnostics; see LB_SETTINGS_PROBE).</summary>
+    internal static IReadOnlyList<string> RegionPriorities => _regions;
     // Full pick order: user priorities → LaunchBox's hard-coded fallback → root ("none") last. See LbRegions.
     private static List<string> _regionOrder = LbRegions.Order(Array.Empty<string>());
     private static List<string> RegionOrder() => _regionOrder;
@@ -187,9 +189,18 @@ internal static class MediaResolver
     public static void Init(string lbRoot)
     {
         _lbRoot = lbRoot;
-        _regions = ReadRegionPriorities(lbRoot);
-        _regionOrder = LbRegions.Order(_regions);   // + LaunchBox's hard-coded fallback, root ("none") last
+        ReloadRegions();
         Console.WriteLine($"[media] init lbRoot={lbRoot} regions=[{string.Join(", ", _regions)}]");
+        // Read once, used for every image pick — so a change to the priorities has to reach it, and
+        // the only moment it can is when the setting is written (the file may not change for days).
+        Data.LiveSettings.Changed -= ReloadRegions;
+        Data.LiveSettings.Changed += ReloadRegions;
+    }
+
+    private static void ReloadRegions()
+    {
+        _regions = ReadRegionPriorities(_lbRoot ?? "");
+        _regionOrder = LbRegions.Order(_regions);   // + LaunchBox's hard-coded fallback, root ("none") last
     }
 
     // ── Public API (used by HostGame) ────────────────────────────────────────
@@ -931,6 +942,14 @@ internal static class MediaResolver
     {
         try
         {
+            // The LIVE value first: this list is read once at Init and then drives every image pick,
+            // so reading the file alone froze the session on whatever LaunchBox last wrote — including
+            // for a change the user had just made in Options (see Data.LiveSettings). An ANSWER of ""
+            // is the user clearing the list, and is honoured as such: no priorities, which leaves
+            // LbRegions.Order to fall back on LaunchBox's own list. Only "no answer" reads the file.
+            if (Data.LiveSettings.TryGet("RegionPriorities", out var live))
+                return live.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
             string file = Path.Combine(lbRoot, "Data", "Settings.xml");
             if (File.Exists(file))
             {

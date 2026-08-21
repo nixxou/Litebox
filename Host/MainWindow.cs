@@ -658,6 +658,68 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 Console.WriteLine("[imgdl] done");
                 BeginInvoke((Action)Close);
             }
+            // LB_SETTINGS_PROBE="Key" (or "Key=value" to write it): who can see a Settings.xml value
+            // and who can write it. Both readers are asked, because they do NOT read the same thing.
+            var setProbe = Environment.GetEnvironmentVariable("LB_SETTINGS_PROBE");
+            if (!string.IsNullOrEmpty(setProbe))
+            {
+                try
+                {
+                    var dm = _dm as HostDataManagerXml;
+                    var store = dm?.Store;
+                    var lbs = dm?.LbSettings;
+                    int eq = setProbe.IndexOf('=');
+                    string key = eq > 0 ? setProbe[..eq] : setProbe;
+                    string? val = eq > 0 ? setProbe[(eq + 1)..] : null;
+
+                    Console.WriteLine($"[setprobe] store={(store == null ? "NULL" : "ok")} readOnly={store?.ReadOnly} lbRunning={Data.GameStore.IsLaunchBoxRunning()}");
+                    Console.WriteLine($"[setprobe] settingsStore loaded={lbs?.Loaded} dbManaged={Data.ProblemKeys.IsDbManaged(key)}");
+                    Console.WriteLine($"[setprobe] via LbSettingsStore : \"{lbs?.Get(key)}\"");
+                    Console.WriteLine($"[setprobe] via GcShims         : \"{string.Join(",", Gc.SettingsWatcher.GetRegionPriorities())}\"  (region list only)");
+                    Console.WriteLine($"[setprobe] pending Settings ops: {(store?.PendingOps() ?? new List<Data.Op>()).Count(o => o.Entity == "Settings")}");
+                    // The readers that used to parse the XML themselves — do they agree now?
+                    Console.WriteLine($"[setprobe] via MediaResolver    : \"{string.Join(",", MediaResolver.RegionPriorities)}\"");
+                    Console.WriteLine($"[setprobe] via GameplaySettings : snapshot={(Data.LiveSettings.Snapshot?.Invoke()?.Count ?? -1)} fields");
+
+                    // The case the install cannot reproduce on demand: a live value that DIFFERS from
+                    // the file (a journal LaunchBox has not let us flush). Faked here, because the
+                    // previous pass only ever checked an install where the two agreed — and that is
+                    // exactly how a reader stuck on its boot-time copy slipped through.
+                    var realReader = Data.LiveSettings.Reader;
+                    try
+                    {
+                        Data.LiveSettings.Reader = k => k == "RegionPriorities" ? "Japan,Asia" : realReader?.Invoke(k);
+                        Data.LiveSettings.RaiseChanged();
+                        Console.WriteLine($"[setprobe] faked live value  -> MediaResolver: \"{string.Join(",", MediaResolver.RegionPriorities)}\" (expect Japan,Asia)");
+                        Console.WriteLine($"[setprobe]                   -> GcShims      : \"{string.Join(",", Gc.SettingsWatcher.GetRegionPriorities())}\" (expect Japan,Asia)");
+
+                        // And the cleared list: an ANSWER of "", which must not fall back to the file.
+                        // No manual invalidation here — the announcement alone must be enough.
+                        Data.LiveSettings.Reader = k => k == "RegionPriorities" ? "" : realReader?.Invoke(k);
+                        Data.LiveSettings.RaiseChanged();
+                        Console.WriteLine($"[setprobe] cleared list      -> MediaResolver: \"{string.Join(",", MediaResolver.RegionPriorities)}\" (expect empty)");
+                        Console.WriteLine($"[setprobe]                   -> GcShims      : \"{string.Join(",", Gc.SettingsWatcher.GetRegionPriorities())}\" (expect empty)");
+                    }
+                    finally
+                    {
+                        Data.LiveSettings.Reader = realReader;
+                        Data.LiveSettings.RaiseChanged();
+                        Console.WriteLine($"[setprobe] restored          -> MediaResolver: \"{string.Join(",", MediaResolver.RegionPriorities)}\""
+                                        + $" · GcShims: \"{string.Join(",", Gc.SettingsWatcher.GetRegionPriorities())}\"");
+                    }
+
+                    if (val != null && lbs != null)
+                    {
+                        lbs.Set(key, val);
+                        Console.WriteLine($"[setprobe] wrote \"{val}\" — pending Settings ops now: "
+                            + $"{(store?.PendingOps() ?? new List<Data.Op>()).Count(o => o.Entity == "Settings")}");
+                        store?.FlushLbSettingsJournalIfSafe();
+                        Console.WriteLine($"[setprobe] after flush, pending: {(store?.PendingOps() ?? new List<Data.Op>()).Count(o => o.Entity == "Settings")}");
+                    }
+                }
+                catch (Exception ex) { Console.WriteLine("[setprobe] " + ex); }
+                BeginInvoke((Action)Close);
+            }
             if (Environment.GetEnvironmentVariable("LB_WHEEL_SELFTEST") == "1") RunWheelSelfTest();
             var idxDiag = Environment.GetEnvironmentVariable("LB_INDEX_DIAG");
             if (!string.IsNullOrEmpty(idxDiag)) RunIndexDiag(idxDiag);

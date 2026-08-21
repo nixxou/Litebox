@@ -43,6 +43,46 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private static readonly Color Fg      = LiteBoxTheme.Fg;
     private static readonly Color SubFg   = LiteBoxTheme.SubFg;
     private static readonly Color Accent  = LiteBoxTheme.Accent;
+    /// <summary>Poster selection plate: the themed accent mixed t of the way out of the centre-zone
+    /// ground. The fill is what the selected tile is composited over, and the edge strokes its outline —
+    /// both drawn inside the tile bake (DrawSelectionPlate).</summary>
+    // The tile faces: Tahoma rather than the window font, because it is hand-hinted for exactly this
+    // size and GDI leans on that hinting at 8-9pt. Measured against real tile strings, the developer line
+    // stops being clipped at all (0 of 5, against 1 of 5 for Segoe UI 9). The title takes the bold weight
+    // for presence — that one is WIDER than Segoe UI Semibold (widest string 182px against 169), so a long
+    // title gives up a little more to the ellipsis. Weight over fit, deliberately.
+    private const string PosterFontFamily = "Tahoma";
+    private const float PosterFontPt = 8.25f;
+
+    /// <summary>A tile face at the current zoom, falling back to the window font if Tahoma is missing —
+    /// GDI+ would otherwise substitute something far worse than what we started from.</summary>
+    private Font MakeTileFont(FontStyle style)
+    {
+        float size = PosterFontPt * (float)_zoom;
+        try
+        {
+            var f = new Font(PosterFontFamily, size, style, GraphicsUnit.Point);
+            if (string.Equals(f.Name, PosterFontFamily, StringComparison.OrdinalIgnoreCase)) return f;
+            f.Dispose();
+        }
+        catch { }
+        return new Font(Font.FontFamily, Font.Size * (float)_zoom, style);
+    }
+
+    /// <summary>The developer line ON a selected tile: the theme secondary lifted most of the way to the
+    /// primary. Derived rather than hard-coded, so a re-themed Fg/SubFg carries through.</summary>
+    private static Color SubFgOnPlate => Color.FromArgb(
+        SubFg.R + (int)((Fg.R - SubFg.R) * 0.75f),
+        SubFg.G + (int)((Fg.G - SubFg.G) * 0.75f),
+        SubFg.B + (int)((Fg.B - SubFg.B) * 0.75f));
+
+    private static Color PlateFill(bool focused) => MixToAccent(focused ? 0.62f : 0.24f);
+    private static Color PlateEdge(bool focused) => MixToAccent(focused ? 0.95f : 0.45f);
+    private static Color MixToAccent(float t) => Color.FromArgb(
+        (int)(Center.R + (Accent.R - Center.R) * t),
+        (int)(Center.G + (Accent.G - Center.G) * t),
+        (int)(Center.B + (Accent.B - Center.B) * t));
+
     private static readonly Color UserRating = Color.FromArgb(255, 196, 0);   // amber: user-set rating
     private static readonly Color CommRating = Color.FromArgb(150, 150, 152); // grey: community rating
 
@@ -68,6 +108,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private readonly IDataManager _dm;
 
     private readonly TreeView _sources;
+    private SlimScrollTreeHost _sourcesHost;         // the tree plus its two overlay bars
     private readonly Dictionary<object, TreeNode> _treeNodeMap = new();   // node object → its TreeNode (selection restore)
     private readonly GameListView _games;
     private GameListIndexBar _gameIndex;         // LB 14's Game List Index — group markers where the scrollbar was
@@ -160,6 +201,17 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         long bytes = (long)t * PosterSlotBytes + (long)th * PosterThumbBytes;
         return $"{bytes / (1024 * 1024)} MB at the current zoom ({t} tiles + {th} images)";
     }
+
+    // Selection colours the tile's BACKGROUND instead of letting comctl blend its highlight into every
+    // opaque pixel of the tile — which today paints the box art blue along with the rest. Option:
+    // Display ▸ "Poster grid: selection colours the background". Never on with the owner-draw renderer,
+    // which already draws its own selection card.
+    private bool _posterPlate;
+
+    /// <summary>A native-renderer feature: the owner-draw one already draws its own rounded selection
+    /// card, so the option is ignored while that one is on (its help says so).</summary>
+    private bool ReadPosterPlate() => !_posterOwnerDraw && _cfg.GetBool("PosterSelectionPlate", true);
+
     // Legacy owner-draw renderer (opt-in via PosterOwnerDraw; needs a restart to switch). Kept as an
     // alternative to the native image list: it owner-draws each tile (custom rounded selection + hover
     // grow) but repaints managed per tile, so a held scroll in a huge view can stutter.
@@ -205,7 +257,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private int _posterBadgeRows;
     private int PGap    => (int)Math.Round(PGap0    * _zoom);
     private int PZ(int px) => (int)Math.Round(px * _zoom);           // scale a tile-internal offset by zoom
-    private Font _posterTileFont;                                    // MainWindow.Font × zoom, for tile title/dev text
+    private Font _posterTileFont;                                    // Tahoma × zoom — the developer line
+    private Font _posterTitleFont;                                   // the same, bold — titles
     private TextBox _search;                                          // quick search — left panel header (borderless, hosted in _searchWrap)
     private RoundedField _searchWrap;                                 // the rounded frame around it (carries the quick-filter tint)
     // Debounces the search box: ApplyFilter → RebuildView → MeasureContentFits re-scans every row of the
@@ -231,7 +284,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private readonly MediaStrip _strip;          // clickable mini-thumbnails under the main media (slim custom scrollbar)
     private SplitContainer _outerSplit;          // left tree | (middle list + right details) — % persisted
     private SplitContainer _innerSplit;          // middle list | right details — % persisted
-    private Panel _detailHost;                    // scroll viewport hosting the detail grid (scrollbar when content overflows)
+    // Slim scrollbars, one switch per host, ini-only (no Options row: these are for advanced users, and
+    // the shipped answer is yes). Read once because each decides how its control is BUILT.
+    private bool _slimDetail, _slimNotes, _slimTree;
+
+    private SlimScrollPanel _detailHost;          // scroll viewport hosting the detail grid (slim bar when content overflows)
+    private SlimScrollBar _detailBar;             // the 4px overlay standing in for the native 17px one
     private LaunchButtons _launchButtons;         // Play / Version / ROM group docked at the pane bottom
     private TableLayoutPanel _detailGrid;        // detail layout — sized by RelayoutDetail (fills viewport, or taller → scrolls)
     private double _mediaAspect = 16.0 / 9.0;    // reserved main-media area aspect (16:9 default, 2:3 poster option)
@@ -249,6 +307,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private bool _hsTabShown;                     // whether the HIGH SCORES tab is currently in the strip (MAME game)
     private static int _detailTabSel;            // 0 = Overview, 1 = Related — remembered across selections (session)
     private readonly TextBox _notes;
+    private SlimScrollTextBox _notesHost;            // the notes box plus its overlay bar
     private static bool _metaExpanded;           // remembered expand state of the platform meta card (session + INI)
     private static bool _vndbExpanded;           // remembered expand state of the VNDB tags box (session + INI)
     private static bool _raExpanded;             // remembered expand state of the RetroAchievements box (session + INI)
@@ -323,6 +382,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _secondInstance = InstanceGuard.AnotherInstanceRunning;
         _useImageCache = _cfg.UseImageCache;
         _posterOwnerDraw = _cfg.GetBool("PosterOwnerDraw", false);   // legacy poster renderer (vs native image list)
+        _posterPlate = ReadPosterPlate();                            // read BEFORE BuildPoster, which wires it into the grid
+        _slimDetail = _cfg.GetBool("SlimScrollDetail", true);
+        _slimNotes = _cfg.GetBool("SlimScrollNotes", true);
+        _slimTree = _cfg.GetBool("SlimScrollTree", true);
         _zoom = Math.Clamp(_cfg.GetInt("ZoomPercent", 100) / 100.0, 0.5, 2.0);   // read BEFORE BuildPoster so its image list is sized for the saved zoom
         _metaExpanded = _cfg.GetBool("MetaExpanded", false);
         _vndbExpanded = _cfg.GetBool("VndbExpanded", false);
@@ -371,7 +434,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // content needs more than fits (e.g. the meta box expanded, or a short pane), the grid grows
         // taller than the viewport and a vertical scrollbar appears — its width is reserved so it
         // never overlaps the content (RelayoutDetail).
-        _detailHost = new Panel { Dock = DockStyle.Fill, BackColor = Panel, AutoScroll = true };
+        _detailHost = new SlimScrollPanel { Dock = DockStyle.Fill, BackColor = Panel, AutoScroll = true, SlimBars = _slimDetail };
         _detailHost.Controls.Add(details);
         _detailHost.Resize += (_, _) => RelayoutDetail();
 
@@ -432,6 +495,39 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // outside the scrolling detail grid). _detailHost (Fill) is added FIRST so
         // the bottom panel reserves its space and the grid fills the rest.
         inner.Panel2.Controls.Add(_detailHost);
+        // The overlay bar, and the two ways the pane gets scrolled into it. It is a SIBLING of the pane,
+        // not a child: a child of an AutoScroll panel scrolls with the content it is meant to be scrolling.
+        // Sitting on top, it costs no layout at all. Skipped entirely when the native bars are kept
+        // (SlimScrollDetail=false in the ini).
+        if (_slimDetail)
+        {
+            _detailBar = new SlimScrollBar(vertical: true);
+            // The pane's range is in pixels, so a notch is worth the usual few lines of them.
+            _detailBar.WheelStep = Math.Max(16, (SystemInformation.MouseWheelScrollLines <= 0 ? 3 : SystemInformation.MouseWheelScrollLines) * 16);
+            inner.Panel2.Controls.Add(_detailBar);
+            // Once, at creation: z-order is also what WinForms resolves docking from, so nudging it on every
+            // reposition would keep re-shuffling the docked launch buttons below.
+            _detailBar.BringToFront();
+            _detailBar.ScrollTo += v => { try { _detailHost.AutoScrollPosition = new Point(0, v); SyncDetailBar(); } catch { } };
+            _detailHost.ScrollStateChanged += SyncDetailBar;
+            // A wheel notch in the pane's own scrollbar strip belongs to the pane, even when a 3D model is
+            // sitting under the pointer and would otherwise zoom on it.
+            Model3d.Model3dBlock.EdgeWheel = delta =>
+            {
+                try
+                {
+                    int lines = SystemInformation.MouseWheelScrollLines;
+                    if (lines <= 0) lines = 3;
+                    int step = Math.Max(16, lines * 16);
+                    int at = -_detailHost.AutoScrollPosition.Y - Math.Sign(delta) * step;
+                    _detailHost.AutoScrollPosition = new Point(0, Math.Max(0, at));
+                    SyncDetailBar();
+                }
+                catch { }
+            };
+            _detailHost.LocationChanged += (_, _) => SyncDetailBar();
+            _detailHost.SizeChanged += (_, _) => SyncDetailBar();
+        }
         _launchButtons = new LaunchButtons(
             (g, app, emu) => Safe(() => PluginHelper.LaunchBoxMainViewModel.PlayGame(g, app, emu, null)),
             StoreLaunch,   // GOG/Steam: running screen + exit watch
@@ -464,7 +560,10 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         leftPanel.Controls.Add(searchRow, 0, 0);
         leftPanel.Controls.Add(_viewCombo, 0, 1);
-        leftPanel.Controls.Add(_sources, 0, 2);
+        // The bars need a container that is not the tree itself (a TreeView does not host child windows
+        // sensibly) and not the TableLayoutPanel either (it would place them in cells). A wrapper it is.
+        _sourcesHost = new SlimScrollTreeHost(_sources, _slimTree) { Dock = DockStyle.Fill, BackColor = Panel };
+        leftPanel.Controls.Add(_sourcesHost, 0, 2);
         outer.Panel1.Controls.Add(leftPanel);
         outer.Panel2.Controls.Add(inner);
         Controls.Add(outer);
@@ -1234,7 +1333,13 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _storeAchCard = new StoreAchievementsCard { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
         _storeAchCard.ExpandedChanged = OnStoreAchExpandedToggled;
         _storeAchCard.LayoutChanged = RelayoutDetail;
-        notes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Panel2, ForeColor = Fg };
+        // The notes box wears the slim overlay bar too: ScrollBars.Vertical on a TextBox shows its native
+        // bar PERMANENTLY, even over two lines that fit. The wrapper owns the bar; `notes` stays the very
+        // same TextBox everything else in here already talks to.
+        var notesHost = new SlimScrollTextBox(_slimNotes) { Dock = DockStyle.Fill, BackColor = Panel2 };
+        notes = notesHost.Box;
+        notes.BackColor = Panel2; notes.ForeColor = Fg;
+        _notesHost = notesHost;
 
         // Compact OVERVIEW | RELATED GAMES switch (web-theme parity) + the Related content panel.
         _detailTabs = new DetailTabStrip(primary: true) { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0, 0, 0, 6) };
@@ -1254,7 +1359,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         tlp.Controls.Add(vndb, 0, 5);
         tlp.Controls.Add(_raCard, 0, 6);
         tlp.Controls.Add(_storeAchCard, 0, 7);
-        tlp.Controls.Add(notes, 0, 8);
+        tlp.Controls.Add(notesHost, 0, 8);
         tlp.Controls.Add(_related, 0, 9);
         _highScores = new Mame.HighScoresPanel { Dock = DockStyle.Fill, BackColor = Panel, Margin = new Padding(0) };
         tlp.Controls.Add(_highScores, 0, 10);
@@ -1322,16 +1427,36 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         finally { _inRelayout = false; }
     }
 
+    /// <summary>Hand the pane geometry to the overlay bar: viewport, content, position. Everything the bar
+    /// needs comes from the pane itself, so this is safe to call from anywhere that might have moved it.</summary>
+    private void SyncDetailBar()
+    {
+        if (!_slimDetail || _detailBar == null || _detailHost == null || _detailHost.IsDisposed) return;
+        try
+        {
+            _detailBar.Edge = _detailHost.Bounds;
+            int viewport = _detailHost.ClientSize.Height;
+            int content = _detailHost.DisplayRectangle.Height;
+            _detailBar.SetRange(viewport, content, -_detailHost.AutoScrollPosition.Y);
+            if (_detailBar.Visible) _detailBar.Reposition();
+        }
+        catch { }
+    }
+
     // Tab strip height (game mode) and the minimum Related-panel height before the pane scrolls.
     private const int DetailTabsH = 30;
     private const int MinRelatedH = 240;
 
     private void RelayoutDetailCore(Panel host, TableLayoutPanel tlp)
     {
-        int sbw = SystemInformation.VerticalScrollBarWidth;
-        int hsbh = SystemInformation.HorizontalScrollBarHeight;
-        int fullW = host.ClientSize.Width + (host.VerticalScroll.Visible ? sbw : 0);     // width with NO vertical scrollbar
-        int viewH = host.ClientSize.Height + (host.HorizontalScroll.Visible ? hsbh : 0); // height with NO horizontal scrollbar
+        // With the overlay bar there is no width to reserve: the native bars are stripped, so the client
+        // area is the whole pane whether it scrolls or not — which also retires the old hazard of reading
+        // the reserved width from a scrollbar state that had not settled yet. With SlimScrollDetail off,
+        // the native bars are back and so is the reservation.
+        int sbw = _slimDetail ? 0 : SystemInformation.VerticalScrollBarWidth;
+        int hsbh = _slimDetail ? 0 : SystemInformation.HorizontalScrollBarHeight;
+        int fullW = host.ClientSize.Width + (sbw > 0 && host.VerticalScroll.Visible ? sbw : 0);
+        int viewH = host.ClientSize.Height + (hsbh > 0 && host.HorizontalScroll.Visible ? hsbh : 0);
         if (fullW < 80 || viewH < 80) return;
         int padH = tlp.Padding.Horizontal, padV = tlp.Padding.Vertical;
 
@@ -1405,11 +1530,22 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // it can still report the previous item's scrollbar state, so the card would render narrower
         // than it was measured → an extra wrapped line overflows the box. wantW already accounts for
         // the scrollbar, and equals the settled client width in both cases.
+        // WE decide whether this pane scrolls, so it only gets AutoScroll while it does. Left on the whole
+        // time, WinForms raises its own bars during a resize — before our pass has had the chance to resize
+        // the grid — and the pane flashes them for a frame even though nothing needed scrolling. Worse, the
+        // two then justify each other: a vertical bar costs 17px of width, making the horizontal one
+        // necessary, whose 17px of height makes the vertical one necessary in turn, and the pair holds
+        // itself up over content that fits (measured: client 391x1255 carrying a 408x1272 grid, autoMin at
+        // 0). With AutoScroll off, a stale oversized grid is simply clipped for the instant before this
+        // pass resizes it — no bar, nothing to flash.
+        if (host.AutoScroll != overflow) host.AutoScroll = overflow;
         host.AutoScrollMinSize = new Size(0, overflow ? minContent : 0);
+        SyncDetailBar();
         int gridW = wantW;
         int gridH = overflow ? minContent : viewH;
         if (tlp.Bounds != new Rectangle(0, 0, gridW, gridH))
             tlp.Bounds = new Rectangle(0, 0, gridW, gridH);
+
     }
 
     private void OnMetaExpandedToggled()
@@ -1556,13 +1692,15 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // Row height/indent scaled for DPI, and bumped up from the classic-Windows-Explorer-tree
         // density (was a hardcoded, unscaled 26px) to the roomier spacing modern Windows apps use.
         float s = LiteBoxTheme.DpiScale(this);
-        var tv = new TreeView
+        var tv = SlimScrollTreeHost.NewTree(_slimTree);
+        tv.SuspendLayout();
         {
-            Dock = DockStyle.Fill, BackColor = Panel, ForeColor = Fg, BorderStyle = BorderStyle.None,
-            FullRowSelect = true, ShowLines = false, ShowPlusMinus = true, ShowRootLines = true,
-            HideSelection = false, ItemHeight = (int)Math.Round(32 * s), Indent = (int)Math.Round(20 * s),
-            ImageList = _treeIcons,
-        };
+            tv.Dock = DockStyle.Fill; tv.BackColor = Panel; tv.ForeColor = Fg; tv.BorderStyle = BorderStyle.None;
+            tv.FullRowSelect = true; tv.ShowLines = false; tv.ShowPlusMinus = true; tv.ShowRootLines = true;
+            tv.HideSelection = false; tv.ItemHeight = (int)Math.Round(32 * s); tv.Indent = (int)Math.Round(20 * s);
+            tv.ImageList = _treeIcons;
+        }
+        tv.ResumeLayout();
         tv.AfterSelect += (_, e) =>
         {
             // Plain selection (keyboard / simple click) resets the multi-selection; with Ctrl/Shift held the
@@ -1906,7 +2044,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             // auto-expands just the path to the selected node.
             _sources.CollapseAll();
         }
-        finally { _sources.EndUpdate(); }
+        finally
+        {
+            _sources.EndUpdate();
+            // The node set just changed, so the range the bar was showing is stale.
+            try { _sourcesHost?.Sync(); } catch { }
+        }
         // Selection (saved category/game) is restored by RestoreSelection().
     }
 
@@ -3978,8 +4121,151 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             }
         }
 
+        // ── Selection plate (Options ▸ Display ▸ "Poster grid: selection colours the background") ─────
+        // comctl32 paints no plate behind an item: it BLENDS the highlight into the opaque pixels of the
+        // icon. The tile covers its whole cell, so that turns the entire tile blue, box art included.
+        //
+        // We take the selected item over instead: blit a SECOND bake of the same game, one that carries
+        // the plate inside it, and tell comctl to skip its own drawing for that item. Baking rather than
+        // compositing settles two things at once. Text: ClearType blends each glyph against the pixels
+        // already beneath it, so the plate has to be the ground when the glyphs go down — probed, every
+        // way of putting text on a transparent tile (GDI+ AntiAlias, AntiAliasGridFit, ClearTypeGridFit,
+        // GDI with an alpha fix-up) came out blurred, fringed, or haloed against the wrong colour. Shape:
+        // the plate hugs the artwork, whose height changes from game to game, so it could never have been
+        // one cached rectangle behind every tile.
+        //
+        // One opaque GDI BitBlt of a cached bitmap — the lesson BlitTile already records, BitBlt being
+        // ~10x GDI+ DrawImage. Nothing here runs for an unselected tile.
+        public bool SelectionPlate;
+        public delegate IntPtr SelectedTileLookup(int index, bool focused, int boxWidth, out Size bleed);
+        public SelectedTileLookup SelectedTileOf;   // the bake, plus how far it reaches past the cell
+        private Rectangle _plated = Rectangle.Empty;   // what the plate painted, for the repaint below
+        private IntPtr _plateDc;                         // shared memory DC for the blit
+
+        private const int OCM_NOTIFY = 0x204E;      // WM_REFLECT | WM_NOTIFY - the parent hands it back to us
+        private const int NM_CUSTOMDRAW_P = -12;
+        private const int CDDS_PREPAINT = 0x00000001, CDDS_ITEMPREPAINT = 0x00010001;
+        private const int CDRF_DODEFAULT = 0, CDRF_SKIPDEFAULT = 4, CDRF_NOTIFYITEMDRAW = 0x20;
+        private const int LVM_GETITEMRECT = LVM_FIRST + 14, LVIR_BOUNDS = 0, LVIR_ICON = 1;
+        private const int LVM_GETITEMSTATE = LVM_FIRST + 44;
+
+        [StructLayout(LayoutKind.Sequential)] private struct RECT { public int left, top, right, bottom; }
+        [StructLayout(LayoutKind.Sequential)] private struct NMHDR { public IntPtr hwndFrom; public IntPtr idFrom; public int code; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NMCUSTOMDRAW
+        {
+            public NMHDR hdr; public int dwDrawStage; public IntPtr hdc; public RECT rc;
+            public IntPtr dwItemSpec; public uint uItemState; public IntPtr lItemlParam;
+        }
+        [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, ref RECT r);
+        // The bake is as wide as the item box, so its size is not a constant we can keep in step by hand.
+        // Ask the bitmap: one struct copy per selected tile per paint, and it cannot drift.
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BITMAP { public int bmType, bmWidth, bmHeight, bmWidthBytes; public ushort bmPlanes, bmBitsPixel; public IntPtr bmBits; }
+        [DllImport("gdi32.dll")] private static extern int GetObject(IntPtr h, int c, ref BITMAP bm);
+
+        private int PlateCustomDraw(IntPtr lp)
+        {
+            var cd = Marshal.PtrToStructure<NMCUSTOMDRAW>(lp);
+            if (cd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+            if (cd.dwDrawStage != CDDS_ITEMPREPAINT) return CDRF_DODEFAULT;
+
+            // NOT cd.uItemState: a list view does not fill CDIS_SELECTED in reliably - probed, it reported
+            // EVERY item as selected and plated the whole grid. Ask the control for the real state.
+            int i = (int)cd.dwItemSpec;
+            if (((int)SendMessage(Handle, LVM_GETITEMSTATE, (IntPtr)i, (IntPtr)(int)LVIS_SELECTED) & (int)LVIS_SELECTED) == 0)
+                return CDRF_DODEFAULT;      // the unselected majority: comctl draws them, untouched
+
+            bool focused = Focused;
+            var bounds = new RECT { left = LVIR_BOUNDS };
+            SendMessage(Handle, LVM_GETITEMRECT, (IntPtr)i, ref bounds);
+            int boxW = bounds.right - bounds.left;
+            if (boxW <= 0) return CDRF_DODEFAULT;
+
+            IntPtr tile = IntPtr.Zero;
+            Size bleed = Size.Empty;
+            try { if (SelectedTileOf != null) tile = SelectedTileOf(i, focused, boxW, out bleed); } catch { tile = IntPtr.Zero; }
+            if (tile == IntPtr.Zero) return CDRF_DODEFAULT;   // nothing to draw - let comctl have the item back
+            var bm = new BITMAP();
+            if (GetObject(tile, Marshal.SizeOf<BITMAP>(), ref bm) == 0 || bm.bmWidth <= 0 || bm.bmHeight <= 0)
+                return CDRF_DODEFAULT;
+
+            // Centred on the item box horizontally; vertically where comctl puts the icon. LVIR_ICON is a
+            // bounding box built from the icon SPACING, not from the image, and comctl centres the image
+            // in it - blitting at its top-left with its size slid the artwork off-register and read past
+            // the edges of the bitmap, which is where a stray square of colour came from.
+            var icon = new RECT { left = LVIR_ICON };
+            SendMessage(Handle, LVM_GETITEMRECT, (IntPtr)i, ref icon);
+            // Register the CELL where comctl would have drawn it, then step back out by the bleed so the
+            // plate lands in the surrounding gap. Working from the tile size rather than the bitmap size
+            // is what keeps the artwork on the same pixels as its unselected neighbours.
+            int tileW = bm.bmWidth - 2 * bleed.Width, tileH = bm.bmHeight - 2 * bleed.Height;
+            if (tileW <= 0 || tileH <= 0) return CDRF_DODEFAULT;
+            int tx = icon.left + ((icon.right - icon.left) - tileW) / 2 - bleed.Width;
+            int ty = icon.top + Math.Max(0, ((icon.bottom - icon.top) - tileH) / 2) - bleed.Height;
+
+            if (_plateDc == IntPtr.Zero) _plateDc = CreateCompatibleDC(IntPtr.Zero);
+            IntPtr prev = SelectObject(_plateDc, tile);
+            BitBlt(cd.hdc, tx, ty, bm.bmWidth, bm.bmHeight, _plateDc, 0, 0, SRCCOPY);
+            SelectObject(_plateDc, prev);
+
+            // The plate reaches a few pixels above the item box, and comctl only ever invalidates the box
+            // itself — so on deselection that sliver would survive as a ghost. Remember what was painted
+            // and invalidate it ourselves when the selection moves.
+            var painted = new Rectangle(tx, ty, bm.bmWidth, bm.bmHeight);
+            _plated = _plated.IsEmpty ? painted : Rectangle.Union(_plated, painted);
+            return CDRF_SKIPDEFAULT;
+        }
+
+        // comctl invalidates the item box and nothing else, and a WM_PAINT is clipped to what was
+        // invalidated — so the few pixels the plate reaches above the box were simply cut off. The margin
+        // then appeared only by luck, when something else had dirtied the band above (selecting a game one
+        // row up did exactly that, which is why it looked like the first click behaved differently).
+        //
+        // So ask for that band ourselves, on both sides of the change: what the plate painted last time,
+        // and what the current selection is about to paint.
+        private const int PlateSlack = 24;   // comfortably more than the bleed; over-asking costs nothing
+        private const int LVNI_SELECTED_P = 0x0002;
+
+        protected override void OnSelectedIndexChanged(EventArgs e)
+        {
+            if (SelectionPlate)
+            {
+                var r = _plated;
+                _plated = Rectangle.Empty;
+                int n = 0;
+                for (int i = (int)SendMessage(Handle, LVM_GETNEXTITEM, (IntPtr)(-1), (IntPtr)LVNI_SELECTED_P);
+                     i >= 0 && n < 16;
+                     i = (int)SendMessage(Handle, LVM_GETNEXTITEM, (IntPtr)i, (IntPtr)LVNI_SELECTED_P), n++)
+                {
+                    var b = new RECT { left = LVIR_BOUNDS };
+                    SendMessage(Handle, LVM_GETITEMRECT, (IntPtr)i, ref b);
+                    var one = Rectangle.FromLTRB(b.left, b.top - PlateSlack, b.right, b.bottom + PlateSlack);
+                    r = r.IsEmpty ? one : Rectangle.Union(r, one);
+                }
+                // A big multi-selection is not worth walking item by item on every state change; it repaints
+                // wholesale anyway.
+                if (n >= 16) Invalidate();
+                else if (!r.IsEmpty) Invalidate(r);
+            }
+            base.OnSelectedIndexChanged(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (_plateDc != IntPtr.Zero) { DeleteDC(_plateDc); _plateDc = IntPtr.Zero; }
+            base.Dispose(disposing);
+        }
+
         protected override void WndProc(ref Message m)
         {
+            // Custom draw arrives reflected from the parent. Only claimed with the plate on — off, the
+            // control behaves exactly as it always has.
+            if (SelectionPlate && m.Msg == OCM_NOTIFY && m.LParam != IntPtr.Zero)
+            {
+                var hdr = Marshal.PtrToStructure<NMHDR>(m.LParam);
+                if (hdr.code == NM_CUSTOMDRAW_P) { m.Result = (IntPtr)PlateCustomDraw(m.LParam); return; }
+            }
             if (_hideVScroll && m.Msg == WM_NCCALCSIZE_P && IsHandleCreated)
             {
                 int style = GetWindowLong(Handle, GWL_STYLE_P);
@@ -4139,6 +4425,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         else
         {
             lv.RetrieveVirtualItem += OnPosterRetrieveItem;   // native: each item carries its image-list slot
+            lv.SelectionPlate = _posterPlate;                 // selection colours the ground, not the tile
+            lv.SelectedTileOf = SelectedTileHbm;
         }
         lv.SearchForVirtualItem += OnTypeAheadSearch;   // type-to-jump (compare-name prefix)
         lv.KeyPress += OnGameListKeyPress;              // hors tri Titre : la frappe FILTRE
@@ -4168,14 +4456,16 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // Hand back the blank item (never null: the Items[i] path throws on a null virtual item) and skip
     // the build.
     private void OnPosterRetrieveItem(object sender, RetrieveVirtualItemEventArgs e)
+        => e.Item = new ListViewItem("") { ImageIndex = PosterSlotAt(e.ItemIndex) };
+
+    /// <summary>The image-list slot for a display index, building and interning the tile on first use;
+    /// -1 while the window is on its way out (see the note above) or for a game with no usable id.</summary>
+    private int PosterSlotAt(int displayIndex)
     {
-        int slot = -1;
-        if (!_closing && !Disposing && !IsDisposed)
-        {
-            var model = PosterModel(e.ItemIndex);
-            if (model != null && Guid.TryParse(S(Safe(() => model.Id)), out var id)) slot = SlotFor(model, id);
-        }
-        e.Item = new ListViewItem("") { ImageIndex = slot };
+        if (_closing || Disposing || IsDisposed) return -1;
+        var model = PosterModel(displayIndex);
+        if (model == null) return -1;
+        return Guid.TryParse(S(Safe(() => model.Id)), out var id) ? SlotFor(model, id) : -1;
     }
 
     private IGame PosterModel(int displayIndex)
@@ -4391,7 +4681,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             while (_posterDone.Count > 0) { var (_, _, img) = _posterDone.Dequeue(); img?.Dispose(); }
         }
         _slotOf.Clear(); _slotId.Clear(); _slotCount = 0; _slotLru.Clear(); _slotNode.Clear();
+        DropSelectedTiles();   // same composition, same geometry — it cannot outlive the rebuild
         _posterTileFont?.Dispose(); _posterTileFont = null;
+        _posterTitleFont?.Dispose(); _posterTitleFont = null;
 
         if (_posterOwnerDraw)
         {
@@ -4407,6 +4699,8 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             _himl = ImageList_Create(PCellW, PImgH + PLabelH, ILC_COLOR32, 0, 64);   // 32bpp: matches the screen depth → direct (fast) blit on scroll
             try { if (_poster.IsHandleCreated) SendMessage(_poster.Handle, LVM_SETIMAGELIST, (IntPtr)LVSIL_NORMAL, _himl); } catch { }
             if (oldHiml != IntPtr.Zero) ImageList_Destroy(oldHiml);
+            // The option may be what triggered this rebuild in the first place.
+            _poster.SelectionPlate = _posterPlate;
         }
         try { if (_poster.IsHandleCreated) { SetIconSpacing(_poster, PCellW + PGap, PImgH + PLabelH + PGap); _poster.InvalidateGridCache(); } } catch { }
         _posterSpacingX = PCellW + PGap;   // keep the elastic-gap cache honest (LayoutPoster re-squeezes right after)
@@ -4721,7 +5015,68 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     [System.Runtime.InteropServices.DllImport("comctl32.dll")] private static extern bool ImageList_Replace(IntPtr himl, int i, IntPtr hbmImage, IntPtr hbmMask);
     [System.Runtime.InteropServices.DllImport("comctl32.dll")] private static extern bool ImageList_Destroy(IntPtr himl);
     [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hgdiobj);
+    // DeleteDC: the selection plate keeps one memory DC for its blits (PosterListView.Dispose frees it).
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr hdc);
     private const int ILC_COLOR32 = 0x20, ILC_COLOR24 = 0x18, LVM_SETIMAGELIST = 0x1000 + 3, LVSIL_NORMAL = 0;
+    // ── Selected-variant tiles ─────────────────────────────────────────────
+    // The same tile, composited over the plate colour instead of the centre zone, so that its ClearType
+    // text is blended against the colour it actually sits on. Built on demand for SELECTED tiles only —
+    // one, for the usual single selection — and cached by (game, focused). It is the same composition as
+    // the ordinary tile, so it dies with it: a geometry rebuild or new art drops both.
+    private readonly Dictionary<(Guid id, bool focused), IntPtr> _selTile = new();
+    private readonly Queue<(Guid id, bool focused)> _selTileOrder = new();
+    // Budgeted in BYTES, like every other poster cache, and NOT out of the poster memory option: that
+    // one sizes the scroll cache, which this is not. A few megabytes already holds more selected tiles
+    // than can be on screen at once, and it keeps the cost flat when a zoom quadruples the tile area
+    // (a count-based cap would have quietly grown from ~16 MB to ~64 MB at zoom 2).
+    private const long SelTileBudget = 6L * 1024 * 1024;
+    private int SelTileCap => (int)Math.Clamp(SelTileBudget / Math.Max(1L, PosterSlotBytes), 4, 96);
+    private int _selTileWidth = -1;   // item-box width the current bakes were made for
+
+    private Size _selBleed;   // how far the last bake reaches past the cell, each side
+
+    private IntPtr SelectedTileHbm(int displayIndex, bool focused, int boxWidth, out Size bleed)
+    {
+        bleed = _selBleed;
+        if (!_posterPlate) return IntPtr.Zero;
+        // The bakes are sized to the item box; an elastic-gap squeeze changes it, and stale ones would be
+        // the wrong width. Rare enough to just start over.
+        if (_selTileWidth != boxWidth) { DropSelectedTiles(); _selTileWidth = boxWidth; }
+        var model = PosterModel(displayIndex);
+        if (model == null || !Guid.TryParse(S(Safe(() => model.Id)), out var id)) return IntPtr.Zero;
+        var key = (id, focused);
+        if (_selTile.TryGetValue(key, out var hit)) { bleed = _selBleed; return hit; }
+        var hbm = BuildTileHbm(model, id, true, focused, boxWidth, out int bx, out int by);
+        if (hbm == IntPtr.Zero) return IntPtr.Zero;
+        _selBleed = new Size(bx, by);
+        _selTile[key] = hbm;
+        _selTileOrder.Enqueue(key);
+        while (_selTileOrder.Count > SelTileCap)
+        {
+            var old = _selTileOrder.Dequeue();
+            if (_selTile.TryGetValue(old, out var oh)) { if (oh != IntPtr.Zero) DeleteObject(oh); _selTile.Remove(old); }
+        }
+        bleed = _selBleed;
+        return hbm;
+    }
+
+    /// <summary>Drop one game’s selected variants, or all of them. Stale keys left in the FIFO are
+    /// harmless: the eviction loop only frees what the dictionary still holds.</summary>
+    private void DropSelectedTiles(Guid? only = null)
+    {
+        if (only is Guid g)
+        {
+            foreach (bool f in new[] { true, false })
+                if (_selTile.TryGetValue((g, f), out var h))
+                {
+                    if (h != IntPtr.Zero) DeleteObject(h);
+                    _selTile.Remove((g, f));
+                }
+            return;
+        }
+        foreach (var h in _selTile.Values) if (h != IntPtr.Zero) DeleteObject(h);
+        _selTile.Clear(); _selTileOrder.Clear();
+    }
 
     // The image-list slot for a game, building + interning its tile on first use (slots recycle LRU).
     private int SlotFor(IGame model, Guid id)
@@ -4767,6 +5122,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // Rebuild + replace a game's tile after its thumb finished loading (no-op if it has no live slot).
     private void RefreshSlot(IGame model, Guid id)
     {
+        DropSelectedTiles(id);   // the art that just landed belongs in the selected bake too
         if (model == null || !_slotOf.TryGetValue(id, out int slot)) return;
         IntPtr hbm = BuildTileHbm(model, id);
         if (hbm == IntPtr.Zero) return;
@@ -4778,57 +5134,138 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // HBITMAP (IntPtr.Zero on failure). 24bpp = no alpha channel, so GDI text renders opaque (a 32bpp
     // ARGB tile would lose the text pixels' alpha and the image list would draw them transparent). The
     // caller adds/replaces it into the image list, then frees the HBITMAP (the list keeps its own copy).
-    private IntPtr BuildTileHbm(IGame model, Guid id)
+    private IntPtr BuildTileHbm(IGame model, Guid id) => BuildTileHbm(model, id, false, false, 0, out _, out _);
+
+    // plate: bake the selection plate into the tile (the SELECTED variant, see SelectedTileHbm). Baked
+    // rather than drawn behind, for two reasons. Text: ClearType blends each glyph against the pixels
+    // already under it, so crisp text on the plate needs the plate to BE the ground when the glyphs go
+    // down. Shape: the plate hugs the artwork, whose height changes from game to game, so it cannot be
+    // one cached rectangle sitting behind every tile.
+    // boxWidth: the width of the grid cell INCLUDING its share of the gutter (the item box). A plated
+    // tile is baked that wide so its plate can use the margin either side of the artwork, which is the
+    // room the grid actually leaves between tiles; an ordinary tile ignores it and stays cell-sized.
+    private IntPtr BuildTileHbm(IGame model, Guid id, bool plate, bool focused, int boxWidth,
+                                out int bleedX, out int bleedY)
     {
+        // A plated tile is baked into the whole space the grid leaves around a cell, not just the cell:
+        // sideways that is the gutter (measured from the item box), vertically half the inter-row gap on
+        // each side. Without that vertical room the plate would start exactly at the top of a full-height
+        // poster and its rounded corners would have nowhere to be drawn.
+        bleedX = plate ? Math.Max(0, (boxWidth - PCellW) / 2) : 0;
+        bleedY = plate ? PGap / 2 : 0;
+        int w = PCellW + 2 * bleedX, h = PImgH + PLabelH + 2 * bleedY;
         IntPtr hbm = IntPtr.Zero;
         try
         {
-            using var tile = new Bitmap(PCellW, PImgH + PLabelH, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            using var tile = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
             using (var tg = Graphics.FromImage(tile))
             {
-                tg.Clear(Center);   // match the centre-column zone (#2A2B34), not the side panels
-                var imgArea = new Rectangle(0, 0, PCellW, PImgH);
-                // The art is bottom-anchored inside imgArea and is usually NARROWER and SHORTER than it
-                // (a tall box in a 124×174 cell leaves empty band(s)). artRect is where the pixels
-                // actually are — the badge placements that talk about "the image" need that, not the area.
-                Rectangle artRect;
-                var img = PosterThumbSync(model, id);         // sync decode if the thumb is on disk; else null + async
-                if (img != null)
-                {
-                    int ix = imgArea.X + (imgArea.Width - img.Width) / 2, iy = imgArea.Bottom - img.Height;
-                    tg.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-                    tg.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-                    tg.DrawImage(img, ix, iy, img.Width, img.Height);
-                    artRect = new Rectangle(ix, iy, img.Width, img.Height);
-                }
-                else
-                {
-                    // No art → a barely-there placeholder that blends into the zone (a hair lighter than Center).
-                    tg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                    int pw = (int)(PCellW * 0.78f), ph = (int)(PArtH * 0.92f);
-                    var ph_r = new Rectangle((PCellW - pw) / 2, imgArea.Bottom - ph, pw, ph);
-                    using var pb = new SolidBrush(PosterPlaceholder);
-                    using var pp = RoundRect(ph_r, 10);
-                    tg.FillPath(pb, pp);
-                    artRect = ph_r;   // the placeholder stands in for the art
-                }
-                var title = S(Safe(() => model.Title));
-                var dev = S(Safe(() => model.Developer));
-                var tRect = new Rectangle(0, PImgH + PZ(3), PCellW, PZ(17));
-                var dRect = new Rectangle(0, PImgH + PZ(19), PCellW, PZ(15));
-                var tileFont = _posterTileFont ??= new Font(Font.FontFamily, Font.Size * (float)_zoom, Font.Style);
-                TextRenderer.DrawText(tg, title, tileFont, tRect, Fg,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-                if (!string.IsNullOrEmpty(dev))
-                    TextRenderer.DrawText(tg, dev, tileFont, dRect, SubFg,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-                DrawTileBadges(tg, model, artRect);
+                tg.Clear(Center);   // matches the centre-column zone (#2A2B34), not the side panels
+                ComposeTile(tg, model, id, plate, focused, bleedX, bleedY);
             }
             hbm = tile.GetHbitmap();
         }
         catch { }
         return hbm;
     }
+
+    // Everything drawn INSIDE a tile: the art (or its placeholder), the title and developer lines, the
+    // badges. Identical for both grounds — only the colour they sit on differs.
+    // bleed: how much wider than a cell this bitmap is, on EACH side. Everything the tile draws is a
+    // cell-sized layout shifted right by it, so the plate can spill into the gutter without the artwork
+    // or the text moving. Zero for every ordinary tile, which keeps that path exactly as it was.
+    //
+    // The shift is applied to the rectangles rather than through Graphics.TranslateTransform on purpose:
+    // TextRenderer goes through GDI, which does not honour a world transform, so the two title lines
+    // would have stayed behind while everything else moved.
+    private void ComposeTile(Graphics tg, IGame model, Guid id, bool plate, bool focused, int bleed, int bleedY)
+    {
+        var imgArea = new Rectangle(bleed, bleedY, PCellW, PImgH);
+        var img = PosterThumbSync(model, id);         // sync decode if the thumb is on disk; else null + async
+        // WHERE the art will land, worked out before anything is drawn: the plate is shaped around it and
+        // has to go down first. The art is bottom-anchored inside imgArea and is usually NARROWER and
+        // SHORTER than it (a tall box in a 124×174 cell leaves empty band(s)), so artRect is where the
+        // pixels actually are — what the badge placements that talk about "the image" need too.
+        Rectangle artRect = img != null
+            ? new Rectangle(imgArea.X + (imgArea.Width - img.Width) / 2, imgArea.Bottom - img.Height, img.Width, img.Height)
+            : PlaceholderRect(imgArea, bleed);
+
+        Color under = Center;
+        if (plate)
+        {
+            under = PlateFill(focused); DrawSelectionPlate(tg, artRect, focused, bleed, bleedY);
+        }
+
+        if (img != null)
+        {
+            tg.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            tg.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            tg.DrawImage(img, artRect.X, artRect.Y, artRect.Width, artRect.Height);
+        }
+        else
+        {
+            // No art → a barely-there placeholder that blends into whatever it sits on.
+            tg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var pb = new SolidBrush(PlaceholderOn(under));
+            using var pp = RoundRect(artRect, 10);
+            tg.FillPath(pb, pp);
+        }
+        var title = S(Safe(() => model.Title));
+        var dev = S(Safe(() => model.Developer));
+        var tRect = new Rectangle(bleed, bleedY + PImgH + PZ(3), PCellW, PZ(17));
+        var dRect = new Rectangle(bleed, bleedY + PImgH + PZ(19), PCellW, PZ(15));
+        var tileFont = _posterTileFont ??= MakeTileFont(FontStyle.Regular);
+        var titleFont = _posterTitleFont ??= MakeTileFont(FontStyle.Bold);
+        // The developer line keeps the theme colour on the ordinary ground, where it reads at 4.8:1, and
+        // is lifted only on the plate, where the SAME colour collapses to 2.4:1 (measured, WCAG). Because
+        // the selected tile is its own bake, this costs nothing and leaves every other tile untouched.
+        var devColour = plate ? SubFgOnPlate : SubFg;
+        TextRenderer.DrawText(tg, title, titleFont, tRect, Fg,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        if (!string.IsNullOrEmpty(dev))
+            TextRenderer.DrawText(tg, dev, tileFont, dRect, devColour,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        DrawTileBadges(tg, model, artRect, bleed, bleedY);
+    }
+
+    private Rectangle PlaceholderRect(Rectangle imgArea, int bleed)
+    {
+        int pw = (int)(PCellW * 0.78f), ph = (int)(PArtH * 0.92f);
+        return new Rectangle(bleed + (PCellW - pw) / 2, imgArea.Bottom - ph, pw, ph);
+    }
+
+    /// <summary>The selection plate, shaped to the CONTENT rather than to the cell: from just above the
+    /// artwork — or above the badge band reserved over it — down to just under the developer line, or
+    /// under the badges that sit there. Filling the whole cell read as a slab, because a tile is mostly
+    /// empty space above a short poster. Full cell WIDTH though: the title can be wider than the art.</summary>
+    private void DrawSelectionPlate(Graphics tg, Rectangle artRect, bool focused, int bleed, int bleedY)
+    {
+        // The margin the corners need: without it the plate starts flush with a full-height poster and
+        // there is nowhere to draw the rounding. bleedY is what makes the room available at all.
+        int pad = Math.Max(PZ(4), bleedY);
+        int top = artRect.Y - pad;
+        if (BadgeBandAbove) top -= PBadgeBand;                       // the band reserved above the art
+        int bottom = bleedY + PImgH + PZ(19) + PZ(15) + pad;         // past the developer line by as much
+        if (BadgeBandBelow) bottom += PZ(1) + PBadgeBand;            // ...or past the badges below it
+        top = Math.Max(0, top);
+        bottom = Math.Min(PImgH + PLabelH + 2 * bleedY, bottom);
+        if (bottom - top < PZ(8)) return;
+
+        // Across the whole bitmap, gutter included, less a hair so two selected neighbours never touch.
+        int inset = bleed > 1 ? 2 : 0;
+        int left = inset, right = PCellW + 2 * bleed - inset;
+        tg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var path = RoundRect(Rectangle.FromLTRB(left, top, right - 1, bottom - 1), 10);
+        using var fill = new SolidBrush(PlateFill(focused));
+        using var pen = new Pen(PlateEdge(focused));
+        tg.FillPath(fill, path);
+        tg.DrawPath(pen, path);
+    }
+
+    /// <summary>The empty-tile placeholder, a hair lighter than whatever ground it sits on — the same
+    /// relationship PosterPlaceholder has to Center (+10/+10/+11), so the default path is unchanged.</summary>
+    private static Color PlaceholderOn(Color ground) => ground == Center ? PosterPlaceholder
+        : Color.FromArgb(Math.Min(255, ground.R + 10), Math.Min(255, ground.G + 10), Math.Min(255, ground.B + 11));
 
     // ── Poster tile badges ───────────────────────────────────────────────────
     // Baked into the tile bitmap, which is composited once and cached — so badges cost nothing while
@@ -4867,7 +5304,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private int ListBadgeScalePct => Math.Clamp(_cfg.GetInt("BadgesListScalePct", 100), 25, 200);
     private int PosterBadgeScalePct => Math.Clamp(_cfg.GetInt("BadgesPosterScalePct", 100), 25, 200);
 
-    private void DrawTileBadges(Graphics g, IGame model, Rectangle artRect)
+    private void DrawTileBadges(Graphics g, IGame model, Rectangle artRect, int bleed, int bleedY)
     {
         if (!Badges.BadgeSettings.ShowBadges) return;
         var hits = Badges.BadgeEngine.VisibleCached(model);
@@ -4886,7 +5323,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         int bandH = rows * cell;
         // Horizontal alignment is relative to the ART for every art-relative placement (including the
         // one drawn above it — badges belong to the picture, not to the cell).
-        var reference = placement == PlaceUnderDev ? new Rectangle(0, 0, PCellW, 0) : artRect;
+        var reference = placement == PlaceUnderDev ? new Rectangle(bleed, bleedY, PCellW, 0) : artRect;
 
         int top;
         bool veiled = false;
@@ -4895,7 +5332,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             case PlaceArtBottom: top = Math.Max(artRect.Y, artRect.Bottom - bandH); veiled = true; break;
             case PlaceArtTop: top = artRect.Y; veiled = true; break;
             case PlaceAboveArt: top = Math.Max(0, artRect.Y - bandH); break;   // the reserved band
-            default: top = PImgH + PZ(19) + PZ(15) + PZ(1); break;             // under the developer line
+            default: top = bleedY + PImgH + PZ(19) + PZ(15) + PZ(1); break;    // under the developer line
         }
 
         if (veiled)
@@ -4920,7 +5357,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 "right" => reference.Right - rowW,
                 _ => reference.X + (reference.Width - rowW) / 2,
             };
-            originX = Math.Max(0, Math.Min(originX, PCellW - rowW));   // a row wider than the art stays in the tile
+            originX = Math.Max(bleed, Math.Min(originX, bleed + PCellW - rowW));   // a row wider than the art stays in the tile
             int x = originX + col * cell + (cell - img.Width) / 2;
             int y = top + row * cell + (cell - img.Height) / 2;
             g.DrawImage(img, x, y, img.Width, img.Height);
@@ -6719,7 +7156,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             {
                 if (e.Button == MouseButtons.Left) OpenFullscreenFromThumb(captured);
             };
-            th.MouseWheel += (_, e) => _strip.WheelScroll(e.Delta);   // wheel over a thumb scrolls the strip
+            th.MouseWheel += (_, e) => { _strip.WheelScroll(e.Delta); if (e is HandledMouseEventArgs h) h.Handled = true; };   // the strip, and only the strip
             _strip.Flow.Controls.Add(th);
             System.Threading.Tasks.Task.Run(() =>
             {
@@ -6782,7 +7219,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             };
             try { _tips.SetToolTip(th, S(Safe(() => captured.Title))); } catch { }
             th.Click += (_, _) => { _games.SelectGame(captured, true); ShowDetails(captured); };
-            th.MouseWheel += (_, e) => _strip.WheelScroll(e.Delta);
+            th.MouseWheel += (_, e) => { _strip.WheelScroll(e.Delta); if (e is HandledMouseEventArgs h) h.Handled = true; };
             _strip.Flow.Controls.Add(th);
             var src = DetailSource(captured, "Front", () =>
                   Safe(() => captured.FrontImagePath) is { Length: > 0 } f ? f
@@ -7214,6 +7651,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             LoadImagesAsync(null, null);             // clears + invalidates any in-flight decode
             _games.Games = Array.Empty<IGame>();     // free the row index during the game
             _games.RebuildView();
+            // Emptying the view only takes the poster down to zero items: the decoded box art and the
+            // composited tiles behind them are held by the image list and survive it, which at the
+            // default memory level is up to a couple of hundred megabytes still resident while the game
+            // runs. RebuildPosterGeometry is the existing full release (image list destroyed, thumbs
+            // disposed, queues drained, selected bakes dropped); tiles re-compose lazily on the way back.
+            try { RebuildPosterGeometry(); } catch { }
         }
         if (_cfg.ShowGameRunningScreen) ShowRunningOverlay(g);
     }
@@ -8180,7 +8623,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             };
             Controls.Add(Flow);
             Flow.SizeChanged += (_, _) => Relayout();
-            Flow.MouseWheel += (_, e) => WheelScroll(e.Delta);
+            Flow.MouseWheel += (_, e) => { WheelScroll(e.Delta); if (e is HandledMouseEventArgs h) h.Handled = true; };
         }
 
         private int ContentW => Flow.PreferredSize.Width;
@@ -8194,7 +8637,13 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
         protected override void OnBackColorChanged(EventArgs e) { base.OnBackColorChanged(e); Flow.BackColor = BackColor; }
         protected override void OnResize(EventArgs e) { base.OnResize(e); Relayout(); }
-        protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); WheelScroll(e.Delta); }
+        // Scroll the strip and keep the notch. base.OnMouseWheel hands an unhandled wheel to the parent,
+        // so calling it first scrolled the strip AND the detail pane behind it on the same gesture.
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            WheelScroll(e.Delta);
+            if (e is HandledMouseEventArgs h) h.Handled = true;
+        }
 
         private void SetScroll(int x)
         {

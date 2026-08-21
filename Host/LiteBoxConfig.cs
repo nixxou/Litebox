@@ -120,6 +120,10 @@ internal sealed class LiteBoxConfig
         _kv["Model3dAcceptFullScan"] = "false";
         _kv["GameRunningText"] = "Game running...";
         _kv["GameRunningColor"] = "#0F0F12";
+        _kv["SlimScrollDetail"] = "true";
+        _kv["SlimScrollNotes"] = "true";
+        _kv["SlimScrollTree"] = "true";
+        _kv["PosterSelectionPlate"] = "true";
         _kv["DebugLog"] = "false";
         try
         {
@@ -154,6 +158,18 @@ internal sealed class LiteBoxConfig
             sb.AppendLine(";                         between 'need both' (true) and 'either one' (false).");
             sb.AppendLine(";                         AcceptFullScan: a Box - Full sheet alone is enough (it composes");
             sb.AppendLine(";                         the whole case), for games where full-scan mode applies.");
+            sb.AppendLine("; SlimScrollDetail      : the right-hand detail pane uses the thin 3px scrollbar drawn by");
+            sb.AppendLine(";                         LiteBox instead of the 17px one Windows imposes (its width is a");
+            sb.AppendLine(";                         SYSTEM metric, so a thin one cannot be had any other way). The thin");
+            sb.AppendLine(";                         bar overlays the content and widens under the pointer. Set false to");
+            sb.AppendLine(";                         go back to the native bars. Takes effect at the next start.");
+            sb.AppendLine("; SlimScrollNotes       : same, for the description box under the tabs. Off also brings back");
+            sb.AppendLine(";                         the native bar being shown PERMANENTLY there, even over text that fits.");
+            sb.AppendLine("; SlimScrollTree        : same, for the platform tree on the left. One switch for both of its");
+            sb.AppendLine(";                         bars: they are hidden by the same change, and cannot be split.");
+            sb.AppendLine("; PosterSelectionPlate  : in poster view, selecting a game colours the tile BACKGROUND and");
+            sb.AppendLine(";                         leaves the artwork alone, instead of Windows tinting the whole tile");
+            sb.AppendLine(";                         blue. Set false for the plain Windows highlight.");
             sb.AppendLine("; GameRunningText       : message shown on the running screen");
             sb.AppendLine("; GameRunningColor      : base colour (#RRGGBB) behind the fanart");
             sb.AppendLine("; DebugLog              : write litebox-debug.log (Core\\litebox\\) with the runtime trace.");
@@ -173,6 +189,10 @@ internal sealed class LiteBoxConfig
             sb.AppendLine($"Model3dRequireSpine={_kv["Model3dRequireSpine"]}");
             sb.AppendLine($"Model3dRequireBothScans={_kv["Model3dRequireBothScans"]}");
             sb.AppendLine($"Model3dAcceptFullScan={_kv["Model3dAcceptFullScan"]}");
+            sb.AppendLine($"SlimScrollDetail={_kv["SlimScrollDetail"]}");
+            sb.AppendLine($"SlimScrollNotes={_kv["SlimScrollNotes"]}");
+            sb.AppendLine($"SlimScrollTree={_kv["SlimScrollTree"]}");
+            sb.AppendLine($"PosterSelectionPlate={_kv["PosterSelectionPlate"]}");
             sb.AppendLine($"GameRunningText={_kv["GameRunningText"]}");
             sb.AppendLine($"GameRunningColor={_kv["GameRunningColor"]}");
             sb.AppendLine($"DebugLog={_kv["DebugLog"]}");

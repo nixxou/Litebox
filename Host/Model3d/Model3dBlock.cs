@@ -289,10 +289,19 @@ internal sealed class Model3dBlock : Panel
     // Drag = IMMEDIATE rotation (1:1 pointer tracking — the animated ease stuttered), 0.25°/px (÷2 vs the
     // editor's historical feel, which was too twitchy), and the NATURAL direction: drag right → the front
     // face follows the pointer right (yaw+ brings the left side toward the camera).
+    /// <summary>Wheel notches landing in the last <see cref="EdgeWheelZone"/> pixels on the right are not a
+    /// zoom: that strip is where the hosting pane keeps its scrollbar, and a model that swallowed the wheel
+    /// there made the pane impossible to scroll past. Left null, the block keeps every notch as before.</summary>
+    internal static Action<int>? EdgeWheel;
+    internal const int EdgeWheelZone = 14;
+
     internal static void WireOrbit(Control host, Platforms.OrbitController orbit,
                                    Action? doubleClicked = null)   // shared with Model3dFullscreen
     {
         const double Sens = 12.0;   // px per 7.5°-unit → 0.625°/px (~145 px drag = 90°)
+        // Only the block embedded in the detail pane gives the edge back; fullscreen and the editor own
+        // their whole surface, so they never set the callback.
+        bool InEdge(double x, double width) => EdgeWheel != null && x >= width - EdgeWheelZone;
         if (host is System.Windows.Forms.Integration.ElementHost eh && eh.Child is System.Windows.UIElement ui)
         {
             bool wd = false; System.Windows.Point wl = default;
@@ -319,13 +328,29 @@ internal sealed class Model3dBlock : Panel
                 orbit.OrbitImmediate(dx / Sens, dy / Sens);
                 e.Handled = true;
             };
-            ui.PreviewMouseWheel += (_, e) => { orbit.Zoom(e.Delta); e.Handled = true; };
+            ui.PreviewMouseWheel += (_, e) =>
+            {
+                if (InEdge(e.GetPosition(ui).X, ui is System.Windows.FrameworkElement fe ? fe.ActualWidth : 0))
+                {
+                    // WPF hosted in WinForms bubbles nothing to its host, so the notch is handed over by
+                    // hand rather than merely left unhandled.
+                    EdgeWheel!(e.Delta);
+                    e.Handled = true;
+                    return;
+                }
+                orbit.Zoom(e.Delta);
+                e.Handled = true;
+            };
         }
         bool dragging = false; int lx = 0, ly = 0;
         host.MouseDown += (_, e) => { dragging = true; lx = e.X; ly = e.Y; };
         host.MouseUp += (_, _) => dragging = false;
         host.MouseMove += (_, e) => { if (!dragging) return; int dx = e.X - lx, dy = e.Y - ly; lx = e.X; ly = e.Y; orbit.OrbitImmediate(dx / Sens, dy / Sens); };
-        host.MouseWheel += (_, e) => orbit.Zoom(e.Delta);
+        host.MouseWheel += (_, e) =>
+        {
+            if (InEdge(e.X, host.ClientSize.Width)) { EdgeWheel!(e.Delta); return; }
+            orbit.Zoom(e.Delta);
+        };
         // ElementHost's WPF child owns mouse input (handled above). Wiring the WinForms double-click too
         // can deliver the same gesture twice on some framework versions and reopen fullscreen on exit.
         if (host is not System.Windows.Forms.Integration.ElementHost)

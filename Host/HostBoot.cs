@@ -96,30 +96,75 @@ internal static class HostBoot
         return list;
     }
 
-    /// <summary>Plugin DLLs lying LOOSE in <paramref name="root"/>, by file name WITH the extension —
-    /// "ThirdScreen.dll". The extension is the whole point of the naming: an entry carrying one is a
-    /// bare DLL at the root, an entry without one is a folder, and the enabled list holds both without
-    /// ambiguity.
+    /// <summary>Every plugin DLL under <paramref name="root"/>, at any depth, named by its path RELATIVE to
+    /// that root — "ThirdScreen.dll", "RetroArch LaunchBox Integration\RetroArch.dll".
     ///
-    /// Most plugins ship as an archive that extracts straight into Plugins\, which is what their authors
-    /// document; only LaunchBox's own integrations use a folder each. Refusing the flat layout meant
-    /// moving files by hand and hoping nothing resolved relative to its own depth.
+    /// One rule instead of two. Discovery used to be a hybrid: loose DLLs at the root were named by file,
+    /// anything else was named by the FOLDER it sat in and only one level down was ever looked at. So a
+    /// plugin shipped two levels deep was invisible, and two plugins sharing a folder could not be told
+    /// apart. A path names exactly one file, however deep, and reads as what it is.
     ///
-    /// Filtered on the ONE thing that separates a plugin from the libraries beside it: a reference to
-    /// Unbroken.LaunchBox.Plugins. Read from the PE metadata, so nothing is loaded or executed to find
-    /// out — a support library never reaches the options list, let alone the loader.</summary>
+    /// Filtered on a reference to Unbroken.LaunchBox.Plugins, read from the PE metadata — nothing is loaded
+    /// or executed to decide. That matters far more now than it did over a flat root: a plugin folder is
+    /// full of dependency DLLs, and without this every one of them would be offered as a plugin.
+    ///
+    /// Everything indexes the tree in one query when it is installed; the plain recursive walk is the
+    /// fallback and is what runs on a machine without it.
+    ///
+    /// DOT-FOLDERS ARE NOT PLUGINS: LB 14 keeps each plugin's runtime data in <c>.data\&lt;PluginId&gt;</c>
+    /// beside the plugin. Walking into it would offer whatever it happens to hold.</summary>
     public static List<string> ListPluginDlls(string root)
     {
         var list = new List<string>();
+        if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) return list;
         try
         {
-            if (Directory.Exists(root))
-                foreach (var f in Directory.GetFiles(root, "*.dll"))
-                    if (ReferencesPluginApi(f)) list.Add(Path.GetFileName(f));
+            foreach (var f in EnumerateDlls(root))
+            {
+                string rel;
+                try { rel = Path.GetRelativePath(root, f); } catch { continue; }
+                if (rel.StartsWith(".", StringComparison.Ordinal) || rel.Contains(@"\.", StringComparison.Ordinal)) continue;
+                if (IsNeverLoaded(rel)) continue;
+                if (!ReferencesPluginApi(f)) continue;
+                list.Add(rel);
+            }
         }
         catch { }
         list.Sort(StringComparer.OrdinalIgnoreCase);
         return list;
+    }
+
+    /// <summary>Plugins LiteBox refuses to load whatever the enabled list says, matched on any path segment.
+    /// ExtendDB is folded in natively — its DLL would double-provide and Harmony-patch what LiteBox now does
+    /// itself — and the companion parental plugin exists only to police vanilla LaunchBox, where LiteBox is
+    /// not. Matched by DLL name as well as folder now that a path can name the file directly.</summary>
+    public static bool IsNeverLoaded(string relativePath)
+    {
+        try
+        {
+            foreach (var seg in relativePath.Split('\\', '/'))
+            {
+                var bare = Path.GetFileNameWithoutExtension(seg);
+                if (bare.Equals(ExtendDbFolder, StringComparison.OrdinalIgnoreCase)) return true;
+                if (bare.Equals(NativeParentalFolder, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    private static IEnumerable<string> EnumerateDlls(string root)
+    {
+        string[] hits = null;
+        try
+        {
+            if (Gc.EverythingBridge.IsEverythingAvailable())
+                hits = Gc.EverythingBridge.GetFiles(root, "*.dll");
+        }
+        catch { }
+        if (hits != null && hits.Length > 0) return hits;
+        try { return Directory.EnumerateFiles(root, "*.dll", SearchOption.AllDirectories); }
+        catch { return Array.Empty<string>(); }
     }
 
     private static bool ReferencesPluginApi(string dll)
@@ -738,19 +783,20 @@ internal static class HostBoot
         // name → folder over BOTH roots. On a name collision the LB-managed system copy wins: it is
         // the one LaunchBox itself updates — a same-named folder left under Plugins\ is a stale pre-14
         // remnant the LB updater didn't clean.
+        // A plugin is a FILE, named by its path under the root it was found in. On a name collision the
+        // LB-managed System\Plugins copy wins: it is the one LaunchBox itself updates, and a same-named
+        // leftover under Plugins\ is a stale pre-14 remnant its updater never cleaned.
+        // Under Plugins\ a plugin is a FILE, named by its path below that root. LB 14's System\Plugins is
+        // NOT touched by that: LaunchBox owns and updates it, one folder per plugin, and it keeps being read
+        // the way LaunchBox lays it out — folder name as the plugin name.
+        var fileByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var nm in ListPluginDlls(pluginsRoot)) fileByName[nm] = Path.Combine(pluginsRoot, nm);
+
         var dirByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var nm in ListPluginFolders(pluginsRoot)) dirByName[nm] = Path.Combine(pluginsRoot, nm);
         if (sysPluginsRoot != null)
             foreach (var nm in ListPluginFolders(sysPluginsRoot)) dirByName[nm] = Path.Combine(sysPluginsRoot, nm);
 
-        // …and the loose ones, keyed by file name WITH the extension, which is what tells the two apart in
-        // the enabled list. Root only: a DLL beside a plugin inside its folder is that plugin's business.
-        var fileByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var nm in ListPluginDlls(pluginsRoot)) fileByName[nm] = Path.Combine(pluginsRoot, nm);
-        if (sysPluginsRoot != null)
-            foreach (var nm in ListPluginDlls(sysPluginsRoot)) fileByName[nm] = Path.Combine(sysPluginsRoot, nm);
-
-        List<string> names = enabled ?? dirByName.Keys.Concat(fileByName.Keys)
+        List<string> names = enabled ?? fileByName.Keys.Concat(dirByName.Keys)
                                                  .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
         // Never load the plugins whose job LiteBox already does natively, whatever the enabled set says:
@@ -758,8 +804,22 @@ internal static class HostBoot
         // here would double-provide and let its write-guard block LiteBox's legitimate Data\ writes).
         {
             int before = names.Count;
-            names = names.Where(n => !(IntegrateExtendDb && IsExtendDb(n)) && !IsNativeParental(n)).ToList();
+            names = names.Where(n => !IsNeverLoaded(n)).ToList();
             if (names.Count != before) Console.WriteLine("[loader] integrated plugins skipped (ExtendDB / litebox-parentalcontrol — native to LiteBox)");
+
+            // LaunchBox's OWN integration plugins keep loading whether or not they are in the enabled list.
+            // They are what makes an emulator launch at all, and renaming every entry to a path (this change)
+            // would otherwise silently drop them from an existing configuration until the user went and
+            // re-ticked them. On 14 they live under System\Plugins; before that they sat in Plugins\ under
+            // the name LaunchBox gives them, which is the convention matched here.
+            foreach (var kv in fileByName)
+            {
+                if (names.Contains(kv.Key, StringComparer.OrdinalIgnoreCase)) continue;
+                if (IsNeverLoaded(kv.Key)) continue;
+                if (kv.Key.IndexOf("LaunchBox Integration", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                names.Add(kv.Key);
+                Console.WriteLine($"  + integration plugin loaded by default: {kv.Key}");
+            }
         }
 
         Console.WriteLine($"Plugins root: {pluginsRoot}"
@@ -767,14 +827,21 @@ internal static class HostBoot
         Console.WriteLine($"Enabled plugins: [{string.Join(", ", names)}]"
             + (enabled == null ? "  (default: all present)" : ""));
 
-        var pluginDirs = new List<string>();
         var pluginFiles = new List<string>();
+        var pluginDirs = new List<string>();
         foreach (var nm in names)
         {
-            if (dirByName.TryGetValue(nm, out var d)) pluginDirs.Add(d);
-            else if (fileByName.TryGetValue(nm, out var f)) pluginFiles.Add(f);
+            if (fileByName.TryGetValue(nm, out var f)) pluginFiles.Add(f);
+            else if (dirByName.TryGetValue(nm, out var d)) pluginDirs.Add(d);   // System\Plugins: scanned as LB lays it out
             else Console.WriteLine($"  ! enabled plugin not found: {Path.Combine(pluginsRoot, nm)}");
         }
+
+        // Resolver-only. Every DISCOVERED plugin's folder under Plugins\ is offered, enabled or not: a
+        // plugin's private dependencies sit beside it, and a disabled sibling's folder can still hold the
+        // copy a loaded one needs.
+        var probeDirs = fileByName.Values.Select(Path.GetDirectoryName)
+                                         .Where(d => !string.IsNullOrEmpty(d))
+                                         .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         // Pin OUR (bundled, net10) WPF assemblies BEFORE any plugin is LoadFrom'd. Some LaunchBox plugins
         // (e.g. "LaunchBox Reader") ship a loose .NET Framework WindowsBase.dll (v4.0.0.0) in their own
@@ -821,7 +888,7 @@ internal static class HostBoot
         // dev run, where the exe's folder is the build output, not <LB>\Core.
         if (lbRoot != null) PluginLoader.LbCoreDir = Path.Combine(lbRoot, "Core");
 
-        var reg = PluginLoader.LoadFrom(pluginDirs, pluginFiles);
+        var reg = PluginLoader.LoadFrom(pluginDirs, pluginFiles, probeDirs);
         Console.WriteLine($"Loaded {reg.All.Count} plugin object(s): events={reg.SystemEvents.Count} sysmenu={reg.SystemMenus.Count} gamemenu={reg.GameMenus.Count} themeel={reg.ThemeElements.Count}");
 
         // Hands-free UI drivers (see the fields' doc): --edit-game/--edit-page/--edit-gamesaves/--options.

@@ -2269,38 +2269,36 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             Dock = DockStyle.Top, AutoSize = false, Height = 52, ForeColor = Warn, BackColor = Bg,
             Padding = new Padding(2, 2, 2, 8), Font = new Font("Segoe UI", 9f, FontStyle.Italic),
-            Text = "Plugins to load (subfolders of " + (HostBoot.PluginsRoot ?? @"<LB>\Plugins")
-                 + ", or DLLs sitting directly in it"
-                 + (HostBoot.SystemPluginsRoot != null ? @", plus LB 14's System\Plugins" : "") + ").\r\n"
+            Text = "Plugins to load — every DLL under " + (HostBoot.PluginsRoot ?? @"<LB>\Plugins")
+                 + ", at any depth, listed by its path"
+                 + (HostBoot.SystemPluginsRoot != null ? @", plus LB 14's System\Plugins by folder" : "") + ".\r\n"
                  + "Changes apply on the next LiteBox restart.",
         };
 
         string root = HostBoot.PluginsRoot ?? "";
-        var folders = HostBoot.ListPluginFolders(root);
-        // Plugins that ship as bare DLLs dropped into Plugins\ rather than a folder each — most of them, in
-        // fact; a folder per plugin is LaunchBox's own habit. Listed by file name WITH ".dll", which is what
-        // separates them from folder entries in the very same persisted list.
-        var looseDlls = HostBoot.ListPluginDlls(root);
+        // Under Plugins\ a plugin is a FILE, listed by its path below that root at any depth — the name the
+        // enabled list persists. Anything that is not a plugin never reaches here: the discovery reads each
+        // DLL's metadata and keeps only those referencing the LaunchBox plugin API, so a folder full of
+        // dependencies shows its plugin and nothing else.
+        var pluginDlls = HostBoot.ListPluginDlls(root);
         var enabled = _cfg.GetEnabledPluginsOrNull();          // null ⇒ all (never configured)
         bool defaultAll = enabled == null;
         var enabledSet = new HashSet<string>(enabled ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
 
-        // LB 14 system plugins (<LB>\System\Plugins — the integration plugins LB moved out of Plugins\).
-        // Same persisted names as pre-14, listed in their own group below. A name present in BOTH roots
-        // is shown once, there: the system copy is the one discovery actually loads.
+        // LB 14's own plugin root is NOT read that way: LaunchBox owns it, one folder per plugin, and it
+        // keeps being listed by folder name exactly as LaunchBox lays it out.
         var sysFolders = HostBoot.SystemPluginsRoot != null
             ? HostBoot.ListPluginFolders(HostBoot.SystemPluginsRoot) : new List<string>();
-        var sysSet = new HashSet<string>(sysFolders, StringComparer.OrdinalIgnoreCase);
 
         var checks = new List<CheckBox>();
-        if (folders.Count == 0 && sysFolders.Count == 0 && looseDlls.Count == 0)
+        if (pluginDlls.Count == 0 && sysFolders.Count == 0)
         {
             flow.Controls.Add(new Label { AutoSize = true, ForeColor = SubFg, Margin = new Padding(2, 6, 2, 2),
                 Text = "No plugins found in " + root });
         }
-        foreach (var f in looseDlls)
+        foreach (var f in pluginDlls)
         {
-            // Text must stay the exact file name — apply() persists cb.Text into EnabledPlugins=.
+            // Text must stay the exact path — apply() persists cb.Text into EnabledPlugins=.
             var cb = new CheckBox
             {
                 Text = f, AutoSize = true, ForeColor = Fg, Margin = new Padding(2, 5, 2, 5),
@@ -2309,50 +2307,28 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             checks.Add(cb);
             flow.Controls.Add(cb);
         }
-        foreach (var f in folders)
+
+        // The two LiteBox refuses outright are filtered out of discovery, so they cannot appear above. Said
+        // here instead, when their folder is on disk, because "my plugin vanished from the list" deserves an
+        // answer rather than silence.
+        void Refused(string folder, string label, string why)
         {
-            if (sysSet.Contains(f)) continue;   // stale pre-14 leftover — the System\Plugins copy loads
-            // ExtendDB is integrated into LiteBox → shown greyed, never loaded, never part of the enabled set.
-            if (HostBoot.IntegrateExtendDb && HostBoot.IsExtendDb(f))
+            try { if (root.Length == 0 || !Directory.Exists(Path.Combine(root, folder))) return; } catch { return; }
+            flow.Controls.Add(new CheckBox
             {
-                flow.Controls.Add(new CheckBox
-                {
-                    Text = f + "   —  integrated into LiteBox", AutoSize = true, ForeColor = SubFg,
-                    Enabled = false, Checked = false, Margin = new Padding(2, 5, 2, 0),
-                });
-                flow.Controls.Add(new Label
-                {
-                    Text = "Its functionality is now built into LiteBox, so the plugin is not loaded.",
-                    AutoSize = true, ForeColor = SubFg, Font = new Font("Segoe UI", 8f, FontStyle.Italic),
-                    Margin = new Padding(24, 0, 2, 6),
-                });
-                continue;
-            }
-            // Our companion parental plugin: deployed for vanilla LaunchBox/BigBox by Options → Parental →
-            // Install, never loaded under LiteBox. Shown greyed so it isn't mistaken for a togglable plugin.
-            if (HostBoot.IsNativeParental(f))
+                Text = folder + "   —  " + label, AutoSize = true, ForeColor = SubFg,
+                Enabled = false, Checked = false, Margin = new Padding(2, 5, 2, 0),
+            });
+            flow.Controls.Add(new Label
             {
-                flow.Controls.Add(new CheckBox
-                {
-                    Text = f + "   —  LiteBox parental (vanilla LaunchBox / BigBox)", AutoSize = true, ForeColor = SubFg,
-                    Enabled = false, Checked = false, Margin = new Padding(2, 5, 2, 0),
-                });
-                flow.Controls.Add(new Label
-                {
-                    Text = "Managed by Options → Parental → Install; enforces parental control inside vanilla LaunchBox/BigBox and is never loaded under LiteBox.",
-                    AutoSize = true, ForeColor = SubFg, Font = new Font("Segoe UI", 8f, FontStyle.Italic),
-                    Margin = new Padding(24, 0, 2, 6),
-                });
-                continue;
-            }
-            var cb = new CheckBox
-            {
-                Text = f, AutoSize = true, ForeColor = Fg, Margin = new Padding(2, 5, 2, 5),
-                Checked = defaultAll || enabledSet.Contains(f),
-            };
-            checks.Add(cb);
-            flow.Controls.Add(cb);
+                Text = why, AutoSize = true, ForeColor = SubFg, Font = new Font("Segoe UI", 8f, FontStyle.Italic),
+                Margin = new Padding(24, 0, 2, 6),
+            });
         }
+        Refused(HostBoot.ExtendDbFolder, "integrated into LiteBox",
+                "Its functionality is now built into LiteBox, so the plugin is not loaded.");
+        Refused(HostBoot.NativeParentalFolder, "LiteBox parental (vanilla LaunchBox / BigBox)",
+                "Managed by Options → Parental → Install; enforces parental control inside vanilla LaunchBox/BigBox and is never loaded under LiteBox.");
 
         if (sysFolders.Count > 0)
         {

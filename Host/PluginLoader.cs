@@ -56,10 +56,15 @@ internal static class PluginLoader
         return @"C:\Users\mehdi\source\repos\scrapper-project\LB\Core";   // dev fallback (repo-sibling LB)
     }
 
-    /// <param name="files">Individual plugin DLLs lying loose in the plugins root. Passed as FILES, not as
-    /// their directory: that directory is the root itself, and scanning it would drag in every plugin the
-    /// user disabled along with every library sitting beside them.</param>
-    public static PluginRegistry LoadFrom(IEnumerable<string> dirs, IEnumerable<string> files = null)
+    /// <param name="dirs">Folders to SCAN, one plugin each — LB 14's System\Plugins, which LaunchBox owns
+    /// and lays out that way. Scanned at the folder and one level below it, as before.</param>
+    /// <param name="files">Plugin DLLs to load by name — everything under Plugins\, where a plugin is a file
+    /// found at any depth. Passed as files rather than as their folder: that folder holds the plugin's
+    /// dependencies and, often, other plugins the user disabled.</param>
+    /// <param name="probeDirs">Resolver-only. Never scanned; they exist so a loaded plugin can find the
+    /// private dependencies sitting beside it.</param>
+    public static PluginRegistry LoadFrom(IEnumerable<string> dirs, IEnumerable<string> files = null,
+                                          IEnumerable<string> probeDirs = null)
     {
         var reg = new PluginRegistry();
         var dirList = dirs.Where(d => !string.IsNullOrWhiteSpace(d) && Directory.Exists(d))
@@ -72,14 +77,18 @@ internal static class PluginLoader
         // Gather DLLs from each dir AND its immediate subdirs (LB layout is
         // LB\Plugins\<PluginName>\<plugin>.dll). Register every containing
         // folder as a probe dir so each plugin's private deps resolve.
-        var dllFiles = new List<string>();
+        var dllFiles = new List<string>(fileList);
         foreach (var dir in dirList)
         {
-            dllFiles.AddRange(Directory.GetFiles(dir, "*.dll"));
-            foreach (var sub in Directory.GetDirectories(dir))
-                try { dllFiles.AddRange(Directory.GetFiles(sub, "*.dll")); } catch { }
+            try { dllFiles.AddRange(Directory.GetFiles(dir, "*.dll")); } catch { }
+            try
+            {
+                foreach (var sub in Directory.GetDirectories(dir))
+                    try { dllFiles.AddRange(Directory.GetFiles(sub, "*.dll")); } catch { }
+            }
+            catch { }
         }
-        dllFiles.AddRange(fileList);
+        dllFiles = dllFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         // Same FILE NAME twice means the same plugin found in two places — a copy left loose in Plugins        // after being moved into a folder of its own, or the reverse. Loading both registers the plugin
         // twice: two menu entries, two event subscribers, two writers to the same log. First one wins,
         // which given the order above is the folder copy — the deliberate placement over the leftover.
@@ -91,7 +100,11 @@ internal static class PluginLoader
             Console.WriteLine($"[loader] duplicate ignored: {f}");
         }
         dllFiles = deduped;
-        AddResolver(dllFiles.Select(Path.GetDirectoryName).Distinct().ToList());
+        // Probe dirs cover the private dependencies of everything DISCOVERED, not just what is loaded.
+        AddResolver(dirList.Concat(probeDirs ?? Enumerable.Empty<string>())
+                           .Concat(dllFiles.Select(Path.GetDirectoryName))
+                           .Where(d => !string.IsNullOrEmpty(d))
+                           .Distinct(StringComparer.OrdinalIgnoreCase).ToList());
 
         {
             foreach (var dll in dllFiles)

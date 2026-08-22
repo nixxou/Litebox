@@ -187,6 +187,11 @@ internal static class HostLaunch
         // kiosk. A second-screen plugin uses it to swap to in-game media and drop its audio.
         try { GameStarted?.Invoke(game); } catch { }
         EventBus.FireNamed(_reg, "GameStarting");
+        // Web surfaces refuse a second Play while this is set. The flag and the epoch behind it were
+        // written and never fed — RecentState.MarkRunning had no caller anywhere — so the guard in
+        // BigBoxMutationApi.Play (shared by bb-web, lb-web and both kiosks) read a permanent "idle"
+        // and let a second launch through. Fed here, beside GameRunning, so every launch path counts.
+        try { Web.RecentState.MarkRunning(); } catch { }
 
         // 1. notify launching plugins
         Fire(p => p.OnBeforeGameLaunching(game, app, emulator));
@@ -260,6 +265,11 @@ internal static class HostLaunch
         // kiosk. A second-screen plugin uses it to swap to in-game media and drop its audio.
         try { GameStarted?.Invoke(game); } catch { }   // GUI shows the running screen + unloads its list
         EventBus.FireNamed(_reg, "GameStarting");
+        // Web surfaces refuse a second Play while this is set. The flag and the epoch behind it were
+        // written and never fed — RecentState.MarkRunning had no caller anywhere — so the guard in
+        // BigBoxMutationApi.Play (shared by bb-web, lb-web and both kiosks) read a permanent "idle"
+        // and let a second launch through. Fed here, beside GameRunning, so every launch path counts.
+        try { Web.RecentState.MarkRunning(); } catch { }
 
         var t = new Thread(() => RunStoreAndWait(game, kind, target, installDir, regainedFocus, killLauncherAfter, killEvenIfPreRunning))
         { IsBackground = true, Name = "LbApiHost-store" };
@@ -374,6 +384,7 @@ internal static class HostLaunch
             GameRunning = false;
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
             EventBus.FireNamed(_reg, "GameExited");
+            try { Web.RecentState.MarkIdle(); } catch { }
         }
     }
 
@@ -575,6 +586,7 @@ internal static class HostLaunch
             GameRunning = false;
             try { GameEnded?.Invoke(game); } catch { }
             EventBus.FireNamed(_reg, "GameExited");
+            try { Web.RecentState.MarkIdle(); } catch { }
         }
     }
 

@@ -136,6 +136,28 @@ internal static class HostBoot
         return list;
     }
 
+    /// <summary>Is this plugin one LAUNCHBOX ships and loads itself? Those default to ON: they are what makes
+    /// an emulator launch at all, so a configuration that does not mention them must not leave them off.
+    ///
+    /// Under LB 14 the question is settled by WHERE it is — System\Plugins is installed and updated by
+    /// LaunchBox, and everything in it is LaunchBox's. Before 14 they sat in Plugins\ among the user's own,
+    /// told apart by the DLL LaunchBox ships: Unbroken.LaunchBox.*. That is the marker rather than the folder
+    /// wording "LaunchBox Integration", which names seven of the eight and misses GamesDB Discovery Lists —
+    /// whose DLL is Unbroken.LaunchBox.Windows.PlaylistProvider. The folder wording stays as a second chance
+    /// for a layout where the DLL was renamed.</summary>
+    public static bool IsLaunchBoxOwned(string name, bool inSystemRoot)
+    {
+        if (inSystemRoot) return true;
+        if (string.IsNullOrEmpty(name)) return false;
+        try
+        {
+            var leaf = Path.GetFileName(name);
+            if (leaf.StartsWith("Unbroken.LaunchBox.", StringComparison.OrdinalIgnoreCase)) return true;
+            return name.IndexOf("LaunchBox Integration", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+        catch { return false; }
+    }
+
     /// <summary>Plugins LiteBox refuses to load whatever the enabled list says, matched on any path segment.
     /// ExtendDB is folded in natively — its DLL would double-provide and Harmony-patch what LiteBox now does
     /// itself — and the companion parental plugin exists only to police vanilla LaunchBox, where LiteBox is
@@ -816,18 +838,25 @@ internal static class HostBoot
             names = names.Where(n => !IsNeverLoaded(n)).ToList();
             if (names.Count != before) Console.WriteLine("[loader] integrated plugins skipped (ExtendDB / litebox-parentalcontrol — native to LiteBox)");
 
-            // LaunchBox's OWN integration plugins keep loading whether or not they are in the enabled list.
-            // They are what makes an emulator launch at all, and renaming every entry to a path (this change)
-            // would otherwise silently drop them from an existing configuration until the user went and
-            // re-ticked them. On 14 they live under System\Plugins; before that they sat in Plugins\ under
-            // the name LaunchBox gives them, which is the convention matched here.
-            foreach (var kv in fileByName)
+            // LaunchBox's OWN plugins default to loading whether or not the enabled list mentions them. They
+            // are what makes an emulator launch, and renaming every entry to a path would otherwise drop them
+            // from an existing configuration until the user noticed and re-ticked them. BOTH roots are swept:
+            // under 14 they live in System\Plugins, before that in Plugins\ — leaving the system root out is
+            // what left every LaunchBox plugin unticked on a 14 install carrying an EnabledPlugins line.
+            //
+            // A default has to be refusable, though. Unticking one only removes it from EnabledPlugins, which
+            // is indistinguishable from never having configured it — so the refusal is recorded separately and
+            // is the one thing that stops the rescue.
+            var refused = pluginCfg.GetDisabledPlugins();
+            foreach (var (name, fromSystem) in fileByName.Keys.Select(k => (k, false))
+                                                        .Concat(dirByName.Keys.Select(k => (k, true))))
             {
-                if (names.Contains(kv.Key, StringComparer.OrdinalIgnoreCase)) continue;
-                if (IsNeverLoaded(kv.Key)) continue;
-                if (kv.Key.IndexOf("LaunchBox Integration", StringComparison.OrdinalIgnoreCase) < 0) continue;
-                names.Add(kv.Key);
-                Console.WriteLine($"  + integration plugin loaded by default: {kv.Key}");
+                if (names.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
+                if (IsNeverLoaded(name)) continue;
+                if (!IsLaunchBoxOwned(name, fromSystem)) continue;
+                if (refused.Contains(name)) { Console.WriteLine($"  - LaunchBox plugin turned off by the user: {name}"); continue; }
+                names.Add(name);
+                Console.WriteLine($"  + LaunchBox plugin loaded by default: {name}");
             }
         }
 

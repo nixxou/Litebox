@@ -244,6 +244,25 @@ internal sealed class LiteBoxConfig
     public void SetEnabledPlugins(System.Collections.Generic.IEnumerable<string> names)
         => Set("EnabledPlugins", string.Join(",", names));
 
+    // ── Plugins LaunchBox owns, turned OFF on purpose (LiteBox.ini DisabledPlugins) ─────────────
+    // LaunchBox's own plugins load whether or not EnabledPlugins mentions them: they are what makes
+    // an emulator launch, and an old configuration naming them differently must not silently drop
+    // them. That default would be impossible to override, though — unticking one just removes it
+    // from EnabledPlugins, which reads exactly like "never configured" and gets it loaded again. So
+    // an explicit refusal is recorded here, and only the names in it lose the default.
+    public System.Collections.Generic.HashSet<string> GetDisabledPlugins()
+    {
+        var set = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        foreach (var p in (Get("DisabledPlugins") ?? "").Split(','))
+        {
+            var t = p.Trim();
+            if (t.Length > 0) set.Add(t);
+        }
+        return set;
+    }
+    public void SetDisabledPlugins(System.Collections.Generic.IEnumerable<string> names)
+        => Set("DisabledPlugins", string.Join(",", names));
+
     // ── Typed options ────────────────────────────────────────────────────────
     public bool ReadOnly              { get => GetBool("ReadOnly", false); set => SetBool("ReadOnly", value); }
     // Settle delay (ms) before the deferred detail-pane parts load on selection (thumb strip + full box

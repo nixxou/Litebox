@@ -2284,6 +2284,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         var enabled = _cfg.GetEnabledPluginsOrNull();          // null ⇒ all (never configured)
         bool defaultAll = enabled == null;
         var enabledSet = new HashSet<string>(enabled ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+        // LaunchBox's own plugins the user turned off on purpose. Kept apart from EnabledPlugins because
+        // absence from that list cannot mean "off" — it is also what a never-configured install looks like.
+        var refusedSet = _cfg.GetDisabledPlugins();
 
         // LB 14's own plugin root is NOT read that way: LaunchBox owns it, one folder per plugin, and it
         // keeps being listed by folder name exactly as LaunchBox lays it out.
@@ -2291,6 +2294,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             ? HostBoot.ListPluginFolders(HostBoot.SystemPluginsRoot) : new List<string>();
 
         var checks = new List<CheckBox>();
+        var sysSet = new HashSet<string>(sysFolders, StringComparer.OrdinalIgnoreCase);
         if (pluginDlls.Count == 0 && sysFolders.Count == 0)
         {
             flow.Controls.Add(new Label { AutoSize = true, ForeColor = SubFg, Margin = new Padding(2, 6, 2, 2),
@@ -2299,10 +2303,13 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         foreach (var f in pluginDlls)
         {
             // Text must stay the exact path — apply() persists cb.Text into EnabledPlugins=.
+            // LaunchBox's own plugins are ticked unless explicitly refused: the host loads them by default
+            // (HostBoot), so showing them unticked would have this screen contradict what actually runs.
             var cb = new CheckBox
             {
                 Text = f, AutoSize = true, ForeColor = Fg, Margin = new Padding(2, 5, 2, 5),
-                Checked = defaultAll || enabledSet.Contains(f),
+                Checked = defaultAll || enabledSet.Contains(f)
+                          || (HostBoot.IsLaunchBoxOwned(f, false) && !refusedSet.Contains(f)),
             };
             checks.Add(cb);
             flow.Controls.Add(cb);
@@ -2341,10 +2348,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             foreach (var f in sysFolders)
             {
                 // Text must stay the exact folder name — apply() persists cb.Text into EnabledPlugins=.
+                // Everything under System\Plugins belongs to LaunchBox, so it is ticked unless refused.
                 var cb = new CheckBox
                 {
                     Text = f, AutoSize = true, ForeColor = Fg, Margin = new Padding(2, 5, 2, 5),
-                    Checked = defaultAll || enabledSet.Contains(f),
+                    Checked = defaultAll || enabledSet.Contains(f) || !refusedSet.Contains(f),
                 };
                 checks.Add(cb);
                 flow.Controls.Add(cb);
@@ -2362,6 +2370,14 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             var sel = new List<string>();
             foreach (var cb in checks) if (cb.Checked) sel.Add(cb.Text);
             _cfg.SetEnabledPlugins(sel);   // persisted by OptionsWindow.ApplyFinished → _cfg.Save()
+
+            // An unticked LaunchBox plugin has to be recorded as such: the host loads those by default, so
+            // merely leaving it out of EnabledPlugins would let it come straight back on the next start.
+            var off = new List<string>();
+            foreach (var cb in checks)
+                if (!cb.Checked && (sysSet.Contains(cb.Text) || HostBoot.IsLaunchBoxOwned(cb.Text, false)))
+                    off.Add(cb.Text);
+            _cfg.SetDisabledPlugins(off);
 
             var now = new HashSet<string>(sel, StringComparer.OrdinalIgnoreCase);
             if (!now.SetEquals(initial))

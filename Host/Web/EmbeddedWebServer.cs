@@ -229,6 +229,7 @@ internal static class EmbeddedWebServer
         // S5: RA achievement badge PNGs referenced by the `ra` block in detail.json (RaBadges disk cache).
         _router.Add(@"/api/ra/badge/(?<name>[^/]+)\.png", WebRa.BadgeHandle);
         _router.Add(@"/api/recent/epoch", RecentEpochApi.Handle);
+        _router.Add(@"/api/kiosk/selection", WebSelectionBridge.Ping);   // a kiosk that served a view from its own cache
         _router.Add(@"/api/parental/state", ParentalApi.HandleState);
         _router.Add(@"/api/parental/unlock", ParentalApi.HandleUnlock);
         _router.Add(@"/api/parental/lock", ParentalApi.HandleLock);

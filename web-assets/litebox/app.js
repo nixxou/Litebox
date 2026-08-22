@@ -54,6 +54,26 @@
     pgup: ["PageUp"], pgdn: ["PageDown"], home: ["Home"], end: ["End"],
     select: ["Enter", "Spacebar"], zone: ["Tab"]
   });
+  /* ─── Signal de sélection (kiosque uniquement) ──────────────────────────────
+     L'hôte déduit la sélection courante des requêtes qu'il voit passer, ce qui
+     ne marche pas quand la vue vient de NOS caches (lbGamesCache, lbDetailCache) :
+     aucune requête ne part, et un écran secondaire reste sur l'affichage
+     précédent. On le prévient donc uniquement dans ce cas — jamais en doublon
+     d'un fetch réel — et uniquement depuis un kiosque, reconnu au marqueur
+     d'agent utilisateur. Sans attente et sans traitement d'erreur : cela ne doit
+     jamais retarder un affichage. */
+  var lbIsKiosk = false;
+  try {
+    lbIsKiosk = (location.protocol === "http:" || location.protocol === "https:")
+             && (navigator.userAgent || "").indexOf("LiteBoxKiosk") >= 0;
+  } catch (e) {}
+
+  function lbPingSelection(path) {
+    if (!lbIsKiosk) return;
+    try { fetch("/api/kiosk/selection?p=" + encodeURIComponent(path), { keepalive: true }).catch(function () {}); }
+    catch (e) {}
+  }
+
   try {
     fetch("/launchbox/api/keybinds", { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1708,6 +1728,7 @@
        (ref: req §2) */
     if (lbGamesCache[path]) {
       console.log("[LBW] lbw games cache hit:", path);
+      lbPingSelection("/launchbox/data/" + path + "/games.json");   // rien ne partira : on le dit
 
       /* Reset the detail cache on platform switch — same reason as below. */
       lbDetailCache = {};
@@ -1809,6 +1830,11 @@
      The prologue mirrors loadPlatform's reset (fanart timers, detail cache,
      lbCurrentPlatformPath) — kept inline so loadPlatform stays untouched. */
   function loadCategory(catPath, leafPaths, categoryName) {
+    /* Nommée ici, cache ou pas : une catégorie est composée depuis ses feuilles,
+       donc AUCUNE requête ne la désigne jamais — même en réseau l'hôte ne verrait
+       passer que des plateformes. Ce n'est donc pas un doublon. */
+    if (catPath) lbPingSelection("/launchbox/data/" + catPath + "/games.json");
+
     /* Store for fillLbPanel() — same as loadPlatform. */
     currentPlatformName = (typeof categoryName === "string") ? categoryName : "";
 
@@ -3356,6 +3382,7 @@
 
     /* Cache hit: merge synchronously and update the panel immediately. */
     if (lbDetailCache[g.id]) {
+      lbPingSelection("/launchbox/data/games/" + encodeURIComponent(String(g.id)) + "/detail.json");
       mergeDetail(g, lbDetailCache[g.id]);
       applyLbLastLaunchSync(g);
       fillLbPanelHeavy(gi);

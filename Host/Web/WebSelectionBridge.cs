@@ -57,13 +57,27 @@ internal static class WebSelectionBridge
 
     /// <summary>Read one request on its way to a handler. Cheap and silent for everything that is not a
     /// kiosk asking for a game or a list — two anchored regexes and, most of the time, no match at all.</summary>
-    public static void Observe(HttpRequest? req)
+    public static void Observe(HttpRequest? req) => Match(req, req?.Path);
+
+    /// <summary>The ping a frontend sends when it served a view from ITS OWN cache, so no request went out
+    /// for us to read. It carries the path it would have fetched — the one parser below then applies, so the
+    /// two routes in cannot drift apart. Answers 204 and costs a header round-trip; the frontends only send
+    /// it on a cache hit, and only from a kiosk.</summary>
+    public static HttpResponse Ping(RouteContext ctx)
     {
-        if (req == null) return;
+        Match(ctx.Request, ctx.Request?.GetQuery("p"));
+        return new HttpResponse { StatusCode = 204, StatusText = "No Content" };
+    }
+
+    private static void Match(HttpRequest? req, string? rawPath)
+    {
+        if (req == null || string.IsNullOrEmpty(rawPath)) return;
         try
         {
             if (!WebParentalState.IsKioskRequest(req)) return;
-            string path = req.Path ?? "";
+            string path = rawPath;
+            int q = path.IndexOf('?');           // a ping carries the query too; the router strips it, we do not
+            if (q >= 0) path = path.Substring(0, q);
 
             var m = GameRx.Match(path);
             if (m.Success) { Adopt("g|" + m.Groups["id"].Value, () => ArchiveListingApi.ResolveGame(m.Groups["id"].Value), null); return; }

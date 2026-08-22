@@ -27,6 +27,30 @@
   var cache = {};   // path -> { p: Promise, exp: 0|timestamp }   (exp = 0 → pas d'expiration)
   var http = (location.protocol === "http:" || location.protocol === "https:");
 
+  /* ─── Signal de sélection (kiosque uniquement) ──────────────────────────────
+     L'hôte déduit « quel jeu / quelle liste est sélectionné » des requêtes qu'il
+     voit passer : pas d'endpoint à appeler, pas de contrat à tenir. Sauf qu'un
+     cache-hit ne produit AUCUNE requête — revenir sur une plateforme déjà visitée
+     devenait donc invisible, et l'écran secondaire restait sur l'affichage
+     précédent.
+     Alors on ne le prévient QUE dans ce cas : jamais en plus d'un fetch réel,
+     donc aucun appel dupliqué. Et seulement depuis un kiosque, reconnu au
+     marqueur d'agent utilisateur — un navigateur ordinaire n'émet rien du tout.
+     Tir sans attente ni gestion d'erreur : ça ne doit jamais retarder un
+     affichage, et un échec ne coûte qu'un rafraîchissement en retard. */
+  var isKiosk = false;
+  try { isKiosk = http && (navigator.userAgent || "").indexOf("LiteBoxKiosk") >= 0; } catch (e) {}
+  var SEL_RX = /\/data\/(?:games\/[^/]+\/detail\.json|(?:platforms|playlists|categories)\/[^/]+\/games\.json)$/;
+
+  function pingSelection(path) {
+    if (!isKiosk) return;
+    try {
+      var abs = new URL(path, location.href).pathname;
+      if (!SEL_RX.test(abs)) return;
+      fetch("/api/kiosk/selection?p=" + encodeURIComponent(abs), { keepalive: true }).catch(function () {});
+    } catch (e) {}
+  }
+
   // Supprime les entrées expirées (purge opportuniste, évite l'accumulation).
   function sweep(now) {
     for (var k in cache) { var e = cache[k]; if (e && e.exp !== 0 && e.exp < now) delete cache[k]; }
@@ -39,7 +63,7 @@
   window.BBW.get = function (path, ttlMs) {
     var now = Date.now();
     var e = cache[path];
-    if (e && (e.exp === 0 || now < e.exp)) return e.p;   // entrée encore valide
+    if (e && (e.exp === 0 || now < e.exp)) { pingSelection(path); return e.p; }   // entrée encore valide
     var p;
     if (http && typeof fetch === "function") {
       p = fetch(path)

@@ -101,7 +101,25 @@ internal sealed class HostPlatform : DummyPlatform, ILiteBoxFields
     public override string SteamBannerImagesFolder { get => SteamBannerImagesFolderValue ?? ""; set { SteamBannerImagesFolderValue = value; Rec("SteamBannerImagesFolder", value); } }
     public override string ManualsFolder { get => ManualsFolderValue ?? ""; set { ManualsFolderValue = value; Rec("ManualsFolder", value); } }
     public override string MusicFolder { get => MusicFolderValue ?? ""; set { MusicFolderValue = value; Rec("MusicFolder", value); } }
-    public override string VideosFolder { get => VideosFolderValue ?? ""; set { VideosFolderValue = value; Rec("VideosFolder", value); } }
+    // Platforms.xml carries a media folder only when the user MOVED one — this library declares none, and
+    // most installs are the same. LaunchBox answers with its convention path anyway; we answered with "",
+    // which reads as "this platform has no videos". A plugin that locates media through the platform
+    // rather than through the game therefore got nothing: ThirdScreen fell straight past Video Snap and
+    // down to Banner, on games whose video sits exactly where the convention says it should.
+    //
+    // RELATIVE, like LaunchBox — the caller prefixes the LaunchBox root. That is visible in ThirdScreen's
+    // own log, which prints "G:\LB1326/Videos\Nintendo Game Boy\Ring Rage-01.mp4": a root, a slash it
+    // added itself, then the convention path. An absolute answer would have concatenated into nonsense.
+    private string ConventionFolder(string root)
+        => System.IO.Path.Combine(root, LbApiHost.Host.Media.MediaResolver.Sanitize(_name ?? ""));
+
+    public override string VideosFolder
+    {
+        get => !string.IsNullOrEmpty(VideosFolderValue) ? VideosFolderValue
+             : !string.IsNullOrWhiteSpace(VideoPathValue) ? VideoPathValue      // the per-platform override
+             : ConventionFolder("Videos");
+        set { VideosFolderValue = value; Rec("VideosFolder", value); }
+    }
 
     /// <summary>Boot-overlay apply: set a field from a PENDING journal op without re-recording it
     /// (the op is already in the journal — going through the public setter would double it).

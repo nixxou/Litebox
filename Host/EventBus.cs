@@ -26,16 +26,37 @@ internal static class EventBus
         return d;
     }
 
+    /// <summary>Deliver an event to every ISystemEventsPlugin — on the PLUGIN loop, never on ours. A handler
+    /// is free to take its time (ThirdScreen builds a window and starts a video surface inside one), and it
+    /// used to take that time on the UI thread, where it reads as a freeze. Fire-and-forget by design: no
+    /// caller of this needs an answer, and waiting for one would put the stall straight back.</summary>
     public static void Fire(PluginRegistry reg, string evt)
     {
-        foreach (var p in reg.SystemEvents)
+        var targets = reg.SystemEvents;
+        if (targets.Count == 0) return;
+        PluginUiThread.Post(() =>
         {
-            try { p.OnEventRaised(evt); }
-            catch (Exception ex)
+            foreach (var p in targets)
             {
-                Console.WriteLine($"[event] {p.GetType().Name}.OnEventRaised(\"{evt}\") threw: {ex.GetType().Name}: {ex.Message}");
+                try { p.OnEventRaised(evt); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[event] {p.GetType().Name}.OnEventRaised(\"{evt}\") threw: {ex.GetType().Name}: {ex.Message}");
+                }
             }
-        }
+        });
+    }
+
+    private static Dictionary<string, string> _vocab;
+
+    /// <summary>Fire the event named by a SystemEventTypes FIELD ("SelectionChanged"), resolved to the
+    /// string LaunchBox actually sends. Silent and free when no plugin listens, which is the common case:
+    /// this is called on every settled selection.</summary>
+    public static void FireNamed(PluginRegistry reg, string fieldName)
+    {
+        if (reg == null || reg.SystemEvents.Count == 0) return;
+        _vocab ??= Vocabulary();
+        Fire(reg, _vocab.TryGetValue(fieldName, out var v) && !string.IsNullOrEmpty(v) ? v : fieldName);
     }
 
     public static void FirePluginInitialized(PluginRegistry reg)

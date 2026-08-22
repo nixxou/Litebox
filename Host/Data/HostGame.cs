@@ -232,6 +232,33 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
            ?? MediaResolver.Video(_plat, R.Id, _title, prioritizeThemeVideos) ?? "";
     public override string GetVideoPath(string videoType)
         => MediaResolver.VideoIn(_plat, R.Id, _title, NormalizeVideoSubDir(videoType)) ?? "";
+
+    /// <summary>Where the NEXT video of this type for this game would be written — LaunchBox's answer to
+    /// "give me a free filename". It was never implemented here, and the Dummy returned null, which is worse
+    /// than it sounds: a caller that only wants the FOLDER takes Path.GetDirectoryName of it, gets null, and
+    /// ends up looking in LiteBox's own Core directory. That is exactly how ThirdScreen lost every game video
+    /// while finding every game image — the images come from GetAllImagesWithDetails, which we do implement.
+    ///
+    /// The file need not exist; the folder is the meaningful half. Numbering matches LaunchBox's "-01", and
+    /// the extension defaults to .mp4 when the caller does not care (this one passes null).</summary>
+    public override string GetNextVideoFilePath(string videoType, string extension)
+    {
+        try
+        {
+            string dir = MediaResolver.VideoDir(_plat, NormalizeVideoSubDir(videoType));
+            if (string.IsNullOrEmpty(dir)) return "";
+            string ext = string.IsNullOrWhiteSpace(extension) ? ".mp4"
+                       : extension.StartsWith(".", StringComparison.Ordinal) ? extension : "." + extension;
+            string stem = MediaResolver.Sanitize(_title ?? "");
+            for (int i = 1; i <= 999; i++)
+            {
+                string candidate = System.IO.Path.Combine(dir, $"{stem}-{i:00}{ext}");
+                if (!System.IO.File.Exists(candidate)) return candidate;
+            }
+            return System.IO.Path.Combine(dir, stem + "-01" + ext);
+        }
+        catch { return ""; }
+    }
     public override string GetThemeVideoPath()
         => MediaResolver.Override(ThemeVideoPath)
            ?? MediaResolver.VideoIn(_plat, R.Id, _title, "Theme") ?? "";
@@ -242,10 +269,22 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
         => MediaResolver.Override(MusicPath)
            ?? MediaResolver.Music(_plat, R.Id, _title) ?? "";
 
+    /// <summary>A LaunchBox video TYPE is not a folder name, and this used to hand it straight through as
+    /// one. "Video Snap" — the plain game video, and the type a caller asks for first — went looking for a
+    /// sub-folder called "Video Snap" that no install has, and answered "no video" for every game that has
+    /// one sitting in the platform's video root. "Theme Video" and "Recording" missed the same way, their
+    /// folders being "Theme" and "Recordings".
+    ///
+    /// The mapping was already written down, one file away, in MediaResolver.VideoTypeDirs; it just was not
+    /// consulted. A name that is already a sub-folder still passes through, so callers that hand us
+    /// "Trailer" or "Theme" directly keep working.</summary>
     private static string NormalizeVideoSubDir(string videoType)
     {
-        if (string.IsNullOrWhiteSpace(videoType)) return null; // root
-        return videoType; // "Trailer" / "Theme" / "Marquee" / "Recordings"
+        if (string.IsNullOrWhiteSpace(videoType)) return null;   // root
+        var t = videoType.Trim();
+        foreach (var (type, sub) in MediaResolver.VideoTypeDirs)
+            if (string.Equals(t, type, StringComparison.OrdinalIgnoreCase)) return sub;
+        return t;   // already "Trailer" / "Theme" / "Marquee" / "Recordings"
     }
 
     // Accessory entities (resident — additional apps are needed for launch). Add/remove/edit are

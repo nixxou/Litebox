@@ -56,12 +56,18 @@ internal static class PluginLoader
         return @"C:\Users\mehdi\source\repos\scrapper-project\LB\Core";   // dev fallback (repo-sibling LB)
     }
 
-    public static PluginRegistry LoadFrom(IEnumerable<string> dirs)
+    /// <param name="files">Individual plugin DLLs lying loose in the plugins root. Passed as FILES, not as
+    /// their directory: that directory is the root itself, and scanning it would drag in every plugin the
+    /// user disabled along with every library sitting beside them.</param>
+    public static PluginRegistry LoadFrom(IEnumerable<string> dirs, IEnumerable<string> files = null)
     {
         var reg = new PluginRegistry();
         var dirList = dirs.Where(d => !string.IsNullOrWhiteSpace(d) && Directory.Exists(d))
                           .Select(Path.GetFullPath).Distinct().ToList();
-        if (dirList.Count == 0) { Console.WriteLine("[loader] no existing plugin dirs."); return reg; }
+        var fileList = (files ?? Enumerable.Empty<string>())
+                          .Where(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f))
+                          .Select(Path.GetFullPath).Distinct().ToList();
+        if (dirList.Count == 0 && fileList.Count == 0) { Console.WriteLine("[loader] no existing plugin dirs."); return reg; }
 
         // Gather DLLs from each dir AND its immediate subdirs (LB layout is
         // LB\Plugins\<PluginName>\<plugin>.dll). Register every containing
@@ -73,7 +79,18 @@ internal static class PluginLoader
             foreach (var sub in Directory.GetDirectories(dir))
                 try { dllFiles.AddRange(Directory.GetFiles(sub, "*.dll")); } catch { }
         }
-        dllFiles = dllFiles.Distinct().ToList();
+        dllFiles.AddRange(fileList);
+        // Same FILE NAME twice means the same plugin found in two places — a copy left loose in Plugins        // after being moved into a folder of its own, or the reverse. Loading both registers the plugin
+        // twice: two menu entries, two event subscribers, two writers to the same log. First one wins,
+        // which given the order above is the folder copy — the deliberate placement over the leftover.
+        var bySeenName = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var deduped = new List<string>();
+        foreach (var f in dllFiles.Distinct())
+        {
+            if (bySeenName.Add(Path.GetFileName(f))) { deduped.Add(f); continue; }
+            Console.WriteLine($"[loader] duplicate ignored: {f}");
+        }
+        dllFiles = deduped;
         AddResolver(dllFiles.Select(Path.GetDirectoryName).Distinct().ToList());
 
         {

@@ -267,6 +267,15 @@ internal static class MediaResolver
         return null;
     }
 
+    /// <summary>The folder a video of this sub-dir (null = root) lives in for a platform, whether or not
+    /// anything is in it yet — what a caller needs to WRITE one, or to look inside for itself.</summary>
+    public static string VideoDir(string platformName, string subDir)
+    {
+        string baseDir = VideoFolder(platformName);
+        if (baseDir == null) return null;
+        return string.IsNullOrEmpty(subDir) ? baseDir : Path.Combine(baseDir, subDir);
+    }
+
     /// <summary>Video path inside a specific sub-dir (null = root). Fast path via cache, else IO.</summary>
     public static string VideoIn(string platformName, Guid id, string title, string subDir)
     {

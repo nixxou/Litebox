@@ -14,6 +14,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection.Metadata;
 using System.Threading;
 using System.Windows.Forms;
 using Unbroken.LaunchBox.Plugins;
@@ -93,6 +94,48 @@ internal static class HostBoot
         catch { }
         list.Sort(StringComparer.OrdinalIgnoreCase);
         return list;
+    }
+
+    /// <summary>Plugin DLLs lying LOOSE in <paramref name="root"/>, by file name WITH the extension —
+    /// "ThirdScreen.dll". The extension is the whole point of the naming: an entry carrying one is a
+    /// bare DLL at the root, an entry without one is a folder, and the enabled list holds both without
+    /// ambiguity.
+    ///
+    /// Most plugins ship as an archive that extracts straight into Plugins\, which is what their authors
+    /// document; only LaunchBox's own integrations use a folder each. Refusing the flat layout meant
+    /// moving files by hand and hoping nothing resolved relative to its own depth.
+    ///
+    /// Filtered on the ONE thing that separates a plugin from the libraries beside it: a reference to
+    /// Unbroken.LaunchBox.Plugins. Read from the PE metadata, so nothing is loaded or executed to find
+    /// out — a support library never reaches the options list, let alone the loader.</summary>
+    public static List<string> ListPluginDlls(string root)
+    {
+        var list = new List<string>();
+        try
+        {
+            if (Directory.Exists(root))
+                foreach (var f in Directory.GetFiles(root, "*.dll"))
+                    if (ReferencesPluginApi(f)) list.Add(Path.GetFileName(f));
+        }
+        catch { }
+        list.Sort(StringComparer.OrdinalIgnoreCase);
+        return list;
+    }
+
+    private static bool ReferencesPluginApi(string dll)
+    {
+        try
+        {
+            using var fs = File.OpenRead(dll);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(fs);
+            if (!pe.HasMetadata) return false;                  // native DLL shipped beside the managed one
+            var md = pe.GetMetadataReader();
+            foreach (var h in md.AssemblyReferences)
+                if (md.GetString(md.GetAssemblyReference(h).Name)
+                      .Equals("Unbroken.LaunchBox.Plugins", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        catch { }                                               // unreadable / not a PE → not a plugin
+        return false;
     }
 
     public static int Run(string[] args)
@@ -700,7 +743,15 @@ internal static class HostBoot
         if (sysPluginsRoot != null)
             foreach (var nm in ListPluginFolders(sysPluginsRoot)) dirByName[nm] = Path.Combine(sysPluginsRoot, nm);
 
-        List<string> names = enabled ?? dirByName.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+        // …and the loose ones, keyed by file name WITH the extension, which is what tells the two apart in
+        // the enabled list. Root only: a DLL beside a plugin inside its folder is that plugin's business.
+        var fileByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var nm in ListPluginDlls(pluginsRoot)) fileByName[nm] = Path.Combine(pluginsRoot, nm);
+        if (sysPluginsRoot != null)
+            foreach (var nm in ListPluginDlls(sysPluginsRoot)) fileByName[nm] = Path.Combine(sysPluginsRoot, nm);
+
+        List<string> names = enabled ?? dirByName.Keys.Concat(fileByName.Keys)
+                                                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
         // Never load the plugins whose job LiteBox already does natively, whatever the enabled set says:
         // ExtendDB (integrated), and our own companion parental plugin (vanilla-LB/BB only — loading it
@@ -717,10 +768,12 @@ internal static class HostBoot
             + (enabled == null ? "  (default: all present)" : ""));
 
         var pluginDirs = new List<string>();
+        var pluginFiles = new List<string>();
         foreach (var nm in names)
         {
             if (dirByName.TryGetValue(nm, out var d)) pluginDirs.Add(d);
-            else Console.WriteLine($"  ! enabled plugin folder not found: {Path.Combine(pluginsRoot, nm)}");
+            else if (fileByName.TryGetValue(nm, out var f)) pluginFiles.Add(f);
+            else Console.WriteLine($"  ! enabled plugin not found: {Path.Combine(pluginsRoot, nm)}");
         }
 
         // Pin OUR (bundled, net10) WPF assemblies BEFORE any plugin is LoadFrom'd. Some LaunchBox plugins
@@ -768,7 +821,7 @@ internal static class HostBoot
         // dev run, where the exe's folder is the build output, not <LB>\Core.
         if (lbRoot != null) PluginLoader.LbCoreDir = Path.Combine(lbRoot, "Core");
 
-        var reg = PluginLoader.LoadFrom(pluginDirs);
+        var reg = PluginLoader.LoadFrom(pluginDirs, pluginFiles);
         Console.WriteLine($"Loaded {reg.All.Count} plugin object(s): events={reg.SystemEvents.Count} sysmenu={reg.SystemMenus.Count} gamemenu={reg.GameMenus.Count} themeel={reg.ThemeElements.Count}");
 
         // Hands-free UI drivers (see the fields' doc): --edit-game/--edit-page/--edit-gamesaves/--options.
@@ -856,7 +909,15 @@ internal static class HostBoot
             Data.OverviewCache.RunSyncIfNeeded();   // auto-update off → still keep the overview cache valid
 
 
-        EventBus.FirePluginInitialized(reg);
+        PluginUiThread.Start();   // the loop that will own every plugin event from here on
+
+        // PluginInitialized is NOT fired here any more. It used to be, on the boot thread — which is not the
+        // GUI thread: LiteBox runs its window on a separate STA thread with the WPF Application and the only
+        // message loop in the process. A plugin that answers this event by opening a window (ThirdScreen puts
+        // its marquee on a second monitor) built it on a thread that pumps nothing, so the window existed and
+        // was never shown. One diagnostic mode hung outright at this line for the same reason. It now fires
+        // where LaunchBox fires it — on the UI thread, once the window is up — and in the headless loop, the
+        // other mode that lives long enough to host a plugin.
 
         // Let ExtendDB's Similar-Games viewer jump to an owned game in-host (instead of
         // opening a web page). No-op if ExtendDB is absent / too old. The callback finds
@@ -1116,6 +1177,7 @@ internal static class HostBoot
             if (args.Contains("--loop"))
             {
                 Console.WriteLine("Headless loop alive — Ctrl+C to exit.");
+                EventBus.FirePluginInitialized(reg);   // no window to wait for; this loop is the process
                 Thread.Sleep(Timeout.Infinite);
             }
             return 0;
@@ -1147,7 +1209,12 @@ internal static class HostBoot
                 // its Run(); the WinForms message loop pumps the WPF Dispatcher queue (same-thread interop).
                 try { if (System.Windows.Application.Current == null) _ = new System.Windows.Application(); } catch (Exception ex) { Console.WriteLine("[gui] WPF Application init: " + ex.Message); }
                 UiKit.LiteBoxTheme.Load(LiteBoxConfig.LoadForExe());   // apply saved color overrides BEFORE any window copies the palette
-                Application.Run(new MainWindow(reg, dm));
+                var win = new MainWindow(reg, dm);
+                // On Shown, not before Run: the plugin's own window needs this thread's message loop already
+                // turning. Once — Shown fires again if the form is ever hidden and re-shown.
+                bool fired = false;
+                win.Shown += (_, _) => { if (!fired) { fired = true; EventBus.FirePluginInitialized(reg); } };
+                Application.Run(win);
             }
             catch (Exception ex) { Console.WriteLine("[gui] " + ex); }
         })
@@ -1155,6 +1222,7 @@ internal static class HostBoot
         ui.SetApartmentState(ApartmentState.STA);
         ui.Start();
         ui.Join();
+        PluginUiThread.Stop();   // our window is gone; the plugins' loop has nothing left to serve
         // GUI closed → flush pending user-state to the XMLs if LaunchBox/BigBox aren't running
         // (else the journal is kept and applied next time it's safe).
         try { store?.FlushJournalIfSafe(); } catch { }

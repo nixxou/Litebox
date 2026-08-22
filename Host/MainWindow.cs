@@ -617,9 +617,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             HostHotKeys.Uninstall();
             try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
             HostStateManager.SelectedGamesProvider = null;
+            HostStateManager.SelectedPlatformProvider = null;   // both close over this form
         };
 
         // Expose the current selection to plugins via IStateManager (UI-thread safe).
+        // (the platform half is set just below, next to the notifications hook)
         HostStateManager.SelectedGamesProvider = () =>
         {
             try
@@ -629,6 +631,20 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                 return _games.SelectedGames;
             }
             catch { return Array.Empty<IGame>(); }
+        };
+
+        // …and the platform behind the current view. A tree node IS the platform when one is selected;
+        // under All Games / a playlist / a group there is none, so the selected game's own platform stands
+        // in — which is what a second-screen plugin means by "where am I".
+        HostStateManager.SelectedPlatformProvider = () =>
+        {
+            try
+            {
+                if (IsDisposed) return null;
+                if (InvokeRequired) return (IPlatform)Invoke((Func<IPlatform>)(() => CurrentPlatformForPlugins()));
+                return CurrentPlatformForPlugins();
+            }
+            catch { return null; }
         };
 
         // Notifications get somewhere to draw: popups in this monitor's bottom-right corner + the bell in
@@ -2251,12 +2267,17 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             Dock = DockStyle.Top, AutoSize = false, Height = 52, ForeColor = Warn, BackColor = Bg,
             Padding = new Padding(2, 2, 2, 8), Font = new Font("Segoe UI", 9f, FontStyle.Italic),
             Text = "Plugins to load (subfolders of " + (HostBoot.PluginsRoot ?? @"<LB>\Plugins")
+                 + ", or DLLs sitting directly in it"
                  + (HostBoot.SystemPluginsRoot != null ? @", plus LB 14's System\Plugins" : "") + ").\r\n"
                  + "Changes apply on the next LiteBox restart.",
         };
 
         string root = HostBoot.PluginsRoot ?? "";
         var folders = HostBoot.ListPluginFolders(root);
+        // Plugins that ship as bare DLLs dropped into Plugins\ rather than a folder each — most of them, in
+        // fact; a folder per plugin is LaunchBox's own habit. Listed by file name WITH ".dll", which is what
+        // separates them from folder entries in the very same persisted list.
+        var looseDlls = HostBoot.ListPluginDlls(root);
         var enabled = _cfg.GetEnabledPluginsOrNull();          // null ⇒ all (never configured)
         bool defaultAll = enabled == null;
         var enabledSet = new HashSet<string>(enabled ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
@@ -2269,10 +2290,21 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         var sysSet = new HashSet<string>(sysFolders, StringComparer.OrdinalIgnoreCase);
 
         var checks = new List<CheckBox>();
-        if (folders.Count == 0 && sysFolders.Count == 0)
+        if (folders.Count == 0 && sysFolders.Count == 0 && looseDlls.Count == 0)
         {
             flow.Controls.Add(new Label { AutoSize = true, ForeColor = SubFg, Margin = new Padding(2, 6, 2, 2),
-                Text = "No plugin folders found in " + root });
+                Text = "No plugins found in " + root });
+        }
+        foreach (var f in looseDlls)
+        {
+            // Text must stay the exact file name — apply() persists cb.Text into EnabledPlugins=.
+            var cb = new CheckBox
+            {
+                Text = f, AutoSize = true, ForeColor = Fg, Margin = new Padding(2, 5, 2, 5),
+                Checked = defaultAll || enabledSet.Contains(f),
+            };
+            checks.Add(cb);
+            flow.Controls.Add(cb);
         }
         foreach (var f in folders)
         {
@@ -3462,6 +3494,82 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         else if (!ReferenceEquals(_detailsShown, _currentNode)) ShowNodeDetails(_currentNode);
     }
 
+    /// <summary>The platform a plugin should consider selected: the tree node when it is one, else the
+    /// platform of the game in focus. Null when neither is available — the caller falls back.</summary>
+    private IPlatform CurrentPlatformForPlugins()
+    {
+        try
+        {
+            if (_currentNode is IPlatform p) return p;
+
+            // A CATEGORY or a PLAYLIST is a selection too, and IStateManager has no accessor for either —
+            // GetSelectedPlatform is the only question a plugin can ask about "where am I". LaunchBox answers
+            // it with the sidebar item whatever its kind: its own log shows ThirdScreen receiving "Handhelds",
+            // a category, and going on to find Images\...\Platform Categories\Handhelds.png. Answering null
+            // here left every category and playlist doing nothing at all, so the name travels on a stand-in
+            // platform. It carries a name and no games, which is exactly what the question is about; a caller
+            // that wants the real thing looks it up by name, as that plugin does.
+            if (_currentNode is IPlatformCategory or IPlaylist)
+            {
+                string node = Data.HostPlatformCategory.NodeName(_currentNode);
+                if (node.Length > 0)
+                    return NamedPlatformStub(node, _currentNode is IPlaylist ? "Playlists" : "Platform Categories");
+            }
+
+            string name = S(Safe(() => _games?.SelectedGame?.Platform));
+            if (name.Length == 0) return null;
+            return _dm?.GetAllPlatforms()?.FirstOrDefault(x => string.Equals(Safe(() => x.Name), name, StringComparison.OrdinalIgnoreCase));
+        }
+        catch { return null; }
+    }
+
+    // One stub per name: the same selection is asked about repeatedly (every plugin, every event), and a
+    // fresh object each time would have plugins that cache by reference miss every single time.
+    private readonly Dictionary<string, IPlatform> _platformStubs = new(StringComparer.OrdinalIgnoreCase);
+
+    private IPlatform NamedPlatformStub(string name, string entityFolder)
+    {
+        string key = entityFolder + "|" + name;
+        if (_platformStubs.TryGetValue(key, out var hit)) return hit;
+        var stub = new SelectedEntityPlatform(entityFolder, name);
+        _platformStubs[key] = stub;
+        return stub;
+    }
+
+    /// <summary>A category or a playlist, wearing IPlatform because that is the only shape
+    /// <see cref="IStateManager.GetSelectedPlatform"/> can return. Carrying the name alone is not enough:
+    /// a plugin asks the object itself for its art — ThirdScreen reads BannerImagePath and
+    /// ClearLogoImagePath straight off whatever it is handed — so those resolve here, against the entity's
+    /// own image folder (Images\Platform Categories\… or Images\Playlists\…), exactly as the tree and the
+    /// editor resolve them.</summary>
+    private sealed class SelectedEntityPlatform : LbApiHost.Generated.DummyPlatform
+    {
+        private readonly string _entityFolder, _name;
+        public SelectedEntityPlatform(string entityFolder, string name) { _entityFolder = entityFolder; _name = name; }
+
+        public override string Name { get => _name; set { } }
+
+        private string Img(string type)
+        {
+            try
+            {
+                var l = LbApiHost.Host.Media.MediaResolver.EntityTypeImages(LbApiHost.Host.Media.MediaResolver.ImagesRoot, _entityFolder, _name, "", type);
+                return l.Count > 0 ? l[0].path : "";
+            }
+            catch { return ""; }
+        }
+
+        public override string BannerImagePath { get => Img("Banner"); set { } }
+        public override string ClearLogoImagePath { get => Img("Clear Logo"); set { } }
+        public override string BackgroundImagePath { get => Img("Fanart - Background"); set { } }
+        public override string DeviceImagePath { get => Img("Device"); set { } }
+    }
+
+    /// <summary>Tell plugins the selection moved. Fired on a SETTLED selection and on a tree change, never
+    /// on transit: a plugin answers this by reading media off disk (a second screen repaints), and a fast
+    /// scroll through a platform would have it doing that for every row it passes.</summary>
+    private void FireSelectionChanged() => EventBus.FireNamed(_reg, "SelectionChanged");
+
     private void LoadNode(object node)
     {
         // Guard re-selecting the already-loaded node — also stops the coalesced
@@ -3472,6 +3580,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // LEDBlinky list-change "7 <emu>" (arcade → "MAME"). Real platforms only for now; playlists /
         // groups / All are the unresolved 7-vs-8 case — see LedBlinky.ListChange.
         try { if (node is IPlatform lbPlat) LedBlinky.ListChange(lbPlat.Name); } catch { }
+        FireSelectionChanged();   // the view moved to another platform / playlist / group
         try
         {
             IEnumerable<IGame> src =
@@ -6403,6 +6512,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _media.SetImage(art, art3d);
         PopulateDetailMeta(g);
         UpdateGameMusic(g);         // the selection settled here → its music (View ▸ Media rules)
+        FireSelectionChanged();     // …and plugins learn it too, once, on the settle
     }
 
     // Transit: a game merely scrolled past. Update only the base thumb + title/logo (cheap) so images

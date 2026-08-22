@@ -66,8 +66,18 @@ internal sealed class HostStateManager : DummyStateManager
         IsBigBoxLocked = false;
     }
 
+    /// <summary>Set by the GUI so plugins can read the platform the user is browsing.</summary>
+    public static Func<IPlatform> SelectedPlatformProvider;
+
+    /// <summary>The platform the user is on. It used to answer with the library's FIRST platform, always
+    /// — harmless while nothing asked, and quietly wrong the moment a plugin did: a second-screen plugin
+    /// reading it on every selection would show the same platform's art forever.</summary>
     public override IPlatform GetSelectedPlatform()
-        => Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllPlatforms()?.FirstOrDefault();
+    {
+        try { if (SelectedPlatformProvider?.Invoke() is { } p) return p; }
+        catch { }
+        return Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllPlatforms()?.FirstOrDefault();
+    }
 
     /// <summary>Set by the GUI so plugins can read the currently-selected games.</summary>
     public static Func<IGame[]> SelectedGamesProvider;

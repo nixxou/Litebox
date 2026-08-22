@@ -6034,6 +6034,30 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             fam = Media.MediaLayout.Current.Immediate3dFallback;
             if (string.IsNullOrEmpty(fam) || string.Equals(fam, Media.Media3dItem.FamilyKey, StringComparison.OrdinalIgnoreCase)) fam = "Front";
         }
+        // "Videos" immediate (the family, or one exact sub-folder): the video's ALREADY-EXTRACTED still.
+        // The panel offers these entries alongside the image families, but only the 3D sentinel was ever
+        // resolved here — a video selector fell through to CacheSourceFor, which looked for an image filed
+        // under a key no image cache has, found nothing, and quietly served Front. The setting appeared to
+        // do nothing at all.
+        //
+        // Only when the frame is on disk. LoadThumbOrFull deliberately refuses to extract one (hundreds of
+        // ms, on the selection path), so a sentinel without a cached still would paint an empty box —
+        // worse than the Front it replaced. KickVideoThumbs fetches it after the post-load delay, so the
+        // instant image starts working from the second visit on.
+        if (allow3d && Media.MediaVideoItem.IsSelector(fam))
+        {
+            try
+            {
+                // Cache-first, like everything on this path: with the platform's game cache up this is a
+                // memory lookup. Without it, one GetVideoPath + File.Exists — far short of the art-slot IO
+                // that once froze the transit loader, but not free either.
+                foreach (var v in Media.MediaVideoItem.Resolve(g, Media.MediaVideoItem.SubDirOf(fam)))
+                    if (Video.VideoThumbnailer.IsCached(v)) return (logoSrc, Media.MediaVideoItem.For(v));
+            }
+            catch (Exception ex) { Console.WriteLine("[mediavideo] instant lookup failed: " + ex.Message); }
+            fam = "Front";
+        }
+        else if (Media.MediaVideoItem.IsSelector(fam)) fam = "Front";   // caller needs a real file
         string artSrc = CacheSourceFor(g, fam);
         if (string.IsNullOrEmpty(artSrc))   // family had nothing → the old Front→Box3D→Screenshot fallback
             artSrc = Safe(() => g.FrontImagePath) is { Length: > 0 } f ? f
@@ -6487,8 +6511,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                     {
                         if (IsDisposed || !ReferenceEquals(_games.SelectedGame, g)) { logo?.Dispose(); art?.Dispose(); return; }
                         bool art3d = Media.Media3dItem.Is(artSrc);   // 3D snapshot → fit-to-height, not letterbox
-                        if (settled) ApplyDetails(g, logo, art, art3d);   // landed → full pane
-                        else ApplyImageTransit(g, logo, art, art3d);      // scrolled past → base thumb + title only
+                        bool artVid = Media.MediaVideoItem.Is(artSrc);   // video still → the player's black ground
+                        if (settled) ApplyDetails(g, logo, art, art3d, artVid);   // landed → full pane
+                        else ApplyImageTransit(g, logo, art, art3d, artVid);      // scrolled past → base thumb + title only
                     }));
                 else { logo?.Dispose(); art?.Dispose(); }
             }
@@ -6500,7 +6525,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     // Settle: the selection landed here. Images are already decoded (on the loader thread) → applied
     // directly (no re-load, no SetImage(null) flash) and the full pane is built.
-    private void ApplyDetails(IGame g, Image logo, Image art, bool art3d = false)
+    private void ApplyDetails(IGame g, Image logo, Image art, bool art3d = false, bool artVideo = false)
     {
         _detailsShown = g;
         _heroGame = g;
@@ -6509,7 +6534,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _hero.SetLogo(logo);
         Hide3dOverlay();            // a flat image takes the box — the previous game's 3D must not linger
         HideVideoOverlay();         // idem for a playing video (it would also keep decoding)
-        _media.SetImage(art, art3d);
+        _media.SetImage(art, art3d, artVideo);
         PopulateDetailMeta(g);
         UpdateGameMusic(g);         // the selection settled here → its music (View ▸ Media rules)
         FireSelectionChanged();     // …and plugins learn it too, once, on the settle
@@ -6517,7 +6542,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     // Transit: a game merely scrolled past. Update only the base thumb + title/logo (cheap) so images
     // track the scroll; the heavy pane (metadata, buttons, fanart, strip) waits for the settle above.
-    private void ApplyImageTransit(IGame g, Image logo, Image art, bool art3d = false)
+    private void ApplyImageTransit(IGame g, Image logo, Image art, bool art3d = false, bool artVideo = false)
     {
         _detailsShown = g;
         _heroGame = g;
@@ -6526,7 +6551,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         _hero.SetLogo(logo);
         Hide3dOverlay();            // scrolling past: the previous game's 3D must not cover the new thumb
         HideVideoOverlay();
-        _media.SetImage(art, art3d);
+        _media.SetImage(art, art3d, artVideo);
     }
 
     // Right pane when a TREE node (category / platform / playlist / All) is selected.
@@ -7746,7 +7771,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             {
                 if (IsDisposed || token != _detailsLoadToken) { logo?.Dispose(); art?.Dispose(); return; }
                 _hero.SetLogo(logo);                       // hero owns + pulses the logo
-                _media.SetImage(art, Media.Media3dItem.Is(artSrc));   // degraded box now; upgraded to full after 0.5s
+                _media.SetImage(art, Media.Media3dItem.Is(artSrc), Media.MediaVideoItem.Is(artSrc));   // degraded box now; upgraded to full after 0.5s
             }
             try { if (!IsDisposed) BeginInvoke((Action)Apply); else { logo?.Dispose(); art?.Dispose(); } }
             catch { logo?.Dispose(); art?.Dispose(); }
@@ -8949,6 +8974,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // narrower than the bake — the poster-ratio defect. Those are drawn FIT TO HEIGHT and centred
         // instead, so the surplus width is cropped, exactly like the 3D overlay's SnapshotBox.
         private bool _fitHeight;
+        private bool _blackGround;   // a video still: match the player that is about to take this rectangle
         /// <summary>Double-click on a displayed image → the fullscreen viewer (LB parity). The 3D item
         /// never lands here: its overlay covers this panel and has its own ⤢ badge.</summary>
         public Action DoubleClicked;
@@ -8958,10 +8984,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                    | ControlStyles.StandardClick | ControlStyles.StandardDoubleClick, true);
         }
-        public void SetImage(Image img, bool fitHeight = false)
+        public void SetImage(Image img, bool fitHeight = false, bool blackGround = false)
         {
             var old = _img; _img = img; if (!ReferenceEquals(old, img)) old?.Dispose();
             _fitHeight = fitHeight;
+            _blackGround = blackGround;
             Cursor = _img != null ? Cursors.Hand : Cursors.Default;   // hover hints "click me" (LB parity)
             Invalidate();
         }
@@ -8974,7 +9001,12 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
-            g.Clear(BackColor);   // transparent: the panel IS the reserved area; letterbox = pane background, no dark box
+            // Normally transparent: the panel IS the reserved area, so the letterbox is pane background and
+            // there is no dark box around a cover. A VIDEO still is the exception — what replaces it moments
+            // later is VideoBlock, docked over this same rectangle, black, with its still in PictureBox Zoom.
+            // The picture therefore lands in exactly the same place either way; only the ground behind it
+            // would change, and a grey-to-black flip on a frame that never moved reads as a glitch.
+            g.Clear(_blackGround && _img != null ? Color.Black : BackColor);
             if (_img == null) return;
             var rect = ClientRectangle;
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;

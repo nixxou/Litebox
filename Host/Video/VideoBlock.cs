@@ -440,11 +440,19 @@ internal sealed class VideoBlock : Panel
             // applied when the stream is opened (the same trick the thumbnailer uses). A player opened that
             // way has no audio pipeline to turn back on, so un-muting rebuilds it — see SetMuted.
             _audioOff = _muted;
+            // The still is NOT dropped here. "Playing" means libvlc accepted the stream and started the
+            // pipeline, not that a frame has reached the HWND — and between the two the surface is black,
+            // which is the flash you see when a video takes over from its own thumbnail. TimeChanged is the
+            // first news that decoding actually advanced, so the still is held until then: it is the same
+            // picture as the first frame, so holding it costs nothing and hides the gap.
+            _mp.TimeChanged += (_, e) => Post(() =>
+            {
+                if (_token == token && e.Time > 0) _still.Visible = false;
+            });
             // Fires on a VLC thread → hop to the UI thread before touching anything of ours.
             _mp.Playing += (_, _) => Post(() =>
             {
                 if (_token != token) return;
-                _still.Visible = false;
                 if (_startAtMs > 0)
                 {
                     long from = _startAtMs; _startAtMs = 0;
@@ -464,6 +472,10 @@ internal sealed class VideoBlock : Panel
                         }
                     }
                     catch { }
+                    // Seeking then pausing renders THAT frame, which is not the thumbnail — and since the
+                    // player stops advancing, TimeChanged may never report a time and would leave the still
+                    // covering it. Drop it here instead.
+                    _still.Visible = false;
                     _ended = markEnded;
                     _playRequested = false;
                     _playBtn.Text = "▶";

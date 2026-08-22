@@ -493,7 +493,7 @@ internal sealed partial class EditGameWindow
     private void VidYtOpenOptions()
     {
         var cfg = YtConfig.Load();
-        using var dlg = NewDialog("YouTube options", 520, 430);
+        using var dlg = NewDialog("YouTube options", 520, 520);
 
         Label Head(string t, int y) { var l = new Label { Text = t, ForeColor = YtRed, BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 9f, FontStyle.Bold), Location = new Point(S(16), y) }; dlg.Controls.Add(l); return l; }
         Label Note(string t, int y) { var l = new Label { Text = t, ForeColor = SubFg, BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 8f), Location = new Point(S(16), y) }; dlg.Controls.Add(l); return l; }
@@ -527,20 +527,51 @@ internal sealed partial class EditGameWindow
         dlg.Controls.Add(ver);
         var dl = DlgBtn("Download", Color.FromArgb(45, 95, 60)); dl.AutoSize = false; dl.SetBounds(S(16), S(280), S(110), S(28));
         var up = DlgBtn("Update", Color.FromArgb(60, 60, 82)); up.AutoSize = false; up.SetBounds(S(132), S(280), S(110), S(28));
+        // Assigned once the engine controls below exist. "Download" now brings deno along, so the engine line
+        // must not go on claiming there is none until the dialog is reopened.
+        Action? refreshEngine = null;
         async void Fetch(Button b, Func<CancellationToken, System.Threading.Tasks.Task<bool>> op)
         {
             dl.Enabled = up.Enabled = false; string old = b.Text; b.Text = "…"; UseWaitCursor = true;
             bool ok = false; try { ok = await op(CancellationToken.None); } catch { }
             UseWaitCursor = false; dl.Enabled = up.Enabled = true; b.Text = old;
             ver.Text = YtVersionText();
+            refreshEngine?.Invoke();
             if (!ok) MessageBox.Show(dlg, "yt-dlp download failed.", "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        dl.Click += (_, _) => Fetch(dl, YtDlp.EnsureAsync);
-        up.Click += (_, _) => Fetch(up, YtDlp.UpdateAsync);
         dlg.Controls.Add(dl); dlg.Controls.Add(up);
 
-        var ok = DlgBtn("OK", Color.FromArgb(45, 95, 60)); ok.AutoSize = false; ok.SetBounds(S(300), S(340), S(96), S(30));
-        var ca = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); ca.AutoSize = false; ca.SetBounds(S(404), S(340), S(96), S(30));
+        // JavaScript engine — invisible equipment until it is missing, and then everything it costs is silent:
+        // YouTube withholds formats and the availability pass drops age-restricted videos, which reads on screen
+        // as "the search found nothing". So its state is stated here rather than left to be deduced.
+        Head("JavaScript engine", S(320));
+        var js = new Label { Text = YtJsText(), ForeColor = SubFg, BackColor = Bg, AutoSize = true, Font = new Font("Segoe UI", 8.5f), Location = new Point(S(160), S(322)) };
+        dlg.Controls.Add(js);
+        Note("YouTube answers extraction with a JS challenge; yt-dlp solves it when it has an engine to run.", S(348));
+        Note("Without one, age-restricted videos are dropped from results and some formats are withheld.", S(362));
+        var getjs = DlgBtn("Install deno · 41 MB", Color.FromArgb(45, 95, 60)); getjs.AutoSize = false; getjs.SetBounds(S(16), S(384), S(150), S(28));
+        var jslink = DlgBtn("Deno website", Color.FromArgb(60, 60, 82)); jslink.AutoSize = false; jslink.SetBounds(S(172), S(384), S(126), S(28));
+        // Offered even when a runtime was found. deno is the engine yt-dlp recommends and the only one that runs
+        // the challenge under restricted permissions, so wanting it over an installed node is a legitimate
+        // choice, not a mistake to be prevented — and once ours is on disk it takes priority over anything on
+        // PATH. Only an existing copy of OURS disables the button, because there would be nothing left to fetch.
+        getjs.Enabled = !File.Exists(YtDlp.DenoPath);
+        getjs.Click += async (_, _) =>
+        {
+            getjs.Enabled = false; string old = getjs.Text; getjs.Text = "…"; UseWaitCursor = true;
+            bool got = false; try { got = await YtDlp.EnsureDenoAsync(CancellationToken.None); } catch { }
+            UseWaitCursor = false; getjs.Text = old;
+            js.Text = YtJsText();
+            getjs.Enabled = !File.Exists(YtDlp.DenoPath);
+            if (!got) MessageBox.Show(dlg, "Couldn't download deno. You can install it yourself from deno.com — LiteBox picks up any deno, node or bun on your PATH.",
+                "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        };
+        jslink.Click += (_, _) => { try { Process.Start(new ProcessStartInfo("https://deno.com/") { UseShellExecute = true }); } catch { } };
+        dlg.Controls.Add(getjs); dlg.Controls.Add(jslink);
+        refreshEngine = () => { js.Text = YtJsText(); getjs.Enabled = !File.Exists(YtDlp.DenoPath); };
+
+        var ok = DlgBtn("OK", Color.FromArgb(45, 95, 60)); ok.AutoSize = false; ok.SetBounds(S(300), S(430), S(96), S(30));
+        var ca = DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); ca.AutoSize = false; ca.SetBounds(S(404), S(430), S(96), S(30));
         ok.Click += (_, _) =>
         {
             cfg.Searches = searches.Text.Replace("\r\n", "\n").Split('\n').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
@@ -560,4 +591,13 @@ internal sealed partial class EditGameWindow
 
     private static string YtVersionText()
         => YtDlp.Available ? ("installed" + (YtDlp.Version() is { } v ? "  ·  " + v : "")) : "not installed";
+
+    /// <summary>Which engine yt-dlp will be handed, and from where — "ours" for the one we fetched beside
+    /// yt-dlp, so a user who has both can tell which is in play.</summary>
+    private static string YtJsText()
+    {
+        if (YtDlp.JsRuntimeFound() is not { } r) return "none found — see below";
+        bool ours = string.Equals(r.Path, YtDlp.DenoPath, StringComparison.OrdinalIgnoreCase);
+        return r.Name + (ours ? "  ·  ours" : "  ·  " + r.Path);
+    }
 }

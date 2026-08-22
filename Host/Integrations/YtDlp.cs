@@ -14,6 +14,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -52,10 +54,34 @@ internal static class YtDlp
 
     /// <summary>Download yt-dlp.exe if it isn't already there. Returns true when the binary is present afterward.</summary>
     public static async Task<bool> EnsureAsync(CancellationToken ct = default)
-        => Available || await DownloadBinaryAsync(ct).ConfigureAwait(false);
+    {
+        bool ok = Available || await DownloadBinaryAsync(ct).ConfigureAwait(false);
+        if (ok) await EnsureEngineAsync(ct).ConfigureAwait(false);
+        return ok;
+    }
 
-    /// <summary>(Re)download the latest yt-dlp.exe, replacing any existing one.</summary>
+    /// <summary>(Re)download the latest yt-dlp.exe, replacing any existing one. Deliberately does NOT touch the
+    /// engine: updating yt-dlp is a small, frequent gesture — the binary changes weekly — and deno neither needs
+    /// to keep step with it nor deserves to reappear behind the back of someone who chose to delete it.</summary>
     public static Task<bool> UpdateAsync(CancellationToken ct = default) => DownloadBinaryAsync(ct);
+
+    /// <summary>Fetching yt-dlp fetches what yt-dlp needs. A JS engine is no longer optional equipment — without
+    /// one YouTube withholds formats and age-restricted videos vanish from results — so it comes along with the
+    /// binary instead of waiting to be discovered as missing.
+    ///
+    /// It comes along even on a machine that already has node, which is a choice worth stating: deno is the
+    /// engine yt-dlp recommends and the only one it runs under restricted permissions, ours is a known version
+    /// rather than whatever happens to be installed, and JsRuntime prefers it once it is there. The price is
+    /// 41 MB fetched and 97 MB on disk that a node owner did not strictly need.
+    ///
+    /// Install-if-missing, never an upgrade: EnsureDenoAsync returns early when the file is there, so this
+    /// costs nothing on the second call. The outcome is deliberately not reported — yt-dlp on its own is still
+    /// worth having, and a failed engine fetch must not read as a failed yt-dlp fetch.</summary>
+    private static async Task EnsureEngineAsync(CancellationToken ct)
+    {
+        try { await EnsureDenoAsync(ct).ConfigureAwait(false); } catch { }
+        ResetJsRuntime();                                   // a fresh install changes the answer
+    }
 
     private static async Task<bool> DownloadBinaryAsync(CancellationToken ct)
     {
@@ -467,20 +493,75 @@ internal static class YtDlp
     // download it. Cookies were making things look WORSE on their own, which is exactly how they got blamed.
     //
     // yt-dlp finds deno by itself; node and bun have to be named. We resolve the full path rather than trust
-    // the process PATH, and probe once — the answer cannot change while LiteBox is up.
+    // the process PATH, and probe once — the answer cannot change while LiteBox is up, unless we install one
+    // ourselves, which is what ResetJsRuntime is for.
+    //
+    // Order is yt-dlp's own preference. deno is the one it recommends, and the only one that runs the
+    // challenge under restricted permissions; bun is last because upstream has deprecated it. quickjs is
+    // absent on purpose — supported, tiny, and warned about for "execution times of several minutes".
     private static string? _jsRuntime;
     private static bool _jsProbed;
+
+    /// <summary>Our own deno, if the user asked us to fetch one — beside yt-dlp, and found the same way.</summary>
+    public static string DenoPath => Path.Combine(LiteBoxPaths.Dir("thirdparty"), "deno.exe");
+
+    /// <summary>"deno" / "node" / "bun" and where it was found, or null when the machine has none.</summary>
+    public static (string Name, string Path)? JsRuntimeFound()
+    {
+        if (JsRuntime() is not { } r) return null;
+        int i = r.IndexOf(':');
+        return (r[..i], r[(i + 1)..]);
+    }
 
     private static string? JsRuntime()
     {
         if (_jsProbed) return _jsRuntime;
         _jsProbed = true;
-        foreach (var name in new[] { "deno", "node", "bun" })
-        {
+        // Ours first: a deno we installed is the one we can promise something about.
+        if (File.Exists(DenoPath)) _jsRuntime = "deno:" + DenoPath;
+        else foreach (var name in new[] { "deno", "node", "bun" })
             if (OnPath(name + ".exe") is { } exe) { _jsRuntime = name + ":" + exe; break; }
-        }
         LbLog.Info("ytdlp", "js runtime: " + (_jsRuntime ?? "(none — YouTube may withhold formats)"));
         return _jsRuntime;
+    }
+
+    /// <summary>Forget the probe — after installing one, so the next call sees it.</summary>
+    public static void ResetJsRuntime() { _jsProbed = false; _jsRuntime = null; }
+
+    // Deno ships as a single executable in a zip, so fetching one on demand is the same gesture as fetching
+    // yt-dlp: nothing is shipped, and nothing is installed system-wide either — it lands beside yt-dlp and is
+    // found by full path, so it cannot collide with a deno the user manages themselves.
+    public const string DenoReleaseUrl =
+        "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip";
+
+    /// <summary>Download deno beside yt-dlp. True when deno.exe is there afterwards.</summary>
+    public static async Task<bool> EnsureDenoAsync(CancellationToken ct = default)
+    {
+        if (File.Exists(DenoPath)) return true;
+        string tmp = DenoPath + ".zip";
+        try
+        {
+            using (var resp = await _http.GetAsync(DenoReleaseUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
+            {
+                if (!resp.IsSuccessStatusCode) { Console.WriteLine($"[yt-dlp] deno download HTTP {(int)resp.StatusCode}"); return false; }
+                await using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                await using var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None);
+                await src.CopyToAsync(fs, ct).ConfigureAwait(false);
+            }
+            using (var zip = ZipFile.OpenRead(tmp))
+            {
+                // One entry, "deno.exe" at the root — matched by name rather than by position, so a future
+                // archive that grows a license file beside it still works.
+                var entry = zip.Entries.FirstOrDefault(e =>
+                    string.Equals(Path.GetFileName(e.FullName), "deno.exe", StringComparison.OrdinalIgnoreCase));
+                if (entry == null) { Console.WriteLine("[yt-dlp] deno zip has no deno.exe"); return false; }
+                entry.ExtractToFile(DenoPath, overwrite: true);
+            }
+            ResetJsRuntime();
+            return File.Exists(DenoPath);
+        }
+        catch (Exception ex) { Console.WriteLine("[yt-dlp] deno download failed: " + ex.Message); return false; }
+        finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
     }
 
     private static string? OnPath(string exe)

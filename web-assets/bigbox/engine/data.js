@@ -92,7 +92,16 @@
     var p;
     if (http && typeof fetch === "function") {
       p = fetch(path)
-        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          /* Mode degrade (jeu lance) : la reponse est une APPROXIMATION — description absente,
+             drapeaux manette manquants. On l'affiche, mais on ne la garde pas : sans ca, la
+             version amaigrie resterait en memoire pour toute la session, longtemps apres le
+             retour des vraies donnees. L'entree est retiree du cache des sa resolution, donc
+             la visite suivante refetche. */
+          try { if (r.headers && r.headers.get("X-LiteBox-Degraded")) delete cache[path]; } catch (e) {}
+          return r.json();
+        })
         .catch(function () { return window.BBW.DUMMY[path]; });
     } else {
       p = Promise.resolve(window.BBW.DUMMY[path]);

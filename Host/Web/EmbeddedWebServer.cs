@@ -159,15 +159,24 @@ internal static class EmbeddedWebServer
                     // Per-request concurrency gate (not per connection) so idle keep-alive sockets hold no slot.
                     _concurrencyGate.Wait();
                     HttpResponse resp;
+                    // Sampled BEFORE the handler runs as well as after: a payload is built DURING dispatch,
+                    // and a request that spans the moment a game exits would otherwise be assembled from the
+                    // thin data and then labelled healthy — cached for the session, which is the one thing
+                    // this whole mechanism exists to prevent. Either sample counts.
+                    bool degradedBefore = IsDegraded();
                     try
                     {
                         try
                         {
                             if (req.Method != "GET" && req.Method != "HEAD" && req.Method != "POST")
+                            {
                                 resp = HttpResponse.PlainText("Method not allowed", 405);
+                            }
                             else
+                            {
                                 WebSelectionBridge.Observe(req);   // a kiosk browsing IS a selection
                                 resp = _router.Dispatch(req) ?? HttpResponse.NotFound($"No route for {req.Path}");
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -176,6 +185,7 @@ internal static class EmbeddedWebServer
                     }
                     finally { _concurrencyGate.Release(); }
 
+                    MarkIfDegraded(req, resp, degradedBefore);
                     resp.Headers["Connection"] = keepAlive ? "keep-alive" : "close";
                     if (keepAlive)
                         resp.Headers["Keep-Alive"] = "timeout=10";
@@ -409,5 +419,43 @@ internal static class EmbeddedWebServer
         var s = addr.ToString();
         foreach (var rx in _allowedPatterns) if (rx.IsMatch(s)) return true;
         return false;
+    }
+
+    // ── Degraded mode: served, but never kept ───────────────────────────────────────────────────────
+    // A game launch frees the optional tier and empties the media cache, so a data payload built during
+    // one is an APPROXIMATION — a game with no description, a list with no controller flags. Serving that
+    // is fine and better than serving nothing; letting anybody KEEP it is not, because the browser and the
+    // frontends' own memory caches would hold the thin answer long after the real one came back.
+    //
+    // So it is labelled at the door rather than at each of the dozen handlers: no-store for the browser,
+    // and a header the frontends read to skip their own memoisation. Only the data JSONs — media URLs and
+    // static assets are the same in both states and stay cacheable.
+    /// <summary>Is the data we can serve right now an APPROXIMATION of the real thing?
+    ///
+    /// Two very different situations look alike from here and must not be confused. A game launch frees the
+    /// optional tier and empties the media cache: that is TRANSIENT, the real answer is coming back, and
+    /// nothing built meanwhile may be kept. But an install that never builds the host cache at all — the
+    /// user turned UseGameCache off, or ExtendDB supplies one this surface cannot read — is a STABLE
+    /// configuration whose normal answer IS the disk walk. Marking those degraded forever would leave every
+    /// frontend cache permanently disabled and repeat the enumeration on every navigation.
+    ///
+    /// So an absent cache only counts when the cache was supposed to be there.</summary>
+    private static bool IsDegraded()
+    {
+        try { return Data.GameStore.OptionalDropped || (Gc.HostGameCache.Enabled && !Gc.GameCache.IsGlobalReady); }
+        catch { return false; }
+    }
+
+    private static void MarkIfDegraded(HttpRequest req, HttpResponse resp, bool degradedBefore)
+    {
+        try
+        {
+            if (resp == null || req?.Path == null) return;
+            if (req.Path.IndexOf("/data/", StringComparison.OrdinalIgnoreCase) < 0) return;
+            if (!degradedBefore && !IsDegraded()) return;
+            resp.Headers["X-LiteBox-Degraded"] = "1";
+            resp.Headers["Cache-Control"] = "no-store";   // already the default; stated so the intent reads
+        }
+        catch { }
     }
 }

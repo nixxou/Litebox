@@ -1782,11 +1782,14 @@
     var myEpoch = lbParentalEpoch;
 
     var url = "/launchbox/data/" + path + "/games.json";
+    var wasDegraded = false;
     fetch(url)
       .then(function (res) {
         if (!res.ok) {
           throw new Error("HTTP " + res.status + " " + res.statusText);
         }
+        /* Reponse degradee (jeu lance) : affichee, jamais memorisee — voir le store plus bas. */
+        try { if (res.headers && res.headers.get("X-LiteBox-Degraded")) wasDegraded = true; } catch (e) {}
         return res.json();
       })
       .then(function (json) {
@@ -1810,12 +1813,14 @@
            (shallow copy only at the array level), meaning toggleLbFavorite's
            direct mutation of g.fav propagates to the cache automatically.
            (ref: req §2) */
-        lbGamesCache[path] = {
+        if (!wasDegraded) lbGamesCache[path] = {
           games: lbRawGames.slice(),
           payload: Array.isArray(json) ? { games: lbRawGames.slice() } : json,
           asOf: lbCacheCounter++
         };
-        console.log("[LBW] lbw games cache store:", path, "(", DATA.games.length, "games, asOf:", lbGamesCache[path].asOf, ")");
+        console.log(wasDegraded
+          ? "[LBW] lbw games NOT cached (degraded): " + path
+          : "[LBW] lbw games cache store: " + path + " (" + DATA.games.length + " games, asOf: " + lbGamesCache[path].asOf + ")");
 
         renderGames();
         if (typeof onReady === "function") { onReady(); }
@@ -3400,17 +3405,25 @@
 
     /* Cache miss: fetch from the server. */
     var url = "/launchbox/data/games/" + encodeURIComponent(String(g.id)) + "/detail.json";
+    var detWasDegraded = false;
     fetch(url)
       .then(function (res) {
         if (!res.ok) { throw new Error("HTTP " + res.status); }
+        /* Reponse degradee (jeu lance) : on l'affiche mais on ne la memorise pas — voir
+           lbDetailCache plus bas. LOCAL a la requete, comme cote liste : plusieurs detail fetches
+           se chevauchent pendant un defilement rapide, et un drapeau partage se faisait ecraser
+           par la reponse d'un jeu qu'on avait deja quitte. */
+        detWasDegraded = true;
+        try { detWasDegraded = !!(res.headers && res.headers.get("X-LiteBox-Degraded")); } catch (e) { detWasDegraded = false; }
         return res.json();
       })
       .then(function (det) {
         /* Token check: if the user has moved to another game, discard. */
         if (myToken !== lbDetailToken) { return; }
         if (!det) { return; }
-        /* Cache before merge so repeat visits skip the network. */
-        lbDetailCache[g.id] = det;
+        /* Cache before merge so repeat visits skip the network — sauf si la reponse etait
+           degradee : une description vide gardee en memoire ne reviendrait jamais. */
+        if (!detWasDegraded) lbDetailCache[g.id] = det;
         mergeDetail(g, det);
         applyLbLastLaunchSync(g);
         fillLbPanelHeavy(gi);

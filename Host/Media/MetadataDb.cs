@@ -251,6 +251,72 @@ internal static class MetadataDb
 
     /// <summary>The Steam appid LaunchBox's metadata associates with a game by its DatabaseId (extended DB
     /// preferred, else base), or null when there is none. Memoized.</summary>
+    // ── Description by DatabaseID ───────────────────────────────────────────────────────────────────
+    // The game's own Notes are Tier-2 and a game launch frees them, so a detail payload built while a game
+    // runs has no description at all. The metadata DB has one, keyed by DatabaseID, and it is on disk — no
+    // resident memory to give back.
+    //
+    // It is an APPROXIMATION and knowingly so: a description edited or written by hand locally lives in the
+    // Notes, not here, so the two can differ. That is acceptable only because a response built in this state
+    // is marked degraded and no cache keeps it — see EmbeddedWebServer.MarkIfDegraded.
+    //
+    // Which DB, and in which order, follows the rule the rest of the app already uses: the extended one when
+    // it is the main DB (Base module on, downloaded, UseAsMainDb), else LaunchBox's own. On the extended DB
+    // the column is not "Overview" but whatever OverviewCache resolves — the precomputed defaultOverview when
+    // valid, else the COALESCE over the user's ordered sources and languages. Falling back to LaunchBox's DB
+    // covers the case the user asked about: a DatabaseID that is set but has no row in the extended copy.
+    private static readonly object _overviewMemoLock = new();
+    private static readonly Dictionary<int, string?> _overviewMemo = new();
+
+    public static string? OverviewForGame(int databaseId)
+    {
+        if (databaseId <= 0) return null;
+        lock (_overviewMemoLock) { if (_overviewMemo.TryGetValue(databaseId, out var m)) return m; }
+
+        string? main = WebDbPath();
+        string? text = OverviewFrom(main, databaseId);
+        if (string.IsNullOrWhiteSpace(text) && !string.Equals(main, DbPath(), StringComparison.OrdinalIgnoreCase))
+            text = OverviewFrom(DbPath(), databaseId);
+
+        lock (_overviewMemoLock) _overviewMemo[databaseId] = text;
+        return text;
+    }
+
+    /// <summary>Path-parameterized reader (also the unit-test seam). On the extended DB the expression comes
+    /// from OverviewCache so the source/language priority is the one the user configured; anywhere else it is
+    /// the plain Overview column.</summary>
+    internal static string? OverviewFrom(string? db, int databaseId)
+    {
+        if (db == null || databaseId <= 0) return null;
+        try
+        {
+            var cs = new SqliteConnectionStringBuilder { DataSource = db, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Shared }.ToString();
+            using var con = new SqliteConnection(cs);
+            con.Open();
+
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pc = con.CreateCommand())
+            {
+                pc.CommandText = "PRAGMA table_info(\"Games\")";
+                using var pr = pc.ExecuteReader();
+                while (pr.Read()) cols.Add(pr.GetString(1));
+            }
+            if (!cols.Contains("DatabaseID")) return null;
+
+            bool extended = string.Equals(db, ExtendedDbPath, StringComparison.OrdinalIgnoreCase);
+            string expr = extended ? Data.OverviewCache.ReadExpression(db) : "\"Overview\"";
+            if (!extended && !cols.Contains("Overview")) return null;
+
+            using var cmd = con.CreateCommand();
+            cmd.CommandText = "SELECT " + expr + " FROM \"Games\" WHERE \"DatabaseID\" = $id LIMIT 1";
+            cmd.Parameters.AddWithValue("$id", databaseId);
+            var v = cmd.ExecuteScalar();
+            var t = v == null || v is DBNull ? null : Convert.ToString(v);
+            return string.IsNullOrWhiteSpace(t) ? null : t;
+        }
+        catch { return null; }
+    }
+
     public static string? SteamAppIdForGame(int databaseId)
     {
         if (databaseId <= 0) return null;

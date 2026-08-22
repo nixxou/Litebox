@@ -5144,13 +5144,24 @@
     var opt = detailAbort ? { signal: detailAbort.signal } : undefined;
     // option extraScreenshots → ?extra=1 (le serveur réordonne/complète les screenshots)
     var detailUrl = "data/games/" + g.id + "/detail.json" + ((G.extraScreenshots && G.extraScreenshots.enabled) ? "?extra=1" : "");
+    /* Ce fetch ne passe PAS par BBW.get : la garde posee la-bas ne le couvre donc pas, et _det
+       ci-dessous est un drapeau de SESSION — une description vide captee pendant un jeu resterait
+       collee au jeu jusqu'au rechargement de la page, bien apres le retour des vraies donnees.
+       On lit donc l'en-tete ici aussi, et on ne pose pas _det sur une reponse approximative. */
+    var detDegraded = false;
     fetch(detailUrl, opt)
-      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (r) {
+        if (!r.ok) return null;
+        try { if (r.headers && r.headers.get("X-LiteBox-Degraded")) detDegraded = true; } catch (e) {}
+        return r.json();
+      })
       .then(function (det) {
         if (detailInFlightId === g.id) detailInFlightId = null;
         if (myToken !== mediaToken) return;        // sélection changée → on jette (g._det non posé → refetch possible)
         if (!det) return;
-        g._det = true;
+        /* Pose le drapeau seulement si la reponse etait complete : sinon le prochain passage
+           doit refetcher pour recuperer ce qui manquait. */
+        if (!detDegraded) g._det = true;
         if (det.d != null) g.d = det.d;
         // Backfill des metas de base (dev/pub/genre/star/esrb/year/title).
         // Pour les jeux atteints via la roue, games.json les fournit déjà

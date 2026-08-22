@@ -510,9 +510,9 @@ internal static class OwnedDataProvider
             portable = SafeBool(() => gm.Portable),
             appPath = Safe(() => gm.ApplicationPath),
             raHash = gm is HostGame hostGame ? hostGame.RetroAchievementsHash : "",
-            thumb = ThumbProxy(cg, "Front"),
-            shotThumb = ThumbProxy(cg, "Screenshots", "Background"),
-            logo = LogoProxy(cg),
+            thumb = ThumbProxy(gm, cg, "Front"),
+            shotThumb = ThumbProxy(gm, cg, "Screenshots", "Background"),
+            logo = LogoProxy(gm, cg),
         };
     }
 
@@ -565,12 +565,12 @@ internal static class OwnedDataProvider
             r = ThemeFormat.RatingStr(SafeRating(game)),
             esrb = Safe(() => game.Rating),
             box = ThemeFormat.BoxLines(game.Title),
-            d = ThemeFormat.OverviewHtml(Safe(() => game.Notes)),
-            boxImg = WithFull(ImageProxy(cg, "Front")),
-            shotImg = WithFull(ImageProxy(cg, "Screenshots", "Background")),
-            video = WithFull(VideoProxy(cg)),
-            shots = extraShots ? ExtraScreenshotThumbs(cg, 12) : ScreenshotThumbs(cg, 8),
-            fanart = FanartList(cg, 12),
+            d = ThemeFormat.OverviewHtml(DescriptionOf(game)),
+            boxImg = WithFull(ImageProxy(game, cg, "Front")),
+            shotImg = WithFull(ImageProxy(game, cg, "Screenshots", "Background")),
+            video = WithFull(VideoProxy(game, cg)),
+            shots = extraShots ? ExtraScreenshotThumbs(game, cg, 12) : ScreenshotThumbs(game, cg, 8),
+            fanart = FanartList(game, cg, 12),
             vndb = VndbTags(game),
             votes,
             // S6: alt-emulator / multi-disc / Select-ROM launch menu — versions/emulators/archive flags.
@@ -580,6 +580,23 @@ internal static class OwnedDataProvider
             // unconfigured / the game has no raid / nothing cached — theme then shows no RA panel).
             ra = WebRa.Block(game),
         };
+    }
+
+
+    /// <summary>The game's own Notes, and — only while the optional tier is freed for a running game — the
+    /// metadata DB's description as a stand-in. Gated on OptionalDropped rather than on "Notes are empty",
+    /// so what is served in normal operation does not change: a game that genuinely has no description still
+    /// reports none. See MetadataDb.OverviewForGame for why the substitute is acceptable.</summary>
+    private static string DescriptionOf(IGame game)
+    {
+        var notes = Safe(() => game.Notes);
+        if (!string.IsNullOrWhiteSpace(notes) || !GameStore.OptionalDropped) return notes;
+        try
+        {
+            int dbId = SafeInt(() => game.LaunchBoxDbId);
+            return Media.MetadataDb.OverviewForGame(dbId) ?? notes;
+        }
+        catch { return notes; }
     }
 
     /// <summary>Last-launch memory (emulator + additional-app the game was last played with), or null.
@@ -731,15 +748,50 @@ internal static class OwnedDataProvider
     /// (`?q=thumb` signed token — the same pipeline the grid cards use), or null when GameCache doesn't
     /// know the game (platform mismatch / cache not rebuilt yet). RelatedProvider falls back to the
     /// numeric /api/media/{dbid}.jpg endpoint in that case, exactly like the plugin did.</summary>
-    internal static string RelatedLocalThumb(IGame game) => ThumbProxy(ResolveCacheGame(game), "Front");
+    internal static string RelatedLocalThumb(IGame game) => ThumbProxy(game, ResolveCacheGame(game), "Front");
 
-    private static string ThumbProxy(GameCacheGame cg, params string[] regroupements)
+    // Cache absent -> disk, and the SAME answer either way.
+    //
+    // Every media URL below came from the GameCache and nowhere else, so the moment it is emptied — which is
+    // what a game launch does, ClearForMemory() swapping the platform dictionary for a fresh one — the web
+    // frontends stopped producing images at all. Not degraded: absent.
+    //
+    // The fallback goes through the game image property, which is MediaResolver.Image over one regroupement
+    // type chain. That function walks the SAME chain whether it reads a ready cache or the folders, so the
+    // file it names does not depend on whether the cache happens to be loaded. That identity is the point:
+    // a URL served now must not name a different file than the one served a minute later, or a browser would
+    // be holding a cached answer that was never true.
+    //
+    // Which is also why the desktop route is NOT used here despite being right there: CacheSourceFor adds
+    // cross-type chains — a missing front falls to a 3D box, then to a screenshot — so it would answer
+    // differently with the cache gone. Generous, and inconsistent; here consistency wins.
+    private static string DiskPath(IGame game, string regroupement)
     {
-        if (cg == null) return null;
+        if (game == null) return null;
+        string p = null;
+        try
+        {
+            p = regroupement switch
+            {
+                "Front"       => game.FrontImagePath,
+                "Screenshots" => game.ScreenshotImagePath,
+                "Background"  => game.BackgroundImagePath,
+                "ClearLogo"   => game.ClearLogoImagePath,
+                _             => null,   // BoxSpine / BoxFull have no property — cache-only, as before
+            };
+        }
+        catch { }
+        return FileOk(p) ? p : null;
+    }
+
+    private static long SizeOf(string path) { try { return new FileInfo(path).Length; } catch { return 0; } }
+
+    private static string ThumbProxy(IGame game, GameCacheGame cg, params string[] regroupements)
+    {
         foreach (var rg in regroupements)
         {
             GameCacheImageRef r = null;
-            try { r = cg.GetBestImageTypeFirst(rg); } catch { }
+            if (cg != null) try { r = cg.GetBestImageTypeFirst(rg); } catch { }
             if (r != null && !string.IsNullOrEmpty(r.FullPath))
             {
                 long size = 0; try { size = r.GetFileSize(); } catch { }
@@ -747,29 +799,87 @@ internal static class OwnedDataProvider
                 if (url != null) return url + "?q=thumb&v=" + size;
             }
         }
+        foreach (var rg in regroupements)
+        {
+            var p = DiskPath(game, rg);
+            if (p == null) continue;
+            var url = MediaProxy.BuildProxyUrl(p, null, 0, ExtOf(p), "local", rg);
+            if (url != null) return url + "?q=thumb&v=" + SizeOf(p);
+        }
         return null;
     }
 
-    private static string LogoProxy(GameCacheGame cg)
+    private static string LogoProxy(IGame game, GameCacheGame cg)
     {
-        if (cg == null) return null;
         GameCacheImageRef r = null;
-        try { r = cg.GetBestImageTypeFirst("ClearLogo"); } catch { }
-        if (r == null || string.IsNullOrEmpty(r.FullPath)) return null;
-        long size = 0; try { size = r.GetFileSize(); } catch { }
-        var url = MediaProxy.BuildProxyUrl(r.FullPath, null, 0, ExtOf(r.FullPath), "local", "Clear Logo");
-        return url != null ? url + "?q=logo&v=" + size : null;
+        if (cg != null) try { r = cg.GetBestImageTypeFirst("ClearLogo"); } catch { }
+        if (r != null && !string.IsNullOrEmpty(r.FullPath))
+        {
+            long size = 0; try { size = r.GetFileSize(); } catch { }
+            var hit = MediaProxy.BuildProxyUrl(r.FullPath, null, 0, ExtOf(r.FullPath), "local", "Clear Logo");
+            if (hit != null) return hit + "?q=logo&v=" + size;
+        }
+        var p = DiskPath(game, "ClearLogo");
+        if (p == null) return null;
+        var url = MediaProxy.BuildProxyUrl(p, null, 0, ExtOf(p), "local", "Clear Logo");
+        return url != null ? url + "?q=logo&v=" + SizeOf(p) : null;
     }
 
     private static string WithFull(string url) => string.IsNullOrEmpty(url) ? url : url + "?q=full";
 
-    private static string[] ScreenshotThumbs(GameCacheGame cg, int max)
+
+    // ── The LIST fields, from disk ──────────────────────────────────────────────────────────────────
+    // shots and fanart are galleries, not single picks: the screenshot strip and the fanart rotation. No
+    // IGame property returns a LIST, so the single-image fallback above cannot serve them — this walks
+    // MediaResolver.AllImageFiles instead, the same enumeration the image editor uses, and keeps the
+    // regroupement type chain in order so the first entry is still a gameplay shot.
+    //
+    // It IS an approximation: the cache orders by the user region priorities, this walks root files then
+    // region sub-folders alphabetically. That is acceptable here and nowhere else, because a response
+    // built in this state is marked X-LiteBox-Degraded and no cache — browser or frontend — keeps it. The
+    // moment the real data is back, the next fetch replaces it.
+    //
+    // TODO: this whole family is due to be replaced. The extra-screenshots flag exists because one region
+    // often has a single shot and the others have more, so the strip is padded from elsewhere — a rule
+    // hard-coded here. It belongs in LiteBox's options as an ordered list of what to send, the same shape
+    // as the post-load image list in Options → Display → Right panel. Until then, this mirrors the flag.
+    private static string[] DiskImageList(IGame game, string[] typeChain, string label, int max)
     {
-        if (cg == null) return Array.Empty<string>();
+        if (game == null || max <= 0) return Array.Empty<string>();
+        string plat, title, idStr;
+        try { plat = game.Platform ?? ""; title = game.Title ?? ""; idStr = game.Id ?? ""; }
+        catch { return Array.Empty<string>(); }
+        if (plat.Length == 0) return Array.Empty<string>();
+        Guid.TryParse(idStr, out var gid);
+
+        List<(string path, string type, string region)> all;
+        try { all = Media.MediaResolver.AllImageFiles(plat, gid, title); }
+        catch (Exception ex) { Log("DiskImageList: " + ex.Message); return Array.Empty<string>(); }
+        if (all == null || all.Count == 0) return Array.Empty<string>();
+
+        var urls = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var type in typeChain)
+        {
+            foreach (var f in all)
+            {
+                if (urls.Count >= max) return urls.ToArray();
+                if (!string.Equals(f.type, type, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!seen.Add(f.path)) continue;
+                var u = MediaProxy.BuildProxyUrl(f.path, null, 0, ExtOf(f.path), "local", label);
+                if (u != null) urls.Add(u + "?q=thumb&v=" + SizeOf(f.path));
+            }
+        }
+        return urls.ToArray();
+    }
+
+    private static string[] ScreenshotThumbs(IGame game, GameCacheGame cg, int max)
+    {
+        if (cg == null) return DiskImageList(game, Media.MediaResolver.Screenshot, "Screenshots", max);
         List<GameCacheImageRef> imgs;
         try { imgs = cg.GetAllImagesTypeFirst("Screenshots", max); }
-        catch (Exception ex) { Log("GetAllImagesTypeFirst: " + ex.Message); return Array.Empty<string>(); }
-        if (imgs == null || imgs.Count == 0) return Array.Empty<string>();
+        catch (Exception ex) { Log("GetAllImagesTypeFirst: " + ex.Message); imgs = null; }
+        if (imgs == null || imgs.Count == 0) return DiskImageList(game, Media.MediaResolver.Screenshot, "Screenshots", max);
 
         var urls = new List<string>(imgs.Count);
         foreach (var r in imgs)
@@ -790,9 +900,10 @@ internal static class OwnedDataProvider
 
     private const int ExtraShotTarget = 6;
 
-    private static string[] ExtraScreenshotThumbs(GameCacheGame cg, int max)
+    private static string[] ExtraScreenshotThumbs(IGame game, GameCacheGame cg, int max)
     {
-        if (cg == null) return Array.Empty<string>();
+        // Cache gone: the padding rule below has nothing to read, so fall back on the plain enumeration.
+        if (cg == null) return DiskImageList(game, Media.MediaResolver.Screenshot, "Screenshots", max);
         List<GameCacheImageRef> shots;
         try { shots = cg.GetAllImagesTypeFirst("Screenshots", max); }
         catch (Exception ex) { Log("Extra GetAllImagesTypeFirst: " + ex.Message); shots = null; }
@@ -816,6 +927,7 @@ internal static class OwnedDataProvider
             if (u != null) urls.Add(u);
         }
         foreach (var r in ordered) { Add(r); if (urls.Count >= max) break; }
+        if (urls.Count == 0) return DiskImageList(game, Media.MediaResolver.Screenshot, "Screenshots", max);
 
         if (urls.Count < ExtraShotTarget)
         {
@@ -828,13 +940,13 @@ internal static class OwnedDataProvider
         return urls.ToArray();
     }
 
-    private static string[] FanartList(GameCacheGame cg, int max)
+    private static string[] FanartList(IGame game, GameCacheGame cg, int max)
     {
-        if (cg == null) return Array.Empty<string>();
+        if (cg == null) return DiskImageList(game, Media.MediaResolver.Background, "Background", max);
         List<GameCacheImageRef> imgs;
         try { imgs = cg.GetAllImagesTypeFirst("Background", max); }
-        catch (Exception ex) { Log("Fanart GetAllImagesTypeFirst: " + ex.Message); return Array.Empty<string>(); }
-        if (imgs == null || imgs.Count == 0) return Array.Empty<string>();
+        catch (Exception ex) { Log("Fanart GetAllImagesTypeFirst: " + ex.Message); imgs = null; }
+        if (imgs == null || imgs.Count == 0) return DiskImageList(game, Media.MediaResolver.Background, "Background", max);
 
         var urls = new List<string>(imgs.Count);
         foreach (var r in imgs)
@@ -846,28 +958,34 @@ internal static class OwnedDataProvider
         return urls.ToArray();
     }
 
-    private static string ImageProxy(GameCacheGame cg, params string[] regroupements)
+    private static string ImageProxy(IGame game, GameCacheGame cg, params string[] regroupements)
     {
-        if (cg == null) return null;
         foreach (var rg in regroupements)
         {
             GameCacheImageRef r = null;
-            try { r = cg.GetBestImageTypeFirst(rg); } catch { }
+            if (cg != null) try { r = cg.GetBestImageTypeFirst(rg); } catch { }
             if (r != null && !string.IsNullOrEmpty(r.FullPath))
                 return MediaProxy.BuildProxyUrl(r.FullPath, null, 0, ExtOf(r.FullPath), "local", rg);
+        }
+        foreach (var rg in regroupements)
+        {
+            var p = DiskPath(game, rg);
+            if (p != null) return MediaProxy.BuildProxyUrl(p, null, 0, ExtOf(p), "local", rg);
         }
         return null;
     }
 
-    private static string VideoProxy(GameCacheGame cg)
+    private static string VideoProxy(IGame game, GameCacheGame cg)
     {
-        if (cg == null) return null;
         List<GameCacheVideoRef> vids = null;
-        try { vids = cg.FindAllVideos(); } catch { }
-        if (vids == null || vids.Count == 0) return null;
-        var v = vids[0];
-        if (string.IsNullOrEmpty(v.FullPath)) return null;
-        return MediaProxy.BuildProxyUrl(v.FullPath, null, 0, ExtOf(v.FullPath), "local", "Video");
+        if (cg != null) try { vids = cg.FindAllVideos(); } catch { }
+        if (vids != null && vids.Count > 0 && !string.IsNullOrEmpty(vids[0].FullPath))
+            return MediaProxy.BuildProxyUrl(vids[0].FullPath, null, 0, ExtOf(vids[0].FullPath), "local", "Video");
+
+        string path = null;
+        try { path = game?.GetVideoPath(false); } catch { }
+        if (!FileOk(path)) return null;
+        return MediaProxy.BuildProxyUrl(path, null, 0, ExtOf(path), "local", "Video");
     }
 
     private static string ExtOf(string path)

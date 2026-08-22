@@ -5105,7 +5105,15 @@
 
   function requestGameDetail(gi) {
     var g = DATA.games[gi];
-    if (!g || g.id == null || g._det === true || detailInFlightId === g.id) return;   // dummy / déjà chargé / déjà en vol
+    if (!g || g.id == null) return;                       // dummy
+    if (g._det === true) {
+      // Détail déjà en mémoire : aucun fetch ne partira, donc l'hôte ne verrait pas
+      // ce changement de jeu — c'est ce qui rendait le suivi intermittent (première
+      // visite oui, revisite non). Un seul ping, jamais en plus d'une requête.
+      try { window.BBW.pingSelection("data/games/" + g.id + "/detail.json"); } catch (e) {}
+      return;
+    }
+    if (detailInFlightId === g.id) return;                // déjà en vol : la requête parle pour nous
     var myToken = mediaToken;
     detailInFlightId = g.id;
     detailAbort = (typeof AbortController !== "undefined") ? new AbortController() : null;

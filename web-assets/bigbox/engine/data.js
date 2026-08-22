@@ -60,6 +60,11 @@
   // (vrai JSON) et on retombe sur le dummy si absent ; en file:// on sert le dummy.
   // `ttlMs` (optionnel) : durée de vie de l'entrée — passé ce délai, un nouvel appel
   // refetch. Sans ttlMs → pas d'expiration (cache de session, comportement d'origine).
+  /* Exposé : le détail d'un jeu ne passe pas par BBW.get (fetch direct), mais il a
+     sa propre mémoire — le drapeau _det posé sur le jeu — qui produit le même angle
+     mort. app.js appelle donc ceci quand il renonce à fetcher. */
+  window.BBW.pingSelection = pingSelection;
+
   window.BBW.get = function (path, ttlMs) {
     var now = Date.now();
     var e = cache[path];

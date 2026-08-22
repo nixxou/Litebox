@@ -643,7 +643,9 @@ internal static class MediaResolver
                     var keys = new List<string>();
                     if (!string.IsNullOrWhiteSpace(scrapeAs)) keys.Add(Sanitize(scrapeAs));
                     if (!keys.Contains(san)) keys.Add(san);
-                    var subs = new[] { "Platforms", "Platform Categories", "" };   // "" = pack root
+                    // Playlists were missing here, and a pack that ships them (Nostalgic Platform Clear
+                    // Logos has a Playlists\ folder of 55) answered "no image" for every one of them.
+                    var subs = new[] { "Platforms", "Platform Categories", "Playlists", "" };   // "" = pack root
                     foreach (var packDir in Directory.EnumerateDirectories(catDir).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                     {
                         string? hit = FindInPackSubs(packDir, subs, keys);

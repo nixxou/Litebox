@@ -78,7 +78,7 @@ internal static class OwnedDataProvider
             var catSlug = PlatformSlug.For(node.Name);
             return new
             {
-                name = node.Name,
+                name = Data.HostPlatformCategory.NodeDisplayName(node),
                 kind = "platform",
                 count = SafeCount(node),
                 sub = new[] { "", "" },
@@ -91,6 +91,8 @@ internal static class OwnedDataProvider
             };
         }
 
+        // name = ce qu'on LIT (nom imbriqué quand il existe) ; slug, media et path restent bâtis sur
+        // le nom UNIQUE, qui est l'identité — un slug tiré du nom court ne résoudrait plus rien.
         if (node is IPlaylist plNode)
         {
             int plCount = CountAllowed(SafePlaylistGames(plNode), st);
@@ -99,7 +101,7 @@ internal static class OwnedDataProvider
             seenPlaylists.Add(node.Name);
             return new
             {
-                name = node.Name,
+                name = Data.HostPlatformCategory.NodeDisplayName(node),
                 kind = "playlist",
                 count = plCount,
                 stats = new[] { "Total Games: " + plCount },
@@ -127,7 +129,7 @@ internal static class OwnedDataProvider
             var pSlug = PlatformSlug.For(node.Name);
             return new
             {
-                name = node.Name,
+                name = Data.HostPlatformCategory.NodeDisplayName(node),
                 kind = "platform",
                 count = SafeCount(node),
                 sub = new[] { "", "" },
@@ -148,7 +150,7 @@ internal static class OwnedDataProvider
         string manu = ""; try { manu = node.Manufacturer ?? ""; } catch { }
         return new
         {
-            name = node.Name,
+            name = Data.HostPlatformCategory.NodeDisplayName(node),
             kind = "platform",
             count,
             sub = new[] { year, manu },
@@ -337,7 +339,7 @@ internal static class OwnedDataProvider
             total += count;
             nodes.Add(new
             {
-                name = pl.Name,
+                name = Data.HostPlatformCategory.NodeDisplayName(pl),
                 kind = "playlist",
                 count,
                 stats = new[] { "Total Games: " + count },

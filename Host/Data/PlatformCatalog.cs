@@ -270,7 +270,8 @@ internal sealed class HostPlatform : DummyPlatform, ILiteBoxFields
     public void AddTreeChild(object c) { if (c != null) _treeChildren.Add(c); }
     public void ClearTreeChildren() => _treeChildren.Clear();
     public IReadOnlyList<object> TreeChildren => _treeChildren;
-    public void SortTreeChildren() => _treeChildren.Sort((a, b) => string.Compare(HostPlatformCategory.NodeName(a), HostPlatformCategory.NodeName(b), StringComparison.OrdinalIgnoreCase));
+    // Trié sur ce qui est LU : trier sur le nom unique rangerait "2-Player Games" à la lettre A.
+    public void SortTreeChildren() => _treeChildren.Sort((a, b) => string.Compare(HostPlatformCategory.NodeDisplayName(a), HostPlatformCategory.NodeDisplayName(b), StringComparison.OrdinalIgnoreCase));
     // SDK tree: expose the nested nodes (playlists/categories under this platform) like real LB does.
     public override IList<IPlatform> GetChildren() => SdkTree.WrapChildren(_treeChildren);
 
@@ -372,7 +373,7 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFiel
     public void AddChild(object c) { if (c != null) _children.Add(c); }
     public void ClearChildren() => _children.Clear();   // for ReloadHierarchy (re-read of Parents.xml)
     public IReadOnlyList<object> Children => _children;
-    public void SortChildren() => _children.Sort((a, b) => string.Compare(NodeName(a), NodeName(b), StringComparison.OrdinalIgnoreCase));
+    public void SortChildren() => _children.Sort((a, b) => string.Compare(NodeDisplayName(a), NodeDisplayName(b), StringComparison.OrdinalIgnoreCase));
     // SDK GetChildren can only carry the platform children (typed IList<IPlatform>).
     public override IList<IPlatform> GetChildren() => _children.OfType<IPlatform>().ToList();
 
@@ -395,6 +396,29 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFiel
         }
         foreach (var c in _children) Visit(c);
         return result.ToArray();
+    }
+
+    /// <summary>What a READER should see for a tree node. LaunchBox keeps two names on a nested item: the
+    /// unique one, which has to carry its parent to stay unique across the library ("Arcade 2-Player Games"),
+    /// and the nested one, which is what it is called once you are already looking at its parent
+    /// ("2-Player Games"). Shown nested, the unique name repeats the parent you just clicked through.
+    ///
+    /// Deliberately NOT NodeName: that one is identity — it matches parental hidden-name entries, feeds the
+    /// media lookups and the web slugs, and is what a plugin is told. Renaming those to the short form would
+    /// silently unhide a hidden playlist and break every path built from a name.
+    ///
+    /// An item that is not nested has no nested name, so this falls back on its own.</summary>
+    internal static string NodeDisplayName(object n)
+    {
+        try
+        {
+            string nested = n is IPlatform p ? p.NestedName
+                          : n is IPlatformCategory c ? c.NestedName
+                          : n is IPlaylist pl ? pl.NestedName : null;
+            if (!string.IsNullOrWhiteSpace(nested)) return nested.Trim();
+        }
+        catch { }
+        return NodeName(n);
     }
 
     /// <summary>Display name of any tree node (platform / category / playlist).</summary>

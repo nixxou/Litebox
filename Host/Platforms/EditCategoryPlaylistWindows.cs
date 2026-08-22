@@ -72,7 +72,7 @@ internal static class EditCategoryWindow
     {
         int S(int px) => (int)Math.Round(px * s);
         var container = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
-        var images = EditPlatformImages.BuildForCategory(Safe(() => cat.Name) ?? "", readOnly, s);
+        var images = EditPlatformImages.BuildForCategory(Safe(() => cat.Name) ?? "", Safe(() => cat.NestedName) ?? "", readOnly, s);
         images.Dock = DockStyle.Right; images.Width = S(300);
         var left = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(S(12)) };
         container.Controls.Add(left);
@@ -364,7 +364,7 @@ internal static class EditPlaylistWindow
             Font = new Font("Segoe UI", 10f, FontStyle.Bold),
             TextAlign = ContentAlignment.MiddleLeft,
         };
-        var body = EditPlatformImages.BuildForPlaylist(Safe(() => pl.Name) ?? "", readOnly, s);
+        var body = EditPlatformImages.BuildForPlaylist(Safe(() => pl.Name) ?? "", Safe(() => pl.NestedName) ?? "", readOnly, s);
         body.Dock = DockStyle.Fill;
         panel.Controls.Add(body);
         panel.Controls.Add(header);

@@ -2098,7 +2098,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     private TreeNode BuildTreeNode(object obj) => BuildTreeNode(obj, new HashSet<object>());
     private TreeNode BuildTreeNode(object obj, HashSet<object> path)
     {
-        string text = obj is AllNode ? "All Games" : obj is GroupNode gn ? gn.Label : (HostPlatformCategory.NodeName(obj) ?? "");
+        string text = obj is AllNode ? "All Games" : obj is GroupNode gn ? gn.Label : (HostPlatformCategory.NodeDisplayName(obj) ?? "");
         string imgKey = _nodeIconKey.TryGetValue(obj, out var k) ? k : "fb_plat";
         var tn = new TreeNode(text) { Tag = obj, ImageKey = imgKey, SelectedImageKey = imgKey };
         _treeNodeMap[obj] = tn;
@@ -3530,18 +3530,19 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     // fresh object each time would have plugins that cache by reference miss every single time.
     private static readonly Dictionary<string, IPlatform> _platformStubs = new(StringComparer.OrdinalIgnoreCase);
 
-    private IPlatform NamedPlatformStub(string name, string entityFolder) => EntityPlatformFor(entityFolder, name);
+    private IPlatform NamedPlatformStub(string name, string entityFolder)
+        => EntityPlatformFor(entityFolder, name, Data.HostPlatformCategory.NodeDisplayName(_currentNode));
 
     /// <summary>The stand-in for a category or playlist, one per name. Static because the web bridge needs
     /// the SAME instance the desktop hands out: a plugin comparing platforms by reference must not see a
     /// change merely because the answer came from the other surface.</summary>
-    internal static IPlatform EntityPlatformFor(string entityFolder, string name)
+    internal static IPlatform EntityPlatformFor(string entityFolder, string name, string nestedName = null)
     {
         string key = entityFolder + "|" + name;
         lock (_platformStubs)
         {
             if (_platformStubs.TryGetValue(key, out var hit)) return hit;
-            var stub = new SelectedEntityPlatform(entityFolder, name);
+            var stub = new SelectedEntityPlatform(entityFolder, name, nestedName);
             _platformStubs[key] = stub;
             return stub;
         }
@@ -3555,8 +3556,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     /// editor resolve them.</summary>
     private sealed class SelectedEntityPlatform : LbApiHost.Generated.DummyPlatform
     {
-        private readonly string _entityFolder, _name;
-        public SelectedEntityPlatform(string entityFolder, string name) { _entityFolder = entityFolder; _name = name; }
+        private readonly string _entityFolder, _name, _nested;
+        public SelectedEntityPlatform(string entityFolder, string name, string nestedName)
+        { _entityFolder = entityFolder; _name = name; _nested = nestedName; }
 
         public override string Name { get => _name; set { } }
 
@@ -3564,7 +3566,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         {
             try
             {
-                var l = LbApiHost.Host.Media.MediaResolver.EntityTypeImages(LbApiHost.Host.Media.MediaResolver.ImagesRoot, _entityFolder, _name, "", type);
+                // Nested name as the pack key: packs file a nested playlist under its SHORT name
+                // (Playlists-Player Games.png), never the unique one it carries in the sidebar.
+                var l = LbApiHost.Host.Media.MediaResolver.EntityTypeImages(
+                            LbApiHost.Host.Media.MediaResolver.ImagesRoot, _entityFolder, _name,
+                            string.IsNullOrWhiteSpace(_nested) ? _name : _nested, type);
                 return l.Count > 0 ? l[0].path : "";
             }
             catch { return ""; }
@@ -6597,7 +6603,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             return;
         }
 
-        _hero.SetNode(HostPlatformCategory.NodeName(node) ?? "");
+        _hero.SetNode(HostPlatformCategory.NodeDisplayName(node) ?? "");
         LoadImagesAsync(NodeImage(node, clearLogo: true), NodeImage(node, clearLogo: false));
         ScheduleFanart(null, node);
         PopulateNodeRecentStrip(true);   // recent-game box thumbs under the main media
@@ -6610,7 +6616,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
             Add("Manufacturer", Safe(() => p.Manufacturer));
             Add("Release", N(() => p.ReleaseDate?.Year)?.ToString());
         }
-        _meta.ShowNode(HostPlatformCategory.NodeName(node) ?? "", bits);
+        _meta.ShowNode(HostPlatformCategory.NodeDisplayName(node) ?? "", bits);
         _vndb.Clear();
         _raCard?.HidePanel();
         RelayoutDetail();

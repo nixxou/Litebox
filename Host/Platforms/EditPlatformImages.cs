@@ -58,17 +58,22 @@ internal static class EditPlatformImages
 
     /// <summary>Images panel for a Platform Category — own images under Images\Platform Categories\&lt;name&gt;
     /// plus media-pack fallbacks, restricted to LB's four category image types.</summary>
-    public static Control BuildForCategory(string name, bool readOnly, float s)
-        => BuildForEntity("Platform Categories", name, readOnly, s);
+    public static Control BuildForCategory(string name, string nestedName, bool readOnly, float s)
+        => BuildForEntity("Platform Categories", name, nestedName, readOnly, s);
 
     /// <summary>Images panel for a Playlist — own images under Images\Playlists\&lt;name&gt;; same four types
     /// as categories (LB's Edit Playlist dropdown is identical).</summary>
-    public static Control BuildForPlaylist(string name, bool readOnly, float s)
-        => BuildForEntity("Playlists", name, readOnly, s);
+    public static Control BuildForPlaylist(string name, string nestedName, bool readOnly, float s)
+        => BuildForEntity("Playlists", name, nestedName, readOnly, s);
 
-    private static Control BuildForEntity(string entityFolder, string name, bool readOnly, float s)
+    /// <summary>Own images plus media-pack fallbacks. The NESTED name is offered as the pack key ahead of
+    /// the unique one, because that is how packs file these: the entry for "Arcade 2-Player Games" ships as
+    /// Playlists-Player Games.png. Searching only the unique name found nothing, which is why LaunchBox
+    /// showed a logo here and we showed "(no image)".</summary>
+    private static Control BuildForEntity(string entityFolder, string name, string nestedName, bool readOnly, float s)
         => BuildCore(name, CategoryTypes,
-            tf => Media.MediaResolver.EntityTypeImages(Media.MediaResolver.ImagesRoot, entityFolder, name, name, tf),
+            tf => Media.MediaResolver.EntityTypeImages(Media.MediaResolver.ImagesRoot, entityFolder, name,
+                                                       string.IsNullOrWhiteSpace(nestedName) ? name : nestedName, tf),
             entityFolder, readOnly, s);
 
     private static Control BuildCore(string name, (string label, string folder)[] Types,

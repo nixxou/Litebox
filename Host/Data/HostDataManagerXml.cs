@@ -29,6 +29,9 @@ internal sealed class HostDataManagerXml : DummyDataManager
     private readonly List<IPlaylist> _playlists;
     private readonly Dictionary<string, IPlaylist> _playlistById;
     private readonly List<object> _roots;   // tree roots (categories/platforms/playlists) from Parents.xml
+    private readonly List<IParent> _parents = new();   // les lignes brutes de Parents.xml, pour GetAllParents
+
+    public override IParent[] GetAllParents() { lock (_parents) return _parents.ToArray(); }
 
     /// <summary>Host-side tree roots for the GUI (objects: HostPlatform / HostPlatformCategory / HostPlaylist).</summary>
     public IReadOnlyList<object> RootNodes => _roots;
@@ -193,8 +196,21 @@ internal sealed class HostDataManagerXml : DummyDataManager
         {
             try
             {
+                lock (_parents) _parents.Clear();   // une relecture remplace, elle n'ajoute pas
                 foreach (var pe in XDocument.Load(parentsFile).Root.Elements("Parent"))
                 {
+                    // Kept as read, not just consumed: GetAllParents answered with an empty array, so a plugin
+                    // asking how the sidebar is nested was told it is flat. The rows cost nothing to hold — we
+                    // parse them anyway — and this is the only place that answer exists.
+                    lock (_parents) _parents.Add(new HostParent
+                    {
+                        PlatformName = (string)pe.Element("PlatformName") ?? "",
+                        PlaylistId = (string)pe.Element("PlaylistId") ?? "",
+                        PlatformCategoryName = (string)pe.Element("PlatformCategoryName") ?? "",
+                        ParentPlatformName = (string)pe.Element("ParentPlatformName") ?? "",
+                        ParentPlaylistId = (string)pe.Element("ParentPlaylistId") ?? "",
+                        ParentPlatformCategoryName = (string)pe.Element("ParentPlatformCategoryName") ?? "",
+                    });
                     var node = ResolveNode((string)pe.Element("PlatformName"), (string)pe.Element("PlaylistId"), (string)pe.Element("PlatformCategoryName"));
                     if (node == null) continue;
                     var parent = ResolveNode((string)pe.Element("ParentPlatformName"), (string)pe.Element("ParentPlaylistId"), (string)pe.Element("ParentPlatformCategoryName"));
@@ -275,8 +291,21 @@ internal sealed class HostDataManagerXml : DummyDataManager
         {
             try
             {
+                lock (_parents) _parents.Clear();   // une relecture remplace, elle n'ajoute pas
                 foreach (var pe in XDocument.Load(parentsFile).Root.Elements("Parent"))
                 {
+                    // Kept as read, not just consumed: GetAllParents answered with an empty array, so a plugin
+                    // asking how the sidebar is nested was told it is flat. The rows cost nothing to hold — we
+                    // parse them anyway — and this is the only place that answer exists.
+                    lock (_parents) _parents.Add(new HostParent
+                    {
+                        PlatformName = (string)pe.Element("PlatformName") ?? "",
+                        PlaylistId = (string)pe.Element("PlaylistId") ?? "",
+                        PlatformCategoryName = (string)pe.Element("PlatformCategoryName") ?? "",
+                        ParentPlatformName = (string)pe.Element("ParentPlatformName") ?? "",
+                        ParentPlaylistId = (string)pe.Element("ParentPlaylistId") ?? "",
+                        ParentPlatformCategoryName = (string)pe.Element("ParentPlatformCategoryName") ?? "",
+                    });
                     var node = ResolveNode((string)pe.Element("PlatformName"), (string)pe.Element("PlaylistId"), (string)pe.Element("PlatformCategoryName"));
                     if (node == null) continue;
                     var parent = ResolveNode((string)pe.Element("ParentPlatformName"), (string)pe.Element("ParentPlaylistId"), (string)pe.Element("ParentPlatformCategoryName"));

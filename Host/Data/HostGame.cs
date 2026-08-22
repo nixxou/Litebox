@@ -242,14 +242,24 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
     /// The file need not exist; the folder is the meaningful half. Numbering matches LaunchBox's "-01", and
     /// the extension defaults to .mp4 when the caller does not care (this one passes null).</summary>
     public override string GetNextVideoFilePath(string videoType, string extension)
+        => NextFreeFile(MediaResolver.VideoDir(_plat, NormalizeVideoSubDir(videoType)), extension, ".mp4");
+
+    // ── "Where do I write this?" ────────────────────────────────────────────────────────────────────
+    // A whole family of these, and every one of them used to answer null. A plugin that downloads media
+    // asks the game where the file goes; null reads as a valid answer right up until Path.GetDirectoryName
+    // turns it into a search of the host's own folder. None of them throws, so nothing ever surfaced.
+    //
+    // The file does not exist yet — the point is the FOLDER plus a free name. Numbering is LaunchBox's
+    // "-01", and each default extension is the one that type normally ships as.
+    private string NextFreeFile(string dir, string extension, string defaultExt)
     {
         try
         {
-            string dir = MediaResolver.VideoDir(_plat, NormalizeVideoSubDir(videoType));
             if (string.IsNullOrEmpty(dir)) return "";
-            string ext = string.IsNullOrWhiteSpace(extension) ? ".mp4"
+            string ext = string.IsNullOrWhiteSpace(extension) ? defaultExt
                        : extension.StartsWith(".", StringComparison.Ordinal) ? extension : "." + extension;
             string stem = MediaResolver.Sanitize(_title ?? "");
+            if (stem.Length == 0) return "";
             for (int i = 1; i <= 999; i++)
             {
                 string candidate = System.IO.Path.Combine(dir, $"{stem}-{i:00}{ext}");
@@ -258,6 +268,68 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
             return System.IO.Path.Combine(dir, stem + "-01" + ext);
         }
         catch { return ""; }
+    }
+
+    // ── Acting on the game ──────────────────────────────────────────────────────────────────────────
+    // A plugin that puts "Play" or "Open folder" in its own menu called these and nothing happened — they
+    // returned null and did not throw, so the menu item looked functional and was inert. All three route to
+    // what LiteBox already does for its own menus.
+    //
+    // The string each returns is the thing acted upon, or "" when there was nothing to act on. Launching
+    // goes through the full lifecycle (plugins notified, RAM freed, exit watched), never a bare Process.Start.
+    public override string Play()
+    {
+        try
+        {
+            var emu = PluginHelper.DataManager?.GetEmulatorById(EmulatorId);
+            LbApiHost.Host.HostLaunch.Launch("Plugin", this, null, emu, null);
+            return Title ?? "";
+        }
+        catch { return ""; }
+    }
+
+    public override string OpenFolder()
+    {
+        try
+        {
+            string path = ApplicationPath ?? "";
+            string dir = path.Length > 0 ? System.IO.Path.GetDirectoryName(path) : null;
+            if (string.IsNullOrEmpty(dir) || !System.IO.Directory.Exists(dir)) return "";
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
+            return dir;
+        }
+        catch { return ""; }
+    }
+
+    public override string OpenManual()
+    {
+        try
+        {
+            string man = GetManualPath();
+            if (string.IsNullOrEmpty(man) || !System.IO.File.Exists(man)) return "";
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(man) { UseShellExecute = true });
+            return man;
+        }
+        catch { return ""; }
+    }
+
+    public override string GetNewVideoFilePath(string extension)
+        => NextFreeFile(MediaResolver.VideoDir(_plat, null), extension, ".mp4");
+    public override string GetNewThemeVideoFilePath(string extension)
+        => NextFreeFile(MediaResolver.VideoDir(_plat, "Theme"), extension, ".mp4");
+    public override string GetNewMusicFilePath(string extension)
+        => NextFreeFile(MediaResolver.MusicFolder(_plat), extension, ".mp3");
+    public override string GetNewManualFilePath(string extension)
+        => NextFreeFile(MediaResolver.ManualsFolder(_plat), extension, ".pdf");
+
+    /// <summary>Images nest one deeper than the rest: Images\&lt;platform&gt;\&lt;type&gt;\&lt;region&gt;\.
+    /// An empty region means the type folder itself, which is where LaunchBox files a region-less image.</summary>
+    public override string GetNextAvailableImageFilePath(string extension, string imageType, string region)
+    {
+        string dir = MediaResolver.TypeFolder(_plat, imageType);
+        if (!string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(region))
+            dir = System.IO.Path.Combine(dir, MediaResolver.Sanitize(region));
+        return NextFreeFile(dir, extension, ".png");
     }
     public override string GetThemeVideoPath()
         => MediaResolver.Override(ThemeVideoPath)
@@ -381,6 +453,20 @@ internal sealed class HostAdditionalApplication : DummyAdditionalApplication
     private readonly Guid _gid;
     public HostAdditionalApplication(GameStore s, AddApp a, Guid gid) { _s = s; _a = a; _gid = gid; }
     private void Rec() => _s.RecordChildReplace(_gid, "AdditionalApplication");
+
+    /// <summary>Run this additional application for its game, through the same lifecycle the launch buttons
+    /// use. It returned null before, so a plugin offering "run this version" silently did nothing.</summary>
+    public override string Launch(IGame game)
+    {
+        try
+        {
+            var emu = PluginHelper.DataManager?.GetEmulatorById(
+                          string.IsNullOrEmpty(EmulatorId) ? game?.EmulatorId : EmulatorId);
+            LbApiHost.Host.HostLaunch.Launch("Plugin", game, this, emu, null);
+            return Name ?? "";
+        }
+        catch { return ""; }
+    }
 
     public override string Id { get => _a.Id ?? ""; set { _a.Id = value; Rec(); } }
     public override string GameId { get => _gid.ToString(); set { } }

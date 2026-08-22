@@ -358,6 +358,70 @@ internal static class MediaResolver
     /// instead of re-walking it per game — a "does this game have a manual?" answer over thousands of
     /// games can't afford one enumeration each.</summary>
     public static string ManualsFolder(string platformName) => MediaFolder("Manuals", platformName);
+    public static string MusicFolder(string platformName) => MediaFolder("Music", platformName);
+
+    /// <summary>Where a downloaded logo or video for an ENTITY should be written. The URL is only read for
+    /// its extension — the caller has the bytes, it wants a name. Answered null before, which is the same
+    /// trap as the game-side GetNew* family: not an error, a wrong answer.</summary>
+    public static string NewEntityFile(string mediaRoot, string entityFolder, string name, string url,
+                                       string typeFolder, string defaultExt)
+    {
+        if (_lbRoot == null || string.IsNullOrEmpty(name)) return "";
+        string ext = defaultExt;
+        try
+        {
+            var fromUrl = Path.GetExtension(new Uri(url ?? "", UriKind.RelativeOrAbsolute).IsAbsoluteUri
+                                            ? new Uri(url).AbsolutePath : (url ?? ""));
+            if (!string.IsNullOrWhiteSpace(fromUrl) && fromUrl.Length <= 6) ext = fromUrl;
+        }
+        catch { }
+        string san = Sanitize(name);
+        string dir = Path.Combine(_lbRoot, mediaRoot, entityFolder);
+        if (!string.IsNullOrEmpty(typeFolder)) dir = Path.Combine(dir, san, typeFolder);
+        try { Directory.CreateDirectory(dir); } catch { }
+        for (int i = 0; i <= 999; i++)
+        {
+            string candidate = Path.Combine(dir, i == 0 ? san + ext : $"{san}-{i:00}{ext}");
+            try { if (!File.Exists(candidate)) return candidate; } catch { return candidate; }
+        }
+        return Path.Combine(dir, san + ext);
+    }
+
+    /// <summary>An ENTITY's own video — a platform's, a playlist's, a category's — as opposed to the videos
+    /// of the games inside it. LaunchBox keeps them in Videos\{Platforms|Playlists|Platform Categories}\,
+    /// which is why an install has those three folders whether or not anything is in them yet. Both shapes
+    /// are accepted: the file named after the entity, and a folder named after it holding one.
+    ///
+    /// <paramref name="altName"/> is tried first when given — a nested playlist is filed under its short
+    /// name, the same way media packs file its art.</summary>
+    public static string EntityVideo(string entityFolder, string name, string altName = null)
+    {
+        if (_lbRoot == null || string.IsNullOrEmpty(name)) return null;
+        foreach (var key in new[] { altName, name })
+        {
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            string san = Sanitize(key);
+            string baseDir = Path.Combine(_lbRoot, "Videos", entityFolder);
+            foreach (var ext in VideoExts)
+            {
+                var f = Path.Combine(baseDir, san + ext);
+                try { if (File.Exists(f)) return f; } catch { }
+            }
+            try
+            {
+                var dir = Path.Combine(baseDir, san);
+                if (Directory.Exists(dir))
+                {
+                    var any = Directory.EnumerateFiles(dir)
+                                       .Where(f => VideoExts.Contains(Path.GetExtension(f)))
+                                       .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+                    if (any != null) return any;
+                }
+            }
+            catch { }
+        }
+        return null;
+    }
 
     /// <summary>TOUTES les musiques du jeu, dans l ordre du parcours (meme regle que les manuels :
     /// appartenance au nom de fichier, toute profondeur) — le premier est celui que Music() rend.</summary>

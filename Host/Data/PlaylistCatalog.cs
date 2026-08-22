@@ -321,6 +321,36 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     }
 
     // ── Images (Images\Playlists\<name>\<type>\<name>.ext) ────────────────────
+
+    // The entity's OWN video (its marquee / attract clip), not the videos of the games inside it. Answered
+    // null until now, which a second-screen plugin reads as "this platform has no video" — ThirdScreen asks
+    // for exactly this on its "Platform Video" and "Platform Marquee Video" entries.
+    //
+    // fallBackToGameVideos: when the entity has none, borrow one from a game inside it — that is what the
+    // flag is for, and refusing to would make the parameter a lie. allowThemePath prefers the platform's
+    // configured VideoPath override when it points somewhere real.
+    public override string GetPlatformVideoPath(bool fallBackToGameVideos, bool allowThemePath)
+    {
+        try
+        {
+            if (allowThemePath && MediaResolver.Override(VideoPathValue) is { } ov) return ov;
+            if (MediaResolver.EntityVideo("Playlists", NameValue, NestedNameValue) is { } own) return own;
+            if (!fallBackToGameVideos) return "";
+            foreach (var g in GetAllGames(false))
+            {
+                try { var v = g?.GetVideoPath(false); if (!string.IsNullOrEmpty(v)) return v; } catch { }
+            }
+        }
+        catch { }
+        return "";
+    }
+
+
+    public override string GetNewPlatformLogoPath(string url)
+        => MediaResolver.NewEntityFile("Images", "Playlists", NameValue, url, "Clear Logo", ".png");
+    public override string GetNewPlatformVideoPath(string url)
+        => MediaResolver.NewEntityFile("Videos", "Playlists", NameValue, url, null, ".mp4");
+
     public override string ClearLogoImagePath => Img("Clear Logo");
     public override string BannerImagePath => Img("Banner");
     public override string BackgroundImagePath => Img("Fanart");

@@ -166,6 +166,7 @@ internal static class EmbeddedWebServer
                             if (req.Method != "GET" && req.Method != "HEAD" && req.Method != "POST")
                                 resp = HttpResponse.PlainText("Method not allowed", 405);
                             else
+                                WebSelectionBridge.Observe(req);   // a kiosk browsing IS a selection
                                 resp = _router.Dispatch(req) ?? HttpResponse.NotFound($"No route for {req.Path}");
                         }
                         catch (Exception ex)

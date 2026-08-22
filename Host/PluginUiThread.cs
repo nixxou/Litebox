@@ -79,6 +79,18 @@ internal static class PluginUiThread
         catch (Exception ex) { Console.WriteLine("[plugin-ui] " + ex.GetType().Name + ": " + ex.Message); }
     }
 
+    /// <summary>Block until everything posted so far has run, or <paramref name="ms"/> elapses. For shutdown:
+    /// the last event a plugin gets is its chance to tear its windows down, and posting it and immediately
+    /// killing the loop would deliver nothing.</summary>
+    public static void Drain(int ms = 3000)
+    {
+        var m = _marshal;
+        if (!Running || m == null) return;
+        using var done = new ManualResetEventSlim(false);
+        try { m.BeginInvoke((Action)(() => done.Set())); } catch { return; }
+        if (!done.Wait(ms)) Console.WriteLine("[plugin-ui] still busy after " + ms + "ms — going down anyway");
+    }
+
     /// <summary>Ask the loop to end. Best-effort: the thread is a background one, so a plugin that refuses to
     /// return cannot keep the process alive either way.</summary>
     public static void Stop()

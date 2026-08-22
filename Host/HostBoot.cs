@@ -909,6 +909,7 @@ internal static class HostBoot
             Data.OverviewCache.RunSyncIfNeeded();   // auto-update off → still keep the overview cache valid
 
 
+        EventBus.Registry = reg;  // so the launch lifecycle and the web server can raise events too
         PluginUiThread.Start();   // the loop that will own every plugin event from here on
 
         // PluginInitialized is NOT fired here any more. It used to be, on the boot thread — which is not the
@@ -1222,6 +1223,7 @@ internal static class HostBoot
         ui.SetApartmentState(ApartmentState.STA);
         ui.Start();
         ui.Join();
+        PluginUiThread.Drain();  // let the shutdown event they were just sent actually run
         PluginUiThread.Stop();   // our window is gone; the plugins' loop has nothing left to serve
         // GUI closed → flush pending user-state to the XMLs if LaunchBox/BigBox aren't running
         // (else the journal is kept and applied next time it's safe).

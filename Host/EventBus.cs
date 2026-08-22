@@ -47,6 +47,13 @@ internal static class EventBus
         });
     }
 
+    /// <summary>The loaded plugins, set once at boot. Kept here so anything that learns something worth
+    /// telling them — the launch lifecycle, the web server — can say so without being handed a registry.</summary>
+    public static PluginRegistry Registry;
+
+    /// <summary>Fire by SystemEventTypes field name to whatever is loaded. No-op before boot finishes.</summary>
+    public static void FireNamed(string fieldName) => FireNamed(Registry, fieldName);
+
     private static Dictionary<string, string> _vocab;
 
     /// <summary>Fire the event named by a SystemEventTypes FIELD ("SelectionChanged"), resolved to the

@@ -74,6 +74,7 @@ internal sealed class HostStateManager : DummyStateManager
     /// reading it on every selection would show the same platform's art forever.</summary>
     public override IPlatform GetSelectedPlatform()
     {
+        if (Web.WebSelectionBridge.Active && Web.WebSelectionBridge.Platform is { } wp) return wp;
         try { if (SelectedPlatformProvider?.Invoke() is { } p) return p; }
         catch { }
         return Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllPlatforms()?.FirstOrDefault();
@@ -84,6 +85,8 @@ internal sealed class HostStateManager : DummyStateManager
 
     public override IGame[] GetAllSelectedGames()
     {
+        // A kiosk that moved more recently than the desktop window IS the frontend — see WebSelectionBridge.
+        if (Web.WebSelectionBridge.Active) return Web.WebSelectionBridge.Games;
         try { return SelectedGamesProvider?.Invoke() ?? Array.Empty<IGame>(); }
         catch { return Array.Empty<IGame>(); }
     }
@@ -179,7 +182,11 @@ internal static class HostLaunch
         // 0b. notify the GUI (it may show a "game running" screen / unload its list)
         //    BEFORE DropOptional so freed memory is reclaimed by the drop's GC.
         GameRunning = true;   // BEFORE the GUI notification and the drops (see the property)
+        // The system-event plugins hear it too, as they would under LaunchBox. Fired HERE and not from the
+        // window, so it reaches every way a game can start: the desktop UI, the web frontends, the
+        // kiosk. A second-screen plugin uses it to swap to in-game media and drop its audio.
         try { GameStarted?.Invoke(game); } catch { }
+        EventBus.FireNamed(_reg, "GameStarting");
 
         // 1. notify launching plugins
         Fire(p => p.OnBeforeGameLaunching(game, app, emulator));
@@ -248,7 +255,11 @@ internal static class HostLaunch
 
         LaunchedGame.Capture(game, null, "Store." + kind);   // before any GUI unload; per-store stay-on-top default
         GameRunning = true;   // BEFORE the GUI notification and the drops (see the property)
+        // The system-event plugins hear it too, as they would under LaunchBox. Fired HERE and not from the
+        // window, so it reaches every way a game can start: the desktop UI, the web frontends, the
+        // kiosk. A second-screen plugin uses it to swap to in-game media and drop its audio.
         try { GameStarted?.Invoke(game); } catch { }   // GUI shows the running screen + unloads its list
+        EventBus.FireNamed(_reg, "GameStarting");
 
         var t = new Thread(() => RunStoreAndWait(game, kind, target, installDir, regainedFocus, killLauncherAfter, killEvenIfPreRunning))
         { IsBackground = true, Name = "LbApiHost-store" };
@@ -362,6 +373,7 @@ internal static class HostLaunch
             EndOfGameFinish(endSnap);                     // OnGameExited (kiosk reopen) + GAME OVER, per WebReturnTiming
             GameRunning = false;
             try { GameEnded?.Invoke(game); } catch { }    // GUI hides the running screen + reloads its list
+            EventBus.FireNamed(_reg, "GameExited");
         }
     }
 
@@ -562,6 +574,7 @@ internal static class HostLaunch
             // GUI: game over + data reloaded → reload its list and restore selection.
             GameRunning = false;
             try { GameEnded?.Invoke(game); } catch { }
+            EventBus.FireNamed(_reg, "GameExited");
         }
     }
 

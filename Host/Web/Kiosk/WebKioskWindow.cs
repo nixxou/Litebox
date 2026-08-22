@@ -221,7 +221,13 @@ internal sealed class WebKioskWindow : Form
         // IsOpen), but this window's page cannot poll for several seconds yet — WebView2 has to boot first.
         // Mark the floor so the page replays what was silenced in between. See NotificationsApi.
         try { NotificationsApi.KioskOpened(); } catch { }
-        FormClosed += (_, _) => { try { NotificationsApi.KioskClosed(); } catch { } };
+        FormClosed += (_, _) =>
+        {
+            try { NotificationsApi.KioskClosed(); } catch { }
+            // The kiosk is gone, so it is no longer the surface being watched — without this a plugin would
+            // keep answering with whatever the kiosk was last showing until the desktop window was clicked.
+            try { WebSelectionBridge.DesktopTookOver(); } catch { }
+        };
         // The kiosk owned the audio while it was up (Toggle stopped the music). Registered AFTER the
         // handler that clears _instance, so IsOpen — and therefore AmbientAudio.Held — is already false.
         FormClosed += (_, _) => { try { LbApiHost.Host.Media.AmbientAudio.Release(); } catch { } };

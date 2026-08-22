@@ -609,6 +609,9 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // App-wide ExtendDB hotkeys (kiosk F10/F11 + parental key) — ExtendDB's own WPF-input
         // hotkeys don't fire in a WinForms host, so the host captures them. See HostHotKeys.
         HostHotKeys.Install(this);
+        // Announced on CLOSING, not Closed: this is a plugin's cue to take its own windows down, and by the
+        // time we are Closed the process is seconds from leaving. Same string LaunchBox sends.
+        FormClosing += (_, _) => EventBus.FireNamed(_reg, "LaunchBoxShutdownBeginning");
         FormClosed += (_, _) =>
         {
             HostLaunch.GameStarted -= OnGameStarted;
@@ -3525,15 +3528,23 @@ internal sealed partial class MainWindow : Form, IMessageFilter
 
     // One stub per name: the same selection is asked about repeatedly (every plugin, every event), and a
     // fresh object each time would have plugins that cache by reference miss every single time.
-    private readonly Dictionary<string, IPlatform> _platformStubs = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, IPlatform> _platformStubs = new(StringComparer.OrdinalIgnoreCase);
 
-    private IPlatform NamedPlatformStub(string name, string entityFolder)
+    private IPlatform NamedPlatformStub(string name, string entityFolder) => EntityPlatformFor(entityFolder, name);
+
+    /// <summary>The stand-in for a category or playlist, one per name. Static because the web bridge needs
+    /// the SAME instance the desktop hands out: a plugin comparing platforms by reference must not see a
+    /// change merely because the answer came from the other surface.</summary>
+    internal static IPlatform EntityPlatformFor(string entityFolder, string name)
     {
         string key = entityFolder + "|" + name;
-        if (_platformStubs.TryGetValue(key, out var hit)) return hit;
-        var stub = new SelectedEntityPlatform(entityFolder, name);
-        _platformStubs[key] = stub;
-        return stub;
+        lock (_platformStubs)
+        {
+            if (_platformStubs.TryGetValue(key, out var hit)) return hit;
+            var stub = new SelectedEntityPlatform(entityFolder, name);
+            _platformStubs[key] = stub;
+            return stub;
+        }
     }
 
     /// <summary>A category or a playlist, wearing IPlatform because that is the only shape
@@ -3568,7 +3579,11 @@ internal sealed partial class MainWindow : Form, IMessageFilter
     /// <summary>Tell plugins the selection moved. Fired on a SETTLED selection and on a tree change, never
     /// on transit: a plugin answers this by reading media off disk (a second screen repaints), and a fast
     /// scroll through a platform would have it doing that for every row it passes.</summary>
-    private void FireSelectionChanged() => EventBus.FireNamed(_reg, "SelectionChanged");
+    private void FireSelectionChanged()
+    {
+        Web.WebSelectionBridge.DesktopTookOver();   // this window moved: it is the surface being watched again
+        EventBus.FireNamed(_reg, "SelectionChanged");
+    }
 
     private void LoadNode(object node)
     {

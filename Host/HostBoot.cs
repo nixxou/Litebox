@@ -36,7 +36,9 @@ internal static class HostBoot
     // ── ExtendDB integration (integration-extenddb branch) ────────────────────
     // LiteBox is folding ExtendDB's functionality in natively. The plugin is therefore NEVER loaded here — its
     // DLL would double-provide (and Harmony-patch) what LiteBox now does itself. The Options → Plugins list
-    // still SHOWS the folder, greyed out, with a note. Matched by the plugin folder name (Plugins\ExtendDB).
+    // still SHOWS the folder, greyed out, with a note. Matched on any segment of a discovered plugin's path
+    // (see IsNeverLoaded), so the folder and a loose ExtendDB.dll are both refused. UNCONDITIONALLY: the
+    // const below no longer gates the refusal, it only records that the functionality is native now.
     public const bool IntegrateExtendDb = true;
     public const string ExtendDbFolder = "ExtendDB";
     public static bool IsExtendDb(string folderName) => folderName.Equals(ExtendDbFolder, StringComparison.OrdinalIgnoreCase);
@@ -137,7 +139,13 @@ internal static class HostBoot
     /// <summary>Plugins LiteBox refuses to load whatever the enabled list says, matched on any path segment.
     /// ExtendDB is folded in natively — its DLL would double-provide and Harmony-patch what LiteBox now does
     /// itself — and the companion parental plugin exists only to police vanilla LaunchBox, where LiteBox is
-    /// not. Matched by DLL name as well as folder now that a path can name the file directly.</summary>
+    /// not. What changed is only WHERE the name is looked for: a plugin used to BE a folder, so one name
+    /// was tested; it is now a file named by its path, so every segment is tested with its extension
+    /// removed — catching ExtendDB\ExtendDB.dll by its folder and a loose ExtendDB.dll by its file name.
+    ///
+    /// The per-name tests stay in IsExtendDb / IsNativeParental rather than being inlined here: the
+    /// parental one also answers to the RETIRED folder name, and an install still carrying that folder
+    /// must keep being refused. Inlining a comparison against the current name alone silently lost it.</summary>
     public static bool IsNeverLoaded(string relativePath)
     {
         try
@@ -145,8 +153,9 @@ internal static class HostBoot
             foreach (var seg in relativePath.Split('\\', '/'))
             {
                 var bare = Path.GetFileNameWithoutExtension(seg);
-                if (bare.Equals(ExtendDbFolder, StringComparison.OrdinalIgnoreCase)) return true;
-                if (bare.Equals(NativeParentalFolder, StringComparison.OrdinalIgnoreCase)) return true;
+                if (bare.Length == 0) continue;
+                if (IsExtendDb(bare)) return true;
+                if (IsNativeParental(bare)) return true;
             }
         }
         catch { }

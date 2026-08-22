@@ -270,8 +270,9 @@ internal sealed class HostPlatform : DummyPlatform, ILiteBoxFields
     public void AddTreeChild(object c) { if (c != null) _treeChildren.Add(c); }
     public void ClearTreeChildren() => _treeChildren.Clear();
     public IReadOnlyList<object> TreeChildren => _treeChildren;
-    // Trié sur ce qui est LU : trier sur le nom unique rangerait "2-Player Games" à la lettre A.
-    public void SortTreeChildren() => _treeChildren.Sort((a, b) => string.Compare(HostPlatformCategory.NodeDisplayName(a), HostPlatformCategory.NodeDisplayName(b), StringComparison.OrdinalIgnoreCase));
+    // Sort Title s'il y en a un, sinon ce qui est LU : trier sur le nom unique rangerait
+    // "2-Player Games" à la lettre A, sous un nom que personne ne voit.
+    public void SortTreeChildren() => _treeChildren.Sort((a, b) => string.Compare(HostPlatformCategory.NodeSortKey(a), HostPlatformCategory.NodeSortKey(b), StringComparison.OrdinalIgnoreCase));
     // SDK tree: expose the nested nodes (playlists/categories under this platform) like real LB does.
     public override IList<IPlatform> GetChildren() => SdkTree.WrapChildren(_treeChildren);
 
@@ -386,7 +387,7 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFiel
     public void AddChild(object c) { if (c != null) _children.Add(c); }
     public void ClearChildren() => _children.Clear();   // for ReloadHierarchy (re-read of Parents.xml)
     public IReadOnlyList<object> Children => _children;
-    public void SortChildren() => _children.Sort((a, b) => string.Compare(NodeDisplayName(a), NodeDisplayName(b), StringComparison.OrdinalIgnoreCase));
+    public void SortChildren() => _children.Sort((a, b) => string.Compare(NodeSortKey(a), NodeSortKey(b), StringComparison.OrdinalIgnoreCase));
     // SDK GetChildren can only carry the platform children (typed IList<IPlatform>).
     public override IList<IPlatform> GetChildren() => _children.OfType<IPlatform>().ToList();
 
@@ -432,6 +433,25 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFiel
         }
         catch { }
         return NodeName(n);
+    }
+
+    /// <summary>What a node ORDERS by. Sort Title exists on all three kinds, is editable in every edit
+    /// window, and was written to the XML and then ignored — the tree ordered on the visible name, so a
+    /// library that had arranged its sidebar deliberately saw that arrangement quietly dropped.
+    ///
+    /// Falls back on the DISPLAYED name, not the unique one: without a sort title, a node belongs where a
+    /// reader would look for it.</summary>
+    internal static string NodeSortKey(object n)
+    {
+        try
+        {
+            string st = n is IPlatform p ? p.SortTitle
+                      : n is IPlatformCategory c ? c.SortTitle
+                      : n is IPlaylist pl ? pl.SortTitle : null;
+            if (!string.IsNullOrWhiteSpace(st)) return st.Trim();
+        }
+        catch { }
+        return NodeDisplayName(n);
     }
 
     /// <summary>Display name of any tree node (platform / category / playlist).</summary>

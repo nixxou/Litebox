@@ -65,9 +65,25 @@ internal static class WebSelectionBridge
     /// it on a cache hit, and only from a kiosk.</summary>
     public static HttpResponse Ping(RouteContext ctx)
     {
+        // Ordering, not just freshness. The client aborts the ping it replaces, but aborting cannot unsend
+        // one the server already has — and two pings racing across separate connections can arrive in the
+        // wrong order, which would leave a second screen on the view the user just left. Each carries the
+        // moment it was sent (same machine, same clock), and anything older than what we already acted on
+        // is dropped. Live traffic stamps the clock too, so a late ping cannot override a fresh request.
+        long t = 0;
+        try { long.TryParse(ctx.Request?.GetQuery("t"), out t); } catch { }
+        lock (Lock)
+        {
+            if (t > 0 && t < _lastEventMs) return NoContent();
+            if (t > 0) _lastEventMs = t;
+        }
         Match(ctx.Request, ctx.Request?.GetQuery("p"));
-        return new HttpResponse { StatusCode = 204, StatusText = "No Content" };
+        return NoContent();
     }
+
+    private static HttpResponse NoContent() => new() { StatusCode = 204, StatusText = "No Content" };
+
+    private static long _lastEventMs;
 
     private static void Match(HttpRequest? req, string? rawPath)
     {
@@ -98,6 +114,7 @@ internal static class WebSelectionBridge
         {
             if (key == _lastKey && Active) return;   // same view again (a repeat, a prefetch) — not a move
             _lastKey = key;
+            _lastEventMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();   // a ping older than this is stale
             if (game != null) { _game = game(); }
             else { _game = null; _platform = platform?.Invoke(); }
             if (game != null && _platform == null && _game != null)

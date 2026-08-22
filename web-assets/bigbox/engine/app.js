@@ -2690,8 +2690,30 @@
 
   // Programme la MAJ du contenu : surbrillance instantanée (déjà faite),
   // contenu après le délai d'attente (dwell), via transitions par zone si activées.
+  // Ping de selection sur l'ecran CATEGORIES : c'est le SURVOL qui compte, pas l'entree.
+  // Entrer dans une liste charge aussitot son premier jeu, qui reprend l'ecran secondaire
+  // dans la foulee — signaler l'entree n'apprend donc rien de plus. Ce qu'on veut voir,
+  // c'est la plateforme survolee pendant qu'on parcourt ce menu.
+  //
+  // Palier propre a 300 ms, independant de contentTransition.dwellMs (reglable, parfois nul) :
+  // sans lui, un defilement rapide emettrait un ping par case traversee.
+  var catPingTimer = null;
+  var CAT_PING_MS = 300;
+
+  function scheduleCatPing(i) {
+    if (catPingTimer) { clearTimeout(catPingTimer); catPingTimer = null; }
+    catPingTimer = setTimeout(function () {
+      catPingTimer = null;
+      if (current !== "categories") return;        // on a quitte l'ecran entre-temps
+      var node = catNode(i);
+      if (!node || !node.path) return;             // "Tous les jeux" et consorts n'ont pas de chemin
+      try { window.BBW.pingSelection("data/" + node.path + "/games.json"); } catch (e) {}
+    }, CAT_PING_MS);
+  }
+
   function scheduleCatContent(toIdx, instant) {
     if (catTimer) { clearTimeout(catTimer); catTimer = null; }
+    scheduleCatPing(toIdx);
     var t = G.contentTransition;
     if (instant || !t.enabled || t.durationMs <= 0) {
       fillCatAll(toIdx); shownCat = toIdx; if (current === "categories") descPlay();

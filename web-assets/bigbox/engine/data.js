@@ -42,12 +42,24 @@
   try { isKiosk = http && (navigator.userAgent || "").indexOf("LiteBoxKiosk") >= 0; } catch (e) {}
   var SEL_RX = /\/data\/(?:games\/[^/]+\/detail\.json|(?:platforms|playlists|categories)\/[^/]+\/games\.json)$/;
 
+  var pingAbort = null;   // le ping precedent : une seule requete en vol a la fois
+
   function pingSelection(path) {
     if (!isKiosk) return;
     try {
       var abs = new URL(path, location.href).pathname;
       if (!SEL_RX.test(abs)) return;
-      fetch("/api/kiosk/selection?p=" + encodeURIComponent(abs), { keepalive: true }).catch(function () {});
+      /* Annule le ping precedent : pendant une navigation rapide on ne veut jamais
+         plus d'une requete en vol, ni occuper un creneau de connexion pour une vue
+         que l'utilisateur a deja quittee. */
+      try { if (pingAbort) pingAbort.abort(); } catch (e) {}
+      pingAbort = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      /* Horodatage : annuler n'empeche pas une requete DEJA recue d'etre traitee,
+         donc le serveur ignore tout ping plus ancien que le dernier accepte. Sans
+         ca, deux pings arrives dans le desordre laisseraient l'ecran sur la vue
+         precedente. */
+      fetch("/api/kiosk/selection?t=" + Date.now() + "&p=" + encodeURIComponent(abs),
+            pingAbort ? { signal: pingAbort.signal } : undefined).catch(function () {});
     } catch (e) {}
   }
 

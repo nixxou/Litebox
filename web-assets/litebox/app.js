@@ -68,10 +68,19 @@
              && (navigator.userAgent || "").indexOf("LiteBoxKiosk") >= 0;
   } catch (e) {}
 
+  var lbPingAbort = null;   // le ping precedent : une seule requete en vol a la fois
+
   function lbPingSelection(path) {
     if (!lbIsKiosk) return;
-    try { fetch("/api/kiosk/selection?p=" + encodeURIComponent(path), { keepalive: true }).catch(function () {}); }
-    catch (e) {}
+    try {
+      /* Annule le precedent (navigation rapide : jamais plus d'une requete en vol)
+         et horodate, car annuler n'empeche pas une requete deja recue d'etre
+         traitee : le serveur ignore tout ping plus ancien que le dernier accepte. */
+      try { if (lbPingAbort) lbPingAbort.abort(); } catch (e) {}
+      lbPingAbort = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      fetch("/api/kiosk/selection?t=" + Date.now() + "&p=" + encodeURIComponent(path),
+            lbPingAbort ? { signal: lbPingAbort.signal } : undefined).catch(function () {});
+    } catch (e) {}
   }
 
   try {

@@ -2859,6 +2859,7 @@
     renderCatList();
     if (isWheel("categories")) { setWheelSelected("categories", 0); scrollListIntoView("categories", true); }
     else setCatHighlight(0, true);
+    scheduleCatPing(0);   // arriver sur un niveau surligne deja quelque chose : c'est un survol
     // contenu : transition par zone en desktop ET tablette (en phone le contenu est masqué)
     if (!window.BBW.isMobile()) doCatTransition(0, dir, false);
   }
@@ -2868,6 +2869,7 @@
       renderCatList();
       if (isWheel("categories")) { setWheelSelected("categories", curFrame().sel); scrollListIntoView("categories", true); }
       else setCatHighlight(curFrame().sel, true);
+      scheduleCatPing(curFrame().sel);
       if (!window.BBW.isMobile()) doCatTransition(curFrame().sel, -(leaving.enterDir || 1), false);
     } else {
       systemReturn = "categories";
@@ -5392,6 +5394,10 @@
   }
   function navTo(target, back) {
     if (target === current) return;
+    // Revenir sur l'ecran categories re-expose un element deja surligne — personne ne l'a
+    // "survole", mais c'est bien ce que l'utilisateur regarde. Meme raison qu'a l'entree d'un
+    // niveau : sans ca, un niveau a un seul element n'emettait jamais rien.
+    if (target === "categories") { try { scheduleCatPing(curFrame().sel); } catch (e) {} }
     if (searchOpen) closeSearch();   // on quitte l'écran jeux → ferme le clavier de recherche
     if (advOpen) closeAdvanced();    // idem : ferme la modale de recherche avancée si ouverte
     // Filtres transitoires (rail ★ favoris / ☰ avancée) : ils appartiennent à l'« univers jeu »

@@ -72,15 +72,23 @@
   // (vrai JSON) et on retombe sur le dummy si absent ; en file:// on sert le dummy.
   // `ttlMs` (optionnel) : durée de vie de l'entrée — passé ce délai, un nouvel appel
   // refetch. Sans ttlMs → pas d'expiration (cache de session, comportement d'origine).
-  /* Exposé : le détail d'un jeu ne passe pas par BBW.get (fetch direct), mais il a
-     sa propre mémoire — le drapeau _det posé sur le jeu — qui produit le même angle
-     mort. app.js appelle donc ceci quand il renonce à fetcher. */
+  /* Exposé : les deux appelants sont dans app.js, et tous deux SAVENT qu'aucune requête
+     ne partira — le survol d'une catégorie (qui ne fetche rien) et le détail d'un jeu déjà
+     en mémoire (drapeau _det).
+
+     Ce ping ne se déclenche PLUS sur un simple cache-hit de BBW.get. Il l'a fait un temps,
+     pour couvrir l'entrée dans une liste déjà visitée ; c'était inutile et nuisible. Inutile
+     car on survole forcément la plateforme avant d'y entrer, donc l'hôte la connaît déjà.
+     Nuisible car entrer signale une sélection SANS jeu : le plugin repassait en vue
+     plateforme, puis le premier jeu le refaisait basculer 300 ms plus tard — un clignotement
+     gratuit. Les deux seules entrées sans survol (depuis les « jeux similaires ») finissent
+     sur un jeu précis, dont le ping porte déjà sa plateforme. */
   window.BBW.pingSelection = pingSelection;
 
   window.BBW.get = function (path, ttlMs) {
     var now = Date.now();
     var e = cache[path];
-    if (e && (e.exp === 0 || now < e.exp)) { pingSelection(path); return e.p; }   // entrée encore valide
+    if (e && (e.exp === 0 || now < e.exp)) return e.p;   // entrée encore valide
     var p;
     if (http && typeof fetch === "function") {
       p = fetch(path)

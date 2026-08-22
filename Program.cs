@@ -358,6 +358,16 @@ if (args.Contains("--render-jewel"))
     return LbApiHost.Tools.JewelRenderProbe.Run(args, Array.IndexOf(args, "--render-jewel"));
 if (args.Contains("--lb-ui-probe"))
     return LbApiHost.Tools.LbUiProbe.Run(args, Array.IndexOf(args, "--lb-ui-probe"));
+// Dev-only: the two wallpaper harnesses. Written for that design, never given their flag — the only two
+// probes in Tools\ that were unreachable, so the code shipped and nothing could run it.
+//   --bgprobe <out.png> [image] [blur] [darken] [tint]  → builds the real three-panel layout, screenshots it;
+//     whatever renders flat in the PNG is a surface that needs the sampled-colour fallback.
+//   --lvbench <out.txt> [items] [steps] [WxH …]         → does a BackgroundImage cost a ListView its scroll
+//     fast path? Interleaved passes and medians (see the file: three ways of measuring this go wrong).
+if (args.Contains("--bgprobe"))
+    return LbApiHost.Tools.BackgroundProbe.Run(args, Array.IndexOf(args, "--bgprobe"));
+if (args.Contains("--lvbench"))
+    return LbApiHost.Tools.ListViewBenchProbe.Run(args, Array.IndexOf(args, "--lvbench"));
 if (args.Contains("--lb-color"))
     return LbApiHost.Tools.LbUiProbe.RunColor(args, Array.IndexOf(args, "--lb-color"));
 if (args.Contains("--render-glb"))

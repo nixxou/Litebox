@@ -329,7 +329,17 @@ internal sealed class HostPlaylist : DummyPlaylist, ILiteBoxFields
     public override string Default3DBoxImagePath => Img("Default 3D Box");
     public override string DefaultCartImagePath => Img("Default Cart");
     public override string Default3DCartImagePath => Img("Default 3D Cart");
-    private string Img(string type) => MediaResolver.NamedImage(ImagesRootValue, "Playlists", NameValue, type);
+    // Own image first, then the media packs — see the twin in PlatformCatalog. The pack key is the NESTED
+    // name when there is one: packs file a nested playlist under its short name (Playlists-Player Games.png),
+    // never the unique one it carries in the sidebar.
+    private string Img(string type)
+    {
+        var own = MediaResolver.NamedImage(ImagesRootValue, "Playlists", NameValue, type);
+        if (!string.IsNullOrEmpty(own)) return own;
+        var l = MediaResolver.EntityTypeImages(ImagesRootValue, "Playlists", NameValue,
+                                               string.IsNullOrWhiteSpace(NestedNameValue) ? NameValue : NestedNameValue, type);
+        return l.Count > 0 ? l[0].path : "";
+    }
 
     public override IGame[] GetAllGames(bool sort)
     {

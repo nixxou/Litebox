@@ -364,7 +364,20 @@ internal sealed class HostPlatformCategory : DummyPlatformCategory, ILiteBoxFiel
     public override string BannerImagePath => Img("Banner");
     public override string BackgroundImagePath => Img("Fanart");
     public override string DeviceImagePath => Img("Device");
-    private string Img(string type) => MediaResolver.NamedImage(_imagesRoot, "Platform Categories", _name, type);
+    // Own image first (exact <name>.<ext>, then anything in the folder), THEN the media packs — the same
+    // order LaunchBox uses, and the same NamedImage answered with alone. Packs were simply never consulted
+    // here: a category whose logo ships only in one (Nostalgic Platform Clear Logos files them under
+    // Platform Categories\<name>.png) reported "no image" to the tree, to the hero and to every plugin,
+    // while LaunchBox showed it. EntityTypeImages walks the own folder too, so the fallback costs a second
+    // look only when there was nothing to find.
+    private string Img(string type)
+    {
+        var own = MediaResolver.NamedImage(_imagesRoot, "Platform Categories", _name, type);
+        if (!string.IsNullOrEmpty(own)) return own;
+        var l = MediaResolver.EntityTypeImages(_imagesRoot, "Platform Categories", _name,
+                                               string.IsNullOrWhiteSpace(NestedNameValue) ? _name : NestedNameValue, type);
+        return l.Count > 0 ? l[0].path : "";
+    }
 
     // ── Tree children (from Parents.xml) + aggregated games ──────────────────
     // Children are held as object because IPlatformCategory / IPlaylist do NOT derive

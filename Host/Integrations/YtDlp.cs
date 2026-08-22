@@ -128,7 +128,7 @@ internal static class YtDlp
         if (string.IsNullOrWhiteSpace(url)) return new List<Result>();
         string key = $"u|{cookies}|{url.Trim()}";
         if (CacheGet(key) is { } hot) return hot;
-        return CachePut(key, await QueryJsonAsync(new[] { url.Trim() }, flat: false, cookies, ct).ConfigureAwait(false));
+        return CachePut(key, await QueryJsonAsync(new[] { url.Trim() }, flat: false, cookies, ct, noPlaylist: true).ConfigureAwait(false));
     }
 
     /// <summary>Metadata for a set of video ids in ONE yt-dlp call (order preserved) — for the priority items
@@ -143,13 +143,19 @@ internal static class YtDlp
         return CachePut(key, await QueryJsonAsync(inputs, flat: false, cookies, ct).ConfigureAwait(false));
     }
 
-    private static async Task<List<Result>> QueryJsonAsync(IReadOnlyList<string> inputs, bool flat, CookieBrowser cookies, CancellationToken ct)
+    /// <param name="noPlaylist">Probe ONE video even when the URL also names a playlist — a watch link copied
+    /// from the browser usually carries the list it was played from, and the box that accepted it asked for that
+    /// video, not for its neighbours. Never set for a search: "ytsearch12:" IS a playlist, and this would cut it
+    /// down to a single hit.</param>
+    private static async Task<List<Result>> QueryJsonAsync(IReadOnlyList<string> inputs, bool flat, CookieBrowser cookies, CancellationToken ct, bool noPlaylist = false)
     {
         var list = new List<Result>();
         if (!Available || inputs.Count == 0) return list;
         var args = new List<string> { "--dump-json", "--no-warnings", "--ignore-errors" };
+        if (noPlaylist) args.Add("--no-playlist");
         if (flat) args.Add("--flat-playlist");
         AddImpersonate(args);
+        AddJsRuntime(args);
         AddCookies(args, cookies);
         args.AddRange(inputs);
         try
@@ -214,6 +220,7 @@ internal static class YtDlp
 
         var args = new List<string> { "--dump-json", "--no-warnings", "--ignore-errors" };
         AddImpersonate(args);
+        AddJsRuntime(args);
         AddCookies(args, cookies);
         foreach (var id in todo) args.Add(WatchUrl(id));
 
@@ -354,7 +361,10 @@ internal static class YtDlp
 
         var args = new List<string>
         {
-            "--no-playlist", "--no-warnings", "--no-simulate", "--newline",
+            // No --no-warnings on the DOWNLOAD, unlike the metadata calls: yt-dlp's warnings are where it says
+            // it had to do without something, and swallowing them here hid the missing JS runtime for hours.
+            // They land in the failure trace and nowhere else — the dialog still shows only the ERROR line.
+            "--no-playlist", "--no-simulate", "--newline",
             "--print", "after_move:filepath",
             "-f", FormatSelector(quality),
             "--merge-output-format", "mp4",
@@ -362,6 +372,7 @@ internal static class YtDlp
         };
         if (FfmpegService.FfmpegExe is { } fexe) { args.Add("--ffmpeg-location"); args.Add(fexe); }   // yt-dlp accepts the exe path
         AddImpersonate(args);
+        AddJsRuntime(args);
         AddCookies(args, cookies);
         args.Add(urlOrId.Trim());
 
@@ -412,6 +423,7 @@ internal static class YtDlp
         if (!Available || string.IsNullOrWhiteSpace(appid)) return null;
         var args = new List<string> { "-g", "--no-warnings", "--playlist-items", "1", "-f", "hls-2600/best[protocol*=m3u8]/best" };
         AddImpersonate(args);
+        AddJsRuntime(args);
         args.Add($"https://store.steampowered.com/app/{appid.Trim()}");
         try
         {
@@ -441,6 +453,55 @@ internal static class YtDlp
     private static void AddCookies(List<string> args, CookieBrowser cookies)
     {
         if (CookieArg(cookies) is { } c) { args.Add("--cookies-from-browser"); args.Add(c); }
+    }
+
+    // ── JavaScript runtime ────────────────────────────────────────────────────
+    // YouTube now answers with a JS challenge, and yt-dlp needs an engine to solve it. Without one it says so
+    // in a WARNING — which --no-warnings used to swallow, at the cost of several hours: "extraction without a
+    // JS runtime has been deprecated, and some formats may be missing".
+    //
+    // Missing how much depends on who is asking, and the combination is what matters. Measured on one
+    // age-restricted video: nothing at all and a JS runtime alone both stop at "Sign in to confirm your age";
+    // cookies alone get past the age gate and then die on "format is not available", because a signed-in
+    // request without a solved challenge is served storyboards and nothing else; cookies AND a runtime
+    // download it. Cookies were making things look WORSE on their own, which is exactly how they got blamed.
+    //
+    // yt-dlp finds deno by itself; node and bun have to be named. We resolve the full path rather than trust
+    // the process PATH, and probe once — the answer cannot change while LiteBox is up.
+    private static string? _jsRuntime;
+    private static bool _jsProbed;
+
+    private static string? JsRuntime()
+    {
+        if (_jsProbed) return _jsRuntime;
+        _jsProbed = true;
+        foreach (var name in new[] { "deno", "node", "bun" })
+        {
+            if (OnPath(name + ".exe") is { } exe) { _jsRuntime = name + ":" + exe; break; }
+        }
+        LbLog.Info("ytdlp", "js runtime: " + (_jsRuntime ?? "(none — YouTube may withhold formats)"));
+        return _jsRuntime;
+    }
+
+    private static string? OnPath(string exe)
+    {
+        try
+        {
+            foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+            {
+                if (string.IsNullOrWhiteSpace(dir)) continue;
+                string p;
+                try { p = Path.Combine(dir.Trim(), exe); } catch { continue; }   // a malformed PATH entry
+                if (File.Exists(p)) return p;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static void AddJsRuntime(List<string> args)
+    {
+        if (JsRuntime() is { } r) { args.Add("--js-runtimes"); args.Add(r); }
     }
 
     // Browser impersonation (curl_cffi TLS fingerprint) — YouTube increasingly throttles / returns only

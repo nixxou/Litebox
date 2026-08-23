@@ -216,6 +216,8 @@ internal sealed class LayoutPath
     public int GpuDepthBpc { get; set; }
     public string GpuDynamicRange { get; set; } = "";
     public int GpuVibrance { get; set; } = -1;
+    /// <summary>NVAPI scaling enum name captured from the driver; restored on apply, NVIDIA-gated.</summary>
+    public string GpuScaling { get; set; } = "";
 
     /// <summary>Per-monitor zoom (DisplayConfigSourceDPIScale member name, e.g. "Scale175Percent";
     /// "Identity" is 100%). Empty = the profile doesn't restore this monitor's zoom.</summary>
@@ -333,12 +335,17 @@ internal sealed class MonitorPreset
     /// <summary>Digital vibrance level; -1 = leave it. NVIDIA's own scale (typically 0–63, default ~50).</summary>
     public int GpuVibrance { get; set; } = -1;
 
+    /// <summary>GPU scaling — the NVIDIA panel's per-display "Scaling" (mode + device), stored as the
+    /// NVAPI enum name ("ToAspectScanOutToClosest", …); "" = leave it. What decides whether 4:3 content
+    /// is stretched, boxed or centred, and whether the GPU or the panel does the work.</summary>
+    public string GpuScaling { get; set; } = "";
+
     /// <summary>G-Sync / VRR: "" = leave it, "off", "fullscreen", "always". DRIVER-WIDE — the one setting
     /// in this group that is not per-monitor; it is snapshotted and restored at the profile level.</summary>
     public string GpuVrr { get; set; } = "";
 
     public bool HasGpu => GpuFormat.Length > 0 || GpuDepthBpc > 0 || GpuDynamicRange.Length > 0 || GpuVibrance >= 0
-                          || GpuVrr.Length > 0;
+                          || GpuVrr.Length > 0 || GpuScaling.Length > 0;
 
     /// <summary>Make this monitor the primary one — the desktop origin moves onto it and every other
     /// screen shifts to match. Only meaningful for a NAMED monitor: "the main monitor" already is one.</summary>

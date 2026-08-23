@@ -349,6 +349,8 @@ internal static class MonitorsPanel
         private readonly ComboBox _gpuDepth;
         private readonly ComboBox _gpuRange;
         private readonly ComboBox _gpuVrr;
+        private readonly ComboBox _gpuScaleMode;
+        private readonly ComboBox _gpuScaleDev;
         private readonly CheckBox _gpuVibOn = new() { Text = "Set digital vibrance", AutoSize = true };
         private readonly NumericUpDown _gpuVib = new() { Minimum = 0, Maximum = 100, Increment = 1 };
         private readonly CheckBox _strict = new() { Text = "Match monitors strictly by port (no EDID fallback)", AutoSize = true };
@@ -403,6 +405,8 @@ internal static class MonitorsPanel
             _gpuDepth = ModulePanelKit.Combo(dpiS, readOnly, 240);
             _gpuRange = ModulePanelKit.Combo(dpiS, readOnly, 240);
             _gpuVrr = ModulePanelKit.Combo(dpiS, readOnly, 240);
+            _gpuScaleMode = ModulePanelKit.Combo(dpiS, readOnly, 240);
+            _gpuScaleDev = ModulePanelKit.Combo(dpiS, readOnly, 240);
             _audioDevice = ModulePanelKit.Combo(dpiS, readOnly, 300);
 
             Root = BuildRoot();
@@ -755,6 +759,18 @@ internal static class MonitorsPanel
             _gpuRange.SelectedIndexChanged += (_, _) => Commit();
             G(_gpuRange, 12);
 
+            G(GCap("Scaling: how below-native content fills the panel, and who does the work — the same "
+                 + "Mode + Scaling Device pair as the NVIDIA app's per-display Scaling panel."));
+            _gpuScaleMode.Items.AddRange(new object[] { "(leave unchanged)", "Aspect ratio", "Full-screen (stretch)", "No scaling (centered)" });
+            _gpuScaleMode.SelectedIndex = 0;
+            _gpuScaleMode.SelectedIndexChanged += (_, _) => { Sync(); Commit(); };
+            G(_gpuScaleMode, 12);
+            G(GCap("Scaling device"));
+            _gpuScaleDev.Items.AddRange(new object[] { "Display", "GPU" });
+            _gpuScaleDev.SelectedIndex = 0;
+            _gpuScaleDev.SelectedIndexChanged += (_, _) => Commit();
+            G(_gpuScaleDev, 12);
+
             G(GCap("G-Sync / VRR — DRIVER-WIDE, one value for the whole machine, not just this monitor. "
                  + "Put back by the game-exit and restore snapshots like everything else."));
             _gpuVrr.Items.AddRange(new object[] { "(leave unchanged)", "Off", "Fullscreen only", "Fullscreen and windowed" });
@@ -1031,6 +1047,9 @@ internal static class MonitorsPanel
                 _gpuRange.SelectedIndex = pf?.GpuDynamicRange switch { "Full" => 1, "Limited" => 2, _ => 0 };
                 _gpuVibOn.Checked = pf is { GpuVibrance: >= 0 };
                 _gpuVrr.SelectedIndex = pf?.GpuVrr switch { "off" => 1, "fullscreen" => 2, "always" => 3, _ => 0 };
+                var (smi, sdi) = GpuScalingIndices(pf?.GpuScaling ?? "");
+                _gpuScaleMode.SelectedIndex = smi;
+                _gpuScaleDev.SelectedIndex = sdi;
                 _gpuVib.Value = pf is { GpuVibrance: >= 0 } ? Math.Min(100, pf.GpuVibrance) : 50;
                 var zl = ZoomLabelOf(p?.Preset?.DpiScale ?? "");
                 _presetZoom.SelectedIndex = 0;
@@ -1081,6 +1100,8 @@ internal static class MonitorsPanel
             _presetRot.Enabled = _presetScale.Enabled = _presetZoom.Enabled = has && _usePreset.Checked;
             _gpuFormat.Enabled = _gpuDepth.Enabled = _gpuRange.Enabled = _gpuVibOn.Enabled = has && _usePreset.Checked;
             _gpuVrr.Enabled = has && _usePreset.Checked;
+            _gpuScaleMode.Enabled = has && _usePreset.Checked;
+            _gpuScaleDev.Enabled = has && _usePreset.Checked && _gpuScaleMode.SelectedIndex > 0;
             _gpuVib.Enabled = has && _usePreset.Checked && _gpuVibOn.Checked;
             _strict.Enabled = has;
             _extras.Enabled = _layoutDetails.Enabled = has && _useLayout.Checked;
@@ -1134,6 +1155,7 @@ internal static class MonitorsPanel
                     GpuDynamicRange = _gpuRange.SelectedIndex switch { 1 => "Full", 2 => "Limited", _ => "" },
                     GpuVibrance = _gpuVibOn.Checked ? (int)_gpuVib.Value : -1,
                     GpuVrr = _gpuVrr.SelectedIndex switch { 1 => "off", 2 => "fullscreen", 3 => "always", _ => "" },
+                    GpuScaling = GpuScalingValue(_gpuScaleMode.SelectedIndex, _gpuScaleDev.SelectedIndex),
                 };
                 // Section ticked but nothing chosen inside = nothing to apply; keep it null so the
                 // profile does not claim a part it will not act on.
@@ -1272,6 +1294,30 @@ internal static class MonitorsPanel
             if (ix <= 0 || ix >= _monitorChoices.Count) return DisplayTargets.ResolveDisplay("");
             return DisplayTargets.ResolveDisplay(_monitorChoices[ix].DevicePath);
         }
+
+        /// <summary>(mode 1..3, device 0..1) to the NVAPI scaling value. "...ToClosest" = the display
+        /// receives the low mode and scales it; "...ToNative" = the GPU outputs native and scales.</summary>
+        private static string GpuScalingValue(int mode, int device) => (mode, device) switch
+        {
+            (1, 0) => "ToAspectScanOutToClosest",
+            (1, 1) => "ToAspectScanOutToNative",
+            (2, 0) => "ToClosest",
+            (2, 1) => "ToNative",
+            (3, 0) => "GPUScanOutToClosest",
+            (3, 1) => "GPUScanOutToNative",
+            _ => "",
+        };
+
+        private static (int Mode, int Device) GpuScalingIndices(string v) => v switch
+        {
+            "ToAspectScanOutToClosest" => (1, 0),
+            "ToAspectScanOutToNative" => (1, 1),
+            "ToClosest" => (2, 0),
+            "ToNative" => (2, 1),
+            "GPUScanOutToClosest" => (3, 0),
+            "GPUScanOutToNative" => (3, 1),
+            _ => (0, 0),
+        };
 
         private static readonly string[] RotValues = { "", "Identity", "Rotate90", "Rotate180", "Rotate270" };
         private static readonly string[] ScaleValues = { "", "Default", "Stretch", "Center" };

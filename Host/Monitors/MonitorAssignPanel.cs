@@ -241,6 +241,13 @@ internal static class MonitorAssignPanel
         gRng.SelectedIndex = p.Preset?.GpuDynamicRange switch { "Full" => 1, "Limited" => 2, _ => 0 };
         N(Cap("Dynamic range"), S(18)); N(gRng, S(30));
 
+        string[] scaleVals = { "", "ToAspectScanOutToClosest", "ToAspectScanOutToNative", "ToClosest", "ToNative", "GPUScanOutToClosest", "GPUScanOutToNative" };
+        var gScale = ModulePanelKit.Combo(dpiS, readOnly, 220);
+        gScale.Items.AddRange(new object[] { "(leave unchanged)", "Aspect ratio (display)", "Aspect ratio (GPU)",
+                                             "Full-screen (display)", "Full-screen (GPU)", "No scaling (display)", "No scaling (GPU)" });
+        gScale.SelectedIndex = Math.Max(0, Array.IndexOf(scaleVals, p.Preset?.GpuScaling ?? ""));
+        N(Cap("GPU scaling (mode + device)"), S(18)); N(gScale, S(30));
+
         var gVrr = ModulePanelKit.Combo(dpiS, readOnly, 220);
         gVrr.Items.AddRange(new object[] { "(leave unchanged)", "Off", "Fullscreen only", "Fullscreen and windowed" });
         gVrr.SelectedIndex = p.Preset?.GpuVrr switch { "off" => 1, "fullscreen" => 2, "always" => 3, _ => 0 };
@@ -305,6 +312,7 @@ internal static class MonitorAssignPanel
                 GpuDynamicRange = gRng.SelectedIndex switch { 1 => "Full", 2 => "Limited", _ => "" },
                 GpuVibrance = gVibOn.Checked ? (int)gVib.Value : -1,
                 GpuVrr = gVrr.SelectedIndex switch { 1 => "off", 2 => "fullscreen", 3 => "always", _ => "" },
+                GpuScaling = scaleVals[Math.Max(0, gScale.SelectedIndex)],
             };
             p.Preset = usePreset.Checked && !preset.IsEmpty ? preset : null;
 

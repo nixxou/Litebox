@@ -270,13 +270,18 @@ internal static class MonitorProfileApply
             // HDR through the path set, but the driver-side settings have no seat there — apply them to
             // the preset's monitor directly, exactly as the standalone preset path would have.
             if (presetMerged && profile.Preset is { } mp2 && (mp2.GpuFormat.Length > 0 || mp2.GpuDepthBpc > 0
-                || mp2.GpuDynamicRange.Length > 0 || mp2.GpuVibrance >= 0))
+                || mp2.GpuDynamicRange.Length > 0 || mp2.GpuVibrance >= 0 || mp2.GpuScaling.Length > 0))
             {
                 try
                 {
                     var d0 = DisplayTargets.ResolveDisplay(mp2.DevicePath);
                     string live0 = d0 != null ? (Try(() => d0.DevicePath) ?? mp2.DevicePath) : mp2.DevicePath;
                     string gnote = GpuColor.Apply(live0, mp2.GpuFormat, mp2.GpuDepthBpc, mp2.GpuDynamicRange, mp2.GpuVibrance);
+                    if (mp2.GpuScaling.Length > 0)
+                    {
+                        string sn = GpuColor.ScalingSet(live0, mp2.GpuScaling);
+                        gnote = gnote.Length > 0 ? gnote + ", " + sn : sn;
+                    }
                     if (gnote.Length > 0) notes.Add(gnote);
                 }
                 catch (Exception ex) { LbLog.Warn(Tag, "merged-preset GPU failed: " + ex.Message); }
@@ -815,10 +820,16 @@ internal static class MonitorProfileApply
         {
             var rec = it.Rec;
             if (it.Extra) continue;
-            if (rec.GpuFormat.Length == 0 && rec.GpuDepthBpc <= 0 && rec.GpuDynamicRange.Length == 0 && rec.GpuVibrance < 0) continue;
+            if (rec.GpuFormat.Length == 0 && rec.GpuDepthBpc <= 0 && rec.GpuDynamicRange.Length == 0 && rec.GpuVibrance < 0
+                && rec.GpuScaling.Length == 0) continue;
             try
             {
                 string note = GpuColor.Apply(it.LivePath, rec.GpuFormat, rec.GpuDepthBpc, rec.GpuDynamicRange, rec.GpuVibrance);
+                if (rec.GpuScaling.Length > 0 && !string.Equals(GpuColor.ScalingGet(it.LivePath), rec.GpuScaling, StringComparison.OrdinalIgnoreCase))
+                {
+                    string sn = GpuColor.ScalingSet(it.LivePath, rec.GpuScaling);
+                    note = note.Length > 0 ? note + ", " + sn : sn;
+                }
                 if (note.Length > 0) { LbLog.Info(Tag, $"{rec.Label}: {note}"); notes.Add($"{rec.Label}: {note}"); }
             }
             catch (Exception ex) { LbLog.Warn(Tag, $"{rec.Label}: GPU output failed ({ex.Message})"); }
@@ -1038,6 +1049,17 @@ internal static class MonitorProfileApply
                 }
             }
             catch (Exception ex) { LbLog.Warn(Tag, "make-primary failed: " + ex.Message); done.Add("main-monitor change failed"); }
+        }
+
+        if (preset.GpuScaling.Length > 0)
+        {
+            try
+            {
+                string live1 = Try(() => display.DevicePath) ?? preset.DevicePath;
+                string sn = GpuColor.ScalingSet(live1, preset.GpuScaling);
+                if (sn.Length > 0) done.Add(sn);
+            }
+            catch (Exception ex) { done.Add("GPU scaling failed (" + ex.Message + ")"); }
         }
 
         // GpuVrr is deliberately absent here: driver-wide, it is applied once at the profile level.

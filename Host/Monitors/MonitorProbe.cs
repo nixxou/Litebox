@@ -232,7 +232,8 @@ internal static class MonitorProbe
             var g = GpuColor.Query(m.DevicePath);
             Console.WriteLine(g.Supported
                 ? $"  {m.FriendlyName,-10} {g.Vendor,-8} {g.Format} {g.DepthBpc}bpc range={g.DynamicRange}"
-                  + (g.Vibrance >= 0 ? $" vibrance={g.Vibrance} ({g.VibranceMin}-{g.VibranceMax}, default {g.VibranceDefault})" : "")
+                  + $" scaling={GpuColor.ScalingLabel(GpuColor.ScalingGet(m.DevicePath))}"
+                  + (g.Vibrance >= 0 ? $" vibrance={g.Vibrance}" : "")
                 : $"  {m.FriendlyName,-10} {(g.Vendor.Length > 0 ? g.Vendor : "?"),-8} not supported");
         }
         return 0;

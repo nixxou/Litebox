@@ -205,6 +205,99 @@ internal static class GpuColor
         try { return t.DevicePath ?? ""; } catch { return ""; }
     }
 
+    // ── GPU scaling — the NVIDIA panel's per-display "Scaling" (mode + device) ──
+    //
+    // The one setting that resisted everything: Windows' CCD refuses it, and NvAPIWrapper's high-level
+    // SetDisplaysConfig silently drops it — its GetPathAdvancedTargetInfo conversion returns
+    // scale=Default regardless of what the managed Scaling property was set to, so the driver receives
+    // "you pick" every time. Verified by round-trip: the HIGH-LEVEL write never takes, the NATIVE
+    // structure with an explicit PathAdvancedTargetInfo takes immediately.
+    //
+    // Hence everything here is built at the native layer. For the monitors NOT being changed, their
+    // CURRENT scaling is re-injected from the high-level property (which reads correctly) — passing the
+    // wrapper's lying Default for them could reset scaling the user set elsewhere.
+
+    /// <summary>The current scaling of one monitor, as the NVAPI enum name ("ToAspectScanOutToClosest"),
+    /// or "" when unreadable / not NVIDIA.</summary>
+    public static string ScalingGet(string monitorDevicePath)
+    {
+        if (VendorOf(monitorDevicePath) != "NVIDIA" || !NvAlive()) return "";
+        try
+        {
+            var nv = NvDisplayOf(monitorDevicePath);
+            if (nv == null) return "";
+            uint id = nv.DisplayDevice.DisplayId;
+            return NvAPIWrapper.Display.PathInfo.GetDisplaysConfig()
+                .SelectMany(pi => pi.TargetsInfo)
+                .First(t => t.DisplayDevice.DisplayId == id)
+                .Scaling.ToString();
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>Set one monitor's scaling (NVAPI enum name). Returns a note; "" on the empty request.</summary>
+    public static string ScalingSet(string monitorDevicePath, string scalingName)
+    {
+        if (scalingName.Length == 0) return "";
+        string vendor = VendorOf(monitorDevicePath);
+        if (vendor != "NVIDIA" || !NvAlive())
+            return $"GPU scaling skipped ({(vendor.Length > 0 ? vendor : "no NVIDIA driver")} — NVIDIA only)";
+
+        try
+        {
+            var nv = NvDisplayOf(monitorDevicePath);
+            if (nv == null) return "GPU scaling skipped (monitor not found on the NVIDIA side)";
+            uint id = nv.DisplayDevice.DisplayId;
+
+            if (!Enum.TryParse<NvAPIWrapper.Native.Display.Scaling>(scalingName, out var wanted))
+                return "GPU scaling skipped (unknown mode " + scalingName + ")";
+
+            var managed = NvAPIWrapper.Display.PathInfo.GetDisplaysConfig();
+            var native = new System.Collections.Generic.List<NvAPIWrapper.Native.Interfaces.Display.IPathInfo>();
+            foreach (var pi in managed)
+            {
+                var v2 = pi.GetPathInfoV2();
+                var targets = new System.Collections.Generic.List<NvAPIWrapper.Native.Display.Structures.PathTargetInfoV2>();
+                foreach (var ti in pi.TargetsInfo)
+                {
+                    var adv = ti.GetPathAdvancedTargetInfo();
+                    // Rebuild with the values the HIGH-LEVEL properties report (they read correctly);
+                    // adv itself carries the conversion bug this whole method exists to work around.
+                    var scale = ti.DisplayDevice.DisplayId == id ? wanted : ti.Scaling;
+                    var rebuilt = new NvAPIWrapper.Native.Display.Structures.PathAdvancedTargetInfo(
+                        ti.Rotation, scale, adv.RefreshRateInMillihertz, adv.TimingOverride,
+                        adv.IsInterlaced, adv.IsClonePrimary, adv.IsClonePanAndScanTarget,
+                        adv.DisableVirtualModeSupport, adv.IsPreferredUnscaledTarget);
+                    targets.Add(new NvAPIWrapper.Native.Display.Structures.PathTargetInfoV2(ti.DisplayDevice.DisplayId, rebuilt));
+                }
+                native.Add(new NvAPIWrapper.Native.Display.Structures.PathInfoV2(targets.ToArray(), v2.SourceModeInfo, v2.SourceId));
+            }
+
+            NvAPIWrapper.Native.DisplayApi.SetDisplayConfig(native.ToArray(),
+                NvAPIWrapper.Native.Display.DisplayConfigFlags.SaveToPersistence);
+            LbLog.Info(Tag, $"GPU scaling → {scalingName}");
+            return "GPU scaling: " + ScalingLabel(scalingName);
+        }
+        catch (Exception ex)
+        {
+            LbLog.Warn(Tag, "GPU scaling failed: " + ex.Message);
+            return "GPU scaling failed (" + ex.Message + ")";
+        }
+    }
+
+    /// <summary>Human name for a stored NVAPI scaling value — the NVIDIA panel's own words.</summary>
+    public static string ScalingLabel(string v) => v switch
+    {
+        "ToAspectScanOutToClosest" => "aspect ratio (display)",
+        "ToAspectScanOutToNative" => "aspect ratio (GPU)",
+        "ToClosest" => "full-screen (display)",
+        "ToNative" => "full-screen (GPU)",
+        "GPUScanOutToClosest" => "no scaling (display)",
+        "GPUScanOutToNative" => "no scaling (GPU)",
+        "Default" => "driver default",
+        _ => v,
+    };
+
     // ── VRR (G-Sync) — a DRIVER-WIDE setting, not a per-monitor one ─────────
     //
     // VRRMode lives in the driver's BASE profile: one value for the whole machine. So unlike everything

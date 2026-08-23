@@ -92,6 +92,7 @@ internal static class DisplayTargets
                     GpuDepthBpc = GpuOf(tgt).Supported ? GpuOf(tgt).DepthBpc : 0,
                     GpuDynamicRange = GpuOf(tgt).Supported ? GpuOf(tgt).DynamicRange : "",
                     GpuVibrance = GpuOf(tgt).Supported ? GpuOf(tgt).Vibrance : -1,
+                    GpuScaling = GpuOf(tgt).Supported ? GpuColor.ScalingGet(Try(() => tgt.DevicePath) ?? "") : "",
                     SignalActiveWidth = TryVal(() => t.IsSignalInformationAvailable ? t.SignalInfo.ActiveSize.Width : 0),
                     SignalActiveHeight = TryVal(() => t.IsSignalInformationAvailable ? t.SignalInfo.ActiveSize.Height : 0),
                     SignalTotalWidth = TryVal(() => t.IsSignalInformationAvailable ? t.SignalInfo.TotalSize.Width : 0),

@@ -115,6 +115,8 @@ internal static class OptionKeys
             Note: "\"Ctrl+Alt+F9\"-style combo for Restore Original Layout; empty = unbound."),
         new("MonitorRestoreHotkeyGlobal", Glob, OptionType.Bool, OptionCache.Cold, "Monitors/MonitorGlobalHotkeys",
             Note: "true = RegisterHotKey (taken from the whole system) instead of LiteBox-focus only."),
+        new("MonitorDrsTransient", Glob, OptionType.Json, OptionCache.Cold, "Monitors/GpuAppProfile",
+            Note: "pending per-exe NVIDIA driver override; present only between a launch and its release. Swept at boot."),
         new("MonitorWebEndpoints", Glob, OptionType.Bool, OptionCache.Cold, "Web/MonitorsApi",
             Note: "true = register /api/monitors/* on the embedded server. Needs the Web module too."),
         new("MonitorRestorePoint", Glob, OptionType.Json, OptionCache.Cold, "Monitors/MonitorProfileApply",

@@ -153,7 +153,7 @@ internal static class MonitorProfileApply
     /// <summary>Snapshot the desktop, then apply <paramref name="profile"/> — for the duration of a game.
     /// Re-entrant by design: a nested call keeps the FIRST snapshot, so an add-app launched from inside a
     /// game does not make the outer exit restore an intermediate state.</summary>
-    public static ApplyResult BeginGameScope(MonitorProfile profile)
+    public static ApplyResult BeginGameScope(MonitorProfile profile, string launchedExe = "")
     {
         lock (_gate)
         {
@@ -168,6 +168,19 @@ internal static class MonitorProfileApply
                 LbLog.Info(Tag, $"game scope opened (layout={(_gameLayout != null ? _gameLayout.Paths.Count + " monitors" : "none")}, audio={_gameAudioDevice}, volume={_gameVolume})");
             }
         }
+        // The per-app driver override rides the launch, not the desktop: it is armed on the exe about
+        // to run, and RELEASED as soon as the game is confirmed started — DRS is read at process
+        // creation, so nothing needs to stay in the driver while the game runs. The 25 s timer is the
+        // confirmation proxy; EndGameScope releases too, for a game that dies faster than that.
+        if (profile.Preset is { AppVrr.Length: > 0 } ap && launchedExe.Length > 0)
+        {
+            uint mode = ap.AppVrr switch { "off" => 1u, "fixed" => 4u, _ => 0u };
+            var note = GpuAppProfile.Begin(launchedExe, mode);
+            if (note.Length > 0) LbLog.Info(Tag, "launch: " + note);
+            System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(25))
+                .ContinueWith(_ => GpuAppProfile.Release());
+        }
+
         // Applied OUTSIDE the snapshot lock section above but through the same public entry, so the
         // profile goes on exactly as a manual switch would — including its own restore-point behaviour.
         return Apply(profile);
@@ -207,6 +220,8 @@ internal static class MonitorProfileApply
                 ok &= r.Ok;
                 notes.Add(r.Message);
             }
+
+            GpuAppProfile.Release();   // no-op when the early release already ran
 
             if (_gameVrrKnown)
             {

@@ -337,8 +337,14 @@ internal sealed class MonitorPreset
     /// in this group that is not per-monitor; it is snapshotted and restored at the profile level.</summary>
     public string GpuVrr { get; set; } = "";
 
+    /// <summary>Per-APPLICATION VRR override, applied through a transient driver profile on the launched
+    /// exe: "" = leave, "off" (ForceOff), "fixed" (FixedRefresh), "allow". Only meaningful when a GAME
+    /// launches with this profile — a manual switch from Tools has no exe to attach it to. Finer than
+    /// <see cref="GpuVrr"/>: the driver applies it to that one program and nothing else.</summary>
+    public string AppVrr { get; set; } = "";
+
     public bool HasGpu => GpuFormat.Length > 0 || GpuDepthBpc > 0 || GpuDynamicRange.Length > 0 || GpuVibrance >= 0
-                          || GpuVrr.Length > 0;
+                          || GpuVrr.Length > 0 || AppVrr.Length > 0;
 
     /// <summary>Make this monitor the primary one — the desktop origin moves onto it and every other
     /// screen shifts to match. Only meaningful for a NAMED monitor: "the main monitor" already is one.</summary>

@@ -246,6 +246,11 @@ internal static class MonitorAssignPanel
         gVrr.SelectedIndex = p.Preset?.GpuVrr switch { "off" => 1, "fullscreen" => 2, "always" => 3, _ => 0 };
         N(Cap("G-Sync / VRR (driver-wide)"), S(18)); N(gVrr, S(30));
 
+        var gAppVrr = ModulePanelKit.Combo(dpiS, readOnly, 220);
+        gAppVrr.Items.AddRange(new object[] { "(leave unchanged)", "Force off for this game", "Fixed refresh for this game", "Allow" });
+        gAppVrr.SelectedIndex = p.Preset?.AppVrr switch { "off" => 1, "fixed" => 2, "allow" => 3, _ => 0 };
+        N(Cap("VRR for the launched game (per-app)"), S(18)); N(gAppVrr, S(30));
+
         var gVibOn = new CheckBox { Text = "Set digital vibrance", AutoSize = true, ForeColor = ModulePanelKit.Fg, Checked = p.Preset is { GpuVibrance: >= 0 }, Enabled = !readOnly };
         var gVib = new NumericUpDown { Minimum = 0, Maximum = 100, Width = S(64), BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, BorderStyle = BorderStyle.None, Enabled = !readOnly && gVibOn.Checked, Value = p.Preset is { GpuVibrance: >= 0 } ? Math.Min(100, p.Preset.GpuVibrance) : 50 };
         gVibOn.CheckedChanged += (_, _) => gVib.Enabled = !readOnly && gVibOn.Checked;
@@ -305,6 +310,7 @@ internal static class MonitorAssignPanel
                 GpuDynamicRange = gRng.SelectedIndex switch { 1 => "Full", 2 => "Limited", _ => "" },
                 GpuVibrance = gVibOn.Checked ? (int)gVib.Value : -1,
                 GpuVrr = gVrr.SelectedIndex switch { 1 => "off", 2 => "fullscreen", 3 => "always", _ => "" },
+                AppVrr = gAppVrr.SelectedIndex switch { 1 => "off", 2 => "fixed", 3 => "allow", _ => "" },
             };
             p.Preset = usePreset.Checked && !preset.IsEmpty ? preset : null;
 

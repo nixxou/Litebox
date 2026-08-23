@@ -761,7 +761,7 @@ internal static class MonitorsPanel
 
             G(GCap("Scaling: how below-native content fills the panel, and who does the work — the same "
                  + "Mode + Scaling Device pair as the NVIDIA app's per-display Scaling panel."));
-            _gpuScaleMode.Items.AddRange(new object[] { "(leave unchanged)", "Aspect ratio", "Full-screen (stretch)", "No scaling (centered)" });
+            _gpuScaleMode.Items.AddRange(new object[] { "(leave unchanged)", "Aspect ratio", "Full-screen (stretch)", "No scaling (centered)", "Integer scaling" });
             _gpuScaleMode.SelectedIndex = 0;
             _gpuScaleMode.SelectedIndexChanged += (_, _) => { Sync(); Commit(); };
             G(_gpuScaleMode, 12);
@@ -1101,7 +1101,7 @@ internal static class MonitorsPanel
             _gpuFormat.Enabled = _gpuDepth.Enabled = _gpuRange.Enabled = _gpuVibOn.Enabled = has && _usePreset.Checked;
             _gpuVrr.Enabled = has && _usePreset.Checked;
             _gpuScaleMode.Enabled = has && _usePreset.Checked;
-            _gpuScaleDev.Enabled = has && _usePreset.Checked && _gpuScaleMode.SelectedIndex > 0;
+            _gpuScaleDev.Enabled = has && _usePreset.Checked && _gpuScaleMode.SelectedIndex is > 0 and < 4;
             _gpuVib.Enabled = has && _usePreset.Checked && _gpuVibOn.Checked;
             _strict.Enabled = has;
             _extras.Enabled = _layoutDetails.Enabled = has && _useLayout.Checked;
@@ -1305,6 +1305,8 @@ internal static class MonitorsPanel
             (2, 1) => "ToNative",
             (3, 0) => "GPUScanOutToClosest",
             (3, 1) => "GPUScanOutToNative",
+            // Integer scaling is GPU-only by nature — the device combo is greyed on it, like the NVIDIA app.
+            (4, _) => GpuColor.IntegerScalingName,
             _ => "",
         };
 
@@ -1316,6 +1318,7 @@ internal static class MonitorsPanel
             "ToNative" => (2, 1),
             "GPUScanOutToClosest" => (3, 0),
             "GPUScanOutToNative" => (3, 1),
+            GpuColor.IntegerScalingName => (4, 1),
             _ => (0, 0),
         };
 

@@ -241,10 +241,11 @@ internal static class MonitorAssignPanel
         gRng.SelectedIndex = p.Preset?.GpuDynamicRange switch { "Full" => 1, "Limited" => 2, _ => 0 };
         N(Cap("Dynamic range"), S(18)); N(gRng, S(30));
 
-        string[] scaleVals = { "", "ToAspectScanOutToClosest", "ToAspectScanOutToNative", "ToClosest", "ToNative", "GPUScanOutToClosest", "GPUScanOutToNative" };
+        string[] scaleVals = { "", "ToAspectScanOutToClosest", "ToAspectScanOutToNative", "ToClosest", "ToNative", "GPUScanOutToClosest", "GPUScanOutToNative", GpuColor.IntegerScalingName };
         var gScale = ModulePanelKit.Combo(dpiS, readOnly, 220);
         gScale.Items.AddRange(new object[] { "(leave unchanged)", "Aspect ratio (display)", "Aspect ratio (GPU)",
-                                             "Full-screen (display)", "Full-screen (GPU)", "No scaling (display)", "No scaling (GPU)" });
+                                             "Full-screen (display)", "Full-screen (GPU)", "No scaling (display)", "No scaling (GPU)",
+                                             "Integer scaling (GPU)" });
         gScale.SelectedIndex = Math.Max(0, Array.IndexOf(scaleVals, p.Preset?.GpuScaling ?? ""));
         N(Cap("GPU scaling (mode + device)"), S(18)); N(gScale, S(30));
 

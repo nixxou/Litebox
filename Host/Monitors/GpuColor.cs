@@ -227,10 +227,13 @@ internal static class GpuColor
             var nv = NvDisplayOf(monitorDevicePath);
             if (nv == null) return "";
             uint id = nv.DisplayDevice.DisplayId;
-            return NvAPIWrapper.Display.PathInfo.GetDisplaysConfig()
+            var sc = NvAPIWrapper.Display.PathInfo.GetDisplaysConfig()
                 .SelectMany(pi => pi.TargetsInfo)
                 .First(t => t.DisplayDevice.DisplayId == id)
-                .Scaling.ToString();
+                .Scaling;
+            // Integer scaling (Turing+) postdates the wrapper's enum: the driver reports raw 8, which
+            // ToString would render as "8" and no parse would round-trip. Name it ourselves.
+            return (int)sc == IntegerScalingRaw ? IntegerScalingName : sc.ToString();
         }
         catch { return ""; }
     }
@@ -249,7 +252,10 @@ internal static class GpuColor
             if (nv == null) return "GPU scaling skipped (monitor not found on the NVIDIA side)";
             uint id = nv.DisplayDevice.DisplayId;
 
-            if (!Enum.TryParse<NvAPIWrapper.Native.Display.Scaling>(scalingName, out var wanted))
+            NvAPIWrapper.Native.Display.Scaling wanted;
+            if (string.Equals(scalingName, IntegerScalingName, StringComparison.OrdinalIgnoreCase))
+                wanted = (NvAPIWrapper.Native.Display.Scaling)IntegerScalingRaw;
+            else if (!Enum.TryParse(scalingName, out wanted))
                 return "GPU scaling skipped (unknown mode " + scalingName + ")";
 
             var managed = NvAPIWrapper.Display.PathInfo.GetDisplaysConfig();
@@ -285,9 +291,15 @@ internal static class GpuColor
         }
     }
 
+    /// <summary>Raw NV_SCALING value for integer scaling on this driver generation — measured: 8 is
+    /// accepted and round-trips, 9 is refused with NVAPI_ERROR. Absent from the wrapper's enum.</summary>
+    private const int IntegerScalingRaw = 8;
+    public const string IntegerScalingName = "IntegerAspectScanOut";
+
     /// <summary>Human name for a stored NVAPI scaling value — the NVIDIA panel's own words.</summary>
     public static string ScalingLabel(string v) => v switch
     {
+        IntegerScalingName => "integer scaling (GPU)",
         "ToAspectScanOutToClosest" => "aspect ratio (display)",
         "ToAspectScanOutToNative" => "aspect ratio (GPU)",
         "ToClosest" => "full-screen (display)",

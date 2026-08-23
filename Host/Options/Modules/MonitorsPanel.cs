@@ -349,7 +349,6 @@ internal static class MonitorsPanel
         private readonly ComboBox _gpuDepth;
         private readonly ComboBox _gpuRange;
         private readonly ComboBox _gpuVrr;
-        private readonly ComboBox _appVrr;
         private readonly CheckBox _gpuVibOn = new() { Text = "Set digital vibrance", AutoSize = true };
         private readonly NumericUpDown _gpuVib = new() { Minimum = 0, Maximum = 100, Increment = 1 };
         private readonly CheckBox _strict = new() { Text = "Match monitors strictly by port (no EDID fallback)", AutoSize = true };
@@ -404,7 +403,6 @@ internal static class MonitorsPanel
             _gpuDepth = ModulePanelKit.Combo(dpiS, readOnly, 240);
             _gpuRange = ModulePanelKit.Combo(dpiS, readOnly, 240);
             _gpuVrr = ModulePanelKit.Combo(dpiS, readOnly, 240);
-            _appVrr = ModulePanelKit.Combo(dpiS, readOnly, 240);
             _audioDevice = ModulePanelKit.Combo(dpiS, readOnly, 300);
 
             Root = BuildRoot();
@@ -764,14 +762,6 @@ internal static class MonitorsPanel
             _gpuVrr.SelectedIndexChanged += (_, _) => Commit();
             G(_gpuVrr, 12);
 
-            G(GCap("VRR for the launched game — PER APPLICATION, through a transient driver profile on its "
-                 + "exe (created at launch, removed seconds later once the game is up). Finer than the "
-                 + "driver-wide switch above; does nothing on a manual switch from Tools."));
-            _appVrr.Items.AddRange(new object[] { "(leave unchanged)", "Force off for this game", "Fixed refresh for this game", "Allow" });
-            _appVrr.SelectedIndex = 0;
-            _appVrr.SelectedIndexChanged += (_, _) => Commit();
-            G(_appVrr, 12);
-
             _gpuVibOn.CheckedChanged += (_, _) => { _gpuVib.Enabled = _gpuVibOn.Checked && _gpuVibOn.Enabled; Commit(); };
             G(_gpuVibOn);
             _gpuVib.BackColor = ModulePanelKit.Field; _gpuVib.ForeColor = ModulePanelKit.Fg;
@@ -1041,7 +1031,6 @@ internal static class MonitorsPanel
                 _gpuRange.SelectedIndex = pf?.GpuDynamicRange switch { "Full" => 1, "Limited" => 2, _ => 0 };
                 _gpuVibOn.Checked = pf is { GpuVibrance: >= 0 };
                 _gpuVrr.SelectedIndex = pf?.GpuVrr switch { "off" => 1, "fullscreen" => 2, "always" => 3, _ => 0 };
-                _appVrr.SelectedIndex = pf?.AppVrr switch { "off" => 1, "fixed" => 2, "allow" => 3, _ => 0 };
                 _gpuVib.Value = pf is { GpuVibrance: >= 0 } ? Math.Min(100, pf.GpuVibrance) : 50;
                 var zl = ZoomLabelOf(p?.Preset?.DpiScale ?? "");
                 _presetZoom.SelectedIndex = 0;
@@ -1092,7 +1081,6 @@ internal static class MonitorsPanel
             _presetRot.Enabled = _presetScale.Enabled = _presetZoom.Enabled = has && _usePreset.Checked;
             _gpuFormat.Enabled = _gpuDepth.Enabled = _gpuRange.Enabled = _gpuVibOn.Enabled = has && _usePreset.Checked;
             _gpuVrr.Enabled = has && _usePreset.Checked;
-            _appVrr.Enabled = has && _usePreset.Checked;
             _gpuVib.Enabled = has && _usePreset.Checked && _gpuVibOn.Checked;
             _strict.Enabled = has;
             _extras.Enabled = _layoutDetails.Enabled = has && _useLayout.Checked;
@@ -1146,7 +1134,6 @@ internal static class MonitorsPanel
                     GpuDynamicRange = _gpuRange.SelectedIndex switch { 1 => "Full", 2 => "Limited", _ => "" },
                     GpuVibrance = _gpuVibOn.Checked ? (int)_gpuVib.Value : -1,
                     GpuVrr = _gpuVrr.SelectedIndex switch { 1 => "off", 2 => "fullscreen", 3 => "always", _ => "" },
-                    AppVrr = _appVrr.SelectedIndex switch { 1 => "off", 2 => "fixed", 3 => "allow", _ => "" },
                 };
                 // Section ticked but nothing chosen inside = nothing to apply; keep it null so the
                 // profile does not claim a part it will not act on.

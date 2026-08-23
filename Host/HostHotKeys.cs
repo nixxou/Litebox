@@ -51,9 +51,6 @@ internal sealed class HostHotKeys : IMessageFilter
         Application.AddMessageFilter(_installed);
         // System-wide monitor-profile keys: opt-in per profile, so usually nothing to do here.
         try { Monitors.MonitorGlobalHotkeys.Refresh(); } catch { }
-        // Undo any per-exe driver override a crashed session left behind (rare: the early release
-        // removes it seconds after each launch).
-        try { System.Threading.Tasks.Task.Run(Monitors.GpuAppProfile.SweepOrphans); } catch { }
     }
 
     /// <summary>Remove the filter (on form close).</summary>

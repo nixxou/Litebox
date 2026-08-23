@@ -458,16 +458,7 @@ internal static class HostLaunch
                     var mp = Monitors.MonitorAssign.Resolve(SafeStr(() => game?.Id), SafeStr(() => app?.Id), SafeStr(() => emulator?.Id));
                     if (mp != null)
                     {
-                        // The exe the driver will see: the emulator's when one launches, the game's own
-                        // otherwise. DRS profiles match by file name.
-                        string mpExe = "";
-                        try
-                        {
-                            string p0 = emulator != null ? SafeStr(() => emulator.ApplicationPath) : SafeStr(() => game.ApplicationPath);
-                            mpExe = Path.GetFileName(p0 ?? "");
-                        }
-                        catch { }
-                        var mr = Monitors.MonitorProfileApply.BeginGameScope(mp, mpExe);
+                        var mr = Monitors.MonitorProfileApply.BeginGameScope(mp);
                         Console.WriteLine($"[launch] monitor profile \"{mp.Name}\": {mr.Message.ReplaceLineEndings(" | ")}");
                     }
                 }

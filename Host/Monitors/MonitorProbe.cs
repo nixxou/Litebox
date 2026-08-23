@@ -38,7 +38,6 @@ internal static class MonitorProbe
             "capture" => Capture(Arg(args, 1)),
             "hdr" => Hdr(Arg(args, 1), Arg(args, 2)),
             "gpu" => Gpu(),
-            "appdrs" => AppDrs(Arg(args, 1)),
             "audio" => Audio(Arg(args, 1)),
             "volume" => Volume(Arg(args, 1)),
             _ => Usage(cmd),
@@ -67,7 +66,6 @@ internal static class MonitorProbe
         Console.WriteLine("  capture <name>        (re)capture the current layout into that profile");
         Console.WriteLine("  hdr on|off [monitor]  set HDR directly; default every HDR-capable monitor");
         Console.WriteLine("  gpu                   read every monitor's GPU-output state (vendor, format, range, vibrance)");
-        Console.WriteLine("  appdrs [exe]          self-test the transient per-exe driver profile (default: a dummy exe)");
         Console.WriteLine("  audio <name>          make that playback device the default (substring match)");
         Console.WriteLine("  volume <0-100>        set the default device's master volume");
         return 2;
@@ -237,18 +235,6 @@ internal static class MonitorProbe
                   + (g.Vibrance >= 0 ? $" vibrance={g.Vibrance} ({g.VibranceMin}-{g.VibranceMax}, default {g.VibranceDefault})" : "")
                 : $"  {m.FriendlyName,-10} {(g.Vendor.Length > 0 ? g.Vendor : "?"),-8} not supported");
         }
-        return 0;
-    }
-
-    /// <summary>Self-test of the transient per-exe driver profile: arm, verify, release, verify clean.
-    /// Uses a dummy exe by default, so nothing real is touched.</summary>
-    private static int AppDrs(string? exe)
-    {
-        string name = string.IsNullOrWhiteSpace(exe) ? "litebox-appdrs-selftest.exe" : exe!;
-        Console.WriteLine("arming: " + GpuAppProfile.Begin(name, 1));
-        Console.WriteLine("marker present: " + (Data.LiteBoxOptionsDb.GetJson<object>(Data.LiteBoxOptionsDb.Global, "", GpuAppProfile.MarkerKey) != null));
-        GpuAppProfile.Release();
-        Console.WriteLine("released; marker present: " + (Data.LiteBoxOptionsDb.GetJson<object>(Data.LiteBoxOptionsDb.Global, "", GpuAppProfile.MarkerKey) != null));
         return 0;
     }
 

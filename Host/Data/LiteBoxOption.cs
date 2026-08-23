@@ -1,4 +1,4 @@
-// Reusable resolution + storage for LiteBox-OWN options that LaunchBox has no field for
+﻿// Reusable resolution + storage for LiteBox-OWN options that LaunchBox has no field for
 // (StartupStayOnTop, per-emulator ScreenCaptureKey, and whatever we add next). These live in
 // litebox-options.db, scope by entity — a per-entity row OVERRIDES the global value, its
 // absence INHERITS it. Tri-state by design: no row = inherit, a row = an explicit override
@@ -18,6 +18,9 @@ internal static class LiteBoxOption
     public const string ScopeEmulator = "emulator";
     public const string ScopeGame     = "game";
     public const string ScopePlatform = "platform";
+    /// <summary>An additional application / "additional version" of a game — its own launch, so its own
+    /// place in the monitor-profile chain, above the game it belongs to.</summary>
+    public const string ScopeVersion  = "version";
 
     /// <summary>The raw per-entity override, or null = inherit (no row). Drives the tri-state UI.</summary>
     public static string? GetOverride(string scope, string entityId, string key)

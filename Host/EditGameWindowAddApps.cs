@@ -1,4 +1,4 @@
-// Edit Game → "Additional Versions" / "Additional Apps" pages — LiteBox's replica of LaunchBox's
+﻿// Edit Game → "Additional Versions" / "Additional Apps" pages — LiteBox's replica of LaunchBox's
 // split management of a game's <AdditionalApplication> records. Single-game only (multi shows a
 // placeholder). BOTH kinds live in the SAME storage; LaunchBox routes each record to one page via
 // its (obfuscated) AdditionalApplication.IsLikelyVersion(). The rule below was determined
@@ -568,10 +568,31 @@ internal sealed partial class EditGameWindow
             pane.Rescan(g, app);   // scan fires when the tab first shows (handle-created deferral)
         }
 
+        // Monitor Profile — an additional VERSION is its own launch, so its own place in the chain, above
+        // the game. Existing versions only: the assignment is keyed on the version's id, which a brand-new
+        // one does not have until it is created. NOT offered on the Additional Applications dialog: an
+        // autorun helper runs inside the game's launch and is already covered by the game's own profile.
+        Action? applyMonitor = null;
+        if (Modules.LbModules.On(Modules.LbModule.Monitors))
+        {
+            string vid = Safe(() => app?.Id) ?? "";
+            if (vid.Length > 0)
+            {
+                var mpPage = NewTabPage(tabs, "Monitor Profile");
+                var (mon, applyMon) = Monitors.MonitorAssignPanel.Build(
+                    Data.LiteBoxOption.ScopeVersion, vid, _s, _readOnly,
+                    allowCustom: false, withOverride: true);
+                mon.Dock = DockStyle.Fill;
+                mpPage.Controls.Add(mon);
+                applyMonitor = applyMon;
+            }
+        }
+
         return RunAddAppDialog(f, app, () =>
         {
             var a = app ?? g.AddNewAdditionalApplication();
             if (a == null) return false;
+            applyMonitor?.Invoke();
             ApplyStr(v => a.Name = v, Safe(() => a.Name), name.Text.Trim());
             ApplyStr(v => a.ApplicationPath = v, Safe(() => a.ApplicationPath), path.Text.Trim());
             ApplyStr(v => a.CommandLine = v, Safe(() => a.CommandLine), cmd.Text.Trim());

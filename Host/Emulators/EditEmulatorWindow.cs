@@ -1,4 +1,4 @@
-// Edit Emulator window — full per-emulator configuration for EVERY emulator,
+﻿// Edit Emulator window — full per-emulator configuration for EVERY emulator,
 // enriched by CAPABILITY when an integration plugin claims it (never by plugin
 // name): version/update block when GetCurrentVersion answers, Dependency Files
 // when GetBiosFilesForPlatform returns rows, core hints when IEmulatorWithCores.
@@ -64,6 +64,15 @@ internal static class EditEmulatorWindow
             Data.LiteBoxOption.ScopeEmulator, emuId, s, Bg, Fg, SubFg, Panel2, readOnly, Gameplay.GameplaySection.Pause);
         w.AddSection("Pause Screen", TabWrap("Pause Screen", pause, lbxPause, s),
             () => { applyPause(); lbxPauseSave(); });
+
+        // Monitor Profile — only when the module is on, and only for a saved emulator (the assignment is
+        // keyed on its id). No override box: the emulator is the bottom of the chain.
+        if (Modules.LbModules.On(Modules.LbModule.Monitors) && emuId.Length > 0)
+        {
+            var (mon, applyMon) = Monitors.MonitorAssignPanel.Build(
+                Data.LiteBoxOption.ScopeEmulator, emuId, s, readOnly, allowCustom: true, withOverride: false);
+            w.AddSection("Monitor Profile", mon, applyMon);
+        }
 
         AddScript(w, emu, "Pause Script", e => e.PauseAutoHotkeyScript, (e, v) => e.PauseAutoHotkeyScript = v);
         AddScript(w, emu, "Resume Script", e => e.ResumeAutoHotkeyScript, (e, v) => e.ResumeAutoHotkeyScript = v);

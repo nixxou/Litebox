@@ -1,4 +1,4 @@
-// Lifecycle owner of LiteBox's local HTTP server.
+﻿// Lifecycle owner of LiteBox's local HTTP server.
 //
 // Binds 127.0.0.1:{port} (loopback only) by default — no auth, no TLS. LAN access is opt-in: when [Web]
 // AllowedIps lists wildcard IP patterns, the server binds 0.0.0.0 and the accept loop admits a connection only
@@ -240,6 +240,15 @@ internal static class EmbeddedWebServer
         _router.Add(@"/api/ra/badge/(?<name>[^/]+)\.png", WebRa.BadgeHandle);
         _router.Add(@"/api/recent/epoch", RecentEpochApi.Handle);
         _router.Add(@"/api/kiosk/selection", WebSelectionBridge.Ping);   // a kiosk that served a view from its own cache
+        // Monitor Profiles — registered only when its module AND its own option are on, so the feature
+        // leaves no trace on a server whose owner did not ask for it.
+        if (MonitorsApi.Enabled)
+        {
+            _router.Add(@"/api/monitors", MonitorsApi.List);
+            _router.Add(@"/api/monitors/apply", MonitorsApi.Apply);
+            _router.Add(@"/api/monitors/restore", MonitorsApi.Restore);
+        }
+
         _router.Add(@"/api/parental/state", ParentalApi.HandleState);
         _router.Add(@"/api/parental/unlock", ParentalApi.HandleUnlock);
         _router.Add(@"/api/parental/lock", ParentalApi.HandleLock);

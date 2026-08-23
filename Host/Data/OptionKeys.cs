@@ -1,4 +1,4 @@
-// The REGISTRY of every key that may live in litebox-options.db — the single place the option-db
+﻿// The REGISTRY of every key that may live in litebox-options.db — the single place the option-db
 // namespace is defined. LiteBoxOptionsDb validates every Get/Set against it: an undeclared (scope, key)
 // pair LOGS in normal runs ("[options-db] unknown key") and THROWS under --debug, so a typo'd key can no
 // longer silently create an orphan row or an override that never resolves (the tri-state "no row =
@@ -46,6 +46,7 @@ internal static class OptionKeys
     private static readonly string[] GameEmuGlob = { LiteBoxOption.ScopeGame, LiteBoxOption.ScopeEmulator, G };
     private static readonly string[] Game = { LiteBoxOption.ScopeGame };
     private static readonly string[] Platform = { LiteBoxOption.ScopePlatform };
+    private static readonly string[] Assignable = { LiteBoxOption.ScopeGame, LiteBoxOption.ScopeEmulator, LiteBoxOption.ScopeVersion };
 
     public static readonly OptionKeyDef[] All =
     {
@@ -62,6 +63,7 @@ internal static class OptionKeys
         new("Module.retroachievements",Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
         new("Module.parental",         Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
         new("Module.web",              Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
+        new("Module.monitors",         Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
 
         // ── Gameplay PER-ENTITY overrides (tri-state: no row = inherit; game → emulator → GLOBAL) ──
         // ONLY the per-entity tiers (game/emulator) live in the DB — that's what the EAV store is for.
@@ -96,6 +98,27 @@ internal static class OptionKeys
         new("SmartCaptureStopOnWindowClose",GameEmu, OptionType.Bool,   OptionCache.Cold, "SmartCapture"),
         new("SmartCaptureShowBorder",       GameEmu, OptionType.Bool,   OptionCache.Cold, "SmartCapture",
             Note: "global default seeded in LiteBox.ini; per-entity tier declared only so the resolver probe is legal."),
+
+        // ── Monitor Profiles (Host\Monitors) ──
+        // One JSON list holds every profile (small set, always read/written whole); the restore point is
+        // the live "what it looked like before the first profile" state, persisted only so a crash mid
+        // -session still lets the next run put the desktop back. Cold: read when the Tools menu opens
+        // and when a profile is applied — never on a list/search/detail path.
+        new("MonitorProfiles", Glob, OptionType.Json, OptionCache.Cold, "Monitors/MonitorProfileStore",
+            Note: "JSON MonitorProfile[]; monitors keyed by DevicePath + EDID, never by adapter LUID."),
+        // Which profile a launch uses, per entity. Cold: read once per launch, never on a list path.
+        new("MonitorProfileAssign", Assignable, OptionType.String, OptionCache.Cold, "Monitors/MonitorAssign",
+            Note: "\"none\" | \"custom\" | a MonitorProfile.Id. Absent = no opinion, ask the next level down."),
+        new("MonitorProfileCustom", Assignable, OptionType.Json, OptionCache.Cold, "Monitors/MonitorAssign",
+            Note: "JSON MonitorProfile stored inline, used when the assignment is \"custom\"."),
+        new("MonitorRestoreHotkey", Glob, OptionType.String, OptionCache.Cold, "Monitors/MonitorHotkeys",
+            Note: "\"Ctrl+Alt+F9\"-style combo for Restore Original Layout; empty = unbound."),
+        new("MonitorRestoreHotkeyGlobal", Glob, OptionType.Bool, OptionCache.Cold, "Monitors/MonitorGlobalHotkeys",
+            Note: "true = RegisterHotKey (taken from the whole system) instead of LiteBox-focus only."),
+        new("MonitorWebEndpoints", Glob, OptionType.Bool, OptionCache.Cold, "Web/MonitorsApi",
+            Note: "true = register /api/monitors/* on the embedded server. Needs the Web module too."),
+        new("MonitorRestorePoint", Glob, OptionType.Json, OptionCache.Cold, "Monitors/MonitorProfileApply",
+            Note: "JSON {Layout,AudioDevice,Volume,ActiveId}; absent = no profile applied / nothing to undo."),
 
         // ── Per-game DATA (not option overrides) ──
         // LEGACY per-game "requires parental rights" flag. The store moved to the shared

@@ -1,4 +1,4 @@
-// Edit Game → the "Launching" branch — LB-parity pages, wired to the <Game> XML fields
+﻿// Edit Game → the "Launching" branch — LB-parity pages, wired to the <Game> XML fields
 // (RE'd against a real 13.28 library; the SDK-less ones go through ILiteBoxFields):
 //   • Launching     ApplicationPath (+Browse), CommandLine, ConfigurationPath (+Browse),
 //                   ConfigurationCommandLine. With an emulator assigned, everything but the ROM
@@ -919,6 +919,107 @@ internal sealed partial class EditGameWindow
     }
 
     // ── Page: Startup/Pause ────────────────────────────────────────────────
+
+    /// <summary>Launching ▸ Monitor Profile — which monitor profile this game's launches use.
+    ///
+    /// Three answers, and the middle one is the reason the page exists: the override box unticked means
+    /// "no opinion, let the emulator decide", while "Do not use a monitor profile" means "not even the
+    /// emulator's". Without that distinction, exempting one game from its emulator's profile would mean
+    /// un-assigning the emulator and re-assigning every other game.
+    ///
+    /// Multi-select works the same way the Emulation page does: a 3-state override box, and a
+    /// "‹multiple values›" row in the list when the games disagree. Only what the user actually changes
+    /// is written — an untouched field leaves every selected game exactly as it was.</summary>
+    private Control BuildMonitorProfilePage()
+    {
+        var p = new Panel { BackColor = Bg, Padding = new Padding(S(6)) };
+        int y = S(16);
+        string Sc = Data.LiteBoxOption.ScopeGame;
+        string IdOf(IGame g) => Safe(() => g.Id) ?? "";
+
+        var profiles = Monitors.MonitorProfileStore.All();
+
+        var over = new CheckBox
+        {
+            Text = "Override the monitor profile for this game", AutoSize = true,
+            Location = new Point(S(14), y), ForeColor = Fg, BackColor = Bg,
+        };
+        p.Controls.Add(over);
+        bool SoloSet() { var g = _editGames[0]; return Monitors.MonitorAssign.Get(Sc, IdOf(g)).IsSet; }
+        LchTrackChk3(over, IsMulti ? LchMergeBool(g => Monitors.MonitorAssign.Get(Sc, IdOf(g)).IsSet) : (bool?)null, SoloSet(), p);
+        over.Enabled = !_readOnly;
+        y += S(26);
+
+        LchCap(p, "Unticked, the emulator decides. Ticked, this game has the last word — including "
+                + "\"do not use one\", which the emulator cannot override.", ref y);
+        y += S(6);
+
+        LchCap(p, "Monitor profile:", ref y);
+        var combo = new ComboBox
+        {
+            Location = new Point(S(14), y), Width = S(520), DropDownStyle = ComboBoxStyle.DropDownList,
+            BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
+        };
+        p.Controls.Add(combo);
+
+        // The games' current choices, merged. A disagreement gets its own row rather than silently
+        // showing one game's answer for all of them.
+        string Choice(IGame g)
+        {
+            var a = Monitors.MonitorAssign.Get(Sc, IdOf(g));
+            return !a.IsSet ? "" : a.Kind == Monitors.AssignKind.None ? "none" : a.ProfileId;
+        }
+        string merged = "";
+        bool differ = false;
+        foreach (var g in _editGames)
+        {
+            var c = Choice(g);
+            if (merged.Length == 0 && !differ) merged = c;
+            else if (!string.Equals(merged, c, StringComparison.OrdinalIgnoreCase)) { differ = true; break; }
+        }
+
+        bool multiRow = IsMulti && differ;
+        if (multiRow) combo.Items.Add(Multi);
+        combo.Items.Add("Do not use a monitor profile");
+        foreach (var pr in profiles) combo.Items.Add(pr.Name);
+
+        int baseIx = multiRow ? 1 : 0;
+        combo.SelectedIndex = multiRow ? 0
+            : merged is "none" or "" ? baseIx
+            : Math.Max(baseIx, profiles.FindIndex(x => x.Id == merged) + 1 + baseIx);
+        combo.Enabled = !_readOnly;
+        y += S(34);
+
+        LchCap(p, "Applied when this game launches, and undone when it exits — on a snapshot of its own, "
+                + "so \"Restore Original Layout\" is never touched.", ref y);
+
+        void Sync() { combo.Enabled = !_readOnly && over.CheckState != CheckState.Unchecked; }
+        over.CheckStateChanged += (_, _) => Sync();
+        Sync();
+
+        _applyMonitorProfile = () =>
+        {
+            if (_readOnly) return;
+            // Indeterminate = the user never touched it: leave every selected game alone.
+            if (IsMulti && over.CheckState == CheckState.Indeterminate) return;
+
+            foreach (var g in _editGames)
+            {
+                string id = IdOf(g);
+                if (id.Length == 0) continue;
+
+                if (over.CheckState != CheckState.Checked) { Monitors.MonitorAssign.Clear(Sc, id); continue; }
+                if (multiRow && combo.SelectedIndex == 0) continue;   // "‹multiple values›" left as-is
+
+                int ix = combo.SelectedIndex - baseIx;
+                Monitors.MonitorAssign.Set(Sc, id, ix <= 0
+                    ? new Monitors.Assignment(Monitors.AssignKind.None, "")
+                    : new Monitors.Assignment(Monitors.AssignKind.Profile, profiles[ix - 1].Id));
+            }
+        };
+
+        return p;
+    }
 
     private Control BuildStartupPausePage()
     {

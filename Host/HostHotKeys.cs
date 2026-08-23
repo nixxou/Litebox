@@ -1,4 +1,4 @@
-// Host-side global hotkeys for the ExtendDB integration.
+﻿// Host-side global hotkeys for the ExtendDB integration.
 //
 // Why this exists
 //   ExtendDB registers its kiosk + parental hotkeys on the WPF input system:
@@ -49,6 +49,8 @@ internal sealed class HostHotKeys : IMessageFilter
         if (_installed != null) return;
         _installed = new HostHotKeys(owner);
         Application.AddMessageFilter(_installed);
+        // System-wide monitor-profile keys: opt-in per profile, so usually nothing to do here.
+        try { Monitors.MonitorGlobalHotkeys.Refresh(); } catch { }
     }
 
     /// <summary>Remove the filter (on form close).</summary>
@@ -57,6 +59,7 @@ internal sealed class HostHotKeys : IMessageFilter
         if (_installed == null) return;
         Application.RemoveMessageFilter(_installed);
         _installed = null;
+        try { Monitors.MonitorGlobalHotkeys.Unregister(); } catch { }
     }
 
     public bool PreFilterMessage(ref Message m)
@@ -65,6 +68,10 @@ internal sealed class HostHotKeys : IMessageFilter
 
         var key = (Keys)((int)m.WParam & 0xFFFF);
         Keys pressed = key | Control.ModifierKeys;   // full combo incl. Ctrl/Alt/Shift
+
+        // 0) Monitor profiles — checked before everything else so a user-chosen combo is never shadowed
+        //    by a fixed key below. Only fires on an exact match of a configured binding.
+        if (Monitors.MonitorHotkeys.TryHandle(pressed)) return true;
 
         // 1) Parental hotkey — whatever the user configured in ExtendDBParental.dat (ANY key, any
         //    modifiers). NOT hardcoded: read live from ParentalBridge.HotKey. Checked first so a key

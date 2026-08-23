@@ -932,6 +932,7 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                             Console.WriteLine($"[options] section not found: \"{HostBoot.AutoOptions}\"");
                         w.ShowDialog(this);
                         (_dm as HostDataManagerXml)?.FlushLbSettingsIfSafe();
+                        ApplyMonitorMenuVisibility();
                     }
                     catch (Exception ex) { Console.WriteLine("[options] " + ex.Message); }
                 }));

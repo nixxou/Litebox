@@ -1,4 +1,4 @@
-// A read-only textbox that CAPTURES a hotkey instead of accepting typed text.
+﻿// A read-only textbox that CAPTURES a hotkey instead of accepting typed text.
 // Click it (or tab into it) → "Press a key…"; the next non-modifier key press is
 // recorded as a "Ctrl+Shift+F12"-style combo (the format PauseManager/ScreenCapture
 // parse). Esc CLEARS the binding (sets it to none/disabled); leaving the field
@@ -32,8 +32,24 @@ internal sealed class HotkeyCaptureBox : TextBox
         Text = Display(_value);
     }
 
-    /// <summary>The committed combo string (e.g. "Ctrl+F12"), or "" when unset.</summary>
-    public string HotkeyValue => _value;
+    /// <summary>The committed combo string (e.g. "Ctrl+F12"), or "" when unset. SETTABLE so one box can
+    /// be re-bound as the selection changes (the Monitor Profiles editor rebinds it per profile) instead
+    /// of being rebuilt; assigning does NOT raise <see cref="ValueChanged"/>, since a programmatic load is
+    /// not a user edit and must not be mistaken for one.</summary>
+    [System.ComponentModel.Browsable(false)]
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public string HotkeyValue
+    {
+        get => _value;
+        set
+        {
+            _value = (value ?? "").Trim();
+            if (!_capturing) Text = Display(_value);
+        }
+    }
+
+    /// <summary>Raised when the USER commits or clears a binding.</summary>
+    public event EventHandler? ValueChanged;
 
     protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); BeginCapture(); }
     protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if (!_capturing) BeginCapture(); }
@@ -66,6 +82,7 @@ internal sealed class HotkeyCaptureBox : TextBox
         {
             _value = "";
             EndCapture();
+            ValueChanged?.Invoke(this, EventArgs.Empty);
             return;
         }
 
@@ -77,6 +94,7 @@ internal sealed class HotkeyCaptureBox : TextBox
 
         _value = Build(mods, key);
         EndCapture();
+        ValueChanged?.Invoke(this, EventArgs.Empty);
     }
 
     // ProcessCmdKey is the FALLBACK path (used only when the hook failed to install): it catches ordinary

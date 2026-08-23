@@ -1,4 +1,4 @@
-// Hand-written specializations of the generated Dummy* classes — the few
+﻿// Hand-written specializations of the generated Dummy* classes — the few
 // members that need real (dummy) behavior: the fake catalog wiring and the
 // MessageBox "launch". Everything else stays inherited from the generated stub.
 
@@ -447,6 +447,24 @@ internal static class HostLaunch
                 && !DependencyCheck.PreLaunchCheck(emulator, game))
                 return;   // finally still runs (play-time, idle state, reload)
 
+            // Monitor profile for this launch — version, else game, else emulator (see MonitorAssign).
+            // AFTER the dependency check, which may still cancel: rearranging the desktop for a launch
+            // that never happens would be worse than not rearranging it at all. The desktop is snapshotted
+            // here and put back in the finally, on its own snapshot — never the manual "restore original".
+            if (!DryRun)
+            {
+                try
+                {
+                    var mp = Monitors.MonitorAssign.Resolve(SafeStr(() => game?.Id), SafeStr(() => app?.Id), SafeStr(() => emulator?.Id));
+                    if (mp != null)
+                    {
+                        var mr = Monitors.MonitorProfileApply.BeginGameScope(mp);
+                        Console.WriteLine($"[launch] monitor profile \"{mp.Name}\": {mr.Message.ReplaceLineEndings(" | ")}");
+                    }
+                }
+                catch (Exception ex) { Console.WriteLine("[launch] monitor profile error: " + ex.Message); }
+            }
+
             // AutoRunBefore additional apps (scripts, mounts, …).
             foreach (var a in addApps.Where(a => a.AutoRunBefore))
                 RunProcess(a.ApplicationPath, a.CommandLine, emulator, game, a.UseEmulator, $"autorun-before \"{a.Name}\"");
@@ -530,6 +548,18 @@ internal static class HostLaunch
         catch (Exception ex) { Console.WriteLine("[launch] error: " + ex.Message); }
         finally
         {
+            // Desktop back to what this launch found — FIRST in the teardown, so the end screen and the
+            // frontend come back onto the arrangement the user actually left, not the game's.
+            try
+            {
+                if (Monitors.MonitorProfileApply.GameScopeActive)
+                {
+                    var mr = Monitors.MonitorProfileApply.EndGameScope();
+                    if (mr.Message.Length > 0) Console.WriteLine("[launch] monitor profile restored: " + mr.Message.ReplaceLineEndings(" | "));
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[launch] monitor restore error: " + ex.Message); }
+
             Pause.PauseManager.Disarm();  // hotkey off + resume a still-frozen process + close the screen
             Gameplay.ScreenCapture.Disarm();
             Gameplay.GameCursor.Show();        // undo "Hide Mouse Cursor During Game" (no-op if off)

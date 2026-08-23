@@ -1,4 +1,4 @@
-// The LiteBox module registry — the single source of truth for "is module X enabled?".
+﻿// The LiteBox module registry — the single source of truth for "is module X enabled?".
 //
 // Mirrors ExtendDB's module model (independently toggleable features) but native to LiteBox: state lives in
 // litebox-options.db (global scope, key "Module.<key>"), default OFF, and the enable flag gates a FEATURE, not
@@ -24,6 +24,7 @@ internal enum LbModule
     RetroAchievements,  // per-ROM RA hashing with our RAHasher
     Parental,           // parental control on BigBox's native PIN
     Web,                // embedded web frontends (LiteBox Web / BigBox Web / database Web)
+    Monitors,           // monitor profiles: layout / display mode / sound card, switchable from Tools
 }
 
 internal static class LbModules
@@ -45,6 +46,8 @@ internal static class LbModules
             "A PIN gate for restricted content, using BigBox's own parental PIN (set or remove it here — BigBox sees the change).", false, true),
         new(LbModule.Web,    "web",    "Web frontends",
             "The embedded web server: LiteBox Web, BigBox Web and the database Web, each served from its own folder.", false, true),
+        new(LbModule.Monitors, "monitors", "Monitor profiles",
+            "Named desktop presets — monitor layout (position, resolution, refresh, rotation, per-screen zoom), a single monitor's display mode, the default sound card and its volume, or a solo-primary blackout. Switch between them from Tools. Off: the Tools entry is hidden and nothing touches the display.", false, true),
     };
 
     public static Info Meta(LbModule m) => Catalog.First(c => c.Module == m);

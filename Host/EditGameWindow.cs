@@ -1,4 +1,4 @@
-// Edit Game window — per-game editor modelled on LaunchBox's "Edit Game" dialog and heavily
+﻿// Edit Game window — per-game editor modelled on LaunchBox's "Edit Game" dialog and heavily
 // inspired by ExtendDB's Editgameform (the data-entry / "saisie" part), but re-homed onto the
 // LiteBox data layer: every field writes through the HostGame SETTERS (SDK props + ILiteBoxFields),
 // so each change lands in the GameStore op-log → persisted to the Platform XML, exactly like any
@@ -290,6 +290,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             if (!ApplyDraft()) return;
             SaveCurrent(); SaveLocks(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching();
             try { _applyModelSettings?.Invoke(); } catch { }
+            try { _applyMonitorProfile?.Invoke(); } catch { }
             DialogResult = DialogResult.OK; Close();
         };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
@@ -394,6 +395,9 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             N("Root Folder", "RootFolder"),
             N("Startup/Pause", "StartupPause"),
         });
+        // Only while the module owns the feature — an inert page would be worse than no page.
+        if (Modules.LbModules.On(Modules.LbModule.Monitors))
+            launching.Nodes.Add(N("Monitor Profile", "MonitorProfile"));
 
         _tree.Nodes.AddRange(new[] { metadata, media, launching });
         _tree.ExpandAll();
@@ -442,6 +446,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "Emulation" => BuildEmulationPage(),   // main Emulation page supports multi (3-state use-emu + merged emulator list)
                 "RootFolder" => BuildRootFolderPage(),        // supports multi (merged path field)
                 "StartupPause" => BuildStartupPausePage(),     // base window supports multi (3-state override toggles); modals stay solo
+                "MonitorProfile" => BuildMonitorProfilePage(),  // supports multi (3-state override + merged profile list)
                 _ => Placeholder(_tree.SelectedNode?.Text ?? key),
             };
             _pages[key] = page;
@@ -464,6 +469,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
     // the exact image per texture slot — Model3dImagesPanel / Model3dImageStore). The live preview renders
     // with the CURRENT unsaved picks; both tabs apply together on OK / page navigation.
     private Action _applyModelSettings;
+    private Action _applyMonitorProfile;
     private Control BuildModelSettingsPage()
     {
         var g = _editGames[0];

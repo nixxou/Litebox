@@ -42,7 +42,7 @@ $proj = Join-Path $here 'LiteBox.csproj'
 # installs silently lose the feature it backs (Magick absent = thumb generation no-ops, for one).
 $hostFiles = @('LiteBox.exe', 'LiteBox.dll', 'LiteBox.deps.json', 'LiteBox.runtimeconfig.json',
                'LibVLCSharp.dll', 'ZstdSharp.dll', 'Magick.NET-Q16-AnyCPU.dll', 'Magick.NET.Core.dll',
-               'Microsoft.ML.OnnxRuntime.dll')
+               'Microsoft.ML.OnnxRuntime.dll', 'WindowsDisplayAPI.dll','NvAPIWrapper.dll')
 $sites = @('litebox', 'bigbox', 'vendor')
 $fail = $false
 

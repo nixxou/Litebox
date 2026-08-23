@@ -1,4 +1,4 @@
-// Options → Modules: the multi-tab module manager.
+﻿// Options → Modules: the multi-tab module manager.
 //   Tab 1 ("Modules")  — lists every module with an enable checkbox + description; the master on/off page.
 //   Tabs 2..N          — one per ENABLED module, its own settings. A module's config tab appears only while
 //                        the module is on; toggling its checkbox adds / removes the tab live.
@@ -187,11 +187,24 @@ internal static class ModulesOptions
         return (root, Apply);
     }
 
-    /// <summary>Apply module toggles that own a live background service so they take effect WITHOUT a restart.
-    /// Only the Web module runs a persistent server (started once at boot); the others gate their behaviour at
-    /// call time (they read LbModules.On live), so toggling them needs no reconcile here.</summary>
+    /// <summary>Apply module toggles that own live state so they take effect WITHOUT a restart.
+    /// Web runs a persistent server (started once at boot); Monitors may be holding a modified desktop.
+    /// The rest gate their behaviour at call time (they read LbModules.On live) and need nothing here.</summary>
     private static void ReconcileRuntime()
     {
+        // Turning Monitors OFF hides its Tools entry — including "Restore Original Layout". Leaving a
+        // profile's layout in force with no way back from the UI would be a trap, so disabling the
+        // module puts the desktop back the way the module found it, first.
+        try
+        {
+            if (!LbModules.On(LbModule.Monitors) && Monitors.MonitorProfileApply.CanRestore)
+            {
+                Diag.LbLog.Info("monitors", "module disabled while a profile was applied → restoring the original layout");
+                Monitors.MonitorProfileApply.Restore();
+            }
+        }
+        catch { }
+
         try
         {
             bool want = LbModules.On(LbModule.Web);
@@ -214,6 +227,7 @@ internal static class ModulesOptions
         LbModule.Rom               => "ROM extractor",
         LbModule.Parental          => "Parental",
         LbModule.Web               => "Web",
+        LbModule.Monitors          => "Monitor profiles",
         _                          => m.ToString(),
     };
 
@@ -224,6 +238,7 @@ internal static class ModulesOptions
         LbModule.Parental         => ParentalPanel.Build(dpiS, readOnly),
         LbModule.Rom              => RomPanel.Build(dpiS, readOnly),
         LbModule.Web              => WebPanel.Build(dpiS, readOnly),
+        LbModule.Monitors         => MonitorsPanel.Build(dpiS, readOnly),
         _                         => (new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg }, (Action?)null),
     };
 }

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <!-- WinExe: no console window by default (transparent when launched by the launcher); a console
@@ -167,6 +167,23 @@
          POST so nothing is sent. Diagnostic path only (the mame-keyhook flag); the shipping upload just calls
          GamesDatabase.UploadMameHighScore directly. Loose app DLL (0Harmony.dll): keep deploy lists in sync. -->
     <PackageReference Include="Lib.Harmony" Version="2.4.2" />
+    <!-- Windows Display / CCD wrapper (Host\Monitors — the Monitor Profiles module). Managed-only,
+         netstandard2.0, ZERO transitive deps: it wraps QueryDisplayConfig/SetDisplayConfig,
+         EnumDisplaySettings/ChangeDisplaySettingsEx and the per-source DPI scaling that we would
+         otherwise have to P/Invoke by hand (~2200 lines of struct marshalling). Crucially it resolves
+         a monitor by its DevicePath + EDID rather than by the adapter LUID, which is what makes a
+         saved layout survive a reboot or a GPU swap. LGPL-3.0, referenced unmodified (dynamic link).
+         Loose app DLL (WindowsDisplayAPI.dll): keep build-release.ps1 $appFiles + LightPayload.Files +
+         the light/<tfm>/* EmbeddedResource block below in sync. -->
+    <PackageReference Include="WindowsDisplayAPI" Version="1.3.0.13" />
+    <!-- NVIDIA NVAPI wrapper (Host\Monitors\GpuColor: GPU-output colour control for monitor profiles).
+         Same author/licence/pattern as WindowsDisplayAPI above. It P/Invokes nvapi64.dll, which only
+         exists where an NVIDIA driver is installed: every touch point is vendor-gated per MONITOR (the
+         adapter DevicePath carries VEN_10DE) and wrapped, so AMD/Intel machines, and non-NVIDIA monitors
+         on mixed machines, report "not supported" instead of failing. Loose app DLL (NvAPIWrapper.dll):
+         keep build-release.ps1 $appFiles + LightPayload.Files + deploy-dev.ps1 $hostFiles + the
+         light/<tfm>/* EmbeddedResource block below in sync. -->
+    <PackageReference Include="NvAPIWrapper.Net" Version="0.8.1.101" />
   </ItemGroup>
 
   <!-- LaunchBox-compatibility shim (LbShim\) — an assembly whose IDENTITY is "LaunchBox", carrying
@@ -356,6 +373,8 @@
     <EmbeddedResource Include="$(LightPayloadDir)\net9\Magick.NET-Q16-AnyCPU.dll"><LogicalName>light/net9/Magick.NET-Q16-AnyCPU.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\Magick.NET.Core.dll"><LogicalName>light/net9/Magick.NET.Core.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net9\Microsoft.ML.OnnxRuntime.dll"><LogicalName>light/net9/Microsoft.ML.OnnxRuntime.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\WindowsDisplayAPI.dll"><LogicalName>light/net9/WindowsDisplayAPI.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net9\NvAPIWrapper.dll"><LogicalName>light/net9/NvAPIWrapper.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.exe"><LogicalName>light/net10/LiteBox.exe</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.dll"><LogicalName>light/net10/LiteBox.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\LiteBox.deps.json"><LogicalName>light/net10/LiteBox.deps.json</LogicalName></EmbeddedResource>
@@ -365,6 +384,8 @@
     <EmbeddedResource Include="$(LightPayloadDir)\net10\Magick.NET-Q16-AnyCPU.dll"><LogicalName>light/net10/Magick.NET-Q16-AnyCPU.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\Magick.NET.Core.dll"><LogicalName>light/net10/Magick.NET.Core.dll</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="$(LightPayloadDir)\net10\Microsoft.ML.OnnxRuntime.dll"><LogicalName>light/net10/Microsoft.ML.OnnxRuntime.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\WindowsDisplayAPI.dll"><LogicalName>light/net10/WindowsDisplayAPI.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(LightPayloadDir)\net10\NvAPIWrapper.dll"><LogicalName>light/net10/NvAPIWrapper.dll</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <!-- Web frontend assets (embedded web server, slice S1). The folder is populated by the integrator (not by

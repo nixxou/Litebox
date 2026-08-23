@@ -698,6 +698,7 @@ internal sealed partial class MainWindow
             Sep(),
             M("Connect to the LaunchBox Games Database...", null),
             M("Disconnect from the LaunchBox Games Database...", null)),
+        MonitorProfilesMenu(),
         Sep(),
         RandomGameItem(),
         M("Export to Android...", MenuIcons.ExportAndroid),
@@ -908,6 +909,182 @@ internal sealed partial class MainWindow
     /// Emulators.xml ops go to disk now (when safe — LB/BB closed); game/playlist ops stay pending
     /// until the close-time flush. Matches the natural "I closed the editor, it's saved" expectation
     /// without committing unrelated half-done edits.</summary>
+    /// <summary>Tools ▸ Monitor Profiles — switch the desktop (layout / display mode / sound card /
+    /// solo primary) in one click.
+    ///
+    /// The items are rebuilt on DropDownOpening, not at menu-bar construction: ToolsMenu() runs ONCE at
+    /// startup, so a profile added or deleted in the editor would otherwise never show up until the next
+    /// launch. Rebuilding on open also keeps "Restore Original Layout" correctly enabled.
+    ///
+    /// NO CHECK MARK on the profiles. A tick would claim we know which one is in force, and we don't —
+    /// nothing stops the user from rearranging the desktop in Windows' own settings a second after
+    /// applying one. Picking a profile switches to it; that is the whole contract.
+    ///
+    /// Applying is allowed in a read-only second instance (it touches the desktop, not the library);
+    /// only the editor is locked, like every other window that writes.</summary>
+    private ToolStripMenuItem MonitorProfilesMenu()
+    {
+        var sub = Sub("Monitor Profiles", MenuIcons.View);
+        // Placeholder so the submenu shows an arrow before it has ever been opened (WinForms hides the
+        // arrow — and never raises DropDownOpening — on an empty DropDownItems collection).
+        sub.DropDownItems.Add(M("...", null, enabled: false));
+        sub.DropDownOpening += (_, _) => Safe(() => FillMonitorProfilesMenu(sub));
+        // ToolsMenu() is built TWICE (nested under MENU, and as the bar's own TOOLS), so each instance
+        // registers itself; ApplyMonitorMenuVisibility drives them all from the module flag.
+        _monitorMenuItems.Add(sub);
+        sub.Visible = Modules.LbModules.On(Modules.LbModule.Monitors);
+        return sub;
+    }
+
+    /// <summary>Every Tools ▸ Monitor Profiles instance, hidden while the module is off. Refreshed after
+    /// the options window closes — the module has no change event, and the options window is the only
+    /// place its flag can be flipped.</summary>
+    private readonly List<ToolStripItem> _monitorMenuItems = new();
+
+    private void ApplyMonitorMenuVisibility()
+    {
+        bool on = Modules.LbModules.On(Modules.LbModule.Monitors);
+        foreach (var it in _monitorMenuItems) { try { it.Visible = on; } catch { } }
+    }
+
+    private void FillMonitorProfilesMenu(ToolStripMenuItem sub)
+    {
+        sub.DropDownItems.Clear();
+
+        // Only the ones marked shown here. A hidden profile is still applied by its hotkey and still
+        // edited in Options — it has simply been kept out of one-click reach.
+        var profiles = Monitors.MonitorProfileStore.All().Where(p => p.Public).ToList();
+
+        // TWO VERBS, kept apart. "Instant switch" acts on the desktop NOW; "Run next game as" arms a
+        // one-shot for the next launch and changes nothing on screen. Listing profiles flat under one
+        // menu made the two indistinguishable — the same profile name doing two very different things
+        // depending on which submenu it happened to sit in.
+        sub.DropDownItems.Add(InstantSwitchMenu(profiles));
+        sub.DropDownItems.Add(NextGameMenu(profiles));
+        sub.DropDownItems.Add(Sep());
+
+        var restore = M("Restore Original Layout", MenuIcons.Refresh,
+                        enabled: Monitors.MonitorProfileApply.CanRestore);
+        string held = Monitors.MonitorProfileApply.RestoreSummary();
+        restore.Enabled = held.Length > 0;
+        restore.ToolTipText = held.Length > 0
+            ? "Put back: " + held
+            : "Nothing saved yet — the next profile you apply records the current desktop first";
+        restore.Click += (_, _) => Safe(RestoreMonitorLayout);
+        sub.DropDownItems.Add(restore);
+
+        var manage = M("Manage Monitor Profiles...", MenuIcons.Manage);
+        manage.ToolTipText = "Opens Options ▸ Modules ▸ Monitor profiles";
+        if (_secondInstance)
+        {
+            manage.Enabled = false;
+            manage.ToolTipText = "Locked — another LiteBox instance is open (read-only)";
+        }
+        else manage.Click += (_, _) => Safe(OpenMonitorProfiles);
+        sub.DropDownItems.Add(manage);
+    }
+
+    /// <summary>Tools ▸ Monitor Profiles ▸ Instant switch — apply one to the desktop, right now.</summary>
+    private ToolStripMenuItem InstantSwitchMenu(List<Monitors.MonitorProfile> profiles)
+    {
+        var m = Sub("Instant switch", MenuIcons.View);
+        if (profiles.Count == 0) { m.DropDownItems.Add(M("(no profile yet)", null, enabled: false)); return m; }
+
+        foreach (var p in profiles)
+        {
+            var it = M(p.Name + (p.Hotkey.Length > 0 ? "\t" + p.Hotkey : ""), null);
+            it.ToolTipText = p.Summary();
+            var captured = p;
+            it.Click += (_, _) => Safe(() => ApplyMonitorProfile(captured));
+            m.DropDownItems.Add(it);
+        }
+        return m;
+    }
+
+    /// <summary>Tools ▸ Monitor Profiles ▸ Run next game as — arm a ONE-SHOT for the next launch.
+    ///
+    /// It outranks the version, the game and the emulator, because it is the most deliberate statement
+    /// available: someone at the machine saying "not the usual arrangement, this once". The armed choice
+    /// carries a tick so the menu answers "is anything armed?" without being opened twice, and Cancel is
+    /// only offered when there is something to cancel.</summary>
+    private ToolStripMenuItem NextGameMenu(List<Monitors.MonitorProfile> profiles)
+    {
+        var m = Sub("Run next game as", MenuIcons.Play);
+        var armed = Monitors.MonitorAssign.NextLaunch;
+
+        void Arm(Monitors.Assignment a, string label)
+        {
+            Monitors.MonitorAssign.SetNextLaunch(a);
+            LiteBox.Notifications.NotificationCenter.Info("Next game will run as: " + label, lifeSpanSeconds: 8);
+        }
+
+        foreach (var p in profiles)
+        {
+            bool on = armed.IsSet && armed.Kind == Monitors.AssignKind.Profile && armed.ProfileId == p.Id;
+            var it = Check(p.Name, null, @checked: on);
+            it.ToolTipText = p.Summary();
+            var captured = p;
+            it.Click += (_, _) => Safe(() => Arm(new Monitors.Assignment(Monitors.AssignKind.Profile, captured.Id), captured.Name));
+            m.DropDownItems.Add(it);
+        }
+        if (profiles.Count > 0) m.DropDownItems.Add(Sep());
+
+        bool noneOn = armed.IsSet && armed.Kind == Monitors.AssignKind.None;
+        var noneItem = Check("Do not use a monitor profile", null, @checked: noneOn);
+        noneItem.ToolTipText = "The next game ignores whatever its version, itself or its emulator would have used";
+        noneItem.Click += (_, _) => Safe(() => Arm(new Monitors.Assignment(Monitors.AssignKind.None, ""), "no monitor profile"));
+        m.DropDownItems.Add(noneItem);
+
+        if (armed.IsSet)
+        {
+            m.DropDownItems.Add(Sep());
+            var cancel = M("Cancel", MenuIcons.Exit);
+            cancel.Click += (_, _) => Safe(() =>
+            {
+                Monitors.MonitorAssign.SetNextLaunch(Monitors.Assignment.Unset);
+                LiteBox.Notifications.NotificationCenter.Info("Next-game monitor profile cancelled.", lifeSpanSeconds: 5);
+            });
+            m.DropDownItems.Add(cancel);
+        }
+        return m;
+    }
+
+    /// <summary>Report an apply/restore through the notification centre rather than a message box.
+    ///
+    /// A modal dialog is the wrong shape for this: it lands ON TOP of the desktop the user just
+    /// rearranged, on whichever screen Windows feels like, and it demands a click for something that is
+    /// already visible. A notification says the same thing beside the work and keeps the detail in the
+    /// bell. Message boxes stay for QUESTIONS, where an answer is actually required.
+    ///
+    /// Successes are reported too, briefly: a profile that changes only the sound card or only HDR leaves
+    /// nothing on screen to confirm it worked.</summary>
+    private static void ReportMonitorResult(string title, Monitors.ApplyResult res)
+    {
+        string text = title + " — " + res.Message.ReplaceLineEndings("  ·  ");
+        if (res.Ok) LiteBox.Notifications.NotificationCenter.Info(text, lifeSpanSeconds: 6);
+        else LiteBox.Notifications.NotificationCenter.Error(text);
+    }
+
+    private void ApplyMonitorProfile(Monitors.MonitorProfile profile)
+        => ReportMonitorResult(profile.Name, Monitors.MonitorProfileApply.Apply(profile));
+
+    private void RestoreMonitorLayout()
+        => ReportMonitorResult("Original layout", Monitors.MonitorProfileApply.Restore());
+
+    /// <summary>The editor lives in the options window (Modules ▸ Monitor profiles) and NOWHERE else —
+    /// a standalone modal would be a second copy of the same page to keep in step.</summary>
+    private void OpenMonitorProfiles()
+    {
+        if (ParentalLimited) return;
+        using var w = BuildOptionsWindow(Modules.LbModule.Monitors);
+        // The module argument only picks the TAB inside the Modules section; the SECTION is the caller's
+        // to choose. Without this the shortcut opened on General and left the user to find the rest.
+        w.SelectSection("Modules");
+        w.ShowDialog(this);
+        (_dm as Data.HostDataManagerXml)?.FlushLbSettingsIfSafe();
+        ApplyMonitorMenuVisibility();
+    }
+
     /// <summary>Tools ▸ Select Random Game… — jump to a random game of the list as it currently
     /// stands (the selected node, minus whatever search/filter/parental rules hide). Drawing from the
     /// VISIBLE set is also what makes the jump work at all: selecting a game the view filtered out
@@ -1004,6 +1181,7 @@ internal sealed partial class MainWindow
         using var w = BuildOptionsWindow();
         w.ShowDialog(this);
         (_dm as Data.HostDataManagerXml)?.FlushLbSettingsIfSafe();
+        ApplyMonitorMenuVisibility();
     }
 
     // ── The padlock's three gestures ──────────────────────────────────────────

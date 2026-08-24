@@ -45,7 +45,11 @@ internal static class RulePipeline
                 var before = cmd;
                 if (ProbePasses(rule, cmd.Exe, cmd.Args))
                 {
-                    cmd = Actions.RuleActions.ByType(rule.Type)?.Apply(rule, cmd) ?? cmd;
+                    var action = Actions.RuleActions.ByType(rule.Type);
+                    // Side effects first, then the transform — the original's ExecuteBefore→Modify
+                    // order. The REAL channel only; the preview walk never calls ExecuteBefore.
+                    action?.ExecuteBefore(rule, cmd);
+                    cmd = action?.Apply(rule, cmd) ?? cmd;
                     if (cmd != before) LbLog.Info(Tag, $"{rule.Type}: → \"{cmd.Exe}\" {cmd.Args}");
                 }
                 // Markers are collected from CONFIGURED rules whether or not their probe fired this

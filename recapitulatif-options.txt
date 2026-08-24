@@ -685,7 +685,8 @@ Registre actuel :
   scope emulator (Launch rules — module "rules") :
     LaunchRules     JSON LaunchRule[] — règles ordonnées appliquées à la ligne
                     de commande juste avant le lancement (Prefix, Suffix, ChangeExe,
-                    ChangeRomPath), avec sondes filter/exclude. Émulateur SEULEMENT :
+                    ChangeRomPath, Replace + variables, ReplaceInFile), avec
+                    sondes filter/exclude. Émulateur SEULEMENT :
                     le ciblage par jeu passe par un argument-marqueur dans les
                     paramètres personnalisés du jeu (retiré avant l'émulateur).
                     Éditées dans Edit Emulator ▸ Launch Rules.

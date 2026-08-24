@@ -206,6 +206,86 @@ internal static class RuleSelfTest
             }
         }
 
+        // ── Replace (line): literal / regex / house "\1" syntax ──
+        Check("replace literal in the command line",
+            Rp("-old", "-new", asArg: false), "-old -x", "-new -x");
+
+        Check("replace literal per argument, case-insensitive by default",
+            Rp("GAME", "demo"), @"""C:\roms\game.zip""", @"C:\roms\demo.zip");
+
+        Check("replace case-sensitive misses the wrong case",
+            Rp("GAME", "demo", caseSensitive: true), @"""C:\roms\game.zip""", @"C:\roms\game.zip");
+
+        Check("replace regex with \\1 group splice",
+            Rp(@"disc(\d)", @"d\1", regex: true), "-load disc2", "-load d2");
+
+        Check("replace literal keeps $ in the replacement literal",
+            Rp("x", "$1"), "-x", "-$1");
+
+        Check("replace honours the shared probes",
+            Rp("-old", "-new", filter: "nothere"), "-old", "-old");
+
+        // ── the variables system (cmd / arg / file sources, iterative, fallback) ──
+        {
+            string V(params RuleVariable[] vs) => RuleVariables.Serialize(vs.ToList());
+
+            Check("variable from the CMD source, group spliced, used in the replacement",
+                Rp("-t", "{ROM}", vars: V(new RuleVariable { Name = "{ROM}", Source = "cmd", Pattern = @"(\w+)\.zip", Value = @"\1" })),
+                @"""C:\roms\game.zip"" -t", @"C:\roms\game.zip game");
+
+            Check("variable from the ARG source: the LAST matching argument wins",
+                Rp("-t", "{N}", vars: V(new RuleVariable { Name = "{N}", Source = "arg", Pattern = @"^-n(\d)$", Value = @"\1" })),
+                "-n1 -n2 -t", "-n1 -n2 2");
+
+            Check("variable falls back when nothing matches",
+                Rp("-t", "{X}", vars: V(new RuleVariable { Name = "{X}", Source = "cmd", Pattern = "nothere", Value = "hit", Fallback = "fb" })),
+                "-t", "fb");
+
+            Check("variables expand iteratively (a value may contain another token)",
+                Rp("-t", "{A}", vars: V(
+                    new RuleVariable { Name = "{A}", Source = "cmd", Pattern = ".", Value = "[{B}]" },
+                    new RuleVariable { Name = "{B}", Source = "cmd", Pattern = ".", Value = "deep" })),
+                "-t", "[deep]");
+
+            string vroot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lbx-rules-selftest-vars");
+            try
+            {
+                System.IO.Directory.CreateDirectory(vroot);
+                string src = System.IO.Path.Combine(vroot, "settings.ini");
+                System.IO.File.WriteAllText(src, "core=snes9x\nvideo=gl\n");
+                Check("variable from a FILE source reads its content",
+                    Rp("-t", "{CORE}", vars: V(new RuleVariable { Name = "{CORE}", Source = src, Pattern = @"core=(\w+)", Value = @"\1" })),
+                    "-t", "snes9x");
+            }
+            finally { try { System.IO.Directory.Delete(vroot, recursive: true); } catch { } }
+        }
+
+        // ── Replace in file: ExecuteBefore on the REAL channel, never in the preview ──
+        {
+            string froot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lbx-rules-selftest-file");
+            try
+            {
+                System.IO.Directory.CreateDirectory(froot);
+                string cfg = System.IO.Path.Combine(froot, "emu.cfg");
+
+                System.IO.File.WriteAllText(cfg, "fullscreen=0\n");
+                RulePipeline.ApplyRules(new List<LaunchRule> { Rif(cfg, "fullscreen=0", "fullscreen=1") }, "emu.exe", "-x");
+                Expect("replaceinfile: the real channel rewrites the file, the line is untouched",
+                    System.IO.File.ReadAllText(cfg).Contains("fullscreen=1"));
+
+                System.IO.File.WriteAllText(cfg, "fullscreen=0\n");
+                RulePipeline.PreviewExample(new List<LaunchRule> { Rif(cfg, "fullscreen=0", "fullscreen=1") }, "emu.exe -x");
+                Expect("replaceinfile: the preview NEVER touches the file",
+                    System.IO.File.ReadAllText(cfg).Contains("fullscreen=0"));
+
+                System.IO.File.WriteAllText(cfg, "fullscreen=0\n");
+                RulePipeline.ApplyRules(new List<LaunchRule> { Rif(cfg, "fullscreen=0", "fullscreen=1", filter: "nothere") }, "emu.exe", "-x");
+                Expect("replaceinfile: a refused probe leaves the file alone",
+                    System.IO.File.ReadAllText(cfg).Contains("fullscreen=0"));
+            }
+            finally { try { System.IO.Directory.Delete(froot, recursive: true); } catch { } }
+        }
+
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
         //    the rom argument) ──
         {
@@ -308,6 +388,15 @@ internal static class RuleSelfTest
 
     private static LaunchRule[] Suffix(string suffix, bool asArg = true, string filter = "")
         => new[] { Sfx(suffix, asArg, filter) };
+
+    private static LaunchRule[] Rp(string search, string replace, bool asArg = true, bool regex = false,
+        bool caseSensitive = false, string filter = "", string vars = "")
+        => new[] { new LaunchRule { Type = LaunchRule.TypeReplace, Search = search, ReplaceWith = replace,
+                                    AsArg = asArg, UseRegex = regex, CaseSensitive = caseSensitive,
+                                    Filter = filter, VariablesData = vars } };
+
+    private static LaunchRule Rif(string file, string search, string replace, string filter = "")
+        => new() { Type = LaunchRule.TypeReplaceInFile, TargetFile = file, Search = search, ReplaceWith = replace, Filter = filter };
 
     private static LaunchRule Cx(string newExe, string filter = "")
         => new() { Type = LaunchRule.TypeChangeExe, NewExe = newExe, Filter = filter };

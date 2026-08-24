@@ -45,6 +45,12 @@ internal interface IRuleAction
     /// treatment — override when the real one has side effects or reads state no example holds.</summary>
     RuleCmd ApplyExample(LaunchRule r, RuleCmd cmd) => Apply(r, cmd);
 
+    /// <summary>A SIDE EFFECT run by the REAL channel only, once the rule's probe passed, right
+    /// before the action's Apply — BigBoxProfile's ExecuteBefore. The example channel never calls
+    /// it, by construction: the preview acts on nothing. Default: nothing. (ExecuteAfter will join
+    /// when the first action needing end-of-game work is ported.)</summary>
+    void ExecuteBefore(LaunchRule r, RuleCmd cmd) { }
+
     /// <summary>The Action group's BODY for the edit dialog: the controls, their height, and the
     /// save that writes the controls back to the rule when OK lands.</summary>
     (Control Body, int Height, Action Save) BuildActionUi(LaunchRule r, float dpiS);
@@ -59,6 +65,8 @@ internal static class RuleActions
         new SuffixAction(),
         new ChangeExeAction(),
         new ChangeRomPathAction(),
+        new ReplaceAction(),
+        new ReplaceInFileAction(),
     };
 
     public static IRuleAction? ByType(string type)

@@ -1,4 +1,4 @@
-// ChangeRomPath — relocate roms whose stored path went stale (a moved drive, a network mirror).
+﻿// ChangeRomPath — relocate roms whose stored path went stale (a moved drive, a network mirror).
 // The original's algorithm, kept whole: every argument containing the SOUGHT path is split into
 // before + after (the remainder past it); HIGH-priority candidates are tried first and win even
 // when the original still exists (a faster local mirror); if none hits and the ORIGINAL is missing,
@@ -6,9 +6,10 @@
 // with the bare filename (the rom moved without its subfolder). Existence checks ping UNC servers
 // first, as the original did — a dead server answers in one ping instead of a filesystem timeout.
 //
-// The example channel is the real treatment: it only READS the disk, and showing the actual
-// resolution is precisely what the preview is for. Candidates are stored "|||"-separated, the
-// original's own format.
+// An m3u argument gets its CONTENT relocated too (the original's UseM3UContent contract) — read,
+// per-entry relocation, and a TEMP COPY swapped into the line; the original file is never touched.
+// The example channel relocates plain arguments (disk READS only) but skips the m3u rewrite: it
+// writes nothing, ever. Candidates are stored "|||"-separated, the original's own format.
 
 #nullable enable
 
@@ -34,7 +35,15 @@ internal sealed class ChangeRomPathAction : IRuleAction
 
     public string Describe(LaunchRule r) => $"Will replace {r.RomPathFind} with another path if needed";
 
-    public RuleCmd Apply(LaunchRule r, RuleCmd cmd)
+    public RuleCmd Apply(LaunchRule r, RuleCmd cmd) => Apply(r, cmd, rewriteM3u: true);
+
+    /// <summary>The example channel relocates plain arguments (disk READS only, the preview showing
+    /// the actual resolution) but never touches an m3u: rewriting one means WRITING a temp copy, and
+    /// the example channel writes nothing — BigBoxProfile's preview skipped its m3u machinery too
+    /// (it lived in EmulatorLauncher.Exec, not in CalculateExemple).</summary>
+    public RuleCmd ApplyExample(LaunchRule r, RuleCmd cmd) => Apply(r, cmd, rewriteM3u: false);
+
+    private RuleCmd Apply(LaunchRule r, RuleCmd cmd, bool rewriteM3u)
     {
         var args = RuleArgs.Split(cmd.Args);
         var high = SplitPaths(r.RomPathHigh);
@@ -42,21 +51,78 @@ internal sealed class ChangeRomPathAction : IRuleAction
 
         for (int i = 0; i < args.Length; i++)
         {
-            string elem = args[i];
-            int at = elem.IndexOf(r.RomPathFind, StringComparison.OrdinalIgnoreCase);
-            if (at < 0) continue;
-
-            string before = elem.Substring(0, at);
-            string after = elem.Substring(at + r.RomPathFind.Length);
-            if (after == "\\") after = "";
-            after = after.TrimStart('\\').TrimEnd('"');
-
-            string? hit = TryCandidates(high, after, elem);
-            if (hit == null && !PathExists(Path.Combine(r.RomPathFind, after)))
-                hit = TryCandidates(low, after, elem);
-            if (hit != null) args[i] = before + hit;
+            // An m3u in the line: relocate its CONTENT (the original's UseM3UContent contract). By
+            // the time rules run, the launch has already prepared everything — the m3u exists on
+            // disk, absolute, in the command line — so this is a read, a per-entry relocation, and a
+            // TEMP COPY swapped in; the original file is never modified.
+            if (rewriteM3u && args[i].EndsWith(".m3u", StringComparison.OrdinalIgnoreCase))
+            {
+                string? rewritten = TryRewriteM3u(r, args[i], high, low);
+                if (rewritten != null) { args[i] = rewritten; continue; }
+            }
+            string? relocated = RelocateElement(r, args[i], high, low);
+            if (relocated != null) args[i] = relocated;
         }
         return cmd with { Args = RuleArgs.Join(args) };
+    }
+
+    /// <summary>One element through the original's algorithm. Null = untouched.</summary>
+    private static string? RelocateElement(LaunchRule r, string elem, string[] high, string[] low)
+    {
+        int at = elem.IndexOf(r.RomPathFind, StringComparison.OrdinalIgnoreCase);
+        if (at < 0) return null;
+
+        string before = elem.Substring(0, at);
+        string after = elem.Substring(at + r.RomPathFind.Length);
+        if (after == "\\") after = "";
+        after = after.TrimStart('\\').TrimEnd('"');
+
+        string? hit = TryCandidates(high, after, elem);
+        if (hit == null && !PathExists(Path.Combine(r.RomPathFind, after)))
+            hit = TryCandidates(low, after, elem);
+        return hit != null ? before + hit : null;
+    }
+
+    /// <summary>Relocates the m3u's entries; when at least one moved, writes a temp copy (entries
+    /// ABSOLUTIZED against the original's folder — relative ones would break from another directory)
+    /// and returns its path. Null = nothing to relocate, keep the original argument.</summary>
+    private static string? TryRewriteM3u(LaunchRule r, string m3uPath, string[] high, string[] low)
+    {
+        try
+        {
+            if (!File.Exists(m3uPath)) return null;
+            string dir = Path.GetDirectoryName(m3uPath) ?? "";
+            var lines = File.ReadAllLines(m3uPath);
+            bool changed = false;
+
+            // Pass 1: absolutize each entry against the original's folder, relocate it, remember
+            // both. A rewrite happens only when at least one entry actually RELOCATED — but once it
+            // does, every untouched entry is written absolutized too, since a relative entry would
+            // break from the temp copy's directory.
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i].Trim();
+                if (line.Length == 0 || line.StartsWith("#")) continue;
+                string abs;
+                try { abs = Path.IsPathRooted(line) ? line : Path.GetFullPath(Path.Combine(dir, line)); }
+                catch { continue; }
+                string? hit = RelocateElement(r, abs, high, low);
+                if (hit != null) changed = true;
+                lines[i] = hit ?? abs;
+            }
+            if (!changed) return null;
+
+            string outDir = Path.Combine(Path.GetTempPath(), "litebox-rules-m3u");
+            Directory.CreateDirectory(outDir);
+            // Named after the original plus a path hash — two same-named m3u never collide, and the
+            // next launch of the same one just overwrites its copy.
+            string name = Path.GetFileNameWithoutExtension(m3uPath)
+                + "-" + (uint)StringComparer.OrdinalIgnoreCase.GetHashCode(m3uPath) + ".m3u";
+            string outPath = Path.Combine(outDir, name);
+            File.WriteAllLines(outPath, lines);
+            return outPath;
+        }
+        catch { return null; }
     }
 
     /// <summary>Each candidate with the remainder, then with the bare filename. First hit wins.</summary>

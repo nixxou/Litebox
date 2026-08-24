@@ -170,6 +170,35 @@ internal static class RuleSelfTest
                 CheckCmd("changerompath: an argument without the sought path is untouched",
                     new[] { Crp(orig, high: high) }, "emu.exe", "-x",
                     "emu.exe", "-x");
+
+                // ── the m3u content (the original's UseM3UContent contract) ──
+                string m3u = System.IO.Path.Combine(orig, "multi.m3u");
+                System.IO.File.WriteAllLines(m3u, new[]
+                {
+                    "both.zip",                                    // relative; relocates HIGH
+                    System.IO.Path.Combine(orig, "lost.zip"),      // absolute; missing → LOW
+                });
+
+                var m3uRules = new[] { Crp(orig, high: high, low: low) };
+                var got = RulePipeline.ApplyRules(m3uRules.ToList(), "emu.exe", Q(orig, "multi.m3u"));
+                var outArg = RuleArgs.Split(got.Args).FirstOrDefault() ?? "";
+                bool swapped = !string.Equals(outArg, System.IO.Path.Combine(orig, "multi.m3u"), StringComparison.OrdinalIgnoreCase)
+                               && outArg.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase)
+                               && System.IO.File.Exists(outArg);
+                var content = swapped ? System.IO.File.ReadAllLines(outArg) : Array.Empty<string>();
+                Expect("changerompath: an m3u argument is swapped for a relocated TEMP copy",
+                    swapped
+                    && content.Length == 2
+                    && string.Equals(content[0], System.IO.Path.Combine(high, "both.zip"), StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(content[1], System.IO.Path.Combine(low, "lost.zip"), StringComparison.OrdinalIgnoreCase));
+                Expect("changerompath: the original m3u file is never modified",
+                    System.IO.File.ReadAllLines(m3u)[0] == "both.zip");
+
+                string preview = RulePipeline.PreviewExample(m3uRules.ToList(), "emu.exe " + Q(orig, "multi.m3u"));
+                Expect("changerompath: the EXAMPLE channel leaves the m3u alone (it writes nothing)",
+                    preview.Contains("multi.m3u", StringComparison.OrdinalIgnoreCase)
+                    && !preview.Contains("litebox-rules-m3u", StringComparison.OrdinalIgnoreCase));
+                if (swapped) { try { System.IO.File.Delete(outArg); } catch { } }
             }
             finally
             {

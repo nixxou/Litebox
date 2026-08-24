@@ -75,6 +75,10 @@ internal static class RuleVariables
         return text;
     }
 
+    /// <summary>One variable's resolved value — public for the sandboxes: the dialogs show each
+    /// variable's live value for a test line.</summary>
+    public static string ResolveOne(RuleVariable v, string exePath, string args) => Resolve(v, exePath, args);
+
     /// <summary>One variable's value for this launch: the regex over its source, groups spliced into
     /// Value via the "\1" house syntax, Fallback when nothing matches anywhere. The "arg" source
     /// tries every argument and the LAST match wins — the original's exact behaviour.</summary>

@@ -2,6 +2,12 @@
 // editor. One builder, a withFile switch — the field the modes do not share is the only difference,
 // which is exactly why they became two actions instead of BigBoxProfile's one dialog where half the
 // fields played dead depending on a radio.
+//
+// SANDBOXES everywhere (Mehdi: the subject is complex enough to demand them): the Replace dialog
+// carries a full test line and shows the live result of the CURRENT settings — and the file mode
+// adds a test-content box, so a config rewrite is rehearsed without touching any real file; the
+// variables editor shows every variable's resolved value for the test line as you type. Nothing a
+// sandbox computes ever writes anywhere.
 
 #nullable enable
 
@@ -16,33 +22,38 @@ namespace LbApiHost.Host.Rules.Actions;
 
 internal static class ReplaceUi
 {
+    private const string SampleLine = @"emulator.exe -L ""cores\snes.dll"" ""C:\roms\game.zip""";
+
     public static (Control Body, int Height, Action Save) Build(LaunchRule r, float dpiS, bool withFile)
     {
         int S(int px) => (int)Math.Round(px * dpiS);
-        int height = S(withFile ? 240 : 186);
-        var body = new Panel { Size = new Size(S(576), height), BackColor = LiteBoxTheme.Bg };
+        var body = new Panel { BackColor = LiteBoxTheme.Bg, Width = (int)Math.Round(576 * dpiS) };
         int y = 0;
 
-        Label Cap(string t)
+        Label Cap(string t, bool dim = true)
         {
             var l = new Label
             {
                 Text = t, AutoSize = true, Location = new Point(0, y + S(2)),
-                ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
+                ForeColor = dim ? LiteBoxTheme.SubFg : LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg,
             };
             body.Controls.Add(l);
             y += S(20);
             return l;
         }
-        TextBox Field(string value, int width = 574)
+        TextBox Field(string value, int width = 574, int lines = 1, bool readOnly = false)
         {
             var t = new TextBox
             {
                 Text = value, Location = new Point(0, y), Width = S(width),
-                BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
+                BackColor = readOnly ? LiteBoxTheme.Bg : LiteBoxTheme.Panel2,
+                ForeColor = readOnly ? LiteBoxTheme.SubFg : LiteBoxTheme.Fg,
+                BorderStyle = BorderStyle.FixedSingle, ReadOnly = readOnly,
+                Multiline = lines > 1, Height = lines > 1 ? S(14 * lines + 8) : S(23),
+                ScrollBars = lines > 1 ? ScrollBars.Vertical : ScrollBars.None,
             };
             body.Controls.Add(t);
-            y += S(30);
+            y += (lines > 1 ? S(14 * lines + 8) : S(23)) + S(7);
             return t;
         }
 
@@ -53,7 +64,7 @@ internal static class ReplaceUi
             file = Field(r.TargetFile, 486);
             var browse = new Button
             {
-                Text = "Browse…", Location = new Point(S(492), file.Top - S(2)), Size = new Size(S(82), S(25)),
+                Text = "Browse…", Location = new Point(S(492), file.Top - S(1)), Size = new Size(S(82), S(25)),
                 BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
             };
             browse.FlatAppearance.BorderColor = Color.FromArgb(64, 64, 68);
@@ -95,7 +106,7 @@ internal static class ReplaceUi
             target.SelectedIndex = r.AsArg ? 0 : 1;
             body.Controls.Add(target);
         }
-        y += S(32);
+        y += S(30);
 
         var manage = new Button
         {
@@ -109,19 +120,76 @@ internal static class ReplaceUi
             Text = VarCountText(variablesData), AutoSize = true, Location = new Point(S(158), y + S(5)),
             ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
         };
+        body.Controls.Add(manage);
+        body.Controls.Add(varCount);
+        y += S(32);
+
+        Cap(withFile
+            ? "ex: search \"fullscreen=0\" → \"fullscreen=1\"  ·  regex \"core=(\\w+)\" → \"core={CORE}\""
+            : "ex: regex search \"disc(\\d)\" → replace \"d\\1\"  ·  literal \"-window\" → \"-fullscreen\"");
+
+        // ── the sandbox — rehearse the CURRENT settings, write nothing, ever ──
+        Cap("Sandbox — test line (exe included; feeds the variables and, without file, the replace):");
+        var testLine = Field(SampleLine);
+        TextBox? testContent = null;
+        if (withFile)
+        {
+            Cap("Test file content (rehearses the rewrite — no real file is touched):");
+            testContent = Field("fullscreen=0\r\nvsync=1", lines: 4);
+        }
+        Cap("Result:");
+        var result = Field("", lines: withFile ? 4 : 1, readOnly: true);
+
+        void Recalc()
+        {
+            try
+            {
+                var vars = RuleVariables.Parse(variablesData);
+                var all = RuleArgs.SplitFull(testLine.Text);
+                string exe = all.FirstOrDefault() ?? "";
+                string args = RuleArgs.Join(all.Skip(1));
+                string s2 = RuleVariables.Expand(search.Text, vars, exe, args);
+                string r2 = RuleVariables.Expand(replace.Text, vars, exe, args);
+                if (withFile)
+                {
+                    string outc = RuleVariables.DoReplace(testContent!.Text, s2, r2, regex.Checked, caseS.Checked, singleline: true);
+                    result.Text = RuleVariables.Expand(outc, vars, exe, args);
+                }
+                else if (target!.SelectedIndex == 0)
+                {
+                    string outa = RuleArgs.Join(RuleArgs.Split(args)
+                        .Select(a => RuleVariables.DoReplace(a, s2, r2, regex.Checked, caseS.Checked)));
+                    result.Text = RuleArgs.Join(new[] { exe }) + " " + RuleVariables.Expand(outa, vars, exe, outa);
+                }
+                else
+                {
+                    string outc = RuleVariables.DoReplace(args, s2, r2, regex.Checked, caseS.Checked);
+                    result.Text = RuleArgs.Join(new[] { exe }) + " " + RuleVariables.Expand(outc, vars, exe, outc);
+                }
+            }
+            catch (Exception ex) { result.Text = "(invalid: " + ex.Message + ")"; }
+        }
+        search.TextChanged += (_, _) => Recalc();
+        replace.TextChanged += (_, _) => Recalc();
+        regex.CheckedChanged += (_, _) => Recalc();
+        caseS.CheckedChanged += (_, _) => Recalc();
+        if (target != null) target.SelectedIndexChanged += (_, _) => Recalc();
+        testLine.TextChanged += (_, _) => Recalc();
+        if (testContent != null) testContent.TextChanged += (_, _) => Recalc();
         manage.Click += (_, _) =>
         {
-            using var dlg = new VariablesDialog(variablesData, dpiS);
+            using var dlg = new VariablesDialog(variablesData, dpiS, testLine.Text);
             if (dlg.ShowDialog(body.FindForm()) == DialogResult.OK)
             {
                 variablesData = dlg.VariablesData;
                 varCount.Text = VarCountText(variablesData);
+                Recalc();
             }
         };
-        body.Controls.Add(manage);
-        body.Controls.Add(varCount);
+        Recalc();
 
-        return (body, height, () =>
+        body.Height = y;
+        return (body, y, () =>
         {
             r.Search = search.Text;
             r.ReplaceWith = replace.Text;
@@ -141,7 +209,8 @@ internal static class ReplaceUi
 }
 
 /// <summary>The Manage Variables editor: the list on the left, the selected variable's fields on
-/// the right, edits committed to the buffer as you type. OK serializes, Cancel discards.</summary>
+/// the right — and the sandbox below: a test line, and every variable's LIVE resolved value for it,
+/// recomputed as you type. OK serializes, Cancel discards; the sandbox writes nothing.</summary>
 internal sealed class VariablesDialog : LiteBoxForm
 {
     public string VariablesData { get; private set; }
@@ -150,20 +219,20 @@ internal sealed class VariablesDialog : LiteBoxForm
     private readonly ListBox _list;
     private bool _binding;
 
-    public VariablesDialog(string variablesData, float dpiS)
+    public VariablesDialog(string variablesData, float dpiS, string? sampleLine = null)
     {
         VariablesData = variablesData;
         _vars = RuleVariables.Parse(variablesData);
 
         Text = "Manage variables";
-        ClientSize = new Size(S(620), S(324));
+        ClientSize = new Size(S(620), S(452));
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = false; MaximizeBox = false;
 
         _list = new ListBox
         {
-            Location = new Point(S(14), S(14)), Size = new Size(S(180), S(240)),
+            Location = new Point(S(14), S(14)), Size = new Size(S(180), S(226)),
             BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg,
             BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false,
         };
@@ -180,8 +249,8 @@ internal sealed class VariablesDialog : LiteBoxForm
             Controls.Add(b);
             return b;
         }
-        var add = Btn("Add", 14, 258);
-        var remove = Btn("Remove", 108, 258);
+        var add = Btn("Add", 14, 244);
+        var remove = Btn("Remove", 108, 244);
 
         int rx = 210, y = S(14);
         Label Cap(string t)
@@ -195,11 +264,11 @@ internal sealed class VariablesDialog : LiteBoxForm
             y += S(18);
             return l;
         }
-        TextBox Field()
+        TextBox Field(int width = 392)
         {
             var t = new TextBox
             {
-                Location = new Point(S(rx), y), Width = S(392),
+                Location = new Point(S(rx), y), Width = S(width),
                 BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
             };
             Controls.Add(t);
@@ -209,22 +278,65 @@ internal sealed class VariablesDialog : LiteBoxForm
 
         Cap("Token (as written in texts, e.g. {ROM}):");
         var name = Field();
-        Cap("Source:");
+        Cap("Source — cmd (exe+args) · arg (each argument, last match wins) · or a FILE path:");
         var source = new ComboBox
         {
-            DropDownStyle = ComboBoxStyle.DropDown, Location = new Point(S(rx), y), Width = S(392),
+            DropDownStyle = ComboBoxStyle.DropDown, Location = new Point(S(rx), y), Width = S(304),
             BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
         };
         source.Items.AddRange(new object[] { "cmd", "arg" });
         Controls.Add(source);
-        y += S(26);
-        Cap("(cmd = exe + arguments · arg = each argument, last match wins · or type a FILE path)");
-        Cap("Regex to match on the source:");
+        var browseSrc = Btn("File…", rx + 312, 0, 80);
+        browseSrc.Top = y;
+        browseSrc.Click += (_, _) =>
+        {
+            using var dlg = new OpenFileDialog { Filter = "All files (*.*)|*.*" };
+            if (dlg.ShowDialog(this) == DialogResult.OK) source.Text = dlg.FileName;
+        };
+        y += S(28);
+        Cap("Regex to match on the source  (ex: core=(\\w+)  ·  (\\w+)\\.zip):");
         var pattern = Field();
-        Cap("Value on match (\"\\1\"–\"\\9\" splice the groups):");
+        Cap("Value on match (\"\\1\"–\"\\9\" splice the groups  ·  ex: \\1):");
         var value = Field();
         Cap("Fallback when nothing matches:");
         var fallback = Field();
+
+        // ── the sandbox: a test line, every variable's live value ──
+        var sandCap = new Label
+        {
+            Text = "Sandbox — test line (exe included):", AutoSize = true,
+            Location = new Point(S(14), S(280)), ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
+        };
+        Controls.Add(sandCap);
+        var testLine = new TextBox
+        {
+            Text = string.IsNullOrWhiteSpace(sampleLine) ? @"emulator.exe -L ""cores\snes.dll"" ""C:\roms\game.zip""" : sampleLine,
+            Location = new Point(S(14), S(300)), Width = S(590),
+            BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
+        };
+        Controls.Add(testLine);
+        var resolved = new TextBox
+        {
+            Location = new Point(S(14), S(330)), Width = S(590), Height = S(76),
+            Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
+            BackColor = LiteBoxTheme.Bg, ForeColor = LiteBoxTheme.SubFg, BorderStyle = BorderStyle.FixedSingle,
+        };
+        Controls.Add(resolved);
+
+        void Sandbox()
+        {
+            try
+            {
+                var all = RuleArgs.SplitFull(testLine.Text);
+                string exe = all.FirstOrDefault() ?? "";
+                string args = RuleArgs.Join(all.Skip(1));
+                resolved.Text = _vars.Count == 0
+                    ? "(no variables yet)"
+                    : string.Join("\r\n", _vars.Where(v => v.Name.Length > 0)
+                        .Select(v => v.Name + " = " + RuleVariables.ResolveOne(v, exe, args)));
+            }
+            catch (Exception ex) { resolved.Text = "(invalid: " + ex.Message + ")"; }
+        }
 
         void Reload(int select)
         {
@@ -233,6 +345,7 @@ internal sealed class VariablesDialog : LiteBoxForm
             foreach (var v in _vars) _list.Items.Add(v.Name.Length > 0 ? v.Name : "(unnamed)");
             _list.EndUpdate();
             if (select >= 0 && select < _vars.Count) _list.SelectedIndex = select;
+            Sandbox();
         }
         void Bind()
         {
@@ -240,7 +353,7 @@ internal sealed class VariablesDialog : LiteBoxForm
             var v = _list.SelectedIndex >= 0 && _list.SelectedIndex < _vars.Count ? _vars[_list.SelectedIndex] : null;
             name.Text = v?.Name ?? ""; source.Text = v?.Source ?? "cmd";
             pattern.Text = v?.Pattern ?? ""; value.Text = v?.Value ?? ""; fallback.Text = v?.Fallback ?? "";
-            name.Enabled = source.Enabled = pattern.Enabled = value.Enabled = fallback.Enabled = v != null;
+            name.Enabled = source.Enabled = pattern.Enabled = value.Enabled = fallback.Enabled = browseSrc.Enabled = v != null;
             _binding = false;
         }
         void Commit()
@@ -249,14 +362,15 @@ internal sealed class VariablesDialog : LiteBoxForm
             var v = _vars[_list.SelectedIndex];
             v.Name = name.Text.Trim(); v.Source = source.Text.Trim();
             v.Pattern = pattern.Text; v.Value = value.Text; v.Fallback = fallback.Text;
-            int ix = _list.SelectedIndex;
-            _list.Items[ix] = v.Name.Length > 0 ? v.Name : "(unnamed)";
+            _list.Items[_list.SelectedIndex] = v.Name.Length > 0 ? v.Name : "(unnamed)";
+            Sandbox();
         }
         name.TextChanged += (_, _) => Commit();
         source.TextChanged += (_, _) => Commit();
         pattern.TextChanged += (_, _) => Commit();
         value.TextChanged += (_, _) => Commit();
         fallback.TextChanged += (_, _) => Commit();
+        testLine.TextChanged += (_, _) => Sandbox();
         _list.SelectedIndexChanged += (_, _) => Bind();
 
         add.Click += (_, _) =>
@@ -274,14 +388,14 @@ internal sealed class VariablesDialog : LiteBoxForm
         };
 
         var ok = ActionButton("OK", MenuIcons.Add);
-        ok.Location = new Point(S(410), S(286));
+        ok.Location = new Point(S(410), S(414));
         ok.Click += (_, _) =>
         {
             VariablesData = RuleVariables.Serialize(_vars.Where(v => v.Name.Length > 0).ToList());
             DialogResult = DialogResult.OK; Close();
         };
         var cancel = ActionButton("Cancel", MenuIcons.Exit);
-        cancel.Location = new Point(S(512), S(286));
+        cancel.Location = new Point(S(512), S(414));
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
         AcceptButton = ok; CancelButton = cancel;
         Controls.Add(ok); Controls.Add(cancel);

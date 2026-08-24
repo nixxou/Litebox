@@ -38,6 +38,7 @@ internal static class MonitorProbe
             "capture" => Capture(Arg(args, 1)),
             "hdr" => Hdr(Arg(args, 1), Arg(args, 2)),
             "gpu" => Gpu(),
+            "uses" => Uses(Arg(args, 1)),
             "audio" => Audio(Arg(args, 1)),
             "volume" => Volume(Arg(args, 1)),
             _ => Usage(cmd),
@@ -66,6 +67,7 @@ internal static class MonitorProbe
         Console.WriteLine("  capture <name>        (re)capture the current layout into that profile");
         Console.WriteLine("  hdr on|off [monitor]  set HDR directly; default every HDR-capable monitor");
         Console.WriteLine("  gpu                   read every monitor's GPU-output state (vendor, format, range, vibrance)");
+        Console.WriteLine("  uses <name>           which games/versions/emulators are assigned that profile");
         Console.WriteLine("  audio <name>          make that playback device the default (substring match)");
         Console.WriteLine("  volume <0-100>        set the default device's master volume");
         return 2;
@@ -221,6 +223,26 @@ internal static class MonitorProbe
 
     /// <summary>Read-only: each monitor's GPU-output state through the vendor facade — the quickest way
     /// to see the per-monitor vendor gate answer on a mixed machine.</summary>
+    /// <summary>Read-only: who points at a profile. Same query the Delete button asks before warning.</summary>
+    private static int Uses(string? which)
+    {
+        if (string.IsNullOrWhiteSpace(which)) { Console.WriteLine("usage: --monitor uses <profile name or id>"); return 2; }
+
+        var all = MonitorProfileStore.All();
+        var prof = all.FirstOrDefault(p => string.Equals(p.Name, which, StringComparison.OrdinalIgnoreCase))
+                   ?? all.FirstOrDefault(p => string.Equals(p.Id, which, StringComparison.OrdinalIgnoreCase));
+        if (prof == null)
+        {
+            Console.WriteLine($"no profile named \"{which}\". known: " + string.Join(", ", all.Select(p => p.Name)));
+            return 2;
+        }
+
+        var users = MonitorAssign.UsersOf(prof.Id);
+        Console.WriteLine($"\"{prof.Name}\" ({prof.Id}) — {users.Count} assignment(s)");
+        foreach (var (scope, id) in users) Console.WriteLine($"  {scope,-9} {id}");
+        return 0;
+    }
+
     private static int Gpu()
     {
         var vrr = GpuColor.VrrGet();

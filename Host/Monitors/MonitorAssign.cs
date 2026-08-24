@@ -214,6 +214,46 @@ internal static class MonitorAssign
         return rows.OrderBy(r => r.EntityName, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary>The three scopes an assignment can live in, in resolution order.</summary>
+    public static readonly string[] AssignableScopes =
+        { LiteBoxOption.ScopeVersion, LiteBoxOption.ScopeGame, LiteBoxOption.ScopeEmulator };
+
+    /// <summary>Every entity whose assignment names this profile. Cheap on purpose — it reads the three
+    /// key sets and resolves no display names, so the delete button can ask before doing anything.</summary>
+    public static List<(string Scope, string EntityId)> UsersOf(string profileId)
+    {
+        var hits = new List<(string, string)>();
+        if (string.IsNullOrEmpty(profileId)) return hits;
+
+        foreach (var scope in AssignableScopes)
+        {
+            Dictionary<string, string> raw;
+            try { raw = LiteBoxOptionsDb.AllOf(scope, KeyAssign); }
+            catch { continue; }
+
+            foreach (var kv in raw)
+            {
+                var a = Get(scope, kv.Key);
+                if (a.Kind == AssignKind.Profile
+                    && string.Equals(a.ProfileId, profileId, StringComparison.OrdinalIgnoreCase))
+                    hits.Add((scope, kv.Key));
+            }
+        }
+        return hits;
+    }
+
+    /// <summary>Drop every assignment naming this profile — called when the profile itself is deleted, so
+    /// no entity is left pointing at something that no longer exists. Clearing (rather than writing an
+    /// explicit "none") is the honest outcome: the entity simply has no opinion again and falls through
+    /// to the level below, which is what it did before anyone named this profile.</summary>
+    public static int ClearUsers(string profileId)
+    {
+        var hits = UsersOf(profileId);
+        foreach (var (scope, id) in hits) Clear(scope, id);
+        if (hits.Count > 0) LbLog.Info(Tag, $"profile {profileId} deleted: {hits.Count} assignment(s) cleared");
+        return hits.Count;
+    }
+
     /// <summary>Drop an entity's assignment AND its inline configuration.</summary>
     public static void Clear(string scope, string entityId)
     {

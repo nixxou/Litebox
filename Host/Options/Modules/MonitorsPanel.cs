@@ -353,6 +353,12 @@ internal static class MonitorsPanel
         private readonly float _dpi;
         private readonly bool _readOnly;
         private readonly List<MonitorProfile> _profiles;
+
+        /// <summary>Profiles deleted in this window whose assignments still have to be swept. The sweep
+        /// rides with the SAVE, never with the click: the profile list is an edit buffer the user can
+        /// still walk away from, and clearing rows for a deletion that never gets committed would strip
+        /// assignments off a profile that is still there.</summary>
+        private readonly List<string> _deletedIds = new();
         private readonly ListBox _list = new();
         private readonly CheckBox _public = new() { Text = "Show in the Tools menu", AutoSize = true };
         private readonly HotkeyCaptureBox _hotkey = new("");
@@ -444,9 +450,18 @@ internal static class MonitorsPanel
             ThemedCheckBox.StyleAll(Root);
         }
 
-        public void Apply()
+        /// <summary>Commit the edit buffer, then sweep the assignments of everything deleted in it.
+        /// Both save sites go through here so a deletion can never reach the store without its sweep.</summary>
+        private void SaveProfiles()
         {
             MonitorProfileStore.Save(_profiles);
+            foreach (var id in _deletedIds) { try { MonitorAssign.ClearUsers(id); } catch { } }
+            _deletedIds.Clear();
+        }
+
+        public void Apply()
+        {
+            SaveProfiles();
             // The system registrations follow the saved list, not the edit buffer — a hotkey the user
             // cancelled out of must not stay claimed from the whole OS.
             MonitorGlobalHotkeys.Refresh();
@@ -892,13 +907,52 @@ internal static class MonitorsPanel
         {
             var cur = Current;
             if (cur == null) return;
-            if (MessageBox.Show(Root, $"Delete \"{cur.Name}\"?", "Monitor Profiles",
+            // Who points at it? Asked BEFORE the confirmation so the question can say what will be lost
+            // — "delete this?" and "delete this and unassign it from 3 games?" deserve different answers.
+            List<(string Scope, string EntityId)> users;
+            try { users = MonitorAssign.UsersOf(cur.Id); } catch { users = new(); }
+
+            string question = $"Delete \"{cur.Name}\"?";
+            if (users.Count > 0)
+            {
+                string nl = Environment.NewLine;
+                question += nl + nl + UsageText(users)
+                          + nl + "Deleting the profile also removes " + (users.Count == 1 ? "that assignment" : "those assignments")
+                          + " — the affected " + (users.Count == 1 ? "entry falls" : "entries fall")
+                          + " back to whatever the level below says.";
+            }
+
+            if (MessageBox.Show(Root, question, "Monitor Profiles",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (users.Count > 0) _deletedIds.Add(cur.Id);
             int ix = _list.SelectedIndex;
             _profiles.RemoveAt(ix);
             ReloadList();
             if (_list.Items.Count > 0) _list.SelectedIndex = Math.Min(ix, _list.Items.Count - 1);
             else Bind(null);
+        }
+
+        /// <summary>"Used by 2 games and 1 emulator." — counted per scope rather than named, because
+        /// naming them means walking the whole library once per entry for a sentence in a dialog.</summary>
+        private static string UsageText(List<(string Scope, string EntityId)> users)
+        {
+            int games = users.Count(u => u.Scope == LiteBoxOption.ScopeGame);
+            int vers = users.Count(u => u.Scope == LiteBoxOption.ScopeVersion);
+            int emus = users.Count(u => u.Scope == LiteBoxOption.ScopeEmulator);
+
+            var parts = new List<string>();
+            void Add(int n, string one, string many) { if (n > 0) parts.Add(n + " " + (n == 1 ? one : many)); }
+            Add(games, "game", "games");
+            Add(vers, "additional version", "additional versions");
+            Add(emus, "emulator", "emulators");
+
+            string list = parts.Count switch
+            {
+                1 => parts[0],
+                2 => parts[0] + " and " + parts[1],
+                _ => string.Join(", ", parts.Take(parts.Count - 1)) + " and " + parts[^1],
+            };
+            return "It is currently assigned to " + list + ".";
         }
 
         private void RefreshRestoreInfo()
@@ -928,7 +982,7 @@ internal static class MonitorsPanel
             if (cur.IsEmpty) { Warn("Nothing is enabled in this profile."); return; }
             // Save first: applying a profile that only exists in this window's buffer would leave a
             // restore point referring to something the store has never heard of.
-            MonitorProfileStore.Save(_profiles);
+            SaveProfiles();
             var res = MonitorProfileApply.Apply(cur);
             RefreshRestoreInfo();
             Report(cur.Name + " — " + res.Message.Replace("\n", "  ·  "), res.Ok);

@@ -385,16 +385,27 @@ internal static class MonitorProfileApply
         }
     }
 
-    /// <summary>An adaptive layout replay with the shared retry ladder (see RestoreRetriesMs).</summary>
+    /// <summary>An adaptive SNAPSHOT replay with the shared retry ladder (see RestoreRetriesMs).
+    ///
+    /// Extras are OFF here, the opposite of a profile's adaptive default. A profile names the monitors
+    /// it cares about and politely leaves the rest alone; a snapshot is a statement of the WHOLE
+    /// desktop — a connected monitor absent from it was absent because it was off. Measured live: a
+    /// solo profile in force at launch, "run next game as" a 3-screen profile, and the exit restore
+    /// reported ok=True while "left as they are: HDMI, PL2452" kept both screens the snapshot had
+    /// dark. (The cost: a monitor plugged in DURING the game goes dark at restore — putting the
+    /// desktop back the way the launch found it is exactly the contract.)
+    ///
+    /// Adapt stays true for the question it actually answers: a snapshot monitor UNPLUGGED in the
+    /// meantime is dropped rather than refusing the whole restore.</summary>
     private static ApplyResult ApplyLayoutWithRetries(MonitorLayout layout, string what)
     {
-        var r = ApplyLayout(layout, adapt: true, preset: null, out _);
+        var r = ApplyLayout(layout, adapt: true, preset: null, out _, profileExtras: MonitorProfile.ExtrasOff);
         foreach (var delay in RestoreRetriesMs)
         {
             if (r.Ok) return r;
             LbLog.Warn(Tag, $"{what} failed ({r.Message.ReplaceLineEndings(" | ")}), retrying in {delay} ms");
             Thread.Sleep(delay);
-            r = ApplyLayout(layout, adapt: true, preset: null, out _);
+            r = ApplyLayout(layout, adapt: true, preset: null, out _, profileExtras: MonitorProfile.ExtrasOff);
         }
         return r;
     }

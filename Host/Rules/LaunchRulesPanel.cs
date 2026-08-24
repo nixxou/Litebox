@@ -246,9 +246,7 @@ internal static class LaunchRulesPanel
         var remove = Btn("Remove");
         var up = Btn("▲");
         var down = Btn("▼");
-        var copy = Btn("Copy");
-        var paste = Btn("Paste");
-        var export = Btn("Export\u2026");
+        var export = Btn("Export all\u2026");
         var import_ = Btn("Import\u2026");
         Row(bar, S(36));
 
@@ -308,48 +306,71 @@ internal static class LaunchRulesPanel
         up.Click += (_, _) => Move(-1);
         down.Click += (_, _) => Move(+1);
 
-        // ── copy / paste — and thereby export / import. The interchange format IS the stored one:
-        // a rule is its JSON object exactly as litebox-options.db holds it, a whole list is the
-        // array; paste accepts either, so a single rule, a full export, or a hand-edited file all
-        // round-trip. Cross-entity by nature: copy here, paste on any other emulator/game/version.
+        // ── copy / paste, right-click, ONE RULE at a time (Mehdi's cut: the clipboard grain is
+        // the line; the list grain belongs to Export all / Import). The format stays the stored
+        // JSON object, so a rule travels to any other entity's page — but an array is refused,
+        // pasting a whole export by accident duplicated pipelines wholesale.
         var jsonPretty = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-        copy.Click += (_, _) =>
+
+        void DoCopy()
+        {
+            int ix = SelectedFlatIndex();
+            if (ix < 0 || ix >= rules.Count) return;
+            try { Clipboard.SetText(System.Text.Json.JsonSerializer.Serialize(rules[ix], jsonPretty)); } catch { }
+        }
+        LaunchRule? ClipboardRule()
         {
             try
             {
-                int ix = SelectedFlatIndex();
-                // A selected rule copies alone; no selection copies the WHOLE list (the export).
-                string payload = ix >= 0 && ix < rules.Count
-                    ? System.Text.Json.JsonSerializer.Serialize(rules[ix], jsonPretty)
-                    : System.Text.Json.JsonSerializer.Serialize(rules, jsonPretty);
-                Clipboard.SetText(payload);
+                string txt = Clipboard.GetText() ?? "";
+                if (txt.Trim().Length == 0 || txt.TrimStart().StartsWith("[")) return null;
+                return System.Text.Json.JsonSerializer.Deserialize<LaunchRule>(txt);
             }
-            catch { }
-        };
-        paste.Click += (_, _) =>
+            catch { return null; }
+        }
+        void DoPaste(bool before)
         {
-            string txt;
-            try { txt = Clipboard.GetText() ?? ""; } catch { return; }
-            if (txt.Trim().Length == 0) return;
-            List<LaunchRule>? incoming = null;
-            try
+            if (readOnly) return;
+            var rule = ClipboardRule();
+            if (rule == null)
             {
-                incoming = txt.TrimStart().StartsWith("[")
-                    ? System.Text.Json.JsonSerializer.Deserialize<List<LaunchRule>>(txt)
-                    : new List<LaunchRule> { System.Text.Json.JsonSerializer.Deserialize<LaunchRule>(txt)! };
-            }
-            catch { }
-            if (incoming == null || incoming.Count == 0 || incoming.Any(r => r == null))
-            {
-                MessageBox.Show(root.FindForm(), "The clipboard does not hold a rule (or a rule list) in the JSON format Copy produces.",
+                MessageBox.Show(root.FindForm(),
+                    "The clipboard does not hold ONE rule in the JSON format Copy produces (a rule list is not pasteable — use Import for that).",
                     "Launch rules", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             int at = SelectedFlatIndex();
-            int insert = at >= 0 && at < rules.Count ? at + 1 : rules.Count;
-            rules.InsertRange(insert, incoming);
+            int insert = at >= 0 && at < rules.Count ? (before ? at : at + 1) : rules.Count;
+            rules.Insert(insert, rule);
             Reload(insert);
+        }
+
+        var menu = new ContextMenuStrip { BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg };
+        var miCopy = menu.Items.Add("Copy");
+        var miPasteBefore = menu.Items.Add("Paste before");
+        var miPasteAfter = menu.Items.Add("Paste after");
+        miCopy.Click += (_, _) => DoCopy();
+        miPasteBefore.Click += (_, _) => DoPaste(before: true);
+        miPasteAfter.Click += (_, _) => DoPaste(before: false);
+        menu.Opening += (_, _) =>
+        {
+            int ix = SelectedFlatIndex();
+            bool onRule = ix >= 0 && ix < rules.Count;
+            bool pastable = !readOnly && ClipboardRule() != null;
+            miCopy.Enabled = onRule;
+            miPasteBefore.Enabled = pastable && onRule;
+            miPasteAfter.Enabled = pastable;   // no selection = append at the end
         };
+        list.ContextMenuStrip = menu;
+        tree.ContextMenuStrip = menu;
+        // Right-click aims: the row/node under the cursor becomes the selection first.
+        list.MouseDown += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right) return;
+            int ix = list.IndexFromPoint(e.Location);
+            if (ix >= 0) list.SelectedIndex = ix;
+        };
+        tree.NodeMouseClick += (_, e) => { if (e.Button == MouseButtons.Right) tree.SelectedNode = e.Node; };
 
         // ── export / import, INDIVIDUAL — this entity's list, in the stored format (a bare rule
         // array, the exact thing Copy-all puts on the clipboard). Import lands in the edit buffer
@@ -414,8 +435,8 @@ internal static class LaunchRulesPanel
         void CtrlCv(object? _, KeyEventArgs e)
         {
             if (!e.Control || readOnly) return;
-            if (e.KeyCode == Keys.C) { copy.PerformClick(); e.Handled = e.SuppressKeyPress = true; }
-            else if (e.KeyCode == Keys.V) { paste.PerformClick(); e.Handled = e.SuppressKeyPress = true; }
+            if (e.KeyCode == Keys.C) { DoCopy(); e.Handled = e.SuppressKeyPress = true; }
+            else if (e.KeyCode == Keys.V) { DoPaste(before: false); e.Handled = e.SuppressKeyPress = true; }
         }
         list.KeyDown += CtrlCv;
         tree.KeyDown += CtrlCv;

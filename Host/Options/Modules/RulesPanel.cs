@@ -109,7 +109,7 @@ internal static class RulesPanel
         }
         var del = Btn("Remove selected");
         var delAll = Btn("Remove all in this list");
-        var export = Btn("Export\u2026");
+        var export = Btn("Export all\u2026");
         var import_ = Btn("Import\u2026");
 
         string Scope() => kind.SelectedIndex switch

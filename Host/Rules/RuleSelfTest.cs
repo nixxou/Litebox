@@ -103,6 +103,25 @@ internal static class RuleSelfTest
         CheckPreview("preview skips a non-configured rule (round-trip requote only)",
             Prefix(""), @"sd.exe ""C:\MyRomDir\MyRom.bin""", @"sd.exe C:\MyRomDir\MyRom.bin");
 
+        // ── Suffix (same probes, opposite end; BigBoxProfile parity) ──
+        Check("suffix as ARGUMENT appends one token last",
+            Suffix("-fullscreen"), @"""C:\roms\game.zip"" -x", @"C:\roms\game.zip -x -fullscreen");
+
+        Check("suffix as ARGUMENT trims and quotes a spaced payload",
+            Suffix("  hello world  "), "-x", @"-x ""hello world""");
+
+        Check("suffix as CMDLINE appends verbatim (leading space is the author's)",
+            Suffix(" -L \"cores\\snes.dll\"", asArg: false), @"""C:\roms\game.zip""", @"""C:\roms\game.zip"" -L ""cores\snes.dll""");
+
+        Check("empty suffix = not configured, untouched",
+            Suffix(""), "-x", "-x");
+
+        Check("suffix honours the shared probes",
+            Suffix("-a", filter: "nothere"), "-x", "-x");
+
+        Check("prefix and suffix compose in pipeline order",
+            new[] { P("-first"), Sfx("-last") }, "-x", "-first -x -last");
+
         // ── the trace channel (groups + trace lot) ──
         {
             var rules = new List<LaunchRule>
@@ -151,6 +170,12 @@ internal static class RuleSelfTest
         Console.WriteLine(_fail == 0 ? "ALL OK" : $"{_fail} FAILURE(S)");
         return _fail == 0 ? 0 : 1;
     }
+
+    private static LaunchRule Sfx(string suffix, bool asArg = true, string filter = "")
+        => new() { Type = LaunchRule.TypeSuffix, Suffix = suffix, AsArg = asArg, Filter = filter };
+
+    private static LaunchRule[] Suffix(string suffix, bool asArg = true, string filter = "")
+        => new[] { Sfx(suffix, asArg, filter) };
 
     private static LaunchRule Anchored(LaunchRule r) { r.AsGroup = true; return r; }
 

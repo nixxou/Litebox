@@ -42,11 +42,7 @@ internal static class RulePipeline
                 string before = args;
                 if (ProbePasses(rule, exePath, args))
                 {
-                    args = rule.Type switch
-                    {
-                        LaunchRule.TypePrefix => ApplyPrefix(rule, args),
-                        _ => args,
-                    };
+                    args = ApplyAction(rule, args);
                     if (args != before) LbLog.Info(Tag, $"{rule.Type}: args → {args}");
                 }
                 // Markers are collected from CONFIGURED rules whether or not their probe fired this
@@ -129,11 +125,9 @@ internal static class RulePipeline
                 if (passes)
                 {
                     fired = true;
-                    args = rule.Type switch
-                    {
-                        LaunchRule.TypePrefix => ApplyPrefix(rule, args),
-                        _ => args,
-                    };
+                    // Example treatments — per action, like ModifyExemple. Prefix and Suffix: same
+                    // as the real thing.
+                    args = ApplyAction(rule, args);
                 }
                 if (rule.RemoveFilter && rule.Filter.Length > 0)
                     removeMarkers.AddRange(SplitList(rule.Filter, rule.CommaFilter));
@@ -192,6 +186,21 @@ internal static class RulePipeline
     }
 
     // ── actions ───────────────────────────────────────────────────────────────
+
+    private static string ApplyAction(LaunchRule rule, string args) => rule.Type switch
+    {
+        LaunchRule.TypePrefix => ApplyPrefix(rule, args),
+        LaunchRule.TypeSuffix => ApplySuffix(rule, args),
+        _ => args,
+    };
+
+    /// <summary>Suffix: as ARGUMENT = one token (trimmed) appended after every existing argument;
+    /// as CMDLINE = the text appended VERBATIM to the joined argument string — a leading space is
+    /// the author's to include, exactly as in the original (cmd + suffix, no separator).</summary>
+    private static string ApplySuffix(LaunchRule rule, string args)
+        => rule.AsArg
+            ? RuleArgs.Join(RuleArgs.Split(args).Concat(new[] { rule.Suffix.Trim() }))
+            : args + rule.Suffix;
 
     /// <summary>Prefix: as ARGUMENT = one token (trimmed) inserted before every existing argument;
     /// as CMDLINE = the text prepended verbatim to the joined argument string, then re-parsed — which

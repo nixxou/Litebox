@@ -29,6 +29,7 @@ namespace LbApiHost.Host.Rules;
 internal sealed class LaunchRule
 {
     public const string TypePrefix = "Prefix";
+    public const string TypeSuffix = "Suffix";
 
     public string Type { get; set; } = TypePrefix;
     public bool Enabled { get; set; } = true;
@@ -40,6 +41,12 @@ internal sealed class LaunchRule
     /// prepended verbatim to the joined argument string and re-parsed, so it may carry SEVERAL
     /// arguments at once (BigBoxProfile's "Add As Argument" / "Add As cmdLine" radio).</summary>
     public bool AsArg { get; set; } = true;
+
+    // ── Suffix ──
+    /// <summary>The text to append to the emulator's arguments. Same trim rule as Prefix (trimmed
+    /// as ARGUMENT, verbatim as CMDLINE — a LEADING space is often the point there), appended at the
+    /// very end; the original never needed to detach the exe for this one.</summary>
+    public string Suffix { get; set; } = "";
 
     // ── probes (shared by every action type) ──
     /// <summary>"Only if cmdLine contains" — case-insensitive substring over exe + arguments.</summary>
@@ -70,6 +77,7 @@ internal sealed class LaunchRule
     public bool IsConfigured => Type switch
     {
         TypePrefix => Prefix.Length > 0,
+        TypeSuffix => Suffix.Length > 0,
         _ => false,
     };
 
@@ -80,6 +88,7 @@ internal sealed class LaunchRule
         string d = Type switch
         {
             TypePrefix => (AsArg ? "Prefix this to the Arg List : " : "Prefix this to the command line : ") + Prefix,
+            TypeSuffix => (AsArg ? "Suffix this to the Arg List : " : "Suffix this to the command line : ") + Suffix,
             _ => Type,
         };
         if (Filter.Length > 0) d += $" [Only if command line contains {Filter}]" + (MatchAllFilter ? "[matchall]" : "");

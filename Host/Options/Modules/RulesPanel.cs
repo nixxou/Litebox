@@ -62,7 +62,7 @@ internal static class RulesPanel
 
         Row(ModulePanelKit.Caption(
             "Actions are ported from BigBoxProfile one by one, each verified against the original before "
-            + "the next lands. Available today: Prefix (prepend to the argument list or the command line).", dpiS, 620), S(48), 18);
+            + "the next lands. Available today: Prefix and Suffix (prepend / append, to the argument list or the command line).", dpiS, 620), S(48), 18);
 
         return p;
     }

@@ -154,28 +154,45 @@ internal static class LaunchRulesPanel
     private static string DefaultExampleIn(string scope, string entityId)
     {
         Unbroken.LaunchBox.Plugins.Data.IEmulator? emu = null;
+        string romPath = "";
         try
         {
             var dm = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager;
             string? emuId = null;
-            if (scope == Data.LiteBoxOption.ScopeEmulator) emuId = entityId;
-            else if (scope == Data.LiteBoxOption.ScopeGame)
-                emuId = dm?.GetAllGames()?.FirstOrDefault(g => string.Equals(g.Id, entityId, StringComparison.OrdinalIgnoreCase))?.EmulatorId;
-            else
+            if (scope == Data.LiteBoxOption.ScopeGame)
+            {
+                var g = dm?.GetAllGames()?.FirstOrDefault(x => string.Equals(x.Id, entityId, StringComparison.OrdinalIgnoreCase));
+                emuId = g?.EmulatorId;
+                romPath = g?.ApplicationPath ?? "";
+            }
+            else if (scope == Data.LiteBoxOption.ScopeVersion)
             {
                 foreach (var g in dm?.GetAllGames() ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IGame>())
                 {
                     var app = g.GetAllAdditionalApplications()?.FirstOrDefault(a => string.Equals(a.Id, entityId, StringComparison.OrdinalIgnoreCase));
                     if (app == null) continue;
                     emuId = app.UseEmulator && !string.IsNullOrEmpty(app.EmulatorId) ? app.EmulatorId : g.EmulatorId;
+                    romPath = app.ApplicationPath ?? "";
                     break;
                 }
+            }
+            else
+            {
+                emuId = entityId;
+                // A ROM this emulator actually serves, picked at random — a fresh pick each time the
+                // page opens keeps the preview honest across a varied library (Mehdi's ask).
+                var mine = dm?.GetAllGames()?.Where(g => string.Equals(g.EmulatorId, entityId, StringComparison.OrdinalIgnoreCase)
+                                                         && !string.IsNullOrWhiteSpace(g.ApplicationPath)).ToList();
+                if (mine is { Count: > 0 }) romPath = mine[Random.Shared.Next(mine.Count)].ApplicationPath ?? "";
             }
             if (!string.IsNullOrEmpty(emuId))
                 emu = dm?.GetAllEmulators()?.FirstOrDefault(x => string.Equals(x.Id, emuId, StringComparison.OrdinalIgnoreCase));
         }
         catch { }
-        if (emu == null) return "emulator.exe \"FULL\\PATH\\TO\\ROM\\FILE\"";
+        // The path as a real launch would pass it: LB-root-relative entries resolved absolute.
+        try { if (romPath.Length > 0) romPath = LbApiHost.Host.HostLaunch.ResolvePath(romPath); } catch { }
+        if (emu == null)
+            return "emulator.exe \"" + (romPath.Length > 0 ? romPath : "FULL\\PATH\\TO\\ROM\\FILE") + "\"";
 
         string exe = "emulator.exe", cmd = "";
         bool noQuotes = false, noSpace = false, nameOnly = false;
@@ -183,7 +200,11 @@ internal static class LaunchRulesPanel
         try { cmd = emu.CommandLine?.Trim() ?? ""; } catch { }
         try { noQuotes = emu.NoQuotes; noSpace = emu.NoSpace; nameOnly = emu.FileNameWithoutExtensionAndPath; } catch { }
 
-        string rom = nameOnly ? "ROMFILE" : "FULL\\PATH\\TO\\ROM\\FILE";
+        string rom;
+        if (romPath.Length > 0)
+            rom = nameOnly ? (SafeNameOnly(romPath) ?? "ROMFILE") : romPath;
+        else
+            rom = nameOnly ? "ROMFILE" : "FULL\\PATH\\TO\\ROM\\FILE";
         if (!noQuotes) rom = "\"" + rom + "\"";
         if (cmd.IndexOf("%romfile%", StringComparison.OrdinalIgnoreCase) >= 0)
         {
@@ -193,6 +214,11 @@ internal static class LaunchRulesPanel
         }
         return exe + (cmd.Length > 0 ? " " + cmd : "") + (noSpace ? "" : " ") + rom;
     }
+    private static string? SafeNameOnly(string path)
+    {
+        try { return System.IO.Path.GetFileNameWithoutExtension(path); } catch { return null; }
+    }
+
     /// <summary>The Prefix editor — grouped, with the shared probe blocks (mode dropdowns + Manage…).
     /// Same stored shape as BigBoxProfile's Prefix_Config; only the surface changed.</summary>
     private sealed class PrefixRuleDialog : LiteBoxForm

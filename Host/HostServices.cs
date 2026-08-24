@@ -1341,7 +1341,9 @@ internal static class HostLaunch
     private static string SafeStr(Func<string> f) { try { return f() ?? ""; } catch { return ""; } }
     private static int? SafeNullableInt(Func<int?> f) { try { return f(); } catch { return null; } }
 
-    private static string ResolvePath(string p)
+    /// <summary>LB-root-relative path resolution — internal so the Launch Rules preview can show the
+    /// same absolute ROM path a real launch would put on the command line.</summary>
+    internal static string ResolvePath(string p)
     {
         if (string.IsNullOrEmpty(p) || Path.IsPathRooted(p)) return p;
         try { return Path.GetFullPath(Path.Combine(_lbRoot ?? AppContext.BaseDirectory, p)); } catch { return p; }

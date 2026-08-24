@@ -44,11 +44,24 @@ internal static class LaunchRulesPanel
         Row(ModulePanelKit.Caption("Example command IN:", dpiS, 620), S(18));
         var exIn = new TextBox
         {
-            Text = DefaultExampleIn(scope, entityId), Width = S(560),
+            Text = DefaultExampleIn(scope, entityId), Width = S(470), Location = new Point(0, 0),
             BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, BorderStyle = BorderStyle.FixedSingle,
             Enabled = !readOnly,
         };
-        Row(exIn, S(28));
+        // Another random game of this emulator, through the same real-launch construction. Only the
+        // emulator scope has anything to re-roll — a game or version IS its own example.
+        var reroll = new Button
+        {
+            Text = "New example", Location = new Point(S(478), 0), Size = new Size(S(82), S(25)),
+            BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, FlatStyle = FlatStyle.Flat,
+            Enabled = !readOnly && scope == Data.LiteBoxOption.ScopeEmulator,
+        };
+        reroll.FlatAppearance.BorderColor = Color.FromArgb(64, 64, 68);
+        reroll.Click += (_, _) => exIn.Text = DefaultExampleIn(scope, entityId);
+        var inRow = new Panel { Size = new Size(S(562), S(27)), BackColor = ModulePanelKit.Bg };
+        inRow.Controls.Add(exIn);
+        inRow.Controls.Add(reroll);
+        Row(inRow, S(30));
         Row(ModulePanelKit.Caption("Command OUT:", dpiS, 620), S(18));
         var exOut = new TextBox
         {
@@ -146,77 +159,49 @@ internal static class LaunchRulesPanel
         });
     }
 
-    /// <summary>The preview's default IN line — the SAME string the Details page shows as "Sample
-    /// Command" (exe + default command-line parameters + ROM token, honouring NoQuotes / NoSpace /
-    /// name-only and the %romfile% in-place substitution), because that IS what the rules will
-    /// receive. The entity's emulator is resolved per scope: the emulator itself; a game's assigned
-    /// emulator; a version's own emulator when it has one, else its game's. Free text either way.</summary>
+    /// <summary>The preview's default IN line — the very line a real launch of the entity would
+    /// spawn, built by HostLaunch.PreviewCommandLine (per-platform command line, the game's custom
+    /// parameters, the integration plugin's NormalizeCommandLine, variable expansion, ROM-token
+    /// flags), minus only the side-effectful steps (archive extraction, PrepareForLaunch). The game:
+    /// a game page uses its own, a version its own, an emulator draws one of ITS games at random —
+    /// the "New example" button redraws. Placeholder only when nothing real can be found.</summary>
     private static string DefaultExampleIn(string scope, string entityId)
     {
-        Unbroken.LaunchBox.Plugins.Data.IEmulator? emu = null;
-        string romPath = "";
         try
         {
             var dm = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager;
-            string? emuId = null;
+            Unbroken.LaunchBox.Plugins.Data.IGame? game = null;
+            Unbroken.LaunchBox.Plugins.Data.IAdditionalApplication? app = null;
+
             if (scope == Data.LiteBoxOption.ScopeGame)
-            {
-                var g = dm?.GetAllGames()?.FirstOrDefault(x => string.Equals(x.Id, entityId, StringComparison.OrdinalIgnoreCase));
-                emuId = g?.EmulatorId;
-                romPath = g?.ApplicationPath ?? "";
-            }
+                game = dm?.GetAllGames()?.FirstOrDefault(x => string.Equals(x.Id, entityId, StringComparison.OrdinalIgnoreCase));
             else if (scope == Data.LiteBoxOption.ScopeVersion)
             {
                 foreach (var g in dm?.GetAllGames() ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IGame>())
                 {
-                    var app = g.GetAllAdditionalApplications()?.FirstOrDefault(a => string.Equals(a.Id, entityId, StringComparison.OrdinalIgnoreCase));
-                    if (app == null) continue;
-                    emuId = app.UseEmulator && !string.IsNullOrEmpty(app.EmulatorId) ? app.EmulatorId : g.EmulatorId;
-                    romPath = app.ApplicationPath ?? "";
+                    var a = g.GetAllAdditionalApplications()?.FirstOrDefault(x => string.Equals(x.Id, entityId, StringComparison.OrdinalIgnoreCase));
+                    if (a == null) continue;
+                    game = g; app = a;
                     break;
                 }
             }
             else
             {
-                emuId = entityId;
-                // A ROM this emulator actually serves, picked at random — a fresh pick each time the
-                // page opens keeps the preview honest across a varied library (Mehdi's ask).
                 var mine = dm?.GetAllGames()?.Where(g => string.Equals(g.EmulatorId, entityId, StringComparison.OrdinalIgnoreCase)
                                                          && !string.IsNullOrWhiteSpace(g.ApplicationPath)).ToList();
-                if (mine is { Count: > 0 }) romPath = mine[Random.Shared.Next(mine.Count)].ApplicationPath ?? "";
+                if (mine is { Count: > 0 }) game = mine[Random.Shared.Next(mine.Count)];
             }
-            if (!string.IsNullOrEmpty(emuId))
-                emu = dm?.GetAllEmulators()?.FirstOrDefault(x => string.Equals(x.Id, emuId, StringComparison.OrdinalIgnoreCase));
-        }
-        catch { }
-        // The path as a real launch would pass it: LB-root-relative entries resolved absolute.
-        try { if (romPath.Length > 0) romPath = LbApiHost.Host.HostLaunch.ResolvePath(romPath); } catch { }
-        if (emu == null)
-            return "emulator.exe \"" + (romPath.Length > 0 ? romPath : "FULL\\PATH\\TO\\ROM\\FILE") + "\"";
+            if (game == null) return @"emulator.exe ""FULL\PATH\TO\ROM\FILE""";
 
-        string exe = "emulator.exe", cmd = "";
-        bool noQuotes = false, noSpace = false, nameOnly = false;
-        try { exe = System.IO.Path.GetFileName(emu.ApplicationPath?.Trim() ?? "") is { Length: > 0 } f ? f : exe; } catch { }
-        try { cmd = emu.CommandLine?.Trim() ?? ""; } catch { }
-        try { noQuotes = emu.NoQuotes; noSpace = emu.NoSpace; nameOnly = emu.FileNameWithoutExtensionAndPath; } catch { }
+            string? emuId = scope == Data.LiteBoxOption.ScopeEmulator ? entityId
+                          : app is { UseEmulator: true } && !string.IsNullOrEmpty(app.EmulatorId) ? app.EmulatorId
+                          : game.EmulatorId;
+            var emu = string.IsNullOrEmpty(emuId) ? null
+                : dm?.GetAllEmulators()?.FirstOrDefault(x => string.Equals(x.Id, emuId, StringComparison.OrdinalIgnoreCase));
 
-        string rom;
-        if (romPath.Length > 0)
-            rom = nameOnly ? (SafeNameOnly(romPath) ?? "ROMFILE") : romPath;
-        else
-            rom = nameOnly ? "ROMFILE" : "FULL\\PATH\\TO\\ROM\\FILE";
-        if (!noQuotes) rom = "\"" + rom + "\"";
-        if (cmd.IndexOf("%romfile%", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            cmd = System.Text.RegularExpressions.Regex.Replace(cmd, "%romfile%", _ => rom,
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            return exe + (cmd.Length > 0 ? " " + cmd : "");
+            return HostLaunch.PreviewCommandLine(game, app, emu) ?? @"emulator.exe ""FULL\PATH\TO\ROM\FILE""";
         }
-        return exe + (cmd.Length > 0 ? " " + cmd : "") + (noSpace ? "" : " ") + rom;
-    }
-    private static string? SafeNameOnly(string path)
-    {
-        try { return System.IO.Path.GetFileNameWithoutExtension(path); } catch { return null; }
+        catch { return @"emulator.exe ""FULL\PATH\TO\ROM\FILE"""; }
     }
 
     /// <summary>The Prefix editor — grouped, with the shared probe blocks (mode dropdowns + Manage…).

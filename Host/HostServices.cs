@@ -735,6 +735,46 @@ internal static class HostLaunch
         return (targetPath, cmd ?? "", useEmu);
     }
 
+    /// <summary>The command line a launch WOULD run, side-effect free — for the Launch Rules preview.
+    /// Replicates RunProcess's construction: per-platform command line, the game's/version's custom
+    /// parameters, the integration plugin's NormalizeCommandLine, launch-variable expansion, and
+    /// BuildEmulatorArgs' ROM token — everything except the steps with side effects (archive
+    /// extraction / m3u picking in ResolveLaunchRomPath, and the plugin's PrepareForLaunch, both of
+    /// which act on the world, not just the string). Returns the FULL line, exe first, quoted as the
+    /// probes will see it; null when the entity has nothing to launch.</summary>
+    internal static string? PreviewCommandLine(IGame game, IAdditionalApplication app, IEmulator emulator)
+    {
+        try
+        {
+            var main = ResolveMain(game, app, emulator, null);
+            if (main == null) return null;
+            var (targetPath, cmd, useEmu) = main.Value;
+
+            string fileName, args;
+            if (useEmu && emulator != null && !string.IsNullOrEmpty(emulator.ApplicationPath))
+            {
+                var ep = ResolveEmulatorPlatform(emulator, game);
+                string emuCmd = !string.IsNullOrWhiteSpace(cmd) ? cmd
+                              : (SafeStr(() => ep?.CommandLine) is { Length: > 0 } pc ? pc : SafeStr(() => emulator.CommandLine));
+                fileName = ResolvePath(emulator.ApplicationPath);
+                emuCmd = EmuPlugins.NormalizeCommandLine(emulator, emuCmd ?? "", fileName);
+                string romAbs = ResolvePath(targetPath);
+                bool cmdPlacesRom = !string.IsNullOrEmpty(emuCmd)
+                                    && emuCmd.IndexOf("%romfile%", StringComparison.OrdinalIgnoreCase) >= 0;
+                emuCmd = ExpandLaunchVariables(emuCmd, romAbs, fileName, game);
+                args = cmdPlacesRom ? (emuCmd?.Trim() ?? "") : BuildEmulatorArgs(emuCmd, romAbs, emulator);
+            }
+            else
+            {
+                fileName = ResolvePath(targetPath);
+                args = cmd?.Trim() ?? "";
+            }
+            string exeToken = Rules.RuleArgs.Join(new[] { fileName });
+            return args.Length > 0 ? exeToken + " " + args : exeToken;
+        }
+        catch { return null; }
+    }
+
     /// <summary>Resolves the command, spawns (or logs in DryRun), waits for exit.</summary>
     private static void RunProcess(string targetPath, string cmd, IEmulator emulator, IGame game, bool useEmu, string label,
         Action<Process> onSpawned = null, IAdditionalApplication selectedApp = null)

@@ -109,6 +109,9 @@ internal static class RulesPanel
         }
         var del = Btn("Remove selected");
         var delAll = Btn("Remove all in this list");
+        var export = Btn("Export all\u2026");
+        var import_ = Btn("Import\u2026");
+        export.Enabled = true;   // exporting is read-only, allowed even in read-only mode
 
         string Scope() => kind.SelectedIndex switch
         {
@@ -142,6 +145,92 @@ internal static class RulesPanel
                     MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             foreach (var r in rows.ToList()) LaunchRuleStore.Clear(r.Scope, r.EntityId);
             Reload();
+        };
+
+        // ── whole-set export / import. The file wraps the stored JSON plus entity names; import
+        // matches by id, then by unique name (ids mean nothing on another install), REPLACES the
+        // rules of what it matches, and says exactly what it will do before doing it.
+        var jsonPretty = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+        export.Click += (_, _) =>
+        {
+            try
+            {
+                var set = LaunchRuleStore.ExportAll(MonitorsPanel.NameResolver);
+                if (set.Entries.Count == 0)
+                {
+                    MessageBox.Show(root, "There are no rules to export.", "Launch rules",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                using var dlg = new SaveFileDialog
+                {
+                    Filter = "Launch rules (*.json)|*.json", FileName = "litebox-launch-rules.json",
+                };
+                if (dlg.ShowDialog(root.FindForm()) != DialogResult.OK) return;
+                System.IO.File.WriteAllText(dlg.FileName,
+                    System.Text.Json.JsonSerializer.Serialize(set, jsonPretty));
+                MessageBox.Show(root, $"Exported {set.Entries.Count} rule list(s).", "Launch rules",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(root, "Export failed: " + ex.Message, "Launch rules",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        import_.Click += (_, _) =>
+        {
+            try
+            {
+                using var dlg = new OpenFileDialog { Filter = "Launch rules (*.json)|*.json|All files (*.*)|*.*" };
+                if (dlg.ShowDialog(root.FindForm()) != DialogResult.OK) return;
+                var set = System.Text.Json.JsonSerializer.Deserialize<LaunchRuleStore.RuleSetExport>(
+                    System.IO.File.ReadAllText(dlg.FileName));
+                if (set == null || set.Format != "LiteBoxLaunchRules" || set.Entries.Count == 0)
+                {
+                    MessageBox.Show(root, "This file is not a LiteBox launch-rules export.", "Launch rules",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                var dm = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager;
+                string? EmuByName(string name)
+                {
+                    var hits = dm?.GetAllEmulators()?.Where(e => string.Equals(e.Title, name, StringComparison.OrdinalIgnoreCase)).ToList();
+                    return hits is { Count: 1 } ? hits[0].Id : null;
+                }
+                string? GameByName(string name)
+                {
+                    var hits = dm?.GetAllGames()?.Where(g => string.Equals(g.Title, name, StringComparison.OrdinalIgnoreCase)).ToList();
+                    return hits is { Count: 1 } ? hits[0].Id : null;
+                }
+                bool Exists(string scope, string id) =>
+                    MonitorsPanel.NameResolver(scope)(id) != null;
+
+                var plan = LaunchRuleStore.PlanImport(set, EmuByName, GameByName, Exists);
+                int byId = plan.Count(x => x.How == "matched by id");
+                int byName = plan.Count(x => x.How == "matched by name");
+                var missed = plan.Where(x => x.TargetId == null).ToList();
+                string msg = $"Import {plan.Count} rule list(s): {byId} matched by id, {byName} by name"
+                    + (missed.Count > 0
+                        ? $", {missed.Count} NOT matched (skipped):\n  "
+                          + string.Join("\n  ", missed.Take(8).Select(x => $"{x.Entry.Scope} \"{(x.Entry.EntityName.Length > 0 ? x.Entry.EntityName : x.Entry.EntityId)}\" — {x.How}"))
+                          + (missed.Count > 8 ? $"\n  … and {missed.Count - 8} more" : "")
+                        : ".")
+                    + "\n\nExisting rules on the matched entities will be REPLACED. Continue?";
+                if (MessageBox.Show(root, msg, "Launch rules",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+
+                int done = LaunchRuleStore.ApplyImport(plan);
+                MessageBox.Show(root, $"Imported {done} rule list(s).", "Launch rules",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                Reload();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(root, "Import failed: " + ex.Message, "Launch rules",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         };
 
         root.Controls.Add(list);

@@ -242,4 +242,96 @@ internal static class LaunchRuleStore
     }
 
     public static void Clear(string scope, string entityId) => Set(scope, entityId, null);
+
+    // ── whole-set export / import ────────────────────────────────────────────
+    // The file format wraps the stored JSON as-is, plus the entity NAMES — ids are meaningless on
+    // another install, so import matches by id first and falls back to the name (emulators and
+    // games; versions are id-only, their names are too ambiguous across libraries). Import REPLACES
+    // the rules of the entities it matches and touches nothing else.
+
+    internal sealed class RuleSetEntry
+    {
+        public string Scope { get; set; } = "";
+        public string EntityId { get; set; } = "";
+        public string EntityName { get; set; } = "";
+        public List<LaunchRule> Rules { get; set; } = new();
+    }
+
+    internal sealed class RuleSetExport
+    {
+        public string Format { get; set; } = "LiteBoxLaunchRules";
+        public int Version { get; set; } = 1;
+        public List<RuleSetEntry> Entries { get; set; } = new();
+    }
+
+    private static readonly string[] AllScopes =
+        { LiteBoxOption.ScopeEmulator, LiteBoxOption.ScopeGame, LiteBoxOption.ScopeVersion };
+
+    /// <summary>Every stored rule list, names resolved through <paramref name="nameOf"/>.</summary>
+    public static RuleSetExport ExportAll(Func<string, Func<string, string?>> nameOf)
+    {
+        var export = new RuleSetExport();
+        foreach (var scope in AllScopes)
+        {
+            Dictionary<string, string> raw;
+            try { raw = LiteBoxOptionsDb.AllOf(scope, Key); } catch { continue; }
+            var resolve = nameOf(scope);
+            foreach (var kv in raw)
+            {
+                var rules = Get(scope, kv.Key);
+                if (rules.Count == 0) continue;
+                export.Entries.Add(new RuleSetEntry
+                {
+                    Scope = scope, EntityId = kv.Key,
+                    EntityName = resolve(kv.Key) ?? "",
+                    Rules = rules,
+                });
+            }
+        }
+        return export;
+    }
+
+    internal sealed record ImportPlanItem(RuleSetEntry Entry, string? TargetId, string How);
+
+    /// <summary>Matches every entry of an export against THIS library: by id when the entity exists,
+    /// by unique name otherwise (emulator/game). The plan is computed first so the confirmation can
+    /// say exactly what will happen before anything is written.</summary>
+    public static List<ImportPlanItem> PlanImport(RuleSetExport export,
+        Func<string, string?> emulatorIdByName, Func<string, string?> gameIdByName,
+        Func<string, string, bool> entityExists)
+    {
+        var plan = new List<ImportPlanItem>();
+        foreach (var e in export.Entries)
+        {
+            if (!AllScopes.Contains(e.Scope)) { plan.Add(new ImportPlanItem(e, null, "unknown scope")); continue; }
+            if (e.EntityId.Length > 0 && entityExists(e.Scope, e.EntityId))
+            {
+                plan.Add(new ImportPlanItem(e, e.EntityId, "matched by id"));
+                continue;
+            }
+            string? byName = e.EntityName.Length == 0 ? null
+                : e.Scope == LiteBoxOption.ScopeEmulator ? emulatorIdByName(e.EntityName)
+                : e.Scope == LiteBoxOption.ScopeGame ? gameIdByName(e.EntityName)
+                : null;
+            plan.Add(byName != null
+                ? new ImportPlanItem(e, byName, "matched by name")
+                : new ImportPlanItem(e, null, e.Scope == LiteBoxOption.ScopeVersion
+                    ? "version not found (versions match by id only)" : "not found"));
+        }
+        return plan;
+    }
+
+    /// <summary>Writes the matched entries — each REPLACES that entity's rules. Returns how many.</summary>
+    public static int ApplyImport(List<ImportPlanItem> plan)
+    {
+        int done = 0;
+        foreach (var item in plan)
+        {
+            if (item.TargetId == null) continue;
+            Set(item.Entry.Scope, item.TargetId, item.Entry.Rules);
+            done++;
+        }
+        if (done > 0) LbLog.Info(Tag, $"rule-set import: {done} entit(ies) written");
+        return done;
+    }
 }

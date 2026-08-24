@@ -238,7 +238,10 @@ internal static class GpuColor
         catch { return ""; }
     }
 
-    /// <summary>Set one monitor's scaling (NVAPI enum name). Returns a note; "" on the empty request.</summary>
+    /// <summary>Set one monitor's scaling (NVAPI enum name). Returns a note; "" on the empty request.
+    /// The NVIDIA app's "Override the scaling mode set by games" checkbox is NOT here: measured — toggling
+    /// it writes nothing to display config, DRS, or any NVIDIA registry hive, only to the app's own private
+    /// IndexedDB (isOverrideScalingEnabled). It is out of NVAPI's reach; do not hunt for it again.</summary>
     public static string ScalingSet(string monitorDevicePath, string scalingName)
     {
         if (scalingName.Length == 0) return "";

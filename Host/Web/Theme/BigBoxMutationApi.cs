@@ -1,4 +1,4 @@
-// POST endpoints that write to LiteBox's library / drive a launch on behalf of the theme surfaces:
+﻿// POST endpoints that write to LiteBox's library / drive a launch on behalf of the theme surfaces:
 //
 //   POST /bigbox|launchbox/api/games/{id}/rating   body { "value": 0..5 }
 //   POST …/api/games/{id}/favorite                 body { "value": true|false }
@@ -23,6 +23,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using LbApiHost.Host;
 using LbApiHost.Host.Data;
+using LbApiHost.Host.Modules;
 using LbApiHost.Host.Diag;
 using LbApiHost.Host.Parental;
 using LbApiHost.Host.Rom;
@@ -90,6 +91,22 @@ internal static class BigBoxMutationApi
         var emulator = FindEmulator(emulatorId);
         var app = FindAdditionalApp(game, additionalAppId);
 
+        // Per-launch monitor profile, picked on the game page. It rides the SAME one-shot as the Tools
+        // menu's "Run next game as" — armed right before Launch and consumed by the first resolve, which
+        // is what puts it above version / game / emulator assignments. The selection itself lives only
+        // in the page's JS, so nothing here persists; PUBLIC profiles only, like every web surface.
+        var monitorProfileId = TryGetString(body, "monitorProfileId");
+        Monitors.MonitorProfile? monProfile = null;
+        if (!string.IsNullOrEmpty(monitorProfileId) && LbModules.On(LbModule.Monitors))
+        {
+            monProfile = Monitors.MonitorProfileStore.ById(monitorProfileId);
+            if (monProfile is not { Public: true })
+            {
+                Log($"play id={id}: monitor profile {monitorProfileId} unknown or not public — ignored");
+                monProfile = null;
+            }
+        }
+
         // Marshal onto the WinForms UI thread; run in the background so the HTTP ack returns immediately.
         // Arm the ROM pick in-process IMMEDIATELY before HostLaunch.Launch — RomExtractor.ResolveLaunch
         // consumes it once on the launch worker thread (single-shot; no cross-process registry — same
@@ -103,13 +120,21 @@ internal static class BigBoxMutationApi
                 UiThread.Invoke(() =>
                 {
                     if (armPick) RomLaunchPick.Arm(game, additionalAppId, archiveEntryFileName, forcePriority);
+                    if (monProfile != null)
+                        Monitors.MonitorAssign.SetNextLaunch(new Monitors.Assignment(Monitors.AssignKind.Profile, monProfile.Id));
                     HostLaunch.Launch("web", game, app, emulator, null);
                 });
             }
-            catch (Exception ex) { Log($"play id={id} launch failed: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                Log($"play id={id} launch failed: {ex.Message}");
+                // A launch that never reached the resolver must not leave the one-shot armed for
+                // whatever launch comes next — that next launch never asked for this profile.
+                if (monProfile != null) try { Monitors.MonitorAssign.SetNextLaunch(Monitors.Assignment.Unset); } catch { }
+            }
         });
 
-        Log($"play id={id} emu={emulatorId ?? "default"} app={additionalAppId ?? "default"} entry={archiveEntryFileName ?? "<none>"} forcePriority={forcePriority} → HostLaunch.Launch(\"web\")");
+        Log($"play id={id} emu={emulatorId ?? "default"} app={additionalAppId ?? "default"} entry={archiveEntryFileName ?? "<none>"} forcePriority={forcePriority} monitor={monProfile?.Name ?? "<none>"} → HostLaunch.Launch(\"web\")");
         return Ok(new { ok = true });
     }
 

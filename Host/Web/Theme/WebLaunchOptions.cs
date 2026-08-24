@@ -1,4 +1,4 @@
-// S6 — builds the detail.json `launchOptions` DTO for the web themes (lb-web / bb-web): the
+﻿// S6 — builds the detail.json `launchOptions` DTO for the web themes (lb-web / bb-web): the
 // alt-emulator / multi-disc / Select-ROM launch menu. Byte-compatible with the shape the shipped theme
 // JS parses (litebox/app.js + bigbox/engine/app.js) AND with ExtendDB's HostRomBridge, so the existing
 // JS drives it unchanged:
@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using LbApiHost.Host.Data;
+using LbApiHost.Host.Modules;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -88,6 +89,23 @@ internal static class WebLaunchOptions
                 });
             }
 
+            // Public monitor profiles, for the theme's per-launch "Monitor profile" picker. Null (absent
+            // in the JSON) when the Monitors module is off or nothing is public — which is also what hides
+            // the menu client-side, so the gate lives in exactly one place.
+            object? monDtos = null;
+            try
+            {
+                if (LbModules.On(LbModule.Monitors))
+                {
+                    var pubs = Monitors.MonitorProfileStore.All()
+                        .Where(mp => mp.Public && !mp.IsEmpty)
+                        .Select(mp => (object)new { id = mp.Id, name = mp.Name })
+                        .ToList();
+                    if (pubs.Count > 0) monDtos = pubs;
+                }
+            }
+            catch { }
+
             return new
             {
                 emulators = emuDtos,
@@ -95,6 +113,7 @@ internal static class WebLaunchOptions
                 mainPathIsArchive = mainIsArc,
                 mainExeName = mainExe,
                 mainUseDosBox = mainDos,
+                monitorProfiles = monDtos,
             };
         }
         catch { return null; }

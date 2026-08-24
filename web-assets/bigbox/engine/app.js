@@ -82,6 +82,10 @@
   var recentSel = 0, railSel = 0;
   var current = "categories";
   var currentGame = 0, detailsReturn = "games";
+  // Profil moniteur choisi pour CE lancement, sur CETTE fiche. Transitoire par
+  // contrat : jamais persiste (ni localStorage ni serveur), efface en quittant
+  // la fiche — l'inverse des selections version/emulateur, qui sont memorisees.
+  var monPickId = null;
   var shownCat = 0, catTimer = null;   // index affiché dans le niveau courant + timer dwell
   var recentItems = [];                // "recent" du nœud catégorie courant (items {id,t,thumb,…})
   var recentEpoch = 0;                 // cache-buster du recent (bumpé serveur à la sortie d'un jeu)
@@ -3596,6 +3600,27 @@
         });
       }
 
+      // « Monitor profile » — un profil PUBLIC applique a CE lancement seulement,
+      // par-dessus toute assignation version/jeu/emulateur (one-shot serveur).
+      // Absent quand le module Monitors est coupe ou sans profil public : le
+      // serveur n'envoie alors pas monitorProfiles, la gate vit chez lui.
+      var mons = lo.monitorProfiles || [];
+      if (mons.length > 0) {
+        if (monPickId && !mons.some(function (m) { return m.id === monPickId; })) monPickId = null;
+        var monChildren = [{ label: (monPickId ? "  " : "● ") + "Default", action: "select_monitor", monitorId: "" }];
+        var monCurName = null;
+        for (var im = 0; im < mons.length; im++) {
+          var mp = mons[im];
+          if (mp.id === monPickId) monCurName = mp.name;
+          monChildren.push({ label: (mp.id === monPickId ? "● " : "  ") + mp.name, action: "select_monitor", monitorId: mp.id });
+        }
+        extraTop.push({
+          label: monCurName ? ("Monitor profile: " + monCurName) : "Monitor profile",
+          action: "monitor_menu",
+          children: monChildren,
+        });
+      }
+
       // « Reset to defaults » — visible seulement quand la sélection (version /
       // émulateur / ROM) ou l'historique de lancement diffèrent des défauts.
       // Miroir du bouton ↺ LiteBox / LaunchBox-Web.
@@ -3627,7 +3652,7 @@
     }
     return items;
   }
-  function resetDetailMenu() { menuStack = [{ items: gameMenuItems(), sel: 0 }]; renderDetailMenu(0); }
+  function resetDetailMenu() { monPickId = null; menuStack = [{ items: gameMenuItems(), sel: 0 }]; renderDetailMenu(0); }
   // detail.json arrivé après coup : si on est au niveau racine du menu, on le reconstruit pour
   // refléter les enrichissements (« View VNDB Tags » apparaît, sous-menu Play apparaît…).
   // Comparaison structurelle (label + action + nb d'enfants) pour ne re-rendre que si nécessaire,
@@ -3777,7 +3802,14 @@
           else if (getRomForce(gLaunch, selVerLaunch)) body.forcePriority = true;   // ROM "Clear" → priorité pure
         }
       }
+      if (monPickId) body.monitorProfileId = monPickId;   // profil moniteur one-shot (fiche courante)
       postLaunch(body); return;
+    }
+    if (item.action === "select_monitor") {
+      monPickId = item.monitorId || null;
+      if (menuStack.length > 1) menuStack.pop();
+      rebuildCurrentDetailLevel();
+      return;
     }
     if (item.action === "select_emulator") {
       // Sélectionne cet émulateur pour le jeu courant (ne lance PAS), remonte
@@ -5429,6 +5461,7 @@
     // sous-menu Select ROM).
     if (current === "details" && target !== "details") {
       try { setArchiveMetaVisible(false); } catch (_) {}
+      monPickId = null;   // le choix de profil moniteur meurt avec la fiche
     }
     deactivateMouse();   // un changement d'écran : pas d'auto-survol sous le curseur
     descClear();         // stoppe le défilement de description de l'écran qu'on quitte

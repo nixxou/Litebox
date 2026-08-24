@@ -91,6 +91,18 @@ internal static class RuleSelfTest
         Check("disabled rule is skipped",
             new[] { Disabled(P("-a")), P("-b") }, "-x", "-b -x");
 
+        // ── the preview channel (EmulatorConfig.CalculateExemple) ──
+        CheckPreview("preview transforms the full line, exe kept in front",
+            Prefix("-a"), @"sd.exe ""C:\MyRomDir\MyRom.bin""", @"sd.exe -a C:\MyRomDir\MyRom.bin");
+
+        CheckPreview("preview runs the marker pass too",
+            Prefix("-a", filter: "-marker", remove: true), "sd.exe rom.bin -marker", "sd.exe -a rom.bin");
+
+        // The parse + re-join round trip dequotes even when no rule acts — visible in BigBoxProfile's
+        // own screenshot (IN quoted, OUT bare, one NON-CONFIGURED rule in the list).
+        CheckPreview("preview skips a non-configured rule (round-trip requote only)",
+            Prefix(""), @"sd.exe ""C:\MyRomDir\MyRom.bin""", @"sd.exe C:\MyRomDir\MyRom.bin");
+
         Console.WriteLine(_fail == 0 ? "ALL OK" : $"{_fail} FAILURE(S)");
         return _fail == 0 ? 0 : 1;
     }
@@ -111,6 +123,14 @@ internal static class RuleSelfTest
         => new[] { P(prefix, asArg, filter, comma, matchAll, remove, exclude, commaEx, matchAllEx) };
 
     private static LaunchRule Disabled(LaunchRule r) { r.Enabled = false; return r; }
+
+    private static void CheckPreview(string what, LaunchRule[] rules, string fullLine, string expected)
+    {
+        string got = RulePipeline.PreviewExample(rules.ToList(), fullLine);
+        if (got == expected) { Console.WriteLine($"  ok    {what}"); return; }
+        _fail++;
+        Console.WriteLine($"  FAIL  {what}\n        in       : {fullLine}\n        expected : {expected}\n        got      : {got}");
+    }
 
     private static void Check(string what, LaunchRule[] rules, string args, string expected)
     {

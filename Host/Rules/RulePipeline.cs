@@ -73,6 +73,43 @@ internal static class RulePipeline
         return args;
     }
 
+    /// <summary>The PREVIEW pipeline — BigBoxProfile's ModifyExemple channel, faithfully separate:
+    /// every action has an EXAMPLE treatment that may differ from the real one (RomExtractor's preview
+    /// shows the would-be path without extracting; Prefix's is identical to the real thing). The input
+    /// is a FULL command line, exe included, as typed in the "Example command IN" box; the output is
+    /// the whole line after every configured rule and the final marker pass — what EmulatorConfig's
+    /// CalculateExemple computed. A rule that throws is skipped (ModifyExemple's try/catch).</summary>
+    public static string PreviewExample(List<LaunchRule> rules, string fullCommandLine)
+    {
+        var all = RuleArgs.SplitFull(fullCommandLine);
+        if (all.Length == 0) return fullCommandLine;
+        string exe = all[0];
+        string args = RuleArgs.Join(all.Skip(1));
+
+        var removeMarkers = new List<string>();
+        foreach (var rule in rules)
+        {
+            if (!rule.Enabled || !rule.IsConfigured) continue;
+            try
+            {
+                if (ProbePasses(rule, exe, args))
+                    args = rule.Type switch
+                    {
+                        // Example treatments — per action, like ModifyExemple. Prefix: same as real.
+                        LaunchRule.TypePrefix => ApplyPrefix(rule, args),
+                        _ => args,
+                    };
+                if (rule.RemoveFilter && rule.Filter.Length > 0)
+                    removeMarkers.AddRange(SplitList(rule.Filter, rule.CommaFilter));
+            }
+            catch { /* the example never breaks the page */ }
+        }
+
+        var kept = RuleArgs.Split(args)
+            .Where(a => !removeMarkers.Contains(a.ToLowerInvariant().Trim()));
+        return RuleArgs.Join(new[] { exe }.Concat(kept));
+    }
+
     // ── probes ────────────────────────────────────────────────────────────────
 
     /// <summary>The shared filter/exclude block. Haystack = exe + args, case-insensitive substring.

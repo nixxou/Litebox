@@ -1,4 +1,4 @@
-// Argument-list ⇄ command-line conversions for the launch rules — faithful ports of the two
+﻿// Argument-list ⇄ command-line conversions for the launch rules — faithful ports of the two
 // BigBoxUtils helpers every BigBoxProfile action leans on, because the rules' semantics are DEFINED
 // in terms of them: "as argument" inserts into the parsed list, "as cmdLine" edits the joined string
 // and re-parses, and the marker-removal pass compares whole parsed arguments.
@@ -38,6 +38,24 @@ internal static class RuleArgs
             var args = new string[count - 1];
             for (int i = 1; i < count; i++)
                 args[i - 1] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(result, i * IntPtr.Size)) ?? "";
+            return args;
+        }
+        finally { LocalFree(result); }
+    }
+
+    /// <summary>Splits a FULL command line (exe first) — CommandLineToArgvW without the fake-exe
+    /// shim, so the first token gets the program-name parsing rules, exactly like the preview box in
+    /// BigBoxProfile's EmulatorConfig (CommandLineToArgs with addfakeexe=false).</summary>
+    public static string[] SplitFull(string commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) return Array.Empty<string>();
+        var result = CommandLineToArgvW(commandLine, out int count);
+        if (result == IntPtr.Zero) return new[] { commandLine };
+        try
+        {
+            var args = new string[count];
+            for (int i = 0; i < count; i++)
+                args[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(result, i * IntPtr.Size)) ?? "";
             return args;
         }
         finally { LocalFree(result); }

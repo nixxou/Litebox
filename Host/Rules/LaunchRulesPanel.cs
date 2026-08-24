@@ -37,12 +37,37 @@ internal static class LaunchRulesPanel
             + $"then emulator — rules here {(level == "emulator" ? "apply unless the game or version has its own" : $"replace the {(level == "version" ? "game's and emulator's" : "emulator's")}")}.",
             dpiS, 620), S(48));
 
+        // ── the live preview — BigBoxProfile's "Exemple Command IN / Emulator Command OUT" pair.
+        // The IN line is free text (exe included) so any scenario can be tried, markers included;
+        // the OUT recomputes on every keystroke and every change to the list, through each rule's
+        // EXAMPLE treatment (see RulePipeline.PreviewExample) plus the final marker pass.
+        Row(ModulePanelKit.Caption("Example command IN:", dpiS, 620), S(18));
+        var exIn = new TextBox
+        {
+            Text = DefaultExampleIn(scope, entityId), Width = S(560),
+            BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, BorderStyle = BorderStyle.FixedSingle,
+            Enabled = !readOnly,
+        };
+        Row(exIn, S(28));
+        Row(ModulePanelKit.Caption("Command OUT:", dpiS, 620), S(18));
+        var exOut = new TextBox
+        {
+            ReadOnly = true, Width = S(560),
+            BackColor = ModulePanelKit.Bg, ForeColor = ModulePanelKit.Sub, BorderStyle = BorderStyle.FixedSingle,
+        };
+        Row(exOut, S(28));
+
         var list = new ListBox
         {
             Width = S(560), Height = S(150),
             BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg,
             BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false,
         };
+        void Recalc()
+        {
+            try { exOut.Text = RulePipeline.PreviewExample(rules, exIn.Text); }
+            catch { exOut.Text = exIn.Text; }
+        }
         void Reload(int select = -1)
         {
             list.BeginUpdate();
@@ -50,7 +75,9 @@ internal static class LaunchRulesPanel
             foreach (var r in rules) list.Items.Add(r.Describe());
             list.EndUpdate();
             if (select >= 0 && select < list.Items.Count) list.SelectedIndex = select;
+            Recalc();
         }
+        exIn.TextChanged += (_, _) => Recalc();
         Reload(rules.Count > 0 ? 0 : -1);
         Row(list, S(156));
 
@@ -117,6 +144,26 @@ internal static class LaunchRulesPanel
             if (readOnly) return;
             try { LaunchRuleStore.Set(scope, entityId, rules); } catch { }
         });
+    }
+
+    /// <summary>The preview's default IN line — BigBoxProfile seeded it with the emulator's exe name
+    /// plus a sample rom path. The entity's real exe when it can be found cheaply, a placeholder
+    /// otherwise; free text either way.</summary>
+    private static string DefaultExampleIn(string scope, string entityId)
+    {
+        string exe = "emulator.exe";
+        try
+        {
+            if (scope == Data.LiteBoxOption.ScopeEmulator)
+            {
+                var e = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllEmulators()
+                    ?.FirstOrDefault(x => string.Equals(x.Id, entityId, StringComparison.OrdinalIgnoreCase));
+                var p = e?.ApplicationPath;
+                if (!string.IsNullOrWhiteSpace(p)) exe = System.IO.Path.GetFileName(p);
+            }
+        }
+        catch { }
+        return exe + " \"C:\\MyRomDir\\MyRom.bin\"";
     }
 
     /// <summary>The Prefix editor — every field of BigBoxProfile's Prefix_Config, plus Enabled.</summary>
@@ -197,12 +244,8 @@ internal static class LaunchRulesPanel
             ok.Location = new Point(S(250), S(398));
             ok.Click += (_, _) =>
             {
-                if (prefix.Text.Trim().Length == 0)
-                {
-                    MessageBox.Show(this, "The prefix is empty — the rule would do nothing.", "Prefix rule",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
+                // An empty prefix is allowed — the rule saves NON-CONFIGURED and is skipped at launch,
+                // BigBoxProfile's add-now-configure-later workflow.
                 rule.Enabled = enabled.Checked;
                 // As ARGUMENT the token is trimmed (BigBoxProfile trims too); as CMDLINE the text is
                 // kept verbatim — a trailing space before the rest of the line is often the point.

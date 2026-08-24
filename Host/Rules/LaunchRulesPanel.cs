@@ -1,4 +1,4 @@
-// The shared "Launch Rules" editor page — one control for the three attachment points (Edit Emulator
+﻿// The shared "Launch Rules" editor page — one control for the three attachment points (Edit Emulator
 // section, Edit Game page, Edit Additional Version tab), like MonitorAssignPanel is for profiles.
 // The list is an edit buffer: nothing touches the store until the window's own apply runs.
 //
@@ -165,106 +165,99 @@ internal static class LaunchRulesPanel
         catch { }
         return exe + " \"C:\\MyRomDir\\MyRom.bin\"";
     }
-
-    /// <summary>The Prefix editor — every field of BigBoxProfile's Prefix_Config, plus Enabled.</summary>
+    /// <summary>The Prefix editor — grouped, with the shared probe blocks (mode dropdowns + Manage…).
+    /// Same stored shape as BigBoxProfile's Prefix_Config; only the surface changed.</summary>
     private sealed class PrefixRuleDialog : LiteBoxForm
     {
         public PrefixRuleDialog(LaunchRule rule, float dpiS)
         {
             Text = "Prefix rule";
-            ClientSize = new Size(S(460), S(436));
+            ClientSize = new Size(S(462), S(496));
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false; MaximizeBox = false;
 
             int y = S(12);
-            Label Cap(string t)
-            {
-                var l = new Label { Text = t, AutoSize = true, Location = new Point(S(14), y), ForeColor = LiteBoxTheme.SubFg };
-                Controls.Add(l); y += S(22);
-                return l;
-            }
-            TextBox Field(string value)
-            {
-                var t = new TextBox
-                {
-                    Text = value, Location = new Point(S(14), y), Width = S(430),
-                    BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
-                };
-                Controls.Add(t); y += S(30);
-                return t;
-            }
-            CheckBox Chk(string t, bool val, int indent = 0)
-            {
-                var c = new CheckBox
-                {
-                    Text = t, Checked = val, AutoSize = true,
-                    Location = new Point(S(14 + indent), y), ForeColor = LiteBoxTheme.Fg, BackColor = BackColor,
-                };
-                Controls.Add(c); y += S(24);
-                return c;
-            }
 
-            var enabled = Chk("Rule enabled", rule.Enabled);
-            y += S(4);
-
-            Cap("Add as prefix:");
-            var prefix = Field(rule.Prefix);
-
-            var asArg = new RadioButton
+            var enabled = new CheckBox
             {
-                Text = "Add as argument (one token)", Checked = rule.AsArg, AutoSize = true,
-                Location = new Point(S(14), y), ForeColor = LiteBoxTheme.Fg, BackColor = BackColor,
+                Text = "Rule enabled", Checked = rule.Enabled, AutoSize = true,
+                Location = new Point(S(16), y), ForeColor = LiteBoxTheme.Fg, BackColor = BackColor,
             };
-            var asCmd = new RadioButton
-            {
-                Text = "Add as command line (may carry several)", Checked = !rule.AsArg, AutoSize = true,
-                Location = new Point(S(214), y), ForeColor = LiteBoxTheme.Fg, BackColor = BackColor,
-            };
-            Controls.Add(asArg); Controls.Add(asCmd);
+            Controls.Add(enabled);
             y += S(30);
 
-            Cap("Only if the command line contains:");
-            var filter = Field(rule.Filter);
-            var commaF = Chk("Multiple entries, comma separated", rule.CommaFilter, 8);
-            var matchAllF = Chk("Must match all entries", rule.MatchAllFilter, 24);
-            var removeF = Chk("If it matches a whole argument, remove it before launch (marker)", rule.RemoveFilter, 8);
-            matchAllF.Enabled = commaF.Checked;
-            commaF.CheckedChanged += (_, _) => { matchAllF.Enabled = commaF.Checked; if (!commaF.Checked) matchAllF.Checked = false; };
-            y += S(4);
+            // ── Action ──
+            var actBox = new GroupBox
+            {
+                Text = "Action", ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
+                Location = new Point(S(16), y), Width = S(430), Height = S(112),
+            };
+            var capPrefix = new Label
+            {
+                Text = "Prefix to add:", AutoSize = true, Location = new Point(S(12), S(22)),
+                ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
+            };
+            var prefix = new TextBox
+            {
+                Text = rule.Prefix, Location = new Point(S(12), S(42)), Width = S(404),
+                BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
+            };
+            var capAs = new Label
+            {
+                Text = "Add it as:", AutoSize = true, Location = new Point(S(12), S(78)),
+                ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
+            };
+            var asMode = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(84), S(74)), Width = S(332),
+                BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
+            };
+            asMode.Items.AddRange(new object[]
+            {
+                "One argument (the text becomes a single token)",
+                "Raw command-line text (may carry several arguments)",
+            });
+            asMode.SelectedIndex = rule.AsArg ? 0 : 1;
+            actBox.Controls.AddRange(new Control[] { capPrefix, prefix, capAs, asMode });
+            Controls.Add(actBox);
+            y += S(122);
 
-            Cap("Exclude if the command line contains:");
-            var exclude = Field(rule.Exclude);
-            var commaE = Chk("Multiple entries, comma separated", rule.CommaExclude, 8);
-            var matchAllE = Chk("Block only when ALL entries are present", rule.MatchAllExclude, 24);
-            matchAllE.Enabled = commaE.Checked;
-            commaE.CheckedChanged += (_, _) => { matchAllE.Enabled = commaE.Checked; if (!commaE.Checked) matchAllE.Checked = false; };
+            // ── the shared probe blocks ──
+            var when = new ProbeBlock("Run only when…", exclude: false, withMarker: true, dpiS, readOnly: false);
+            when.Box.Location = new Point(S(16), y);
+            when.Load(rule.Filter, rule.CommaFilter, rule.MatchAllFilter, rule.RemoveFilter);
+            Controls.Add(when.Box);
+            y += when.Box.Height + S(10);
+
+            var never = new ProbeBlock("Never when…", exclude: true, withMarker: false, dpiS, readOnly: false);
+            never.Box.Location = new Point(S(16), y);
+            never.Load(rule.Exclude, rule.CommaExclude, rule.MatchAllExclude);
+            Controls.Add(never.Box);
+            y += never.Box.Height + S(14);
 
             var ok = ActionButton("OK", MenuIcons.Add);
-            ok.Location = new Point(S(250), S(398));
+            ok.Location = new Point(S(252), y);
             ok.Click += (_, _) =>
             {
                 // An empty prefix is allowed — the rule saves NON-CONFIGURED and is skipped at launch,
                 // BigBoxProfile's add-now-configure-later workflow.
                 rule.Enabled = enabled.Checked;
+                bool asArg = asMode.SelectedIndex == 0;
                 // As ARGUMENT the token is trimmed (BigBoxProfile trims too); as CMDLINE the text is
                 // kept verbatim — a trailing space before the rest of the line is often the point.
-                rule.Prefix = asArg.Checked ? prefix.Text.Trim() : prefix.Text;
-                rule.AsArg = asArg.Checked;
-                rule.Filter = filter.Text.Trim();
-                rule.CommaFilter = commaF.Checked;
-                rule.MatchAllFilter = matchAllF.Checked;
-                rule.RemoveFilter = removeF.Checked;
-                rule.Exclude = exclude.Text.Trim();
-                rule.CommaExclude = commaE.Checked;
-                rule.MatchAllExclude = matchAllE.Checked;
+                rule.Prefix = asArg ? prefix.Text.Trim() : prefix.Text;
+                rule.AsArg = asArg;
+                (rule.Filter, rule.CommaFilter, rule.MatchAllFilter, rule.RemoveFilter) = when.Save();
+                (rule.Exclude, rule.CommaExclude, rule.MatchAllExclude, _) = never.Save();
                 DialogResult = DialogResult.OK; Close();
             };
             var cancel = ActionButton("Cancel", MenuIcons.Exit);
-            cancel.Location = new Point(S(352), S(398));
+            cancel.Location = new Point(S(354), y);
             cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
             AcceptButton = ok; CancelButton = cancel;
             Controls.Add(ok); Controls.Add(cancel);
+            ClientSize = new Size(S(462), y + S(40));
             ThemedCheckBox.StyleAll(this);
         }
     }

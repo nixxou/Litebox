@@ -81,10 +81,7 @@ internal static class LaunchRulesPanel
             AutoSize = true, Checked = true,
             ForeColor = ModulePanelKit.Sub, BackColor = ModulePanelKit.Bg,
         };
-        Row(groupView, S(22));
-        Row(ModulePanelKit.Caption(
-            "Colours follow the example line above: normal = the rule would run, dimmed = it would "
-            + "not (condition not met, or disabled), red = nothing configured.", dpiS, 620), S(30), 18);
+        Row(groupView, S(24));
 
         var list = new ListBox
         {
@@ -107,21 +104,13 @@ internal static class LaunchRulesPanel
         tree.HideSelection = false;
         var treeHost = new SlimScrollTreeHost(tree) { Width = S(560), Height = S(150) };
 
-        List<RulePipeline.RuleTrace>? lastTrace = null;
-
-        // The rule's fate for the current example line, said in colour. Red once CRIED at a rule
-        // whose probe merely did not match the example — it read as an error (Mehdi, rightly
-        // confused). So: DIMMED = would not run for this line (condition not met, or disabled) —
-        // inactive, not wrong; RED = genuinely wrong, a rule with nothing configured; normal = runs.
-        Color TraceColor(int i)
-        {
-            if (i >= 0 && i < rules.Count && !rules[i].IsConfigured) return LiteBoxTheme.Danger;
-            if (lastTrace == null || i >= lastTrace.Count) return ModulePanelKit.Fg;
-            return lastTrace[i].State == RulePipeline.TraceState.Fired ? ModulePanelKit.Fg : ModulePanelKit.Sub;
-        }
-
-        bool TraceRefused(int i)
-            => lastTrace != null && i < lastTrace.Count && lastTrace[i].State == RulePipeline.TraceState.Refused;
+        // The ONE per-rule indicator, BigBoxProfile's own: red = nothing configured. A per-rule
+        // "would it fire for the example line" trace was tried and DROPPED (Mehdi): future actions
+        // will hinge on AHK scripts, hardware, files — things no example line can simulate — and an
+        // indicator that is right only most of the time misleads with confidence. The preview's
+        // global OUT is the only behavioural feedback, exactly like the original.
+        Color RuleColor(int i)
+            => i >= 0 && i < rules.Count && !rules[i].IsConfigured ? LiteBoxTheme.Danger : ModulePanelKit.Fg;
 
         void RebuildTree(int selectIndex)
         {
@@ -141,7 +130,7 @@ internal static class LaunchRulesPanel
                 if (sig == null)
                 {
                     stack.Clear();
-                    var n0 = new TreeNode(r.Describe()) { Tag = i, ForeColor = TraceColor(i) };
+                    var n0 = new TreeNode(r.Describe()) { Tag = i, ForeColor = RuleColor(i) };
                     tree.Nodes.Add(n0);
                     if (i == selectIndex) selected = n0;
                     continue;
@@ -151,20 +140,16 @@ internal static class LaunchRulesPanel
                 if (stack.Count == 0 || !sig.Equals(stack[^1].Sig))
                 {
                     var parent = stack.Count > 0 ? stack[^1] : ((ProbeSignature, TreeNode)?)null;
-                    // The header carries its branch's fate: when the anchored condition does not
-                    // match the example line, the CAUSE is here, so the dimming starts here.
                     var header = new TreeNode(sig.Label(parent?.Item1))
                     {
-                        Tag = null, ForeColor = TraceRefused(i) ? ModulePanelKit.Sub : ModulePanelKit.Accent,
+                        Tag = null, ForeColor = ModulePanelKit.Accent,
                     };
                     if (parent != null) parent.Value.Item2.Nodes.Add(header);
                     else tree.Nodes.Add(header);
                     stack.Add((sig, header));
                 }
-                bool broken = lastTrace != null && i < lastTrace.Count && lastTrace[i].AnchorBroken;
                 var top = stack[^1].Node;
-                if (broken && !top.Text.StartsWith("\u26a0")) top.Text = "\u26a0 " + top.Text;
-                var node = new TreeNode(DescribeAction(r)) { Tag = i, ForeColor = TraceColor(i) };
+                var node = new TreeNode(DescribeAction(r)) { Tag = i, ForeColor = RuleColor(i) };
                 top.Nodes.Add(node);
                 if (i == selectIndex) selected = node;
             }
@@ -180,8 +165,8 @@ internal static class LaunchRulesPanel
 
         void Recalc()
         {
-            try { exOut.Text = RulePipeline.PreviewWithTrace(rules, exIn.Text, out var tr); lastTrace = tr; }
-            catch { exOut.Text = exIn.Text; lastTrace = null; }
+            try { exOut.Text = RulePipeline.PreviewExample(rules, exIn.Text); }
+            catch { exOut.Text = exIn.Text; }
         }
         void Reload(int select = -1)
         {
@@ -201,7 +186,7 @@ internal static class LaunchRulesPanel
             bool sel = (e.State & DrawItemState.Selected) != 0;
             using var bg = new SolidBrush(sel ? Color.FromArgb(60, 60, 66) : ModulePanelKit.Field);
             e.Graphics.FillRectangle(bg, e.Bounds);
-            using var fg = new SolidBrush(TraceColor(e.Index));
+            using var fg = new SolidBrush(RuleColor(e.Index));
             e.Graphics.DrawString(list.Items[e.Index]?.ToString() ?? "", list.Font, fg,
                 e.Bounds.X + 2, e.Bounds.Y + 1);
         };

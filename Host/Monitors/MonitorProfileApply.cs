@@ -61,7 +61,11 @@ internal static class MonitorProfileApply
     /// flat second after every change; 900 ms covers the same ground with the two-phase commit the
     /// library does for us.</summary>
     private const int SettleMs = 900;
-    private const int RestoreRetryMs = 2000;
+    /// <summary>Delays between layout-restore attempts. Three tries, increasingly patient: a restore
+    /// that runs seconds after a fullscreen game exits can race the display stack re-negotiating the
+    /// game's own mode switch back — measured live: a restore that failed at game exit succeeded
+    /// unchanged a minute later. The old single 2-second retry lost exactly that race.</summary>
+    private static readonly int[] RestoreRetriesMs = { 2000, 5000 };
     /// <summary>How long to wait for a monitor-bound audio endpoint to be published after the displays
     /// moved. Paid only when the named device is missing on the first try.</summary>
     private const int AudioSettleMs = 3000;
@@ -206,13 +210,7 @@ internal static class MonitorProfileApply
 
             if (_gameLayout != null)
             {
-                var r = ApplyLayout(_gameLayout, adapt: true, preset: null, out _);
-                if (!r.Ok)
-                {
-                    LbLog.Warn(Tag, "game-scope restore failed, retrying in " + RestoreRetryMs + " ms");
-                    Thread.Sleep(RestoreRetryMs);
-                    r = ApplyLayout(_gameLayout, adapt: true, preset: null, out _);
-                }
+                var r = ApplyLayoutWithRetries(_gameLayout, "game-scope restore");
                 ok &= r.Ok;
                 notes.Add(r.Message);
             }
@@ -358,13 +356,7 @@ internal static class MonitorProfileApply
             {
                 // Restore is ALWAYS adaptive: it is a best-effort "put it back", and refusing because a
                 // monitor was unplugged in the meantime would strand the user on the profile's layout.
-                var r = ApplyLayout(_savedLayout, adapt: true, preset: null, out _);
-                if (!r.Ok)
-                {
-                    LbLog.Warn(Tag, "restore failed, retrying in " + RestoreRetryMs + " ms");
-                    Thread.Sleep(RestoreRetryMs);
-                    r = ApplyLayout(_savedLayout, adapt: true, preset: null, out _);
-                }
+                var r = ApplyLayoutWithRetries(_savedLayout, "restore");
                 ok &= r.Ok;
                 notes.Add("Layout: " + r.Message);
             }
@@ -391,6 +383,20 @@ internal static class MonitorProfileApply
             Persist();
             return new ApplyResult(ok, string.Join("\n", notes));
         }
+    }
+
+    /// <summary>An adaptive layout replay with the shared retry ladder (see RestoreRetriesMs).</summary>
+    private static ApplyResult ApplyLayoutWithRetries(MonitorLayout layout, string what)
+    {
+        var r = ApplyLayout(layout, adapt: true, preset: null, out _);
+        foreach (var delay in RestoreRetriesMs)
+        {
+            if (r.Ok) return r;
+            LbLog.Warn(Tag, $"{what} failed ({r.Message.ReplaceLineEndings(" | ")}), retrying in {delay} ms");
+            Thread.Sleep(delay);
+            r = ApplyLayout(layout, adapt: true, preset: null, out _);
+        }
+        return r;
     }
 
     // ── the parts ────────────────────────────────────────────────────────────

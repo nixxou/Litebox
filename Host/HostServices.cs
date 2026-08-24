@@ -276,6 +276,19 @@ internal static class HostLaunch
         t.Start();
     }
 
+    /// <summary>A failed end-of-game desktop restore, said out loud: the layout retries are exhausted,
+    /// but the manual restore point taken by the same launch is still held — Tools has the way out.</summary>
+    private static void NotifyMonitorRestoreFailure(Monitors.ApplyResult r)
+    {
+        if (r.Ok) return;
+        try
+        {
+            LiteBox.Notifications.NotificationCenter.Error(
+                "The desktop was not fully restored after the game — use Tools ▸ Monitor profiles ▸ Restore Original Layout.");
+        }
+        catch { }
+    }
+
     private static void RunStoreAndWait(IGame game, StoreKind kind, string target, string installDir, Func<bool> regainedFocus, bool killLauncherAfter, bool killEvenIfPreRunning = false)
     {
         int gi = GameIndex(game);
@@ -317,6 +330,7 @@ internal static class HostLaunch
                 {
                     var mr = Monitors.MonitorProfileApply.BeginGameScope(mp);
                     Console.WriteLine($"[store-launch] monitor profile \"{mp.Name}\": {mr.Message.ReplaceLineEndings(" | ")}");
+                    StoreTrace.Log($"monitor profile \"{mp.Name}\" ok={mr.Ok}: {mr.Message.ReplaceLineEndings(" | ")}");
                     int mdelay = Monitors.MonitorProfileApply.LaunchDelaySeconds;
                     if (mdelay > 0)
                     {
@@ -378,9 +392,15 @@ internal static class HostLaunch
                 {
                     var mres = Monitors.MonitorProfileApply.EndGameScope();
                     if (mres.Message.Length > 0) Console.WriteLine("[store-launch] monitor profile restored: " + mres.Message.ReplaceLineEndings(" | "));
+                    // Always-on trace (litebox-store.log): the Fallout incident was undiagnosable because
+                    // this outcome only ever reached the console. And a failed restore must not be silent
+                    // for the user either — the manual restore point survives EndGameScope untouched, so
+                    // the notification can honestly name the way out.
+                    StoreTrace.Log($"monitor restore ok={mres.Ok}: {mres.Message.ReplaceLineEndings(" | ")}");
+                    NotifyMonitorRestoreFailure(mres);
                 }
             }
-            catch (Exception ex) { Console.WriteLine("[store-launch] monitor restore error: " + ex.Message); }
+            catch (Exception ex) { Console.WriteLine("[store-launch] monitor restore error: " + ex.Message); StoreTrace.Log("monitor restore EX: " + ex.Message); }
 
             Pause.PauseManager.Disarm();   // hotkey hook off + resume a still-frozen game + close the screen
             Gameplay.GameCursor.Show();        // undo "Hide Mouse Cursor During Game" (no-op if off)
@@ -609,6 +629,7 @@ internal static class HostLaunch
                 {
                     var mr = Monitors.MonitorProfileApply.EndGameScope();
                     if (mr.Message.Length > 0) Console.WriteLine("[launch] monitor profile restored: " + mr.Message.ReplaceLineEndings(" | "));
+                    NotifyMonitorRestoreFailure(mr);
                 }
             }
             catch (Exception ex) { Console.WriteLine("[launch] monitor restore error: " + ex.Message); }

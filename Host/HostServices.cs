@@ -460,6 +460,15 @@ internal static class HostLaunch
                     {
                         var mr = Monitors.MonitorProfileApply.BeginGameScope(mp);
                         Console.WriteLine($"[launch] monitor profile \"{mp.Name}\": {mr.Message.ReplaceLineEndings(" | ")}");
+                        // Give the displays time to finish changing before anything reads the desktop:
+                        // autoruns and emulators started right after a mode set can still see the old
+                        // resolution. Configurable in the module's General options; 0 = no wait.
+                        int delay = Monitors.MonitorProfileApply.LaunchDelaySeconds;
+                        if (delay > 0)
+                        {
+                            Console.WriteLine($"[launch] waiting {delay}s for the displays to settle");
+                            Thread.Sleep(delay * 1000);
+                        }
                     }
                 }
                 catch (Exception ex) { Console.WriteLine("[launch] monitor profile error: " + ex.Message); }

@@ -79,6 +79,26 @@ internal static class MonitorProfileApply
     // claim we cannot keep. Picking a profile switches to it; that is the whole contract.
 
     /// <summary>True when a restore point is held (this session or recovered from a previous one).</summary>
+    public const string KeyLaunchDelay = "MonitorLaunchDelay";
+    public const int LaunchDelayDefault = 2;
+
+    /// <summary>Seconds a game launch waits after its profile switch, so the emulator starts on a desktop
+    /// that has finished changing — a mode set the driver acknowledged can still be settling when the
+    /// next process asks Windows what the resolution is. Absent = 2; clamped to 0–60.</summary>
+    public static int LaunchDelaySeconds
+    {
+        get
+        {
+            try
+            {
+                var raw = Data.LiteBoxOptionsDb.GetGlobal(KeyLaunchDelay);
+                if (string.IsNullOrWhiteSpace(raw)) return LaunchDelayDefault;
+                return int.TryParse(raw.Trim(), out var v) ? Math.Clamp(v, 0, 60) : LaunchDelayDefault;
+            }
+            catch { return LaunchDelayDefault; }
+        }
+    }
+
     public static bool CanRestore
     {
         get { lock (_gate) { Load(); return _savedLayout != null || _savedAudioDevice.Length > 0 || _savedVolume >= 0; } }

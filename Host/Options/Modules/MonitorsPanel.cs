@@ -117,6 +117,28 @@ internal static class MonitorsPanel
                                  + "receive it again. This is the way OUT of a profile, so it is the one key "
                                  + "most worth having reachable from inside a game.", dpiS, 620), S(56), 18);
 
+        // ── Game launch ──
+        Row(ModulePanelKit.Header("Game launch", dpiS), S(40));
+
+        var delayBox = new NumericUpDown
+        {
+            Minimum = 0, Maximum = 60, Increment = 1, Width = S(70),
+            BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg,
+            BorderStyle = BorderStyle.FixedSingle, Enabled = !readOnly,
+            Value = Math.Clamp(MonitorProfileApply.LaunchDelaySeconds, 0, 60),
+        };
+        var delayLabel = ModulePanelKit.Caption("seconds between a profile switch and the game start", dpiS, 480);
+        var delayRow = new Panel { Size = new Size(S(620), S(26)), BackColor = ModulePanelKit.Bg };
+        delayRow.Controls.Add(delayBox);
+        delayLabel.Location = new Point(S(78), S(4));
+        delayRow.Controls.Add(delayLabel);
+        Row(delayRow, S(30), 18);
+
+        Row(ModulePanelKit.Caption(
+            "When a launch applies a monitor profile, the game is started only after this pause — a mode "
+            + "change the driver has accepted can still be settling when the emulator asks Windows for the "
+            + "resolution. 0 launches immediately.", dpiS, 620), S(46), 18);
+
         var head = ModulePanelKit.Header("Web endpoints", dpiS);
         Row(head, S(40));
 
@@ -160,6 +182,13 @@ internal static class MonitorsPanel
         {
             if (readOnly) return;
             try { LiteBoxOptionsDb.SetGlobal(MonitorsApi.OptionKey, box.Checked ? "true" : null); } catch { }
+            try
+            {
+                int d = (int)delayBox.Value;
+                LiteBoxOptionsDb.SetGlobal(MonitorProfileApply.KeyLaunchDelay,
+                    d == MonitorProfileApply.LaunchDelayDefault ? null : d.ToString());
+            }
+            catch { }
             try
             {
                 string hk = (rkBox.HotkeyValue ?? "").Trim();

@@ -33,6 +33,10 @@ internal sealed class ChangeRomPathAction : IRuleAction
 
     public bool IsConfigured(LaunchRule r) => r.RomPathFind.Length > 0;
 
+    /// <summary>Relocating must happen BEFORE extraction reads the archive — the whole point when
+    /// the stale path is the archive's own (BigBoxProfile: place ChangeRomPath before RomExtractor).</summary>
+    public bool AppliesToRomSource => true;
+
     public string Describe(LaunchRule r) => $"Will replace {r.RomPathFind} with another path if needed";
 
     public RuleCmd Apply(LaunchRule r, RuleCmd cmd) => Apply(r, cmd, rewriteM3u: true);
@@ -167,7 +171,7 @@ internal sealed class ChangeRomPathAction : IRuleAction
     public (Control Body, int Height, Action Save) BuildActionUi(LaunchRule r, float dpiS)
     {
         int S(int px) => (int)Math.Round(px * dpiS);
-        var body = new Panel { Size = new Size(S(576), S(196)), BackColor = LiteBoxTheme.Bg };
+        var body = new Panel { Size = new Size(S(576), S(232)), BackColor = LiteBoxTheme.Bg };
         int y = 0;
 
         (TextBox box, Button? manage) Field(string caption, string value, bool withManage)
@@ -209,13 +213,15 @@ internal sealed class ChangeRomPathAction : IRuleAction
         var (low, _) = Field("Low-priority replacements — only when the original is MISSING (\"|||\"-separated):", r.RomPathLow, withManage: true);
         var hint = new Label
         {
-            Text = "Each candidate is tried with the remainder path, then with the bare file name.",
+            Text = "Each candidate is tried with the remainder path, then with the bare file name.\n"
+                 + "Same file name = treated as the original (extraction, caches, history continue);\n"
+                 + "a DIFFERENT name = explicit substitution, passed to the emulator verbatim, no extraction.",
             AutoSize = true, Location = new Point(0, y + S(2)),
             ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
         };
         body.Controls.Add(hint);
 
-        return (body, S(196), () =>
+        return (body, S(232), () =>
         {
             r.RomPathFind = find.Text.Trim();
             r.RomPathHigh = high.Text.Trim();

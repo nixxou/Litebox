@@ -1,4 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
+﻿// ─────────────────────────────────────────────────────────────────────────────
 // ROM extractor (ArchiveMGS) — native facade (READ surfaces). Slice R2.
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -144,7 +144,12 @@ internal static class RomExtractor
 
     /// <summary>Resolve the loose-ROM path the emulator should launch against for an archive.
     /// <paramref name="romAbs"/> is the resolved archive path. Consumes the in-process armed pick once.</summary>
-    public static RomLaunchResult ResolveLaunch(IGame game, IEmulator emulator, IEmulatorPlatform ep, string romAbs, string label)
+    /// <param name="identityPath">The rom-source ALIAS (see Rules.RomSourceDecision): when set, the
+    /// archive branch computes its identity — signature, listing key, recorded source path — from
+    /// THIS path while every byte is read from <paramref name="romAbs"/>. Only meaningful when the
+    /// relocated file was validated identical; the caller owns that proof.</param>
+    public static RomLaunchResult ResolveLaunch(IGame game, IEmulator emulator, IEmulatorPlatform ep, string romAbs, string label,
+        string? identityPath = null)
     {
         if (game == null || !Available || string.IsNullOrEmpty(romAbs)) return RomLaunchResult.NotHandled;
         // Read the armed pick exactly once, whatever branch we take.
@@ -180,7 +185,10 @@ internal static class RomExtractor
             }
 
             long archiveSize = 0; try { archiveSize = new FileInfo(romAbs).Length; } catch { }
-            string sig = ArchiveSig.ComputePathSignature(romAbs, archiveSize);
+            // The alias split: keys and recorded paths from the identity, bytes from romAbs. With no
+            // alias the two are the same path and nothing changes.
+            string keyPath = identityPath ?? romAbs;
+            string sig = ArchiveSig.ComputePathSignature(keyPath, archiveSize);
             string cacheRoot = CacheRoot;
             long maxBytes = (long)Math.Max(0, RomConfig.Instance.CacheMaxGb) * 1024L * 1024L * 1024L;
 
@@ -189,13 +197,13 @@ internal static class RomExtractor
             // the re-pick), and when a follow-up convert step is armed (it re-runs every launch).
             if (!pick.ForcePriority && !row.ConvertAfterExtract)
             {
-                var fast = TryListingFastHit(romAbs, archiveSize, sig, row, pick, gameTitle, platform, emuTitle);
+                var fast = TryListingFastHit(keyPath, archiveSize, sig, row, pick, gameTitle, platform, emuTitle);
                 if (fast.outputFile != null)
                 {
                     LbLog.Info("rom", $"launch: listing-cache FAST HIT → \"{fast.outputFile}\"");
                     RecordSideEffects(gameId, fast.shortSig, fast.entryIdentity);
                     if (IsPersistentCachePath(cacheRoot, fast.outputFile))
-                        ArchiveCacheIndex.Record(cacheRoot, sig, gameTitle, platform, emuTitle, romAbs, row.Mode.ToString(), fast.outputFile);
+                        ArchiveCacheIndex.Record(cacheRoot, sig, gameTitle, platform, emuTitle, keyPath, row.Mode.ToString(), fast.outputFile);
                     return new RomLaunchResult { Success = true, Handled = true, OutputFilePath = fast.outputFile };
                 }
             }
@@ -211,8 +219,8 @@ internal static class RomExtractor
                 var lentries = analysis.StandaloneFiles
                     .Select(e => new ArchiveListingEntry { FileName = e.FileName, PathInArchive = e.PathInArchive, Size = (long)e.Size })
                     .ToList();
-                ArchiveListingCache.Set(ArchiveListingCache.ComputeKey(romAbs, archiveSize),
-                    lentries, romAbs, archiveSize, analysis.Signature?.ShortSignature ?? "");
+                ArchiveListingCache.Set(ArchiveListingCache.ComputeKey(keyPath, archiveSize),
+                    lentries, keyPath, archiveSize, analysis.Signature?.ShortSignature ?? "");
             }
             catch { }
 
@@ -312,7 +320,7 @@ internal static class RomExtractor
             // cache — not RAM, not \tmp), per-archive last-played, op-log launch-history entry.
             if (!launchToTmp && !usedRam)
             {
-                ArchiveCacheIndex.Record(cacheRoot, sig, gameTitle, platform, emuTitle, romAbs, row.Mode.ToString(), launchFile);
+                ArchiveCacheIndex.Record(cacheRoot, sig, gameTitle, platform, emuTitle, keyPath, row.Mode.ToString(), launchFile);
                 ArchiveCacheEvictor.KeepCacheUnder(cacheRoot, maxBytes);
             }
             RecordSideEffects(gameId, analysis.Signature?.ShortSignature ?? "", target.PathInArchive);

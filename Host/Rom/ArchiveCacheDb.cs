@@ -1,4 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
+﻿// ─────────────────────────────────────────────────────────────────────────────
 // ROM extractor (ArchiveMGS) — SQLite backing (LISTING half). Slice R2.
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -132,6 +132,25 @@ internal static class ArchiveCacheDb
             return rec;
         }
         catch (Exception ex) { Log("GetListingRecord failed: " + ex.Message); return null; }
+    }
+
+    /// <summary>The recorded byte size of an archive the listing knows by PATH — how the rom-source
+    /// alias validates a relocated copy of an original that no longer exists: the database remembers
+    /// its size for it. Null when the path was never listed.</summary>
+    public static long? GetRecordedSizeByPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        try
+        {
+            using var conn = Open();
+            if (conn == null) return null;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT size FROM archive WHERE path = $p COLLATE NOCASE ORDER BY cached_at DESC LIMIT 1;";
+            cmd.Parameters.AddWithValue("$p", path);
+            var v = cmd.ExecuteScalar();
+            return v is long l ? l : v is int i ? i : null;
+        }
+        catch { return null; }
     }
 
     public static void SetListing(string sig, string path, long size, string shortSig, IList<ArchiveListingEntry> entries)

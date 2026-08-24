@@ -206,6 +206,66 @@ internal static class RuleSelfTest
             }
         }
 
+        // ── the ROM-SOURCE phase (opt-in actions run on the rom path before extraction) ──
+        {
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lbx-rules-selftest-src");
+            string orig = System.IO.Path.Combine(root, "orig");
+            string high = System.IO.Path.Combine(root, "high");
+            try
+            {
+                System.IO.Directory.CreateDirectory(orig);
+                System.IO.Directory.CreateDirectory(high);
+                System.IO.File.WriteAllText(System.IO.Path.Combine(high, "game.zip"), "");
+
+                string relocated = RulePipeline.ApplyRomSourceRules(
+                    new List<LaunchRule> { Crp(orig, high: high) }, "emu.exe", "",
+                    System.IO.Path.Combine(orig, "game.zip"));
+                Expect("rom-source: an opted-in action relocates the rom path",
+                    string.Equals(relocated, System.IO.Path.Combine(high, "game.zip"), StringComparison.OrdinalIgnoreCase));
+
+                string untouched = RulePipeline.ApplyRomSourceRules(
+                    new List<LaunchRule> { P("-a") }, "emu.exe", "",
+                    System.IO.Path.Combine(orig, "game.zip"));
+                Expect("rom-source: a line action (Prefix) never runs in this phase",
+                    string.Equals(untouched, System.IO.Path.Combine(orig, "game.zip"), StringComparison.Ordinal));
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(root, recursive: true); } catch { }
+            }
+        }
+
+        // ── the rom-source DECISION grid (databases hang on it) ──
+        {
+            static long? None(string _) => null;
+            var d = RomSourceDecision.Decide(@"G:\r\game.zip", @"G:\r\game.zip", None, None);
+            Expect("decision: same path = untouched", d.Mode == RomSourceMode.Untouched);
+
+            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\other.7z", None, None);
+            Expect("decision: a different NAME = verbatim substitution, no identity",
+                d.Mode == RomSourceMode.Verbatim && d.IdentityPath == null);
+
+            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\game.zip",
+                p => 1234, None);
+            Expect("decision: same name + size validated by stat = alias on the ORIGINAL",
+                d.Mode == RomSourceMode.Alias && d.IdentityPath == @"G:\r\game.zip");
+
+            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\game.zip",
+                p => p.StartsWith(@"D:\") ? 1234 : (long?)null,
+                p => 1234);
+            Expect("decision: original missing, size validated by the DATABASE record = alias",
+                d.Mode == RomSourceMode.Alias && d.IdentityPath == @"G:\r\game.zip");
+
+            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\game.zip",
+                p => p.StartsWith(@"D:\") ? 1234 : 5678, None);
+            Expect("decision: same name but sizes differ = honest new entry, no alias",
+                d.Mode == RomSourceMode.Normal && d.IdentityPath == null);
+
+            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\game.zip", None, None);
+            Expect("decision: nothing to validate against = no alias either",
+                d.Mode == RomSourceMode.Normal && d.IdentityPath == null);
+        }
+
         // ── the trace channel (groups + trace lot) ──
         {
             var rules = new List<LaunchRule>

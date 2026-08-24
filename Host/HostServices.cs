@@ -793,7 +793,36 @@ internal static class HostLaunch
             emuCmd = EmuPlugins.NormalizeCommandLine(emulator, emuCmd ?? "", fileName);
             // ROM to pass: m3u (multi-disc) → auto-extracted file (archive) → the rom itself.
             string romAbs = ResolvePath(targetPath);
-            string rom = ResolveLaunchRomPath(game, selectedApp, emulator, ep, romAbs, label);
+            // ROM-SOURCE rules phase, BEFORE extraction/m3u resolution: a relocated archive is the
+            // one that gets extracted (BigBoxProfile ordered ChangeRomPath before RomExtractor; our
+            // extractor is core, so the phase recreates that ordering). The DECISION grid — verbatim
+            // on a name change, identity alias when the size validates, honest new entry otherwise —
+            // is RomSourceDecision's; the databases' integrity hangs on it. Main launch only.
+            string? romIdentity = null;
+            bool romVerbatim = false;
+            if (label == "main")
+            {
+                try
+                {
+                    string relocated = Rules.RulePipeline.ApplyRomSource(fileName, emuCmd ?? "", romAbs,
+                        SafeStr(() => game?.Id), SafeStr(() => selectedApp?.Id), SafeStr(() => emulator?.Id));
+                    if (!string.Equals(relocated, romAbs, StringComparison.Ordinal))
+                    {
+                        var d = Rules.RomSourceDecision.Decide(romAbs, relocated,
+                            p => { try { var fi = new FileInfo(p); return fi.Exists ? fi.Length : (long?)null; } catch { return null; } },
+                            Rom.ArchiveCacheDb.GetRecordedSizeByPath);
+                        Console.WriteLine($"[launch] rom source: {d.Mode} → \"{relocated}\"");
+                        romAbs = relocated;
+                        romIdentity = d.IdentityPath;
+                        romVerbatim = d.Mode == Rules.RomSourceMode.Verbatim;
+                    }
+                }
+                catch (Exception ex) { Console.WriteLine("[launch] rom-source rules error: " + ex.Message); }
+            }
+            // Verbatim = an explicit substitution: no m3u planning, no extraction, no records — the
+            // file goes to the emulator exactly as the rule wrote it.
+            string rom = romVerbatim ? romAbs
+                : ResolveLaunchRomPath(game, selectedApp, emulator, ep, romAbs, label, romIdentity);
             // When the command line ALREADY places the ROM itself via %romfile% (ScummVM's "-p %romfile%",
             // DOSBox, …), LB substitutes it IN PLACE and does NOT also append the ROM at the end — appending
             // would pass the ROM twice and the emulator chokes (ScummVM never launches). %romlocation% & co.
@@ -942,7 +971,8 @@ internal static class HostLaunch
     /// <summary>Resolves the ROM path actually passed to the emulator: an auto-generated .m3u for a
     /// multi-disc game (M3uDiscLoadEnabled), an extracted file for an archive (AutoExtract), else the ROM.</summary>
     private static string ResolveLaunchRomPath(IGame game, IAdditionalApplication selectedApp,
-        IEmulator emulator, IEmulatorPlatform ep, string romAbs, string label)
+        IEmulator emulator, IEmulatorPlatform ep, string romAbs, string label,
+        string? identityPath = null)
     {
         try
         {
@@ -983,7 +1013,7 @@ internal static class HostLaunch
             {
                 Web.RecentState.MarkExtracting();
                 Rom.RomLaunchResult res;
-                try { res = Rom.RomExtractor.ResolveLaunch(game, emulator, ep, romAbs, label); }
+                try { res = Rom.RomExtractor.ResolveLaunch(game, emulator, ep, romAbs, label, identityPath); }
                 finally { Web.RecentState.MarkExtractionDone(); }
                 if (res.Handled && res.Success && !string.IsNullOrEmpty(res.OutputFilePath))
                 {

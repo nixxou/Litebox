@@ -38,6 +38,13 @@ internal interface IRuleAction
     /// probe clauses ([Only if…], [remove marker], …) itself.</summary>
     string Describe(LaunchRule r);
 
+    /// <summary>Opt-in to the ROM-SOURCE phase: LiteBox extracts archives and plans m3u while
+    /// BUILDING the command line (core work BigBoxProfile modelled as the RomExtractor rule), so a
+    /// path-transforming action that should affect WHAT GETS EXTRACTED must also run on the rom path
+    /// BEFORE that resolution. The pipeline then runs it again on the final line, where the cache
+    /// path simply no longer matches — a clean no-op. Line transformers stay out of this phase.</summary>
+    bool AppliesToRomSource => false;
+
     /// <summary>The REAL channel: transform the command (most actions only touch Args).</summary>
     RuleCmd Apply(LaunchRule r, RuleCmd cmd);
 

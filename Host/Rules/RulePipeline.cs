@@ -32,6 +32,46 @@ internal static class RulePipeline
         return ApplyRules(rules, exePath, args);
     }
 
+    /// <summary>The ROM-SOURCE phase: the entity's opted-in rules (AppliesToRomSource) run over the
+    /// rom path BEFORE ResolveLaunchRomPath extracts / plans it — so relocating an archive means the
+    /// relocated one gets extracted. Probes see exe + the (pre-expansion) command line + the rom
+    /// path, so marker routing works here too; the marker STRIP stays in the main phase, which owns
+    /// the final line. Returns the rom path to resolve.</summary>
+    public static string ApplyRomSource(string exePath, string contextArgs, string romPath,
+        string? gameId, string? versionId, string? emulatorId)
+    {
+        List<LaunchRule> rules;
+        try { rules = LaunchRuleStore.Resolve(gameId, versionId, emulatorId); }
+        catch { return romPath; }
+        if (rules.Count == 0) return romPath;
+        return ApplyRomSourceRules(rules, exePath, contextArgs, romPath);
+    }
+
+    /// <summary>The phase body — what the selftest drives directly.</summary>
+    public static string ApplyRomSourceRules(List<LaunchRule> rules, string exePath, string contextArgs, string romPath)
+    {
+        foreach (var rule in rules)
+        {
+            if (!rule.Enabled || !rule.IsConfigured) continue;
+            var action = Actions.RuleActions.ByType(rule.Type);
+            if (action is not { AppliesToRomSource: true }) continue;
+            try
+            {
+                string hay = contextArgs.Length > 0 ? contextArgs + " " + romPath : romPath;
+                if (!ProbePasses(rule, exePath, hay)) continue;
+                var cmd = action.Apply(rule, new Actions.RuleCmd(exePath, RuleArgs.Join(new[] { romPath })));
+                string relocated = RuleArgs.Split(cmd.Args).FirstOrDefault() ?? romPath;
+                if (!string.Equals(relocated, romPath, StringComparison.Ordinal))
+                {
+                    LbLog.Info(Tag, $"{rule.Type} (rom source): {romPath} → {relocated}");
+                    romPath = relocated;
+                }
+            }
+            catch (Exception ex) { LbLog.Warn(Tag, $"{rule.Type} (rom source) failed ({ex.Message}) — rule skipped"); }
+        }
+        return romPath;
+    }
+
     /// <summary>The pipeline body over an explicit rule list — what the selftest drives directly.</summary>
     public static (string Exe, string Args) ApplyRules(List<LaunchRule> rules, string exePath, string args)
     {

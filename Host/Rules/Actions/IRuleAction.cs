@@ -38,28 +38,12 @@ internal interface IRuleAction
     /// probe clauses ([Only if…], [remove marker], …) itself.</summary>
     string Describe(LaunchRule r);
 
-    /// <summary>Opt-in to the ROM-SOURCE phase: LiteBox extracts archives and plans m3u while
-    /// BUILDING the command line (core work BigBoxProfile modelled as the RomExtractor rule), so a
-    /// path-transforming action that should affect WHAT GETS EXTRACTED must also run on the rom path
-    /// BEFORE that resolution. The pipeline then runs it again on the final line, where the cache
-    /// path simply no longer matches — a clean no-op. Line transformers stay out of this phase.</summary>
-    bool AppliesToRomSource => false;
-
     /// <summary>The REAL channel: transform the command (most actions only touch Args).</summary>
     RuleCmd Apply(LaunchRule r, RuleCmd cmd);
 
     /// <summary>The EXAMPLE channel (ModifyExemple): what the preview shows. Defaults to the real
     /// treatment — override when the real one has side effects or reads state no example holds.</summary>
     RuleCmd ApplyExample(LaunchRule r, RuleCmd cmd) => Apply(r, cmd);
-
-    /// <summary>The ROM-SOURCE channel: how the action behaves in the pre-extraction phase. The
-    /// source phase moves PATHS, never content — Mehdi's cut after the adversarial review caught the
-    /// composed m3u case: the full Apply there rewrote a playlist into a hash-named temp copy, which
-    /// the decision grid then mistook for a user substitution and shipped verbatim past every
-    /// per-entry conversion. A relocated m3u simply loads from its mirror path instead; content
-    /// rewriting belongs to the LINE phase alone. Defaults to Apply — actions whose Apply already
-    /// only moves paths need nothing.</summary>
-    RuleCmd ApplyRomSource(LaunchRule r, RuleCmd cmd) => Apply(r, cmd);
 
     /// <summary>The Action group's BODY for the edit dialog: the controls, their height, and the
     /// save that writes the controls back to the rule when OK lands.</summary>

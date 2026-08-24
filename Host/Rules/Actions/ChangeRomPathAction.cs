@@ -33,10 +33,6 @@ internal sealed class ChangeRomPathAction : IRuleAction
 
     public bool IsConfigured(LaunchRule r) => r.RomPathFind.Length > 0;
 
-    /// <summary>Relocating must happen BEFORE extraction reads the archive — the whole point when
-    /// the stale path is the archive's own (BigBoxProfile: place ChangeRomPath before RomExtractor).</summary>
-    public bool AppliesToRomSource => true;
-
     public string Describe(LaunchRule r) => $"Will replace {r.RomPathFind} with another path if needed";
 
     public RuleCmd Apply(LaunchRule r, RuleCmd cmd) => Apply(r, cmd, rewriteM3u: true);
@@ -46,13 +42,6 @@ internal sealed class ChangeRomPathAction : IRuleAction
     /// the example channel writes nothing — BigBoxProfile's preview skipped its m3u machinery too
     /// (it lived in EmulatorLauncher.Exec, not in CalculateExemple).</summary>
     public RuleCmd ApplyExample(LaunchRule r, RuleCmd cmd) => Apply(r, cmd, rewriteM3u: false);
-
-    /// <summary>Rom-source phase: PATH relocation only. An m3u under the sought path relocates as a
-    /// file — the mirror's own m3u loads with its (typically relative) entries resolving beside it —
-    /// and is never content-rewritten here. Caveat, documented in the dialog: a mirror m3u carrying
-    /// ABSOLUTE entries to the dead original location will feed those to the per-entry pipeline
-    /// before the line phase can relocate them.</summary>
-    public RuleCmd ApplyRomSource(LaunchRule r, RuleCmd cmd) => Apply(r, cmd, rewriteM3u: false);
 
     private RuleCmd Apply(LaunchRule r, RuleCmd cmd, bool rewriteM3u)
     {
@@ -123,13 +112,13 @@ internal sealed class ChangeRomPathAction : IRuleAction
             }
             if (!changed) return null;
 
-            string outDir = Path.Combine(Path.GetTempPath(), "litebox-rules-m3u");
+            // The temp copy KEEPS the original file name — the hash moves into the directory —
+            // so the rom-token search classifies it "same name, another path" and hands it to
+            // ResolveM3u for per-entry conversion, exactly like any relocated file.
+            string outDir = Path.Combine(Path.GetTempPath(), "litebox-rules-m3u",
+                ((uint)StringComparer.OrdinalIgnoreCase.GetHashCode(m3uPath)).ToString());
             Directory.CreateDirectory(outDir);
-            // Named after the original plus a path hash — two same-named m3u never collide, and the
-            // next launch of the same one just overwrites its copy.
-            string name = Path.GetFileNameWithoutExtension(m3uPath)
-                + "-" + (uint)StringComparer.OrdinalIgnoreCase.GetHashCode(m3uPath) + ".m3u";
-            string outPath = Path.Combine(outDir, name);
+            string outPath = Path.Combine(outDir, Path.GetFileName(m3uPath));
             File.WriteAllLines(outPath, lines);
             return outPath;
         }
@@ -221,9 +210,9 @@ internal sealed class ChangeRomPathAction : IRuleAction
         var hint = new Label
         {
             Text = "Each candidate is tried with the remainder path, then with the bare file name.\n"
-                 + "Same file name = treated as the original (extraction, caches, history continue);\n"
-                 + "a DIFFERENT name = explicit substitution, passed to the emulator verbatim, no extraction.\n"
-                 + "An m3u relocates as a file — keep mirror m3u entries RELATIVE so they resolve beside it.",
+                 + "Same file name = still the rom: extraction, caches and history carry on (validated).\n"
+                 + "If the rom argument is no longer recognizable after all rules (name changed), the\n"
+                 + "line goes to the emulator AS-IS — no extraction. Keep mirror m3u entries RELATIVE.",
             AutoSize = true, Location = new Point(0, y + S(2)),
             ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
         };

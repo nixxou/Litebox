@@ -791,53 +791,75 @@ internal static class HostLaunch
             // Integration-plugin fixups on the emulator's command line (per-exe
             // normalisation the plugin knows about, e.g. RetroArch core paths).
             emuCmd = EmuPlugins.NormalizeCommandLine(emulator, emuCmd ?? "", fileName);
-            // ROM to pass: m3u (multi-disc) → auto-extracted file (archive) → the rom itself.
             string romAbs = ResolvePath(targetPath);
-            // ROM-SOURCE rules phase, BEFORE extraction/m3u resolution: a relocated archive is the
-            // one that gets extracted (BigBoxProfile ordered ChangeRomPath before RomExtractor; our
-            // extractor is core, so the phase recreates that ordering). The DECISION grid — verbatim
-            // on a name change, identity alias when the size validates, honest new entry otherwise —
-            // is RomSourceDecision's; the databases' integrity hangs on it. Main launch only.
-            string? romIdentity = null;
-            bool romVerbatim = false;
-            if (label == "main")
-            {
-                try
-                {
-                    string relocated = Rules.RulePipeline.ApplyRomSource(fileName, emuCmd ?? "", romAbs,
-                        SafeStr(() => game?.Id), SafeStr(() => selectedApp?.Id), SafeStr(() => emulator?.Id));
-                    if (!string.Equals(relocated, romAbs, StringComparison.Ordinal))
-                    {
-                        var d = Rules.RomSourceDecision.Decide(romAbs, relocated,
-                            p => { try { var fi = new FileInfo(p); return fi.Exists ? fi.Length : (long?)null; } catch { return null; } },
-                            Rom.ArchiveCacheDb.GetRecordedSizeByPath);
-                        Console.WriteLine($"[launch] rom source: {d.Mode} → \"{relocated}\"");
-                        romAbs = relocated;
-                        romIdentity = d.IdentityPath;
-                        romVerbatim = d.Mode == Rules.RomSourceMode.Verbatim;
-                    }
-                }
-                catch (Exception ex) { Console.WriteLine("[launch] rom-source rules error: " + ex.Message); }
-            }
-            // Verbatim = an explicit substitution: no m3u planning, no extraction, no records — the
-            // file goes to the emulator exactly as the rule wrote it.
-            string rom = romVerbatim ? romAbs
-                : ResolveLaunchRomPath(game, selectedApp, emulator, ep, romAbs, label, romIdentity);
             // When the command line ALREADY places the ROM itself via %romfile% (ScummVM's "-p %romfile%",
             // DOSBox, …), LB substitutes it IN PLACE and does NOT also append the ROM at the end — appending
             // would pass the ROM twice and the emulator chokes (ScummVM never launches). %romlocation% & co.
             // are partial (MAME's "-rompath %romlocation%") and DON'T suppress the append.
             bool cmdPlacesRom = !string.IsNullOrEmpty(emuCmd)
                                 && emuCmd.IndexOf("%romfile%", StringComparison.OrdinalIgnoreCase) >= 0;
-            // Expand the LaunchBox command-line variables (%romlocation%, %romfile%, …) that
-            // LB's core (Game.PlayEmulator) resolves at launch and that integration plugins
-            // embed in their command lines — most importantly MAME's "-rompath %romlocation%".
-            // %romfile% resolves to the actual launch rom (extracted / m3u when applicable).
-            emuCmd = ExpandLaunchVariables(emuCmd, cmdPlacesRom ? rom : romAbs, fileName, game);
-            args = cmdPlacesRom ? (emuCmd?.Trim() ?? "") : BuildEmulatorArgs(emuCmd, rom, emulator);
-            // PrepareEmulatorForLaunch: the integration plugin may rewrite the
-            // final command line right before the spawn (what LB does silently).
-            // Main launch only — autorun helpers aren't emulator launches.
+            bool romNameOnly = SafeBool(() => emulator.FileNameWithoutExtensionAndPath);
+
+            // THE PRE-RESOLUTION LINE (Mehdi's unification, replacing the special-cased rom-source
+            // phase): the line is built with the ORIGINAL rom, EVERY rule runs once at its position
+            // on it, and only then does the launch ask what became of its rom argument — found,
+            // relocated (same file name elsewhere), or missing. Extraction and m3u planning follow
+            // the answer; a rule injecting a marker at position 1 is therefore visible to every
+            // probe after it, ChangeRomPath included, exactly like the flat BigBoxProfile pipeline.
+            emuCmd = ExpandLaunchVariables(emuCmd, romAbs, fileName, game);
+            args = cmdPlacesRom ? (emuCmd?.Trim() ?? "") : BuildEmulatorArgs(emuCmd, romAbs, emulator);
+
+            // Launch rules — the whole ordered pipeline, main spawn only (autorun helpers are not
+            // emulator invocations; store games never reach RunProcess).
+            if (label == "main")
+            {
+                try
+                {
+                    (fileName, args) = Rules.RulePipeline.Apply(fileName, args,
+                        SafeStr(() => game?.Id), SafeStr(() => selectedApp?.Id), SafeStr(() => emulator?.Id));
+                }
+                catch (Exception ex) { Console.WriteLine("[launch] rules error: " + ex.Message); }
+            }
+
+            // Find the rom argument and resolve it (m3u planning + extraction) per the verdict.
+            try
+            {
+                var parts = Rules.RuleArgs.Split(args);
+                var found = Rules.RomTokenSearch.Classify(parts, romAbs, romNameOnly);
+                if (found.State == Rules.RomTokenState.Missing)
+                {
+                    if (label == "main")
+                        Console.WriteLine("[launch] rom argument not recognizable after the rules — resolution skipped, line goes as-is");
+                }
+                else
+                {
+                    string source = found.State == Rules.RomTokenState.Relocated ? found.Relocated! : romAbs;
+                    string? romIdentity = null;
+                    if (found.State == Rules.RomTokenState.Relocated)
+                    {
+                        // Same name, another directory: extract the relocated source — under the
+                        // ORIGINAL's identity when the size validates (no duplicate cache entry, no
+                        // RA re-hash, ArchiveHistory continuity), an honest new entry otherwise.
+                        romIdentity = Rules.RomSourceDecision.ValidateAlias(romAbs, source,
+                            pth => { try { var fi = new FileInfo(pth); return fi.Exists ? fi.Length : (long?)null; } catch { return null; } },
+                            Rom.ArchiveCacheDb.GetRecordedSizeByPath);
+                        Console.WriteLine($"[launch] rom relocated → \"{source}\""
+                            + (romIdentity != null ? " (validated: original identity kept)" : " (unvalidated: own identity)"));
+                    }
+                    string rom = ResolveLaunchRomPath(game, selectedApp, emulator, ep, source, label, romIdentity);
+                    if (!string.Equals(rom, romAbs, StringComparison.OrdinalIgnoreCase)
+                        || found.State == Rules.RomTokenState.Relocated)
+                    {
+                        parts[found.ArgIndex] = romNameOnly ? Path.GetFileNameWithoutExtension(rom) : rom;
+                        args = Rules.RuleArgs.Join(parts);
+                    }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[launch] rom resolution error: " + ex.Message); }
+
+            // PrepareEmulatorForLaunch: the integration plugin may rewrite the final command line
+            // right before the spawn (what LB does silently) — AFTER resolution and the rules, true
+            // to its name; the rules deliberately never see its fixups. Main launch only.
             if (label == "main" && game != null)
                 args = EmuPlugins.PrepareForLaunch(emulator, game, null, args);
         }
@@ -850,21 +872,19 @@ internal static class HostLaunch
             // folder (Spawn's default). Emulator launches keep the emulator's folder; DOSBox uses
             // the Root Folder as its C: mount instead (separate, deferred runtime wiring).
             workDir = RootFolderDir(game);
-        }
-        // Launch rules — BigBoxProfile's command-line pipeline, on the game's MAIN spawn only
-        // (autorun helpers are not emulator invocations; store games never reach RunProcess). Both
-        // branches above converge here, so a direct-exe launch is rewritable exactly like an
-        // emulator one — something BigBoxProfile could only do for exes it was registered on.
-        if (label == "main")
-        {
-            try
+            // Launch rules for the DIRECT branch too — a direct-exe launch is rewritable exactly
+            // like an emulator one, something BigBoxProfile could only do for exes it proxied.
+            // No rom resolution here: direct launches never extract.
+            if (label == "main")
             {
-                (fileName, args) = Rules.RulePipeline.Apply(fileName, args,
-                    SafeStr(() => game?.Id), SafeStr(() => selectedApp?.Id), SafeStr(() => emulator?.Id));
+                try
+                {
+                    (fileName, args) = Rules.RulePipeline.Apply(fileName, args,
+                        SafeStr(() => game?.Id), SafeStr(() => selectedApp?.Id), SafeStr(() => emulator?.Id));
+                }
+                catch (Exception ex) { Console.WriteLine("[launch] rules error: " + ex.Message); }
             }
-            catch (Exception ex) { Console.WriteLine("[launch] rules error: " + ex.Message); }
         }
-
         // Honour the emulator's "Attempt to hide console" flag (LB's HideConsole). A
         // console-subsystem emulator like MAME otherwise pops a console window that grabs
         // the foreground, leaving the game window unfocused — CreateNoWindow suppresses it.

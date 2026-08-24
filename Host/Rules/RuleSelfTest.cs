@@ -206,77 +206,52 @@ internal static class RuleSelfTest
             }
         }
 
-        // ── the ROM-SOURCE phase (opt-in actions run on the rom path before extraction) ──
+        // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
+        //    the rom argument) ──
         {
-            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lbx-rules-selftest-src");
-            string orig = System.IO.Path.Combine(root, "orig");
-            string high = System.IO.Path.Combine(root, "high");
-            try
-            {
-                System.IO.Directory.CreateDirectory(orig);
-                System.IO.Directory.CreateDirectory(high);
-                System.IO.File.WriteAllText(System.IO.Path.Combine(high, "game.zip"), "");
+            string rom = @"G:\Roms\SNES\game.zip";
+            var c = RomTokenSearch.Classify(RuleArgs.Split(@"-L core.dll ""G:\Roms\SNES\game.zip"" -f"), rom, nameOnly: false);
+            Expect("token: found untouched, at its argument index",
+                c.State == RomTokenState.Found && c.ArgIndex == 2);
 
-                string relocated = RulePipeline.ApplyRomSourceRules(
-                    new List<LaunchRule> { Crp(orig, high: high) }, "emu.exe", "",
-                    System.IO.Path.Combine(orig, "game.zip"));
-                Expect("rom-source: an opted-in action relocates the rom path",
-                    string.Equals(relocated, System.IO.Path.Combine(high, "game.zip"), StringComparison.OrdinalIgnoreCase));
+            c = RomTokenSearch.Classify(RuleArgs.Split(@"-L core.dll ""D:\Mirror\game.zip"" -f"), rom, nameOnly: false);
+            Expect("token: same file name in another directory = relocated, path captured",
+                c.State == RomTokenState.Relocated && c.Relocated == @"D:\Mirror\game.zip");
 
-                string untouched = RulePipeline.ApplyRomSourceRules(
-                    new List<LaunchRule> { P("-a") }, "emu.exe", "",
-                    System.IO.Path.Combine(orig, "game.zip"));
-                Expect("rom-source: a line action (Prefix) never runs in this phase",
-                    string.Equals(untouched, System.IO.Path.Combine(orig, "game.zip"), StringComparison.Ordinal));
+            c = RomTokenSearch.Classify(RuleArgs.Split(@"-L core.dll ""D:\Mirror\other.7z"" -f"), rom, nameOnly: false);
+            Expect("token: a different name = missing (resolution will be skipped)",
+                c.State == RomTokenState.Missing);
 
-                // The adversarial-review fix, pinned: an m3u relocates AS A FILE in this phase —
-                // same name, the mirror's own copy — never as a hash-named rewritten temp playlist
-                // (which the decision grid would mistake for a user substitution and ship verbatim
-                // past the per-entry pipeline).
-                System.IO.File.WriteAllLines(System.IO.Path.Combine(orig, "multi.m3u"), new[] { "disc1.chd" });
-                System.IO.File.WriteAllLines(System.IO.Path.Combine(high, "multi.m3u"), new[] { "disc1.chd" });
-                string m3uReloc = RulePipeline.ApplyRomSourceRules(
-                    new List<LaunchRule> { Crp(orig, high: high) }, "emu.exe", "",
-                    System.IO.Path.Combine(orig, "multi.m3u"));
-                Expect("rom-source: an m3u relocates as a FILE, never as a rewritten temp copy",
-                    string.Equals(m3uReloc, System.IO.Path.Combine(high, "multi.m3u"), StringComparison.OrdinalIgnoreCase)
-                    && !m3uReloc.Contains("litebox-rules-m3u", StringComparison.OrdinalIgnoreCase));
-            }
-            finally
-            {
-                try { System.IO.Directory.Delete(root, recursive: true); } catch { }
-            }
+            c = RomTokenSearch.Classify(RuleArgs.Split("-flag game -x"), rom, nameOnly: true);
+            Expect("token: name-only mode matches the bare name",
+                c.State == RomTokenState.Found && c.ArgIndex == 1);
+
+            c = RomTokenSearch.Classify(RuleArgs.Split("-flag renamed -x"), rom, nameOnly: true);
+            Expect("token: name-only mode cannot trace a rename = missing",
+                c.State == RomTokenState.Missing);
+
+            // A marker argument must never be mistaken for a relocated rom (not path-shaped).
+            c = RomTokenSearch.Classify(RuleArgs.Split("game.zip -x"), rom, nameOnly: false);
+            Expect("token: a bare same-name argument without a path shape is not a relocation",
+                c.State == RomTokenState.Missing);
         }
 
-        // ── the rom-source DECISION grid (databases hang on it) ──
+        // ── alias validation (databases hang on it) ──
         {
             static long? None(string _) => null;
-            var d = RomSourceDecision.Decide(@"G:\r\game.zip", @"G:\r\game.zip", None, None);
-            Expect("decision: same path = untouched", d.Mode == RomSourceMode.Untouched);
+            Expect("alias: size validated by stat = original identity",
+                RomSourceDecision.ValidateAlias(@"G:\r\game.zip", @"D:\m\game.zip", p => 1234, None) == @"G:\r\game.zip");
 
-            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\other.7z", None, None);
-            Expect("decision: a different NAME = verbatim substitution, no identity",
-                d.Mode == RomSourceMode.Verbatim && d.IdentityPath == null);
+            Expect("alias: original missing, size validated by the DATABASE record",
+                RomSourceDecision.ValidateAlias(@"G:\r\game.zip", @"D:\m\game.zip",
+                    p => p.StartsWith(@"D:\") ? 1234 : (long?)null, p => 1234) == @"G:\r\game.zip");
 
-            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\game.zip",
-                p => 1234, None);
-            Expect("decision: same name + size validated by stat = alias on the ORIGINAL",
-                d.Mode == RomSourceMode.Alias && d.IdentityPath == @"G:\r\game.zip");
+            Expect("alias: sizes differ = no alias",
+                RomSourceDecision.ValidateAlias(@"G:\r\game.zip", @"D:\m\game.zip",
+                    p => p.StartsWith(@"D:\") ? 1234 : 5678, None) == null);
 
-            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\game.zip",
-                p => p.StartsWith(@"D:\") ? 1234 : (long?)null,
-                p => 1234);
-            Expect("decision: original missing, size validated by the DATABASE record = alias",
-                d.Mode == RomSourceMode.Alias && d.IdentityPath == @"G:\r\game.zip");
-
-            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\game.zip",
-                p => p.StartsWith(@"D:\") ? 1234 : 5678, None);
-            Expect("decision: same name but sizes differ = honest new entry, no alias",
-                d.Mode == RomSourceMode.Normal && d.IdentityPath == null);
-
-            d = RomSourceDecision.Decide(@"G:\r\game.zip", @"D:\m\game.zip", None, None);
-            Expect("decision: nothing to validate against = no alias either",
-                d.Mode == RomSourceMode.Normal && d.IdentityPath == null);
+            Expect("alias: nothing to validate against = no alias",
+                RomSourceDecision.ValidateAlias(@"G:\r\game.zip", @"D:\m\game.zip", None, None) == null);
         }
 
         // ── the trace channel (groups + trace lot) ──

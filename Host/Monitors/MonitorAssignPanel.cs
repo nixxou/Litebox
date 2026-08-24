@@ -213,7 +213,9 @@ internal static class MonitorAssignPanel
         Row(zoom, S(28), 18);
 
         // NVIDIA output — the vendor's dark green frames its scope: driver-level, skipped with the
-        // vendor named when this monitor is driven by another GPU.
+        // vendor named when this monitor is driven by another GPU. Shown only where it can act (an
+        // NVIDIA driver answers AND applies are on) — stored values survive the hiding untouched.
+        bool showNv = GpuColor.NvPresent && GpuColor.ApplyEnabled;
         var nvGreen = Color.FromArgb(24, 46, 24);
         var nvBorder = Color.FromArgb(58, 110, 58);
         var nvBox = new Panel
@@ -259,7 +261,7 @@ internal static class MonitorAssignPanel
         gVibOn.CheckedChanged += (_, _) => gVib.Enabled = !readOnly && gVibOn.Checked;
         N(gVibOn, S(24)); N(gVib, S(28), 16);
         nvBox.Height = ny + S(6);
-        Row(nvBox, nvBox.Height + S(6), 18);
+        if (showNv) Row(nvBox, nvBox.Height + S(6), 18);
 
         var adjust = new CheckBox { Text = "Adjust to the closest supported value", AutoSize = true, ForeColor = ModulePanelKit.Fg, BackColor = ModulePanelKit.Bg, Checked = p.Preset?.AdjustToClosest ?? true, Enabled = !readOnly };
         Row(adjust, S(26), 18);

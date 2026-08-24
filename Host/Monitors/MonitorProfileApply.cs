@@ -320,7 +320,7 @@ internal static class MonitorProfileApply
                 uint mode = vp.GpuVrr switch { "off" => 0u, "always" => 2u, _ => 1u };
                 notes.Add(GpuColor.VrrSet(mode)
                     ? $"VRR → {vp.GpuVrr} (driver-wide)"
-                    : "VRR skipped (no NVIDIA driver)");
+                    : "VRR " + (GpuColor.ApplyEnabled ? "skipped (no NVIDIA driver)" : "skipped (NVIDIA features are turned off in the module options)"));
             }
 
             if (profile.Audio != null)

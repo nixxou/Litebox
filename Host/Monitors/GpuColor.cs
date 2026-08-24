@@ -37,6 +37,27 @@ internal static class GpuColor
     private const string Tag = "monitors";
 
     private static bool _nvTried, _nvAlive;
+
+    public const string KeyApply = "MonitorNvidiaApply";
+
+    /// <summary>The "Apply NVIDIA-specific settings" master switch (General options; absent = on).
+    /// It gates the WRITES only — captures keep recording the NVIDIA state through Query/ScalingGet/
+    /// VrrGet, so a profile saved while this is off carries everything and simply waits. Read at every
+    /// write rather than cached: the user flips it in Options and expects the very next apply to obey.</summary>
+    public static bool ApplyEnabled
+    {
+        get
+        {
+            try { return !string.Equals(Data.LiteBoxOptionsDb.GetGlobal(KeyApply), "false", StringComparison.OrdinalIgnoreCase); }
+            catch { return true; }
+        }
+    }
+
+    /// <summary>True when an NVIDIA driver answers on this machine — the cheap probe the UI uses to
+    /// hide the NVIDIA-only controls where they can never do anything.</summary>
+    public static bool NvPresent => NvAlive();
+
+    private const string DisabledNote = "skipped (NVIDIA features are turned off in the module options)";
     private static readonly object _gate = new();
 
     /// <summary>PCI vendor of the adapter driving a monitor, from its adapter DevicePath.</summary>
@@ -99,6 +120,7 @@ internal static class GpuColor
         bool wantsColor = format.Length > 0 || depthBpc > 0 || dynamicRange.Length > 0;
         if (!wantsColor && vibrance < 0) return "";
 
+        if (!ApplyEnabled) return "GPU output " + DisabledNote;
         string vendor = VendorOf(monitorDevicePath);
         if (vendor != "NVIDIA" || !NvAlive())
             return $"GPU output skipped ({(vendor.Length > 0 ? vendor : "no NVIDIA driver")} — NVIDIA only)";
@@ -245,6 +267,7 @@ internal static class GpuColor
     public static string ScalingSet(string monitorDevicePath, string scalingName)
     {
         if (scalingName.Length == 0) return "";
+        if (!ApplyEnabled) return "GPU scaling " + DisabledNote;
         string vendor = VendorOf(monitorDevicePath);
         if (vendor != "NVIDIA" || !NvAlive())
             return $"GPU scaling skipped ({(vendor.Length > 0 ? vendor : "no NVIDIA driver")} — NVIDIA only)";
@@ -344,7 +367,7 @@ internal static class GpuColor
     /// <summary>Write the base profile's VRR mode (0=off, 1=fullscreen only, 2=fullscreen and windowed).</summary>
     public static bool VrrSet(uint mode)
     {
-        if (!NvAlive()) return false;
+        if (!ApplyEnabled || !NvAlive()) return false;
         try
         {
             using var session = NvAPIWrapper.DRS.DriverSettingsSession.CreateAndLoad();
@@ -361,7 +384,9 @@ internal static class GpuColor
     /// state the machine was in.</summary>
     public static bool VrrRestore(bool hadEntry, uint value)
     {
-        if (!NvAlive()) return false;
+        // Gated like VrrSet: with applies off nothing was ever changed, so there is nothing to put back —
+        // and a restore that wrote would break the "treat the screen as AMD/Intel" promise.
+        if (!ApplyEnabled || !NvAlive()) return false;
         try
         {
             using var session = NvAPIWrapper.DRS.DriverSettingsSession.CreateAndLoad();

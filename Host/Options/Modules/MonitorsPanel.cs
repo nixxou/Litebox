@@ -139,6 +139,25 @@ internal static class MonitorsPanel
             + "change the driver has accepted can still be settling when the emulator asks Windows for the "
             + "resolution. 0 launches immediately.", dpiS, 620), S(46), 18);
 
+        // ── NVIDIA ── (only on machines where the driver answers — elsewhere the whole topic is moot,
+        // exactly like the green groups this switch governs)
+        CheckBox? nvApply = null;
+        if (GpuColor.NvPresent)
+        {
+            Row(ModulePanelKit.Header("NVIDIA", dpiS), S(40));
+            nvApply = new CheckBox
+            {
+                Text = "Apply NVIDIA-specific settings (colour format, dynamic range, vibrance, GPU scaling, VRR)",
+                AutoSize = true, ForeColor = ModulePanelKit.Fg, BackColor = ModulePanelKit.Bg,
+                Checked = GpuColor.ApplyEnabled, Enabled = !readOnly,
+            };
+            Row(nvApply, S(26), 18);
+            Row(ModulePanelKit.Caption(
+                "Off: captures still RECORD the NVIDIA state, so no profile is ever missing anything — but "
+                + "nothing is written to the driver, screens are treated like any other GPU's, and the green "
+                + "NVIDIA panels are hidden (they reappear next time this window opens after re-enabling).", dpiS, 620), S(46), 18);
+        }
+
         var head = ModulePanelKit.Header("Web endpoints", dpiS);
         Row(head, S(40));
 
@@ -189,6 +208,7 @@ internal static class MonitorsPanel
                     d == MonitorProfileApply.LaunchDelayDefault ? null : d.ToString());
             }
             catch { }
+            try { if (nvApply != null) LiteBoxOptionsDb.SetGlobal(GpuColor.KeyApply, nvApply.Checked ? null : "false"); } catch { }
             try
             {
                 string hk = (rkBox.HotkeyValue ?? "").Trim();
@@ -686,7 +706,10 @@ internal static class MonitorsPanel
             _presetZoom.SelectedIndexChanged += (_, _) => Commit();
             Add(_presetZoom, 18);
 
-            Add(BuildGpuGroup(), 18, gapAbove: 6);
+            // The NVIDIA group earns its screen space only where it can act: hidden on machines with
+            // no NVIDIA driver, and when applies are turned off in General. Profiles KEEP any stored
+            // GPU fields either way — captures record them regardless, they just wait.
+            if (GpuColor.NvPresent && GpuColor.ApplyEnabled) Add(BuildGpuGroup(), 18, gapAbove: 6);
 
             _adjust.CheckedChanged += (_, _) => Commit();
             Add(_adjust, 18, gapAbove: 4);

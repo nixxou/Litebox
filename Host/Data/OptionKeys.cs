@@ -117,6 +117,8 @@ internal static class OptionKeys
             Note: "true = RegisterHotKey (taken from the whole system) instead of LiteBox-focus only."),
         new("MonitorWebEndpoints", Glob, OptionType.Bool, OptionCache.Cold, "Web/MonitorsApi",
             Note: "true = register /api/monitors/* on the embedded server. Needs the Web module too."),
+        new("MonitorNvidiaApply", Glob, OptionType.Bool, OptionCache.Cold, "Monitors/GpuColor",
+            Note: "false = capture NVIDIA state (colour, scaling, vibrance, VRR) but never write it, and hide the NVIDIA UI. Absent = on."),
         new("MonitorLaunchDelay", Glob, OptionType.String, OptionCache.Cold, "Monitors/MonitorProfileApply",
             Note: "Seconds to wait between a launch-time profile switch and the game start; absent = 2."),
         new("MonitorRestorePoint", Glob, OptionType.Json, OptionCache.Cold, "Monitors/MonitorProfileApply",

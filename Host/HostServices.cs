@@ -782,6 +782,20 @@ internal static class HostLaunch
             // the Root Folder as its C: mount instead (separate, deferred runtime wiring).
             workDir = RootFolderDir(game);
         }
+        // Launch rules — BigBoxProfile's command-line pipeline, on the game's MAIN spawn only
+        // (autorun helpers are not emulator invocations; store games never reach RunProcess). Both
+        // branches above converge here, so a direct-exe launch is rewritable exactly like an
+        // emulator one — something BigBoxProfile could only do for exes it was registered on.
+        if (label == "main")
+        {
+            try
+            {
+                args = Rules.RulePipeline.Apply(fileName, args,
+                    SafeStr(() => game?.Id), SafeStr(() => selectedApp?.Id), SafeStr(() => emulator?.Id));
+            }
+            catch (Exception ex) { Console.WriteLine("[launch] rules error: " + ex.Message); }
+        }
+
         // Honour the emulator's "Attempt to hide console" flag (LB's HideConsole). A
         // console-subsystem emulator like MAME otherwise pops a console window that grabs
         // the foreground, leaving the game window unfocused — CreateNoWindow suppresses it.

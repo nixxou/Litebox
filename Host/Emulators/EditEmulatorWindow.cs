@@ -74,6 +74,13 @@ internal static class EditEmulatorWindow
             w.AddSection("Monitor Profile", mon, applyMon);
         }
 
+        // Launch Rules — same contract: module-gated, keyed on the saved emulator's id.
+        if (Modules.LbModules.On(Modules.LbModule.Rules) && emuId.Length > 0)
+        {
+            var (rp, applyRules) = Rules.LaunchRulesPanel.Build(Data.LiteBoxOption.ScopeEmulator, emuId, s, readOnly);
+            w.AddSection("Launch Rules", rp, applyRules);
+        }
+
         AddScript(w, emu, "Pause Script", e => e.PauseAutoHotkeyScript, (e, v) => e.PauseAutoHotkeyScript = v);
         AddScript(w, emu, "Resume Script", e => e.ResumeAutoHotkeyScript, (e, v) => e.ResumeAutoHotkeyScript = v);
         AddScript(w, emu, "Reset Game Script", e => e.ResetAutoHotkeyScript, (e, v) => e.ResetAutoHotkeyScript = v);

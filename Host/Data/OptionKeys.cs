@@ -64,6 +64,7 @@ internal static class OptionKeys
         new("Module.parental",         Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
         new("Module.web",              Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
         new("Module.monitors",         Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
+        new("Module.rules",            Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
 
         // ── Gameplay PER-ENTITY overrides (tri-state: no row = inherit; game → emulator → GLOBAL) ──
         // ONLY the per-entity tiers (game/emulator) live in the DB — that's what the EAV store is for.
@@ -123,6 +124,10 @@ internal static class OptionKeys
             Note: "Seconds to wait between a launch-time profile switch and the game start; absent = 2."),
         new("MonitorRestorePoint", Glob, OptionType.Json, OptionCache.Cold, "Monitors/MonitorProfileApply",
             Note: "JSON {Layout,AudioDevice,Volume,ActiveId}; absent = no profile applied / nothing to undo."),
+
+        // ── Launch rules (Host\Rules) ──
+        new("LaunchRules", Assignable, OptionType.Json, OptionCache.Cold, "Rules/LaunchRuleStore",
+            Note: "JSON LaunchRule[] run in order at launch; resolved EXCLUSIVELY version > game > emulator."),
 
         // ── Per-game DATA (not option overrides) ──
         // LEGACY per-game "requires parental rights" flag. The store moved to the shared

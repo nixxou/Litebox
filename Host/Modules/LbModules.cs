@@ -25,6 +25,7 @@ internal enum LbModule
     Parental,           // parental control on BigBox's native PIN
     Web,                // embedded web frontends (LiteBox Web / BigBox Web / database Web)
     Monitors,           // monitor profiles: layout / display mode / sound card, switchable from Tools
+    Rules,              // launch rules: BigBoxProfile's sondes & actions on the command line, per entity
 }
 
 internal static class LbModules
@@ -48,6 +49,8 @@ internal static class LbModules
             "The embedded web server: LiteBox Web, BigBox Web and the database Web, each served from its own folder.", false, true),
         new(LbModule.Monitors, "monitors", "Monitor profiles",
             "Named desktop presets — monitor layout (position, resolution, refresh, rotation, per-screen zoom), a single monitor's display mode, the default sound card and its volume, or a solo-primary blackout. Switch between them from Tools. Off: the Tools entry is hidden and nothing touches the display.", false, true),
+        new(LbModule.Rules, "rules", "Launch rules",
+            "BigBoxProfile's probes & actions, native: ordered rules attached to an emulator, game or version rewrite the command line right before the spawn, guarded by filters (and marker arguments that are stripped before the emulator sees them). Ported action by action — today: Prefix. Off: launches run untouched.", false, true),
     };
 
     public static Info Meta(LbModule m) => Catalog.First(c => c.Module == m);

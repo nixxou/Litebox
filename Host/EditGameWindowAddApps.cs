@@ -588,11 +588,26 @@ internal sealed partial class EditGameWindow
             }
         }
 
+        Action? applyRules = null;
+        if (Modules.LbModules.On(Modules.LbModule.Rules))
+        {
+            string vid2 = Safe(() => app?.Id) ?? "";
+            if (vid2.Length > 0)
+            {
+                var rulesPage = NewTabPage(tabs, "Launch Rules");
+                var (rp, applyR) = Rules.LaunchRulesPanel.Build(Data.LiteBoxOption.ScopeVersion, vid2, _s, _readOnly);
+                rp.Dock = DockStyle.Fill;
+                rulesPage.Controls.Add(rp);
+                applyRules = applyR;
+            }
+        }
+
         return RunAddAppDialog(f, app, () =>
         {
             var a = app ?? g.AddNewAdditionalApplication();
             if (a == null) return false;
             applyMonitor?.Invoke();
+            applyRules?.Invoke();
             ApplyStr(v => a.Name = v, Safe(() => a.Name), name.Text.Trim());
             ApplyStr(v => a.ApplicationPath = v, Safe(() => a.ApplicationPath), path.Text.Trim());
             ApplyStr(v => a.CommandLine = v, Safe(() => a.CommandLine), cmd.Text.Trim());

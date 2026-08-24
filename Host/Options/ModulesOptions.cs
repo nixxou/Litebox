@@ -228,6 +228,7 @@ internal static class ModulesOptions
         LbModule.Parental          => "Parental",
         LbModule.Web               => "Web",
         LbModule.Monitors          => "Monitor profiles",
+        LbModule.Rules             => "Launch rules",
         _                          => m.ToString(),
     };
 
@@ -239,6 +240,7 @@ internal static class ModulesOptions
         LbModule.Rom              => RomPanel.Build(dpiS, readOnly),
         LbModule.Web              => WebPanel.Build(dpiS, readOnly),
         LbModule.Monitors         => MonitorsPanel.Build(dpiS, readOnly),
+        LbModule.Rules            => RulesPanel.Build(dpiS, readOnly),
         _                         => (new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg }, (Action?)null),
     };
 }

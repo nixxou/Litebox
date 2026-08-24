@@ -1,0 +1,170 @@
+// Launch rules — the LiteBox port of BigBoxProfile's EmulatorActions ("sondes & actions"): an ordered
+// list of actions run against the command line right before the game spawns, each guarded by probes
+// (command-line filters today; more probes as actions get ported one by one, faithfully).
+//
+// V1 carries ONE action, Prefix — deliberately: each BigBoxProfile action is ported alone, verified
+// against the original's behaviour, then the next one lands. The rule model already holds what the
+// whole family needs (a Type discriminator, the shared filter/exclude probes, ordering, Enabled).
+//
+// Attachment is per entity (Edit Emulator / Edit Game / Edit Additional Version), resolved EXCLUSIVELY:
+// version > game > emulator — the most specific level that has any enabled rule replaces the others,
+// the same contract as Monitor Profile assignments (Mehdi's call; BigBoxProfile had one flat pipeline
+// per emulator exe and no notion of game, so there is no original semantic to preserve here).
+
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using LbApiHost.Host.Data;
+using LbApiHost.Host.Diag;
+using LbApiHost.Host.Modules;
+
+namespace LbApiHost.Host.Rules;
+
+/// <summary>One rule. Fields are a superset across action types; <see cref="Type"/> says which apply.
+/// The probe fields (Filter/Exclude and their modes) are shared by the whole family, exactly as in
+/// BigBoxProfile where every action carried the same filter block.</summary>
+internal sealed class LaunchRule
+{
+    public const string TypePrefix = "Prefix";
+
+    public string Type { get; set; } = TypePrefix;
+    public bool Enabled { get; set; } = true;
+
+    // ── Prefix ──
+    /// <summary>The text to prepend to the emulator's arguments.</summary>
+    public string Prefix { get; set; } = "";
+    /// <summary>true = the prefix (trimmed) becomes ONE argument inserted first; false = the prefix is
+    /// prepended verbatim to the joined argument string and re-parsed, so it may carry SEVERAL
+    /// arguments at once (BigBoxProfile's "Add As Argument" / "Add As cmdLine" radio).</summary>
+    public bool AsArg { get; set; } = true;
+
+    // ── probes (shared by every action type) ──
+    /// <summary>"Only if cmdLine contains" — case-insensitive substring over exe + arguments.</summary>
+    public string Filter { get; set; } = "";
+    /// <summary>Filter is a comma-separated list: fire when ANY entry matches…</summary>
+    public bool CommaFilter { get; set; }
+    /// <summary>…unless this asks for ALL entries to match.</summary>
+    public bool MatchAllFilter { get; set; }
+    /// <summary>BigBoxProfile's "If match an arg, remove before execute": arguments strictly equal to a
+    /// filter entry are stripped in a FINAL pass, after every rule ran — the marker-argument system,
+    /// where a dummy per-game parameter set in LaunchBox routes rules and never reaches the emulator.</summary>
+    public bool RemoveFilter { get; set; }
+    /// <summary>"Exclude if cmdLine contains" — the blocking mirror of Filter.</summary>
+    public string Exclude { get; set; } = "";
+    public bool CommaExclude { get; set; }
+    /// <summary>Block only when ALL exclude entries are present. NOTE: this is the INTENT of
+    /// BigBoxProfile's checkbox — its original code had the any-match test first, making the flag
+    /// unsatisfiable (ticked, the action never fired). Ported as what the label always promised.</summary>
+    public bool MatchAllExclude { get; set; }
+
+    public bool IsConfigured => Type switch
+    {
+        TypePrefix => Prefix.Length > 0,
+        _ => false,
+    };
+
+    /// <summary>One-line description for the rule lists — mirrors BigBoxProfile's ToString().</summary>
+    public string Describe()
+    {
+        if (!IsConfigured) return $"{Type} => NOT CONFIGURED";
+        string d = Type switch
+        {
+            TypePrefix => (AsArg ? "Prefix this to the Arg List : " : "Prefix this to the command line : ") + Prefix,
+            _ => Type,
+        };
+        if (Filter.Length > 0) d += $" [Only if command line contains {Filter}]" + (MatchAllFilter ? "[matchall]" : "");
+        if (Exclude.Length > 0) d += $" [Exclude {Exclude}]" + (MatchAllExclude ? "[matchall]" : "");
+        if (RemoveFilter) d += " [remove marker]";
+        if (!Enabled) d = "(disabled) " + d;
+        return $"{Type} => {d}";
+    }
+}
+
+/// <summary>Storage + resolution. One JSON list per entity (option key "LaunchRules", scopes
+/// version/game/emulator), read at launch time only — Cold, like the monitor assignments.</summary>
+internal static class LaunchRuleStore
+{
+    private const string Tag = "rules";
+    public const string Key = "LaunchRules";
+
+    private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
+
+    public static List<LaunchRule> Get(string scope, string entityId)
+    {
+        if (string.IsNullOrEmpty(entityId)) return new List<LaunchRule>();
+        try
+        {
+            var raw = LiteBoxOptionsDb.Get(scope, entityId, Key);
+            if (string.IsNullOrWhiteSpace(raw)) return new List<LaunchRule>();
+            return JsonSerializer.Deserialize<List<LaunchRule>>(raw, Json) ?? new List<LaunchRule>();
+        }
+        catch (Exception ex)
+        {
+            LbLog.Warn(Tag, $"unreadable rules for {scope}/{entityId}: {ex.Message}");
+            return new List<LaunchRule>();
+        }
+    }
+
+    /// <summary>Persist a list; empty/null deletes the row (no row = no opinion, like every option).</summary>
+    public static void Set(string scope, string entityId, List<LaunchRule>? rules)
+    {
+        if (string.IsNullOrEmpty(entityId)) return;
+        try
+        {
+            LiteBoxOptionsDb.Set(scope, entityId, Key,
+                rules is { Count: > 0 } ? JsonSerializer.Serialize(rules, Json) : null);
+        }
+        catch (Exception ex) { LbLog.Warn(Tag, $"rules write failed ({scope}/{entityId}): {ex.Message}"); }
+    }
+
+    /// <summary>The rules a launch should run, or an empty list. EXCLUSIVE walk, version &gt; game &gt;
+    /// emulator: the most specific entity with at least one ENABLED rule provides the whole pipeline.</summary>
+    public static List<LaunchRule> Resolve(string? gameId, string? versionId, string? emulatorId)
+    {
+        if (!LbModules.On(LbModule.Rules)) return new List<LaunchRule>();
+
+        foreach (var (scope, id) in new[]
+                 {
+                     (LiteBoxOption.ScopeVersion,  versionId ?? ""),
+                     (LiteBoxOption.ScopeGame,     gameId ?? ""),
+                     (LiteBoxOption.ScopeEmulator, emulatorId ?? ""),
+                 })
+        {
+            if (id.Length == 0) continue;
+            var rules = Get(scope, id);
+            if (rules.Any(r => r.Enabled && r.IsConfigured))
+            {
+                LbLog.Info(Tag, $"launch: {rules.Count(r => r.Enabled && r.IsConfigured)} rule(s) from {scope}");
+                return rules;
+            }
+        }
+        return new List<LaunchRule>();
+    }
+
+    // ── the module-options listing (same shape as the monitor Assignments page) ──
+
+    internal sealed record Row(string Scope, string EntityId, string EntityName, string What);
+
+    public static List<Row> All(string scope, Func<string, string?> nameOf)
+    {
+        var rows = new List<Row>();
+        Dictionary<string, string> raw;
+        try { raw = LiteBoxOptionsDb.AllOf(scope, Key); }
+        catch { return rows; }
+
+        foreach (var kv in raw)
+        {
+            var rules = Get(scope, kv.Key);
+            if (rules.Count == 0) continue;
+            string what = rules.Count == 1 ? rules[0].Describe()
+                        : $"{rules.Count} rules: " + string.Join(" · ", rules.Select(r => r.Type));
+            rows.Add(new Row(scope, kv.Key, nameOf(kv.Key) ?? $"<unknown {kv.Key}>", what));
+        }
+        return rows.OrderBy(r => r.EntityName, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public static void Clear(string scope, string entityId) => Set(scope, entityId, null);
+}

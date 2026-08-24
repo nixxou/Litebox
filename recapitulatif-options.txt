@@ -638,7 +638,7 @@ Registre actuel :
     ForceFrontendFocusOnShutdown, MonitorStartupShutdownWithProcess
   scope global (switchs de modules, row absente = défaut du module) :
     Module.base, Module.rom, Module.retroachievements, Module.parental,
-    Module.web, Module.monitors
+    Module.web, Module.monitors, Module.rules
   scopes game+emulator (overrides gameplay, §1.3 pour la sémantique ; édités par
   Edit Game / Edit Emulator → onglets LiteBox) :
     StartupStayOnTop, ExitScreenEagerMs, PauseHotkey, ScreenCaptureKey,
@@ -681,6 +681,13 @@ Registre actuel :
     MonitorProfileCustom  JSON d'un profil stocké EN LIGNE, utilisé quand
                           l'assignation vaut "custom" (réglages propres à cet
                           émulateur, sans polluer la liste des profils).
+
+  scopes game+emulator+version (Launch rules — module "rules") :
+    LaunchRules     JSON LaunchRule[] — règles ordonnées appliquées à la ligne
+                    de commande juste avant le lancement (V1 : Prefix), avec
+                    sondes filter/exclude et arguments-marqueurs retirés avant
+                    l'émulateur. Résolution EXCLUSIVE version -> jeu -> ému.
+                    Éditées dans Edit Emulator / Game / Additional Version.
 
   scope game (données, pas des overrides) :
     FieldLocks      JSON {"colonne":"valeur préservée"} — verrous de champs de

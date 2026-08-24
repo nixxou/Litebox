@@ -326,7 +326,7 @@ internal static class MonitorsPanel
 
     /// <summary>Entity id to a display name. An id that resolves to nothing is left alone, so a dangling
     /// assignment still shows up as one — that is the kind this page exists to catch.</summary>
-    private static Func<string, string?> NameResolver(string scope)
+    internal static Func<string, string?> NameResolver(string scope)
     {
         if (scope == LiteBoxOption.ScopeEmulator)
             return id =>

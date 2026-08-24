@@ -31,7 +31,7 @@ locks/3D — trop de stores épars pour garder le fil.
   partagé) : `StartupScreenPostLaunchDisplayTime`, `ShutdownScreenPostReadyDisplayTime`,
   `ForceFrontendFocusOnShutdown`, `MonitorStartupShutdownWithProcess`.
 - **Modules** : `Module.base`, `Module.rom`, `Module.retroachievements`, `Module.parental`,
-  `Module.web`, `Module.monitors` (LbModules ; row absente = défaut du module).
+  `Module.web`, `Module.monitors`, `Module.rules` (LbModules ; row absente = défaut du module).
 - **Monitor Profiles** (Host\Monitors, ajouté 2026-08) : `MonitorProfiles` (JSON, la liste entière),
   `MonitorRestorePoint` (JSON, l'état d'avant le 1er profil — persisté pour survivre à un crash),
   `MonitorRestoreHotkey` + `MonitorRestoreHotkeyGlobal`, `MonitorWebEndpoints`, `MonitorLaunchDelay`,
@@ -61,6 +61,11 @@ Résolution jeu → émulateur → global (`LiteBoxOption.ResolveBool/ResolveStr
   JSON d'un profil stocké en ligne (utilisé quand l'assignation vaut `"custom"`). Résolution
   version → jeu → émulateur, précédée du one-shot « Run next game as » (mémoire vive uniquement).
   **Premier usage du scope `version`** (additional version), déclaré dans `LiteBoxOption`.
+
+### scopes `game` / `emulator` / `version` — Launch rules (module "rules", ajouté 2026-08)
+- `LaunchRules` = JSON `LaunchRule[]` ordonné, appliqué à la ligne de commande avant le spawn
+  (portage action-par-action de BigBoxProfile ; V1 : Prefix). Résolution EXCLUSIVE
+  version → jeu → émulateur, comme les Monitor Profiles.
 
 ### scope `platform`
 Déclaré (`LiteBoxOption.ScopePlatform`) mais **aucune clé en service à ce jour**.

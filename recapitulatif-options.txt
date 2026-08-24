@@ -682,13 +682,13 @@ Registre actuel :
                           l'assignation vaut "custom" (réglages propres à cet
                           émulateur, sans polluer la liste des profils).
 
-  scopes game+emulator+version (Launch rules — module "rules") :
+  scope emulator (Launch rules — module "rules") :
     LaunchRules     JSON LaunchRule[] — règles ordonnées appliquées à la ligne
                     de commande juste avant le lancement (Prefix, Suffix, ChangeExe,
-                    ChangeRomPath), avec
-                    sondes filter/exclude et arguments-marqueurs retirés avant
-                    l'émulateur. Résolution EXCLUSIVE version -> jeu -> ému.
-                    Éditées dans Edit Emulator / Game / Additional Version.
+                    ChangeRomPath), avec sondes filter/exclude. Émulateur SEULEMENT :
+                    le ciblage par jeu passe par un argument-marqueur dans les
+                    paramètres personnalisés du jeu (retiré avant l'émulateur).
+                    Éditées dans Edit Emulator ▸ Launch Rules.
 
   scope game (données, pas des overrides) :
     FieldLocks      JSON {"colonne":"valeur préservée"} — verrous de champs de

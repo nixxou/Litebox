@@ -291,7 +291,6 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             SaveCurrent(); SaveLocks(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching();
             try { _applyModelSettings?.Invoke(); } catch { }
             try { _applyMonitorProfile?.Invoke(); } catch { }
-            try { _applyLaunchRules?.Invoke(); } catch { }
             DialogResult = DialogResult.OK; Close();
         };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
@@ -399,8 +398,6 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
         // Only while the module owns the feature — an inert page would be worse than no page.
         if (Modules.LbModules.On(Modules.LbModule.Monitors))
             launching.Nodes.Add(N("Monitor Profile", "MonitorProfile"));
-        if (Modules.LbModules.On(Modules.LbModule.Rules))
-            launching.Nodes.Add(N("Launch Rules", "LaunchRules"));
 
         _tree.Nodes.AddRange(new[] { metadata, media, launching });
         _tree.ExpandAll();
@@ -450,7 +447,6 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
                 "RootFolder" => BuildRootFolderPage(),        // supports multi (merged path field)
                 "StartupPause" => BuildStartupPausePage(),     // base window supports multi (3-state override toggles); modals stay solo
                 "MonitorProfile" => BuildMonitorProfilePage(),  // supports multi (3-state override + merged profile list)
-                "LaunchRules" => BuildLaunchRulesPage(),   // solo only: an ORDERED rule list has no honest merge
                 _ => Placeholder(_tree.SelectedNode?.Text ?? key),
             };
             _pages[key] = page;
@@ -474,27 +470,6 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
     // with the CURRENT unsaved picks; both tabs apply together on OK / page navigation.
     private Action _applyModelSettings;
     private Action _applyMonitorProfile;
-    private Action _applyLaunchRules;
-
-    /// <summary>The shared rules editor on the game scope. Multi-selection gets a refusal rather than
-    /// a merge: rules are an ORDERED pipeline, and there is no honest way to merge two orders.</summary>
-    private Control BuildLaunchRulesPage()
-    {
-        if (IsMulti)
-        {
-            var ph = new Panel { BackColor = Bg, Padding = new Padding(S(6)) };
-            ph.Controls.Add(new Label
-            {
-                Text = "Launch rules are edited one game at a time.", AutoSize = true,
-                Location = new Point(S(14), S(16)), ForeColor = SubFg, BackColor = Bg,
-            });
-            return ph;
-        }
-        string gid = Safe(() => _editGames[0].Id) ?? "";
-        var (panel, apply) = Rules.LaunchRulesPanel.Build(Data.LiteBoxOption.ScopeGame, gid, _s, _readOnly);
-        _applyLaunchRules = apply;
-        return panel;
-    }
     private Control BuildModelSettingsPage()
     {
         var g = _editGames[0];

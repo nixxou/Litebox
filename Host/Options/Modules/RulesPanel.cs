@@ -49,16 +49,14 @@ internal static class RulesPanel
 
         Row(ModulePanelKit.Header("Launch rules", dpiS), S(30));
         Row(ModulePanelKit.Caption(
-            "BigBoxProfile's probes & actions, native. An ordered list of rules attached to an emulator, a "
-            + "game or an additional version rewrites the command line right before the game spawns — each "
-            + "rule guarded by filters on the command line, including marker arguments that route rules and "
-            + "are stripped before the emulator ever sees them.", dpiS, 620), S(64), 18);
+            "BigBoxProfile's probes & actions, native. An ordered list of rules attached to an EMULATOR "
+            + "rewrites the command line right before the game spawns — each rule guarded by filters on "
+            + "the command line. Per-game targeting: a marker argument in the game's custom command-line "
+            + "parameters routes rules and is stripped before the emulator ever sees it.", dpiS, 620), S(64), 18);
 
         Row(ModulePanelKit.Caption(
-            "Rules are edited on the entity itself: Edit Emulator ▸ Launch Rules, Edit Game ▸ Launching ▸ "
-            + "Launch Rules, or the additional version's dialog. Resolution is EXCLUSIVE — the most specific "
-            + "level that has any enabled rule provides the whole pipeline: version, then game, then "
-            + "emulator.", dpiS, 620), S(64), 18);
+            "Rules are edited on the emulator: Edit Emulator ▸ Launch Rules. Store games are out of "
+            + "scope by construction — they have neither an emulator nor a command line to rewrite.", dpiS, 620), S(48), 18);
 
         Row(ModulePanelKit.Caption(
             "Actions are ported from BigBoxProfile one by one, each verified against the original before "
@@ -72,13 +70,11 @@ internal static class RulesPanel
         int S(int px) => ModulePanelKit.Sc(dpiS, px);
         var root = new Panel { Dock = DockStyle.Fill, BackColor = ModulePanelKit.Bg, Padding = new Padding(S(10)) };
 
-        var kind = ModulePanelKit.Combo(dpiS, readOnly: false, 220);
-        kind.Items.AddRange(new object[] { "Emulators", "Games", "Additional versions" });
-        kind.SelectedIndex = 0;
-
-        var top = new Panel { Dock = DockStyle.Top, Height = S(38), BackColor = ModulePanelKit.Bg };
-        kind.Location = new Point(0, S(4));
-        top.Controls.Add(kind);
+        // Emulator-only since Mehdi's cut — no scope combo: one list, the emulators carrying rules.
+        var top = new Panel { Dock = DockStyle.Top, Height = S(30), BackColor = ModulePanelKit.Bg };
+        var topCap = ModulePanelKit.Caption("Emulators carrying launch rules — double-click opens the emulator on its Launch Rules page.", dpiS, 620);
+        topCap.Location = new Point(0, S(4));
+        top.Controls.Add(topCap);
 
         var list = new ListView
         {
@@ -112,12 +108,7 @@ internal static class RulesPanel
         var export = Btn("Export all\u2026");
         var import_ = Btn("Import\u2026");
 
-        string Scope() => kind.SelectedIndex switch
-        {
-            1 => LiteBoxOption.ScopeGame,
-            2 => LiteBoxOption.ScopeVersion,
-            _ => LiteBoxOption.ScopeEmulator,
-        };
+        string Scope() => LiteBoxOption.ScopeEmulator;
 
         var rows = new List<LaunchRuleStore.Row>();
         void Reload()
@@ -140,7 +131,6 @@ internal static class RulesPanel
             import_.Enabled = one && !readOnly;
         }
         list.SelectedIndexChanged += (_, _) => SyncSel();
-        kind.SelectedIndexChanged += (_, _) => Reload();
         del.Click += (_, _) =>
         {
             var picked = list.SelectedIndices.Cast<int>().Where(i => i >= 0 && i < rows.Count).Select(i => rows[i]).ToList();

@@ -815,8 +815,7 @@ internal static class HostLaunch
             {
                 try
                 {
-                    (fileName, args) = Rules.RulePipeline.Apply(fileName, args,
-                        SafeStr(() => game?.Id), SafeStr(() => selectedApp?.Id), SafeStr(() => emulator?.Id));
+                    (fileName, args) = Rules.RulePipeline.Apply(fileName, args, SafeStr(() => emulator?.Id));
                 }
                 catch (Exception ex) { Console.WriteLine("[launch] rules error: " + ex.Message); }
             }
@@ -872,18 +871,9 @@ internal static class HostLaunch
             // folder (Spawn's default). Emulator launches keep the emulator's folder; DOSBox uses
             // the Root Folder as its C: mount instead (separate, deferred runtime wiring).
             workDir = RootFolderDir(game);
-            // Launch rules for the DIRECT branch too — a direct-exe launch is rewritable exactly
-            // like an emulator one, something BigBoxProfile could only do for exes it proxied.
-            // No rom resolution here: direct launches never extract.
-            if (label == "main")
-            {
-                try
-                {
-                    (fileName, args) = Rules.RulePipeline.Apply(fileName, args,
-                        SafeStr(() => game?.Id), SafeStr(() => selectedApp?.Id), SafeStr(() => emulator?.Id));
-                }
-                catch (Exception ex) { Console.WriteLine("[launch] rules error: " + ex.Message); }
-            }
+            // No rules on the direct branch: the module is emulator-only (a direct exe launch has
+            // no emulator to carry rules) — per-game needs are a marker in the game's custom
+            // parameters on an emulator launch, or simply not this module's business.
         }
         // Honour the emulator's "Attempt to hide console" flag (LB's HideConsole). A
         // console-subsystem emulator like MAME otherwise pops a console window that grabs

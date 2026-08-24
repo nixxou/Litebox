@@ -23,10 +23,10 @@ internal static class RulePipeline
     /// exe and arguments to spawn with — unchanged when no rule applies or the module is off. The
     /// exe travels through the pipeline since ChangeExe: an action may retarget it, and Spawn's
     /// working directory follows the exe it is given (BigBoxProfile set WorkingDirExe by hand).</summary>
-    public static (string Exe, string Args) Apply(string exePath, string args, string? gameId, string? versionId, string? emulatorId)
+    public static (string Exe, string Args) Apply(string exePath, string args, string? emulatorId)
     {
         List<LaunchRule> rules;
-        try { rules = LaunchRuleStore.Resolve(gameId, versionId, emulatorId); }
+        try { rules = LaunchRuleStore.Resolve(emulatorId); }
         catch { return (exePath, args); }
         if (rules.Count == 0) return (exePath, args);
         return ApplyRules(rules, exePath, args);

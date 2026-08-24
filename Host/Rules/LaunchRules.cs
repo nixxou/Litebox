@@ -6,10 +6,10 @@
 // against the original's behaviour, then the next one lands. The rule model already holds what the
 // whole family needs (a Type discriminator, the shared filter/exclude probes, ordering, Enabled).
 //
-// Attachment is per entity (Edit Emulator / Edit Game / Edit Additional Version), resolved EXCLUSIVELY:
-// version > game > emulator — the most specific level that has any enabled rule replaces the others,
-// the same contract as Monitor Profile assignments (Mehdi's call; BigBoxProfile had one flat pipeline
-// per emulator exe and no notion of game, so there is no original semantic to preserve here).
+// Attachment is EMULATOR-ONLY (Mehdi's final cut, converging back on BigBoxProfile's own shape —
+// one pipeline per emulator): per-game targeting is a marker argument in the game's custom
+// command-line parameters, intercepted by the probes at execution, and store games fall outside
+// the module by construction. The storage keeps its scope column, so widening later stays cheap.
 
 #nullable enable
 
@@ -210,28 +210,19 @@ internal static class LaunchRuleStore
         catch (Exception ex) { LbLog.Warn(Tag, $"rules write failed ({scope}/{entityId}): {ex.Message}"); }
     }
 
-    /// <summary>The rules a launch should run, or an empty list. EXCLUSIVE walk, version &gt; game &gt;
-    /// emulator: the most specific entity with at least one ENABLED rule provides the whole pipeline.</summary>
-    public static List<LaunchRule> Resolve(string? gameId, string? versionId, string? emulatorId)
+    /// <summary>The rules a launch should run, or an empty list. EMULATOR-ONLY (Mehdi's cut, and it
+    /// buys a lot: per-game targeting is a marker argument in the game's custom command-line
+    /// parameters — the classic BigBoxProfile mechanism, already fully supported by the probes —
+    /// and store games, which have neither an emulator nor a command line to rewrite, fall outside
+    /// the module by construction instead of by special-casing).</summary>
+    public static List<LaunchRule> Resolve(string? emulatorId)
     {
-        if (!LbModules.On(LbModule.Rules)) return new List<LaunchRule>();
-
-        foreach (var (scope, id) in new[]
-                 {
-                     (LiteBoxOption.ScopeVersion,  versionId ?? ""),
-                     (LiteBoxOption.ScopeGame,     gameId ?? ""),
-                     (LiteBoxOption.ScopeEmulator, emulatorId ?? ""),
-                 })
-        {
-            if (id.Length == 0) continue;
-            var rules = Get(scope, id);
-            if (rules.Any(r => r.Enabled && r.IsConfigured))
-            {
-                LbLog.Info(Tag, $"launch: {rules.Count(r => r.Enabled && r.IsConfigured)} rule(s) from {scope}");
-                return rules;
-            }
-        }
-        return new List<LaunchRule>();
+        if (!LbModules.On(LbModule.Rules) || string.IsNullOrEmpty(emulatorId)) return new List<LaunchRule>();
+        var rules = Get(LiteBoxOption.ScopeEmulator, emulatorId);
+        int active = rules.Count(r => r.Enabled && r.IsConfigured);
+        if (active == 0) return new List<LaunchRule>();
+        LbLog.Info(Tag, $"launch: {active} rule(s) from the emulator");
+        return rules;
     }
 
     // ── the module-options listing (same shape as the monitor Assignments page) ──

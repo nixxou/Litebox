@@ -464,37 +464,20 @@ internal static class LaunchRulesPanel
     {
         try
         {
+            // Emulator-only since Mehdi's cut — the page has one attachment point, so the example
+            // is always "one of THIS emulator's games", redrawn by the New button.
             var dm = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager;
             Unbroken.LaunchBox.Plugins.Data.IGame? game = null;
-            Unbroken.LaunchBox.Plugins.Data.IAdditionalApplication? app = null;
-
-            if (scope == Data.LiteBoxOption.ScopeGame)
-                game = dm?.GetAllGames()?.FirstOrDefault(x => string.Equals(x.Id, entityId, StringComparison.OrdinalIgnoreCase));
-            else if (scope == Data.LiteBoxOption.ScopeVersion)
-            {
-                foreach (var g in dm?.GetAllGames() ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IGame>())
-                {
-                    var a = g.GetAllAdditionalApplications()?.FirstOrDefault(x => string.Equals(x.Id, entityId, StringComparison.OrdinalIgnoreCase));
-                    if (a == null) continue;
-                    game = g; app = a;
-                    break;
-                }
-            }
-            else
-            {
-                var mine = dm?.GetAllGames()?.Where(g => string.Equals(g.EmulatorId, entityId, StringComparison.OrdinalIgnoreCase)
-                                                         && !string.IsNullOrWhiteSpace(g.ApplicationPath)).ToList();
-                if (mine is { Count: > 0 }) game = mine[Random.Shared.Next(mine.Count)];
-            }
+            var mine = dm?.GetAllGames()?.Where(g => string.Equals(g.EmulatorId, entityId, StringComparison.OrdinalIgnoreCase)
+                                                     && !string.IsNullOrWhiteSpace(g.ApplicationPath)).ToList();
+            if (mine is { Count: > 0 }) game = mine[Random.Shared.Next(mine.Count)];
             if (game == null) return @"emulator.exe ""FULL\PATH\TO\ROM\FILE""";
 
-            string? emuId = scope == Data.LiteBoxOption.ScopeEmulator ? entityId
-                          : app is { UseEmulator: true } && !string.IsNullOrEmpty(app.EmulatorId) ? app.EmulatorId
-                          : game.EmulatorId;
+            string? emuId = entityId;
             var emu = string.IsNullOrEmpty(emuId) ? null
                 : dm?.GetAllEmulators()?.FirstOrDefault(x => string.Equals(x.Id, emuId, StringComparison.OrdinalIgnoreCase));
 
-            return HostLaunch.PreviewCommandLine(game, app, emu) ?? @"emulator.exe ""FULL\PATH\TO\ROM\FILE""";
+            return HostLaunch.PreviewCommandLine(game, null, emu) ?? @"emulator.exe ""FULL\PATH\TO\ROM\FILE""";
         }
         catch { return @"emulator.exe ""FULL\PATH\TO\ROM\FILE"""; }
     }

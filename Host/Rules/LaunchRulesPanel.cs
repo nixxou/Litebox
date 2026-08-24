@@ -96,10 +96,11 @@ internal static class LaunchRulesPanel
         tree.BorderStyle = BorderStyle.FixedSingle;
         tree.ShowLines = false;
         // No expand glyphs: their bottom lands one indent short and reads as a broken hierarchy
-        // (Mehdi). The accent colour alone says "group", and groups simply cannot collapse.
+        // (Mehdi). The accent colour alone says "group" — and a group folds on double-click, the
+        // TreeView's glyphless default. (An earlier cut cancelled BeforeCollapse, burying the
+        // function with the glyph; only the glyph was ever the problem.)
         tree.ShowPlusMinus = false;
         tree.ShowRootLines = false;
-        tree.BeforeCollapse += (_, e) => e.Cancel = true;
         tree.FullRowSelect = true;
         tree.HideSelection = false;
         var treeHost = new SlimScrollTreeHost(tree) { Width = S(560), Height = S(150) };
@@ -114,6 +115,19 @@ internal static class LaunchRulesPanel
 
         void RebuildTree(int selectIndex)
         {
+            // The fold state belongs to the user, the rebuild does not: collapsed headers are
+            // remembered by their full path and re-collapsed after the walk re-creates them.
+            var collapsed = new HashSet<string>();
+            void Collect(TreeNodeCollection nodes)
+            {
+                foreach (TreeNode n in nodes)
+                {
+                    if (n.Tag == null && !n.IsExpanded && n.Nodes.Count > 0) collapsed.Add(n.FullPath);
+                    Collect(n.Nodes);
+                }
+            }
+            Collect(tree.Nodes);
+
             tree.BeginUpdate();
             tree.Nodes.Clear();
             // The stack holds the open group chain (signature + its node). A rule whose signature
@@ -154,8 +168,17 @@ internal static class LaunchRulesPanel
                 if (i == selectIndex) selected = node;
             }
             tree.ExpandAll();
+            void Refold(TreeNodeCollection nodes)
+            {
+                foreach (TreeNode n in nodes)
+                {
+                    Refold(n.Nodes);
+                    if (n.Tag == null && collapsed.Contains(n.FullPath)) n.Collapse(ignoreChildren: false);
+                }
+            }
+            Refold(tree.Nodes);
             tree.EndUpdate();
-            if (selected != null) tree.SelectedNode = selected;
+            if (selected != null) { tree.SelectedNode = selected; selected.EnsureVisible(); }
         }
 
         int SelectedFlatIndex()
@@ -191,7 +214,7 @@ internal static class LaunchRulesPanel
                 e.Bounds.X + 2, e.Bounds.Y + 1);
         };
 
-        exIn.TextChanged += (_, _) => Reload(SelectedFlatIndex());
+        exIn.TextChanged += (_, _) => Recalc();
         groupView.CheckedChanged += (_, _) => Reload(SelectedFlatIndex());
         Reload(rules.Count > 0 ? 0 : -1);
         Row(list, 0);

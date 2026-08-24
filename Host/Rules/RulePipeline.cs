@@ -80,29 +80,66 @@ internal static class RulePipeline
     /// the whole line after every configured rule and the final marker pass — what EmulatorConfig's
     /// CalculateExemple computed. A rule that throws is skipped (ModifyExemple's try/catch).</summary>
     public static string PreviewExample(List<LaunchRule> rules, string fullCommandLine)
+        => PreviewWithTrace(rules, fullCommandLine, out _);
+
+    /// <summary>One rule's fate for the current example line. Skipped = disabled or not configured;
+    /// AnchorBroken = this rule is anchored (AsGroup) and its probe no longer evaluates the way it
+    /// did when its group was entered — proof that a rule in between modified the arguments the
+    /// group's condition matches on, the very thing the checkbox promises never happens.</summary>
+    internal enum TraceState { Fired, Refused, Skipped }
+    internal sealed record RuleTrace(TraceState State, bool AnchorBroken);
+
+    /// <summary>PreviewExample with the per-rule trace the grouped view displays. Same walk, same
+    /// example channel — the trace is a by-product of the preview, never a second engine.</summary>
+    public static string PreviewWithTrace(List<LaunchRule> rules, string fullCommandLine, out List<RuleTrace> trace)
     {
+        trace = new List<RuleTrace>();
         var all = RuleArgs.SplitFull(fullCommandLine);
-        if (all.Length == 0) return fullCommandLine;
+        if (all.Length == 0)
+        {
+            foreach (var _ in rules) trace.Add(new RuleTrace(TraceState.Skipped, false));
+            return fullCommandLine;
+        }
         string exe = all[0];
         string args = RuleArgs.Join(all.Skip(1));
+
+        // Group-entry probe results, per canonical signature: the first anchored rule of a signature
+        // records how the condition evaluated at group entry; every later member re-evaluates and a
+        // mismatch marks it broken.
+        var entryResults = new Dictionary<ProbeSignature, bool>();
 
         var removeMarkers = new List<string>();
         foreach (var rule in rules)
         {
-            if (!rule.Enabled || !rule.IsConfigured) continue;
+            if (!rule.Enabled || !rule.IsConfigured)
+            {
+                trace.Add(new RuleTrace(TraceState.Skipped, false));
+                continue;
+            }
+            bool fired = false, broken = false;
             try
             {
-                if (ProbePasses(rule, exe, args))
+                bool passes = ProbePasses(rule, exe, args);
+                var sig = ProbeSignature.Of(rule);
+                if (sig != null)
+                {
+                    if (entryResults.TryGetValue(sig, out bool atEntry)) broken = passes != atEntry;
+                    else entryResults[sig] = passes;
+                }
+                if (passes)
+                {
+                    fired = true;
                     args = rule.Type switch
                     {
-                        // Example treatments — per action, like ModifyExemple. Prefix: same as real.
                         LaunchRule.TypePrefix => ApplyPrefix(rule, args),
                         _ => args,
                     };
+                }
                 if (rule.RemoveFilter && rule.Filter.Length > 0)
                     removeMarkers.AddRange(SplitList(rule.Filter, rule.CommaFilter));
             }
             catch { /* the example never breaks the page */ }
+            trace.Add(new RuleTrace(fired ? TraceState.Fired : TraceState.Refused, broken));
         }
 
         var kept = RuleArgs.Split(args)

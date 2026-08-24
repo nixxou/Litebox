@@ -70,29 +70,122 @@ internal static class LaunchRulesPanel
         };
         Row(exOut, S(28));
 
+        // ── the two faces of the same flat list. The group view is a DERIVED, display-only lens
+        // (spec: launch-rules groups design) — folding is opt-in per rule (the Group anchor box),
+        // nesting is EVERY-refinement with the delta shown, and the flat ORDER stays the truth: the
+        // tree is built by walking the list with a stack, so reading top-to-bottom is still reading
+        // the execution. Editing always addresses the underlying flat index (rule nodes carry it).
+        var groupView = new CheckBox
+        {
+            Text = "Group view (display only — the flat list is what runs, in its order)",
+            AutoSize = true, Checked = true,
+            ForeColor = ModulePanelKit.Sub, BackColor = ModulePanelKit.Bg,
+        };
+        Row(groupView, S(24));
+
         var list = new ListBox
         {
             Width = S(560), Height = S(150),
             BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg,
             BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false,
         };
+        var tree = SlimScrollTreeHost.NewTree();
+        tree.BackColor = ModulePanelKit.Field;
+        tree.ForeColor = ModulePanelKit.Fg;
+        tree.BorderStyle = BorderStyle.FixedSingle;
+        tree.ShowLines = false;
+        tree.FullRowSelect = true;
+        tree.HideSelection = false;
+        var treeHost = new SlimScrollTreeHost(tree) { Width = S(560), Height = S(150) };
+
+        List<RulePipeline.RuleTrace>? lastTrace = null;
+
+        string TraceMark(int i)
+            => lastTrace == null || i >= lastTrace.Count ? ""
+             : lastTrace[i].State switch
+               {
+                   RulePipeline.TraceState.Fired => "\u2713 ",
+                   RulePipeline.TraceState.Refused => "\u2717 ",
+                   _ => "\u2212 ",
+               };
+
+        void RebuildTree(int selectIndex)
+        {
+            tree.BeginUpdate();
+            tree.Nodes.Clear();
+            // The stack holds the open group chain (signature + its node). A rule whose signature
+            // equals the top joins it; one that strictly refines it opens a child; anything else
+            // (other signature, or no anchor) closes back to where it fits. Contiguity is the rule:
+            // scattered same-signature runs become separate group instances — never wrong, the view
+            // simply mirrors the order that will execute.
+            var stack = new List<(ProbeSignature Sig, TreeNode Node)>();
+            TreeNode? selected = null;
+            for (int i = 0; i < rules.Count; i++)
+            {
+                var r = rules[i];
+                var sig = ProbeSignature.Of(r);
+                if (sig == null)
+                {
+                    stack.Clear();
+                    var n0 = new TreeNode(TraceMark(i) + r.Describe()) { Tag = i };
+                    tree.Nodes.Add(n0);
+                    if (i == selectIndex) selected = n0;
+                    continue;
+                }
+                while (stack.Count > 0 && !sig.Equals(stack[^1].Sig) && !sig.Refines(stack[^1].Sig))
+                    stack.RemoveAt(stack.Count - 1);
+                if (stack.Count == 0 || !sig.Equals(stack[^1].Sig))
+                {
+                    var parent = stack.Count > 0 ? stack[^1] : ((ProbeSignature, TreeNode)?)null;
+                    var header = new TreeNode(sig.Label(parent?.Item1))
+                    {
+                        Tag = null, ForeColor = ModulePanelKit.Accent,
+                    };
+                    if (parent != null) parent.Value.Item2.Nodes.Add(header);
+                    else tree.Nodes.Add(header);
+                    stack.Add((sig, header));
+                }
+                bool broken = lastTrace != null && i < lastTrace.Count && lastTrace[i].AnchorBroken;
+                var top = stack[^1].Node;
+                if (broken && !top.Text.StartsWith("\u26a0")) top.Text = "\u26a0 " + top.Text;
+                var node = new TreeNode(TraceMark(i) + DescribeAction(r)) { Tag = i };
+                top.Nodes.Add(node);
+                if (i == selectIndex) selected = node;
+            }
+            tree.ExpandAll();
+            tree.EndUpdate();
+            if (selected != null) tree.SelectedNode = selected;
+        }
+
+        int SelectedFlatIndex()
+            => groupView.Checked
+                ? tree.SelectedNode?.Tag is int ix ? ix : -1
+                : list.SelectedIndex;
+
         void Recalc()
         {
-            try { exOut.Text = RulePipeline.PreviewExample(rules, exIn.Text); }
-            catch { exOut.Text = exIn.Text; }
+            try { exOut.Text = RulePipeline.PreviewWithTrace(rules, exIn.Text, out var tr); lastTrace = tr; }
+            catch { exOut.Text = exIn.Text; lastTrace = null; }
         }
         void Reload(int select = -1)
         {
+            Recalc();
             list.BeginUpdate();
             list.Items.Clear();
-            foreach (var r in rules) list.Items.Add(r.Describe());
+            for (int i = 0; i < rules.Count; i++) list.Items.Add(TraceMark(i) + rules[i].Describe());
             list.EndUpdate();
             if (select >= 0 && select < list.Items.Count) list.SelectedIndex = select;
-            Recalc();
+            RebuildTree(select);
+            list.Visible = !groupView.Checked;
+            treeHost.Visible = groupView.Checked;
         }
-        exIn.TextChanged += (_, _) => Recalc();
+        exIn.TextChanged += (_, _) => Reload(SelectedFlatIndex());
+        groupView.CheckedChanged += (_, _) => Reload(SelectedFlatIndex());
         Reload(rules.Count > 0 ? 0 : -1);
-        Row(list, S(156));
+        Row(list, 0);
+        treeHost.Location = list.Location;
+        root.Controls.Add(treeHost);
+        y += S(156);
 
         var bar = new FlowLayoutPanel
         {
@@ -133,35 +226,41 @@ internal static class LaunchRulesPanel
             exOut.Width = w;
             list.Width = w;
             list.Height = Math.Max(S(120), root.ClientSize.Height - list.Top - bar.Height - S(30));
+            treeHost.Location = list.Location;
+            treeHost.Size = list.Size;
             bar.Location = new Point(bar.Left, list.Top + list.Height + S(8));
         }
         root.Resize += (_, _) => Relayout();
         Relayout();
 
-        LaunchRule? Current() => list.SelectedIndex >= 0 && list.SelectedIndex < rules.Count
-            ? rules[list.SelectedIndex] : null;
+        LaunchRule? Current() => SelectedFlatIndex() is var fi && fi >= 0 && fi < rules.Count
+            ? rules[fi] : null;
 
         void EditRule(LaunchRule rule, bool isNew)
         {
             using var dlg = new PrefixRuleDialog(rule, dpiS);
             if (dlg.ShowDialog(root.FindForm()) != DialogResult.OK) return;
             if (isNew) rules.Add(rule);
-            Reload(isNew ? rules.Count - 1 : list.SelectedIndex);
+            Reload(isNew ? rules.Count - 1 : SelectedFlatIndex());
         }
 
         add.Click += (_, _) => EditRule(new LaunchRule { Type = LaunchRule.TypePrefix }, isNew: true);
         edit.Click += (_, _) => { if (Current() is { } r) EditRule(r, isNew: false); };
-        if (!readOnly) list.DoubleClick += (_, _) => { if (Current() is { } r) EditRule(r, isNew: false); };
+        if (!readOnly)
+        {
+            list.DoubleClick += (_, _) => { if (Current() is { } r) EditRule(r, isNew: false); };
+            tree.NodeMouseDoubleClick += (_, e) => { if (e.Node?.Tag is int && Current() is { } r) EditRule(r, isNew: false); };
+        }
         remove.Click += (_, _) =>
         {
-            int ix = list.SelectedIndex;
+            int ix = SelectedFlatIndex();
             if (ix < 0 || ix >= rules.Count) return;
             rules.RemoveAt(ix);
             Reload(Math.Min(ix, rules.Count - 1));
         };
         void Move(int delta)
         {
-            int ix = list.SelectedIndex;
+            int ix = SelectedFlatIndex();
             int to = ix + delta;
             if (ix < 0 || ix >= rules.Count || to < 0 || to >= rules.Count) return;
             (rules[ix], rules[to]) = (rules[to], rules[ix]);
@@ -220,6 +319,21 @@ internal static class LaunchRulesPanel
             return HostLaunch.PreviewCommandLine(game, app, emu) ?? @"emulator.exe ""FULL\PATH\TO\ROM\FILE""";
         }
         catch { return @"emulator.exe ""FULL\PATH\TO\ROM\FILE"""; }
+    }
+
+    /// <summary>A rule as shown INSIDE its group: the action alone — the condition lives on the
+    /// header. Only the parts the header does not carry remain (exclude, marker, disabled).</summary>
+    private static string DescribeAction(LaunchRule r)
+    {
+        if (!r.IsConfigured) return r.Type + " => NOT CONFIGURED";
+        string d = r.Type switch
+        {
+            LaunchRule.TypePrefix => (r.AsArg ? "Prefix this to the Arg List : " : "Prefix this to the command line : ") + r.Prefix,
+            _ => r.Type,
+        };
+        if (r.RemoveFilter) d += " [remove marker]";
+        if (!r.Enabled) d = "(disabled) " + d;
+        return d;
     }
 
     /// <summary>The Prefix editor — grouped, with the shared probe blocks (mode dropdowns + Manage…).

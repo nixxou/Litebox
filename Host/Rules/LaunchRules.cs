@@ -91,6 +91,73 @@ internal sealed class LaunchRule
     }
 }
 
+/// <summary>The canonical form of a rule's CONDITION, for the derived group view — semantic, not
+/// textual: entries normalized (trimmed, lowercased) and SORTED, so "a, b" and "B,a" are the same
+/// signature. Two rules group when their signatures are EQUAL; a group nests under another when its
+/// signature REFINES it — every-kind only (single text counts as EVERY of one entry), excludes
+/// identical — because that is the one implication a human can predict at a glance (spec: the
+/// launch-rules-groups design, Mehdi 2026-08).</summary>
+internal sealed class ProbeSignature : IEquatable<ProbeSignature>
+{
+    /// <summary>Sorted, normalized filter entries.</summary>
+    public IReadOnlyList<string> Entries { get; }
+    /// <summary>true = ALL entries must be present (single text, or comma+matchall); false = ANY.</summary>
+    public bool EveryKind { get; }
+    /// <summary>The exclude side, normalized "entries|comma|matchall" — must be EQUAL to group or nest.</summary>
+    public string ExcludeKey { get; }
+
+    private ProbeSignature(IReadOnlyList<string> entries, bool everyKind, string excludeKey)
+    {
+        Entries = entries; EveryKind = everyKind; ExcludeKey = excludeKey;
+    }
+
+    /// <summary>The signature of an ANCHORED rule (AsGroup + a configured filter); null otherwise —
+    /// grouping is opt-in and declared, never inferred.</summary>
+    public static ProbeSignature? Of(LaunchRule r)
+    {
+        if (!r.AsGroup || r.Filter.Length == 0) return null;
+        var entries = (r.CommaFilter ? r.Filter.Split(',') : new[] { r.Filter })
+            .Select(e => e.Trim().ToLowerInvariant()).Where(e => e.Length > 0)
+            .OrderBy(e => e, StringComparer.Ordinal).ToList();
+        if (entries.Count == 0) return null;
+        bool every = !r.CommaFilter || r.MatchAllFilter || entries.Count == 1;
+        string exKey = r.Exclude.Length == 0 ? "" :
+            string.Join(",", (r.CommaExclude ? r.Exclude.Split(',') : new[] { r.Exclude })
+                .Select(e => e.Trim().ToLowerInvariant()).Where(e => e.Length > 0)
+                .OrderBy(e => e, StringComparer.Ordinal))
+            + "|" + r.CommaExclude + "|" + r.MatchAllExclude;
+        return new ProbeSignature(entries, every, exKey);
+    }
+
+    public bool Equals(ProbeSignature? o)
+        => o != null && EveryKind == o.EveryKind && ExcludeKey == o.ExcludeKey
+           && Entries.SequenceEqual(o.Entries);
+    public override bool Equals(object? o) => Equals(o as ProbeSignature);
+    public override int GetHashCode()
+        => Entries.Aggregate(EveryKind.GetHashCode() ^ ExcludeKey.GetHashCode(), (h, e) => h * 31 + e.GetHashCode());
+
+    /// <summary>Strict refinement: this signature implies <paramref name="parent"/> — EVERY-kind on
+    /// both sides, same excludes, and a strict superset of entries. The nesting relation.</summary>
+    public bool Refines(ProbeSignature parent)
+        => EveryKind && parent.EveryKind && ExcludeKey == parent.ExcludeKey
+           && Entries.Count > parent.Entries.Count
+           && !parent.Entries.Except(Entries).Any();
+
+    /// <summary>Group-header text; with a parent, only the DELTA is shown ("... and --sinden").</summary>
+    public string Label(ProbeSignature? parent = null)
+    {
+        var shown = parent == null ? Entries : Entries.Except(parent.Entries).ToList();
+        string joined = string.Join(", ", shown);
+        string head = parent != null ? "... and " + joined
+            : EveryKind
+                ? (Entries.Count == 1 ? "When the line contains " + joined : "When the line contains EVERY of: " + joined)
+                : "When the line contains ANY of: " + joined;
+        if (parent == null && ExcludeKey.Length > 0)
+            head += "  (excl. " + ExcludeKey.Split('|')[0] + ")";
+        return head;
+    }
+}
+
 /// <summary>Storage + resolution. One JSON list per entity (option key "LaunchRules", scopes
 /// version/game/emulator), read at launch time only — Cold, like the monitor assignments.</summary>
 internal static class LaunchRuleStore

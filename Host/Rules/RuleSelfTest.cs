@@ -103,8 +103,65 @@ internal static class RuleSelfTest
         CheckPreview("preview skips a non-configured rule (round-trip requote only)",
             Prefix(""), @"sd.exe ""C:\MyRomDir\MyRom.bin""", @"sd.exe C:\MyRomDir\MyRom.bin");
 
+        // ── the trace channel (groups + trace lot) ──
+        {
+            var rules = new List<LaunchRule>
+            {
+                P("-a", filter: "rom.bin"),          // fires
+                P("-b", filter: "nothere"),          // refused
+                Disabled(P("-c")),                   // skipped
+            };
+            RulePipeline.PreviewWithTrace(rules, "emu.exe rom.bin", out var tr);
+            Expect("trace: fired / refused / skipped",
+                tr.Count == 3
+                && tr[0].State == RulePipeline.TraceState.Fired
+                && tr[1].State == RulePipeline.TraceState.Refused
+                && tr[2].State == RulePipeline.TraceState.Skipped
+                && tr.All(t => !t.AnchorBroken));
+        }
+        {
+            // An anchored condition whose evaluation FLIPS mid-pipeline: rule 0 is anchored on a
+            // token that is absent (group entry records "refused"), rule 1 injects the token, rule 2
+            // (same anchored signature) now passes — the commitment the checkbox makes is broken,
+            // and the trace is what says so.
+            var rules = new List<LaunchRule>
+            {
+                Anchored(P("-x", filter: "-tok")),
+                P("-tok"),
+                Anchored(P("-y", filter: "-tok")),
+            };
+            RulePipeline.PreviewWithTrace(rules, "emu.exe rom.bin", out var tr);
+            Expect("trace: a mid-pipeline injection breaks the anchor",
+                !tr[0].AnchorBroken && tr[2].AnchorBroken
+                && tr[0].State == RulePipeline.TraceState.Refused
+                && tr[2].State == RulePipeline.TraceState.Fired);
+        }
+
+        // ── canonical signatures (the derived group view's keys) ──
+        Expect("signature: entry order and case do not matter",
+            Sig("a, b", comma: true, matchAll: true)!.Equals(Sig("B,a", comma: true, matchAll: true)));
+        Expect("signature: refinement is strict EVERY-superset",
+            Sig("a,b,c", comma: true, matchAll: true)!.Refines(Sig("a, b", comma: true, matchAll: true)!)
+            && !Sig("a,b", comma: true, matchAll: true)!.Refines(Sig("a,b,c", comma: true, matchAll: true)!));
+        Expect("signature: ANY mode never nests",
+            !Sig("a,b", comma: true, matchAll: false)!.Refines(Sig("a", comma: false, matchAll: false)!));
+        Expect("signature: only anchored rules have one",
+            ProbeSignature.Of(P("-a", filter: "x")) == null && Sig("x") != null);
+
         Console.WriteLine(_fail == 0 ? "ALL OK" : $"{_fail} FAILURE(S)");
         return _fail == 0 ? 0 : 1;
+    }
+
+    private static LaunchRule Anchored(LaunchRule r) { r.AsGroup = true; return r; }
+
+    private static ProbeSignature? Sig(string filter, bool comma = false, bool matchAll = false)
+        => ProbeSignature.Of(Anchored(P("-p", filter: filter, comma: comma, matchAll: matchAll)));
+
+    private static void Expect(string what, bool ok)
+    {
+        if (ok) { Console.WriteLine($"  ok    {what}"); return; }
+        _fail++;
+        Console.WriteLine($"  FAIL  {what}");
     }
 
     // ── plumbing ─────────────────────────────────────────────────────────────

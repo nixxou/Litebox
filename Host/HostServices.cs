@@ -479,7 +479,17 @@ internal static class HostLaunch
             // user may cancel the launch.
             if (!DryRun && !useDos && emulator != null
                 && !DependencyCheck.PreLaunchCheck(emulator, game))
+            {
+                // A cancelled launch still CONSUMES the one-shot monitor override: it was armed for
+                // THIS launch ("run the next game as…"), and this was the next game — letting it
+                // survive would fire it on some later launch that never asked for it.
+                if (Monitors.MonitorAssign.NextLaunch.IsSet)
+                {
+                    Monitors.MonitorAssign.SetNextLaunch(Monitors.Assignment.Unset);
+                    Console.WriteLine("[launch] cancelled at the dependency check — one-shot monitor override dropped");
+                }
                 return;   // finally still runs (play-time, idle state, reload)
+            }
 
             // Monitor profile for this launch — version, else game, else emulator (see MonitorAssign).
             // AFTER the dependency check, which may still cancel: rearranging the desktop for a launch

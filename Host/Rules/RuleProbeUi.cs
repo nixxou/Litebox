@@ -1,4 +1,4 @@
-// The probe block UI — the filter/exclude controls nearly EVERY BigBoxProfile action carries, built
+﻿// The probe block UI — the filter/exclude controls nearly EVERY BigBoxProfile action carries, built
 // once as a reusable component so each ported action gets the same, polished surface. Two Mehdi
 // passes shaped it: the original's dependent checkboxes became ONE mode dropdown (no invalid state
 // can be expressed), and the block now rests COLLAPSED as a single accent-blue summary line — the
@@ -225,8 +225,11 @@ internal sealed class ManageItemsDialog : LiteBoxForm
 {
     public string Value { get; private set; } = "";
 
-    public ManageItemsDialog(string commaList, float dpiS)
+    private readonly string _separator;
+
+    public ManageItemsDialog(string joinedList, float dpiS, string separator = ",")
     {
+        _separator = separator;
         Text = "Manage entries";
         ClientSize = new Size(S(380), S(300));
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -244,7 +247,8 @@ internal sealed class ManageItemsDialog : LiteBoxForm
             BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg,
             BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false,
         };
-        foreach (var e in commaList.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0))
+        foreach (var e in joinedList.Split(new[] { separator }, StringSplitOptions.RemoveEmptyEntries)
+                     .Select(x => x.Trim()).Where(x => x.Length > 0))
             list.Items.Add(e);
 
         Button Side(string t, int yy)
@@ -267,9 +271,9 @@ internal sealed class ManageItemsDialog : LiteBoxForm
         {
             string v = input.Text.Trim();
             if (v.Length == 0) return;
-            if (v.Contains(','))
+            if (v.Contains(_separator))
             {
-                MessageBox.Show(this, "An entry cannot contain a comma — that is the list separator.",
+                MessageBox.Show(this, $"An entry cannot contain \"{_separator}\" — that is the list separator.",
                     "Manage entries", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -295,7 +299,8 @@ internal sealed class ManageItemsDialog : LiteBoxForm
         ok.Location = new Point(S(170), S(262));
         ok.Click += (_, _) =>
         {
-            Value = string.Join(", ", list.Items.Cast<object>().Select(o => o?.ToString() ?? ""));
+            Value = string.Join(_separator == "," ? ", " : _separator,
+                list.Items.Cast<object>().Select(o => o?.ToString() ?? ""));
             DialogResult = DialogResult.OK; Close();
         };
         var cancel = ActionButton("Cancel", MenuIcons.Exit);

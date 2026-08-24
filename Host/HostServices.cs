@@ -830,7 +830,7 @@ internal static class HostLaunch
         {
             try
             {
-                args = Rules.RulePipeline.Apply(fileName, args,
+                (fileName, args) = Rules.RulePipeline.Apply(fileName, args,
                     SafeStr(() => game?.Id), SafeStr(() => selectedApp?.Id), SafeStr(() => emulator?.Id));
             }
             catch (Exception ex) { Console.WriteLine("[launch] rules error: " + ex.Message); }

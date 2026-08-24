@@ -30,6 +30,8 @@ internal sealed class LaunchRule
 {
     public const string TypePrefix = "Prefix";
     public const string TypeSuffix = "Suffix";
+    public const string TypeChangeExe = "ChangeExe";
+    public const string TypeChangeRomPath = "ChangeRomPath";
 
     public string Type { get; set; } = TypePrefix;
     public bool Enabled { get; set; } = true;
@@ -47,6 +49,18 @@ internal sealed class LaunchRule
     /// as ARGUMENT, verbatim as CMDLINE — a LEADING space is often the point there), appended at the
     /// very end; the original never needed to detach the exe for this one.</summary>
     public string Suffix { get; set; } = "";
+
+    // ── ChangeExe ──
+    /// <summary>The replacement executable: absolute, or relative to the ORIGINAL exe's folder.</summary>
+    public string NewExe { get; set; } = "";
+
+    // ── ChangeRomPath ──
+    /// <summary>The path sought inside every argument (e.g. the stale rom root).</summary>
+    public string RomPathFind { get; set; } = "";
+    /// <summary>"|||"-separated candidates tried even when the original exists.</summary>
+    public string RomPathHigh { get; set; } = "";
+    /// <summary>"|||"-separated candidates tried only when the original is missing.</summary>
+    public string RomPathLow { get; set; } = "";
 
     // ── probes (shared by every action type) ──
     /// <summary>"Only if cmdLine contains" — case-insensitive substring over exe + arguments.</summary>

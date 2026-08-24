@@ -20,30 +20,33 @@ internal static class RulePipeline
     private const string Tag = "rules";
 
     /// <summary>Runs the entity's rules (exclusive resolve) over the launch command. Returns the
-    /// arguments to spawn with — unchanged when no rule applies or the module is off.</summary>
-    public static string Apply(string exePath, string args, string? gameId, string? versionId, string? emulatorId)
+    /// exe and arguments to spawn with — unchanged when no rule applies or the module is off. The
+    /// exe travels through the pipeline since ChangeExe: an action may retarget it, and Spawn's
+    /// working directory follows the exe it is given (BigBoxProfile set WorkingDirExe by hand).</summary>
+    public static (string Exe, string Args) Apply(string exePath, string args, string? gameId, string? versionId, string? emulatorId)
     {
         List<LaunchRule> rules;
         try { rules = LaunchRuleStore.Resolve(gameId, versionId, emulatorId); }
-        catch { return args; }
-        if (rules.Count == 0) return args;
+        catch { return (exePath, args); }
+        if (rules.Count == 0) return (exePath, args);
         return ApplyRules(rules, exePath, args);
     }
 
     /// <summary>The pipeline body over an explicit rule list — what the selftest drives directly.</summary>
-    public static string ApplyRules(List<LaunchRule> rules, string exePath, string args)
+    public static (string Exe, string Args) ApplyRules(List<LaunchRule> rules, string exePath, string args)
     {
+        var cmd = new Actions.RuleCmd(exePath, args);
         var removeMarkers = new List<string>();
         foreach (var rule in rules)
         {
             if (!rule.Enabled || !rule.IsConfigured) continue;
             try
             {
-                string before = args;
-                if (ProbePasses(rule, exePath, args))
+                var before = cmd;
+                if (ProbePasses(rule, cmd.Exe, cmd.Args))
                 {
-                    args = Actions.RuleActions.ByType(rule.Type)?.Apply(rule, args) ?? args;
-                    if (args != before) LbLog.Info(Tag, $"{rule.Type}: args → {args}");
+                    cmd = Actions.RuleActions.ByType(rule.Type)?.Apply(rule, cmd) ?? cmd;
+                    if (cmd != before) LbLog.Info(Tag, $"{rule.Type}: → \"{cmd.Exe}\" {cmd.Args}");
                 }
                 // Markers are collected from CONFIGURED rules whether or not their probe fired this
                 // time — BigBoxProfile gathers FiltersToRemoveOnFinalPass over every configured
@@ -56,17 +59,17 @@ internal static class RulePipeline
 
         if (removeMarkers.Count > 0)
         {
-            var kept = RuleArgs.Split(args)
+            var kept = RuleArgs.Split(cmd.Args)
                 .Where(a => !removeMarkers.Contains(a.ToLowerInvariant().Trim()))
                 .ToArray();
             string stripped = RuleArgs.Join(kept);
-            if (stripped != args)
+            if (stripped != cmd.Args)
             {
                 LbLog.Info(Tag, $"markers stripped: args → {stripped}");
-                args = stripped;
+                cmd = cmd with { Args = stripped };
             }
         }
-        return args;
+        return (cmd.Exe, cmd.Args);
     }
 
     /// <summary>The PREVIEW pipeline — BigBoxProfile's ModifyExemple channel, faithfully separate:
@@ -96,8 +99,7 @@ internal static class RulePipeline
             foreach (var _ in rules) trace.Add(new RuleTrace(TraceState.Skipped, false));
             return fullCommandLine;
         }
-        string exe = all[0];
-        string args = RuleArgs.Join(all.Skip(1));
+        var cmd = new Actions.RuleCmd(all[0], RuleArgs.Join(all.Skip(1)));
 
         // Group-entry probe results, per canonical signature: the first anchored rule of a signature
         // records how the condition evaluated at group entry; every later member re-evaluates and a
@@ -115,7 +117,7 @@ internal static class RulePipeline
             bool fired = false, broken = false;
             try
             {
-                bool passes = ProbePasses(rule, exe, args);
+                bool passes = ProbePasses(rule, cmd.Exe, cmd.Args);
                 var sig = ProbeSignature.Of(rule);
                 if (sig != null)
                 {
@@ -128,7 +130,7 @@ internal static class RulePipeline
                     // The EXAMPLE channel — each action's own ApplyExample (ModifyExemple), which
                     // defaults to the real treatment and diverges where the real one acts on the
                     // world (see IRuleAction).
-                    args = Actions.RuleActions.ByType(rule.Type)?.ApplyExample(rule, args) ?? args;
+                    cmd = Actions.RuleActions.ByType(rule.Type)?.ApplyExample(rule, cmd) ?? cmd;
                 }
                 if (rule.RemoveFilter && rule.Filter.Length > 0)
                     removeMarkers.AddRange(SplitList(rule.Filter, rule.CommaFilter));
@@ -137,9 +139,9 @@ internal static class RulePipeline
             trace.Add(new RuleTrace(fired ? TraceState.Fired : TraceState.Refused, broken));
         }
 
-        var kept = RuleArgs.Split(args)
+        var kept = RuleArgs.Split(cmd.Args)
             .Where(a => !removeMarkers.Contains(a.ToLowerInvariant().Trim()));
-        return RuleArgs.Join(new[] { exe }.Concat(kept));
+        return RuleArgs.Join(new[] { cmd.Exe }.Concat(kept));
     }
 
     // ── probes ────────────────────────────────────────────────────────────────

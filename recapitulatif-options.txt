@@ -684,7 +684,8 @@ Registre actuel :
 
   scopes game+emulator+version (Launch rules — module "rules") :
     LaunchRules     JSON LaunchRule[] — règles ordonnées appliquées à la ligne
-                    de commande juste avant le lancement (V1 : Prefix, Suffix), avec
+                    de commande juste avant le lancement (Prefix, Suffix, ChangeExe,
+                    ChangeRomPath), avec
                     sondes filter/exclude et arguments-marqueurs retirés avant
                     l'émulateur. Résolution EXCLUSIVE version -> jeu -> ému.
                     Éditées dans Edit Emulator / Game / Additional Version.

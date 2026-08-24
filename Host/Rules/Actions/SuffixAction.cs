@@ -1,4 +1,4 @@
-// Suffix — Prefix's mirror, with the original's two nuances kept: the payload goes at the very END
+﻿// Suffix — Prefix's mirror, with the original's two nuances kept: the payload goes at the very END
 // (no exe to detach), and as CMDLINE it appends VERBATIM — cmd + suffix, no separator, the leading
 // space is the author's to include (the dialog wording says so).
 
@@ -21,10 +21,13 @@ internal sealed class SuffixAction : IRuleAction
     public string Describe(LaunchRule r)
         => (r.AsArg ? "Suffix this to the Arg List : " : "Suffix this to the command line : ") + r.Suffix;
 
-    public string Apply(LaunchRule r, string args)
-        => r.AsArg
-            ? RuleArgs.Join(RuleArgs.Split(args).Concat(new[] { r.Suffix.Trim() }))
-            : args + r.Suffix;
+    public RuleCmd Apply(LaunchRule r, RuleCmd cmd)
+        => cmd with
+        {
+            Args = r.AsArg
+                ? RuleArgs.Join(RuleArgs.Split(cmd.Args).Concat(new[] { r.Suffix.Trim() }))
+                : cmd.Args + r.Suffix,
+        };
 
     public (Control Body, int Height, Action Save) BuildActionUi(LaunchRule r, float dpiS)
         => PayloadUi.Build(

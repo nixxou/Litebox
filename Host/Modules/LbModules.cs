@@ -50,7 +50,7 @@ internal static class LbModules
         new(LbModule.Monitors, "monitors", "Monitor profiles",
             "Named desktop presets — monitor layout (position, resolution, refresh, rotation, per-screen zoom), a single monitor's display mode, the default sound card and its volume, or a solo-primary blackout. Switch between them from Tools. Off: the Tools entry is hidden and nothing touches the display.", false, true),
         new(LbModule.Rules, "rules", "Launch rules",
-            "BigBoxProfile's probes & actions, native: ordered rules attached to an emulator, game or version rewrite the command line right before the spawn, guarded by filters (and marker arguments that are stripped before the emulator sees them). Ported action by action — today: Prefix, Suffix. Off: launches run untouched.", false, true),
+            "BigBoxProfile's probes & actions, native: ordered rules attached to an emulator, game or version rewrite the command line right before the spawn, guarded by filters (and marker arguments that are stripped before the emulator sees them). Ported action by action — today: Prefix, Suffix, Change exe, Change rom path. Off: launches run untouched.", false, true),
     };
 
     public static Info Meta(LbModule m) => Catalog.First(c => c.Module == m);

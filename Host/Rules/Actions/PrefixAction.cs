@@ -1,4 +1,4 @@
-// Prefix — BigBoxProfile's first and simplest action, and the mould the family is cast in.
+﻿// Prefix — BigBoxProfile's first and simplest action, and the mould the family is cast in.
 // Everything Prefix IS lives here: its configuredness, its description, both channels, its dialog
 // body. The engine, the panel and the dialog know it only through IRuleAction.
 
@@ -25,10 +25,13 @@ internal sealed class PrefixAction : IRuleAction
     /// CMDLINE = the text prepended verbatim to the joined argument string — which is how one prefix
     /// can inject several arguments. The exe is untouched by construction: rules receive the
     /// argument string WITHOUT args[0], the separation BigBoxProfile re-created by hand.</summary>
-    public string Apply(LaunchRule r, string args)
-        => r.AsArg
-            ? RuleArgs.Join(new[] { r.Prefix.Trim() }.Concat(RuleArgs.Split(args)))
-            : r.Prefix + args;
+    public RuleCmd Apply(LaunchRule r, RuleCmd cmd)
+        => cmd with
+        {
+            Args = r.AsArg
+                ? RuleArgs.Join(new[] { r.Prefix.Trim() }.Concat(RuleArgs.Split(cmd.Args)))
+                : r.Prefix + cmd.Args,
+        };
 
     public (Control Body, int Height, Action Save) BuildActionUi(LaunchRule r, float dpiS)
         => PayloadUi.Build(

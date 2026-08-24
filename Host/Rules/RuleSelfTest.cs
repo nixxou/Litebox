@@ -1,4 +1,4 @@
-// --selftest-rules: the Prefix action's behaviour pinned case by case against BigBoxProfile's
+﻿// --selftest-rules: the Prefix action's behaviour pinned case by case against BigBoxProfile's
 // semantics (Prefix.Modify + EmulatorLauncher's final marker pass), so the next ported action starts
 // from a harness instead of a hope. Pure pipeline tests — no DB, no UI: rules are built in memory and
 // pushed through the same code the launch hook runs.
@@ -122,6 +122,61 @@ internal static class RuleSelfTest
         Check("prefix and suffix compose in pipeline order",
             new[] { P("-first"), Sfx("-last") }, "-x", "-first -x -last");
 
+        // ── ChangeExe (the reason RuleCmd carries the exe) ──
+        CheckCmd("changeexe: a rooted path replaces the exe outright",
+            new[] { Cx(@"D:\other\emu.exe") }, @"C:\emu\retroarch.exe", "-x",
+            @"D:\other\emu.exe", "-x");
+
+        CheckCmd("changeexe: a relative path resolves against the ORIGINAL exe's folder",
+            new[] { Cx("retroarch_debug.exe") }, @"C:\emu\retroarch.exe", "-x",
+            @"C:\emu\retroarch_debug.exe", "-x");
+
+        CheckCmd("changeexe: the probe gates it like any rule",
+            new[] { Cx(@"D:\other\emu.exe", filter: "nothere") }, @"C:\emu\retroarch.exe", "-x",
+            @"C:\emu\retroarch.exe", "-x");
+
+        // ── ChangeRomPath (real files: priorities and the bare-filename fallback) ──
+        {
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lbx-rules-selftest");
+            string orig = System.IO.Path.Combine(root, "orig");
+            string high = System.IO.Path.Combine(root, "high");
+            string low = System.IO.Path.Combine(root, "low");
+            try
+            {
+                System.IO.Directory.CreateDirectory(orig);
+                System.IO.Directory.CreateDirectory(high);
+                System.IO.Directory.CreateDirectory(low);
+                System.IO.File.WriteAllText(System.IO.Path.Combine(orig, "both.zip"), "");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(high, "both.zip"), "");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(high, "flat.zip"), "");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(low, "lost.zip"), "");
+
+                CheckCmd("changerompath: HIGH priority wins even when the original exists",
+                    new[] { Crp(orig, high: high) }, "emu.exe", Q(orig, "both.zip"),
+                    "emu.exe", Q(high, "both.zip"));
+
+                CheckCmd("changerompath: bare-filename fallback when the remainder subdir is gone",
+                    new[] { Crp(orig, high: high) }, "emu.exe", Q(orig, @"deep\flat.zip"),
+                    "emu.exe", Q(high, "flat.zip"));
+
+                CheckCmd("changerompath: LOW priority is skipped while the original exists",
+                    new[] { Crp(orig, low: low) }, "emu.exe", Q(orig, "both.zip"),
+                    "emu.exe", Q(orig, "both.zip"));
+
+                CheckCmd("changerompath: LOW priority rescues a missing original",
+                    new[] { Crp(orig, low: low) }, "emu.exe", Q(orig, "lost.zip"),
+                    "emu.exe", Q(low, "lost.zip"));
+
+                CheckCmd("changerompath: an argument without the sought path is untouched",
+                    new[] { Crp(orig, high: high) }, "emu.exe", "-x",
+                    "emu.exe", "-x");
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(root, recursive: true); } catch { }
+            }
+        }
+
         // ── the trace channel (groups + trace lot) ──
         {
             var rules = new List<LaunchRule>
@@ -177,6 +232,25 @@ internal static class RuleSelfTest
     private static LaunchRule[] Suffix(string suffix, bool asArg = true, string filter = "")
         => new[] { Sfx(suffix, asArg, filter) };
 
+    private static LaunchRule Cx(string newExe, string filter = "")
+        => new() { Type = LaunchRule.TypeChangeExe, NewExe = newExe, Filter = filter };
+
+    private static LaunchRule Crp(string find, string high = "", string low = "")
+        => new() { Type = LaunchRule.TypeChangeRomPath, RomPathFind = find, RomPathHigh = high, RomPathLow = low };
+
+    /// <summary>A path argument as the launch would carry it — quoted when spaces demand it, which
+    /// %TEMP% often does; expectations must speak post-round-trip quoting like every other case.</summary>
+    private static string Q(string dir, string file)
+        => RuleArgs.Join(new[] { System.IO.Path.Combine(dir, file) });
+
+    private static void CheckCmd(string what, LaunchRule[] rules, string exe, string args, string expExe, string expArgs)
+    {
+        var got = RulePipeline.ApplyRules(rules.ToList(), exe, args);
+        if (got.Exe == expExe && got.Args == expArgs) { Console.WriteLine($"  ok    {what}"); return; }
+        _fail++;
+        Console.WriteLine($"  FAIL  {what}\n        expected : \"{expExe}\" {expArgs}\n        got      : \"{got.Exe}\" {got.Args}");
+    }
+
     private static LaunchRule Anchored(LaunchRule r) { r.AsGroup = true; return r; }
 
     private static ProbeSignature? Sig(string filter, bool comma = false, bool matchAll = false)
@@ -224,5 +298,5 @@ internal static class RuleSelfTest
 
     /// <summary>The pipeline body, minus the store: same probe + action + marker code as a launch.</summary>
     private static string RunPipeline(IEnumerable<LaunchRule> rules, string exe, string args)
-        => RulePipeline.ApplyRules(rules.ToList(), exe, args);
+        => RulePipeline.ApplyRules(rules.ToList(), exe, args).Args;
 }

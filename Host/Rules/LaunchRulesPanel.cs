@@ -81,7 +81,10 @@ internal static class LaunchRulesPanel
             AutoSize = true, Checked = true,
             ForeColor = ModulePanelKit.Sub, BackColor = ModulePanelKit.Bg,
         };
-        Row(groupView, S(24));
+        Row(groupView, S(22));
+        Row(ModulePanelKit.Caption(
+            "Colours follow the example line above: normal = the rule would run, dimmed = it would "
+            + "not (condition not met, or disabled), red = nothing configured.", dpiS, 620), S(30), 18);
 
         var list = new ListBox
         {
@@ -106,16 +109,19 @@ internal static class LaunchRulesPanel
 
         List<RulePipeline.RuleTrace>? lastTrace = null;
 
-        // The rule's fate for the current example line, said in colour rather than glyphs: red =
-        // the probe refused it, dimmed = disabled or not configured, normal = it fires.
+        // The rule's fate for the current example line, said in colour. Red once CRIED at a rule
+        // whose probe merely did not match the example — it read as an error (Mehdi, rightly
+        // confused). So: DIMMED = would not run for this line (condition not met, or disabled) —
+        // inactive, not wrong; RED = genuinely wrong, a rule with nothing configured; normal = runs.
         Color TraceColor(int i)
-            => lastTrace == null || i >= lastTrace.Count ? ModulePanelKit.Fg
-             : lastTrace[i].State switch
-               {
-                   RulePipeline.TraceState.Refused => LiteBoxTheme.Danger,
-                   RulePipeline.TraceState.Skipped => ModulePanelKit.Sub,
-                   _ => ModulePanelKit.Fg,
-               };
+        {
+            if (i >= 0 && i < rules.Count && !rules[i].IsConfigured) return LiteBoxTheme.Danger;
+            if (lastTrace == null || i >= lastTrace.Count) return ModulePanelKit.Fg;
+            return lastTrace[i].State == RulePipeline.TraceState.Fired ? ModulePanelKit.Fg : ModulePanelKit.Sub;
+        }
+
+        bool TraceRefused(int i)
+            => lastTrace != null && i < lastTrace.Count && lastTrace[i].State == RulePipeline.TraceState.Refused;
 
         void RebuildTree(int selectIndex)
         {
@@ -145,9 +151,11 @@ internal static class LaunchRulesPanel
                 if (stack.Count == 0 || !sig.Equals(stack[^1].Sig))
                 {
                     var parent = stack.Count > 0 ? stack[^1] : ((ProbeSignature, TreeNode)?)null;
+                    // The header carries its branch's fate: when the anchored condition does not
+                    // match the example line, the CAUSE is here, so the dimming starts here.
                     var header = new TreeNode(sig.Label(parent?.Item1))
                     {
-                        Tag = null, ForeColor = ModulePanelKit.Accent,
+                        Tag = null, ForeColor = TraceRefused(i) ? ModulePanelKit.Sub : ModulePanelKit.Accent,
                     };
                     if (parent != null) parent.Value.Item2.Nodes.Add(header);
                     else tree.Nodes.Add(header);

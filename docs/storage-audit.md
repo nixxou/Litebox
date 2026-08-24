@@ -31,7 +31,10 @@ locks/3D — trop de stores épars pour garder le fil.
   partagé) : `StartupScreenPostLaunchDisplayTime`, `ShutdownScreenPostReadyDisplayTime`,
   `ForceFrontendFocusOnShutdown`, `MonitorStartupShutdownWithProcess`.
 - **Modules** : `Module.base`, `Module.rom`, `Module.retroachievements`, `Module.parental`,
-  `Module.web` (LbModules ; row absente = défaut du module).
+  `Module.web`, `Module.monitors` (LbModules ; row absente = défaut du module).
+- **Monitor Profiles** (Host\Monitors, ajouté 2026-08) : `MonitorProfiles` (JSON, la liste entière),
+  `MonitorRestorePoint` (JSON, l'état d'avant le 1er profil — persisté pour survivre à un crash),
+  `MonitorRestoreHotkey` + `MonitorRestoreHotkeyGlobal`, `MonitorWebEndpoints`, `MonitorLaunchDelay`.
 
 ### scopes `game` / `emulator` (overrides tri-state : pas de row = hérite)
 Résolution jeu → émulateur → global (`LiteBoxOption.ResolveBool/ResolveString`) :
@@ -51,6 +54,12 @@ Résolution jeu → émulateur → global (`LiteBoxOption.ResolveBool/ResolveStr
 - `FieldLocks` = JSON `{"title":"…","genre":""}` — locks de métadonnées, **contrat partagé avec
   ExtendDB** (LockStorage l'attaque en SQLite direct sous vrai LB quand `Core\litebox\` existe).
 - `Model3dImages` = JSON `{"front":"Images\\…"}` (chemins relatifs racine LB) — sélections d'images 3D.
+
+### scopes `game` / `emulator` / `version` — assignations Monitor Profiles
+- `MonitorProfileAssign` = `"none"` | `"custom"` | un `MonitorProfile.Id` ; `MonitorProfileCustom` =
+  JSON d'un profil stocké en ligne (utilisé quand l'assignation vaut `"custom"`). Résolution
+  version → jeu → émulateur, précédée du one-shot « Run next game as » (mémoire vive uniquement).
+  **Premier usage du scope `version`** (additional version), déclaré dans `LiteBoxOption`.
 
 ### scope `platform`
 Déclaré (`LiteBoxOption.ScopePlatform`) mais **aucune clé en service à ce jour**.

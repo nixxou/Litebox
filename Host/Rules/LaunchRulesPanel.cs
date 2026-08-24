@@ -88,25 +88,33 @@ internal static class LaunchRulesPanel
             Width = S(560), Height = S(150),
             BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg,
             BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false,
+            DrawMode = DrawMode.OwnerDrawFixed,
         };
         var tree = SlimScrollTreeHost.NewTree();
         tree.BackColor = ModulePanelKit.Field;
         tree.ForeColor = ModulePanelKit.Fg;
         tree.BorderStyle = BorderStyle.FixedSingle;
         tree.ShowLines = false;
+        // No expand glyphs: their bottom lands one indent short and reads as a broken hierarchy
+        // (Mehdi). The accent colour alone says "group", and groups simply cannot collapse.
+        tree.ShowPlusMinus = false;
+        tree.ShowRootLines = false;
+        tree.BeforeCollapse += (_, e) => e.Cancel = true;
         tree.FullRowSelect = true;
         tree.HideSelection = false;
         var treeHost = new SlimScrollTreeHost(tree) { Width = S(560), Height = S(150) };
 
         List<RulePipeline.RuleTrace>? lastTrace = null;
 
-        string TraceMark(int i)
-            => lastTrace == null || i >= lastTrace.Count ? ""
+        // The rule's fate for the current example line, said in colour rather than glyphs: red =
+        // the probe refused it, dimmed = disabled or not configured, normal = it fires.
+        Color TraceColor(int i)
+            => lastTrace == null || i >= lastTrace.Count ? ModulePanelKit.Fg
              : lastTrace[i].State switch
                {
-                   RulePipeline.TraceState.Fired => "\u2713 ",
-                   RulePipeline.TraceState.Refused => "\u2717 ",
-                   _ => "\u2212 ",
+                   RulePipeline.TraceState.Refused => LiteBoxTheme.Danger,
+                   RulePipeline.TraceState.Skipped => ModulePanelKit.Sub,
+                   _ => ModulePanelKit.Fg,
                };
 
         void RebuildTree(int selectIndex)
@@ -127,7 +135,7 @@ internal static class LaunchRulesPanel
                 if (sig == null)
                 {
                     stack.Clear();
-                    var n0 = new TreeNode(TraceMark(i) + r.Describe()) { Tag = i };
+                    var n0 = new TreeNode(r.Describe()) { Tag = i, ForeColor = TraceColor(i) };
                     tree.Nodes.Add(n0);
                     if (i == selectIndex) selected = n0;
                     continue;
@@ -148,7 +156,7 @@ internal static class LaunchRulesPanel
                 bool broken = lastTrace != null && i < lastTrace.Count && lastTrace[i].AnchorBroken;
                 var top = stack[^1].Node;
                 if (broken && !top.Text.StartsWith("\u26a0")) top.Text = "\u26a0 " + top.Text;
-                var node = new TreeNode(TraceMark(i) + DescribeAction(r)) { Tag = i };
+                var node = new TreeNode(DescribeAction(r)) { Tag = i, ForeColor = TraceColor(i) };
                 top.Nodes.Add(node);
                 if (i == selectIndex) selected = node;
             }
@@ -172,13 +180,24 @@ internal static class LaunchRulesPanel
             Recalc();
             list.BeginUpdate();
             list.Items.Clear();
-            for (int i = 0; i < rules.Count; i++) list.Items.Add(TraceMark(i) + rules[i].Describe());
+            for (int i = 0; i < rules.Count; i++) list.Items.Add(rules[i].Describe());
             list.EndUpdate();
             if (select >= 0 && select < list.Items.Count) list.SelectedIndex = select;
             RebuildTree(select);
             list.Visible = !groupView.Checked;
             treeHost.Visible = groupView.Checked;
         }
+        list.DrawItem += (_, e) =>
+        {
+            if (e.Index < 0 || e.Index >= list.Items.Count) return;
+            bool sel = (e.State & DrawItemState.Selected) != 0;
+            using var bg = new SolidBrush(sel ? Color.FromArgb(60, 60, 66) : ModulePanelKit.Field);
+            e.Graphics.FillRectangle(bg, e.Bounds);
+            using var fg = new SolidBrush(TraceColor(e.Index));
+            e.Graphics.DrawString(list.Items[e.Index]?.ToString() ?? "", list.Font, fg,
+                e.Bounds.X + 2, e.Bounds.Y + 1);
+        };
+
         exIn.TextChanged += (_, _) => Reload(SelectedFlatIndex());
         groupView.CheckedChanged += (_, _) => Reload(SelectedFlatIndex());
         Reload(rules.Count > 0 ? 0 : -1);

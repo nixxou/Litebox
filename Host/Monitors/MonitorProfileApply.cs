@@ -276,6 +276,7 @@ internal static class MonitorProfileApply
                 {
                     var d0 = DisplayTargets.ResolveDisplay(mp2.DevicePath);
                     string live0 = d0 != null ? (Try(() => d0.DevicePath) ?? mp2.DevicePath) : mp2.DevicePath;
+                    RememberGpu(mp2.DevicePath, live0);
                     string gnote = GpuColor.Apply(live0, mp2.GpuFormat, mp2.GpuDepthBpc, mp2.GpuDynamicRange, mp2.GpuVibrance);
                     if (mp2.GpuScaling.Length > 0)
                     {
@@ -291,6 +292,13 @@ internal static class MonitorProfileApply
             // recorded by the snapshots (restore point / game scope), which restore it the same way.
             if (profile.Preset is { GpuVrr.Length: > 0 } vp)
             {
+                // A restore point recovered from a pre-VRR build has no "before": learn it now, while
+                // it is still the before.
+                if (!_savedVrrKnown && CanRestoreUnlocked())
+                {
+                    var was = GpuColor.VrrGet();
+                    if (was.Supported) { _savedVrrKnown = true; _savedVrrHadEntry = was.HasEntry; _savedVrrValue = was.Value; }
+                }
                 uint mode = vp.GpuVrr switch { "off" => 0u, "always" => 2u, _ => 1u };
                 notes.Add(GpuColor.VrrSet(mode)
                     ? $"VRR → {vp.GpuVrr} (driver-wide)"
@@ -824,6 +832,7 @@ internal static class MonitorProfileApply
                 && rec.GpuScaling.Length == 0) continue;
             try
             {
+                RememberGpu(rec.DevicePath, it.LivePath);
                 string note = GpuColor.Apply(it.LivePath, rec.GpuFormat, rec.GpuDepthBpc, rec.GpuDynamicRange, rec.GpuVibrance);
                 if (rec.GpuScaling.Length > 0 && !string.Equals(GpuColor.ScalingGet(it.LivePath), rec.GpuScaling, StringComparison.OrdinalIgnoreCase))
                 {
@@ -1056,6 +1065,7 @@ internal static class MonitorProfileApply
             try
             {
                 string live1 = Try(() => display.DevicePath) ?? preset.DevicePath;
+                RememberGpu(preset.DevicePath, live1);
                 string sn = GpuColor.ScalingSet(live1, preset.GpuScaling);
                 if (sn.Length > 0) done.Add(sn);
             }
@@ -1068,6 +1078,7 @@ internal static class MonitorProfileApply
             try
             {
                 string live0 = Try(() => display.DevicePath) ?? preset.DevicePath;
+                RememberGpu(preset.DevicePath, live0);
                 string gnote = GpuColor.Apply(live0, preset.GpuFormat, preset.GpuDepthBpc, preset.GpuDynamicRange, preset.GpuVibrance);
                 if (gnote.Length > 0) done.Add(gnote);
             }
@@ -1206,6 +1217,35 @@ internal static class MonitorProfileApply
         if (!learned) return;
 
         LbLog.Info(Tag, $"restore point learned HDR={HdrControl.Text(current)} for {devicePath}");
+        Persist();
+    }
+
+    /// <summary>Same contract as <see cref="RememberHdr"/>, for the driver-side monitor settings:
+    /// before the first GPU write lands on a monitor, make sure the restore point knows what was
+    /// there. A snapshot persisted by a build that predates these fields holds ""/-1 — "no
+    /// information" — and restoring it would leave the profile's colours and scaling behind.
+    /// A record that already knows ANY of the fields is left alone: it was captured whole.</summary>
+    private static void RememberGpu(string storedPath, string livePath)
+    {
+        var layout = _savedLayout;
+        if (layout == null) return;
+
+        bool Match(string a, string b) => a.Length > 0 && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        bool learned = false;
+        foreach (var r in layout.Paths)
+        {
+            if (!Match(r.DevicePath, storedPath) && !Match(r.DevicePath, livePath)) continue;
+            if (r.GpuFormat.Length > 0 || r.GpuDepthBpc > 0 || r.GpuDynamicRange.Length > 0
+                || r.GpuVibrance >= 0 || r.GpuScaling.Length > 0) continue;
+            var g = GpuColor.Query(livePath);
+            if (!g.Supported) continue;
+            r.GpuFormat = g.Format; r.GpuDepthBpc = g.DepthBpc; r.GpuDynamicRange = g.DynamicRange;
+            r.GpuVibrance = g.Vibrance; r.GpuScaling = GpuColor.ScalingGet(livePath);
+            learned = true;
+        }
+        if (!learned) return;
+
+        LbLog.Info(Tag, $"restore point learned the GPU output for {livePath}");
         Persist();
     }
 

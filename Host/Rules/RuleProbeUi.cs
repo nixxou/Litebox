@@ -1,4 +1,4 @@
-// The probe block UI — the filter/exclude controls nearly EVERY BigBoxProfile action carries, built
+﻿// The probe block UI — the filter/exclude controls nearly EVERY BigBoxProfile action carries, built
 // once as a reusable component so each ported action gets the same, polished surface. The redesign
 // (Mehdi-approved, on trial): the original's dependent checkboxes ("Multiple entries" ungreys "Must
 // match all") become ONE mode dropdown — no invalid state can be expressed — and the Manage… button
@@ -26,6 +26,7 @@ internal sealed class ProbeBlock
     private readonly TextBox _text;
     private readonly Button _manage;
     private readonly CheckBox? _marker;
+    private readonly CheckBox? _group;
     private readonly float _dpiS;
 
     private int S(int px) => (int)Math.Round(px * _dpiS);
@@ -39,7 +40,7 @@ internal sealed class ProbeBlock
         Box = new GroupBox
         {
             Text = title, ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
-            Width = S(430), Height = S(withMarker ? 118 : 92),
+            Width = S(430), Height = S(withMarker ? 142 : 92),
         };
 
         _mode = new ComboBox
@@ -96,6 +97,15 @@ internal sealed class ProbeBlock
                 ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg, Enabled = !readOnly,
             };
             Box.Controls.Add(_marker);
+
+            // Presentation + a commitment, not an engine switch (see LaunchRule.AsGroup).
+            _group = new CheckBox
+            {
+                Text = "Group: rules sharing this condition form one branch (keep its arguments unmodified)",
+                AutoSize = true, Location = new Point(S(12), S(110)),
+                ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg, Enabled = !readOnly,
+            };
+            Box.Controls.Add(_group);
         }
 
         _mode.SelectedIndexChanged += (_, _) => Sync();
@@ -108,23 +118,26 @@ internal sealed class ProbeBlock
         _text.Enabled = active && _mode.Enabled;
         _manage.Enabled = listMode && _mode.Enabled;
         if (_marker != null) _marker.Enabled = active && _mode.Enabled;
+        if (_group != null) _group.Enabled = active && _mode.Enabled;
     }
 
-    public void Load(string text, bool comma, bool matchAll, bool marker = false)
+    public void Load(string text, bool comma, bool matchAll, bool marker = false, bool asGroup = false)
     {
         _mode.SelectedIndex = text.Length == 0 ? 0 : comma ? (matchAll ? 3 : 2) : 1;
         _text.Text = text;
         if (_marker != null) _marker.Checked = marker;
+        if (_group != null) _group.Checked = asGroup;
         Sync();
     }
 
     /// <summary>The stored shape. Mode 0 saves an EMPTY text — the mode is authoritative, whatever
     /// still sits in the (disabled) field; the engine's "empty = probe off" contract does the rest.</summary>
-    public (string Text, bool Comma, bool MatchAll, bool Marker) Save()
+    public (string Text, bool Comma, bool MatchAll, bool Marker, bool AsGroup) Save()
         => (_mode.SelectedIndex == 0 ? "" : _text.Text.Trim(),
             _mode.SelectedIndex >= 2,
             _mode.SelectedIndex == 3,
-            _marker?.Checked ?? false);
+            _marker?.Checked ?? false,
+            _group?.Checked ?? false);
 }
 
 /// <summary>BigBoxProfile's Manage_Items, native: the comma list edited as an actual list — add,

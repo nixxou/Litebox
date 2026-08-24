@@ -1,4 +1,4 @@
-// Launch rules — the LiteBox port of BigBoxProfile's EmulatorActions ("sondes & actions"): an ordered
+﻿// Launch rules — the LiteBox port of BigBoxProfile's EmulatorActions ("sondes & actions"): an ordered
 // list of actions run against the command line right before the game spawns, each guarded by probes
 // (command-line filters today; more probes as actions get ported one by one, faithfully).
 //
@@ -52,6 +52,13 @@ internal sealed class LaunchRule
     /// filter entry are stripped in a FINAL pass, after every rule ran — the marker-argument system,
     /// where a dummy per-game parameter set in LaunchBox routes rules and never reaches the emulator.</summary>
     public bool RemoveFilter { get; set; }
+    /// <summary>Declares this rule's CONDITION as a group anchor: the future grouped view folds the
+    /// consecutive rules sharing this signature into one branch, and by ticking it the author commits
+    /// that no rule in the pipeline modifies the arguments the condition matches on. Presentation +
+    /// contract only — the engine still re-probes every rule against the current line (the branching
+    /// bus), and the preview trace is what audits the commitment, not the flag.</summary>
+    public bool AsGroup { get; set; }
+
     /// <summary>"Exclude if cmdLine contains" — the blocking mirror of Filter.</summary>
     public string Exclude { get; set; } = "";
     public bool CommaExclude { get; set; }
@@ -78,6 +85,7 @@ internal sealed class LaunchRule
         if (Filter.Length > 0) d += $" [Only if command line contains {Filter}]" + (MatchAllFilter ? "[matchall]" : "");
         if (Exclude.Length > 0) d += $" [Exclude {Exclude}]" + (MatchAllExclude ? "[matchall]" : "");
         if (RemoveFilter) d += " [remove marker]";
+        if (AsGroup && Filter.Length > 0) d += " [group]";
         if (!Enabled) d = "(disabled) " + d;
         return $"{Type} => {d}";
     }

@@ -283,7 +283,7 @@ internal static class LaunchRulesPanel
             // ── the shared probe blocks ──
             var when = new ProbeBlock("Run only when…", exclude: false, withMarker: true, dpiS, readOnly: false);
             when.Box.Location = new Point(S(16), y);
-            when.Load(rule.Filter, rule.CommaFilter, rule.MatchAllFilter, rule.RemoveFilter);
+            when.Load(rule.Filter, rule.CommaFilter, rule.MatchAllFilter, rule.RemoveFilter, rule.AsGroup);
             Controls.Add(when.Box);
             y += when.Box.Height + S(10);
 
@@ -305,8 +305,8 @@ internal static class LaunchRulesPanel
                 // kept verbatim — a trailing space before the rest of the line is often the point.
                 rule.Prefix = asArg ? prefix.Text.Trim() : prefix.Text;
                 rule.AsArg = asArg;
-                (rule.Filter, rule.CommaFilter, rule.MatchAllFilter, rule.RemoveFilter) = when.Save();
-                (rule.Exclude, rule.CommaExclude, rule.MatchAllExclude, _) = never.Save();
+                (rule.Filter, rule.CommaFilter, rule.MatchAllFilter, rule.RemoveFilter, rule.AsGroup) = when.Save();
+                (rule.Exclude, rule.CommaExclude, rule.MatchAllExclude, _, _) = never.Save();
                 DialogResult = DialogResult.OK; Close();
             };
             var cancel = ActionButton("Cancel", MenuIcons.Exit);

@@ -40,16 +40,16 @@ internal static class GpuColor
 
     public const string KeyApply = "MonitorNvidiaApply";
 
-    /// <summary>The "Apply NVIDIA-specific settings" master switch (General options; absent = on).
-    /// It gates the WRITES only — captures keep recording the NVIDIA state through Query/ScalingGet/
-    /// VrrGet, so a profile saved while this is off carries everything and simply waits. Read at every
-    /// write rather than cached: the user flips it in Options and expects the very next apply to obey.</summary>
+    /// <summary>The "Apply NVIDIA-specific settings" master switch (General options; absent = OFF —
+    /// an opt-in: most users never need driver-level writes, and captures record the NVIDIA state
+    /// either way, so nothing is lost while it waits). It gates the WRITES only. Read at every write
+    /// rather than cached: the user flips it in Options and expects the very next apply to obey.</summary>
     public static bool ApplyEnabled
     {
         get
         {
-            try { return !string.Equals(Data.LiteBoxOptionsDb.GetGlobal(KeyApply), "false", StringComparison.OrdinalIgnoreCase); }
-            catch { return true; }
+            try { return string.Equals(Data.LiteBoxOptionsDb.GetGlobal(KeyApply), "true", StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
         }
     }
 

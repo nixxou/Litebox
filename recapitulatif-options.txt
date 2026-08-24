@@ -667,11 +667,11 @@ Registre actuel :
                           intégré (demande aussi le module web).
     MonitorLaunchDelay    Secondes d'attente entre le changement de profil et le
                           démarrage du jeu ; absent = 2, "0" = immédiat.
-    MonitorNvidiaApply    false = les captures ENREGISTRENT toujours l'état NVIDIA
-                          (couleur, scaling, vibrance, VRR) mais plus rien n'est
-                          écrit au pilote, et l'interface verte NVIDIA est cachée.
-                          Absent = on. La case n'apparaît que si un pilote NVIDIA
-                          répond sur la machine.
+    MonitorNvidiaApply    true = l'état NVIDIA (couleur, scaling, vibrance, VRR)
+                          est écrit au pilote et l'interface verte NVIDIA visible.
+                          Absent = OFF (opt-in) ; les captures ENREGISTRENT l'état
+                          NVIDIA dans les deux cas, rien n'est perdu en attendant.
+                          La case n'apparaît que si un pilote NVIDIA répond.
 
   scopes game+emulator+version (Monitor Profiles — quel profil pour ce
   lancement ; résolution version -> jeu -> émulateur) :

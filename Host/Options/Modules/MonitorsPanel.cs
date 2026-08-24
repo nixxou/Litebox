@@ -208,7 +208,7 @@ internal static class MonitorsPanel
                     d == MonitorProfileApply.LaunchDelayDefault ? null : d.ToString());
             }
             catch { }
-            try { if (nvApply != null) LiteBoxOptionsDb.SetGlobal(GpuColor.KeyApply, nvApply.Checked ? null : "false"); } catch { }
+            try { if (nvApply != null) LiteBoxOptionsDb.SetGlobal(GpuColor.KeyApply, nvApply.Checked ? "true" : null); } catch { }
             try
             {
                 string hk = (rkBox.HotkeyValue ?? "").Trim();

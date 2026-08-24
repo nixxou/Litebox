@@ -35,7 +35,7 @@ locks/3D — trop de stores épars pour garder le fil.
 - **Monitor Profiles** (Host\Monitors, ajouté 2026-08) : `MonitorProfiles` (JSON, la liste entière),
   `MonitorRestorePoint` (JSON, l'état d'avant le 1er profil — persisté pour survivre à un crash),
   `MonitorRestoreHotkey` + `MonitorRestoreHotkeyGlobal`, `MonitorWebEndpoints`, `MonitorLaunchDelay`,
-  `MonitorNvidiaApply` (false = capture NVIDIA sans jamais écrire, UI verte cachée).
+  `MonitorNvidiaApply` (opt-in, absent = OFF : capture NVIDIA toujours, écriture et UI verte seulement à true).
 
 ### scopes `game` / `emulator` (overrides tri-state : pas de row = hérite)
 Résolution jeu → émulateur → global (`LiteBoxOption.ResolveBool/ResolveString`) :

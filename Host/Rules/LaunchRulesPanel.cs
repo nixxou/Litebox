@@ -146,24 +146,52 @@ internal static class LaunchRulesPanel
         });
     }
 
-    /// <summary>The preview's default IN line — BigBoxProfile seeded it with the emulator's exe name
-    /// plus a sample rom path. The entity's real exe when it can be found cheaply, a placeholder
-    /// otherwise; free text either way.</summary>
+    /// <summary>The preview's default IN line — the SAME string the Details page shows as "Sample
+    /// Command" (exe + default command-line parameters + ROM token, honouring NoQuotes / NoSpace /
+    /// name-only and the %romfile% in-place substitution), because that IS what the rules will
+    /// receive. The entity's emulator is resolved per scope: the emulator itself; a game's assigned
+    /// emulator; a version's own emulator when it has one, else its game's. Free text either way.</summary>
     private static string DefaultExampleIn(string scope, string entityId)
     {
-        string exe = "emulator.exe";
+        Unbroken.LaunchBox.Plugins.Data.IEmulator? emu = null;
         try
         {
-            if (scope == Data.LiteBoxOption.ScopeEmulator)
+            var dm = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager;
+            string? emuId = null;
+            if (scope == Data.LiteBoxOption.ScopeEmulator) emuId = entityId;
+            else if (scope == Data.LiteBoxOption.ScopeGame)
+                emuId = dm?.GetAllGames()?.FirstOrDefault(g => string.Equals(g.Id, entityId, StringComparison.OrdinalIgnoreCase))?.EmulatorId;
+            else
             {
-                var e = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllEmulators()
-                    ?.FirstOrDefault(x => string.Equals(x.Id, entityId, StringComparison.OrdinalIgnoreCase));
-                var p = e?.ApplicationPath;
-                if (!string.IsNullOrWhiteSpace(p)) exe = System.IO.Path.GetFileName(p);
+                foreach (var g in dm?.GetAllGames() ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IGame>())
+                {
+                    var app = g.GetAllAdditionalApplications()?.FirstOrDefault(a => string.Equals(a.Id, entityId, StringComparison.OrdinalIgnoreCase));
+                    if (app == null) continue;
+                    emuId = app.UseEmulator && !string.IsNullOrEmpty(app.EmulatorId) ? app.EmulatorId : g.EmulatorId;
+                    break;
+                }
             }
+            if (!string.IsNullOrEmpty(emuId))
+                emu = dm?.GetAllEmulators()?.FirstOrDefault(x => string.Equals(x.Id, emuId, StringComparison.OrdinalIgnoreCase));
         }
         catch { }
-        return exe + " \"C:\\MyRomDir\\MyRom.bin\"";
+        if (emu == null) return "emulator.exe \"FULL\\PATH\\TO\\ROM\\FILE\"";
+
+        string exe = "emulator.exe", cmd = "";
+        bool noQuotes = false, noSpace = false, nameOnly = false;
+        try { exe = System.IO.Path.GetFileName(emu.ApplicationPath?.Trim() ?? "") is { Length: > 0 } f ? f : exe; } catch { }
+        try { cmd = emu.CommandLine?.Trim() ?? ""; } catch { }
+        try { noQuotes = emu.NoQuotes; noSpace = emu.NoSpace; nameOnly = emu.FileNameWithoutExtensionAndPath; } catch { }
+
+        string rom = nameOnly ? "ROMFILE" : "FULL\\PATH\\TO\\ROM\\FILE";
+        if (!noQuotes) rom = "\"" + rom + "\"";
+        if (cmd.IndexOf("%romfile%", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            cmd = System.Text.RegularExpressions.Regex.Replace(cmd, "%romfile%", _ => rom,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return exe + (cmd.Length > 0 ? " " + cmd : "");
+        }
+        return exe + (cmd.Length > 0 ? " " + cmd : "") + (noSpace ? "" : " ") + rom;
     }
     /// <summary>The Prefix editor — grouped, with the shared probe blocks (mode dropdowns + Manage…).
     /// Same stored shape as BigBoxProfile's Prefix_Config; only the surface changed.</summary>

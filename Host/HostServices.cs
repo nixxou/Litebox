@@ -305,6 +305,28 @@ internal static class HostLaunch
             if (histDet.HasValue) scMax = Math.Max(scMax, (int)Math.Min(120000, histDet.Value + 3000));
             int scBackstop = scMax + scDisplay + 5000;
 
+            // Monitor profile for this launch — same contract as the emulator path (RunAndWait), which
+            // this flow bypasses entirely: without this, a store game's assignment simply never fired.
+            // Store games have no version and no emulator, so the game's own assignment (or a one-shot
+            // "Run next game as") is the whole chain. Applied on this worker thread, so the settle delay
+            // never holds the UI; the running screen is already up to cover the switch.
+            try
+            {
+                var mp = Monitors.MonitorAssign.Resolve(SafeStr(() => game?.Id), null, null);
+                if (mp != null)
+                {
+                    var mr = Monitors.MonitorProfileApply.BeginGameScope(mp);
+                    Console.WriteLine($"[store-launch] monitor profile \"{mp.Name}\": {mr.Message.ReplaceLineEndings(" | ")}");
+                    int mdelay = Monitors.MonitorProfileApply.LaunchDelaySeconds;
+                    if (mdelay > 0)
+                    {
+                        Console.WriteLine($"[store-launch] waiting {mdelay}s for the displays to settle");
+                        Thread.Sleep(mdelay * 1000);
+                    }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[store-launch] monitor profile error: " + ex.Message); }
+
             if (!StoreSupport.ShellOpen(target)) { Console.WriteLine("[store-launch] ShellOpen failed: " + target); StoreTrace.Log("store-launch ShellOpen FAILED"); return; }
             if (gi >= 0) { try { _store.JournalPlayStart(gi); } catch { } }
             // Notify launching plugins the game is up — same as the emulator path.
@@ -348,6 +370,18 @@ internal static class HostLaunch
         catch (Exception ex) { Console.WriteLine("[store-launch] error: " + ex.Message); StoreTrace.Log("store-launch EX: " + ex.Message); }
         finally
         {
+            // Desktop back to what this launch found — FIRST in the teardown, so the end screen and the
+            // frontend come back onto the arrangement the user actually left, not the game's.
+            try
+            {
+                if (Monitors.MonitorProfileApply.GameScopeActive)
+                {
+                    var mres = Monitors.MonitorProfileApply.EndGameScope();
+                    if (mres.Message.Length > 0) Console.WriteLine("[store-launch] monitor profile restored: " + mres.Message.ReplaceLineEndings(" | "));
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[store-launch] monitor restore error: " + ex.Message); }
+
             Pause.PauseManager.Disarm();   // hotkey hook off + resume a still-frozen game + close the screen
             Gameplay.GameCursor.Show();        // undo "Hide Mouse Cursor During Game" (no-op if off)
             Gameplay.WindowHider.Restore();    // undo "Hide All Windows…" (no-op if off)

@@ -514,8 +514,10 @@ internal static class LaunchRulesPanel
     {
         public PrefixRuleDialog(LaunchRule rule, float dpiS)
         {
+            // WIDE on purpose: the collapsed probe summaries are sentences, and a sentence needs a
+            // line (Mehdi). Height follows the blocks as they expand, collapse, or wrap.
             Text = "Prefix rule";
-            ClientSize = new Size(S(462), S(496));
+            ClientSize = new Size(S(640), S(400));
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false; MaximizeBox = false;
@@ -534,7 +536,7 @@ internal static class LaunchRulesPanel
             var actBox = new GroupBox
             {
                 Text = "Action", ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
-                Location = new Point(S(16), y), Width = S(430), Height = S(112),
+                Location = new Point(S(16), y), Width = S(600), Height = S(112),
             };
             var capPrefix = new Label
             {
@@ -543,7 +545,7 @@ internal static class LaunchRulesPanel
             };
             var prefix = new TextBox
             {
-                Text = rule.Prefix, Location = new Point(S(12), S(42)), Width = S(404),
+                Text = rule.Prefix, Location = new Point(S(12), S(42)), Width = S(574),
                 BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
             };
             var capAs = new Label
@@ -553,7 +555,7 @@ internal static class LaunchRulesPanel
             };
             var asMode = new ComboBox
             {
-                DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(84), S(74)), Width = S(332),
+                DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(84), S(74)), Width = S(502),
                 BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
             };
             asMode.Items.AddRange(new object[]
@@ -566,21 +568,17 @@ internal static class LaunchRulesPanel
             Controls.Add(actBox);
             y += S(122);
 
-            // ── the shared probe blocks ──
+            // ── the shared probe blocks — collapsed summaries; the dialog reflows on toggle ──
             var when = new ProbeBlock("Run only when…", exclude: false, withMarker: true, dpiS, readOnly: false);
             when.Box.Location = new Point(S(16), y);
             when.Load(rule.Filter, rule.CommaFilter, rule.MatchAllFilter, rule.RemoveFilter, rule.AsGroup);
             Controls.Add(when.Box);
-            y += when.Box.Height + S(10);
 
             var never = new ProbeBlock("Never when…", exclude: true, withMarker: false, dpiS, readOnly: false);
-            never.Box.Location = new Point(S(16), y);
             never.Load(rule.Exclude, rule.CommaExclude, rule.MatchAllExclude);
             Controls.Add(never.Box);
-            y += never.Box.Height + S(14);
 
             var ok = ActionButton("OK", MenuIcons.Add);
-            ok.Location = new Point(S(252), y);
             ok.Click += (_, _) =>
             {
                 // An empty prefix is allowed — the rule saves NON-CONFIGURED and is skipped at launch,
@@ -596,11 +594,21 @@ internal static class LaunchRulesPanel
                 DialogResult = DialogResult.OK; Close();
             };
             var cancel = ActionButton("Cancel", MenuIcons.Exit);
-            cancel.Location = new Point(S(354), y);
             cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
             AcceptButton = ok; CancelButton = cancel;
             Controls.Add(ok); Controls.Add(cancel);
-            ClientSize = new Size(S(462), y + S(40));
+
+            void Reflow()
+            {
+                never.Box.Location = new Point(S(16), when.Box.Bottom + S(10));
+                int by = never.Box.Bottom + S(14);
+                ok.Location = new Point(S(430), by);
+                cancel.Location = new Point(S(532), by);
+                ClientSize = new Size(S(640), by + S(40));
+            }
+            when.LayoutChanged += Reflow;
+            never.LayoutChanged += Reflow;
+            Reflow();
             ThemedCheckBox.StyleAll(this);
         }
     }

@@ -246,6 +246,8 @@ internal static class LaunchRulesPanel
         var remove = Btn("Remove");
         var up = Btn("▲");
         var down = Btn("▼");
+        var copy = Btn("Copy");
+        var paste = Btn("Paste");
         Row(bar, S(36));
 
         // ── stretch with the window: the fields and the list use whatever room the host gives —
@@ -303,6 +305,58 @@ internal static class LaunchRulesPanel
         }
         up.Click += (_, _) => Move(-1);
         down.Click += (_, _) => Move(+1);
+
+        // ── copy / paste — and thereby export / import. The interchange format IS the stored one:
+        // a rule is its JSON object exactly as litebox-options.db holds it, a whole list is the
+        // array; paste accepts either, so a single rule, a full export, or a hand-edited file all
+        // round-trip. Cross-entity by nature: copy here, paste on any other emulator/game/version.
+        var jsonPretty = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+        copy.Click += (_, _) =>
+        {
+            try
+            {
+                int ix = SelectedFlatIndex();
+                // A selected rule copies alone; no selection copies the WHOLE list (the export).
+                string payload = ix >= 0 && ix < rules.Count
+                    ? System.Text.Json.JsonSerializer.Serialize(rules[ix], jsonPretty)
+                    : System.Text.Json.JsonSerializer.Serialize(rules, jsonPretty);
+                Clipboard.SetText(payload);
+            }
+            catch { }
+        };
+        paste.Click += (_, _) =>
+        {
+            string txt;
+            try { txt = Clipboard.GetText() ?? ""; } catch { return; }
+            if (txt.Trim().Length == 0) return;
+            List<LaunchRule>? incoming = null;
+            try
+            {
+                incoming = txt.TrimStart().StartsWith("[")
+                    ? System.Text.Json.JsonSerializer.Deserialize<List<LaunchRule>>(txt)
+                    : new List<LaunchRule> { System.Text.Json.JsonSerializer.Deserialize<LaunchRule>(txt)! };
+            }
+            catch { }
+            if (incoming == null || incoming.Count == 0 || incoming.Any(r => r == null))
+            {
+                MessageBox.Show(root.FindForm(), "The clipboard does not hold a rule (or a rule list) in the JSON format Copy produces.",
+                    "Launch rules", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            int at = SelectedFlatIndex();
+            int insert = at >= 0 && at < rules.Count ? at + 1 : rules.Count;
+            rules.InsertRange(insert, incoming);
+            Reload(insert);
+        };
+
+        void CtrlCv(object? _, KeyEventArgs e)
+        {
+            if (!e.Control || readOnly) return;
+            if (e.KeyCode == Keys.C) { copy.PerformClick(); e.Handled = e.SuppressKeyPress = true; }
+            else if (e.KeyCode == Keys.V) { paste.PerformClick(); e.Handled = e.SuppressKeyPress = true; }
+        }
+        list.KeyDown += CtrlCv;
+        tree.KeyDown += CtrlCv;
 
         return (root, () =>
         {

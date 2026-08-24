@@ -120,6 +120,24 @@ internal static class LaunchRulesPanel
         var down = Btn("▼");
         Row(bar, S(36));
 
+        // ── stretch with the window: the fields and the list use whatever room the host gives —
+        // long real-launch command lines are the whole point of the preview, and the rule list is
+        // where a busy pipeline lives. Width tracks the client area, the list also takes the free
+        // height, and the button bar rides just under it.
+        void Relayout()
+        {
+            int w = Math.Max(S(420), root.ClientSize.Width - S(40));
+            inRow.Width = w;
+            exIn.Width = w - S(96);
+            reroll.Left = w - S(86);
+            exOut.Width = w;
+            list.Width = w;
+            list.Height = Math.Max(S(120), root.ClientSize.Height - list.Top - bar.Height - S(30));
+            bar.Location = new Point(bar.Left, list.Top + list.Height + S(8));
+        }
+        root.Resize += (_, _) => Relayout();
+        Relayout();
+
         LaunchRule? Current() => list.SelectedIndex >= 0 && list.SelectedIndex < rules.Count
             ? rules[list.SelectedIndex] : null;
 

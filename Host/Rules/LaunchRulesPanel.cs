@@ -241,8 +241,12 @@ internal static class LaunchRulesPanel
             return b;
         }
 
-        var add = Btn("Add: Prefix…");
-        var addSuffix = Btn("Add: Suffix…");
+        // One Add button per registered action — the registry is the only list that grows.
+        foreach (var action in Actions.RuleActions.All)
+        {
+            var a = action;
+            Btn(a.AddLabel).Click += (_, _) => EditRule(new LaunchRule { Type = a.Type }, isNew: true);
+        }
         var edit = Btn("Edit…");
         var remove = Btn("Remove");
         var up = Btn("▲");
@@ -276,14 +280,14 @@ internal static class LaunchRulesPanel
 
         void EditRule(LaunchRule rule, bool isNew)
         {
-            using var dlg = new PrefixRuleDialog(rule, dpiS);
+            var action = Actions.RuleActions.ByType(rule.Type);
+            if (action == null) return;   // a rule from a newer build: shown red, not editable here
+            using var dlg = new RuleDialog(rule, action, dpiS);
             if (dlg.ShowDialog(root.FindForm()) != DialogResult.OK) return;
             if (isNew) rules.Add(rule);
             Reload(isNew ? rules.Count - 1 : SelectedFlatIndex());
         }
 
-        add.Click += (_, _) => EditRule(new LaunchRule { Type = LaunchRule.TypePrefix }, isNew: true);
-        addSuffix.Click += (_, _) => EditRule(new LaunchRule { Type = LaunchRule.TypeSuffix }, isNew: true);
         edit.Click += (_, _) => { if (Current() is { } r) EditRule(r, isNew: false); };
         if (!readOnly)
         {
@@ -500,88 +504,45 @@ internal static class LaunchRulesPanel
     private static string DescribeAction(LaunchRule r)
     {
         if (!r.IsConfigured) return r.Type + " => NOT CONFIGURED";
-        string d = r.Type switch
-        {
-            LaunchRule.TypePrefix => (r.AsArg ? "Prefix this to the Arg List : " : "Prefix this to the command line : ") + r.Prefix,
-            LaunchRule.TypeSuffix => (r.AsArg ? "Suffix this to the Arg List : " : "Suffix this to the command line : ") + r.Suffix,
-            _ => r.Type,
-        };
+        string d = Actions.RuleActions.ByType(r.Type)?.Describe(r) ?? r.Type;
         if (r.RemoveFilter) d += " [remove marker]";
         if (!r.Enabled) d = "(disabled) " + d;
         return d;
     }
 
-    /// <summary>The rule editor — one dialog for the whole action family, since Prefix and Suffix
-    /// (and BigBoxProfile's originals) share everything but the payload's name and direction. The
-    /// probe blocks are the shared component; only the Action group reads the rule's type.</summary>
-    private sealed class PrefixRuleDialog : LiteBoxForm
+    /// <summary>The rule editor SHELL — enabled box, the Action group whose BODY the action itself
+    /// provides (IRuleAction.BuildActionUi), the two shared probe blocks, and the reflow. What a
+    /// rule dialog IS lives here once; what each action ASKS lives in its own file.</summary>
+    private sealed class RuleDialog : LiteBoxForm
     {
-        public PrefixRuleDialog(LaunchRule rule, float dpiS)
+        public RuleDialog(LaunchRule rule, Actions.IRuleAction action, float dpiS)
         {
-            bool suffix = rule.Type == LaunchRule.TypeSuffix;
             // WIDE on purpose: the collapsed probe summaries are sentences, and a sentence needs a
             // line (Mehdi). Height follows the blocks as they expand, collapse, or wrap.
-            Text = suffix ? "Suffix rule" : "Prefix rule";
+            Text = action.DialogTitle;
             ClientSize = new Size(S(640), S(400));
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false; MaximizeBox = false;
 
-            int y = S(12);
-
             var enabled = new CheckBox
             {
                 Text = "Rule enabled", Checked = rule.Enabled, AutoSize = true,
-                Location = new Point(S(16), y), ForeColor = LiteBoxTheme.Fg, BackColor = BackColor,
+                Location = new Point(S(16), S(12)), ForeColor = LiteBoxTheme.Fg, BackColor = BackColor,
             };
             Controls.Add(enabled);
-            y += S(30);
 
-            // ── Action ──
+            var (body, bodyHeight, saveAction) = action.BuildActionUi(rule, dpiS);
             var actBox = new GroupBox
             {
                 Text = "Action", ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
-                Location = new Point(S(16), y), Width = S(600), Height = S(112),
+                Location = new Point(S(16), S(42)), Width = S(600), Height = bodyHeight + S(30),
             };
-            var capPrefix = new Label
-            {
-                Text = suffix ? "Suffix to add:" : "Prefix to add:", AutoSize = true, Location = new Point(S(12), S(22)),
-                ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
-            };
-            var prefix = new TextBox
-            {
-                Text = suffix ? rule.Suffix : rule.Prefix, Location = new Point(S(12), S(42)), Width = S(574),
-                BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
-            };
-            var capAs = new Label
-            {
-                Text = "Add it as:", AutoSize = true, Location = new Point(S(12), S(78)),
-                ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
-            };
-            var asMode = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(84), S(74)), Width = S(502),
-                BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
-            };
-            asMode.Items.AddRange(suffix
-                ? new object[]
-                {
-                    "One argument (appended as a single token)",
-                    "Raw command-line text (appended verbatim — include the leading space yourself)",
-                }
-                : new object[]
-                {
-                    "One argument (the text becomes a single token)",
-                    "Raw command-line text (may carry several arguments)",
-                });
-            asMode.SelectedIndex = rule.AsArg ? 0 : 1;
-            actBox.Controls.AddRange(new Control[] { capPrefix, prefix, capAs, asMode });
+            body.Location = new Point(S(12), S(20));
+            actBox.Controls.Add(body);
             Controls.Add(actBox);
-            y += S(122);
 
-            // ── the shared probe blocks — collapsed summaries; the dialog reflows on toggle ──
             var when = new ProbeBlock("Run only when…", exclude: false, withMarker: true, dpiS, readOnly: false);
-            when.Box.Location = new Point(S(16), y);
             when.Load(rule.Filter, rule.CommaFilter, rule.MatchAllFilter, rule.RemoveFilter, rule.AsGroup);
             Controls.Add(when.Box);
 
@@ -592,16 +553,10 @@ internal static class LaunchRulesPanel
             var ok = ActionButton("OK", MenuIcons.Add);
             ok.Click += (_, _) =>
             {
-                // An empty prefix is allowed — the rule saves NON-CONFIGURED and is skipped at launch,
+                // An unconfigured save is allowed — the rule shows NOT CONFIGURED and is skipped,
                 // BigBoxProfile's add-now-configure-later workflow.
                 rule.Enabled = enabled.Checked;
-                bool asArg = asMode.SelectedIndex == 0;
-                // As ARGUMENT the token is trimmed (BigBoxProfile trims too); as CMDLINE the text is
-                // kept verbatim — an edge space (trailing for a prefix, leading for a suffix) is
-                // often the point.
-                string payload = asArg ? prefix.Text.Trim() : prefix.Text;
-                if (suffix) rule.Suffix = payload; else rule.Prefix = payload;
-                rule.AsArg = asArg;
+                saveAction();
                 (rule.Filter, rule.CommaFilter, rule.MatchAllFilter, rule.RemoveFilter, rule.AsGroup) = when.Save();
                 (rule.Exclude, rule.CommaExclude, rule.MatchAllExclude, _, _) = never.Save();
                 DialogResult = DialogResult.OK; Close();
@@ -613,6 +568,7 @@ internal static class LaunchRulesPanel
 
             void Reflow()
             {
+                when.Box.Location = new Point(S(16), actBox.Bottom + S(10));
                 never.Box.Location = new Point(S(16), when.Box.Bottom + S(10));
                 int by = never.Box.Bottom + S(14);
                 ok.Location = new Point(S(430), by);

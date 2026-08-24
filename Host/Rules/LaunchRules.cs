@@ -74,23 +74,15 @@ internal sealed class LaunchRule
     /// unsatisfiable (ticked, the action never fired). Ported as what the label always promised.</summary>
     public bool MatchAllExclude { get; set; }
 
-    public bool IsConfigured => Type switch
-    {
-        TypePrefix => Prefix.Length > 0,
-        TypeSuffix => Suffix.Length > 0,
-        _ => false,
-    };
+    /// <summary>Delegated to the action registry — an unknown Type (a rule from a newer build)
+    /// reads as not configured: shown red, skipped everywhere, never an error.</summary>
+    public bool IsConfigured => Actions.RuleActions.ByType(Type)?.IsConfigured(this) ?? false;
 
     /// <summary>One-line description for the rule lists — mirrors BigBoxProfile's ToString().</summary>
     public string Describe()
     {
         if (!IsConfigured) return $"{Type} => NOT CONFIGURED";
-        string d = Type switch
-        {
-            TypePrefix => (AsArg ? "Prefix this to the Arg List : " : "Prefix this to the command line : ") + Prefix,
-            TypeSuffix => (AsArg ? "Suffix this to the Arg List : " : "Suffix this to the command line : ") + Suffix,
-            _ => Type,
-        };
+        string d = Actions.RuleActions.ByType(Type)?.Describe(this) ?? Type;
         if (Filter.Length > 0) d += $" [Only if command line contains {Filter}]" + (MatchAllFilter ? "[matchall]" : "");
         if (Exclude.Length > 0) d += $" [Exclude {Exclude}]" + (MatchAllExclude ? "[matchall]" : "");
         if (RemoveFilter) d += " [remove marker]";

@@ -42,7 +42,7 @@ internal static class RulePipeline
                 string before = args;
                 if (ProbePasses(rule, exePath, args))
                 {
-                    args = ApplyAction(rule, args);
+                    args = Actions.RuleActions.ByType(rule.Type)?.Apply(rule, args) ?? args;
                     if (args != before) LbLog.Info(Tag, $"{rule.Type}: args → {args}");
                 }
                 // Markers are collected from CONFIGURED rules whether or not their probe fired this
@@ -125,9 +125,10 @@ internal static class RulePipeline
                 if (passes)
                 {
                     fired = true;
-                    // Example treatments — per action, like ModifyExemple. Prefix and Suffix: same
-                    // as the real thing.
-                    args = ApplyAction(rule, args);
+                    // The EXAMPLE channel — each action's own ApplyExample (ModifyExemple), which
+                    // defaults to the real treatment and diverges where the real one acts on the
+                    // world (see IRuleAction).
+                    args = Actions.RuleActions.ByType(rule.Type)?.ApplyExample(rule, args) ?? args;
                 }
                 if (rule.RemoveFilter && rule.Filter.Length > 0)
                     removeMarkers.AddRange(SplitList(rule.Filter, rule.CommaFilter));
@@ -187,28 +188,4 @@ internal static class RulePipeline
 
     // ── actions ───────────────────────────────────────────────────────────────
 
-    private static string ApplyAction(LaunchRule rule, string args) => rule.Type switch
-    {
-        LaunchRule.TypePrefix => ApplyPrefix(rule, args),
-        LaunchRule.TypeSuffix => ApplySuffix(rule, args),
-        _ => args,
-    };
-
-    /// <summary>Suffix: as ARGUMENT = one token (trimmed) appended after every existing argument;
-    /// as CMDLINE = the text appended VERBATIM to the joined argument string — a leading space is
-    /// the author's to include, exactly as in the original (cmd + suffix, no separator).</summary>
-    private static string ApplySuffix(LaunchRule rule, string args)
-        => rule.AsArg
-            ? RuleArgs.Join(RuleArgs.Split(args).Concat(new[] { rule.Suffix.Trim() }))
-            : args + rule.Suffix;
-
-    /// <summary>Prefix: as ARGUMENT = one token (trimmed) inserted before every existing argument;
-    /// as CMDLINE = the text prepended verbatim to the joined argument string, then re-parsed — which
-    /// is how one prefix can inject several arguments. The exe is untouched by construction: rules
-    /// here receive the argument string WITHOUT args[0], the separation BigBoxProfile had to
-    /// re-create by hand around every Modify call.</summary>
-    private static string ApplyPrefix(LaunchRule rule, string args)
-        => rule.AsArg
-            ? RuleArgs.Join(new[] { rule.Prefix.Trim() }.Concat(RuleArgs.Split(args)))
-            : rule.Prefix + args;
 }

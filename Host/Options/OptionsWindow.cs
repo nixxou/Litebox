@@ -1,4 +1,4 @@
-// Sectioned settings window shell (LB "Edit Emulator"-style): section list on the
+﻿// Sectioned settings window shell (LB "Edit Emulator"-style): section list on the
 // left, one panel per section on the right, OK / Apply / Cancel footer. Reused by
 // the global options today and by the emulator / game editors later — a section
 // can be auto-generated from OptionItems (checkbox / textbox / combo stack) or be

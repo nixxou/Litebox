@@ -248,6 +248,8 @@ internal static class LaunchRulesPanel
         var down = Btn("▼");
         var copy = Btn("Copy");
         var paste = Btn("Paste");
+        var export = Btn("Export\u2026");
+        var import_ = Btn("Import\u2026");
         Row(bar, S(36));
 
         // ── stretch with the window: the fields and the list use whatever room the host gives —
@@ -347,6 +349,66 @@ internal static class LaunchRulesPanel
             int insert = at >= 0 && at < rules.Count ? at + 1 : rules.Count;
             rules.InsertRange(insert, incoming);
             Reload(insert);
+        };
+
+        // ── export / import, INDIVIDUAL — this entity's list, in the stored format (a bare rule
+        // array, the exact thing Copy-all puts on the clipboard). Import lands in the edit buffer
+        // like any other change: nothing reaches the database before OK/Apply, Cancel undoes it.
+        export.Click += (_, _) =>
+        {
+            if (rules.Count == 0)
+            {
+                MessageBox.Show(root.FindForm(), "There is no rule to export.", "Launch rules",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try
+            {
+                using var dlg = new SaveFileDialog
+                {
+                    Filter = "Launch rules (*.json)|*.json", FileName = "launch-rules.json",
+                };
+                if (dlg.ShowDialog(root.FindForm()) != DialogResult.OK) return;
+                System.IO.File.WriteAllText(dlg.FileName, System.Text.Json.JsonSerializer.Serialize(rules, jsonPretty));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(root.FindForm(), "Export failed: " + ex.Message, "Launch rules",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        import_.Click += (_, _) =>
+        {
+            try
+            {
+                using var dlg = new OpenFileDialog { Filter = "Launch rules (*.json)|*.json|All files (*.*)|*.*" };
+                if (dlg.ShowDialog(root.FindForm()) != DialogResult.OK) return;
+                string txt = System.IO.File.ReadAllText(dlg.FileName);
+                var incoming = txt.TrimStart().StartsWith("[")
+                    ? System.Text.Json.JsonSerializer.Deserialize<List<LaunchRule>>(txt)
+                    : new List<LaunchRule> { System.Text.Json.JsonSerializer.Deserialize<LaunchRule>(txt)! };
+                if (incoming == null || incoming.Count == 0 || incoming.Any(r => r == null))
+                {
+                    MessageBox.Show(root.FindForm(), "This file does not hold a rule list in the format Export produces.",
+                        "Launch rules", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                if (rules.Count > 0)
+                {
+                    var res = MessageBox.Show(root.FindForm(),
+                        $"Replace the {rules.Count} current rule(s) with the {incoming.Count} imported one(s)?\n\nNo appends them instead.",
+                        "Launch rules", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                    if (res == DialogResult.Cancel) return;
+                    if (res == DialogResult.Yes) rules.Clear();
+                }
+                rules.AddRange(incoming);
+                Reload(rules.Count - incoming.Count);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(root.FindForm(), "Import failed: " + ex.Message, "Launch rules",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         };
 
         void CtrlCv(object? _, KeyEventArgs e)

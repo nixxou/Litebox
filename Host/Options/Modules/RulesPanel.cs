@@ -109,6 +109,8 @@ internal static class RulesPanel
         }
         var del = Btn("Remove selected");
         var delAll = Btn("Remove all in this list");
+        var export = Btn("Export\u2026");
+        var import_ = Btn("Import\u2026");
 
         string Scope() => kind.SelectedIndex switch
         {
@@ -127,7 +129,17 @@ internal static class RulesPanel
             foreach (var r in rows) list.Items.Add(new ListViewItem(new[] { r.EntityName, r.What }));
             list.EndUpdate();
             del.Enabled = delAll.Enabled = !readOnly && rows.Count > 0;
+            SyncSel();
         }
+        // Export/Import act on ONE entity — greyed unless exactly one row is selected (Mehdi's cut:
+        // the exchange grain is the entity, here as on its own Launch Rules page).
+        void SyncSel()
+        {
+            bool one = list.SelectedIndices.Count == 1;
+            export.Enabled = one;
+            import_.Enabled = one && !readOnly;
+        }
+        list.SelectedIndexChanged += (_, _) => SyncSel();
         kind.SelectedIndexChanged += (_, _) => Reload();
         del.Click += (_, _) =>
         {
@@ -142,6 +154,73 @@ internal static class RulesPanel
                     MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             foreach (var r in rows.ToList()) LaunchRuleStore.Clear(r.Scope, r.EntityId);
             Reload();
+        };
+
+        LaunchRuleStore.Row? Selected()
+            => list.SelectedIndices.Count == 1 && list.SelectedIndices[0] < rows.Count
+                ? rows[list.SelectedIndices[0]] : null;
+
+        var jsonPretty = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+        export.Click += (_, _) =>
+        {
+            if (Selected() is not { } row) return;
+            try
+            {
+                var rules = LaunchRuleStore.Get(row.Scope, row.EntityId);
+                using var dlg = new SaveFileDialog
+                {
+                    Filter = "Launch rules (*.json)|*.json",
+                    FileName = "launch-rules-" + string.Join("_", row.EntityName.Split(System.IO.Path.GetInvalidFileNameChars())) + ".json",
+                };
+                if (dlg.ShowDialog(root.FindForm()) != DialogResult.OK) return;
+                System.IO.File.WriteAllText(dlg.FileName, System.Text.Json.JsonSerializer.Serialize(rules, jsonPretty));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(root, "Export failed: " + ex.Message, "Launch rules", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        import_.Click += (_, _) =>
+        {
+            if (Selected() is not { } row) return;
+            try
+            {
+                using var dlg = new OpenFileDialog { Filter = "Launch rules (*.json)|*.json|All files (*.*)|*.*" };
+                if (dlg.ShowDialog(root.FindForm()) != DialogResult.OK) return;
+                string txt = System.IO.File.ReadAllText(dlg.FileName);
+                var incoming = txt.TrimStart().StartsWith("[")
+                    ? System.Text.Json.JsonSerializer.Deserialize<List<LaunchRule>>(txt)
+                    : new List<LaunchRule> { System.Text.Json.JsonSerializer.Deserialize<LaunchRule>(txt)! };
+                if (incoming == null || incoming.Count == 0 || incoming.Any(r => r == null))
+                {
+                    MessageBox.Show(root, "This file does not hold a rule list in the format Export produces.",
+                        "Launch rules", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                // This page edits the STORE directly (no buffer window around it), so it confirms.
+                if (MessageBox.Show(root,
+                        $"Replace the rules of \"{row.EntityName}\" with the {incoming.Count} imported one(s)?",
+                        "Launch rules", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                LaunchRuleStore.Set(row.Scope, row.EntityId, incoming);
+                Reload();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(root, "Import failed: " + ex.Message, "Launch rules", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+
+        // Double-click = straight to the entity's own Launch Rules page. Emulators for now — the
+        // game and version windows will follow once the emulator loop is polished (Mehdi's order).
+        list.DoubleClick += (_, _) =>
+        {
+            if (Selected() is not { } row || row.Scope != LiteBoxOption.ScopeEmulator) return;
+            var emu = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllEmulators()
+                ?.FirstOrDefault(e => string.Equals(e.Id, row.EntityId, StringComparison.OrdinalIgnoreCase));
+            if (emu == null) return;
+            Emulators.EditEmulatorWindow.Open(emu, readOnly, root.FindForm(),
+                Media.MediaResolver.LbRoot ?? "", openSection: "Launch Rules");
+            Reload();   // the window may have changed this very list
         };
 
         root.Controls.Add(list);

@@ -32,7 +32,8 @@ internal static class EditEmulatorWindow
     private static readonly Color Good = Color.FromArgb(120, 220, 140);
     private static readonly Color Bad = Color.FromArgb(235, 120, 120);
 
-    public static void Open(IEmulator emu, bool readOnly, IWin32Window? owner, string lbRoot)
+    public static void Open(IEmulator emu, bool readOnly, IWin32Window? owner, string lbRoot,
+        string? openSection = null)
     {
         string title = Safe(() => emu.Title) ?? "Emulator";
         using var w = new OptionsWindow($"Edit Emulator — {title}{(readOnly ? "   [READ-ONLY]" : "")}");
@@ -91,6 +92,7 @@ internal static class EditEmulatorWindow
         AddScript(w, emu, "Exit Script", e => e.ExitAutoHotkeyScript, (e, v) => e.ExitAutoHotkeyScript = v);
 
         if (readOnly) DisableAllInputs(w);
+        if (openSection != null) w.SelectSection(openSection);
         w.ShowDialog(owner);
     }
 

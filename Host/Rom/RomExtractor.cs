@@ -213,6 +213,26 @@ internal static class RomExtractor
             catch (Exception ex) { LbLog.Info("rom", "launch: analyze failed: " + ex.Message); return RomLaunchResult.NotHandled; }
             if (analysis.StandaloneFiles.Count == 0) { LbLog.Info("rom", "launch: archive has no playable candidate"); return RomLaunchResult.NotHandled; }
 
+            // The alias guard (adversarial-review hardening): a listing MISS is the one moment the
+            // relocated archive's CONTENT is actually in hand — its ShortSignature is name+listing
+            // based. If it contradicts the original's recorded short_sig, the size validation lied:
+            // DROP the alias before anything is written under the borrowed identity, and re-key this
+            // launch on the relocated path. Costs nothing — the analysis just happened anyway.
+            if (identityPath != null)
+            {
+                string? recordedShort = null;
+                try { recordedShort = ArchiveCacheDb.GetListingRecord(sig)?.ShortSignature; } catch { }
+                string mineShort = analysis.Signature?.ShortSignature ?? "";
+                if (!string.IsNullOrEmpty(recordedShort) && !string.IsNullOrEmpty(mineShort)
+                    && !string.Equals(recordedShort, mineShort, StringComparison.OrdinalIgnoreCase))
+                {
+                    LbLog.Info("rom", $"launch: alias REFUSED — content signature mismatch ({mineShort} vs recorded {recordedShort}); re-keying on the relocated path");
+                    identityPath = null;
+                    keyPath = romAbs;
+                    sig = ArchiveSig.ComputePathSignature(keyPath, archiveSize);
+                }
+            }
+
             // Populate the listing cache from the launch path too (so the next launch can fast-hit).
             try
             {

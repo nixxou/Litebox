@@ -47,6 +47,13 @@ internal sealed class ChangeRomPathAction : IRuleAction
     /// (it lived in EmulatorLauncher.Exec, not in CalculateExemple).</summary>
     public RuleCmd ApplyExample(LaunchRule r, RuleCmd cmd) => Apply(r, cmd, rewriteM3u: false);
 
+    /// <summary>Rom-source phase: PATH relocation only. An m3u under the sought path relocates as a
+    /// file — the mirror's own m3u loads with its (typically relative) entries resolving beside it —
+    /// and is never content-rewritten here. Caveat, documented in the dialog: a mirror m3u carrying
+    /// ABSOLUTE entries to the dead original location will feed those to the per-entry pipeline
+    /// before the line phase can relocate them.</summary>
+    public RuleCmd ApplyRomSource(LaunchRule r, RuleCmd cmd) => Apply(r, cmd, rewriteM3u: false);
+
     private RuleCmd Apply(LaunchRule r, RuleCmd cmd, bool rewriteM3u)
     {
         var args = RuleArgs.Split(cmd.Args);
@@ -215,7 +222,8 @@ internal sealed class ChangeRomPathAction : IRuleAction
         {
             Text = "Each candidate is tried with the remainder path, then with the bare file name.\n"
                  + "Same file name = treated as the original (extraction, caches, history continue);\n"
-                 + "a DIFFERENT name = explicit substitution, passed to the emulator verbatim, no extraction.",
+                 + "a DIFFERENT name = explicit substitution, passed to the emulator verbatim, no extraction.\n"
+                 + "An m3u relocates as a file — keep mirror m3u entries RELATIVE so they resolve beside it.",
             AutoSize = true, Location = new Point(0, y + S(2)),
             ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
         };

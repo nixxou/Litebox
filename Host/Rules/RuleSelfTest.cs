@@ -228,6 +228,19 @@ internal static class RuleSelfTest
                     System.IO.Path.Combine(orig, "game.zip"));
                 Expect("rom-source: a line action (Prefix) never runs in this phase",
                     string.Equals(untouched, System.IO.Path.Combine(orig, "game.zip"), StringComparison.Ordinal));
+
+                // The adversarial-review fix, pinned: an m3u relocates AS A FILE in this phase —
+                // same name, the mirror's own copy — never as a hash-named rewritten temp playlist
+                // (which the decision grid would mistake for a user substitution and ship verbatim
+                // past the per-entry pipeline).
+                System.IO.File.WriteAllLines(System.IO.Path.Combine(orig, "multi.m3u"), new[] { "disc1.chd" });
+                System.IO.File.WriteAllLines(System.IO.Path.Combine(high, "multi.m3u"), new[] { "disc1.chd" });
+                string m3uReloc = RulePipeline.ApplyRomSourceRules(
+                    new List<LaunchRule> { Crp(orig, high: high) }, "emu.exe", "",
+                    System.IO.Path.Combine(orig, "multi.m3u"));
+                Expect("rom-source: an m3u relocates as a FILE, never as a rewritten temp copy",
+                    string.Equals(m3uReloc, System.IO.Path.Combine(high, "multi.m3u"), StringComparison.OrdinalIgnoreCase)
+                    && !m3uReloc.Contains("litebox-rules-m3u", StringComparison.OrdinalIgnoreCase));
             }
             finally
             {

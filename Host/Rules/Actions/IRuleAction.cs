@@ -52,6 +52,15 @@ internal interface IRuleAction
     /// treatment — override when the real one has side effects or reads state no example holds.</summary>
     RuleCmd ApplyExample(LaunchRule r, RuleCmd cmd) => Apply(r, cmd);
 
+    /// <summary>The ROM-SOURCE channel: how the action behaves in the pre-extraction phase. The
+    /// source phase moves PATHS, never content — Mehdi's cut after the adversarial review caught the
+    /// composed m3u case: the full Apply there rewrote a playlist into a hash-named temp copy, which
+    /// the decision grid then mistook for a user substitution and shipped verbatim past every
+    /// per-entry conversion. A relocated m3u simply loads from its mirror path instead; content
+    /// rewriting belongs to the LINE phase alone. Defaults to Apply — actions whose Apply already
+    /// only moves paths need nothing.</summary>
+    RuleCmd ApplyRomSource(LaunchRule r, RuleCmd cmd) => Apply(r, cmd);
+
     /// <summary>The Action group's BODY for the edit dialog: the controls, their height, and the
     /// save that writes the controls back to the rule when OK lands.</summary>
     (Control Body, int Height, Action Save) BuildActionUi(LaunchRule r, float dpiS);

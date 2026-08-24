@@ -36,7 +36,12 @@ internal static class RulePipeline
     /// rom path BEFORE ResolveLaunchRomPath extracts / plans it — so relocating an archive means the
     /// relocated one gets extracted. Probes see exe + the (pre-expansion) command line + the rom
     /// path, so marker routing works here too; the marker STRIP stays in the main phase, which owns
-    /// the final line. Returns the rom path to resolve.</summary>
+    /// the final line. Returns the rom path to resolve.
+    ///
+    /// KNOWN LIMIT (adversarial review, accepted): probes here see the PRE-RULE line — a token
+    /// injected by an earlier line rule (Prefix) is not visible yet, only LaunchBox's own custom
+    /// parameters are. Gating a rom-source rule on a rule-injected marker is therefore not
+    /// supported; gate it on the game's custom parameters instead.</summary>
     public static string ApplyRomSource(string exePath, string contextArgs, string romPath,
         string? gameId, string? versionId, string? emulatorId)
     {
@@ -59,7 +64,7 @@ internal static class RulePipeline
             {
                 string hay = contextArgs.Length > 0 ? contextArgs + " " + romPath : romPath;
                 if (!ProbePasses(rule, exePath, hay)) continue;
-                var cmd = action.Apply(rule, new Actions.RuleCmd(exePath, RuleArgs.Join(new[] { romPath })));
+                var cmd = action.ApplyRomSource(rule, new Actions.RuleCmd(exePath, RuleArgs.Join(new[] { romPath })));
                 string relocated = RuleArgs.Split(cmd.Args).FirstOrDefault() ?? romPath;
                 if (!string.Equals(relocated, romPath, StringComparison.Ordinal))
                 {

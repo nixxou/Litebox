@@ -67,6 +67,7 @@ internal static class RuleActions
         new ChangeRomPathAction(),
         new ReplaceAction(),
         new ReplaceInFileAction(),
+        new CreateFileAction(),
     };
 
     public static IRuleAction? ByType(string type)

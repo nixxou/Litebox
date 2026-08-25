@@ -286,6 +286,41 @@ internal static class RuleSelfTest
             finally { try { System.IO.Directory.Delete(froot, recursive: true); } catch { } }
         }
 
+        // ── Create file: variables in the path AND the content, directory created, preview inert ──
+        {
+            string croot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lbx-rules-selftest-create");
+            try
+            {
+                string vars = RuleVariables.Serialize(new List<RuleVariable>
+                {
+                    new() { Name = "{ROM}", Source = "cmd", Pattern = @"(\w+)\.zip", Value = @"\1" },
+                }.ToList());
+                var rule = new LaunchRule
+                {
+                    Type = LaunchRule.TypeCreateFile,
+                    TargetFile = System.IO.Path.Combine(croot, "sub", "{ROM}.cfg"),
+                    FileContent = "name={ROM}\r\n",
+                    VariablesData = vars,
+                };
+                RulePipeline.ApplyRules(new List<LaunchRule> { rule }, "emu.exe", @"""C:\roms\game.zip""");
+                string expected = System.IO.Path.Combine(croot, "sub", "game.cfg");
+                Expect("createfile: variables expand in path and content, missing directory created",
+                    System.IO.File.Exists(expected)
+                    && System.IO.File.ReadAllText(expected).Contains("name=game"));
+
+                System.IO.Directory.Delete(croot, recursive: true);
+                RulePipeline.PreviewExample(new List<LaunchRule> { rule }, @"emu.exe ""C:\roms\game.zip""");
+                Expect("createfile: the preview writes nothing",
+                    !System.IO.Directory.Exists(croot));
+
+                rule.Filter = "nothere";
+                RulePipeline.ApplyRules(new List<LaunchRule> { rule }, "emu.exe", @"""C:\roms\game.zip""");
+                Expect("createfile: a refused probe writes nothing",
+                    !System.IO.Directory.Exists(croot));
+            }
+            finally { try { System.IO.Directory.Delete(croot, recursive: true); } catch { } }
+        }
+
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
         //    the rom argument) ──
         {

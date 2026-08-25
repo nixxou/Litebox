@@ -34,6 +34,7 @@ internal sealed class LaunchRule
     public const string TypeChangeRomPath = "ChangeRomPath";
     public const string TypeReplace = "Replace";
     public const string TypeReplaceInFile = "ReplaceInFile";
+    public const string TypeCreateFile = "CreateFile";
 
     public string Type { get; set; } = TypePrefix;
     public bool Enabled { get; set; } = true;
@@ -71,8 +72,10 @@ internal sealed class LaunchRule
     public string ReplaceWith { get; set; } = "";
     public bool UseRegex { get; set; }
     public bool CaseSensitive { get; set; }
-    /// <summary>ReplaceInFile: the file whose CONTENT is rewritten before launch. Variables allowed.</summary>
+    /// <summary>ReplaceInFile / CreateFile: the file acted on before launch. Variables allowed.</summary>
     public string TargetFile { get; set; } = "";
+    /// <summary>CreateFile: what gets written. Variables allowed.</summary>
+    public string FileContent { get; set; } = "";
     /// <summary>The rule's variables (JSON RuleVariable[] — see RuleVariables). Transverse: any
     /// action may consult them; today the two Replace actions do.</summary>
     public string VariablesData { get; set; } = "";

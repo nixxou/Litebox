@@ -694,19 +694,41 @@ internal static class EditEmulatorWindow
     }
 
     // ── Script sections ────────────────────────────────────────────────
+    // The colored AHK editor from the launch-rule dialogs, with the same "Check syntax" — but the
+    // content stays VERBATIM LaunchBox data: no prelude, no markers, nothing prepended (the check
+    // validates the bare text, so error line numbers match what the user sees).
     private static void AddScript(OptionsWindow w, IEmulator emu, string title,
         Func<IEmulator, string?> get, Action<IEmulator, string> set)
     {
         var p = new Panel { BackColor = Bg };
-        var tb = new TextBox
+        var tb = Rules.Actions.CodeEditorBox.CreateEditor(Safe(() => get(emu)) ?? "", ahk: true);
+        var bar = new Panel { Dock = DockStyle.Bottom, Height = 30, BackColor = Bg };
+        var check = new Button
         {
-            Dock = DockStyle.Fill, Multiline = true, AcceptsReturn = true, AcceptsTab = true,
-            ScrollBars = ScrollBars.Both, WordWrap = false,
-            BackColor = Color.FromArgb(37, 37, 38), ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
-            Font = new Font("Consolas", 9.5f),
-            Text = (Safe(() => get(emu)) ?? "").Replace("\r\n", "\n").Replace("\n", "\r\n"),
+            Text = "Check syntax", Location = new Point(0, 3), Size = new Size(110, 24),
+            BackColor = Panel2, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
         };
-        p.Controls.Add(tb);
+        check.FlatAppearance.BorderColor = Color.FromArgb(64, 64, 68);
+        var status = new Label
+        {
+            Text = "", AutoSize = false, Location = new Point(118, 7), Size = new Size(500, 20),
+            ForeColor = SubFg, BackColor = Bg, AutoEllipsis = true,
+        };
+        check.Click += (_, _) =>
+        {
+            var form = p.FindForm();
+            if (form != null) form.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var (ok, msg) = Rules.Scripting.AhkScriptEngine.Check(tb.Text, withPrelude: false);
+                status.ForeColor = ok ? Color.FromArgb(120, 190, 120) : Color.FromArgb(230, 120, 110);
+                status.Text = msg.ReplaceLineEndings("  ");
+                new ToolTip().SetToolTip(status, msg);
+            }
+            finally { if (form != null) form.Cursor = Cursors.Default; }
+        };
+        bar.Controls.Add(check); bar.Controls.Add(status);
+        p.Controls.Add(tb); p.Controls.Add(bar);
         w.AddSection(title, p, () => Set(() => set(emu, tb.Text.Replace("\r\n", "\n"))));
     }
 

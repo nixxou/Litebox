@@ -177,7 +177,13 @@ internal static class AhkScriptEngine
     /// interpreter LOADS the script (full syntax pass, errors on stderr via /ErrorStdOut) and
     /// exits before the auto-execute section runs. Verified on the 1.1.24 exe LaunchBox ships:
     /// valid → exit 0 and nothing executed, broken → exit 2 with the line and message.</summary>
-    public static (bool Ok, string Message) Check(string body)
+    public static (bool Ok, string Message) Check(string body) => Check(body, withPrelude: true);
+
+    /// <summary>Same check, prelude optional: the RULE dialogs validate prelude + body (the script
+    /// will really run that way); the EMULATOR script sections validate the BARE text — those are
+    /// LaunchBox's own verbatim scripts, nothing is ever prepended, and error line numbers must
+    /// match what the user sees.</summary>
+    public static (bool Ok, string Message) Check(string body, bool withPrelude)
     {
         if (string.IsNullOrWhiteSpace(body)) return (true, "(empty)");
         string? exe = ExePath();
@@ -188,7 +194,7 @@ internal static class AhkScriptEngine
         try
         {
             var d = new AhkScriptData("emu.exe", "", "emu.exe", "", "", "", "", "", "", true);
-            File.WriteAllText(scriptPath, BuildPrelude(d) + body, new UTF8Encoding(true));
+            File.WriteAllText(scriptPath, withPrelude ? BuildPrelude(d) + body : body, new UTF8Encoding(true));
             var psi = new ProcessStartInfo(exe, $"/ErrorStdOut /iLib nul \"{scriptPath}\"")
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
             using var p = Process.Start(psi)!;

@@ -349,6 +349,7 @@ internal sealed class VariablesDialog : LiteBoxForm
         }
         void Bind()
         {
+            if (_binding) return;   // re-entry from Commit's guarded list rewrite — not a user selection
             _binding = true;
             var v = _list.SelectedIndex >= 0 && _list.SelectedIndex < _vars.Count ? _vars[_list.SelectedIndex] : null;
             name.Text = v?.Name ?? ""; source.Text = v?.Source ?? "cmd";
@@ -359,10 +360,22 @@ internal sealed class VariablesDialog : LiteBoxForm
         void Commit()
         {
             if (_binding || _list.SelectedIndex < 0 || _list.SelectedIndex >= _vars.Count) return;
-            var v = _vars[_list.SelectedIndex];
+            int ix = _list.SelectedIndex;
+            var v = _vars[ix];
             v.Name = name.Text.Trim(); v.Source = source.Text.Trim();
             v.Pattern = pattern.Text; v.Value = value.Text; v.Fallback = fallback.Text;
-            _list.Items[_list.SelectedIndex] = v.Name.Length > 0 ? v.Name : "(unnamed)";
+            // Rewriting the SELECTED item clears the selection for a beat → SelectedIndexChanged
+            // fires with -1 → Bind() disables the fields — and disabling the focused textbox THROWS
+            // THE FOCUS to the next control (the sandbox). Guard the rewrite and re-select silently
+            // so typing in the token field keeps its caret. Only rewrite when the label changed.
+            string label = v.Name.Length > 0 ? v.Name : "(unnamed)";
+            if ((string)_list.Items[ix] != label)
+            {
+                _binding = true;
+                _list.Items[ix] = label;
+                _list.SelectedIndex = ix;
+                _binding = false;
+            }
             Sandbox();
         }
         name.TextChanged += (_, _) => Commit();

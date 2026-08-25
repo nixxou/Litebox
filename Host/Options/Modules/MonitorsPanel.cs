@@ -489,6 +489,22 @@ internal static class MonitorsPanel
             _gpuScaleDev = ModulePanelKit.Combo(dpiS, readOnly, 240);
             _audioDevice = ModulePanelKit.Combo(dpiS, readOnly, 300);
 
+            // The GPU combos are POPULATED here, not in BuildGpuGroup: that group is only BUILT
+            // when NVIDIA applies are on (line ~737), but Bind() and Commit() touch these combos
+            // unconditionally. On a fresh install (MonitorNvidiaApply absent = OFF) the group was
+            // skipped, the combos stayed EMPTY, and Bind's SelectedIndex = 0 threw
+            // ArgumentOutOfRange the moment the module was enabled — and Commit would have wiped a
+            // profile's stored GPU settings (SelectedIndex -1 reads as "clear"). Items always
+            // exist now; only the UI visibility stays conditional.
+            _gpuFormat.Items.AddRange(new object[] { "(leave unchanged)", "RGB", "YCbCr444", "YCbCr422", "YCbCr420" });
+            _gpuDepth.Items.AddRange(new object[] { "(leave unchanged)", "8 bpc", "10 bpc", "12 bpc" });
+            _gpuRange.Items.AddRange(new object[] { "(leave unchanged)", "Full", "Limited" });
+            _gpuScaleMode.Items.AddRange(new object[] { "(leave unchanged)", "Aspect ratio", "Full-screen (stretch)", "No scaling (centered)", "Integer scaling" });
+            _gpuScaleDev.Items.AddRange(new object[] { "Display", "GPU" });
+            _gpuVrr.Items.AddRange(new object[] { "(leave unchanged)", "Off", "Fullscreen only", "Fullscreen and windowed" });
+            foreach (var c in new[] { _gpuFormat, _gpuDepth, _gpuRange, _gpuScaleMode, _gpuScaleDev, _gpuVrr })
+                c.SelectedIndex = 0;
+
             Root = BuildRoot();
             ReloadList();
             if (_list.Items.Count > 0) _list.SelectedIndex = 0; else Bind(null);
@@ -860,39 +876,27 @@ internal static class MonitorsPanel
                  + "is driven by an NVIDIA card; on any other GPU the profile skips them and says so."));
 
             G(GCap("Output color format"));
-            _gpuFormat.Items.AddRange(new object[] { "(leave unchanged)", "RGB", "YCbCr444", "YCbCr422", "YCbCr420" });
-            _gpuFormat.SelectedIndex = 0;
             _gpuFormat.SelectedIndexChanged += (_, _) => Commit();
             G(_gpuFormat, 12);
 
             G(GCap("Output color depth"));
-            _gpuDepth.Items.AddRange(new object[] { "(leave unchanged)", "8 bpc", "10 bpc", "12 bpc" });
-            _gpuDepth.SelectedIndex = 0;
             _gpuDepth.SelectedIndexChanged += (_, _) => Commit();
             G(_gpuDepth, 12);
 
             G(GCap("Output dynamic range"));
-            _gpuRange.Items.AddRange(new object[] { "(leave unchanged)", "Full", "Limited" });
-            _gpuRange.SelectedIndex = 0;
             _gpuRange.SelectedIndexChanged += (_, _) => Commit();
             G(_gpuRange, 12);
 
             G(GCap("Scaling: how below-native content fills the panel, and who does the work — the same "
                  + "Mode + Scaling Device pair as the NVIDIA app's per-display Scaling panel."));
-            _gpuScaleMode.Items.AddRange(new object[] { "(leave unchanged)", "Aspect ratio", "Full-screen (stretch)", "No scaling (centered)", "Integer scaling" });
-            _gpuScaleMode.SelectedIndex = 0;
             _gpuScaleMode.SelectedIndexChanged += (_, _) => { Sync(); Commit(); };
             G(_gpuScaleMode, 12);
             G(GCap("Scaling device"));
-            _gpuScaleDev.Items.AddRange(new object[] { "Display", "GPU" });
-            _gpuScaleDev.SelectedIndex = 0;
             _gpuScaleDev.SelectedIndexChanged += (_, _) => Commit();
             G(_gpuScaleDev, 12);
 
             G(GCap("G-Sync / VRR — DRIVER-WIDE, one value for the whole machine, not just this monitor. "
                  + "Put back by the game-exit and restore snapshots like everything else."));
-            _gpuVrr.Items.AddRange(new object[] { "(leave unchanged)", "Off", "Fullscreen only", "Fullscreen and windowed" });
-            _gpuVrr.SelectedIndex = 0;
             _gpuVrr.SelectedIndexChanged += (_, _) => Commit();
             G(_gpuVrr, 12);
 

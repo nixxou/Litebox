@@ -19,6 +19,20 @@ internal static class RulePipeline
 {
     private const string Tag = "rules";
 
+    /// <summary>Args an ACTION generated during this walk and flagged for the final strip —
+    /// BigBoxProfile's argsToFilterOut (the HID detector's "force remove" per device type): the
+    /// generated argument is visible to every downstream rule's probe, then removed before launch.
+    /// Thread-static and scoped to one pipeline walk; actions add via AddDynamicMarker.</summary>
+    [ThreadStatic] private static List<string>? _dynamicMarkers;
+
+    /// <summary>For actions: flags one generated argument for the end-of-pipeline strip (lowercased,
+    /// whole-argument match — same normalization as RemoveFilter markers). No-op outside a walk.</summary>
+    internal static void AddDynamicMarker(string arg)
+    {
+        string key = arg.ToLowerInvariant().Trim();
+        if (_dynamicMarkers != null && !_dynamicMarkers.Contains(key)) _dynamicMarkers.Add(key);
+    }
+
     /// <summary>Runs the entity's rules (exclusive resolve) over the launch command. Returns the
     /// exe and arguments to spawn with — unchanged when no rule applies or the module is off. The
     /// exe travels through the pipeline since ChangeExe: an action may retarget it, and Spawn's
@@ -37,6 +51,9 @@ internal static class RulePipeline
     {
         var cmd = new Actions.RuleCmd(exePath, args);
         var removeMarkers = new List<string>();
+        _dynamicMarkers = removeMarkers;   // actions may flag their own generated args for the strip
+        try
+        {
         foreach (var rule in rules)
         {
             if (!rule.Enabled || !rule.IsConfigured) continue;
@@ -60,6 +77,8 @@ internal static class RulePipeline
             }
             catch (Exception ex) { LbLog.Warn(Tag, $"{rule.Type} failed ({ex.Message}) — rule skipped"); }
         }
+        }
+        finally { _dynamicMarkers = null; }
 
         if (removeMarkers.Count > 0)
         {
@@ -111,6 +130,9 @@ internal static class RulePipeline
         var entryResults = new Dictionary<ProbeSignature, bool>();
 
         var removeMarkers = new List<string>();
+        _dynamicMarkers = removeMarkers;   // example channel: same contract (HID's "marker only" args)
+        try
+        {
         foreach (var rule in rules)
         {
             if (!rule.Enabled || !rule.IsConfigured)
@@ -142,6 +164,8 @@ internal static class RulePipeline
             catch { /* the example never breaks the page */ }
             trace.Add(new RuleTrace(fired ? TraceState.Fired : TraceState.Refused, broken));
         }
+        }
+        finally { _dynamicMarkers = null; }
 
         var kept = RuleArgs.Split(cmd.Args)
             .Where(a => !removeMarkers.Contains(a.ToLowerInvariant().Trim()));

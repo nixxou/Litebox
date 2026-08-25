@@ -113,6 +113,33 @@
     <!-- BouncyCastle: LaunchBox ships it in Core and uses it for its settings cipher (Rijndael-256/CBC/PKCS7).
          Compile-only (Private=false) — resolved from Core at runtime, version-agnostic like the refs above. Lets
          LiteBox read/write LB's encrypted settings (EmuMovies password, …) in the exact same format. -->
+    <!-- HID device detector (Launch rules): DirectInput via the SharpDX 4.2.0 LaunchBox ITSELF ships
+         in Core (same version BigBoxProfile bundled) - Private=false, we deploy NOTHING and must not:
+         our own copy would clobber LaunchBox's. The other three are OUR bundled copies of the exact
+         assemblies BigBoxProfile used (HidSharp 2.1.0, ppy.SDL2-CS 1.0.82, 32feet 3.5) - compiled
+         against thirdparty\hid\, resolved at runtime from <LB>\ThirdParty\Hid by the lazy
+         AssemblyLoadContext hook in Host\Rules\Hid\HidThirdParty (deployed there by NativeInstaller,
+         along with the native SDL2.dll 2.0.14). -->
+    <Reference Include="SharpDX">
+      <HintPath>$(Lb10Root)\Core\SharpDX.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SharpDX.DirectInput">
+      <HintPath>$(Lb10Root)\Core\SharpDX.DirectInput.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="HidSharp">
+      <HintPath>thirdparty\hid\HidSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SDL2-CS">
+      <HintPath>thirdparty\hid\SDL2-CS.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="InTheHand.Net.Personal">
+      <HintPath>thirdparty\hid\InTheHand.Net.Personal.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="BouncyCastle.Crypto">
       <HintPath>..\..\..\LB\Core\BouncyCastle.Crypto.dll</HintPath>
       <Private>false</Private>
@@ -325,6 +352,10 @@
     <EmbeddedResource Include="thirdparty\VCRUNTIME140_1.dll.api"><LogicalName>natives/VCRUNTIME140_1.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\steam_api64.dll.api"><LogicalName>natives/steam_api64.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\pdfium.dll.api"><LogicalName>natives/pdfium.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\hid\SDL2.dll"><LogicalName>natives/SDL2.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\hid\SDL2-CS.dll"><LogicalName>natives/SDL2-CS.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\hid\HidSharp.dll"><LogicalName>natives/HidSharp.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\hid\InTheHand.Net.Personal.dll"><LogicalName>natives/InTheHand.Net.Personal.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\chdman.exe"><LogicalName>natives/chdman.exe</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\DolphinTool.exe"><LogicalName>natives/DolphinTool.exe</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\RamDiskHelper.exe"><LogicalName>natives/RamDiskHelper.exe</LogicalName></EmbeddedResource>

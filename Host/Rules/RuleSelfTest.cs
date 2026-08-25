@@ -321,6 +321,61 @@ internal static class RuleSelfTest
             finally { try { System.IO.Directory.Delete(croot, recursive: true); } catch { } }
         }
 
+        // ── HID device detector: matcher/quota/%NUM%/marker logic on INJECTED backend data ──
+        {
+            Hid.HidInfoCache.InjectForTest(
+                hidSharp: "FakePad<>1118<>767<>\\\\?\\hid#fake1\r\nOtherThing<>1<>2<>\\\\?\\hid#fake2\r\n",
+                sdl: "SDL0<>Fake Lightgun A<>ABC123<>SDL2.SDL+SDL_JoystickGUID<><>030000001234<>VendorID=0x1234<>ProductID=0x0001\r\n"
+                   + "SDL1<>Fake Lightgun B<>DEF456<>SDL2.SDL+SDL_JoystickGUID<><>030000005678<>VendorID=0x5678<>ProductID=0x0002\r\n"
+                   + "SDL2<>Fake Lightgun B<>DEF456<>SDL2.SDL+SDL_JoystickGUID<><>030000005678<>VendorID=0x5678<>ProductID=0x0002\r\n");
+
+            var gunMatcher = new Hid.HidMatcher
+            {
+                RegexToMatch = @"SDL(\d+)<>Fake Lightgun", Suffix = @"\1",
+                DeviceType = "lightgun", UseSdl = true, MaxMatch = 0,
+            };
+            Expect("hid matcher: \\1 splice over injected SDL lines, MaxMatch 0 = all",
+                string.Join("|", gunMatcher.Match("") ?? Array.Empty<string>()) == "0|1|2");
+
+            var uniqueMatcher = new Hid.HidMatcher
+            {
+                RegexToMatch = @"SDL\d+<>(Fake Lightgun \w)", Suffix = @"\1",
+                DeviceType = "lightgun", UseSdl = true, MaxMatch = 0, UniqueMatch = true,
+            };
+            Expect("hid matcher: UniqueMatch collapses duplicate suffixes",
+                string.Join("|", uniqueMatcher.Match("") ?? Array.Empty<string>()) == "Fake Lightgun A|Fake Lightgun B");
+
+            Expect("hid matcher: no match returns null",
+                new Hid.HidMatcher { RegexToMatch = "nothere", UseSdl = true }.Match("") == null);
+
+            // End-to-end: two buckets, quotas, %NUM%, final order controller-first, marker strip.
+            var settings = new Actions.HidDetectSettings
+            {
+                NumLightgun = 2, PrefixLightgun = "--lightgun%NUM%=", ForceRemoveLightgun = false,
+                NumController = 4, PrefixController = "--pad%NUM%=", ForceRemoveController = true,
+                Matchers = new List<Hid.HidMatcher>
+                {
+                    new() { RegexToMatch = @"SDL(\d+)<>Fake Lightgun", Suffix = @"\1", DeviceType = "lightgun", UseSdl = true, MaxMatch = 0 },
+                    new() { RegexToMatch = @"(FakePad)<>1118", Suffix = @"\1", DeviceType = "controller", UseHidSharp = true },
+                },
+            };
+            var hidRule = new LaunchRule { Type = LaunchRule.TypeHidDetect, HidData = settings.Serialize() };
+            var seesMarker = Sfx("--saw-pad", asArg: true);
+            seesMarker.Filter = "--pad1=fakepad";
+            var (_, outArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { hidRule, seesMarker }, "emu.exe", "\"C:\\roms\\game.zip\"");
+            Expect("hid detect: lightgun quota 2 of 3 matches, %NUM% per bucket, marker arg visible downstream then stripped",
+                outArgs == "C:\\roms\\game.zip --lightgun1=0 --lightgun2=1 --saw-pad");
+
+            var previewOut = RulePipeline.PreviewExample(new List<LaunchRule> { hidRule, seesMarker },
+                "emu.exe \"C:\\roms\\game.zip\"");
+            Expect("hid detect: the example channel computes the same line",
+                previewOut == "emu.exe C:\\roms\\game.zip --lightgun1=0 --lightgun2=1 --saw-pad");
+
+            Expect("hid detect: no matchers = NOT CONFIGURED",
+                !new LaunchRule { Type = LaunchRule.TypeHidDetect }.IsConfigured
+                && hidRule.IsConfigured);
+        }
+
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
         //    the rom argument) ──
         {

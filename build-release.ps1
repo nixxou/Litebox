@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   build-release.ps1 - builds the LiteBox release artifacts. See BUILD-RELEASE.md for the full explanation.
 
@@ -64,6 +64,14 @@ $payload = @(
   'MSVCP140.dll.api','VCRUNTIME140.dll.api','VCRUNTIME140_1.dll.api','steam_api64.dll.api','pdfium.dll.api',
   'onnxruntime.dll.api','DirectML.dll.api','mobilenetv3s_embed.onnx'
 )
+# HID detector deps: stored in the repo under thirdparty\hid\ with their REAL dll names (they are
+# also compile-time references), shipped loose renamed to the .api payload names NativeInstaller reads.
+$payloadHid = @{
+  'hid\SDL2.dll'                   = 'SDL2.dll.api'
+  'hid\SDL2-CS.dll'                = 'SDL2-CS.dll.api'
+  'hid\HidSharp.dll'               = 'HidSharp.dll.api'
+  'hid\InTheHand.Net.Personal.dll' = 'InTheHand.Net.Personal.dll.api'
+}
 
 # Native parental payload (WS5/WS6): the ASI + winhttp loader + the write-guard plugin + Harmony, each .api.
 # Built by native\assemble-payload.ps1 into native\payload\ (run it after building the two native projects).
@@ -190,6 +198,11 @@ foreach ($t in $targets) {
     $src = Join-Path $thirdparty $p
     if (-not (Test-Path $src)) { throw "payload file missing: $src" }
     Copy-Item $src (Join-Path $tpDir $p)
+  }
+  foreach ($p in $payloadHid.Keys) {
+    $src = Join-Path $thirdparty $p
+    if (-not (Test-Path $src)) { throw "payload file missing: $src" }
+    Copy-Item $src (Join-Path $tpDir $payloadHid[$p])
   }
   # Native parental payload (.api) LOOSE under litebox\parental-native\ (extracts to Core\litebox\parental-native\).
   # Shipped in BOTH zips: the write-guard is dual-targeted (net9 + net10 builds), and LiteBox deploys the one

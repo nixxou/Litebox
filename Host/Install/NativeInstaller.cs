@@ -1,4 +1,4 @@
-// Single owner of native-payload deployment into <LB>\ThirdParty\… for the LiteBox host.
+﻿// Single owner of native-payload deployment into <LB>\ThirdParty\… for the LiteBox host.
 //
 // The payload = the native tools LiteBox needs (RAHasher + runtime deps, Everything64, Magick.Native,
 // steam_api64). Its source depends on how the exe was published:
@@ -41,6 +41,12 @@ internal static class NativeInstaller
         ("VCRUNTIME140_1.dll.api",        "RetroAchievements", "VCRUNTIME140_1.dll"),
         ("steam_api64.dll.api",           "Steam",             "steam_api64.dll"),
         ("pdfium.dll.api",                "Pdfium",            "pdfium.dll"),        // LiteBox-only: PDF document thumbnails
+        // HID device detector (Launch rules): the exact assemblies BigBoxProfile used, loaded from
+        // ThirdParty\Hid by HidThirdParty's resolver (managed) / full-path preload (native SDL2).
+        ("SDL2.dll.api",                  "Hid",               "SDL2.dll"),
+        ("SDL2-CS.dll.api",               "Hid",               "SDL2-CS.dll"),
+        ("HidSharp.dll.api",              "Hid",               "HidSharp.dll"),
+        ("InTheHand.Net.Personal.dll.api","Hid",               "InTheHand.Net.Personal.dll"),
         // ROM extractor tools (the plugin bundled these in its own thirdparty): disc-image conversion +
         // the elevated RAM-disk mount helper. Resolved by RomToolRunner / ArchiveRamDisk from
         // ThirdParty\RomExtractor[\ramdisk].
@@ -61,7 +67,7 @@ internal static class NativeInstaller
     // ThirdParty sub-folders that are LiteBox-only (not shared with ExtendDB) — a refresh overwrites them
     // freely instead of prompting. The rest (ExtendDB / RetroAchievements / Everything) are shared.
     private static bool IsLiteBoxOnlySub(string sub)
-        => sub is "Steam" or "Pdfium" or "ImageDedup" || sub.StartsWith("RomExtractor", OIC);
+        => sub is "Steam" or "Pdfium" or "ImageDedup" or "Hid" || sub.StartsWith("RomExtractor", OIC);
 
     // ── Uninstall support: the deployed ThirdParty targets, split by ownership (single source of truth) ──
     private static string TopSub(string sub) => sub.Split('\\', '/')[0];

@@ -60,7 +60,7 @@ internal static class RulesPanel
 
         Row(ModulePanelKit.Caption(
             "Actions are ported from BigBoxProfile one by one, each verified against the original before "
-            + "the next lands. Available today: Prefix and Suffix (prepend / append), Change exe, Change rom path (relocation through prioritized folders), Replace (search/replace on the line, literal or regex, with an extraction-variables system), and Replace in file (rewrite a config file right before launch), and Create file (write a file — path and content take variables).", dpiS, 620), S(48), 18);
+            + "the next lands. Available today: Prefix and Suffix (prepend / append), Change exe, Change rom path (relocation through prioritized folders), Replace (search/replace on the line, literal or regex, with an extraction-variables system), and Replace in file (rewrite a config file right before launch), Create file (write a file — path and content take variables), and HID device detector (scans the plugged devices through the same libraries emulators read and appends one argument per matched device).", dpiS, 620), S(48), 18);
 
         return p;
     }

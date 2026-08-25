@@ -574,6 +574,10 @@ internal static class RuleSelfTest
 
             if (Scripting.AhkScriptEngine.IsAvailable(v1: true))
             {
+                Expect("ahk: v1 syntax check passes a valid script without executing it",
+                    Scripting.AhkScriptEngine.Check(v1: true, "x := 1\nArgs := Args . \" ok\"").Ok);
+                Expect("ahk: v1 syntax check rejects a broken script with a message",
+                    !Scripting.AhkScriptEngine.Check(v1: true, "oops((").Ok);
                 var ahkRule = new LaunchRule
                 {
                     Type = LaunchRule.TypeAhkScript,

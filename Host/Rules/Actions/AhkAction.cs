@@ -340,7 +340,8 @@ EIGHT EXAMPLES (v1.1 syntax — the default interpreter)
 NOTES
   • 'Export .ahk…' copies a STANDALONE script: dummy prelude + your body between
     markers + a MsgBox showing the resulting line. Run it directly to test.
-  • 'Check syntax' uses v2's /validate; v1 has no validate mode — use the export.
+  • 'Check syntax' validates WITHOUT executing: v2's /validate, v1's /iLib load-only pass —
+     both report the exact line and message of the first error.
   • The C# rule is the richer tool (HID objects, media, JSON/XML): reach for AHK
     when you want AHK's strengths — Send, hotkeys, window management, residency.";
 }

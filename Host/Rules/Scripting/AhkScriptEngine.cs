@@ -179,22 +179,25 @@ internal static class AhkScriptEngine
         catch (Exception ex) { return (false, ex.Message, null); }
     }
 
-    /// <summary>Syntax check. v2 has a real /validate switch; v1 has none — running the script to
-    /// find out is not a "check", so v1 answers honestly.</summary>
+    /// <summary>Syntax check, both dialects, without executing anything: v2 has the /validate
+    /// switch; v1 uses the classic "/iLib nul" trick — the interpreter LOADS the script (full
+    /// syntax pass, errors on stderr via /ErrorStdOut) and exits before the auto-execute section
+    /// runs. Verified on the 1.1.24 exe LaunchBox ships: valid → exit 0 and nothing executed,
+    /// broken → exit 2 with the line and message.</summary>
     public static (bool Ok, string Message) Check(bool v1, string body)
     {
         if (string.IsNullOrWhiteSpace(body)) return (true, "(empty)");
         string? exe = ExePath(v1);
         if (exe == null) return (false, MissingMessage(v1));
-        if (v1) return (true, "v1 has no syntax-check mode — test through the exported .ahk");
 
         string scriptPath = Path.Combine(Path.GetTempPath(), "litebox-rules-ahk", Guid.NewGuid().ToString("N") + ".ahk");
         Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
         try
         {
             var d = new AhkScriptData("emu.exe", "", "emu.exe", "", "", "", "", "", "", true);
-            File.WriteAllText(scriptPath, BuildPrelude(d, false) + body, new UTF8Encoding(true));
-            var psi = new ProcessStartInfo(exe, $"/ErrorStdOut /validate \"{scriptPath}\"")
+            File.WriteAllText(scriptPath, BuildPrelude(d, v1) + body, new UTF8Encoding(true));
+            string switches = v1 ? "/ErrorStdOut /iLib nul" : "/ErrorStdOut /validate";
+            var psi = new ProcessStartInfo(exe, $"{switches} \"{scriptPath}\"")
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
             using var p = Process.Start(psi)!;
             string err = p.StandardError.ReadToEnd() + p.StandardOutput.ReadToEnd();

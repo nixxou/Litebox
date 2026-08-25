@@ -117,10 +117,10 @@ internal static class AhkScriptEngine
         try
         {
             File.WriteAllText(scriptPath, sb.ToString(), new UTF8Encoding(true));
-            var (exited, stderr, _) = Exec(exe, scriptPath, wait: true);
-            if (!exited) return (false, "", "", "timeout — script killed");
+            var (exited, exitCode, stderr, _) = Exec(exe, scriptPath, wait: true);
+            if (!exited) return (false, "", "", "timeout — script killed" + (stderr.Length > 0 ? " (" + stderr + ")" : ""));
             if (!File.Exists(outPath))
-                return (false, "", "", "no result" + (stderr.Length > 0 ? ": " + stderr : " (script exited before the epilogue?)"));
+                return (false, "", "", $"no result (exit {exitCode})" + (stderr.Length > 0 ? ": " + stderr : " — script exited before the epilogue?"));
             var lines = File.ReadAllLines(outPath);
             string newExe = lines.Length > 0 ? lines[0] : d.Exe;
             string newArgs = lines.Length > 1 ? string.Join(" ", lines[1..]) : "";
@@ -157,9 +157,14 @@ internal static class AhkScriptEngine
             File.WriteAllText(scriptPath, sb.ToString(), new UTF8Encoding(true));
             if (wait)
             {
-                var (exited, stderr, _) = Exec(exe, scriptPath, wait: true);
+                var (exited, exitCode, stderr, _) = Exec(exe, scriptPath, wait: true);
                 try { File.Delete(scriptPath); } catch { }
-                return exited ? (true, stderr, null) : (false, "timeout — script killed", null);
+                if (!exited) return (false, "timeout — script killed", null);
+                // A non-zero exit is a FAILED script (interpreter or runtime error) — reporting it
+                // as success let a broken setup/cleanup pass silently (the review's finding 4).
+                if (exitCode != 0)
+                    return (false, $"exit {exitCode}" + (stderr.Length > 0 ? ": " + stderr : ""), null);
+                return (true, "", null);
             }
             var p = Exec(exe, scriptPath, wait: false).Resident;
             // The temp .ahk stays while the script runs; swept on the next launch's writes.
@@ -187,31 +192,51 @@ internal static class AhkScriptEngine
             var psi = new ProcessStartInfo(exe, $"/ErrorStdOut /iLib nul \"{scriptPath}\"")
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
             using var p = Process.Start(psi)!;
-            string err = p.StandardError.ReadToEnd() + p.StandardOutput.ReadToEnd();
-            p.WaitForExit(TimeoutMs);
+            // Async reads + timed wait — the same no-hang pattern as Exec.
+            var errTask = p.StandardError.ReadToEndAsync();
+            var outTask = p.StandardOutput.ReadToEndAsync();
+            if (!p.WaitForExit(EffectiveTimeoutMs))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { }
+                return (false, "syntax check timed out");
+            }
+            string err = errTask.GetAwaiter().GetResult() + outTask.GetAwaiter().GetResult();
             return p.ExitCode == 0 ? (true, "OK") : (false, err.Trim().Length > 0 ? err.Trim() : "invalid script");
         }
         catch (Exception ex) { return (false, ex.Message); }
         finally { try { File.Delete(scriptPath); } catch { } }
     }
 
-    private static (bool Exited, string Stderr, Process? Resident) Exec(string exe, string scriptPath, bool wait)
+    /// <summary>Runs the interpreter. WAITED mode: stderr is read ASYNCHRONOUSLY while WaitForExit
+    /// carries the timeout — a synchronous ReadToEnd would block until the child dies and the
+    /// watchdog would never fire (the Codex review's finding: a MsgBox or a loop froze the launch
+    /// forever). On timeout the whole tree is killed. The exit code rides back so callers can tell
+    /// a script that DIED from one that ran (finding 4: silent side-effect failures).</summary>
+    private static (bool Exited, int ExitCode, string Stderr, Process? Resident) Exec(string exe, string scriptPath, bool wait)
     {
         var psi = new ProcessStartInfo(exe, $"/ErrorStdOut \"{scriptPath}\"")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
         var p = Process.Start(psi)!;
-        if (!wait) return (true, "", p);
-        string stderr = p.StandardError.ReadToEnd();
-        if (!p.WaitForExit(TimeoutMs))
+        if (!wait) return (true, 0, "", p);
+        var stderrTask = p.StandardError.ReadToEndAsync();
+        if (!p.WaitForExit(EffectiveTimeoutMs))
         {
             try { p.Kill(entireProcessTree: true); } catch { }
-            LbLog.Warn(Tag, "script still running after 10s — killed");
+            try { p.WaitForExit(2000); } catch { }   // let the streams close so the read completes
+            LbLog.Warn(Tag, $"script still running after {EffectiveTimeoutMs / 1000}s — killed");
+            string tail = stderrTask.Wait(1000) ? stderrTask.Result.Trim() : "";
             p.Dispose();
-            return (false, stderr, null);
+            return (false, -1, tail, null);
         }
+        string stderr = stderrTask.GetAwaiter().GetResult().Trim();
+        int exitCode = p.ExitCode;
         p.Dispose();
-        return (true, stderr.Trim(), null);
+        return (true, exitCode, stderr, null);
     }
+
+    /// <summary>Selftests shrink the watchdog so the timeout path is testable in seconds.</summary>
+    internal static int? TestTimeoutMs;
+    private static int EffectiveTimeoutMs => TestTimeoutMs ?? TimeoutMs;
 
     private const string MissingMessage = "AutoHotkey.exe not found (LaunchBox ships it at ThirdParty\\AutoHotkey)";
 }

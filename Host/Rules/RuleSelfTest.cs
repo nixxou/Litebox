@@ -577,6 +577,22 @@ internal static class RuleSelfTest
                     Scripting.AhkScriptEngine.Check("x := 1\nArgs := Args . \" ok\"").Ok);
                 Expect("ahk: the syntax check rejects a broken script with a message",
                     !Scripting.AhkScriptEngine.Check("oops((").Ok);
+
+                // The Codex findings, pinned: a never-ending script must be KILLED at the timeout
+                // (the old sync ReadToEnd blocked before the watchdog), and a script that DIES
+                // (non-zero exit) must come back as a failure, not a silent success.
+                Scripting.AhkScriptEngine.TestTimeoutMs = 1500;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var (tOk, _, _, tErr) = Scripting.AhkScriptEngine.RunTransform("Sleep, 60000",
+                    new Scripting.AhkScriptData("emu.exe", "", "emu.exe", "", "", "", "", "", "", false));
+                sw.Stop();
+                Expect("ahk: a never-ending script is killed at the watchdog, launch released",
+                    !tOk && tErr.Contains("timeout") && sw.Elapsed.TotalSeconds < 8);
+                var (sOk, sErr, _) = Scripting.AhkScriptEngine.RunSideEffect("ExitApp, 3",
+                    new Scripting.AhkScriptData("emu.exe", "", "emu.exe", "", "", "", "", "", "", false), wait: true);
+                Expect("ahk: a script dying with a non-zero exit is a FAILURE, not silence",
+                    !sOk && sErr.Contains("exit 3"));
+                Scripting.AhkScriptEngine.TestTimeoutMs = null;
                 var ahkRule = new LaunchRule
                 {
                     Type = LaunchRule.TypeAhkScript,

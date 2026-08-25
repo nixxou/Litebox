@@ -495,7 +495,12 @@ NOTES
   • The ""VS Code…"" button copies a SELF-CONTAINED .cs to the clipboard: your code between
     SCRIPT BODY markers, everything else mirrored as dummies with sample data — IntelliSense
     matches, `dotnet run` executes. Edit there, copy the body back.
-  • Runtime errors and timeouts (10 s) log to [script] and SKIP the rule — never the launch.
+  • A C# script is for IMMEDIATE actions: do the work, return. It runs IN LiteBox's process
+    (that is what buys the live objects), so the 10 s watchdog RELEASES THE LAUNCH but cannot
+    kill your code — a script that loops keeps running until LiteBox closes, and late side
+    effects still execute. Write terminating scripts; anything RESIDENT (hotkeys, overlays,
+    watchers) belongs to the AHK rule's resident mode, which is a real process we can kill.
+  • Runtime errors and timeouts log to [script] and SKIP the rule — never the launch.
   • The real/preview split is yours to honour: mirror what matters into the example slot.
   • Writing to Game/Emulator is possible but on you — LiteBox does not undo it.";
 }

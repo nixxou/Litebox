@@ -67,9 +67,16 @@ internal static class RulePipeline
 
     [ThreadStatic] internal static LaunchCtx? CurrentContext;
 
-    private static object? _pendingGame, _pendingEmulator, _pendingVersion;
+    // Thread-static like CurrentContext itself: SetLaunchEntities and Apply run back-to-back on the
+    // SAME launch thread, so the handoff never crosses threads — and process-wide statics would let
+    // two overlapping launches (however unlikely under the one-game-at-a-time model) swap or clear
+    // each other's entities (the Codex review's finding 3). One attribute closes the class of bug.
+    [ThreadStatic] private static object? _pendingGame;
+    [ThreadStatic] private static object? _pendingEmulator;
+    [ThreadStatic] private static object? _pendingVersion;
 
-    /// <summary>RunProcess, right before Apply: the entities the next real walk exposes to scripts.</summary>
+    /// <summary>RunProcess, right before Apply — same thread, by contract: the entities the next
+    /// real walk exposes to scripts.</summary>
     public static void SetLaunchEntities(object? game, object? emulator, object? version)
     { _pendingGame = game; _pendingEmulator = emulator; _pendingVersion = version; }
 

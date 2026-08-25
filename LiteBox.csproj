@@ -140,6 +140,26 @@
       <HintPath>thirdparty\hid\InTheHand.Net.Personal.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- C# script rules (Roslyn scripting 4.12): the four assemblies sleep in <LB>\ThirdParty\Roslyn
+         (NativeInstaller payload, resolved by RuleScriptEngine lazy ALC hook - nothing lands in Core).
+         Private=true so the BIN copy exists for the selftests; deploy-dev hostFiles does not ship
+         them to Core, on purpose. -->
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>thirdparty\roslyn\Microsoft.CodeAnalysis.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>thirdparty\roslyn\Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.Scripting">
+      <HintPath>thirdparty\roslyn\Microsoft.CodeAnalysis.Scripting.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp.Scripting">
+      <HintPath>thirdparty\roslyn\Microsoft.CodeAnalysis.CSharp.Scripting.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
     <Reference Include="BouncyCastle.Crypto">
       <HintPath>..\..\..\LB\Core\BouncyCastle.Crypto.dll</HintPath>
       <Private>false</Private>
@@ -356,6 +376,10 @@
     <EmbeddedResource Include="thirdparty\hid\SDL2-CS.dll"><LogicalName>natives/SDL2-CS.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\hid\HidSharp.dll"><LogicalName>natives/HidSharp.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\hid\InTheHand.Net.Personal.dll"><LogicalName>natives/InTheHand.Net.Personal.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\roslyn\Microsoft.CodeAnalysis.dll"><LogicalName>natives/Microsoft.CodeAnalysis.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\roslyn\Microsoft.CodeAnalysis.CSharp.dll"><LogicalName>natives/Microsoft.CodeAnalysis.CSharp.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\roslyn\Microsoft.CodeAnalysis.Scripting.dll"><LogicalName>natives/Microsoft.CodeAnalysis.Scripting.dll.api</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="thirdparty\roslyn\Microsoft.CodeAnalysis.CSharp.Scripting.dll"><LogicalName>natives/Microsoft.CodeAnalysis.CSharp.Scripting.dll.api</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\chdman.exe"><LogicalName>natives/chdman.exe</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\DolphinTool.exe"><LogicalName>natives/DolphinTool.exe</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="thirdparty\RamDiskHelper.exe"><LogicalName>natives/RamDiskHelper.exe</LogicalName></EmbeddedResource>

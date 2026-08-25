@@ -834,6 +834,8 @@ internal static class HostLaunch
             {
                 try
                 {
+                    // The live entities for C# script rules — consumed by the walk that follows.
+                    Rules.RulePipeline.SetLaunchEntities(game, emulator, selectedApp);
                     (fileName, args) = Rules.RulePipeline.Apply(fileName, args, SafeStr(() => emulator?.Id));
                 }
                 catch (Exception ex) { Console.WriteLine("[launch] rules error: " + ex.Message); }

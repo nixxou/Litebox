@@ -71,6 +71,10 @@ $payloadHid = @{
   'hid\SDL2-CS.dll'                = 'SDL2-CS.dll.api'
   'hid\HidSharp.dll'               = 'HidSharp.dll.api'
   'hid\InTheHand.Net.Personal.dll' = 'InTheHand.Net.Personal.dll.api'
+  'roslyn\Microsoft.CodeAnalysis.dll'                  = 'Microsoft.CodeAnalysis.dll.api'
+  'roslyn\Microsoft.CodeAnalysis.CSharp.dll'           = 'Microsoft.CodeAnalysis.CSharp.dll.api'
+  'roslyn\Microsoft.CodeAnalysis.Scripting.dll'        = 'Microsoft.CodeAnalysis.Scripting.dll.api'
+  'roslyn\Microsoft.CodeAnalysis.CSharp.Scripting.dll' = 'Microsoft.CodeAnalysis.CSharp.Scripting.dll.api'
 }
 
 # Native parental payload (WS5/WS6): the ASI + winhttp loader + the write-guard plugin + Harmony, each .api.

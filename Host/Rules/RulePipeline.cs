@@ -52,6 +52,27 @@ internal static class RulePipeline
         return batch;
     }
 
+    // ── the launch context (C# script rules) ─────────────────────────────────
+    //
+    // Scripts get the LIVE entities and the pre-rules line. RunProcess hands the entities in right
+    // before Apply; the walk itself records the original exe/args and whether this is the preview
+    // channel. Thread-static, scoped to one walk — null Game/Emulator on the page preview is a
+    // documented fact of life (the script guards with Preview).
+
+    // Entities are carried as OBJECTS on purpose: naming the SDK interfaces here would make
+    // ApplyRules' JIT load the plugin SDK in every context (the selftest harness has none) — the
+    // script layer types them back (dynamic) only when a script actually touches them.
+    internal sealed record LaunchCtx(object? Game, object? Emulator, object? Version,
+        string OriginalExe, string OriginalArgs, bool Preview);
+
+    [ThreadStatic] internal static LaunchCtx? CurrentContext;
+
+    private static object? _pendingGame, _pendingEmulator, _pendingVersion;
+
+    /// <summary>RunProcess, right before Apply: the entities the next real walk exposes to scripts.</summary>
+    public static void SetLaunchEntities(object? game, object? emulator, object? version)
+    { _pendingGame = game; _pendingEmulator = emulator; _pendingVersion = version; }
+
     /// <summary>Runs the entity's rules (exclusive resolve) over the launch command. Returns the
     /// exe and arguments to spawn with — unchanged when no rule applies or the module is off. The
     /// exe travels through the pipeline since ChangeExe: an action may retarget it, and Spawn's
@@ -72,6 +93,8 @@ internal static class RulePipeline
         var removeMarkers = new List<string>();
         _dynamicMarkers = removeMarkers;   // actions may flag their own generated args for the strip
         _afterLaunch = new List<Action>(); // ExecuteBefore may register post-exit cleanup (real walk only)
+        CurrentContext = new LaunchCtx(_pendingGame, _pendingEmulator, _pendingVersion, exePath, args, Preview: false);
+        _pendingGame = null; _pendingEmulator = null; _pendingVersion = null;   // one walk consumes them
         try
         {
         foreach (var rule in rules)
@@ -98,7 +121,7 @@ internal static class RulePipeline
             catch (Exception ex) { LbLog.Warn(Tag, $"{rule.Type} failed ({ex.Message}) — rule skipped"); }
         }
         }
-        finally { _dynamicMarkers = null; }
+        finally { _dynamicMarkers = null; CurrentContext = null; }
 
         if (removeMarkers.Count > 0)
         {
@@ -151,6 +174,7 @@ internal static class RulePipeline
 
         var removeMarkers = new List<string>();
         _dynamicMarkers = removeMarkers;   // example channel: same contract (HID's "marker only" args)
+        CurrentContext = new LaunchCtx(null, null, null, cmd.Exe, cmd.Args, Preview: true);
         try
         {
         foreach (var rule in rules)
@@ -185,7 +209,7 @@ internal static class RulePipeline
             trace.Add(new RuleTrace(fired ? TraceState.Fired : TraceState.Refused, broken));
         }
         }
-        finally { _dynamicMarkers = null; }
+        finally { _dynamicMarkers = null; CurrentContext = null; }
 
         var kept = RuleArgs.Split(cmd.Args)
             .Where(a => !removeMarkers.Contains(a.ToLowerInvariant().Trim()));

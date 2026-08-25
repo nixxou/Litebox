@@ -47,6 +47,11 @@ internal static class NativeInstaller
         ("SDL2-CS.dll.api",               "Hid",               "SDL2-CS.dll"),
         ("HidSharp.dll.api",              "Hid",               "HidSharp.dll"),
         ("InTheHand.Net.Personal.dll.api","Hid",               "InTheHand.Net.Personal.dll"),
+        // C# script rules: Roslyn scripting, resolved from ThirdParty\Roslyn by RuleScriptEngine.
+        ("Microsoft.CodeAnalysis.dll.api",                 "Roslyn", "Microsoft.CodeAnalysis.dll"),
+        ("Microsoft.CodeAnalysis.CSharp.dll.api",          "Roslyn", "Microsoft.CodeAnalysis.CSharp.dll"),
+        ("Microsoft.CodeAnalysis.Scripting.dll.api",       "Roslyn", "Microsoft.CodeAnalysis.Scripting.dll"),
+        ("Microsoft.CodeAnalysis.CSharp.Scripting.dll.api","Roslyn", "Microsoft.CodeAnalysis.CSharp.Scripting.dll"),
         // ROM extractor tools (the plugin bundled these in its own thirdparty): disc-image conversion +
         // the elevated RAM-disk mount helper. Resolved by RomToolRunner / ArchiveRamDisk from
         // ThirdParty\RomExtractor[\ramdisk].
@@ -67,7 +72,7 @@ internal static class NativeInstaller
     // ThirdParty sub-folders that are LiteBox-only (not shared with ExtendDB) — a refresh overwrites them
     // freely instead of prompting. The rest (ExtendDB / RetroAchievements / Everything) are shared.
     private static bool IsLiteBoxOnlySub(string sub)
-        => sub is "Steam" or "Pdfium" or "ImageDedup" or "Hid" || sub.StartsWith("RomExtractor", OIC);
+        => sub is "Steam" or "Pdfium" or "ImageDedup" or "Hid" or "Roslyn" || sub.StartsWith("RomExtractor", OIC);
 
     // ── Uninstall support: the deployed ThirdParty targets, split by ownership (single source of truth) ──
     private static string TopSub(string sub) => sub.Split('\\', '/')[0];

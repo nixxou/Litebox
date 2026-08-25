@@ -72,6 +72,7 @@ internal static class RuleActions
         new CopyFileAction(),
         new UseFileContentAction(),
         new MonitorProfileAction(),
+        new ScriptAction(),
     };
 
     public static IRuleAction? ByType(string type)

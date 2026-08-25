@@ -512,6 +512,51 @@ internal static class RuleSelfTest
             Actions.MonitorProfileAction.TestBypassModuleGate = false;
         }
 
+        // ── C# script rules: real compile+run (Roslyn from bin), mutation, real/example split ──
+        {
+            var script = new LaunchRule { Type = LaunchRule.TypeScript, ScriptReal = "Args = Args + \" --scripted\";" };
+            var (_, outArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { script }, "emu.exe", "game.zip");
+            RulePipeline.TakeAfterLaunch();
+            Expect("script: the real transform mutates Args through the pipeline",
+                outArgs == "game.zip --scripted");
+
+            script.ScriptExample = "Args = Args + \" --demo\";";
+            string preview = RulePipeline.PreviewExample(new List<LaunchRule> { script }, "emu.exe game.zip");
+            Expect("script: the preview runs the EXAMPLE slot, never the real one",
+                preview == "emu.exe game.zip --demo");
+
+            var broken = new LaunchRule { Type = LaunchRule.TypeScript, ScriptReal = "this is not C#" };
+            var (_, brokenArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { broken }, "emu.exe", "game.zip");
+            RulePipeline.TakeAfterLaunch();
+            Expect("script: a compile error skips the rule, line untouched", brokenArgs == "game.zip");
+
+            var original = new LaunchRule { Type = LaunchRule.TypeScript, ScriptReal = "Args = OriginalArgs;" };
+            var (_, origArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { P("-x"), original }, "emu.exe", "game.zip");
+            RulePipeline.TakeAfterLaunch();
+            Expect("script: OriginalArgs is the pre-rules line (the prefix is undone)",
+                origArgs == "game.zip");
+
+            // The Lb toolbox parses the backend dumps into clean objects (injected data).
+            Hid.HidInfoCache.InjectForTest(
+                hidSharp: "PadX<>1118<>767<>\\\\?\\hid#pad\r\n",
+                sdl: "SDL0<>Cool Pad<>ABC123<>SDL2.SDL+SDL_JoystickGUID<>SER9<>0300abcd<>VendorID=0x054C<>ProductID=0x09CC\r\n",
+                xinput: "XINPUT2<>Gamepad<>DEADBE<>VendorID=0x045E<>ProductID=0x02FF<>RevisionID=0x0001\r\n");
+            var g = new Scripting.RuleScriptGlobals { Exe = "emu.exe", Args = "" };
+            g.Lb = new Scripting.LbScriptApi(g, new LaunchRule());
+            var sdl = g.Lb.SdlDevices();
+            var xin = g.Lb.XInputSlots();
+            var hidd = g.Lb.HidDevices();
+            Expect("script: Lb.SdlDevices parses clean objects (no <> in sight)",
+                sdl.Count == 1 && sdl[0].Index == 0 && sdl[0].Name == "Cool Pad"
+                && sdl[0].Serial == "SER9" && sdl[0].Guid == "0300abcd"
+                && sdl[0].VendorId == 0x054C && sdl[0].ProductId == 0x09CC);
+            Expect("script: Lb.XInputSlots parses slot, subtype and hex ids",
+                xin.Count == 1 && xin[0].Slot == 2 && xin[0].SubType == "Gamepad"
+                && xin[0].VendorId == 0x045E && xin[0].RevisionId == 1);
+            Expect("script: Lb.HidDevices parses decimal ids",
+                hidd.Count == 1 && hidd[0].VendorId == 1118 && hidd[0].Path.Contains("hid#pad"));
+        }
+
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
         //    the rom argument) ──
         {

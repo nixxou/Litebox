@@ -39,6 +39,7 @@ internal sealed class LaunchRule
     public const string TypeCopyFile = "CopyFile";
     public const string TypeUseFileContent = "UseFileContent";
     public const string TypeMonitorProfile = "MonitorProfile";
+    public const string TypeScript = "Script";
 
     public string Type { get; set; } = TypePrefix;
     public bool Enabled { get; set; } = true;
@@ -105,6 +106,16 @@ internal sealed class LaunchRule
     /// <summary>MonitorProfile: apply the NVIDIA (NVAPI) parts for this launch even when the
     /// module's global NVAPI toggle is off.</summary>
     public bool MonitorNvapi { get; set; }
+    /// <summary>Script: transforms the line on the REAL channel (assign Exe/Args in the script).</summary>
+    public string ScriptReal { get; set; } = "";
+    /// <summary>Script: the EXAMPLE channel's transform (the preview runs THIS one, never Real).</summary>
+    public string ScriptExample { get; set; } = "";
+    /// <summary>Script: side effects before the spawn (probe-gated; line mutations ignored).</summary>
+    public string ScriptBefore { get; set; } = "";
+    /// <summary>Script: runs after the game exits (the after-launch batch).</summary>
+    public string ScriptAfter { get; set; } = "";
+    /// <summary>Script: run the Before script on a background task (BBP's runbeforebackground).</summary>
+    public bool ScriptBeforeBackground { get; set; }
     /// <summary>The rule's variables (JSON RuleVariable[] — see RuleVariables). Transverse: any
     /// action may consult them; today the two Replace actions do.</summary>
     public string VariablesData { get; set; } = "";

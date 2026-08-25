@@ -107,34 +107,30 @@ internal sealed class ScriptAction : IRuleAction
     public (Control Body, int Height, Action Save) BuildActionUi(LaunchRule r, float dpiS)
     {
         int S(int px) => (int)Math.Round(px * dpiS);
-        var body = new Panel { BackColor = LiteBoxTheme.Bg, Width = S(576) };
+        // Wide on purpose — this is a code editor, not a form field; the rule dialog follows the
+        // body's width (see RuleDialog).
+        var body = new Panel { BackColor = LiteBoxTheme.Bg, Width = S(880) };
 
         var intro = new Label
         {
             Text = "C# scripts (Roslyn). Assign Exe / Args to transform the line; Game, Emulator, Version,"
                  + " OriginalArgs, Preview and the Lb API (HID devices, monitor profiles, variables, log)"
                  + " are in scope — see the Documentation tab. Compiled once per session; 10 s watchdog.",
-            AutoSize = false, Location = new Point(0, S(2)), Size = new Size(S(574), S(50)),
+            AutoSize = false, Location = new Point(0, S(2)), Size = new Size(S(878), S(34)),
             ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
         };
         body.Controls.Add(intro);
 
         var tabs = new TabControl
         {
-            Location = new Point(0, S(54)), Size = new Size(S(574), S(330)),
+            Location = new Point(0, S(38)), Size = new Size(S(878), S(470)),
         };
         body.Controls.Add(tabs);
 
-        (TextBox Editor, TabPage Page) ScriptTab(string title, string code)
+        (RichTextBox Editor, TabPage Page) ScriptTab(string title, string code)
         {
             var page = new TabPage(title) { BackColor = LiteBoxTheme.Bg };
-            var editor = new TextBox
-            {
-                Multiline = true, WordWrap = false, AcceptsReturn = true, AcceptsTab = true,
-                ScrollBars = ScrollBars.Both, Font = new Font("Consolas", 9f),
-                Text = code, Dock = DockStyle.Fill,
-                BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
-            };
+            var editor = CodeEditorBox.CreateEditor(code);
             var bar = new Panel { Dock = DockStyle.Bottom, Height = S(30), BackColor = LiteBoxTheme.Bg };
             var check = new Button
             {
@@ -144,7 +140,7 @@ internal sealed class ScriptAction : IRuleAction
             check.FlatAppearance.BorderColor = Color.FromArgb(64, 64, 68);
             var status = new Label
             {
-                Text = "", AutoSize = false, Location = new Point(S(118), S(7)), Size = new Size(S(440), S(20)),
+                Text = "", AutoSize = false, Location = new Point(S(118), S(7)), Size = new Size(S(560), S(20)),
                 ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg, AutoEllipsis = true,
             };
             check.Click += (_, _) =>
@@ -179,19 +175,14 @@ internal sealed class ScriptAction : IRuleAction
         };
         // ride the before-tab's bottom bar, right side
         var beforeBar = (Panel)beforePage.Controls[1];
-        bg.Location = new Point(S(400), S(6));
+        bg.Location = new Point(S(690), S(6));
         beforeBar.Controls.Add(bg);
 
         var docPage = new TabPage("Documentation") { BackColor = LiteBoxTheme.Bg };
-        docPage.Controls.Add(new TextBox
-        {
-            Multiline = true, ReadOnly = true, WordWrap = false, ScrollBars = ScrollBars.Both,
-            Font = new Font("Consolas", 8.5f), Text = DocText, Dock = DockStyle.Fill,
-            BackColor = LiteBoxTheme.Bg, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
-        });
+        docPage.Controls.Add(CodeEditorBox.CreateDocView(DocText));
         tabs.TabPages.Add(docPage);
 
-        int h = S(54) + S(334);
+        int h = S(38) + S(474);
         body.Height = h;
         return (body, h, () =>
         {
@@ -245,8 +236,8 @@ THE Lb TOOLBOX
   Lb.ApplyMonitorProfile(""name"")    switch now; restored at game exit. No-op in Preview.
   Devices are queried ON DEMAND — a script that never asks never pays a scan.
 
-TEN EXAMPLES (fictional)
-------------------------
+TEN FICTIONAL EXAMPLES
+----------------------
 1) Append an argument for one game
      if (Game != null && Game.Title.Contains(""Duck Hunt"")) Args += "" --lightgun"";
 

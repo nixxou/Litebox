@@ -524,7 +524,9 @@ internal static class LaunchRulesPanel
             var actBox = new GroupBox
             {
                 Text = "Action", ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
-                Location = new Point(S(16), S(42)), Width = S(600), Height = bodyHeight + S(30),
+                Location = new Point(S(16), S(42)),
+                Width = Math.Max(S(600), body.Width + S(24)),   // wide bodies (script editors) widen the dialog
+                Height = bodyHeight + S(30),
             };
             body.Location = new Point(S(12), S(20));
             actBox.Controls.Add(body);
@@ -556,12 +558,13 @@ internal static class LaunchRulesPanel
 
             void Reflow()
             {
+                int width = Math.Max(S(640), actBox.Right + S(16));
                 when.Box.Location = new Point(S(16), actBox.Bottom + S(10));
                 never.Box.Location = new Point(S(16), when.Box.Bottom + S(10));
                 int by = never.Box.Bottom + S(14);
-                ok.Location = new Point(S(430), by);
-                cancel.Location = new Point(S(532), by);
-                ClientSize = new Size(S(640), by + S(40));
+                ok.Location = new Point(width - S(210), by);
+                cancel.Location = new Point(width - S(108), by);
+                ClientSize = new Size(width, by + S(40));
             }
             when.LayoutChanged += Reflow;
             never.LayoutChanged += Reflow;

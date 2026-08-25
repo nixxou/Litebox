@@ -130,7 +130,7 @@ internal sealed class ScriptAction : IRuleAction
         });
         var name = new TextBox
         {
-            Text = r.ScriptName, Location = new Point(S(170), S(38)), Width = S(400),
+            Text = r.ScriptName, Location = new Point(S(200), S(38)), Width = S(370),
             BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
         };
         body.Controls.Add(name);

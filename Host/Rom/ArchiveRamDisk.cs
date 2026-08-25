@@ -50,7 +50,23 @@ internal static class ArchiveRamDisk
     public static string ImDiskExe => Path.Combine(System32, "imdisk.exe");
     private static string SchTasks => Path.Combine(System32, "schtasks.exe");
 
-    public const string TaskName = "LiteBox_RomExtractor_RamDisk";
+    /// <summary>PER INSTALL, like the admin-launch bridge: the helper and its cfg already live under
+    /// this install's ThirdParty, so a globally-named task let install A answer install B's
+    /// IsTaskInstalled() and then run A's helper against A's cfg — B's mount request silently
+    /// ignored. The suffix is a stable FNV-1a of this install's Core path.</summary>
+    public static string TaskName => "LiteBox_RomExtractor_RamDisk_" + InstallTag;
+
+    private static string InstallTag
+    {
+        get
+        {
+            string core = AppContext.BaseDirectory.TrimEnd('\\', '/').ToLowerInvariant();
+            uint h = 2166136261;
+            foreach (char c in core) { h = (h ^ c) * 16777619; }
+            return h.ToString("x8");
+        }
+    }
+
     public static string HelperDir => Path.Combine(RomPaths.LbRoot, "ThirdParty", "RomExtractor", "ramdisk");
     public static string HelperExe => Path.Combine(HelperDir, "RamDiskHelper.exe");
     private static string CfgPath => Path.Combine(HelperDir, "ramdisk.cfg");
@@ -87,10 +103,21 @@ internal static class ArchiveRamDisk
         catch { return false; }
     }
 
-    /// <summary>True when the elevated mount task is registered.</summary>
+    /// <summary>True when THIS install's elevated mount task is registered AND still points at this
+    /// install's helper — a task left by a moved install reads as absent, so InstallTask
+    /// re-registers it on the right path instead of running the wrong helper.</summary>
     public static bool IsTaskInstalled()
     {
-        try { return RomToolRunner.Run(SchTasks, new[] { "/query", "/tn", TaskName }, default, "ramdisk-task") == 0; }
+        try
+        {
+            var psi = new ProcessStartInfo(SchTasks, $"/query /tn \"{TaskName}\" /v /fo LIST")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            using var p = Process.Start(psi)!;
+            string outp = p.StandardOutput.ReadToEnd();
+            p.StandardError.ReadToEnd();
+            p.WaitForExit(10000);
+            return p.ExitCode == 0 && outp.IndexOf(HelperExe, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
         catch { return false; }
     }
 

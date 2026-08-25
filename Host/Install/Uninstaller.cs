@@ -71,10 +71,12 @@ internal static class Uninstaller
         foreach (var dir in NativeInstaller.LiteBoxOnlySubDirs())
             sb.AppendLine($"rmdir /s /q \"{root}\\{dir}\" 2>nul");
 
-        // Always: THIS install's elevated admin-launch task (per-install name — other installs keep
-        // theirs). Needs elevation: it succeeds when the uninstall runs elevated and fails silently
-        // otherwise, leaving an inert entry pointing at a deleted exe.
+        // Always: THIS install's elevated tasks (per-install names — other installs keep theirs):
+        // the admin-launch bridge and the ROM-extractor RAM-disk mounter. Both need elevation to
+        // delete: they succeed when the uninstall runs elevated and fail silently otherwise,
+        // leaving inert entries pointing at deleted exes.
         sb.AppendLine($"schtasks /delete /tn \"{AdminLaunch.TaskName}\" /f >nul 2>&1");
+        sb.AppendLine($"schtasks /delete /tn \"{Rom.ArchiveRamDisk.TaskName}\" /f >nul 2>&1");
 
         // Always: the native parental payload the in-app button deploys ON DEMAND into Core + Plugins
         // (the ASI + winhttp loader in Core, the write-guard plugin folder). del/rmdir no-op when the

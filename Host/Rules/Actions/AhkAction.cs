@@ -1,9 +1,9 @@
 ﻿// Run AHK script — BigBoxProfile's ExecuteAHK on the C# rule's exact model: the same four slots
 // (transform real / transform example / before launch / after exit), a display name, the syntax-
 // colored editors, the documentation tab, and an export button producing a standalone testable
-// .ahk. Runs OUT-OF-PROCESS through the AutoHotkey v1.1 exe LaunchBox itself ships (ThirdParty\
-// AutoHotkey — no new payload), or a user-provided v2 exe in the same folder; see AhkScriptEngine
-// for the prelude/result contract. A background Before script is the resident case (hotkeys,
+// .ahk. Runs OUT-OF-PROCESS through the ONE interpreter that matters — the AutoHotkey v1.1 exe
+// LaunchBox itself ships (ThirdParty\AutoHotkey, no new payload); see AhkScriptEngine for the
+// prelude/result contract. A background Before script is the resident case (hotkeys,
 // overlays): left running during the game, killed by the after-launch batch when it exits.
 
 #nullable enable
@@ -38,7 +38,7 @@ internal sealed class AhkAction : IRuleAction
         if (r.AhkExample.Length > 0) slots.Add("example");
         if (r.AhkBefore.Length > 0) slots.Add("before" + (r.AhkBeforeBackground ? "(resident)" : ""));
         if (r.AhkAfter.Length > 0) slots.Add("after");
-        string label = $"AHK {(r.AhkV2 ? "v2" : "v1")} script: " + (slots.Count > 0 ? string.Join(" + ", slots) : "(empty)");
+        string label = "AHK script: " + (slots.Count > 0 ? string.Join(" + ", slots) : "(empty)");
         return r.AhkName.Length > 0 ? $"“{r.AhkName}” — {label}" : label;
     }
 
@@ -57,7 +57,7 @@ internal sealed class AhkAction : IRuleAction
     private static RuleCmd Transform(LaunchRule r, RuleCmd cmd, string body, bool preview)
     {
         if (body.Length == 0) return cmd;
-        var (ok, exe, args, error) = AhkScriptEngine.RunTransform(v1: !r.AhkV2, body, MakeData(cmd, preview));
+        var (ok, exe, args, error) = AhkScriptEngine.RunTransform(body, MakeData(cmd, preview));
         if (!ok) { LbLog.Warn(Tag, $"AHK {(preview ? "example" : "transform")} failed: {error} — line untouched"); return cmd; }
         return new RuleCmd(exe, args);
     }
@@ -75,7 +75,7 @@ internal sealed class AhkAction : IRuleAction
             var data = MakeData(cmd, preview: false);
             if (r.AhkBeforeBackground)
             {
-                var (ok, error, resident) = AhkScriptEngine.RunSideEffect(v1: !r.AhkV2, r.AhkBefore, data, wait: false);
+                var (ok, error, resident) = AhkScriptEngine.RunSideEffect(r.AhkBefore, data, wait: false);
                 if (!ok) LbLog.Warn(Tag, $"AHK before(resident) failed: {error}");
                 else if (resident != null)
                 {
@@ -90,18 +90,17 @@ internal sealed class AhkAction : IRuleAction
             }
             else
             {
-                var (ok, error, _) = AhkScriptEngine.RunSideEffect(v1: !r.AhkV2, r.AhkBefore, data, wait: true);
+                var (ok, error, _) = AhkScriptEngine.RunSideEffect(r.AhkBefore, data, wait: true);
                 if (!ok) LbLog.Warn(Tag, $"AHK before failed: {error}");
             }
         }
         if (r.AhkAfter.Length > 0)
         {
             var data = MakeData(cmd, preview: false);   // the line as this rule saw it
-            bool v2 = r.AhkV2;
             string body = r.AhkAfter;
             RulePipeline.RegisterAfterLaunch(() =>
             {
-                var (ok, error, _) = AhkScriptEngine.RunSideEffect(v1: !v2, body, data, wait: true);
+                var (ok, error, _) = AhkScriptEngine.RunSideEffect(body, data, wait: true);
                 if (!ok) LbLog.Warn(Tag, $"AHK after failed: {error}");
             });
         }
@@ -131,33 +130,19 @@ internal sealed class AhkAction : IRuleAction
         });
         var name = new TextBox
         {
-            Text = r.AhkName, Location = new Point(S(170), S(38)), Width = S(330),
+            Text = r.AhkName, Location = new Point(S(170), S(38)), Width = S(400),
             BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
         };
         body.Controls.Add(name);
 
-        var version = new ComboBox
+        bool ahkFound = AhkScriptEngine.IsAvailable();
+        body.Controls.Add(new Label
         {
-            Location = new Point(S(512), S(38)), Width = S(210), DropDownStyle = ComboBoxStyle.DropDownList,
-            BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
-        };
-        version.Items.Add("AutoHotkey v1.1 (LaunchBox's)");
-        version.Items.Add("AutoHotkey v2 (your exe)");
-        version.SelectedIndex = r.AhkV2 ? 1 : 0;
-        body.Controls.Add(version);
-        var avail = new Label
-        {
-            AutoSize = true, Location = new Point(S(728), S(41)), BackColor = LiteBoxTheme.Bg,
-        };
-        void SyncAvail()
-        {
-            bool ok = AhkScriptEngine.IsAvailable(v1: version.SelectedIndex == 0);
-            avail.Text = ok ? "interpreter found" : "interpreter MISSING";
-            avail.ForeColor = ok ? Color.FromArgb(120, 190, 120) : Color.FromArgb(220, 160, 90);
-        }
-        version.SelectedIndexChanged += (_, _) => SyncAvail();
-        SyncAvail();
-        body.Controls.Add(avail);
+            Text = ahkFound ? "AutoHotkey v1.1 (LaunchBox's) — found"
+                            : "LaunchBox's AutoHotkey.exe MISSING (ThirdParty\\AutoHotkey)",
+            AutoSize = true, Location = new Point(S(590), S(41)), BackColor = LiteBoxTheme.Bg,
+            ForeColor = ahkFound ? Color.FromArgb(120, 190, 120) : Color.FromArgb(220, 160, 90),
+        });
 
         var tabs = new TabControl
         {
@@ -193,7 +178,7 @@ internal sealed class AhkAction : IRuleAction
                 if (form != null) form.Cursor = Cursors.WaitCursor;
                 try
                 {
-                    var (ok, msg) = AhkScriptEngine.Check(version.SelectedIndex == 0, editor.Text);
+                    var (ok, msg) = AhkScriptEngine.Check(editor.Text);
                     status.ForeColor = ok ? Color.FromArgb(120, 190, 120) : Color.FromArgb(230, 120, 110);
                     status.Text = msg.ReplaceLineEndings("  ");
                     new ToolTip().SetToolTip(status, msg);
@@ -204,7 +189,7 @@ internal sealed class AhkAction : IRuleAction
             {
                 try
                 {
-                    Clipboard.SetText(BuildAhkScaffold(editor.Text, version.SelectedIndex == 0));
+                    Clipboard.SetText(BuildAhkScaffold(editor.Text));
                     status.ForeColor = Color.FromArgb(120, 190, 120);
                     status.Text = "Standalone .ahk copied — paste into a file, tune the sample values, run it; copy the body back.";
                 }
@@ -246,7 +231,6 @@ internal sealed class AhkAction : IRuleAction
         return (body, h, () =>
         {
             r.AhkName = name.Text.Trim();
-            r.AhkV2 = version.SelectedIndex == 1;
             r.AhkReal = real.Text;
             r.AhkExample = example.Text;
             r.AhkBefore = before.Text;
@@ -257,7 +241,7 @@ internal sealed class AhkAction : IRuleAction
 
     /// <summary>Standalone .ahk: the tab's body between SCRIPT BODY markers, a dummy prelude with
     /// sample values above, a MsgBox epilogue showing the resulting line — run it anywhere.</summary>
-    internal static string BuildAhkScaffold(string body, bool v1)
+    internal static string BuildAhkScaffold(string body)
     {
         var d = new AhkScriptData(
             @"C:\emulators\retroarch\retroarch.exe",
@@ -266,13 +250,10 @@ internal sealed class AhkAction : IRuleAction
             "-L \"cores\\snes.dll\" \"C:\\roms\\game.zip\"",
             "Sample Game", "Super Nintendo Entertainment System", "00000000-0000-0000-0000-000000000000",
             "RetroArch", "", true);
-        string epilogue = v1
-            ? "MsgBox % \"Exe = \" . Exe . \"`n\" . \"Args = \" . Args"
-            : "MsgBox(\"Exe = \" . Exe . \"`n\" . \"Args = \" . Args)";
-        return "; LiteBox AHK scaffold — tune the sample values, run this file with AutoHotkey "
-             + (v1 ? "v1.1" : "v2") + ",\r\n"
+        string epilogue = "MsgBox % \"Exe = \" . Exe . \"`n\" . \"Args = \" . Args";
+        return "; LiteBox AHK scaffold — tune the sample values, run this file with AutoHotkey v1.1,\r\n"
              + "; edit ONLY between the SCRIPT BODY markers, then copy that part back into LiteBox.\r\n"
-             + AhkScriptEngine.BuildPrelude(d, v1).ReplaceLineEndings("\r\n")
+             + AhkScriptEngine.BuildPrelude(d).ReplaceLineEndings("\r\n")
              + "; ==== SCRIPT BODY — copy back everything between these two markers ====\r\n"
              + (body.Length == 0 ? "; (empty script)" : body.ReplaceLineEndings("\r\n")) + "\r\n"
              + "; ==== END SCRIPT BODY ====\r\n"
@@ -284,8 +265,8 @@ internal sealed class AhkAction : IRuleAction
 
 Same model as the C# script rule, in AutoHotkey. Each tab is one script, run
 OUT-OF-PROCESS with the AutoHotkey v1.1 exe LaunchBox already ships (ThirdParty\
-AutoHotkey\AutoHotkey.exe) — or a v2 exe YOU drop in that same folder (AutoHotkey64.exe).
-Waited scripts are killed after 10 s; failures log to [ahk] and skip the rule.
+AutoHotkey\AutoHotkey.exe). Waited scripts are killed after 10 s; failures log to
+[ahk] and skip the rule.
 
 THE FOUR SLOTS
   Transform (real)     runs at launch. Assign Exe and/or Args — the assigned values ARE
@@ -303,7 +284,7 @@ WHAT A SCRIPT SEES (injected by the generated prelude)
   EmulatorTitle, VersionName
   Preview                      1 on the example channel, 0 at a real launch
 
-EIGHT EXAMPLES (v1.1 syntax — the default interpreter)
+EIGHT EXAMPLES (v1.1 syntax)
 ------------------------------------------------------
 1) Append an argument for one game
      if InStr(GameTitle, ""Duck Hunt"")
@@ -340,8 +321,8 @@ EIGHT EXAMPLES (v1.1 syntax — the default interpreter)
 NOTES
   • 'Export .ahk…' copies a STANDALONE script: dummy prelude + your body between
     markers + a MsgBox showing the resulting line. Run it directly to test.
-  • 'Check syntax' validates WITHOUT executing: v2's /validate, v1's /iLib load-only pass —
-     both report the exact line and message of the first error.
+  • 'Check syntax' validates WITHOUT executing (a load-only pass) and reports the exact
+     line and message of the first error.
   • The C# rule is the richer tool (HID objects, media, JSON/XML): reach for AHK
     when you want AHK's strengths — Send, hotkeys, window management, residency.";
 }

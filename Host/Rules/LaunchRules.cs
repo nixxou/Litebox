@@ -128,9 +128,6 @@ internal sealed class LaunchRule
     /// <summary>AhkScript: leave the Before script RUNNING during the game (hotkeys, overlays);
     /// killed when the game exits.</summary>
     public bool AhkBeforeBackground { get; set; }
-    /// <summary>AhkScript: run with AutoHotkey v2 (user-provided exe) instead of the v1.1
-    /// LaunchBox ships.</summary>
-    public bool AhkV2 { get; set; }
     /// <summary>AhkScript: the display name, like the C# rule's.</summary>
     public string AhkName { get; set; } = "";
     /// <summary>The rule's variables (JSON RuleVariable[] — see RuleVariables). Transverse: any

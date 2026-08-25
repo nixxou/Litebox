@@ -1,12 +1,11 @@
-// The AHK script engine — BigBoxProfile's ExecuteAHK, kept in its BETTER half only: BBP had two
+﻿// The AHK script engine — BigBoxProfile's ExecuteAHK, kept in its BETTER half only: BBP had two
 // modes (in-process AutoHotkey.Interop, and an AutoHotkeyU32.exe + temp-file + result-file mode);
 // ours is exclusively out-of-process, which buys everything the interop could not give — clean
 // x64, crash isolation, and a watchdog that can actually KILL a runaway script.
 //
-// NO new payload (Mehdi): LaunchBox itself ships AutoHotkey v1.1 at ThirdParty\AutoHotkey\
-// AutoHotkey.exe — the same exe our AhkScript (the emulator "Running AutoHotkey Script" parity)
-// already runs — so v1 is always available. v2 is optional: drop an AutoHotkey64.exe (v2) into
-// that same folder and the per-rule version switch lights up.
+// NO new payload and NO second interpreter (Mehdi): the ONE AutoHotkey that matters is the v1.1
+// LaunchBox itself ships at ThirdParty\AutoHotkey\AutoHotkey.exe — the same exe our AhkScript
+// (the emulator "Running AutoHotkey Script" parity) already runs. Everything here is that dialect.
 //
 // The contract mirrors the C# rule: a generated PRELUDE defines Exe, Args, OriginalExe,
 // OriginalArgs, GameTitle/GamePlatform/GameId, EmulatorTitle, VersionName, Preview (0/1); the
@@ -35,35 +34,28 @@ internal static class AhkScriptEngine
     private const string Tag = "ahk";
     private const int TimeoutMs = 10_000;
 
-    /// <summary>The interpreter homes, probed in order: the install's own ThirdParty\AutoHotkey
-    /// (LaunchBox ships v1.1 there), then the dev-tree sibling LB install (lets the selftests run
-    /// the real interpreter from bin). v2 is user-provided in the same folder.</summary>
-    private static string? ExePath(bool v1)
+    /// <summary>LaunchBox's own interpreter, probed in order: the install's ThirdParty\AutoHotkey,
+    /// then the dev-tree sibling LB install (lets the selftests run the real thing from bin).</summary>
+    private static string? ExePath()
     {
-        string[] names = v1
-            ? new[] { "AutoHotkey.exe" }
-            : new[] { "AutoHotkey64.exe", "AutoHotkeyV2.exe", Path.Combine("v2", "AutoHotkey64.exe") };
         foreach (var dir in new[]
         {
             Path.Combine(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..")), "ThirdParty", "AutoHotkey"),
             Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "LB", "ThirdParty", "AutoHotkey")),
         })
         {
-            foreach (var name in names)
-            {
-                string p = Path.Combine(dir, name);
-                if (File.Exists(p)) return p;
-            }
+            string p = Path.Combine(dir, "AutoHotkey.exe");
+            if (File.Exists(p)) return p;
         }
         return null;
     }
 
-    public static bool IsAvailable(bool v1) => ExePath(v1) != null;
+    public static bool IsAvailable() => ExePath() != null;
 
-    /// <summary>AHK string-literal escape for a value spliced into the prelude. Backtick first
-    /// (it is the escape char), then the quote — doubled in v1, backtick-escaped in v2 — and
-    /// newlines become `n so a value never breaks the line structure.</summary>
-    internal static string Esc(string v, bool v1)
+    /// <summary>AHK v1 string-literal escape for a value spliced into the prelude. Backtick first
+    /// (it is the escape char), then the doubled quote, and newlines become `n so a value never
+    /// breaks the line structure.</summary>
+    internal static string Esc(string v)
     {
         var sb = new StringBuilder(v.Length + 8);
         foreach (char c in v)
@@ -71,7 +63,7 @@ internal static class AhkScriptEngine
             switch (c)
             {
                 case '`': sb.Append("``"); break;
-                case '"': sb.Append(v1 ? "\"\"" : "`\""); break;
+                case '"': sb.Append("\"\""); break;
                 case '\r': break;
                 case '\n': sb.Append("`n"); break;
                 default: sb.Append(c); break;
@@ -80,13 +72,12 @@ internal static class AhkScriptEngine
         return sb.ToString();
     }
 
-    /// <summary>The variables every slot sees, both dialects (v1 accepts := expressions too).</summary>
-    internal static string BuildPrelude(AhkScriptData d, bool v1)
+    /// <summary>The variables every slot sees.</summary>
+    internal static string BuildPrelude(AhkScriptData d)
     {
         var sb = new StringBuilder();
         sb.AppendLine("; ── LiteBox prelude (generated — the script body follows) ──");
-        if (!v1) sb.AppendLine("#Requires AutoHotkey v2.0");
-        void V(string name, string value) => sb.AppendLine($"{name} := \"{Esc(value, v1)}\"");
+        void V(string name, string value) => sb.AppendLine($"{name} := \"{Esc(value)}\"");
         V("Exe", d.Exe);
         V("Args", d.Args);
         V("OriginalExe", d.OriginalExe);
@@ -104,10 +95,10 @@ internal static class AhkScriptEngine
     /// <summary>Transform slot: prelude + body + result epilogue, run to completion (10 s cap,
     /// killed past it). Returns the script's Exe/Args on success.</summary>
     public static (bool Ok, string Exe, string Args, string Error) RunTransform(
-        bool v1, string body, AhkScriptData d)
+        string body, AhkScriptData d)
     {
-        string? exe = ExePath(v1);
-        if (exe == null) return (false, "", "", MissingMessage(v1));
+        string? exe = ExePath();
+        if (exe == null) return (false, "", "", MissingMessage);
 
         string dir = Path.Combine(Path.GetTempPath(), "litebox-rules-ahk");
         Directory.CreateDirectory(dir);
@@ -116,13 +107,11 @@ internal static class AhkScriptEngine
         string outPath = Path.Combine(dir, stamp + ".out");
 
         var sb = new StringBuilder();
-        sb.Append(BuildPrelude(d, v1));
-        sb.AppendLine($"__LB_OUT := \"{Esc(outPath, v1)}\"");
+        sb.Append(BuildPrelude(d));
+        sb.AppendLine($"__LB_OUT := \"{Esc(outPath)}\"");
         sb.AppendLine(body);
         sb.AppendLine("; ── LiteBox epilogue: the transform's result ──");
-        sb.AppendLine(v1
-            ? "FileAppend, % Exe . \"`n\" . Args, %__LB_OUT%, UTF-8"
-            : "FileAppend(Exe . \"`n\" . Args, __LB_OUT, \"UTF-8\")");
+        sb.AppendLine("FileAppend, % Exe . \"`n\" . Args, %__LB_OUT%, UTF-8");
         sb.AppendLine("ExitApp");
 
         try
@@ -149,17 +138,17 @@ internal static class AhkScriptEngine
     /// point is living during the game) and the returned process handle lets the caller kill it at
     /// game exit. Waited runs are capped at 10 s.</summary>
     public static (bool Ok, string Error, Process? Resident) RunSideEffect(
-        bool v1, string body, AhkScriptData d, bool wait)
+        string body, AhkScriptData d, bool wait)
     {
-        string? exe = ExePath(v1);
-        if (exe == null) return (false, MissingMessage(v1), null);
+        string? exe = ExePath();
+        if (exe == null) return (false, MissingMessage, null);
 
         string dir = Path.Combine(Path.GetTempPath(), "litebox-rules-ahk");
         Directory.CreateDirectory(dir);
         string scriptPath = Path.Combine(dir, Guid.NewGuid().ToString("N") + ".ahk");
 
         var sb = new StringBuilder();
-        sb.Append(BuildPrelude(d, v1));
+        sb.Append(BuildPrelude(d));
         sb.AppendLine(body);
         if (wait) sb.AppendLine("ExitApp");   // a resident script (hotkeys) belongs in background mode
 
@@ -179,25 +168,23 @@ internal static class AhkScriptEngine
         catch (Exception ex) { return (false, ex.Message, null); }
     }
 
-    /// <summary>Syntax check, both dialects, without executing anything: v2 has the /validate
-    /// switch; v1 uses the classic "/iLib nul" trick — the interpreter LOADS the script (full
-    /// syntax pass, errors on stderr via /ErrorStdOut) and exits before the auto-execute section
-    /// runs. Verified on the 1.1.24 exe LaunchBox ships: valid → exit 0 and nothing executed,
-    /// broken → exit 2 with the line and message.</summary>
-    public static (bool Ok, string Message) Check(bool v1, string body)
+    /// <summary>Syntax check without executing anything: the classic "/iLib nul" trick — the
+    /// interpreter LOADS the script (full syntax pass, errors on stderr via /ErrorStdOut) and
+    /// exits before the auto-execute section runs. Verified on the 1.1.24 exe LaunchBox ships:
+    /// valid → exit 0 and nothing executed, broken → exit 2 with the line and message.</summary>
+    public static (bool Ok, string Message) Check(string body)
     {
         if (string.IsNullOrWhiteSpace(body)) return (true, "(empty)");
-        string? exe = ExePath(v1);
-        if (exe == null) return (false, MissingMessage(v1));
+        string? exe = ExePath();
+        if (exe == null) return (false, MissingMessage);
 
         string scriptPath = Path.Combine(Path.GetTempPath(), "litebox-rules-ahk", Guid.NewGuid().ToString("N") + ".ahk");
         Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
         try
         {
             var d = new AhkScriptData("emu.exe", "", "emu.exe", "", "", "", "", "", "", true);
-            File.WriteAllText(scriptPath, BuildPrelude(d, v1) + body, new UTF8Encoding(true));
-            string switches = v1 ? "/ErrorStdOut /iLib nul" : "/ErrorStdOut /validate";
-            var psi = new ProcessStartInfo(exe, $"{switches} \"{scriptPath}\"")
+            File.WriteAllText(scriptPath, BuildPrelude(d) + body, new UTF8Encoding(true));
+            var psi = new ProcessStartInfo(exe, $"/ErrorStdOut /iLib nul \"{scriptPath}\"")
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
             using var p = Process.Start(psi)!;
             string err = p.StandardError.ReadToEnd() + p.StandardOutput.ReadToEnd();
@@ -226,7 +213,5 @@ internal static class AhkScriptEngine
         return (true, stderr.Trim(), null);
     }
 
-    private static string MissingMessage(bool v1)
-        => v1 ? "AutoHotkey.exe not found (LaunchBox ships it at ThirdParty\\AutoHotkey)"
-              : "AutoHotkey v2 not found — drop an AutoHotkey64.exe (v2) into ThirdParty\\AutoHotkey";
+    private const string MissingMessage = "AutoHotkey.exe not found (LaunchBox ships it at ThirdParty\\AutoHotkey)";
 }

@@ -562,22 +562,21 @@ internal static class RuleSelfTest
 
         // ── AHK script rules: escaping, prelude, and (when LB's interpreter is reachable) a real run ──
         {
-            Expect("ahk: prelude escaping (backtick first, quotes, newline)",
-                Scripting.AhkScriptEngine.Esc("a`b\"c\r\nd", v1: true) == "a``b\"\"c`nd"
-                && Scripting.AhkScriptEngine.Esc("x\"y", v1: false) == "x`\"y");
+            Expect("ahk: prelude escaping (backtick first, doubled quotes, newline)",
+                Scripting.AhkScriptEngine.Esc("a`b\"c\r\nd") == "a``b\"\"c`nd");
 
             var data = new Scripting.AhkScriptData("emu.exe", "\"C:\\roms\\game.zip\"",
                 "emu.exe", "", "Duck \"Hunt\"", "NES", "id", "FakeEmu", "", false);
-            string prelude = Scripting.AhkScriptEngine.BuildPrelude(data, v1: true);
-            Expect("ahk: the v1 prelude carries the values, quotes doubled",
+            string prelude = Scripting.AhkScriptEngine.BuildPrelude(data);
+            Expect("ahk: the prelude carries the values, quotes doubled",
                 prelude.Contains("GameTitle := \"Duck \"\"Hunt\"\"\"") && prelude.Contains("Preview := 0"));
 
-            if (Scripting.AhkScriptEngine.IsAvailable(v1: true))
+            if (Scripting.AhkScriptEngine.IsAvailable())
             {
-                Expect("ahk: v1 syntax check passes a valid script without executing it",
-                    Scripting.AhkScriptEngine.Check(v1: true, "x := 1\nArgs := Args . \" ok\"").Ok);
-                Expect("ahk: v1 syntax check rejects a broken script with a message",
-                    !Scripting.AhkScriptEngine.Check(v1: true, "oops((").Ok);
+                Expect("ahk: the syntax check passes a valid script without executing it",
+                    Scripting.AhkScriptEngine.Check("x := 1\nArgs := Args . \" ok\"").Ok);
+                Expect("ahk: the syntax check rejects a broken script with a message",
+                    !Scripting.AhkScriptEngine.Check("oops((").Ok);
                 var ahkRule = new LaunchRule
                 {
                     Type = LaunchRule.TypeAhkScript,

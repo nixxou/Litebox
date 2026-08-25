@@ -58,6 +58,10 @@ internal static class OptionKeys
         new("MonitorStartupShutdownWithProcess",  GameEmuGlob, OptionType.Bool,   OptionCache.Hot, "Gameplay/ProblemKeys"),
 
         // ── Module master switches (LbModules; row absent = module default) ──
+        // Per-game "Run as ADMINISTRATOR" (Edit Game > Launching > Startup/Pause): elevated spawn,
+        // screen system disabled for that launch (UIPI). The emulator-level twin is a launch rule.
+        new("RunAsAdmin", Game, OptionType.Bool, OptionCache.Cold, "HostServices/RunAndWait"),
+
         new("Module.base",             Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
         new("Module.rom",              Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
         new("Module.retroachievements",Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),

@@ -74,6 +74,7 @@ internal static class RuleActions
         new MonitorProfileAction(),
         new ScriptAction(),
         new AhkAction(),
+        new RunAsAdminAction(),
     };
 
     public static IRuleAction? ByType(string type)

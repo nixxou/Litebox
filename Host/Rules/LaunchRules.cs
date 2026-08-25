@@ -41,6 +41,7 @@ internal sealed class LaunchRule
     public const string TypeMonitorProfile = "MonitorProfile";
     public const string TypeScript = "Script";
     public const string TypeAhkScript = "AhkScript";
+    public const string TypeRunAsAdmin = "RunAsAdmin";
 
     public string Type { get; set; } = TypePrefix;
     public bool Enabled { get; set; } = true;

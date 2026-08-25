@@ -685,7 +685,7 @@ Registre actuel :
   scope emulator (Launch rules — module "rules") :
     LaunchRules     JSON LaunchRule[] — règles ordonnées appliquées à la ligne
                     de commande juste avant le lancement (Prefix, Suffix, ChangeExe,
-                    ChangeRomPath, Replace + variables, ReplaceInFile, CreateFile, HidDetect, CopyFile, UseFileContent, MonitorProfile, Script C# Roslyn, Script AHK v1.1 LB), scripts par Monitor Profile (avant/apres application, C# ou AHK, 30s, exemples domotique), avec
+                    ChangeRomPath, Replace + variables, ReplaceInFile, CreateFile, HidDetect, CopyFile, UseFileContent, MonitorProfile, Script C# Roslyn, Script AHK v1.1 LB), scripts par Monitor Profile (avant/apres application, C# ou AHK, 30s, exemples domotique), RunAsAdmin par jeu (cle RunAsAdmin scope game) et par regle emulateur (spawn eleve UAC, ecrans start/pause/gameover coupes), avec
                     sondes filter/exclude. Émulateur SEULEMENT :
                     le ciblage par jeu passe par un argument-marqueur dans les
                     paramètres personnalisés du jeu (retiré avant l'émulateur).

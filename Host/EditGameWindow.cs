@@ -291,6 +291,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             SaveCurrent(); SaveLocks(); SaveCustomFields(); SaveAlternateNames(); SaveControllerSupport(); SaveControllerSupportMulti(); SaveLaunching();
             try { _applyModelSettings?.Invoke(); } catch { }
             try { _applyMonitorProfile?.Invoke(); } catch { }
+            try { _applyRunAsAdmin?.Invoke(); } catch { }
             DialogResult = DialogResult.OK; Close();
         };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
@@ -470,6 +471,7 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
     // with the CURRENT unsaved picks; both tabs apply together on OK / page navigation.
     private Action _applyModelSettings;
     private Action _applyMonitorProfile;
+    private Action _applyRunAsAdmin;
     private Control BuildModelSettingsPage()
     {
         var g = _editGames[0];

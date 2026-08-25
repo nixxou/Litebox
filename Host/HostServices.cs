@@ -473,6 +473,7 @@ internal static class HostLaunch
         // last-played now; on exit we add the elapsed seconds to play time. Skipped in DryRun.
         int gi = GameIndex(game);
         var sw = Stopwatch.StartNew();
+        bool adminLaunch = false;   // decided inside the try (game flag / RunAsAdmin rule); read by the finally
         if (!DryRun && gi >= 0) { try { _store.JournalPlayStart(gi); } catch { } }
         // Per-VERSION play tracking (LB parity): the launched additional app carries its own
         // PlayCount / LastPlayed / PlayTime alongside the game's. Safe post-DropOptional: the
@@ -556,6 +557,27 @@ internal static class HostLaunch
                 catch (Exception ex) { Console.WriteLine("[launch] monitor profile error: " + ex.Message); }
             }
 
+            // Run-as-admin — the game's Launching checkbox, or a fired RunAsAdmin rule on the
+            // emulator (pre-evaluated on the preview walk, like the monitor rule). Decided HERE
+            // because the screen system arms below and must stay DARK for an elevated spawn:
+            // medium-IL LiteBox cannot capture (WGC), hook (UIPI) or suspend a high-IL process,
+            // and half-working overlays would be worse than none. Exit detection still works.
+            try
+            {
+                adminLaunch = string.Equals(
+                    Data.LiteBoxOptionsDb.Get(Data.LiteBoxOption.ScopeGame, SafeStr(() => game?.Id), "RunAsAdmin"),
+                    "true", StringComparison.OrdinalIgnoreCase);
+                if (!adminLaunch && emulator != null)
+                {
+                    var arl = Rules.LaunchRuleStore.Resolve(SafeStr(() => emulator?.Id));
+                    if (arl.Any(x => x.Type == Rules.LaunchRule.TypeRunAsAdmin))
+                        adminLaunch = Rules.Actions.RunAsAdminAction.EvaluateRules(arl, PreviewCommandLine(game, app, emulator) ?? "");
+                }
+                if (adminLaunch && !DryRun)
+                    Console.WriteLine("[launch] RUN AS ADMIN: elevated spawn (UAC) — screen system disabled for this launch");
+            }
+            catch (Exception ex) { Console.WriteLine("[launch] admin decision error: " + ex.Message); }
+
             // AutoRunBefore additional apps (scripts, mounts, …).
             foreach (var a in addApps.Where(a => a.AutoRunBefore))
                 RunProcess(a.ApplicationPath, a.CommandLine, emulator, game, a.UseEmulator, $"autorun-before \"{a.Name}\"");
@@ -575,6 +597,16 @@ internal static class HostLaunch
                         AhkScript.StartGameScript(SafeStr(() => emulator.AutoHotkeyScript), _lbRoot);
                     // Pause screen: arm the global hotkey + remember the emulator
                     // process for suspend/resume (PauseManager.Disarm in the finally).
+                    Action<Process> onSpawned = null;
+                    if (adminLaunch)
+                    {
+                        // Elevated spawn: no cover, no SmartCapture, no pause arming, no cursor/window
+                        // games — every one of them needs rights or input a medium-IL process does not
+                        // have over a high-IL child. The spawn itself goes through UAC in RunProcess.
+                        RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main", null, app, elevated: true);
+                    }
+                    else
+                    {
                     // SmartCapture: reveal the cover when the game actually renders, not on a
                     // blind timer. Resolved game → emulator → global; when on, the cover uses a
                     // safety-max and the coordinator closes it early (GameScreens.Close).
@@ -600,7 +632,7 @@ internal static class HostLaunch
                     bool hideCursor = HideCursorInGame(game, emulator);
                     bool hideOthers = HideOtherWindows(game, emulator);
                     bool aggressive = AggressiveHiding(game, emulator);
-                    Action<Process> onSpawned = p =>
+                    onSpawned = p =>
                     {
                         // Pause works for ALL launch types, not just emulators: a direct-exe game (useEmu
                         // false / no emulator) is the main process itself, so we arm on it too. Arm handles
@@ -622,6 +654,7 @@ internal static class HostLaunch
                     // backstop; the coordinator closes it at render-start + displayTime.
                     if (!DryRun) Gameplay.GameScreens.ShowStartup(LaunchedGame.Current, scCfg.Enabled ? scBackstop : (int?)null, scEta, aggressive);
                     RunProcess(main.Value.path, main.Value.args, emulator, game, main.Value.useEmu, "main", onSpawned, app);
+                    }
                 }
                 else if (!DryRun)
                     System.Windows.Forms.MessageBox.Show(
@@ -667,7 +700,7 @@ internal static class HostLaunch
             // uncovered LiteBox (or flashed the reopening kiosk) during play-time / progress / plugin work.
             // ShowEndEager also drops any lingering startup cover, and no-ops (no flash) when the pause-menu
             // exit already put an early cover up.
-            if (!DryRun) Gameplay.GameScreens.ShowEndEager(endSnap);
+            if (!DryRun && !adminLaunch) Gameplay.GameScreens.ShowEndEager(endSnap);
             AhkScript.KillGameScript();   // running script dies with the game (LB parity)
             // ROM extractor: purge the ephemeral \tmp band now the emulator has released the files
             // (persistent <SIG> cache entries survive; LRU-evicted on the next extraction).
@@ -703,7 +736,9 @@ internal static class HostLaunch
                 try { Media.Dedup.DedupEngine.Resume(); } catch { }   // CNN session allowed again (lazy re-create)
             }
             // OnGameExited (reopens the ExtendDB kiosk) + the GAME OVER screen, ordered per WebReturnTiming.
-            EndOfGameFinish(endSnap);
+            // Admin launches skip the screen but the plugins MUST still hear the exit (kiosk reopen).
+            if (adminLaunch) Fire(p2 => p2.OnGameExited());
+            else EndOfGameFinish(endSnap);
             // GUI: game over + data reloaded → reload its list and restore selection.
             GameRunning = false;
             try { GameEnded?.Invoke(game); } catch { }
@@ -795,7 +830,7 @@ internal static class HostLaunch
 
     /// <summary>Resolves the command, spawns (or logs in DryRun), waits for exit.</summary>
     private static void RunProcess(string targetPath, string cmd, IEmulator emulator, IGame game, bool useEmu, string label,
-        Action<Process> onSpawned = null, IAdditionalApplication selectedApp = null)
+        Action<Process> onSpawned = null, IAdditionalApplication selectedApp = null, bool elevated = false)
     {
         if (string.IsNullOrEmpty(targetPath)) return;
 
@@ -909,7 +944,7 @@ internal static class HostLaunch
         // window comes up focused on top of it (the overlay stays visible until its timer
         // closes it). Main emulator launch only — not autorun helpers.
         if (label == "main") Gameplay.GameScreens.ReleaseStartupTopFront();
-        Spawn(fileName, args, label, onSpawned, hideConsole, workDir);
+        Spawn(fileName, args, label, onSpawned, hideConsole, workDir, elevated);
         // Spawn waits for the process to exit — the rules' after-launch batch runs now, while the
         // rest of the exit teardown (monitor restore, kiosk reopen) happens in RunAndWait's finally.
         if (afterRules is { Count: > 0 })
@@ -1407,22 +1442,35 @@ internal static class HostLaunch
     }
 
     /// <summary>Spawns a process (or logs it in DryRun) and waits for exit.</summary>
-    private static void Spawn(string fileName, string args, string label, Action<Process> onSpawned = null, bool hideConsole = false, string workDir = null)
+    private static void Spawn(string fileName, string args, string label, Action<Process> onSpawned = null, bool hideConsole = false, string workDir = null, bool elevated = false)
     {
         if (string.IsNullOrEmpty(fileName)) return;
-        if (DryRun) { Console.WriteLine($"[launch/dry] {label}: \"{fileName}\" {args}"); return; }
+        if (DryRun) { Console.WriteLine($"[launch/dry] {label}: \"{fileName}\" {args}" + (elevated ? " (ADMIN)" : "")); return; }
 
-        Console.WriteLine($"[launch] {label}: \"{fileName}\" {args}" + (workDir != null ? $" (cwd={workDir})" : ""));
+        Console.WriteLine($"[launch] {label}: \"{fileName}\" {args}" + (workDir != null ? $" (cwd={workDir})" : "") + (elevated ? " (ADMIN)" : ""));
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = args,
-                UseShellExecute = false,
-                CreateNoWindow = hideConsole,   // LB's "Attempt to hide console" — suppress the child console window
-                WorkingDirectory = workDir ?? SafeDir(fileName) ?? _lbRoot ?? AppContext.BaseDirectory,
-            };
+            // Elevated: ShellExecute + "runas" (the only way up from medium IL) — UAC prompts, and
+            // CreateNoWindow/redirects don't exist under ShellExecute. A refused prompt throws
+            // ERROR_CANCELLED into the catch below: the launch aborts cleanly, the finally restores.
+            // WaitForExit still works on the returned handle (SYNCHRONIZE is granted).
+            var psi = elevated
+                ? new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    Arguments = args,
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    WorkingDirectory = workDir ?? SafeDir(fileName) ?? _lbRoot ?? AppContext.BaseDirectory,
+                }
+                : new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    CreateNoWindow = hideConsole,   // LB's "Attempt to hide console" — suppress the child console window
+                    WorkingDirectory = workDir ?? SafeDir(fileName) ?? _lbRoot ?? AppContext.BaseDirectory,
+                };
             using var proc = Process.Start(psi);
             if (proc != null && onSpawned != null) { try { onSpawned(proc); } catch { } }
             proc?.WaitForExit();

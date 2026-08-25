@@ -1087,6 +1087,46 @@ internal sealed partial class EditGameWindow
                 LchSeedPauseDefaults();
         };
         SyncCust();
+
+        // ── Run as administrator (LiteBox key, litebox-options.db) ─────────────────
+        // Rare but real: TeknoParrot titles, some Windows games. The spawn goes through UAC (runas)
+        // and the WHOLE screen system goes dark for that launch — a medium-IL LiteBox cannot
+        // capture, hook or suspend a high-IL process, and half-working overlays would be worse
+        // than none (Mehdi's call). Exit detection and play time still work.
+        y += S(46);
+        string ScA = Data.LiteBoxOption.ScopeGame;
+        string AdmIdOf(IGame g) => Safe(() => g.Id) ?? "";
+        bool AdmGet(IGame g)
+        {
+            try { return string.Equals(Data.LiteBoxOptionsDb.Get(ScA, AdmIdOf(g), "RunAsAdmin"), "true", StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
+        var admin = new CheckBox
+        {
+            Text = "Run this game as ADMINISTRATOR (UAC prompt at launch)", AutoSize = true,
+            Location = new Point(S(14), y), ForeColor = Fg, BackColor = Bg,
+        };
+        p.Controls.Add(admin);
+        LchTrackChk3(admin, IsMulti ? LchMergeBool(AdmGet) : (bool?)null, !IsMulti && AdmGet(_editGames[0]), p);
+        admin.Enabled = !_readOnly;
+        y += S(26);
+        LchCap(p, "WARNING: elevated launches disable the whole screen system — startup screen, FPS "
+                + "detection, pause screen and hotkeys, game-over screen — because Windows blocks a "
+                + "normal process from watching or controlling an elevated one. Exit detection and "
+                + "play time keep working.", ref y);
+
+        _applyRunAsAdmin = () =>
+        {
+            if (_readOnly) return;
+            if (IsMulti && admin.CheckState == CheckState.Indeterminate) return;   // untouched
+            foreach (var g in _editGames)
+            {
+                string id = AdmIdOf(g);
+                if (id.Length == 0) continue;
+                try { Data.LiteBoxOptionsDb.Set(ScA, id, "RunAsAdmin", admin.Checked ? "true" : null); } catch { }
+            }
+        };
+
         return p;
     }
 

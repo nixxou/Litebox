@@ -622,6 +622,21 @@ internal static class RuleSelfTest
             else Expect("ahk: interpreter not reachable from this harness — generation-only run", true);
         }
 
+        // ── Run-as-admin rule: pre-evaluation on the preview walk (the branching bus included) ──
+        {
+            var adminRule = new LaunchRule { Type = LaunchRule.TypeRunAsAdmin, Filter = "--tekno" };
+            Expect("runasadmin: a refused probe leaves the launch normal",
+                !Actions.RunAsAdminAction.EvaluateRules(new List<LaunchRule> { adminRule }, "emu.exe game.zip"));
+            Expect("runasadmin: the fired rule elevates",
+                Actions.RunAsAdminAction.EvaluateRules(new List<LaunchRule> { adminRule }, "emu.exe game.zip --tekno"));
+            var inject = Sfx("--tekno", asArg: true);
+            Expect("runasadmin: a marker injected by an earlier rule routes it (preview walk sees the transformed line)",
+                Actions.RunAsAdminAction.EvaluateRules(new List<LaunchRule> { inject, adminRule }, "emu.exe game.zip"));
+            var off = new LaunchRule { Type = LaunchRule.TypeRunAsAdmin, Enabled = false };
+            Expect("runasadmin: a disabled rule never elevates",
+                !Actions.RunAsAdminAction.EvaluateRules(new List<LaunchRule> { off }, "emu.exe game.zip"));
+        }
+
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
         //    the rom argument) ──
         {

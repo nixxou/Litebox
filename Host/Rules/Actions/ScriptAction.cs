@@ -46,7 +46,9 @@ internal sealed class ScriptAction : IRuleAction
         if (r.ScriptExample.Length > 0) slots.Add("example");
         if (r.ScriptBefore.Length > 0) slots.Add("before" + (r.ScriptBeforeBackground ? "(bg)" : ""));
         if (r.ScriptAfter.Length > 0) slots.Add("after");
-        return "C# script: " + (slots.Count > 0 ? string.Join(" + ", slots) : "(empty)");
+        string label = "C# script: " + (slots.Count > 0 ? string.Join(" + ", slots) : "(empty)");
+        // The name LEADS — a pipeline with several script rules reads by what they do, not by type.
+        return r.ScriptName.Length > 0 ? $"“{r.ScriptName}” — {label}" : label;
     }
 
     private static RuleScriptGlobals MakeGlobals(LaunchRule r, RuleCmd cmd, bool preview)
@@ -114,16 +116,28 @@ internal sealed class ScriptAction : IRuleAction
         var intro = new Label
         {
             Text = "C# scripts (Roslyn). Assign Exe / Args to transform the line; Game, Emulator, Version,"
-                 + " OriginalArgs, Preview and the Lb API (HID devices, monitor profiles, variables, log)"
-                 + " are in scope — see the Documentation tab. Compiled once per session; 10 s watchdog.",
+                 + " OriginalArgs, Preview and the Lb API (HID devices, media, monitor profiles, variables,"
+                 + " log) are in scope — see the Documentation tab. Compiled once per session; 10 s watchdog.",
             AutoSize = false, Location = new Point(0, S(2)), Size = new Size(S(878), S(34)),
             ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
         };
         body.Controls.Add(intro);
 
+        body.Controls.Add(new Label
+        {
+            Text = "Name (shown in the rule list):", AutoSize = true, Location = new Point(0, S(41)),
+            ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
+        });
+        var name = new TextBox
+        {
+            Text = r.ScriptName, Location = new Point(S(170), S(38)), Width = S(400),
+            BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
+        };
+        body.Controls.Add(name);
+
         var tabs = new TabControl
         {
-            Location = new Point(0, S(38)), Size = new Size(S(878), S(470)),
+            Location = new Point(0, S(68)), Size = new Size(S(878), S(470)),
         };
         body.Controls.Add(tabs);
 
@@ -200,10 +214,11 @@ internal sealed class ScriptAction : IRuleAction
         docPage.Controls.Add(CodeEditorBox.CreateDocView(DocText));
         tabs.TabPages.Add(docPage);
 
-        int h = S(38) + S(474);
+        int h = S(68) + S(474);
         body.Height = h;
         return (body, h, () =>
         {
+            r.ScriptName = name.Text.Trim();
             r.ScriptReal = real.Text;
             r.ScriptExample = example.Text;
             r.ScriptBefore = before.Text;

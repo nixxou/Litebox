@@ -116,6 +116,9 @@ internal sealed class LaunchRule
     public string ScriptAfter { get; set; } = "";
     /// <summary>Script: run the Before script on a background task (BBP's runbeforebackground).</summary>
     public bool ScriptBeforeBackground { get; set; }
+    /// <summary>Script: a display name leading the rule's line in the list — with several script
+    /// rules on one emulator, "who does what" must not require opening each one.</summary>
+    public string ScriptName { get; set; } = "";
     /// <summary>The rule's variables (JSON RuleVariable[] — see RuleVariables). Transverse: any
     /// action may consult them; today the two Replace actions do.</summary>
     public string VariablesData { get; set; } = "";

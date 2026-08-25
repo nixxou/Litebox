@@ -37,6 +37,10 @@ public sealed record DInputDeviceInfo(int Index, string ProductName, string Type
 public sealed record SdlDeviceInfo(int Index, string Name, string CapsSignature,
     string Serial, string Guid, int VendorId, int ProductId);
 
+/// <summary>One media file of the launch's game: family = the image type ("Box - Front", …) or the
+/// video kind; sub-family = the region folder for images, empty when the file sits at the root.</summary>
+public sealed record MediaFileInfo(string Path, string Family, string SubFamily);
+
 /// <summary>The script's world. Mutable Exe/Args = the transform channel; everything else is
 /// context. Null Game/Emulator happens on the page preview — guard with <see cref="Preview"/>.</summary>
 public sealed class RuleScriptGlobals
@@ -126,6 +130,102 @@ public sealed class LbScriptApi
 
     /// <summary>Fresh scan on the next HID query (the per-launch cache is dropped).</summary>
     public void RescanDevices() => HidInfoCache.Clear();
+
+    // ── the game's media — families = image types / video kinds, sub-families = regions ──
+    // Everything binds to the LAUNCH's game (empty results in the page preview or when the game is
+    // unknown). "Selected" = the file the UI itself retains (LaunchBox-native region/rank rules);
+    // the list forms return every file in native priority order.
+
+    /// <summary>Every image family name ("Box - Front", "Screenshot - Gameplay", …).</summary>
+    public string[] ImageFamilies()
+        => Media.MediaResolver.ImageTypeNames().ToArray();
+
+    /// <summary>The RETAINED image of a family — what LiteBox itself displays. Empty family = the
+    /// front-box chain (Box - Front → Reconstructed → Fanart). "" when the game has none.</summary>
+    public string SelectedImage(string family = "")
+    {
+        var k = GameKey(); if (k == null) return "";
+        string[] chain = family.Length == 0 ? Media.MediaResolver.FrontChain() : new[] { family };
+        return Media.MediaResolver.Image(k.Value.Platform, k.Value.Id, k.Value.Title, chain) ?? "";
+    }
+
+    /// <summary>Every image of one family, native priority order. A region ("Europe", …) narrows to
+    /// that sub-family; empty = all regions.</summary>
+    public List<string> Images(string family, string region = "")
+    {
+        var k = GameKey(); if (k == null) return new List<string>();
+        if (region.Length == 0)
+            return Media.MediaResolver.AllOfType(k.Value.Platform, k.Value.Id, k.Value.Title, family);
+        return Media.MediaResolver.AllImageFiles(k.Value.Platform, k.Value.Id, k.Value.Title)
+            .Where(f => string.Equals(f.type, family, StringComparison.OrdinalIgnoreCase)
+                     && string.Equals(f.region, region, StringComparison.OrdinalIgnoreCase))
+            .Select(f => f.path).ToList();
+    }
+
+    /// <summary>The whole image inventory of the game as (Path, Family, SubFamily=region).</summary>
+    public List<MediaFileInfo> AllImages()
+    {
+        var k = GameKey(); if (k == null) return new List<MediaFileInfo>();
+        return Media.MediaResolver.AllImageFiles(k.Value.Platform, k.Value.Id, k.Value.Title)
+            .Select(f => new MediaFileInfo(f.path, f.type, f.region ?? "")).ToList();
+    }
+
+    /// <summary>The retained video (theme-first when asked). "" when none.</summary>
+    public string SelectedVideo(bool preferTheme = false)
+    {
+        var k = GameKey(); if (k == null) return "";
+        return Media.MediaResolver.Video(k.Value.Platform, k.Value.Id, k.Value.Title, preferTheme) ?? "";
+    }
+
+    /// <summary>Every video, optionally narrowed to one kind ("Video Snap", "Trailer", "Theme Video",
+    /// "Recording", "Marquee").</summary>
+    public List<string> Videos(string kind = "")
+    {
+        var k = GameKey(); if (k == null) return new List<string>();
+        return Media.MediaResolver.AllVideoFiles(k.Value.Platform, k.Value.Id, k.Value.Title)
+            .Where(v => kind.Length == 0 || string.Equals(v.type, kind, StringComparison.OrdinalIgnoreCase))
+            .Select(v => v.path).ToList();
+    }
+
+    /// <summary>The retained manual ("" when none) / every manual.</summary>
+    public string SelectedManual()
+    {
+        var k = GameKey(); if (k == null) return "";
+        return Media.MediaResolver.Manual(k.Value.Platform, k.Value.Id, k.Value.Title) ?? "";
+    }
+    public List<string> Manuals()
+    {
+        var k = GameKey(); if (k == null) return new List<string>();
+        return Media.MediaResolver.ManualsAll(k.Value.Platform, k.Value.Id, k.Value.Title);
+    }
+
+    /// <summary>The retained music track ("" when none) / every track.</summary>
+    public string SelectedMusic()
+    {
+        var k = GameKey(); if (k == null) return "";
+        return Media.MediaResolver.Music(k.Value.Platform, k.Value.Id, k.Value.Title) ?? "";
+    }
+    public List<string> Musics()
+    {
+        var k = GameKey(); if (k == null) return new List<string>();
+        return Media.MediaResolver.MusicsAll(k.Value.Platform, k.Value.Id, k.Value.Title);
+    }
+
+    /// <summary>The launch's game identity through the dynamic Game — null in the preview or when
+    /// any member is missing (a script-provided fake, …). Every media method degrades to empty.</summary>
+    private (string Platform, Guid Id, string Title)? GameKey()
+    {
+        try
+        {
+            if (_g.Game == null) return null;
+            string platform = (string)_g.Game.Platform;
+            string id = (string)_g.Game.Id;
+            string title = (string)_g.Game.Title;
+            if (string.IsNullOrEmpty(platform) || string.IsNullOrEmpty(title)) return null;
+            return (platform, Guid.TryParse(id, out var g) ? g : Guid.Empty, title);
+        }
+        catch { return null; }
+    }
 
     // ── monitor profiles ──
     /// <summary>Every saved profile's name.</summary>

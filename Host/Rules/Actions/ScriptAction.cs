@@ -301,6 +301,7 @@ public sealed record DInputDeviceInfo(int Index, string ProductName, string Type
     Guid InstanceGuid, string InstanceName, string InterfacePath);
 public sealed record SdlDeviceInfo(int Index, string Name, string CapsSignature,
     string Serial, string Guid, int VendorId, int ProductId);
+public sealed record MediaFileInfo(string Path, string Family, string SubFamily);
 
 public class LbApi
 {
@@ -308,6 +309,20 @@ public class LbApi
     public void Log(string message) => Console.WriteLine("[script] " + message);
     public string Var(string name) => "";
     public string ExpandVars(string text) => text;
+    // media (sample paths — in LiteBox these resolve the REAL game's files)
+    public string[] ImageFamilies() => new[] { "Box - Front", "Screenshot - Gameplay", "Clear Logo", "Arcade - Marquee" };
+    public string SelectedImage(string family = "") => @"C:\LaunchBox\Images\SNES\Box - Front\Sample Game-01.png";
+    public List<string> Images(string family, string region = "") => new()
+        { @"C:\LaunchBox\Images\SNES\Screenshot - Gameplay\Sample Game-01.png",
+          @"C:\LaunchBox\Images\SNES\Screenshot - Gameplay\Sample Game-02.png" };
+    public List<MediaFileInfo> AllImages() => new()
+        { new(@"C:\LaunchBox\Images\SNES\Box - Front\Europe\Sample Game-01.png", "Box - Front", "Europe") };
+    public string SelectedVideo(bool preferTheme = false) => @"C:\LaunchBox\Videos\SNES\Sample Game.mp4";
+    public List<string> Videos(string kind = "") => new() { @"C:\LaunchBox\Videos\SNES\Sample Game.mp4" };
+    public string SelectedManual() => @"C:\LaunchBox\Manuals\SNES\Sample Game.pdf";
+    public List<string> Manuals() => new() { @"C:\LaunchBox\Manuals\SNES\Sample Game.pdf" };
+    public string SelectedMusic() => @"C:\LaunchBox\Music\SNES\Sample Game.mp3";
+    public List<string> Musics() => new() { @"C:\LaunchBox\Music\SNES\Sample Game.mp3" };
     public List<HidDeviceInfo> HidDevices() => new()
         { new("Sample Pad", 1118, 767, @"\\?\hid#vid_045e&pid_02ff#sample") };
     public List<Ds4DeviceInfo> Ds4Devices() => new()
@@ -369,8 +384,18 @@ THE Lb TOOLBOX
   Lb.ApplyMonitorProfile(""name"")    switch now; restored at game exit. No-op in Preview.
   Devices are queried ON DEMAND — a script that never asks never pays a scan.
 
-TEN FICTIONAL EXAMPLES
-----------------------
+  THE GAME'S MEDIA (families = image types / video kinds, sub-families = regions;
+  ""selected"" = the file LiteBox itself retains; lists come in native priority order)
+  Lb.ImageFamilies()                every image family name
+  Lb.SelectedImage(family="""")       the retained image (empty family = the front-box chain)
+  Lb.Images(family, region="""")      every image of a family; a region narrows the sub-family
+  Lb.AllImages()                    the whole inventory → (Path, Family, SubFamily)
+  Lb.SelectedVideo(preferTheme)     the retained video   ·  Lb.Videos(kind="""")  all, by kind
+  Lb.SelectedManual() / Manuals()   the retained manual / all of them
+  Lb.SelectedMusic()  / Musics()    the retained track  / all of them
+
+SIXTEEN FICTIONAL EXAMPLES
+--------------------------
 1) Append an argument for one game
      if (Game != null && Game.Title.Contains(""Duck Hunt"")) Args += "" --lightgun"";
 
@@ -407,6 +432,49 @@ TEN FICTIONAL EXAMPLES
 10) XInput slot of the DS4Windows pad → tell the emulator (uses the DS4 link)
      var slot = Lb.XInputSlots(@""C:\DS4Windows\Logs"").FirstOrDefault(s => s.Signature == ""DS4WIN"");
      if (slot != null) Args += $"" --pad={slot.Slot}"";
+
+11) The selected box art becomes the emulator's splash screen (Before slot)
+     var art = Lb.SelectedImage();
+     if (art != """" && !Preview)
+         File.Copy(art, Path.Combine(Path.GetDirectoryName(Exe)!, ""splash.png""), true);
+
+12) A random gameplay screenshot as the RetroArch menu wallpaper (Before slot)
+     var shots = Lb.Images(""Screenshot - Gameplay"");
+     if (shots.Count > 0)
+     {
+         var pick = shots[new Random().Next(shots.Count)];
+         var cfg = Path.Combine(Path.GetDirectoryName(Exe)!, ""retroarch.cfg"");
+         var text = Regex.Replace(File.ReadAllText(cfg),
+             ""menu_wallpaper = \""[^\""]*\"""",
+             ""menu_wallpaper = \"""" + pick.Replace(@""\"", @""\\"") + ""\"""");
+         File.WriteAllText(cfg, text);
+     }
+
+13) Marquee to a second-screen app that watches a JSON file (Before slot)
+     var marquee = Lb.SelectedImage(""Arcade - Marquee"");
+     if (marquee == """") marquee = Lb.SelectedImage(""Clear Logo"");   // fallback chain, yours
+     File.WriteAllText(@""C:\marquee\now.json"",
+         JsonSerializer.Serialize(new { game = (string)Game.Title, image = marquee }));
+
+14) A European box exists → the game is PAL, flag it (transform slot)
+     if (Lb.Images(""Box - Front"", ""Europe"").Count > 0 && !ArgList.Contains(""--pal""))
+         Args += "" --pal"";
+
+15) Attract slideshow built from EVERY screenshot (Before slot; kill it in After)
+     var dir = Path.Combine(Path.GetTempPath(), ""litebox-slideshow"");
+     Directory.CreateDirectory(dir);
+     foreach (var old in Directory.GetFiles(dir)) File.Delete(old);
+     int i = 0;
+     foreach (var s in Lb.Images(""Screenshot - Gameplay"")) File.Copy(s, Path.Combine(dir, $""{i++:D3}.png""));
+     Process.Start(@""C:\tools\slideshow.exe"", ""\"""" + dir + ""\"""");
+     // After slot: foreach (var p in Process.GetProcessesByName(""slideshow"")) p.Kill();
+
+16) The manual opens minimized on the side, gone with the game (Before + After slots)
+     var man = Lb.SelectedManual();
+     if (man != """")
+         Process.Start(new ProcessStartInfo(@""C:\tools\SumatraPDF.exe"", ""\"""" + man + ""\"""")
+             { WindowStyle = ProcessWindowStyle.Minimized });
+     // After slot: foreach (var p in Process.GetProcessesByName(""SumatraPDF"")) p.Kill();
 
 NOTES
   • The ""VS Code…"" button copies a SELF-CONTAINED .cs to the clipboard: your code between

@@ -555,6 +555,9 @@ internal static class RuleSelfTest
                 && xin[0].VendorId == 0x045E && xin[0].RevisionId == 1);
             Expect("script: Lb.HidDevices parses decimal ids",
                 hidd.Count == 1 && hidd[0].VendorId == 1118 && hidd[0].Path.Contains("hid#pad"));
+            Expect("script: media API degrades to empty without a game (preview contract)",
+                g.Lb.SelectedImage() == "" && g.Lb.Images("Box - Front").Count == 0
+                && g.Lb.AllImages().Count == 0 && g.Lb.Manuals().Count == 0);
         }
 
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of

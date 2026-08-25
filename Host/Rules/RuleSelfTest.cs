@@ -560,6 +560,33 @@ internal static class RuleSelfTest
                 && g.Lb.AllImages().Count == 0 && g.Lb.Manuals().Count == 0);
         }
 
+        // ── AHK script rules: escaping, prelude, and (when LB's interpreter is reachable) a real run ──
+        {
+            Expect("ahk: prelude escaping (backtick first, quotes, newline)",
+                Scripting.AhkScriptEngine.Esc("a`b\"c\r\nd", v1: true) == "a``b\"\"c`nd"
+                && Scripting.AhkScriptEngine.Esc("x\"y", v1: false) == "x`\"y");
+
+            var data = new Scripting.AhkScriptData("emu.exe", "\"C:\\roms\\game.zip\"",
+                "emu.exe", "", "Duck \"Hunt\"", "NES", "id", "FakeEmu", "", false);
+            string prelude = Scripting.AhkScriptEngine.BuildPrelude(data, v1: true);
+            Expect("ahk: the v1 prelude carries the values, quotes doubled",
+                prelude.Contains("GameTitle := \"Duck \"\"Hunt\"\"\"") && prelude.Contains("Preview := 0"));
+
+            if (Scripting.AhkScriptEngine.IsAvailable(v1: true))
+            {
+                var ahkRule = new LaunchRule
+                {
+                    Type = LaunchRule.TypeAhkScript,
+                    AhkReal = "if InStr(GameTitle, \"X\")\n    Args := Args\nArgs := Args . \" --ahk\"",
+                };
+                var (_, ahkArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { ahkRule }, "emu.exe", "game.zip");
+                RulePipeline.TakeAfterLaunch();
+                Expect("ahk: the real interpreter transforms the line (LB's AutoHotkey.exe)",
+                    ahkArgs == "game.zip --ahk");
+            }
+            else Expect("ahk: interpreter not reachable from this harness — generation-only run", true);
+        }
+
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
         //    the rom argument) ──
         {

@@ -40,6 +40,7 @@ internal sealed class LaunchRule
     public const string TypeUseFileContent = "UseFileContent";
     public const string TypeMonitorProfile = "MonitorProfile";
     public const string TypeScript = "Script";
+    public const string TypeAhkScript = "AhkScript";
 
     public string Type { get; set; } = TypePrefix;
     public bool Enabled { get; set; } = true;
@@ -119,6 +120,19 @@ internal sealed class LaunchRule
     /// <summary>Script: a display name leading the rule's line in the list — with several script
     /// rules on one emulator, "who does what" must not require opening each one.</summary>
     public string ScriptName { get; set; } = "";
+    /// <summary>AhkScript: the four slots, same contract as the C# rule's (see AhkAction).</summary>
+    public string AhkReal { get; set; } = "";
+    public string AhkExample { get; set; } = "";
+    public string AhkBefore { get; set; } = "";
+    public string AhkAfter { get; set; } = "";
+    /// <summary>AhkScript: leave the Before script RUNNING during the game (hotkeys, overlays);
+    /// killed when the game exits.</summary>
+    public bool AhkBeforeBackground { get; set; }
+    /// <summary>AhkScript: run with AutoHotkey v2 (user-provided exe) instead of the v1.1
+    /// LaunchBox ships.</summary>
+    public bool AhkV2 { get; set; }
+    /// <summary>AhkScript: the display name, like the C# rule's.</summary>
+    public string AhkName { get; set; } = "";
     /// <summary>The rule's variables (JSON RuleVariable[] — see RuleVariables). Transverse: any
     /// action may consult them; today the two Replace actions do.</summary>
     public string VariablesData { get; set; } = "";

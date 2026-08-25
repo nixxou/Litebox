@@ -1,4 +1,4 @@
-// A small dark C# code editor for the script rule — RichTextBox + a line-based tokenizer good
+﻿// A small dark C# code editor for the script rule — RichTextBox + a line-based tokenizer good
 // enough for scripts this size: // and /* */ comments, "…" / @"…" / $"…" strings, keywords,
 // numbers. The whole text recolors on a short debounce (full pass — scripts are small), behind
 // WM_SETREDRAW so nothing flickers, caret and scroll preserved. Also renders the Documentation
@@ -41,8 +41,22 @@ internal static class CodeEditorBox
     private const int EM_GETFIRSTVISIBLELINE = 0xCE;
     private const int EM_LINESCROLL = 0xB6;
 
+    private static readonly string[] AhkKeywords =
+    {
+        "if", "else", "return", "global", "static", "local", "loop", "while", "for", "in",
+        "true", "false", "and", "or", "not", "contains", "break", "continue", "goto",
+        "ExitApp", "Exit", "MsgBox", "FileAppend", "FileRead", "FileDelete", "Run", "RunWait",
+        "Send", "SendInput", "Sleep", "WinActivate", "WinWait", "WinWaitActive", "Hotkey",
+        "SetTimer", "Gosub", "IniRead", "IniWrite", "StrReplace", "InStr", "SubStr", "RegExMatch",
+        "RegExReplace", "Process", "EnvGet", "Click", "MouseMove", "SoundSetVolume", "ToolTip",
+    };
+
     /// <summary>The editor: dark, Consolas, C# highlighting on a 400 ms debounce.</summary>
-    public static RichTextBox CreateEditor(string code)
+    public static RichTextBox CreateEditor(string code) => CreateEditor(code, ahk: false);
+
+    /// <summary>Same editor, language-switched: <paramref name="ahk"/> uses the AHK tokenizer
+    /// (";" comments, AHK keywords, %derefs%).</summary>
+    public static RichTextBox CreateEditor(string code, bool ahk)
     {
         var box = new RichTextBox
         {
@@ -55,15 +69,15 @@ internal static class CodeEditorBox
         };
         var timer = new System.Windows.Forms.Timer { Interval = 400 };
         bool coloring = false;
-        timer.Tick += (_, _) => { timer.Stop(); Highlight(box, ref coloring); };
+        timer.Tick += (_, _) => { timer.Stop(); Highlight(box, ref coloring, ahk); };
         box.TextChanged += (_, _) => { if (!coloring) { timer.Stop(); timer.Start(); } };
         box.Disposed += (_, _) => timer.Dispose();
-        Highlight(box, ref coloring);
+        Highlight(box, ref coloring, ahk);
         return box;
     }
 
     /// <summary>Full-pass recolor, flicker-free, caret and scroll kept.</summary>
-    private static void Highlight(RichTextBox box, ref bool coloring)
+    private static void Highlight(RichTextBox box, ref bool coloring, bool ahk = false)
     {
         if (coloring || box.IsDisposed) return;
         coloring = true;
@@ -74,7 +88,7 @@ internal static class CodeEditorBox
         {
             box.SelectAll();
             box.SelectionColor = ColDefault;
-            foreach (var (start, len, color) in Tokenize(box.Text))
+            foreach (var (start, len, color) in (ahk ? TokenizeAhk(box.Text) : Tokenize(box.Text)))
             {
                 box.Select(start, len);
                 box.SelectionColor = color;
@@ -146,11 +160,73 @@ internal static class CodeEditorBox
         }
     }
 
+    /// <summary>The AHK flavour: ";" line comments (start of line or after whitespace), /* */
+    /// blocks, "…" strings (doubled-quote escape), %deref% names, numbers, AHK keywords.</summary>
+    private static System.Collections.Generic.IEnumerable<(int Start, int Len, Color Color)> TokenizeAhk(string s)
+    {
+        int i = 0, n = s.Length;
+        while (i < n)
+        {
+            char c = s[i];
+            bool atLineStart = i == 0 || s[i - 1] == '\n' || char.IsWhiteSpace(s[i - 1]);
+            if (c == ';' && atLineStart)
+            {
+                int end = s.IndexOf('\n', i); if (end < 0) end = n;
+                yield return (i, end - i, ColComment); i = end;
+            }
+            else if (c == '/' && i + 1 < n && s[i + 1] == '*')
+            {
+                int end = s.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                end = end < 0 ? n : end + 2;
+                yield return (i, end - i, ColComment); i = end;
+            }
+            else if (c == '"')
+            {
+                int start = i; i++;
+                while (i < n)
+                {
+                    if (s[i] == '"')
+                    {
+                        if (i + 1 < n && s[i + 1] == '"') { i += 2; continue; }
+                        i++; break;
+                    }
+                    if (s[i] == '\n') break;
+                    i++;
+                }
+                yield return (start, i - start, ColString);
+            }
+            else if (c == '%')
+            {
+                int end = s.IndexOf('%', i + 1);
+                if (end > i && end - i < 64 && s.IndexOf('\n', i, end - i) < 0)
+                { yield return (i, end - i + 1, ColNumber); i = end + 1; }
+                else i++;
+            }
+            else if (char.IsDigit(c))
+            {
+                int start = i;
+                while (i < n && (char.IsLetterOrDigit(s[i]) || s[i] == '.')) i++;
+                yield return (start, i - start, ColNumber);
+            }
+            else if (char.IsLetter(c) || c == '_' || c == '#')
+            {
+                int start = i; i++;
+                while (i < n && (char.IsLetterOrDigit(s[i]) || s[i] == '_')) i++;
+                if (AhkKeywords.Any(k => string.Equals(k, s[start..i], StringComparison.OrdinalIgnoreCase))
+                    || s[start] == '#')
+                    yield return (start, i - start, ColKeyword);
+            }
+            else i++;
+        }
+    }
+
     // ── the documentation renderer ────────────────────────────────────────────
 
     /// <summary>Read-only doc view: headings in accent, prose gray, indented lines highlighted as
     /// code with the editor's own palette.</summary>
-    public static RichTextBox CreateDocView(string doc)
+    public static RichTextBox CreateDocView(string doc) => CreateDocView(doc, ahk: false);
+
+    public static RichTextBox CreateDocView(string doc, bool ahk)
     {
         var box = new RichTextBox
         {
@@ -181,7 +257,7 @@ internal static class CodeEditorBox
                 int lineStart = box.TextLength;
                 box.SelectionColor = ColDefault;
                 box.AppendText(line + "\r\n");
-                foreach (var (start, len, color) in Tokenize(line))
+                foreach (var (start, len, color) in (ahk ? TokenizeAhk(line) : Tokenize(line)))
                 {
                     box.Select(lineStart + start, len);
                     box.SelectionColor = color;

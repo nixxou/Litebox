@@ -98,7 +98,14 @@ internal static class RuleScriptEngine
                     "System.Text", "System.Text.RegularExpressions", "System.Text.Json",
                     "System.Xml.Linq", "System.Diagnostics",
                     "System.Net", "System.Net.Http", "System.Net.Sockets",
-                    "LbApiHost.Host.Rules.Scripting");
+                    "LbApiHost.Host.Rules.Scripting")
+                // `using X;` works out of the box in script code; these resolvers additionally
+                // enable `#r "path\to\lib.dll"` (extra references — user libs, vendor SDKs) and
+                // `#load "shared.csx"` (shared snippets), relative paths anchored at Core.
+                .WithMetadataResolver(Microsoft.CodeAnalysis.Scripting.ScriptMetadataResolver.Default
+                    .WithBaseDirectory(AppContext.BaseDirectory))
+                .WithSourceResolver(new Microsoft.CodeAnalysis.SourceFileResolver(
+                    System.Collections.Immutable.ImmutableArray<string>.Empty, AppContext.BaseDirectory));
             // The plugin SDK, when it is around (Core): scripts may cast Game to IGame. Loaded by
             // NAME so this engine never hard-references it — the selftest harness has no SDK.
             try

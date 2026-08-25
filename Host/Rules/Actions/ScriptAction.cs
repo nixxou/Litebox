@@ -363,7 +363,12 @@ public class LbApi
 Each tab is one script, compiled once per session (first compile ~1 s, then instant).
 A script is plain C# (Roslyn scripting): statements at top level, no class needed.
 Imports already in scope: System, IO, Linq, Collections.Generic, Text, RegularExpressions,
-Text.Json, Xml.Linq, Diagnostics — JSON, XML and regex work out of the box.
+Text.Json, Xml.Linq, Diagnostics, Net, Net.Http, Net.Sockets — JSON, XML, regex and HTTP
+work out of the box. Need more?
+  using Some.Namespace;          any namespace of an already-referenced assembly
+  #r ""C:\libs\MyLib.dll""         reference an EXTRA dll (first line of the script;
+                                 relative paths resolve from LaunchBox's Core folder)
+  #load ""shared.csx""             include a shared snippet file the same way
 
 THE FOUR SLOTS
   Transform (real)     runs at launch, at this rule's position. Assign Exe and/or Args:

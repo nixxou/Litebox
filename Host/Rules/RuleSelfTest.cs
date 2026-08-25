@@ -525,6 +525,26 @@ internal static class RuleSelfTest
             Expect("script: the preview runs the EXAMPLE slot, never the real one",
                 preview == "emu.exe game.zip --demo");
 
+            var usingRule = new LaunchRule
+            {
+                Type = LaunchRule.TypeScript,
+                ScriptReal = "using System.Collections;\nvar q = new Queue();\nq.Enqueue(\"--from-using\");\nArgs = Args + \" \" + (string)q.Dequeue();",
+            };
+            var (_, usingArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { usingRule }, "emu.exe", "game.zip");
+            RulePipeline.TakeAfterLaunch();
+            Expect("script: user `using` directives work in script code",
+                usingArgs == "game.zip --from-using");
+
+            var refRule = new LaunchRule
+            {
+                Type = LaunchRule.TypeScript,
+                ScriptReal = "#r \"Microsoft.CodeAnalysis.dll\"\nArgs = Args + \" lang=\" + Microsoft.CodeAnalysis.LanguageNames.CSharp;",
+            };
+            var (_, refArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { refRule }, "emu.exe", "game.zip");
+            RulePipeline.TakeAfterLaunch();
+            Expect("script: #r pulls an extra dll (resolved from the Core/base directory)",
+                refArgs == "game.zip lang=C#");
+
             var broken = new LaunchRule { Type = LaunchRule.TypeScript, ScriptReal = "this is not C#" };
             var (_, brokenArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { broken }, "emu.exe", "game.zip");
             RulePipeline.TakeAfterLaunch();

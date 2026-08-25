@@ -3186,6 +3186,27 @@ internal sealed partial class MainWindow : Form, IMessageFilter
                     "Uninstall LiteBox now?\n\nLiteBox will close and delete itself. This cannot be undone." + extra,
                     "Uninstall LiteBox", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                 return;
+            // Elevated scheduled tasks (admin-launch bridge, RAM-disk mounter): the .bat cannot
+            // delete them — deleting an elevated task needs elevation, which a detached cmd does
+            // not have. Ask ONLY when this install actually has some, and do it in one UAC here,
+            // while we are still an interactive app. A refusal is not fatal: the uninstall goes on
+            // and the entries survive, inert, pointing at a deleted exe.
+            var tasks = Install.Uninstaller.PresentScheduledTasks();
+            if (tasks.Length > 0)
+            {
+                var answer = MessageBox.Show(p.FindForm(),
+                    "This install also registered " + (tasks.Length > 1 ? "elevated scheduled tasks" : "an elevated scheduled task") + ":\n\n  • "
+                    + string.Join("\n  • ", tasks)
+                    + "\n\nRemove " + (tasks.Length > 1 ? "them" : "it") + " too? Windows will ask for administrator rights once."
+                    + "\n\n(No = the uninstall continues and " + (tasks.Length > 1 ? "they stay" : "it stays") + " in the Task Scheduler, harmless but useless.)",
+                    "Uninstall LiteBox", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (answer == DialogResult.Cancel) return;
+                if (answer == DialogResult.Yes && !Install.Uninstaller.RemoveScheduledTasks(tasks))
+                    MessageBox.Show(p.FindForm(),
+                        "The scheduled task"+ (tasks.Length > 1 ? "s were" : " was") + " not removed (elevation refused or failed).\n"
+                        + "The uninstall continues; you can delete " + (tasks.Length > 1 ? "them" : "it") + " later from the Task Scheduler.",
+                        "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
             try { Install.Uninstaller.RunSelfUninstall(cbTp.Checked); }   // launches the bat + exits
             catch (Exception ex) { MessageBox.Show(p.FindForm(), "Uninstall failed to start: " + ex.Message, "LiteBox", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         };

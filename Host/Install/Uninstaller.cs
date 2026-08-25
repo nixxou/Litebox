@@ -26,6 +26,40 @@ namespace LbApiHost.Host.Install;
 
 internal static class Uninstaller
 {
+    /// <summary>THIS install's elevated scheduled tasks that actually exist right now — the caller
+    /// asks about them only when the list is non-empty (nothing to say otherwise). Per-install
+    /// names, so another LiteBox's tasks are never listed and never removed.</summary>
+    public static string[] PresentScheduledTasks()
+    {
+        var found = new System.Collections.Generic.List<string>();
+        try { if (AdminLaunch.IsTaskInstalled()) found.Add(AdminLaunch.TaskName); } catch { }
+        try { if (Rom.ArchiveRamDisk.IsTaskInstalled()) found.Add(Rom.ArchiveRamDisk.TaskName); } catch { }
+        return found.ToArray();
+    }
+
+    /// <summary>Deletes the given tasks in ONE elevated shell (a single UAC prompt). Returns false
+    /// when the prompt is refused or schtasks fails — the caller then carries on with the uninstall
+    /// and the (inert) entries simply survive.</summary>
+    public static bool RemoveScheduledTasks(string[] tasks)
+    {
+        if (tasks.Length == 0) return true;
+        try
+        {
+            string cmd = string.Join(" & ", Array.ConvertAll(tasks,
+                t => $"schtasks /delete /tn \"{t}\" /f"));
+            var psi = new ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = true, Verb = "runas", CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden, Arguments = "/c " + cmd,
+            };
+            using var p = Process.Start(psi);
+            if (p == null) return false;
+            p.WaitForExit(30000);
+            return p.ExitCode == 0;
+        }
+        catch { return false; }   // UAC refused
+    }
+
     /// <summary>Writes the uninstall .bat, launches it detached, and exits LiteBox. Does not return.</summary>
     public static void RunSelfUninstall(bool alsoSharedThirdParty)
     {

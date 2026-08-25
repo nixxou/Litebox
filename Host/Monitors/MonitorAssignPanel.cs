@@ -136,7 +136,10 @@ internal static class MonitorAssignPanel
     // ── the custom editor: display mode + sound card + solo, no layout ────────
 
     // Internal: the MonitorProfile LAUNCH RULE reuses this exact editor for its own inline custom.
-    internal static (Panel box, Action apply) BuildCustom(MonitorProfile p, float dpiS, bool readOnly)
+    // twoColumns redistributes the content for a DIALOG (the rule editor): display mode on the left,
+    // NVIDIA + sound + solo on the right — the emulator page keeps its single scrollable column.
+    internal static (Panel box, Action apply) BuildCustom(MonitorProfile p, float dpiS, bool readOnly,
+        bool twoColumns = false)
     {
         int S(int px) => ModulePanelKit.Sc(dpiS, px);
         // AutoSize rather than a guessed width: a Panel CLIPS its children, and sizing it from the parent's
@@ -147,9 +150,12 @@ internal static class MonitorAssignPanel
             BackColor = ModulePanelKit.Bg,
             AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
         };
-        int y = 0;
-        void Row(Control c, int h, int indent = 0) { c.Location = new Point(S(indent), y); box.Controls.Add(c); y += h; }
-        Label Cap(string t) => ModulePanelKit.Caption(t, dpiS, 560);
+        int y = 0, colX = 0;
+        void Row(Control c, int h, int indent = 0) { c.Location = new Point(colX + S(indent), y); box.Controls.Add(c); y += h; }
+        void NextColumn() { if (!twoColumns) return; colX = S(272); y = 0; }
+        int wMain = twoColumns ? 246 : 360;    // monitor / sound-device combos
+        int wSmall = twoColumns ? 246 : 260;   // the mode selectors
+        Label Cap(string t) => ModulePanelKit.Caption(t, dpiS, twoColumns ? 246 : 560);
 
         var monitors = DisplayTargets.Enumerate();
 
@@ -157,7 +163,7 @@ internal static class MonitorAssignPanel
         var usePreset = new CheckBox { Text = "Display mode", AutoSize = true, ForeColor = ModulePanelKit.Fg, BackColor = ModulePanelKit.Bg, Checked = p.Preset != null, Enabled = !readOnly };
         Row(usePreset, S(24));
 
-        var monCombo = ModulePanelKit.Combo(dpiS, readOnly, 360);
+        var monCombo = ModulePanelKit.Combo(dpiS, readOnly, wMain);
         monCombo.Items.Add("Main monitor (whichever is primary)");
         foreach (var m in monitors)
             monCombo.Items.Add($"{m.FriendlyName}  ({(m.DisplayName.Length > 0 ? m.DisplayName : "connected")})");
@@ -169,7 +175,7 @@ internal static class MonitorAssignPanel
         var primary = new CheckBox { Text = "Make this monitor the main one", AutoSize = true, ForeColor = ModulePanelKit.Fg, BackColor = ModulePanelKit.Bg, Checked = p.Preset?.MakePrimary ?? false, Enabled = !readOnly };
         Row(primary, S(24), 18);
 
-        var res = ModulePanelKit.Combo(dpiS, readOnly, 260);
+        var res = ModulePanelKit.Combo(dpiS, readOnly, wSmall);
         res.Items.Add("(leave unchanged)");
         foreach (var l in ModeCatalog.ResolutionLabels()) res.Items.Add(l);
         res.SelectedIndex = 0;
@@ -177,7 +183,7 @@ internal static class MonitorAssignPanel
         Row(Cap("Resolution"), S(18), 18);
         Row(res, S(28), 18);
 
-        var freq = ModulePanelKit.Combo(dpiS, readOnly, 260);
+        var freq = ModulePanelKit.Combo(dpiS, readOnly, wSmall);
         freq.Items.Add("(leave unchanged)");
         foreach (var l in ModeCatalog.RefreshLabels()) freq.Items.Add(l);
         freq.SelectedIndex = 0;
@@ -185,27 +191,27 @@ internal static class MonitorAssignPanel
         Row(Cap("Refresh rate"), S(18), 18);
         Row(freq, S(28), 18);
 
-        var hdr = ModulePanelKit.Combo(dpiS, readOnly, 260);
+        var hdr = ModulePanelKit.Combo(dpiS, readOnly, wSmall);
         hdr.Items.AddRange(new object[] { "Leave unchanged", "Force HDR on", "Force HDR off (SDR)" });
         hdr.SelectedIndex = p.Preset?.Hdr switch { true => 1, false => 2, _ => 0 };
         Row(Cap("HDR"), S(18), 18);
         Row(hdr, S(28), 18);
 
         var rotValues = new[] { "", "Identity", "Rotate90", "Rotate180", "Rotate270" };
-        var rot = ModulePanelKit.Combo(dpiS, readOnly, 260);
+        var rot = ModulePanelKit.Combo(dpiS, readOnly, wSmall);
         rot.Items.AddRange(new object[] { "(leave unchanged)", "Landscape", "Portrait (90°)", "Landscape flipped (180°)", "Portrait flipped (270°)" });
         rot.SelectedIndex = Math.Max(0, Array.FindIndex(rotValues, v => string.Equals(v, p.Preset?.Rotation ?? "", StringComparison.OrdinalIgnoreCase)));
         Row(Cap("Rotation"), S(18), 18);
         Row(rot, S(28), 18);
 
         var scaleValues = new[] { "", "Default", "Stretch", "Center" };
-        var scale = ModulePanelKit.Combo(dpiS, readOnly, 260);
+        var scale = ModulePanelKit.Combo(dpiS, readOnly, wSmall);
         scale.Items.AddRange(new object[] { "(leave unchanged)", "Driver default", "Stretch to fill", "Center (no stretch)" });
         scale.SelectedIndex = Math.Max(0, Array.FindIndex(scaleValues, v => string.Equals(v, p.Preset?.OutputScaling ?? "", StringComparison.OrdinalIgnoreCase)));
         Row(Cap("Scaling below native"), S(18), 18);
         Row(scale, S(28), 18);
 
-        var zoom = ModulePanelKit.Combo(dpiS, readOnly, 260);
+        var zoom = ModulePanelKit.Combo(dpiS, readOnly, wSmall);
         zoom.Items.Add("(leave unchanged)");
         foreach (var z in new[] { 100, 125, 150, 175, 200, 225, 250, 300 }) zoom.Items.Add(z + "%");
         zoom.SelectedIndex = 0;
@@ -262,16 +268,20 @@ internal static class MonitorAssignPanel
         gVibOn.CheckedChanged += (_, _) => gVib.Enabled = !readOnly && gVibOn.Checked;
         N(gVibOn, S(24)); N(gVib, S(28), 16);
         nvBox.Height = ny + S(6);
-        if (showNv) Row(nvBox, nvBox.Height + S(6), 18);
 
         var adjust = new CheckBox { Text = "Adjust to the closest supported value", AutoSize = true, ForeColor = ModulePanelKit.Fg, BackColor = ModulePanelKit.Bg, Checked = p.Preset?.AdjustToClosest ?? true, Enabled = !readOnly };
         Row(adjust, S(26), 18);
+
+        // Second column (dialog mode): NVIDIA, then sound, then solo. Single column keeps the
+        // page's historical order — NVIDIA between the zoom and the adjust box.
+        NextColumn();
+        if (showNv) Row(nvBox, nvBox.Height + S(6), twoColumns ? 0 : 18);
 
         // sound
         var useAudio = new CheckBox { Text = "Sound card / volume", AutoSize = true, ForeColor = ModulePanelKit.Fg, BackColor = ModulePanelKit.Bg, Checked = p.Audio != null, Enabled = !readOnly };
         Row(useAudio, S(24));
 
-        var dev = ModulePanelKit.Combo(dpiS, readOnly, 360);
+        var dev = ModulePanelKit.Combo(dpiS, readOnly, wMain);
         dev.Items.Add("(leave unchanged)");
         foreach (var d in AudioEndpoints.Playback()) dev.Items.Add(d);
         dev.SelectedIndex = 0;

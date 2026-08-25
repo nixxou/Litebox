@@ -144,8 +144,9 @@ internal sealed class MonitorProfileAction : IRuleAction
         MonitorProfile customProfile;
         try { customProfile = JsonSerializer.Deserialize<MonitorProfile>(r.MonitorCustomData) ?? new MonitorProfile { Name = "Custom" }; }
         catch { customProfile = new MonitorProfile { Name = "Custom" }; }
-        var (customBox, applyCustom) = MonitorAssignPanel.BuildCustom(customProfile, dpiS, readOnly: false);
-        customBox.Location = new Point(S(18), y);
+        // Two columns — the single-column page layout would push this dialog past the screen.
+        var (customBox, applyCustom) = MonitorAssignPanel.BuildCustom(customProfile, dpiS, readOnly: false, twoColumns: true);
+        customBox.Location = new Point(0, y);
         body.Controls.Add(customBox);
         int customY = y;
 

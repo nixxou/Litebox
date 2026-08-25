@@ -115,6 +115,10 @@ internal sealed class CopyFileAction : IRuleAction
         return changed ? cmd with { Args = RuleArgs.Join(parts) } : cmd;
     }
 
+    /// <summary>Files at least this big copy through the TopMost progress window (BBP's
+    /// CopyFile_Task); smaller ones are near-instant and skip the flash.</summary>
+    private const long ProgressWindowBytes = 32L * 1024 * 1024;
+
     /// <summary>One file into the target dir. Reuses an identical existing copy (size + write time)
     /// — the network-share case pays the copy once, not per launch.</summary>
     private static string CopyOne(string source, string targetDir)
@@ -129,7 +133,16 @@ internal sealed class CopyFileAction : IRuleAction
             return target;
         }
         var sw = Stopwatch.StartNew();
-        File.Copy(source, target, overwrite: true);
+        if (src.Length >= ProgressWindowBytes)
+        {
+            // The visible copy — the progress window pumps on this (launch) thread, exactly how the
+            // original ran its CopyFile_Task from ExecuteBefore. A failure inside deleted the
+            // half-copy; rethrow so the per-argument catch leaves the argument untouched.
+            using var dlg = new CopyProgressDialog(source, target);
+            dlg.ShowDialog();
+            if (dlg.Error != null) throw dlg.Error;
+        }
+        else File.Copy(source, target, overwrite: true);
         LbLog.Info(Tag, $"CopyFile: \"{source}\" → \"{target}\" ({src.Length / 1048576.0:0.#} MB in {sw.ElapsedMilliseconds} ms)");
         return target;
     }
@@ -228,8 +241,10 @@ internal sealed class CopyFileAction : IRuleAction
         body.Controls.Add(del);
         y += S(28);
 
-        // ── sandbox: the would-be rewrite for a test line (File.Exists checks only, no copy) ──
-        Cap("Sandbox — test line (real paths get rewritten in the result; nothing is copied):");
+        // ── sandbox: pedagogical, so it rewrites on the substring match ALONE — the real launch
+        // (and the page preview) additionally require the file to EXIST; a matching-but-missing
+        // path is flagged instead of silently doing nothing with the demo line. Nothing is copied.
+        Cap("Sandbox — test line (matching args get rewritten here even if the file doesn't exist):");
         var testLine = new TextBox
         {
             Text = @"emulator.exe ""\\NAS\roms\game.iso""", Location = new Point(0, y), Width = S(574),
@@ -240,22 +255,31 @@ internal sealed class CopyFileAction : IRuleAction
         Cap("Result:");
         var result = new TextBox
         {
-            Location = new Point(0, y), Width = S(574), ReadOnly = true,
+            Location = new Point(0, y), Width = S(574), Multiline = true, Height = S(46), ReadOnly = true,
             BackColor = LiteBoxTheme.Bg, ForeColor = LiteBoxTheme.SubFg, BorderStyle = BorderStyle.FixedSingle,
         };
         body.Controls.Add(result);
-        y += S(30);
+        y += S(52);
 
         void Recalc()
         {
             try
             {
-                var probe = new LaunchRule { CopySourceDir = src.Text, CopyTargetDir = dst.Text };
                 var all = RuleArgs.SplitFull(testLine.Text);
-                if (all.Length == 0) { result.Text = ""; return; }
-                var cmd = new RuleCmd(all[0], RuleArgs.Join(all.Skip(1)));
-                var outCmd = ApplyExample(probe, cmd);
-                result.Text = RuleArgs.Join(new[] { outCmd.Exe }.Concat(RuleArgs.Split(outCmd.Args)));
+                if (all.Length == 0 || src.Text.Length == 0) { result.Text = ""; return; }
+                var parts = all.Skip(1).ToArray();
+                var missing = new List<string>();
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    if (!parts[i].Contains(src.Text)) continue;
+                    if (!File.Exists(parts[i])) missing.Add(parts[i]);
+                    parts[i] = Path.Combine(dst.Text, Path.GetFileName(parts[i]));
+                }
+                result.Text = RuleArgs.Join(new[] { all[0] }.Concat(parts))
+                    + (missing.Count > 0
+                        ? "\r\n(note: " + string.Join(", ", missing.Select(Path.GetFileName))
+                          + " doesn't exist here — at a real launch that argument would stay untouched)"
+                        : "");
             }
             catch (Exception ex) { result.Text = "(invalid: " + ex.Message + ")"; }
         }

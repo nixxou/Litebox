@@ -167,8 +167,18 @@ internal static class MonitorAssignPanel
         monCombo.Items.Add("Main monitor (whichever is primary)");
         foreach (var m in monitors)
             monCombo.Items.Add($"{m.FriendlyName}  ({(m.DisplayName.Length > 0 ? m.DisplayName : "connected")})");
-        int mi = p.Preset != null && p.Preset.DevicePath.Length > 0
-            ? monitors.FindIndex(m => string.Equals(m.DevicePath, p.Preset.DevicePath, StringComparison.OrdinalIgnoreCase)) + 1 : 0;
+        // The preset's own monitor when it is NOT among the attached ones — a deliberate selection
+        // must SURVIVE unplugging (or an identity edit in the database): silently snapping back to
+        // "Main monitor" both lies and, on the next save, destroys the stored identity. Same
+        // "(disconnected)" synthetic entry as the profile editor; the saved DevicePath/EDID ride it.
+        var savedMon = p.Preset != null && p.Preset.DevicePath.Length > 0
+            && !monitors.Any(m => string.Equals(m.DevicePath, p.Preset.DevicePath, StringComparison.OrdinalIgnoreCase))
+            ? p.Preset : null;
+        if (savedMon != null)
+            monCombo.Items.Add($"{(savedMon.FriendlyName.Length > 0 ? savedMon.FriendlyName : "Saved monitor")}  (disconnected)");
+        int mi = savedMon != null ? monCombo.Items.Count - 1
+               : p.Preset != null && p.Preset.DevicePath.Length > 0
+                 ? monitors.FindIndex(m => string.Equals(m.DevicePath, p.Preset.DevicePath, StringComparison.OrdinalIgnoreCase)) + 1 : 0;
         monCombo.SelectedIndex = Math.Max(0, mi);
         Row(monCombo, S(28), 18);
 
@@ -303,20 +313,22 @@ internal static class MonitorAssignPanel
             var (w, h) = ParseRes(res.SelectedItem as string);
             int hz = ParseHz(freq.SelectedItem as string);
             bool? wantHdr = hdr.SelectedIndex switch { 1 => true, 2 => false, _ => (bool?)null };
-            var mon = monCombo.SelectedIndex > 0 ? monitors[monCombo.SelectedIndex - 1] : null;
+            // The synthetic "(disconnected)" entry keeps the SAVED identity verbatim.
+            bool savedSel = savedMon != null && monCombo.SelectedIndex == monCombo.Items.Count - 1;
+            var mon = !savedSel && monCombo.SelectedIndex > 0 ? monitors[monCombo.SelectedIndex - 1] : null;
 
             var preset = new MonitorPreset
             {
-                DevicePath = mon?.DevicePath ?? "",
-                FriendlyName = mon?.FriendlyName ?? "",
-                EdidManufacture = mon?.EdidManufacture ?? "",
-                EdidProduct = mon?.EdidProduct ?? 0,
+                DevicePath = savedSel ? savedMon!.DevicePath : mon?.DevicePath ?? "",
+                FriendlyName = savedSel ? savedMon!.FriendlyName : mon?.FriendlyName ?? "",
+                EdidManufacture = savedSel ? savedMon!.EdidManufacture : mon?.EdidManufacture ?? "",
+                EdidProduct = savedSel ? savedMon!.EdidProduct : mon?.EdidProduct ?? 0,
                 Width = w > 0 ? w : 0,
                 Height = w > 0 ? h : 0,
                 Frequency = w > 0 ? hz : 0,
                 Hdr = wantHdr,
                 AdjustToClosest = adjust.Checked,
-                MakePrimary = primary.Checked && mon != null,
+                MakePrimary = primary.Checked && (mon != null || savedSel),
                 Rotation = rotValues[Math.Max(0, rot.SelectedIndex)],
                 OutputScaling = scaleValues[Math.Max(0, scale.SelectedIndex)],
                 DpiScale = (zoom.SelectedItem as string) is { Length: > 0 } zl && !zl.StartsWith("(")

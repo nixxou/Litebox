@@ -138,7 +138,18 @@ internal static class MonitorAssign
     /// Walks version → game → emulator and stops at the FIRST level that has an opinion, including an
     /// explicit "none" — that is the whole reason the chain has three levels rather than one.</summary>
     public static MonitorProfile? Resolve(string? gameId, string? versionId, string? emulatorId)
+        => Resolve(gameId, versionId, emulatorId, Assignment.Unset, null, out _);
+
+    /// <summary>Same resolution with the LAUNCH-RULE layer slotted in: above every stored assignment
+    /// (version / game / emulator) and below the manual one-shot — a fired MonitorProfile rule is
+    /// configuration, the one-shot is someone at the machine right now. <paramref name="ruleDecided"/>
+    /// reports whether the rule's answer is the one that won (the caller keys the rule's per-launch
+    /// NVAPI force on it). The caller evaluates the rule and hands the decision in — Monitors stays
+    /// ignorant of the Rules module.</summary>
+    public static MonitorProfile? Resolve(string? gameId, string? versionId, string? emulatorId,
+        Assignment ruleAssign, MonitorProfile? ruleCustom, out bool ruleDecided)
     {
+        ruleDecided = false;
         if (!LbModules.On(LbModule.Monitors)) return null;
 
         // The one-shot first, and consumed whether or not it names a profile — arming "no profile for the
@@ -150,6 +161,34 @@ internal static class MonitorAssign
             var chosen = MonitorProfileStore.ById(once.ProfileId);
             if (chosen != null) { LbLog.Info(Tag, $"launch: one-shot profile \"{chosen.Name}\""); return chosen; }
             LbLog.Warn(Tag, "launch: the one-shot named a profile that no longer exists — falling through");
+        }
+
+        // The rule layer. A missing named profile falls through to the stored assignments, like a
+        // dangling assignment would at any level.
+        if (ruleAssign.IsSet)
+        {
+            switch (ruleAssign.Kind)
+            {
+                case AssignKind.None:
+                    LbLog.Info(Tag, "launch: a monitor-profile rule says no monitor profile");
+                    ruleDecided = true;
+                    return null;
+                case AssignKind.Custom:
+                    if (ruleCustom != null)
+                    {
+                        ruleCustom.Name = ruleCustom.Name.Length > 0 ? ruleCustom.Name : "rule settings";
+                        LbLog.Info(Tag, "launch: a monitor-profile rule applies its custom settings");
+                        ruleDecided = true;
+                        return ruleCustom;
+                    }
+                    LbLog.Warn(Tag, "launch: a monitor-profile rule is set to custom but has no configuration — ignored");
+                    break;
+                default:
+                    var rp = MonitorProfileStore.ById(ruleAssign.ProfileId);
+                    if (rp != null) { LbLog.Info(Tag, $"launch: monitor-profile rule → \"{rp.Name}\""); ruleDecided = true; return rp; }
+                    LbLog.Warn(Tag, "launch: a monitor-profile rule names a profile that no longer exists — ignored");
+                    break;
+            }
         }
 
         foreach (var (scope, id) in new[]

@@ -468,6 +468,50 @@ internal static class RuleSelfTest
             finally { try { System.IO.Directory.Delete(root, recursive: true); } catch { } }
         }
 
+        // ── Monitor profile rule: pre-evaluation on the preview walk, last fired wins ──
+        {
+            Actions.MonitorProfileAction.TestBypassModuleGate = true;
+            LaunchRule Mon(string assign, string filter = "", bool nvapi = false, string custom = "")
+                => new()
+                {
+                    Type = LaunchRule.TypeMonitorProfile, MonitorAssignData = assign,
+                    Filter = filter, MonitorNvapi = nvapi, MonitorCustomData = custom,
+                };
+
+            var (a1, _, _) = Actions.MonitorProfileAction.EvaluateRules(
+                new List<LaunchRule> { Mon("none", filter: "--sinden") }, "emu.exe game.zip");
+            Expect("monitor rule: a refused probe contributes nothing", !a1.IsSet);
+
+            var (a2, _, nv2) = Actions.MonitorProfileAction.EvaluateRules(
+                new List<LaunchRule> { Mon("none", filter: "--sinden", nvapi: true) }, "emu.exe game.zip --sinden");
+            Expect("monitor rule: fired \"none\" answers explicitly, nvapi flag carried",
+                a2.IsSet && a2.Kind == Monitors.AssignKind.None && nv2);
+
+            // The branching bus works on the pre-evaluation too: an earlier rule injects the marker
+            // the monitor rule keys on — the preview walk sees the TRANSFORMED line.
+            var injected = Sfx("--lightgun", asArg: true);
+            var (a3, _, _) = Actions.MonitorProfileAction.EvaluateRules(
+                new List<LaunchRule> { injected, Mon("profile-A", filter: "--lightgun") }, "emu.exe game.zip");
+            Expect("monitor rule: probes see the line as previous rules left it",
+                a3.IsSet && a3.Kind == Monitors.AssignKind.Profile && a3.ProfileId == "profile-A");
+
+            var (a4, c4, _) = Actions.MonitorProfileAction.EvaluateRules(
+                new List<LaunchRule>
+                {
+                    Mon("profile-A"),
+                    Mon("custom", custom: "{\"Name\":\"RuleCustom\"}"),
+                }, "emu.exe game.zip");
+            Expect("monitor rule: the LAST fired rule supersedes, custom settings deserialized",
+                a4.Kind == Monitors.AssignKind.Custom && c4 != null && c4.Name == "RuleCustom");
+
+            var disabledRule = Mon("profile-A");
+            disabledRule.Enabled = false;
+            var (a5, _, _) = Actions.MonitorProfileAction.EvaluateRules(
+                new List<LaunchRule> { disabledRule }, "emu.exe game.zip");
+            Expect("monitor rule: a disabled rule contributes nothing", !a5.IsSet);
+            Actions.MonitorProfileAction.TestBypassModuleGate = false;
+        }
+
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
         //    the rom argument) ──
         {

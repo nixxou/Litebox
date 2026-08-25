@@ -38,6 +38,7 @@ internal sealed class LaunchRule
     public const string TypeHidDetect = "HidDetect";
     public const string TypeCopyFile = "CopyFile";
     public const string TypeUseFileContent = "UseFileContent";
+    public const string TypeMonitorProfile = "MonitorProfile";
 
     public string Type { get; set; } = TypePrefix;
     public bool Enabled { get; set; } = true;
@@ -96,6 +97,14 @@ internal sealed class LaunchRule
     /// <summary>UseFileContent: resolve a relative content path against the pointer file's own
     /// folder (true, the original's "usefile") or the current directory (false).</summary>
     public bool UseFileDir { get; set; } = true;
+    /// <summary>MonitorProfile: the rule's choice, in MonitorAssign's own encoding — "none",
+    /// "custom", or a saved profile id. Empty = not configured.</summary>
+    public string MonitorAssignData { get; set; } = "";
+    /// <summary>MonitorProfile: the inline custom profile (JSON MonitorProfile) when "custom".</summary>
+    public string MonitorCustomData { get; set; } = "";
+    /// <summary>MonitorProfile: apply the NVIDIA (NVAPI) parts for this launch even when the
+    /// module's global NVAPI toggle is off.</summary>
+    public bool MonitorNvapi { get; set; }
     /// <summary>The rule's variables (JSON RuleVariable[] — see RuleVariables). Transverse: any
     /// action may consult them; today the two Replace actions do.</summary>
     public string VariablesData { get; set; } = "";

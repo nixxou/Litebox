@@ -519,10 +519,28 @@ internal static class HostLaunch
             {
                 try
                 {
-                    var mp = Monitors.MonitorAssign.Resolve(SafeStr(() => game?.Id), SafeStr(() => app?.Id), SafeStr(() => emulator?.Id));
+                    // The MonitorProfile LAUNCH RULE layer — above version/game/emulator, below the
+                    // one-shot. The profile applies before the command line exists, so the rule is
+                    // pre-evaluated on the PREVIEW walk over the side-effect-free constructed line
+                    // (see MonitorProfileAction). NVAPI force only when the rule's answer WON.
+                    var ruleAssign = Monitors.Assignment.Unset;
+                    Monitors.MonitorProfile ruleCustom = null; bool ruleNvapi = false;
+                    try
+                    {
+                        var rl = Rules.LaunchRuleStore.Resolve(SafeStr(() => emulator?.Id));
+                        if (rl.Any(x => x.Type == Rules.LaunchRule.TypeMonitorProfile))
+                        {
+                            string line = PreviewCommandLine(game, app, emulator) ?? "";
+                            (ruleAssign, ruleCustom, ruleNvapi) = Rules.Actions.MonitorProfileAction.EvaluateRules(rl, line);
+                        }
+                    }
+                    catch (Exception ex) { Console.WriteLine("[launch] monitor-profile rule eval error: " + ex.Message); }
+
+                    var mp = Monitors.MonitorAssign.Resolve(SafeStr(() => game?.Id), SafeStr(() => app?.Id), SafeStr(() => emulator?.Id),
+                        ruleAssign, ruleCustom, out bool ruleDecided);
                     if (mp != null)
                     {
-                        var mr = Monitors.MonitorProfileApply.BeginGameScope(mp);
+                        var mr = Monitors.MonitorProfileApply.BeginGameScope(mp, ruleDecided && ruleNvapi);
                         Console.WriteLine($"[launch] monitor profile \"{mp.Name}\": {mr.Message.ReplaceLineEndings(" | ")}");
                         // Give the displays time to finish changing before anything reads the desktop:
                         // autoruns and emulators started right after a mode set can still see the old

@@ -565,6 +565,9 @@ internal static class LaunchRulesPanel
             }
             when.LayoutChanged += Reflow;
             never.LayoutChanged += Reflow;
+            // An action body may grow/shrink after build (MonitorProfile shows its custom editor on
+            // demand) — follow it, same contract as the probe blocks.
+            body.SizeChanged += (_, _) => { actBox.Height = body.Height + S(30); Reflow(); };
             Reflow();
             ThemedCheckBox.StyleAll(this);
         }

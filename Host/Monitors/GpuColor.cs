@@ -40,14 +40,22 @@ internal static class GpuColor
 
     public const string KeyApply = "MonitorNvidiaApply";
 
+    /// <summary>Game-scope override of the master switch: a MonitorProfile LAUNCH RULE can enable
+    /// NVAPI writes for one launch even when the global toggle is off. Set by BeginGameScope,
+    /// cleared by EndGameScope AFTER the restore — the exit must be allowed to put the NVIDIA state
+    /// back, or the launch-time write would outlive the game.</summary>
+    public static bool ScopeForce { get; set; }
+
     /// <summary>The "Apply NVIDIA-specific settings" master switch (General options; absent = OFF —
     /// an opt-in: most users never need driver-level writes, and captures record the NVIDIA state
     /// either way, so nothing is lost while it waits). It gates the WRITES only. Read at every write
-    /// rather than cached: the user flips it in Options and expects the very next apply to obey.</summary>
+    /// rather than cached: the user flips it in Options and expects the very next apply to obey.
+    /// A launch rule's per-launch force (ScopeForce) opens the gate for its game scope.</summary>
     public static bool ApplyEnabled
     {
         get
         {
+            if (ScopeForce) return true;
             try { return string.Equals(Data.LiteBoxOptionsDb.GetGlobal(KeyApply), "true", StringComparison.OrdinalIgnoreCase); }
             catch { return false; }
         }

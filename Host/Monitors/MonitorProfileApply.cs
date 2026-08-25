@@ -177,10 +177,16 @@ internal static class MonitorProfileApply
     /// <summary>Snapshot the desktop, then apply <paramref name="profile"/> — for the duration of a game.
     /// Re-entrant by design: a nested call keeps the FIRST snapshot, so an add-app launched from inside a
     /// game does not make the outer exit restore an intermediate state.</summary>
-    public static ApplyResult BeginGameScope(MonitorProfile profile)
+    public static ApplyResult BeginGameScope(MonitorProfile profile) => BeginGameScope(profile, nvapiForce: false);
+
+    /// <summary>Same, with a MonitorProfile launch rule's per-launch NVAPI force: the NVIDIA writes
+    /// are enabled for this whole game scope (apply AND exit restore) even when the global toggle is
+    /// off. Cleared by EndGameScope after the restore.</summary>
+    public static ApplyResult BeginGameScope(MonitorProfile profile, bool nvapiForce)
     {
         lock (_gate)
         {
+            if (nvapiForce) GpuColor.ScopeForce = true;
             if (!_gameScopeHeld)
             {
                 _gameLayout = DisplayTargets.Capture();
@@ -234,6 +240,7 @@ internal static class MonitorProfileApply
             }
 
             _gameLayout = null; _gameAudioDevice = ""; _gameVolume = -1; _gameVrrKnown = false;
+            GpuColor.ScopeForce = false;   // the rule's per-launch NVAPI force ends WITH the restore
             LbLog.Info(Tag, "game scope closed: " + string.Join(" | ", notes));
             return new ApplyResult(ok, string.Join("\n", notes));
         }

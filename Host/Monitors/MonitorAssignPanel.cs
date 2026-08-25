@@ -135,7 +135,8 @@ internal static class MonitorAssignPanel
 
     // ── the custom editor: display mode + sound card + solo, no layout ────────
 
-    private static (Panel box, Action apply) BuildCustom(MonitorProfile p, float dpiS, bool readOnly)
+    // Internal: the MonitorProfile LAUNCH RULE reuses this exact editor for its own inline custom.
+    internal static (Panel box, Action apply) BuildCustom(MonitorProfile p, float dpiS, bool readOnly)
     {
         int S(int px) => ModulePanelKit.Sc(dpiS, px);
         // AutoSize rather than a guessed width: a Panel CLIPS its children, and sizing it from the parent's

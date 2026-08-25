@@ -71,6 +71,7 @@ internal static class RuleActions
         new HidDetectAction(),
         new CopyFileAction(),
         new UseFileContentAction(),
+        new MonitorProfileAction(),
     };
 
     public static IRuleAction? ByType(string type)

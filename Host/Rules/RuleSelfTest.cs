@@ -545,6 +545,18 @@ internal static class RuleSelfTest
             Expect("script: #r pulls an extra dll (resolved from the Core/base directory)",
                 refArgs == "game.zip lang=C#");
 
+            var pinvokeRule = new LaunchRule
+            {
+                Type = LaunchRule.TypeScript,
+                ScriptReal = "using System.Runtime.InteropServices;\n"
+                    + "class W { [DllImport(\"kernel32.dll\")] public static extern ulong GetTickCount64(); }\n"
+                    + "if (W.GetTickCount64() > 0) Args = Args + \" --win32\";",
+            };
+            var (_, pinvokeArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { pinvokeRule }, "emu.exe", "game.zip");
+            RulePipeline.TakeAfterLaunch();
+            Expect("script: a P/Invoke class declared IN the script calls Win32 (doc example 18's pattern)",
+                pinvokeArgs == "game.zip --win32");
+
             var broken = new LaunchRule { Type = LaunchRule.TypeScript, ScriptReal = "this is not C#" };
             var (_, brokenArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { broken }, "emu.exe", "game.zip");
             RulePipeline.TakeAfterLaunch();

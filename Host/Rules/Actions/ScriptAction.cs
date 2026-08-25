@@ -414,8 +414,8 @@ THE Lb TOOLBOX
   Lb.SelectedManual() / Manuals()   the retained manual / all of them
   Lb.SelectedMusic()  / Musics()    the retained track  / all of them
 
-SIXTEEN FICTIONAL EXAMPLES
---------------------------
+NINETEEN FICTIONAL EXAMPLES
+---------------------------
 1) Append an argument for one game
      if (Game != null && Game.Title.Contains(""Duck Hunt"")) Args += "" --lightgun"";
 
@@ -495,6 +495,33 @@ SIXTEEN FICTIONAL EXAMPLES
          Process.Start(new ProcessStartInfo(@""C:\tools\SumatraPDF.exe"", ""\"""" + man + ""\"""")
              { WindowStyle = ProcessWindowStyle.Minimized });
      // After slot: foreach (var p in Process.GetProcessesByName(""SumatraPDF"")) p.Kill();
+
+17) Newtonsoft.Json — LaunchBox ships it in Core, so #r loads it BY NAME (Before slot)
+     #r ""Newtonsoft.Json.dll""
+     using Newtonsoft.Json.Linq;
+     var cfg = JObject.Parse(File.ReadAllText(@""C:\emu\settings.json""));
+     cfg[""video""]![""vsync""] = true;
+     cfg[""lastGame""] = Game != null ? (string)Game.Title : """";
+     File.WriteAllText(@""C:\emu\settings.json"", cfg.ToString());
+
+18) Raw Win32 — declare P/Invoke classes right in the script (window juggling, Before slot)
+     using System.Runtime.InteropServices;
+     class Win32
+     {
+         [DllImport(""user32.dll"")] public static extern IntPtr FindWindow(string cls, string title);
+         [DllImport(""user32.dll"")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hh, bool repaint);
+         [DllImport(""user32.dll"")] public static extern bool ShowWindow(IntPtr h, int cmd);
+     }
+     var hwnd = Win32.FindWindow(null, ""MameHooker"");
+     if (hwnd != IntPtr.Zero) { Win32.ShowWindow(hwnd, 6); }          // 6 = minimize
+     // (works against NORMAL windows; an elevated one ignores you — UIPI)
+
+19) MessageBox — handy to DEBUG a rule (System.Windows.Forms is already referenced)
+     using System.Windows.Forms;
+     if (!Preview)
+         MessageBox.Show(""Args at this rule:\n"" + Args, ""LiteBox script"");
+     // CAUTION: the box BLOCKS the script — click within 10 s or the watchdog abandons
+     // the rule (the box stays up until you close it). Debugging tool, not a UI.
 
 NOTES
   • The ""VS Code…"" button copies a SELF-CONTAINED .cs to the clipboard: your code between

@@ -75,6 +75,7 @@ internal static class RuleActions
         new ScriptAction(),
         new AhkAction(),
         new RunAsAdminAction(),
+        new AdminCmdAction(),
     };
 
     public static IRuleAction? ByType(string type)

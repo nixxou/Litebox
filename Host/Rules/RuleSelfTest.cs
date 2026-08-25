@@ -637,6 +637,33 @@ internal static class RuleSelfTest
                 !Actions.RunAsAdminAction.EvaluateRules(new List<LaunchRule> { off }, "emu.exe game.zip"));
         }
 
+        // ── Admin commands rule: parsing, variables, before/exit routing (nothing elevated here) ──
+        {
+            var acmd = new LaunchRule
+            {
+                Type = LaunchRule.TypeAdminCmd,
+                AdminCmds = "C:\\tools\\mount.exe -x ||| \"C:\\my tools\\svc.exe\" start {ROM}",
+                VariablesData = RuleVariables.Serialize(new List<RuleVariable>
+                {
+                    new() { Name = "{ROM}", Source = "cmd", Pattern = @"(\w+)\.zip", Value = @"\1" },
+                }),
+            };
+            var parsed = Actions.AdminCmdAction.ParseCommands(acmd, "emu.exe", "\"C:\\roms\\game.zip\"");
+            Expect("admincmd: the ||| list splits into (exe, args) pairs, variables expanded",
+                parsed.Count == 2
+                && parsed[0].Exe == "C:\\tools\\mount.exe" && parsed[0].Args == "-x"
+                && parsed[1].Exe == "C:\\my tools\\svc.exe" && parsed[1].Args == "start game");
+
+            acmd.AdminOnStart = false;
+            RulePipeline.ApplyRules(new List<LaunchRule> { acmd }, "emu.exe", "\"C:\\roms\\game.zip\"");
+            var exitBatch = RulePipeline.TakeAfterLaunch();
+            Expect("admincmd: at-exit commands ride the after-launch batch (not executed here)",
+                exitBatch.Count == 1);
+
+            Expect("admincmd: an empty list is NOT CONFIGURED",
+                !new LaunchRule { Type = LaunchRule.TypeAdminCmd }.IsConfigured && acmd.IsConfigured);
+        }
+
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
         //    the rom argument) ──
         {

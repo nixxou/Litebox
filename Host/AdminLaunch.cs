@@ -112,7 +112,10 @@ internal static class AdminLaunch
                 if (!p.WaitForExit(10000) || p.ExitCode != 0) { Console.WriteLine("[launch] admin task /run failed"); return 0; }
             }
 
-            // The helper writes the PID (or an error) within moments of starting.
+            // The helper writes the PID (or an error) within moments of starting. Back-to-back
+            // bridge calls (an admin pre-command then an admin emulator) can hit the scheduler's
+            // don't-start-while-running policy while the previous helper instance is still shutting
+            // down — one silent /run retry at the 3 s mark covers that window.
             for (int i = 0; i < 100; i++)   // 10 s
             {
                 if (File.Exists(ErrPath))
@@ -122,6 +125,14 @@ internal static class AdminLaunch
                 }
                 if (File.Exists(PidPath) && int.TryParse(SafeRead(PidPath).Trim(), out int pid) && pid > 0)
                     return pid;
+                if (i == 30)
+                {
+                    var retry = new ProcessStartInfo(SchTasks, $"/run /tn \"{TaskName}\"")
+                    { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                    using var r = Process.Start(retry)!;
+                    r.StandardOutput.ReadToEnd(); r.StandardError.ReadToEnd();
+                    r.WaitForExit(5000);
+                }
                 Thread.Sleep(100);
             }
             Console.WriteLine("[launch] admin helper produced no PID within 10s — falling back to UAC");

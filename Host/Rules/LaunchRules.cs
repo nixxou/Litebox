@@ -42,6 +42,7 @@ internal sealed class LaunchRule
     public const string TypeScript = "Script";
     public const string TypeAhkScript = "AhkScript";
     public const string TypeRunAsAdmin = "RunAsAdmin";
+    public const string TypeAdminCmd = "AdminCmd";
 
     public string Type { get; set; } = TypePrefix;
     public bool Enabled { get; set; } = true;
@@ -131,6 +132,14 @@ internal sealed class LaunchRule
     public bool AhkBeforeBackground { get; set; }
     /// <summary>AhkScript: the display name, like the C# rule's.</summary>
     public string AhkName { get; set; } = "";
+    /// <summary>AdminCmd: "|||"-separated command lines run ELEVATED (through the no-UAC task).
+    /// Variables allowed.</summary>
+    public string AdminCmds { get; set; } = "";
+    /// <summary>AdminCmd: true = run before the emulator spawns (BBP's onStart), false = at exit.</summary>
+    public bool AdminOnStart { get; set; } = true;
+    /// <summary>AdminCmd: wait for each command to finish before continuing (the original fired and
+    /// forgot; waiting is what a mount/driver-load needs).</summary>
+    public bool AdminWait { get; set; }
     /// <summary>The rule's variables (JSON RuleVariable[] — see RuleVariables). Transverse: any
     /// action may consult them; today the two Replace actions do.</summary>
     public string VariablesData { get; set; } = "";

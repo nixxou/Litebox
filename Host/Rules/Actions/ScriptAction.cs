@@ -157,7 +157,25 @@ internal sealed class ScriptAction : IRuleAction
                 }
                 finally { if (form != null) form.Cursor = Cursors.Default; }
             };
-            bar.Controls.Add(check); bar.Controls.Add(status);
+            var vscode = new Button
+            {
+                Text = "VS Code…", Location = new Point(S(116), S(3)), Size = new Size(S(84), S(24)),
+                BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
+            };
+            vscode.FlatAppearance.BorderColor = Color.FromArgb(64, 64, 68);
+            vscode.Click += (_, _) =>
+            {
+                try
+                {
+                    Clipboard.SetText(BuildVsCodeScaffold(editor.Text));
+                    status.ForeColor = Color.FromArgb(120, 190, 120);
+                    status.Text = "Scaffold copied — paste into a .cs in VS Code, edit between the SCRIPT BODY markers, copy that part back.";
+                }
+                catch (Exception ex) { status.ForeColor = Color.FromArgb(230, 120, 110); status.Text = ex.Message; }
+            };
+            status.Location = new Point(S(208), S(7));
+            status.Size = new Size(S(470), S(20));
+            bar.Controls.Add(check); bar.Controls.Add(vscode); bar.Controls.Add(status);
             page.Controls.Add(editor); page.Controls.Add(bar);
             tabs.TabPages.Add(page);
             return (editor, page);
@@ -193,6 +211,121 @@ internal sealed class ScriptAction : IRuleAction
             r.ScriptBeforeBackground = bg.Checked;
         });
     }
+
+    /// <summary>A self-contained .cs the user pastes into VS Code: the tab's code between SCRIPT
+    /// BODY markers, everything LiteBox provides mirrored as dummies with sample data — IntelliSense
+    /// matches, `dotnet run` executes, and the body copies back verbatim (indentation untouched).</summary>
+    internal static string BuildVsCodeScaffold(string body)
+        => ScaffoldTemplate.Replace("__SCRIPT_BODY__", body.Length == 0 ? "// (empty script)" : body.ReplaceLineEndings("\r\n"));
+
+    private const string ScaffoldTemplate = """"
+// ─────────────────────────────────────────────────────────────────────────────
+// LiteBox C# script scaffold
+//   1. Paste this WHOLE file over the Program.cs of a `dotnet new console` project
+//      (or any scratch .cs — IntelliSense works either way).
+//   2. Edit ONLY between the SCRIPT BODY markers. Everything else is dummies that
+//      mirror what LiteBox provides at launch — tune their sample values to test,
+//      then `dotnet run` executes your body and prints the resulting line.
+//   3. Copy the body (between the markers) back into the LiteBox script tab.
+// In LiteBox, Game/Emulator are LaunchBox's live IGame/IEmulator (dynamic — more
+// members than these dummies) and Lb queries REAL devices/profiles.
+// ─────────────────────────────────────────────────────────────────────────────
+#nullable disable
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
+
+public static class LiteBoxScript
+{
+    // ── the world (sample values — tune freely) ──
+    public static string Exe = @"C:\emulators\retroarch\retroarch.exe";
+    public static string Args = @"-L ""cores\snes.dll"" ""C:\roms\game.zip""";
+    public static string[] ArgList => SplitArgs(Args);
+    public static string OriginalExe = @"C:\emulators\retroarch\retroarch.exe";
+    public static string OriginalArgs = @"-L ""cores\snes.dll"" ""C:\roms\game.zip""";
+    public static string[] OriginalArgList => SplitArgs(OriginalArgs);
+    public static dynamic Game = new DummyGame();
+    public static dynamic Emulator = new DummyEmulator();
+    public static dynamic Version = null;
+    public static bool Preview = true;
+    public static LbApi Lb = new LbApi();
+
+    public static object Run()
+    {
+        // ==== SCRIPT BODY — copy back everything between these two markers ====
+__SCRIPT_BODY__
+        // ==== END SCRIPT BODY ====
+        return null;
+    }
+
+    public static void Main()
+    {
+        Run();
+        Console.WriteLine();
+        Console.WriteLine("Exe  = " + Exe);
+        Console.WriteLine("Args = " + Args);
+    }
+
+    static string[] SplitArgs(string s) => Regex.Matches(s, @"""([^""]*)""|(\S+)")
+        .Cast<Match>().Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value).ToArray();
+}
+
+// ── dummies mirroring LiteBox's objects ──────────────────────────────────────
+public class DummyGame
+{
+    public string Id = "00000000-0000-0000-0000-000000000000";
+    public string Title = "Sample Game";
+    public string Platform = "Super Nintendo Entertainment System";
+    public string ApplicationPath = @"C:\roms\game.zip";
+}
+public class DummyEmulator
+{
+    public string Id = "00000000-0000-0000-0000-000000000001";
+    public string Title = "RetroArch";
+    public string ApplicationPath = @"C:\emulators\retroarch\retroarch.exe";
+}
+
+public sealed record HidDeviceInfo(string Name, int VendorId, int ProductId, string Path);
+public sealed record Ds4DeviceInfo(int VendorId, int ProductId, string Path, bool Usb);
+public sealed record BtDeviceInfo(string Name, string ClassOfDevice, string Address);
+public sealed record XInputSlotInfo(int Slot, string SubType, string Signature,
+    int VendorId, int ProductId, int RevisionId,
+    string Ds4Mac, string Ds4Type, string Ds4Connection, int Ds4InputSlot);
+public sealed record DInputDeviceInfo(int Index, string ProductName, string Type,
+    Guid InstanceGuid, string InstanceName, string InterfacePath);
+public sealed record SdlDeviceInfo(int Index, string Name, string CapsSignature,
+    string Serial, string Guid, int VendorId, int ProductId);
+
+public class LbApi
+{
+    public string LbRoot = @"C:\LaunchBox";
+    public void Log(string message) => Console.WriteLine("[script] " + message);
+    public string Var(string name) => "";
+    public string ExpandVars(string text) => text;
+    public List<HidDeviceInfo> HidDevices() => new()
+        { new("Sample Pad", 1118, 767, @"\\?\hid#vid_045e&pid_02ff#sample") };
+    public List<Ds4DeviceInfo> Ds4Devices() => new()
+        { new(1356, 2508, @"\\?\hid#vid_054c&pid_09cc#sample", true) };
+    public List<BtDeviceInfo> BluetoothDevices() => new()
+        { new("Wireless Controller", "9480", "001122334455") };
+    public List<XInputSlotInfo> XInputSlots(string ds4WinLogPath = "") => new()
+        { new(1, "Gamepad", "A1B2C3", 0x045E, 0x02FF, 1, "", "", "", 0) };
+    public List<DInputDeviceInfo> DInputDevices() => new()
+        { new(0, "Sample Stick", "Gamepad", Guid.NewGuid(), "Sample Stick", @"\\?\hid#sample") };
+    public List<SdlDeviceInfo> SdlDevices(bool rawInputOff = false) => new()
+        { new(0, "Sample Pad", "ABC123", "SER01", "0300aabbccdd", 0x054C, 0x09CC) };
+    public void RescanDevices() { }
+    public string[] MonitorProfileNames() => new[] { "TV 4K", "Desk" };
+    public bool ApplyMonitorProfile(string name)
+    { Console.WriteLine("[script] ApplyMonitorProfile(" + name + ")"); return true; }
+}
+"""";
 
     private const string DocText = @"C# SCRIPT RULES — HOW IT WORKS
 ==============================
@@ -276,6 +409,9 @@ TEN FICTIONAL EXAMPLES
      if (slot != null) Args += $"" --pad={slot.Slot}"";
 
 NOTES
+  • The ""VS Code…"" button copies a SELF-CONTAINED .cs to the clipboard: your code between
+    SCRIPT BODY markers, everything else mirrored as dummies with sample data — IntelliSense
+    matches, `dotnet run` executes. Edit there, copy the body back.
   • Runtime errors and timeouts (10 s) log to [script] and SKIP the rule — never the launch.
   • The real/preview split is yours to honour: mirror what matters into the example slot.
   • Writing to Game/Emulator is possible but on you — LiteBox does not undo it.";

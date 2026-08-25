@@ -25,7 +25,24 @@ namespace LbApiHost.Host;
 
 internal static class AdminLaunch
 {
-    public const string TaskName = "LiteBox_AdminLaunch";
+    /// <summary>The task name is PER INSTALL: several LiteBox installs coexist on one machine
+    /// (G:\LB, G:\LB1326, a dev tree…) and a single fixed name would let install A's task answer
+    /// install B's IsTaskInstalled() while running A's helper — which then reads A's cfg folder
+    /// and never sees B's request (10 s of nothing, then the UAC fallback). The suffix is a stable
+    /// hash of THIS install's Core path, so each install owns its own task and its own exchange
+    /// folder, and uninstalling one never disarms the others.</summary>
+    public static string TaskName => "LiteBox_AdminLaunch_" + InstallTag;
+
+    private static string InstallTag
+    {
+        get
+        {
+            string core = AppContext.BaseDirectory.TrimEnd('\\', '/').ToLowerInvariant();
+            uint h = 2166136261;                       // FNV-1a, stable across runs and machines
+            foreach (char c in core) { h = (h ^ c) * 16777619; }
+            return h.ToString("x8");
+        }
+    }
 
     private static string System32 => Environment.SystemDirectory ?? @"C:\Windows\System32";
     private static string SchTasks => Path.Combine(System32, "schtasks.exe");
@@ -41,12 +58,19 @@ internal static class AdminLaunch
     {
         try
         {
-            var psi = new ProcessStartInfo(SchTasks, $"/query /tn \"{TaskName}\"")
+            // /v /fo LIST prints the action too: we require the task to name THIS install's exe.
+            // A task left by a LiteBox that has moved (or a same-hash collision) is treated as
+            // absent, so InstallTask re-registers it on the right path instead of silently
+            // launching someone else's helper.
+            var psi = new ProcessStartInfo(SchTasks, $"/query /tn \"{TaskName}\" /v /fo LIST")
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             using var p = Process.Start(psi)!;
-            p.StandardOutput.ReadToEnd(); p.StandardError.ReadToEnd();
+            string outp = p.StandardOutput.ReadToEnd();
+            p.StandardError.ReadToEnd();
             p.WaitForExit(10000);
-            return p.ExitCode == 0;
+            if (p.ExitCode != 0) return false;
+            string exe = Path.Combine(AppContext.BaseDirectory, "LiteBox.exe");
+            return outp.IndexOf(exe, StringComparison.OrdinalIgnoreCase) >= 0;
         }
         catch { return false; }
     }

@@ -221,14 +221,21 @@ internal sealed class AhkAction : IRuleAction
         var (before, beforePage) = ScriptTab("Before launch", r.AhkBefore);
         var (after, _) = ScriptTab("After exit", r.AhkAfter);
 
+        // The Before tab's bar also carries the resident switch — the status label shrinks there so
+        // nothing overlaps or falls past the right edge.
         var resident = new CheckBox
         {
-            Text = "resident (keep running during the game; killed at exit)", Checked = r.AhkBeforeBackground,
+            Text = "resident (killed at game exit)", Checked = r.AhkBeforeBackground,
             AutoSize = true, ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg,
         };
         var beforeBar = (Panel)beforePage.Controls[1];
-        resident.Location = new Point(S(520), S(6));
+        resident.Location = new Point(S(220), S(5));
         beforeBar.Controls.Add(resident);
+        var beforeStatus = (Label)beforeBar.Controls[2];
+        beforeStatus.Location = new Point(S(452), S(7));
+        beforeStatus.Width = S(420);
+        var tip = new ToolTip();
+        tip.SetToolTip(resident, "Keep the script running DURING the game (hotkeys, overlays) — killed when the game exits.");
 
         var docPage = new TabPage("Documentation") { BackColor = LiteBoxTheme.Bg };
         docPage.Controls.Add(CodeEditorBox.CreateDocView(DocText, ahk: true));

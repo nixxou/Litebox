@@ -69,6 +69,8 @@ internal static class RuleActions
         new ReplaceInFileAction(),
         new CreateFileAction(),
         new HidDetectAction(),
+        new CopyFileAction(),
+        new UseFileContentAction(),
     };
 
     public static IRuleAction? ByType(string type)

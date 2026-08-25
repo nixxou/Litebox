@@ -376,6 +376,98 @@ internal static class RuleSelfTest
                 && hidRule.IsConfigured);
         }
 
+        // ── Copy file: real copies, cache hit, delete-on-exit batch, m3u staging, inert preview ──
+        {
+            string Quo(string qp) => "\"" + qp + "\"";
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lbx-rules-selftest-copy");
+            string srcDir = System.IO.Path.Combine(root, "src");
+            string dstDir = System.IO.Path.Combine(root, "dst");
+            try
+            {
+                System.IO.Directory.CreateDirectory(srcDir);
+                string rom = System.IO.Path.Combine(srcDir, "game.iso");
+                System.IO.File.WriteAllText(rom, "ROMDATA");
+                var rule = new LaunchRule
+                {
+                    Type = LaunchRule.TypeCopyFile,
+                    CopySourceDir = srcDir, CopyTargetDir = dstDir, CopyDeleteOnExit = true,
+                };
+                string copy = System.IO.Path.Combine(dstDir, "game.iso");
+
+                var (_, outArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { rule }, "emu.exe", Quo(rom));
+                var batch = RulePipeline.TakeAfterLaunch();
+                Expect("copyfile: the argument points at the copy and the copy exists",
+                    outArgs == Quo(copy).Trim('"') || outArgs == Quo(copy));
+                Expect("copyfile: the copy has the source's content, the original is intact",
+                    System.IO.File.ReadAllText(copy) == "ROMDATA" && System.IO.File.Exists(rom));
+
+                var again = RulePipeline.ApplyRules(new List<LaunchRule> { rule }, "emu.exe", Quo(rom));
+                var batch2 = RulePipeline.TakeAfterLaunch();
+                Expect("copyfile: an identical existing copy is reused", System.IO.File.Exists(copy));
+
+                foreach (var w in batch) w();
+                foreach (var w in batch2) w();
+                Expect("copyfile: the after-launch batch deletes the copy on exit",
+                    !System.IO.File.Exists(copy) && System.IO.File.Exists(rom));
+
+                // m3u: the ENTRY is copied, a temp m3u keeps the original name, the original m3u is intact.
+                string m3u = System.IO.Path.Combine(srcDir, "set.m3u");
+                System.IO.File.WriteAllLines(m3u, new[] { "game.iso" });
+                var ruleM3u = new LaunchRule
+                {
+                    Type = LaunchRule.TypeCopyFile,
+                    CopySourceDir = srcDir, CopyTargetDir = dstDir,
+                };
+                var (_, m3uArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { ruleM3u }, "emu.exe", Quo(m3u));
+                RulePipeline.TakeAfterLaunch();
+                string tempM3u = RuleArgs.Split(m3uArgs)[0];
+                Expect("copyfile m3u: temp copy keeps the original file name, entry points at the copy",
+                    System.IO.Path.GetFileName(tempM3u) == "set.m3u" && tempM3u != m3u
+                    && System.IO.File.ReadAllLines(tempM3u)[0] == copy && System.IO.File.Exists(copy));
+                Expect("copyfile m3u: the original m3u still holds its relative entry",
+                    System.IO.File.ReadAllLines(m3u)[0] == "game.iso");
+
+                System.IO.File.Delete(copy);
+                var preview = RulePipeline.PreviewExample(new List<LaunchRule> { rule }, "emu.exe " + Quo(rom));
+                Expect("copyfile: the preview rewrites to the would-be target but copies nothing",
+                    preview.Contains("game.iso") && preview.Contains(dstDir) && !System.IO.File.Exists(copy));
+            }
+            finally { try { System.IO.Directory.Delete(root, recursive: true); } catch { } }
+        }
+
+        // ── Use file content: pointer files, rooted only when real, guards, exe out of reach ──
+        {
+            string Quo(string qp) => "\"" + qp + "\"";
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lbx-rules-selftest-ufc");
+            try
+            {
+                System.IO.Directory.CreateDirectory(root);
+                string target = System.IO.Path.Combine(root, "real-game.chd");
+                System.IO.File.WriteAllText(target, "X");
+                string pointerRel = System.IO.Path.Combine(root, "pointer-rel.txt");
+                System.IO.File.WriteAllText(pointerRel, "real-game.chd\r\n");     // relative + trailing newline
+                string pointerOpt = System.IO.Path.Combine(root, "pointer-opt.txt");
+                System.IO.File.WriteAllText(pointerOpt, "--fullscreen\r\n");      // not a path
+
+                var rule = new LaunchRule { Type = LaunchRule.TypeUseFileContent, UseFileDir = true };
+                var (_, outArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { rule },
+                    "emu.exe", Quo(pointerRel) + " " + Quo(pointerOpt) + " --keep");
+                var parts = RuleArgs.Split(outArgs);
+                Expect("usefilecontent: relative pointer content rooted beside the file, trimmed",
+                    parts[0] == target);
+                Expect("usefilecontent: non-path content passes through raw (never path-ified)",
+                    parts[1] == "--fullscreen");
+                Expect("usefilecontent: a non-file argument is untouched", parts[2] == "--keep");
+
+                string big = System.IO.Path.Combine(root, "big.bin");
+                System.IO.File.WriteAllText(big, new string('A', 5000));
+                var (_, bigArgs) = RulePipeline.ApplyRules(new List<LaunchRule> { rule }, "emu.exe", Quo(big));
+                Expect("usefilecontent: a file over the pointer size cap is left alone",
+                    RuleArgs.Split(bigArgs)[0] == big);
+            }
+            finally { try { System.IO.Directory.Delete(root, recursive: true); } catch { } }
+        }
+
         // ── the rom-token search (Mehdi's unification: one pipeline, then ask what became of
         //    the rom argument) ──
         {

@@ -36,6 +36,8 @@ internal sealed class LaunchRule
     public const string TypeReplaceInFile = "ReplaceInFile";
     public const string TypeCreateFile = "CreateFile";
     public const string TypeHidDetect = "HidDetect";
+    public const string TypeCopyFile = "CopyFile";
+    public const string TypeUseFileContent = "UseFileContent";
 
     public string Type { get; set; } = TypePrefix;
     public bool Enabled { get; set; } = true;
@@ -80,6 +82,15 @@ internal sealed class LaunchRule
     /// <summary>HidDetect: the whole detector settings blob (quotas, prefixes, DS4Windows log path,
     /// matcher list) as JSON — one field, deserialized by the action (see HidDetectAction).</summary>
     public string HidData { get; set; } = "";
+    /// <summary>CopyFile: file arguments containing this directory text get copied…</summary>
+    public string CopySourceDir { get; set; } = "";
+    /// <summary>CopyFile: …into this directory (the argument is rewritten to the copy).</summary>
+    public string CopyTargetDir { get; set; } = "";
+    /// <summary>CopyFile: delete the copies after the game exits.</summary>
+    public bool CopyDeleteOnExit { get; set; }
+    /// <summary>UseFileContent: resolve a relative content path against the pointer file's own
+    /// folder (true, the original's "usefile") or the current directory (false).</summary>
+    public bool UseFileDir { get; set; } = true;
     /// <summary>The rule's variables (JSON RuleVariable[] — see RuleVariables). Transverse: any
     /// action may consult them; today the two Replace actions do.</summary>
     public string VariablesData { get; set; } = "";

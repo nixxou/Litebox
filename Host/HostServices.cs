@@ -782,6 +782,7 @@ internal static class HostLaunch
         if (string.IsNullOrEmpty(targetPath)) return;
 
         string fileName, args, workDir = null;
+        System.Collections.Generic.List<Action> afterRules = null;
         if (useEmu && emulator != null && !string.IsNullOrEmpty(emulator.ApplicationPath))
         {
             var ep = ResolveEmulatorPlatform(emulator, game);
@@ -818,6 +819,10 @@ internal static class HostLaunch
                     (fileName, args) = Rules.RulePipeline.Apply(fileName, args, SafeStr(() => emulator?.Id));
                 }
                 catch (Exception ex) { Console.WriteLine("[launch] rules error: " + ex.Message); }
+                // After-launch batch (CopyFile's delete-on-exit, …): registered by ExecuteBefore
+                // during the walk above, run after Spawn's WaitForExit returns — the emulator has
+                // released the files by then. BBP's ExecuteAfter channel.
+                afterRules = Rules.RulePipeline.TakeAfterLaunch();
             }
 
             // Find the rom argument and resolve it (m3u planning + extraction) per the verdict.
@@ -885,6 +890,14 @@ internal static class HostLaunch
         // closes it). Main emulator launch only — not autorun helpers.
         if (label == "main") Gameplay.GameScreens.ReleaseStartupTopFront();
         Spawn(fileName, args, label, onSpawned, hideConsole, workDir);
+        // Spawn waits for the process to exit — the rules' after-launch batch runs now, while the
+        // rest of the exit teardown (monitor restore, kiosk reopen) happens in RunAndWait's finally.
+        if (afterRules is { Count: > 0 })
+            foreach (var work in afterRules)
+            {
+                try { work(); }
+                catch (Exception ex) { Console.WriteLine("[launch] rule after-exit cleanup error: " + ex.Message); }
+            }
     }
 
     /// <summary>The game's Root Folder resolved to an absolute path (relative values are

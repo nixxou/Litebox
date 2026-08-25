@@ -33,6 +33,25 @@ internal static class RulePipeline
         if (_dynamicMarkers != null && !_dynamicMarkers.Contains(key)) _dynamicMarkers.Add(key);
     }
 
+    /// <summary>Cleanup work registered DURING the real walk (from ExecuteBefore) to run after the
+    /// emulator EXITS — BigBoxProfile's ExecuteAfter channel (CopyFile's delete-on-exit). Collected
+    /// per walk; RunProcess takes the batch right after Apply and runs it once the game is over.
+    /// The preview never calls ExecuteBefore, so nothing ever registers on the example channel.</summary>
+    [ThreadStatic] private static List<Action>? _afterLaunch;
+
+    /// <summary>For actions (real channel, inside ExecuteBefore): runs <paramref name="work"/> after
+    /// the spawned process exits. No-op outside a real walk.</summary>
+    internal static void RegisterAfterLaunch(Action work) => _afterLaunch?.Add(work);
+
+    /// <summary>The launch code's half: takes (and clears) the batch registered by the walk that
+    /// just ran. Call right after Apply; run the batch after WaitForExit.</summary>
+    public static List<Action> TakeAfterLaunch()
+    {
+        var batch = _afterLaunch ?? new List<Action>();
+        _afterLaunch = null;
+        return batch;
+    }
+
     /// <summary>Runs the entity's rules (exclusive resolve) over the launch command. Returns the
     /// exe and arguments to spawn with — unchanged when no rule applies or the module is off. The
     /// exe travels through the pipeline since ChangeExe: an action may retarget it, and Spawn's
@@ -52,6 +71,7 @@ internal static class RulePipeline
         var cmd = new Actions.RuleCmd(exePath, args);
         var removeMarkers = new List<string>();
         _dynamicMarkers = removeMarkers;   // actions may flag their own generated args for the strip
+        _afterLaunch = new List<Action>(); // ExecuteBefore may register post-exit cleanup (real walk only)
         try
         {
         foreach (var rule in rules)

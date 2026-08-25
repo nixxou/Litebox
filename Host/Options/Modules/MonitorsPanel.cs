@@ -420,6 +420,31 @@ internal static class MonitorsPanel
         private readonly NumericUpDown _volume = new() { Minimum = 0, Maximum = 100, Increment = 5 };
 
         private readonly CheckBox _solo = new() { Text = "Turn off every monitor except the primary one", AutoSize = true };
+        private readonly Label _scriptSummary = new() { Text = "" };
+
+        /// <summary>Opens one script slot in its editor dialog; writes straight into the profile.</summary>
+        private void EditProfileScript(bool before)
+        {
+            var p = Current;
+            if (p == null) return;
+            using var dlg = new ProfileScriptDialog(
+                (before ? "Before" : "After") + " script — " + p.Name,
+                before ? p.ScriptBefore : p.ScriptAfter,
+                before ? p.ScriptBeforeLang : p.ScriptAfterLang,
+                _dpi);
+            if (dlg.ShowDialog(_list.FindForm()) != DialogResult.OK) return;
+            if (before) { p.ScriptBefore = dlg.Code; p.ScriptBeforeLang = dlg.Lang; }
+            else { p.ScriptAfter = dlg.Code; p.ScriptAfterLang = dlg.Lang; }
+            Commit();
+            SyncScriptSummary(p);
+        }
+
+        private void SyncScriptSummary(MonitorProfile? p)
+        {
+            string One(string code, string lang) => code.Trim().Length == 0 ? "—" : lang.ToUpperInvariant();
+            _scriptSummary.Text = p == null ? ""
+                : $"before: {One(p.ScriptBefore, p.ScriptBeforeLang)}   after: {One(p.ScriptAfter, p.ScriptAfterLang)}";
+        }
 
         private readonly Label _restoreInfo = new();
         private readonly Label _hdrHint = new();
@@ -747,6 +772,32 @@ internal static class MonitorsPanel
             // the new state. The editor is not a Control, so the deferral goes through the list itself.
             _disableList.ItemCheck += (_, _) => { if (!_loading && !_loadingDisable) _disableList.BeginInvoke(new Action(Commit)); };
             Add(_disableList, 18);
+
+            // ── per-profile scripts (C# or AHK, around every application of the profile) ──
+            Add(Cap("Scripts — run around EVERY application of this profile (game launches and manual"
+                  + " switches alike): power the TV on over Home Assistant or ADB before, notify"
+                  + " node-red after… Examples inside."), 0, gapAbove: 12);
+            var scriptRow = new Panel { BackColor = ModulePanelKit.Bg, Width = S(470), Height = S(30) };
+            var beforeBtn = new Button
+            {
+                Text = "Before script…", Location = new Point(0, 0), Size = new Size(S(120), S(25)),
+                BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, FlatStyle = FlatStyle.Flat,
+            };
+            beforeBtn.FlatAppearance.BorderColor = Color.FromArgb(64, 64, 68);
+            var afterBtn = new Button
+            {
+                Text = "After script…", Location = new Point(S(126), 0), Size = new Size(S(120), S(25)),
+                BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, FlatStyle = FlatStyle.Flat,
+            };
+            afterBtn.FlatAppearance.BorderColor = Color.FromArgb(64, 64, 68);
+            _scriptSummary.Location = new Point(S(254), S(5));
+            _scriptSummary.AutoSize = true;
+            _scriptSummary.ForeColor = ModulePanelKit.Sub;
+            _scriptSummary.BackColor = ModulePanelKit.Bg;
+            scriptRow.Controls.Add(beforeBtn); scriptRow.Controls.Add(afterBtn); scriptRow.Controls.Add(_scriptSummary);
+            beforeBtn.Click += (_, _) => EditProfileScript(before: true);
+            afterBtn.Click += (_, _) => EditProfileScript(before: false);
+            Add(scriptRow, 0, gapAbove: 2);
 
             _presetHdr.Items.AddRange(new object[] { "Leave unchanged", "Force HDR on", "Force HDR off (SDR)" });
 
@@ -1125,6 +1176,7 @@ internal static class MonitorsPanel
                 _useVolume.Checked = has && p!.Audio?.Volume != null;
                 _solo.Checked = has && p!.SoloPrimary;
                 _adapt.Checked = has && p!.AdaptToConnected;
+                SyncScriptSummary(p);
                 _volume.Value = p?.Audio?.Volume is int v ? Math.Clamp(v, 0, 100) : 50;
                 _hdrHint.Visible = p?.Layout != null && p.Layout.Paths.Any(r => r.Hdr == null);
 

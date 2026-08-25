@@ -112,6 +112,16 @@ internal sealed class MonitorProfile
     /// is not always on) that is the difference between a profile that works and one that never fires.</summary>
     public bool AdaptToConnected { get; set; }
 
+    /// <summary>Script run BEFORE the profile applies (power the TV on over Home Assistant / ADB,
+    /// wake a device, warn node-red…) and AFTER it applied. Each slot carries its language:
+    /// "cs" (Roslyn, the launch-rule engine and its Lb API) or "ahk" (LaunchBox's AutoHotkey v1.1).
+    /// Empty = no script. Runs on EVERY application of the profile — game launches and manual
+    /// Tools switches alike (see MonitorProfileScripts).</summary>
+    public string ScriptBefore { get; set; } = "";
+    public string ScriptBeforeLang { get; set; } = "cs";
+    public string ScriptAfter { get; set; } = "";
+    public string ScriptAfterLang { get; set; } = "cs";
+
     /// <summary>True when the profile would do nothing at all — the editor refuses to save one.</summary>
     public bool IsEmpty => Layout == null && Preset == null && Audio == null && !SoloPrimary
                            && DisableMonitors.Count == 0;

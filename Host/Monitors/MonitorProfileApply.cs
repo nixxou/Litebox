@@ -251,6 +251,16 @@ internal static class MonitorProfileApply
     public static ApplyResult Apply(MonitorProfile profile)
     {
         if (profile == null) return ApplyResult.Bad("No profile.");
+        // The profile's BEFORE script (power the TV on, wake a device…) — outside the gate: it may
+        // wait up to 30 s on hardware and must not hold the monitor lock while doing so.
+        MonitorProfileScripts.Run(profile, before: true);
+        var result = ApplyCore(profile);
+        MonitorProfileScripts.Run(profile, before: false);
+        return result;
+    }
+
+    private static ApplyResult ApplyCore(MonitorProfile profile)
+    {
         lock (_gate)
         {
             Load();

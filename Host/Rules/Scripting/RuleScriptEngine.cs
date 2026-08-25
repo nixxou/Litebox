@@ -1,4 +1,4 @@
-// The C# script engine — Roslyn scripting (Microsoft.CodeAnalysis.CSharp.Scripting 4.12), the
+﻿// The C# script engine — Roslyn scripting (Microsoft.CodeAnalysis.CSharp.Scripting 4.12), the
 // successor of BigBoxProfile's AHK slot. The four Roslyn assemblies (~12 MB) sleep in
 // <LB>\ThirdParty\Roslyn, NOT in Core — resolved by the lazy ALC hook below, loaded on the first
 // script only (this file is the single place Roslyn types appear; everything heavy is NoInlining).
@@ -64,11 +64,11 @@ internal static class RuleScriptEngine
 
     /// <summary>Compiles (cached) and runs with the watchdog. (true, "") or (false, why). The
     /// globals object is mutated in place — Exe/Args after the run ARE the script's output.</summary>
-    public static (bool Ok, string Error) Run(string code, RuleScriptGlobals globals)
+    public static (bool Ok, string Error) Run(string code, RuleScriptGlobals globals, int timeoutMs = TimeoutMs)
     {
         if (string.IsNullOrWhiteSpace(code)) return (true, "");
         EnsureResolver();
-        try { return RunCore(code, globals); }
+        try { return RunCore(code, globals, timeoutMs); }
         catch (Exception ex) { return (false, "Script engine unavailable: " + ex.Message); }
     }
 
@@ -86,6 +86,10 @@ internal static class RuleScriptEngine
                     typeof(System.Text.Json.JsonSerializer).Assembly,          // JSON
                     typeof(System.Xml.Linq.XDocument).Assembly,                // XML
                     typeof(System.Diagnostics.Process).Assembly,               // processes
+                    typeof(System.Net.Http.HttpClient).Assembly,               // HTTP calls (HA, node-red)
+                    typeof(System.Net.Sockets.UdpClient).Assembly,             // sockets (WOL magic packets)
+                    typeof(System.Net.IPAddress).Assembly,                     // System.Net primitives
+                    typeof(System.Windows.Forms.Screen).Assembly,              // Screen.AllScreens
                     typeof(File).Assembly,                                     // IO
                     typeof(Microsoft.CSharp.RuntimeBinder.Binder).Assembly,    // dynamic (Game/Emulator)
                     typeof(RuleScriptGlobals).Assembly)                        // us (records, API)
@@ -93,6 +97,7 @@ internal static class RuleScriptEngine
                     "System", "System.IO", "System.Linq", "System.Collections.Generic",
                     "System.Text", "System.Text.RegularExpressions", "System.Text.Json",
                     "System.Xml.Linq", "System.Diagnostics",
+                    "System.Net", "System.Net.Http", "System.Net.Sockets",
                     "LbApiHost.Host.Rules.Scripting");
             // The plugin SDK, when it is around (Core): scripts may cast Game to IGame. Loaded by
             // NAME so this engine never hard-references it — the selftest harness has no SDK.
@@ -123,7 +128,7 @@ internal static class RuleScriptEngine
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static (bool, string) RunCore(string code, RuleScriptGlobals globals)
+    private static (bool, string) RunCore(string code, RuleScriptGlobals globals, int timeoutMs)
     {
         object script;
         try { script = GetOrCompile(code); }
@@ -133,9 +138,9 @@ internal static class RuleScriptEngine
         var typed = (Microsoft.CodeAnalysis.Scripting.Script<object>)script;
         // catchException: a runtime throw lands in ScriptState.Exception instead of faulting the task.
         var task = Task.Run(() => typed.RunAsync(globals, _ => true));
-        if (!task.Wait(TimeoutMs))
+        if (!task.Wait(timeoutMs))
         {
-            LbLog.Warn(Tag, $"script still running after {TimeoutMs / 1000}s — abandoned (the task keeps running; fix the script)");
+            LbLog.Warn(Tag, $"script still running after {timeoutMs / 1000}s — abandoned (the task keeps running; fix the script)");
             return (false, "timeout");
         }
         if (task.Result.Exception != null) return (false, task.Result.Exception.Message);

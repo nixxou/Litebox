@@ -27,7 +27,7 @@ namespace LbApiHost.Host.Rules.Scripting;
 /// <summary>What the prelude injects — the AHK twin of RuleScriptGlobals' context.</summary>
 internal sealed record AhkScriptData(string Exe, string Args, string OriginalExe, string OriginalArgs,
     string GameTitle, string GamePlatform, string GameId,
-    string EmulatorTitle, string VersionName, bool Preview);
+    string EmulatorTitle, string VersionName, bool Preview, string ProfileName = "");
 
 internal static class AhkScriptEngine
 {
@@ -87,6 +87,7 @@ internal static class AhkScriptEngine
         V("GameId", d.GameId);
         V("EmulatorTitle", d.EmulatorTitle);
         V("VersionName", d.VersionName);
+        V("ProfileName", d.ProfileName);
         sb.AppendLine($"Preview := {(d.Preview ? 1 : 0)}");
         sb.AppendLine("; ── end prelude ──");
         return sb.ToString();
@@ -138,7 +139,7 @@ internal static class AhkScriptEngine
     /// point is living during the game) and the returned process handle lets the caller kill it at
     /// game exit. Waited runs are capped at 10 s.</summary>
     public static (bool Ok, string Error, Process? Resident) RunSideEffect(
-        string body, AhkScriptData d, bool wait)
+        string body, AhkScriptData d, bool wait, int? timeoutMs = null)
     {
         string? exe = ExePath();
         if (exe == null) return (false, MissingMessage, null);
@@ -157,7 +158,7 @@ internal static class AhkScriptEngine
             File.WriteAllText(scriptPath, sb.ToString(), new UTF8Encoding(true));
             if (wait)
             {
-                var (exited, exitCode, stderr, _) = Exec(exe, scriptPath, wait: true);
+                var (exited, exitCode, stderr, _) = Exec(exe, scriptPath, wait: true, timeoutMs);
                 try { File.Delete(scriptPath); } catch { }
                 if (!exited) return (false, "timeout — script killed", null);
                 // A non-zero exit is a FAILED script (interpreter or runtime error) — reporting it
@@ -218,18 +219,19 @@ internal static class AhkScriptEngine
     /// watchdog would never fire (the Codex review's finding: a MsgBox or a loop froze the launch
     /// forever). On timeout the whole tree is killed. The exit code rides back so callers can tell
     /// a script that DIED from one that ran (finding 4: silent side-effect failures).</summary>
-    private static (bool Exited, int ExitCode, string Stderr, Process? Resident) Exec(string exe, string scriptPath, bool wait)
+    private static (bool Exited, int ExitCode, string Stderr, Process? Resident) Exec(string exe, string scriptPath, bool wait, int? timeoutMs = null)
     {
         var psi = new ProcessStartInfo(exe, $"/ErrorStdOut \"{scriptPath}\"")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
         var p = Process.Start(psi)!;
         if (!wait) return (true, 0, "", p);
         var stderrTask = p.StandardError.ReadToEndAsync();
-        if (!p.WaitForExit(EffectiveTimeoutMs))
+        int cap = timeoutMs ?? EffectiveTimeoutMs;
+        if (!p.WaitForExit(cap))
         {
             try { p.Kill(entireProcessTree: true); } catch { }
             try { p.WaitForExit(2000); } catch { }   // let the streams close so the read completes
-            LbLog.Warn(Tag, $"script still running after {EffectiveTimeoutMs / 1000}s — killed");
+            LbLog.Warn(Tag, $"script still running after {cap / 1000}s — killed");
             string tail = stderrTask.Wait(1000) ? stderrTask.Result.Trim() : "";
             p.Dispose();
             return (false, -1, tail, null);

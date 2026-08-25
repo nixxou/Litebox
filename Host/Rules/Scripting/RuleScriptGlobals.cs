@@ -1,4 +1,4 @@
-// What a C# script rule SEES — the globals object whose public members become top-level identifiers
+﻿// What a C# script rule SEES — the globals object whose public members become top-level identifiers
 // in the script (Roslyn's globalsType contract, hence everything here is public). The design brief
 // (Mehdi): give it access to EVERYTHING — the current line (mutable: assign Exe/Args and the change
 // IS the transform), the original pre-rules line, the live IGame / IEmulator / version objects, the
@@ -66,6 +66,9 @@ public sealed class RuleScriptGlobals
     /// <summary>True on the EXAMPLE channel (the page preview and sandbox test runs) — scripts with
     /// side effects guard on it.</summary>
     public bool Preview { get; init; }
+
+    /// <summary>The monitor profile being applied, for PROFILE scripts (empty in launch rules).</summary>
+    public string ProfileName { get; init; } = "";
 
     /// <summary>The Swiss-army API. Set right after construction (it needs the globals back-ref).</summary>
     public LbScriptApi Lb { get; set; } = null!;

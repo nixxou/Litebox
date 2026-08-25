@@ -241,12 +241,17 @@ internal static class LaunchRulesPanel
             return b;
         }
 
-        // One Add button per registered action — the registry is the only list that grows.
+        // ONE Add button; the action types live in its dropdown — ten actions as ten buttons ate
+        // the whole bar. The registry is still the only list that grows: the menu is built from it.
+        var add = Btn("Add…");
+        var addMenu = new ContextMenuStrip { BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg };
         foreach (var action in Actions.RuleActions.All)
         {
             var a = action;
-            Btn(a.AddLabel).Click += (_, _) => EditRule(new LaunchRule { Type = a.Type }, isNew: true);
+            string label = a.AddLabel.StartsWith("Add: ", StringComparison.Ordinal) ? a.AddLabel.Substring(5) : a.AddLabel;
+            addMenu.Items.Add(label, null, (_, _) => EditRule(new LaunchRule { Type = a.Type }, isNew: true));
         }
+        add.Click += (_, _) => addMenu.Show(add, new Point(0, add.Height));
         var edit = Btn("Edit…");
         var remove = Btn("Remove");
         var up = Btn("▲");

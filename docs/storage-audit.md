@@ -1,4 +1,4 @@
-# Audit du stockage — LiteBox (+ ExtendDB) — 2026-07-26
+# Audit du stockage — LiteBox (+ ExtendDB) — 2026-07-26 (revu 2026-08-26, LiteBox 0.9.3)
 
 État des lieux exhaustif de TOUT ce que LiteBox persiste, où, sous quelle forme, et les pistes de
 standardisation. Déclencheur : la découverte tardive de `litebox-options.db` pendant le chantier
@@ -32,7 +32,9 @@ locks/3D — trop de stores épars pour garder le fil.
   `ForceFrontendFocusOnShutdown`, `MonitorStartupShutdownWithProcess`.
 - **Modules** : `Module.base`, `Module.rom`, `Module.retroachievements`, `Module.parental`,
   `Module.web`, `Module.monitors`, `Module.rules` (LbModules ; row absente = défaut du module).
-- **Monitor Profiles** (Host\Monitors, ajouté 2026-08) : `MonitorProfiles` (JSON, la liste entière),
+- **Monitor Profiles** (Host\Monitors, ajouté 2026-08) : `MonitorProfiles` (JSON, la liste entière —
+  chaque profil porte aussi ses scripts avant/après application : `ScriptBefore`/`ScriptAfter` +
+  leur langue `cs`|`ahk`, 0.9.3),
   `MonitorRestorePoint` (JSON, l'état d'avant le 1er profil — persisté pour survivre à un crash),
   `MonitorRestoreHotkey` + `MonitorRestoreHotkeyGlobal`, `MonitorWebEndpoints`, `MonitorLaunchDelay`,
   `MonitorNvidiaApply` (opt-in, absent = OFF : capture NVIDIA toujours, écriture et UI verte seulement à true).
@@ -62,10 +64,23 @@ Résolution jeu → émulateur → global (`LiteBoxOption.ResolveBool/ResolveStr
   version → jeu → émulateur, précédée du one-shot « Run next game as » (mémoire vive uniquement).
   **Premier usage du scope `version`** (additional version), déclaré dans `LiteBoxOption`.
 
-### scopes `game` / `emulator` / `version` — Launch rules (module "rules", ajouté 2026-08)
+### scope `emulator` — Launch rules (module "rules", ajouté 2026-08)
 - `LaunchRules` = JSON `LaunchRule[]` ordonné, appliqué à la ligne de commande avant le spawn
-  (portage action-par-action de BigBoxProfile ; V1 : Prefix). Résolution EXCLUSIVE
-  version → jeu → émulateur, comme les Monitor Profiles.
+  (portage action-par-action de BigBoxProfile). **Attachement ÉMULATEUR SEUL** (décision 08/2026,
+  converge sur la forme de BBP : un pipeline par émulateur) — le ciblage par jeu passe par un
+  argument-marqueur dans les paramètres personnalisés du jeu, intercepté par les sondes, et les
+  jeux de store sortent du périmètre par construction. Le stockage garde ses colonnes de scope,
+  donc élargir plus tard reste trivial.
+- Actions au 0.9.3 : Prefix, Suffix, ChangeExe, ChangeRomPath, Replace (+ variables), ReplaceInFile,
+  CreateFile, HidDetect, CopyFile (option RAM disk via l'infra de l'extracteur), UseFileContent,
+  MonitorProfile, Script (C#/Roslyn), AhkScript, RunAsAdmin, AdminCmd. Les charges lourdes vivent
+  dans des champs JSON de la règle : `HidData` (réglages du détecteur + matchers), `VariablesData`
+  (les variables de la règle), `MonitorCustomData` (profil moniteur en ligne), les corps de scripts.
+
+### scope `game` — Run as administrator (0.9.3)
+- `RunAsAdmin` = `"true"` (row absente = normal) — spawn élevé pour CE jeu, écrans start/pause/
+  game-over désactivés pour ce lancement (murs UIPI). Le jumeau côté émulateur est une règle
+  `RunAsAdmin`, sondée, donc pas de clé db.
 
 ### scope `platform`
 Déclaré (`LiteBoxOption.ScopePlatform`) mais **aucune clé en service à ce jour**.
@@ -109,7 +124,20 @@ place (`3d`, `thumbs`, `related-thumbs`, `thumbs\degraded`, staging ExtDb, snaps
   Vérif live G:\LB : 6 dossiers relocalisés, racine propre, 2ᵉ boot = no-op, `--debug` sans erreur.
 - **DataMaintenance** : champ `Rel` sur les 10 rows (`FullPath` = `cache\<name>`, `Name` = affichage) ;
   la row parapluie `cache` couvre tout l'arbre (les rows individuelles restent pour un clear granulaire).
-- Restent à la racine (NON-caches, correct) : `thirdparty`, `config`, `web`, `web-assets`.
+- Restent à la racine (NON-caches, correct) : `thirdparty`, `config`, `web`, `web-assets`,
+  `admin-launch` (échange avec le helper élevé, 0.9.3 : `launch.cfg`/`launch.pid`/`launch.err`,
+  éphémères, une paire par lancement admin).
+
+### 4bis. Hors `Core\litebox\` — ce que le module "rules" pose ailleurs (0.9.3)
+
+| Emplacement | Contenu | Cycle de vie |
+|---|---|---|
+| `<LB>\ThirdParty\Hid\` | `HidSharp.dll`, `SDL2-CS.dll`, `SDL2.dll` (natif), `InTheHand.Net.Personal.dll` | déployé par `NativeInstaller` (payload embarqué / `.api` en vrac), chargé à la demande ; **LiteBox-only** → supprimé par la désinstallation |
+| `<LB>\ThirdParty\Roslyn\` | les 4 assemblies Microsoft.CodeAnalysis (scripts C#) | idem |
+| *(rien dans `Core\`)* | SharpDX (DirectInput) et AutoHotkey sont ceux que **LaunchBox fournit** — référencés, jamais déployés : y écrire écraserait les siens | — |
+| `%TEMP%\litebox-rules-ahk\` | scripts AHK générés (prélude + corps + épilogue) et leur fichier résultat | supprimés après exécution ; un script résident garde le sien jusqu'à sa mort |
+| `%TEMP%\litebox-rules-m3u\<hash>\` | m3u temporaires réécrits (ChangeRomPath / CopyFile) — nom de fichier d'origine conservé | par lancement |
+| Planificateur de tâches | `LiteBox_AdminLaunch_<hash>` et `LiteBox_RomExtractor_RamDisk_<hash>` (hash = FNV-1a du Core de CETTE install) | créées à la demande (1 UAC) ; la désinstallation propose de les retirer, sinon inertes |
 
 ## 5. ADS par fichier (sain, ne pas toucher)
 

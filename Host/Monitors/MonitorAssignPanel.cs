@@ -48,6 +48,12 @@ internal static class MonitorAssignPanel
 
         var current = MonitorAssign.Get(scope, entityId);
         var profiles = MonitorProfileStore.All();
+        // A DELETED profile must not snap the combo to "Do not use" (and silently rewrite the
+        // assignment on save) — the dangling id rides a synthetic entry, same contract as the
+        // custom page's "(disconnected)" monitor: what was selected is what the page shows.
+        if (current.Kind == AssignKind.Profile && current.ProfileId.Length > 0
+            && !profiles.Any(pr => string.Equals(pr.Id, current.ProfileId, StringComparison.OrdinalIgnoreCase)))
+            profiles.Add(new MonitorProfile { Id = current.ProfileId, Name = "<deleted profile>  (missing)" });
 
         // ── the override box (game / version only) ──
         CheckBox? over = null;

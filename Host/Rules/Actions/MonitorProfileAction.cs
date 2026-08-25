@@ -115,6 +115,13 @@ internal sealed class MonitorProfileAction : IRuleAction
                 1, Color.FromArgb(220, 160, 90));
 
         var profiles = MonitorProfileStore.All();
+        // Same contract as everywhere this form appears: a deleted profile keeps its (dangling)
+        // selection visible instead of snapping to "Do not use" and rewriting the rule on save.
+        if (r.MonitorAssignData.Length > 0
+            && !r.MonitorAssignData.Equals("none", StringComparison.OrdinalIgnoreCase)
+            && !r.MonitorAssignData.Equals("custom", StringComparison.OrdinalIgnoreCase)
+            && !profiles.Any(p => string.Equals(p.Id, r.MonitorAssignData, StringComparison.OrdinalIgnoreCase)))
+            profiles.Add(new MonitorProfile { Id = r.MonitorAssignData, Name = "<deleted profile>  (missing)" });
         var combo = new ComboBox
         {
             Location = new Point(0, y), Width = S(420), DropDownStyle = ComboBoxStyle.DropDownList,

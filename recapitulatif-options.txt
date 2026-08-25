@@ -1,5 +1,5 @@
 ================================================================================
- RÉCAPITULATIF DES OPTIONS ET FICHIERS DE DONNÉES — LiteBox 0.9.2
+ RÉCAPITULATIF DES OPTIONS ET FICHIERS DE DONNÉES — LiteBox 0.9.3
 ================================================================================
 
 Tout ce que LiteBox écrit vit sous <LaunchBox>\Core\litebox\ (LiteBoxPaths.Data).

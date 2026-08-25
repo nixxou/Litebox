@@ -13,9 +13,13 @@
 // directory — the rom-token search still sees "same name, another path") is written with every
 // entry absolutized and the copied ones pointing at their copies. The original m3u is never touched.
 //
-// NOT ported: the RAM-disk option. Its helper (RamDiskHelper/ImDisk) is RomExtractor's machinery
-// and not deployed by LiteBox today (see Host\Rom\ArchiveRamDisk.cs) — the option can land later on
-// top of this action without changing its storage.
+// RAM disk (BBP's useRamDisk, restyled to OUR infrastructure): instead of the target directory,
+// the copies can land on a per-launch ImDisk drive mounted through the ROM extractor's
+// ArchiveRamDisk — same driver, same elevated-task path, same guards (size cap + free RAM), and
+// the SAME exit cleanup: the mount is registered in ArchiveRamDisk's active table, which
+// RomExtractor.OnGameExitCleanup already UnmountAll()s when the game exits — no second lifecycle.
+// One drive sized to the SUM of the launch's copies (BBP mounted one PER FILE); delete-on-exit is
+// moot there (the unmount destroys the drive). Every failure falls back to the target directory.
 
 #nullable enable
 
@@ -55,21 +59,26 @@ internal sealed class CopyFileAction : IRuleAction
         var deleteOnExit = new List<string>();
         try
         {
-            foreach (var part in RuleArgs.Split(cmd.Args))
+            var parts = RuleArgs.Split(cmd.Args);
+            // Destination: the RAM drive when asked for and mountable, the target dir otherwise.
+            // On RAM, delete-on-exit is pointless — the exit unmount destroys the whole drive.
+            string destDir = r.CopyUseRamDisk ? (TryMountRamDisk(r, parts) ?? r.CopyTargetDir) : r.CopyTargetDir;
+            bool onRam = destDir != r.CopyTargetDir;
+            foreach (var part in parts)
             {
                 try
                 {
                     if (!part.Contains(r.CopySourceDir) || !File.Exists(part)) continue;
                     if (part.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase))
                     {
-                        string? temp = StageM3u(r, part, map, deleteOnExit);
+                        string? temp = StageM3u(r, part, destDir, onRam, map, deleteOnExit);
                         if (temp != null) map[part] = temp;
                     }
                     else
                     {
-                        string target = CopyOne(part, r.CopyTargetDir);
+                        string target = CopyOne(part, destDir);
                         map[part] = target;
-                        if (r.CopyDeleteOnExit) deleteOnExit.Add(target);
+                        if (r.CopyDeleteOnExit && !onRam) deleteOnExit.Add(target);
                     }
                 }
                 catch (Exception ex) { LbLog.Warn(Tag, $"CopyFile: \"{part}\" failed ({ex.Message}) — argument left as-is"); }
@@ -86,6 +95,58 @@ internal sealed class CopyFileAction : IRuleAction
                         catch (Exception ex) { LbLog.Warn(Tag, $"CopyFile: delete-on-exit \"{f}\" failed ({ex.Message})"); }
                 });
         }
+    }
+
+    /// <summary>Mounts one RAM drive sized to the SUM of this launch's matching files (+50 MB, the
+    /// extractor's margin) under the extractor's own guards: driver present, size under the rule's
+    /// cap AND under free RAM. Registered in ArchiveRamDisk's active table, so the existing
+    /// game-exit cleanup (RomExtractor.OnGameExitCleanup → UnmountAll) unmounts it — no second
+    /// lifecycle. Null on any refusal or failure → the caller copies to the target directory.</summary>
+    private static string? TryMountRamDisk(LaunchRule r, string[] parts)
+    {
+        try
+        {
+            if (!Rom.ArchiveRamDisk.IsDriverInstalled())
+            {
+                LbLog.Info(Tag, "CopyFile: ramdisk requested but the ImDisk driver is absent — target dir used");
+                return null;
+            }
+            long totalBytes = 0;
+            foreach (var part in parts)
+            {
+                if (!part.Contains(r.CopySourceDir) || !File.Exists(part)) continue;
+                if (part.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase))
+                {
+                    string dir = Path.GetDirectoryName(part) ?? "";
+                    foreach (var line in File.ReadAllLines(part))
+                    {
+                        string e = line.Trim();
+                        if (e.Length == 0 || e.StartsWith("#")) continue;
+                        try
+                        {
+                            string abs = Path.IsPathRooted(e) ? e : Path.GetFullPath(Path.Combine(dir, e));
+                            if (abs.Contains(r.CopySourceDir) && File.Exists(abs)) totalBytes += new FileInfo(abs).Length;
+                        }
+                        catch { }
+                    }
+                }
+                else totalBytes += new FileInfo(part).Length;
+            }
+            if (totalBytes == 0) return null;
+            int needMb = (int)(totalBytes / (1024 * 1024)) + 50;
+            int freeMb = Rom.ArchiveRamDisk.GetFreeRamMb();
+            if (needMb > r.CopyRamDiskMaxMb || needMb >= freeMb)
+            {
+                LbLog.Info(Tag, $"CopyFile: ramdisk skipped (need {needMb}MB, max {r.CopyRamDiskMaxMb}MB, free {freeMb}MB)");
+                return null;
+            }
+            string? root = Rom.ArchiveRamDisk.Mount(needMb);
+            if (string.IsNullOrEmpty(root)) return null;
+            Rom.ArchiveRamDisk.Register("launch-rules-copyfile", root!);
+            LbLog.Info(Tag, $"CopyFile: ramdisk {root} ({needMb}MB) for this launch");
+            return root;
+        }
+        catch (Exception ex) { LbLog.Warn(Tag, $"CopyFile: ramdisk mount failed ({ex.Message}) — target dir used"); return null; }
     }
 
     public RuleCmd Apply(LaunchRule r, RuleCmd cmd)
@@ -150,7 +211,8 @@ internal sealed class CopyFileAction : IRuleAction
     /// <summary>The m3u treatment: copy the matching ENTRY files, then write a temp m3u keeping the
     /// original file name (hash in the directory) with entries absolutized and copied ones pointing
     /// at their copies. Null = no entry matched, the m3u argument stays as-is.</summary>
-    private static string? StageM3u(LaunchRule r, string m3uPath, Dictionary<string, string> map, List<string> deleteOnExit)
+    private static string? StageM3u(LaunchRule r, string m3uPath, string destDir, bool onRam,
+        Dictionary<string, string> map, List<string> deleteOnExit)
     {
         string dir = Path.GetDirectoryName(m3uPath) ?? "";
         var lines = File.ReadAllLines(m3uPath);
@@ -164,9 +226,9 @@ internal sealed class CopyFileAction : IRuleAction
             catch { continue; }
             if (abs.Contains(r.CopySourceDir) && File.Exists(abs))
             {
-                string target = CopyOne(abs, r.CopyTargetDir);
+                string target = CopyOne(abs, destDir);
                 map[abs] = target;
-                if (r.CopyDeleteOnExit) deleteOnExit.Add(target);
+                if (r.CopyDeleteOnExit && !onRam) deleteOnExit.Add(target);
                 lines[i] = target;
                 changed = true;
             }
@@ -239,7 +301,41 @@ internal sealed class CopyFileAction : IRuleAction
             Location = new Point(0, y), ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg,
         };
         body.Controls.Add(del);
-        y += S(28);
+        y += S(26);
+
+        // ── RAM disk (the ROM extractor's ImDisk infrastructure, shared) ──
+        var ram = new CheckBox
+        {
+            Text = "Copy onto a per-launch RAM disk instead (unmounted at game exit; falls back to the target dir)",
+            Checked = r.CopyUseRamDisk, AutoSize = true,
+            Location = new Point(0, y), ForeColor = LiteBoxTheme.Fg, BackColor = LiteBoxTheme.Bg,
+        };
+        body.Controls.Add(ram);
+        y += S(24);
+        body.Controls.Add(new Label
+        {
+            Text = "Max size (MB):", AutoSize = true, Location = new Point(S(18), y + S(3)),
+            ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
+        });
+        var ramMax = new NumericUpDown
+        {
+            Minimum = 1, Maximum = 1000000, Value = Math.Min(1000000, Math.Max(1, r.CopyRamDiskMaxMb)),
+            Location = new Point(S(110), y), Width = S(72),
+            BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, BorderStyle = BorderStyle.FixedSingle,
+        };
+        body.Controls.Add(ramMax);
+        bool ramReady = false;
+        try { ramReady = Rom.ArchiveRamDisk.IsReady(); } catch { }
+        body.Controls.Add(new Label
+        {
+            Text = ramReady
+                ? "ImDisk ready (same setup as the ROM extractor)."
+                : "ImDisk not ready — install the driver / elevated task from the ROM extractor options.",
+            AutoSize = true, Location = new Point(S(196), y + S(3)),
+            ForeColor = ramReady ? Color.FromArgb(120, 190, 120) : Color.FromArgb(220, 160, 90),
+            BackColor = LiteBoxTheme.Bg,
+        });
+        y += S(30);
 
         // ── sandbox: pedagogical, so it rewrites on the substring match ALONE — the real launch
         // (and the page preview) additionally require the file to EXIST; a matching-but-missing
@@ -294,6 +390,8 @@ internal sealed class CopyFileAction : IRuleAction
             r.CopySourceDir = src.Text.Trim();
             r.CopyTargetDir = dst.Text.Trim();
             r.CopyDeleteOnExit = del.Checked;
+            r.CopyUseRamDisk = ram.Checked;
+            r.CopyRamDiskMaxMb = (int)ramMax.Value;
         });
     }
 }

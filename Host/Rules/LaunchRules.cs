@@ -88,6 +88,11 @@ internal sealed class LaunchRule
     public string CopyTargetDir { get; set; } = "";
     /// <summary>CopyFile: delete the copies after the game exits.</summary>
     public bool CopyDeleteOnExit { get; set; }
+    /// <summary>CopyFile: copy onto a per-launch ImDisk RAM drive instead of the target directory
+    /// (the ROM extractor's ramdisk infrastructure; falls back to the target directory).</summary>
+    public bool CopyUseRamDisk { get; set; }
+    /// <summary>CopyFile: RAM-disk size cap in MB (same meaning as the extractor's, same default).</summary>
+    public int CopyRamDiskMaxMb { get; set; } = 2000;
     /// <summary>UseFileContent: resolve a relative content path against the pointer file's own
     /// folder (true, the original's "usefile") or the current directory (false).</summary>
     public bool UseFileDir { get; set; } = true;

@@ -1450,10 +1450,24 @@ internal static class HostLaunch
         Console.WriteLine($"[launch] {label}: \"{fileName}\" {args}" + (workDir != null ? $" (cwd={workDir})" : "") + (elevated ? " (ADMIN)" : ""));
         try
         {
-            // Elevated: ShellExecute + "runas" (the only way up from medium IL) — UAC prompts, and
-            // CreateNoWindow/redirects don't exist under ShellExecute. A refused prompt throws
-            // ERROR_CANCELLED into the catch below: the launch aborts cleanly, the finally restores.
-            // WaitForExit still works on the returned handle (SYNCHRONIZE is granted).
+            // Elevated, preferred path: the LiteBox_AdminLaunch scheduled task (one UAC at install,
+            // none per launch — Mehdi: a frontend must never surface UAC mid-flow). The elevated
+            // helper does a real CreateProcess, so HideConsole works there; we wait on the PID.
+            if (elevated)
+            {
+                int pid = AdminLaunch.SpawnViaTask(fileName, args, workDir ?? SafeDir(fileName) ?? _lbRoot, hideConsole);
+                if (pid > 0)
+                {
+                    Console.WriteLine($"[launch] {label}: elevated via task, pid {pid}");
+                    AdminLaunch.WaitForPid(pid);
+                    return;
+                }
+                Console.WriteLine("[launch] elevated task unavailable — falling back to UAC runas"
+                    + " (install the no-UAC task from the run-as-admin dialog)");
+            }
+            // Elevated fallback: ShellExecute + "runas" — UAC prompts, and CreateNoWindow/redirects
+            // don't exist under ShellExecute. A refused prompt throws ERROR_CANCELLED into the catch
+            // below: the launch aborts cleanly, the finally restores. WaitForExit works (SYNCHRONIZE).
             var psi = elevated
                 ? new ProcessStartInfo
                 {

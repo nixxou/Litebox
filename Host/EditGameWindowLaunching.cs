@@ -1103,7 +1103,7 @@ internal sealed partial class EditGameWindow
         }
         var admin = new CheckBox
         {
-            Text = "Run this game as ADMINISTRATOR (UAC prompt at launch)", AutoSize = true,
+            Text = "Run this game as ADMINISTRATOR", AutoSize = true,
             Location = new Point(S(14), y), ForeColor = Fg, BackColor = Bg,
         };
         p.Controls.Add(admin);
@@ -1114,6 +1114,8 @@ internal sealed partial class EditGameWindow
                 + "detection, pause screen and hotkeys, game-over screen — because Windows blocks a "
                 + "normal process from watching or controlling an elevated one. Exit detection and "
                 + "play time keep working.", ref y);
+        Rules.Actions.AdminTaskRow.Build(p, S(14), y, _s);
+        y += S(32);
 
         _applyRunAsAdmin = () =>
         {

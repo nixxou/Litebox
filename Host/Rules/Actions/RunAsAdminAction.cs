@@ -53,10 +53,10 @@ internal sealed class RunAsAdminAction : IRuleAction
         var body = new Panel { BackColor = LiteBoxTheme.Bg, Width = S(576) };
         body.Controls.Add(new Label
         {
-            Text = "Matching launches spawn the emulator ELEVATED (a UAC prompt appears). Use the"
-                 + " probes below to scope it — e.g. a marker argument in the game's custom"
-                 + " command-line parameters for the few titles that need it (TeknoParrot…).",
-            AutoSize = false, Location = new Point(0, S(2)), Size = new Size(S(574), S(52)),
+            Text = "Matching launches spawn the emulator ELEVATED. Use the probes below to scope it"
+                 + " — e.g. a marker argument in the game's custom command-line parameters for the"
+                 + " few titles that need it (TeknoParrot…).",
+            AutoSize = false, Location = new Point(0, S(2)), Size = new Size(S(574), S(38)),
             ForeColor = LiteBoxTheme.SubFg, BackColor = LiteBoxTheme.Bg,
         });
         body.Controls.Add(new Label
@@ -65,11 +65,56 @@ internal sealed class RunAsAdminAction : IRuleAction
                  + " screen, FPS detection, pause screen and hotkeys, game-over screen. Windows"
                  + " forbids a normal process from watching or controlling an elevated one."
                  + " Exit detection and play time keep working.",
-            AutoSize = false, Location = new Point(0, S(58)), Size = new Size(S(574), S(66)),
+            AutoSize = false, Location = new Point(0, S(44)), Size = new Size(S(574), S(66)),
             ForeColor = Color.FromArgb(220, 160, 90), BackColor = LiteBoxTheme.Bg,
         });
-        int h = S(128);
+        AdminTaskRow.Build(body, 0, S(114), dpiS);
+        int h = S(148);
         body.Height = h;
         return (body, h, () => { });
+    }
+}
+
+/// <summary>The shared "no-UAC elevated task" status + Install/Remove row — used by the rule dialog
+/// and the per-game Launching page. One UAC at install; without the task, launches fall back to a
+/// per-launch UAC prompt.</summary>
+internal static class AdminTaskRow
+{
+    public static void Build(Control parent, int x, int y, float dpiS)
+    {
+        int S(int px) => (int)Math.Round(px * dpiS);
+        var status = new Label
+        {
+            AutoSize = true, Location = new Point(x, y + S(5)),
+            BackColor = parent.BackColor,
+        };
+        var install = new Button
+        {
+            Location = new Point(x + S(320), y), Size = new Size(S(200), S(25)),
+            BackColor = LiteBoxTheme.Panel2, ForeColor = LiteBoxTheme.Fg, FlatStyle = FlatStyle.Flat,
+        };
+        install.FlatAppearance.BorderColor = Color.FromArgb(64, 64, 68);
+        void Sync()
+        {
+            bool on = AdminLaunch.IsTaskInstalled();
+            status.Text = on ? "No-UAC task: installed (silent elevated launches)"
+                             : "No-UAC task: NOT installed — each launch will UAC-prompt";
+            status.ForeColor = on ? Color.FromArgb(120, 190, 120) : Color.FromArgb(220, 160, 90);
+            install.Text = on ? "Remove elevated task…" : "Install elevated task… (one UAC)";
+        }
+        install.Click += (_, _) =>
+        {
+            var form = parent.FindForm();
+            if (form != null) form.Cursor = Cursors.WaitCursor;
+            try
+            {
+                if (AdminLaunch.IsTaskInstalled()) AdminLaunch.UninstallTask();
+                else AdminLaunch.InstallTask();
+            }
+            finally { if (form != null) form.Cursor = Cursors.Default; Sync(); }
+        };
+        Sync();
+        parent.Controls.Add(status);
+        parent.Controls.Add(install);
     }
 }

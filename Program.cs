@@ -435,6 +435,10 @@ if (args.Contains("--selftest-safewrite"))
     return SafeWriteSelfTest.Run();
 if (args.Contains("--selftest-rules"))
     return LbApiHost.Host.Rules.RuleSelfTest.Run();
+// The elevated admin-launch helper (scheduled task action) — before ANY boot work: read the cfg,
+// spawn the emulator, write the PID, leave. See Host\AdminLaunch.cs.
+if (args.Contains("--admin-spawn"))
+    return LbApiHost.Host.AdminLaunch.RunHelper();
 if (args.Contains("--hid-dump"))
 {
     // Diag: every HID backend's real output — the exact lines matchers regex over. Run from Core.

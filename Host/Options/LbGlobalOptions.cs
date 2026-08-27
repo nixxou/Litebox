@@ -200,9 +200,11 @@ internal static class LbGlobalOptions
 
             OptionItem.Action("sm", "Repair save metadata", () => RunSaveJob("Repairing save metadata",
                 (ct, _) => Saves.SaveBackupService.RepairMetadata(ct)),
-                "Drops save records and backup entries that no longer point at anything. No save file and "
-                + "no backup is deleted. LaunchBox has a button of this name; what its version does is not "
-                + "observable from outside, so this is LiteBox's own behaviour, not parity."),
+                "Three things, the same three LaunchBox does: drops records whose file is gone, drops "
+                + "exact duplicates, and records live saves nothing had recorded yet. It leaves a second "
+                + "record naming the same file under a different group alone, and it never adopts a vault "
+                + "file no record mentions — both deliberate, both matching LaunchBox. No save file and no "
+                + "backup is ever deleted."),
 
             OptionItem.Action("sm", "Clear all and re-scan save metadata", () =>
             {
@@ -216,7 +218,9 @@ internal static class LbGlobalOptions
                     (ct, prog) => Saves.SaveBackupService.ClearAndRescan(ct, prog));
             },
                 "Use when records have drifted from what is on disk. Backups survive; names given to "
-                + "active save groups do not."),
+                + "active save groups do not. LaunchBox's button of this name goes further and re-adopts "
+                + "every file in the vault as a save of its own — measured: it turns three groups with "
+                + "their history into thirty independent ones. We keep the history instead."),
         };
     }
 

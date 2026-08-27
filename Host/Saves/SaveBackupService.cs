@@ -22,6 +22,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -90,10 +91,19 @@ internal static class SaveBackupService
     /// <summary>When the last full sweep finished — LaunchBox's own field, so a sweep on either side
     /// counts for both and neither redoes the other's work minutes later.
     ///
-    /// Two traps in its format, both observed on a real file. Despite the name it is written in LOCAL
-    /// time with an offset ("2026-08-27T04:39:05.13416+02:00"), and the fractional part has its trailing
-    /// zeros trimmed — the shape XmlConvert produces, not DateTime.ToString("o"). Writing it any other
-    /// way would still parse, but the file would stop looking like one LaunchBox wrote.</summary>
+    /// Its format is wrong, and has to be reproduced wrongly or the two frontends disagree by the UTC
+    /// offset. LaunchBox writes the UTC value but tags it with the LOCAL offset, then reads it back
+    /// ignoring the tag. Measured: a sweep run at 14:50:42 local (UTC+2) was stored as
+    ///
+    ///     2026-08-27T12:50:42.6874085+02:00        &lt;- 12:50 is UTC, "+02:00" is the local offset
+    ///
+    /// and its own UI displayed "2:50 PM" — so it read the number back as UTC and ignored the offset it
+    /// had just written. Writing a correct local timestamp (14:50:42+02:00, which is the same instant)
+    /// would show up in LaunchBox two hours late.
+    ///
+    /// So: write the UTC number as Unspecified through XmlConvert in Local mode, which appends the local
+    /// offset without converting; read the number back as UTC and drop the offset. The fractional part
+    /// has its trailing zeros trimmed, which is XmlConvert's doing, not ours.</summary>
     public static DateTime? LastScanUtc
     {
         get
@@ -102,9 +112,13 @@ internal static class SaveBackupService
             {
                 var v = Store?.Get("LastLibrarySaveScanUtc", "");
                 if (string.IsNullOrWhiteSpace(v)) return null;
-                return DateTimeOffset.TryParse(v, System.Globalization.CultureInfo.InvariantCulture,
-                                               System.Globalization.DateTimeStyles.RoundtripKind, out var d)
-                       ? d.UtcDateTime : (DateTime?)null;
+                // Deliberately parsed WITHOUT the offset: the number is UTC whatever the tag claims.
+                int cut = v!.LastIndexOfAny(new[] { '+', 'Z' });
+                if (cut > 10) v = v.Substring(0, cut);
+                else if (v.EndsWith("Z", StringComparison.Ordinal)) v = v.TrimEnd('Z');
+                return DateTime.TryParse(v, System.Globalization.CultureInfo.InvariantCulture,
+                                         System.Globalization.DateTimeStyles.None, out var d)
+                       ? DateTime.SpecifyKind(d, DateTimeKind.Utc) : (DateTime?)null;
             }
             catch { return null; }
         }
@@ -114,14 +128,13 @@ internal static class SaveBackupService
             {
                 Store?.Set("LastLibrarySaveScanUtc", value == null
                     ? ""
-                    : System.Xml.XmlConvert.ToString(value.Value.ToLocalTime(),
-                                                     System.Xml.XmlDateTimeSerializationMode.Local));
+                    : System.Xml.XmlConvert.ToString(
+                          DateTime.SpecifyKind(value.Value, DateTimeKind.Unspecified),
+                          System.Xml.XmlDateTimeSerializationMode.Local));
             }
             catch { }
         }
     }
-
-    // ── 1. Game close — the authoritative moment ──────────────────────────────
 
     /// <summary>Backs up whatever the session just changed. Called from the exit sequence BEFORE the ROM
     /// extractor purges \tmp: with savefiles_in_content_dir the emulator wrote its save inside the
@@ -215,16 +228,22 @@ internal static class SaveBackupService
                 progress?.Invoke(i - start + 1, games.Length - start, Safe(() => game.Title) ?? "");
                 try
                 {
-                    var scan = SaveManager.ScanBase(game);
-                    if (scan.Error != null) continue;
-                    bool any = false;
-                    foreach (var g in scan.Files.Concat(scan.States))
+                    // The base view only covers the game's own saves and those of a version sharing its
+                    // ROM path. A version pointing elsewhere has its own saves, invisible from here — so
+                    // each one is scanned in its own right. Without this the sweep silently skipped every
+                    // version-attributed save, which is most of a library imported with versions.
+                    foreach (var scan in ScansFor(game))
                     {
-                        if (g.Active == null) continue;
-                        var r = SaveManager.Backup(g, force: false, auto: true);
-                        if (r.Entry != null) { made++; any = true; }
+                        if (scan.Error != null) continue;
+                        bool any = false;
+                        foreach (var g in scan.Files.Concat(scan.States))
+                        {
+                            if (g.Active == null) continue;
+                            var r = SaveManager.Backup(g, force: false, auto: true);
+                            if (r.Entry != null) { made++; any = true; }
+                        }
+                        if (any) Prune(game, scan);
                     }
-                    if (any) Prune(game, scan);
                 }
                 catch (Exception ex) { LbLog.Info("saves", $"sweep \"{Safe(() => game.Title)}\": {ex.Message}"); }
             }
@@ -245,6 +264,39 @@ internal static class SaveBackupService
     ///
     /// The second field stays empty: our sweep walks games, and scans each one's versions as part of it,
     /// so there is never a version to resume at on its own.</summary>
+    /// <summary>Every view a game's saves can live in: its own, then one per additional application.
+    /// A save attributed to a version is not visible from the base view unless that version shares the
+    /// game's ROM path, so anything walking a library has to ask for each of them.</summary>
+    private static IEnumerable<SaveScan> ScansFor(IGame game)
+    {
+        SaveScan? bas = null;
+        try { bas = SaveManager.ScanBase(game); } catch { }
+        if (bas != null) yield return bas;
+
+        IAdditionalApplication[] apps;
+        try { apps = game.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>(); }
+        catch { yield break; }
+
+        string gamePath = "";
+        try { gamePath = game.ApplicationPath ?? ""; } catch { }
+        foreach (var a in apps)
+        {
+            string ap = "";
+            try { ap = a.ApplicationPath ?? ""; } catch { }
+            // An entry with no FILE NAME is not scannable, and feeding it to a plugin is actively
+            // harmful: RetroArch derives its search from Path.GetFileNameWithoutExtension, so an empty
+            // one produces the pattern "*.*" and the entry claims every save in the folder. That is the
+            // defect we measured in LaunchBox's own vault re-scan — and this loop reintroduced it on our
+            // side the moment it started scanning versions individually, because the base view used to
+            // discard those results. A Link holding "https://site.com/" is exactly such an entry.
+            if (Path.GetFileNameWithoutExtension(ap).Length == 0) continue;
+            if (SaveManager.PathEq(ap, gamePath)) continue;                // already in the base view
+            SaveScan? v = null;
+            try { v = SaveManager.ScanApp(game, a); } catch { }
+            if (v != null) yield return v;
+        }
+    }
+
     private static void SetCursor(string? gameId)
     {
         try
@@ -322,29 +374,43 @@ internal static class SaveBackupService
 
     // ── 5. Maintenance tools ──────────────────────────────────────────────────
     //
-    // LaunchBox exposes two buttons under this name. What its own versions do is NOT observable from the
-    // plugin sources — the host is obfuscated and neither operation goes through the SDK — so these are
-    // LiteBox's semantics, spelled out in the UI, not a parity claim.
+    // The two buttons LaunchBox exposes under "Maintenance Tools". Repair is now measured (below);
+    // Clear-and-rescan still is not, and says so.
 
     public sealed class MaintenanceResult
     {
-        public int RowsRemoved;
-        public int GamesTouched;
+        public int RowsRemoved;      // "Removed missing records"
+        public int SavesAdded;       // "Added emulator saves"
+        public int GamesTouched;     // "Games updated"
         public override string ToString()
-            => $"{RowsRemoved} record(s) dropped over {GamesTouched} game(s)";
+            => $"{RowsRemoved} missing record(s) removed, {SavesAdded} emulator save(s) added, {GamesTouched} game(s) updated";
     }
 
-    /// <summary>Removes save metadata that no longer describes anything: a record whose file is gone and
-    /// which has no backup to restore from, a backup record whose copy is gone, and the fossil record a
-    /// version leaves behind when it starts covering the game's own ROM. Nothing that still resolves is
-    /// touched, and no save file and no backup is ever deleted — only dangling bookkeeping.</summary>
+    /// <summary>"Repair Save Metadata", measured against LaunchBox on five deliberately broken records.
+    /// Its report names three numbers, and they are the three things it does:
+    ///
+    ///   Removed missing records   a record whose file is gone, or whose FilePath is empty
+    ///   Added emulator saves      a live save the plugins can see and no record names yet
+    ///   Games updated             how many games any of that touched
+    ///
+    /// It also drops EXACT duplicates — two records with the same SaveGroupId naming the same file, which
+    /// is what its own Import produces — without counting them anywhere. Three records vanished on a run
+    /// reporting "Removed missing records: 1".
+    ///
+    /// What it deliberately does NOT do, both verified:
+    ///   • it keeps a FOSSIL — a second record naming the same live file under a DIFFERENT SaveGroupId.
+    ///     We used to remove those. That was a divergence, and removing them is not obviously right
+    ///     either: a fossil is a group, and a group may be something the user made on purpose.
+    ///   • it does not adopt a vault file that no record names. Such a file stays invisible to LaunchBox,
+    ///     which is consistent with everything else — the folder is not an index.
+    ///
+    /// And it does NOT set SaveVaultMetadataRepairComplete: the flag stayed false across a completed run,
+    /// so it is not the one-shot marker for this button, whatever else it is for.
+    ///
+    /// No save file and no backup is ever deleted — only bookkeeping.</summary>
     public static MaintenanceResult RepairMetadata(CancellationToken ct = default)
     {
         var res = new MaintenanceResult();
-
-        // There is no vault index to clean any more — the folder IS the index. What can still dangle is
-        // a RECORD: one pointing at a file that is gone, or an older record left behind when a version
-        // started covering the game's own ROM.
 
         IGame[] games;
         try { games = PluginHelper.DataManager.GetAllGames() ?? Array.Empty<IGame>(); }
@@ -358,68 +424,48 @@ internal static class SaveBackupService
             {
                 var rows = lbg.GetSubEntities("GameSave")
                     .Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
-                if (rows.Count == 0) continue;
-
-                // Title SET = a backup row. Not one particular literal: "Saved Game" for a save file,
-                // "Save State <slot>" for a state.
-                static bool IsBackup(Dictionary<string, string> r)
-                    => !string.IsNullOrWhiteSpace(r.GetValueOrDefault("Title"));
-
                 int before = rows.Count;
+                int removedMissing = 0;
+
+                // 1. Records naming nothing, or naming a file that is gone.
                 rows.RemoveAll(r =>
                 {
                     var path = r.GetValueOrDefault("FilePath") ?? "";
-                    if (path.Length == 0) return true;                       // a record addressing nothing
-                    var abs = SaveManager.AbsPath(path);
-                    if (System.IO.File.Exists(abs) || System.IO.Directory.Exists(abs)) return false;
-
-                    // A backup record whose copy is gone is pure noise. A live record whose save is gone is
-                    // still worth keeping WHEN backups remain — that is the "deleted the save, kept the
-                    // versions" case, and dropping it would orphan them.
-                    if (IsBackup(r)) return true;
-                    // Does any surviving backup row still belong to this group? If so the record is the
-                    // only thing tying those copies to the game — keep it.
-                    return !rows.Any(o => IsBackup(o)
-                        && string.Equals(o.GetValueOrDefault("SaveGroupId"),
-                                         r.GetValueOrDefault("SaveGroupId"), StringComparison.OrdinalIgnoreCase)
-                        && FileOrDirExists(SaveManager.AbsPath(o.GetValueOrDefault("FilePath") ?? "")));
+                    if (path.Length == 0) { removedMissing++; return true; }
+                    if (FileOrDirExists(SaveManager.AbsPath(path))) return false;
+                    removedMissing++;
+                    return true;
                 });
 
-                // Duplicate records. Once a version points at the game's own ROM, RetroArch's scan skips
-                // the game entirely and every save comes back attributed to the version — but LaunchBox
-                // leaves the older game-attributed record behind for ever. The result is one save shown
-                // twice, the second copy claiming its file is missing. Drop the fossil, never the one
-                // that carries history: a row is only removed when no backup and no vault entry
-                // references its group.
-                var carriesHistory = new HashSet<string>(
-                    rows.Where(IsBackup).Select(r => r.GetValueOrDefault("SaveGroupId") ?? ""),
-                    StringComparer.OrdinalIgnoreCase);
+                // 2. Exact duplicates: same group, same file, same slot. Keep the first.
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                rows.RemoveAll(r => !seen.Add(string.Join("|",
+                    r.GetValueOrDefault("SaveGroupId") ?? "",
+                    SaveManager.AbsPath(r.GetValueOrDefault("FilePath") ?? ""),
+                    r.GetValueOrDefault("Slot") ?? "")));
 
-                var byTarget = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-                var fossils = new List<Dictionary<string, string>>();
-                foreach (var r in rows.Where(r => !IsBackup(r)))
-                {
-                    var abs = SaveManager.AbsPath(r.GetValueOrDefault("FilePath") ?? "");
-                    if (abs.Length == 0) continue;
-                    string key = abs + "|" + (r.GetValueOrDefault("Slot") ?? "");
-                    if (!byTarget.TryGetValue(key, out var kept)) { byTarget[key] = r; continue; }
-
-                    // Two records for the same file+slot. Keep the one with history; failing that, the
-                    // one already kept (document order — LaunchBox writes the current one first).
-                    bool keptHas = carriesHistory.Contains(kept.GetValueOrDefault("SaveGroupId") ?? "");
-                    bool mineHas = carriesHistory.Contains(r.GetValueOrDefault("SaveGroupId") ?? "");
-                    if (mineHas && !keptHas) { fossils.Add(kept); byTarget[key] = r; }
-                    else if (!mineHas) fossils.Add(r);
-                    // both carry history → leave both alone, this is not a fossil we can judge
-                }
-                foreach (var f in fossils) rows.Remove(f);
-
-                if (rows.Count != before)
+                bool dirty = rows.Count != before;
+                if (dirty)
                 {
                     lbg.SetSubEntities("GameSave", rows);
-                    res.RowsRemoved += before - rows.Count;
-                    res.GamesTouched++;
+                    res.RowsRemoved += removedMissing;
                 }
+
+                // 3. Live saves nobody has recorded yet. The scan creates their records as a side effect,
+                //    which is precisely what "Added emulator saves" counts.
+                try
+                {
+                    int had = rows.Count;
+                    var scan = SaveManager.ScanBase(game);
+                    if (scan.Error == null)
+                    {
+                        int now = lbg.GetSubEntities("GameSave").Count();
+                        if (now > had) { res.SavesAdded += now - had; dirty = true; }
+                    }
+                }
+                catch { }
+
+                if (dirty) res.GamesTouched++;
             }
             catch (Exception ex) { LbLog.Info("saves", $"repair \"{Safe(() => game.Title)}\": {ex.Message}"); }
         }
@@ -428,18 +474,35 @@ internal static class SaveBackupService
         return res;
     }
 
-    /// <summary>Drops every ACTIVE save record library-wide and rebuilds them from a fresh scan. Backups —
-    /// ours and LaunchBox's — are deliberately left alone: a button about metadata has no business
-    /// deleting a user's saved versions, and the records that point at them are re-derived anyway.</summary>
+    /// <summary>Drops every ACTIVE save record library-wide and rebuilds them by asking the plugins.
+    /// Records of vault COPIES are left untouched, so the backup history survives.
+    ///
+    /// LaunchBox's button of this name does more, and measurably worse. It clears everything, then adopts
+    /// every file it finds in the vault as a save in its own right: 22 records became 42, and NOT ONE of
+    /// the 42 carried a Title — every archived copy had been promoted to a live save in a brand-new group.
+    /// Where the user had three groups with their history, they had thirty-odd independent groups each
+    /// pointing at one vault file. The files themselves were untouched, as its confirmation promises; the
+    /// structure was gone, which its confirmation does not mention.
+    ///
+    /// Its adoption also has no guard against an empty base name. An Additional Application of type Link
+    /// (ApplicationPath = a URL) yields one, and the resulting "" + "*.*" glob claims the whole platform
+    /// folder: 14 of 36 records, all naming Secret of Mana backups, came back attributed to an unrelated
+    /// game through such an entry.
+    ///
+    /// So this is a deliberate divergence, for the same reason as the one in Backup: reproducing it would
+    /// destroy the user's backup history at the exact moment they click a button meant to repair it.</summary>
     public static MaintenanceResult ClearAndRescan(CancellationToken ct = default,
                                                    Action<int, int, string>? progress = null)
     {
         var res = new MaintenanceResult();
+        var identity = new Dictionary<string, (string gid, string lineage, string name)>(StringComparer.OrdinalIgnoreCase);
 
         IGame[] games;
         try { games = PluginHelper.DataManager.GetAllGames() ?? Array.Empty<IGame>(); }
         catch { return res; }
 
+        // 1. Clear the ACTIVE records. Records of vault copies are kept, so a group's history survives
+        //    the rebuild — this is where LaunchBox loses everything.
         foreach (var game in games)
         {
             if (ct.IsCancellationRequested) return res;
@@ -449,8 +512,21 @@ internal static class SaveBackupService
                 var rows = lbg.GetSubEntities("GameSave")
                     .Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
                 int before = rows.Count;
-                // Title SET = backup row (see RepairMetadata). Active records are the ones with no Title.
-                rows.RemoveAll(r => string.IsNullOrWhiteSpace(r.GetValueOrDefault("Title")));
+
+                // Remember what each cleared record said about its file. Rebuilding mints a NEW
+                // SaveGroupId, and a new id detaches the group's copies — the history would survive the
+                // clear only to be orphaned by the rebuild. Restoring the identity of any record that
+                // comes back naming the same file keeps them together.
+                foreach (var r in rows.Where(r => !SaveManager.IsVaultPath(r.GetValueOrDefault("FilePath") ?? "")))
+                {
+                    var abs = SaveManager.AbsPath(r.GetValueOrDefault("FilePath") ?? "");
+                    if (abs.Length == 0) continue;
+                    identity[abs] = (r.GetValueOrDefault("SaveGroupId") ?? "",
+                                     r.GetValueOrDefault("MatchLineageId") ?? "",
+                                     r.GetValueOrDefault("SaveGroupName") ?? "");
+                }
+
+                rows.RemoveAll(r => !SaveManager.IsVaultPath(r.GetValueOrDefault("FilePath") ?? ""));
                 if (rows.Count != before)
                 {
                     lbg.SetSubEntities("GameSave", rows);
@@ -462,9 +538,45 @@ internal static class SaveBackupService
         }
         LbLog.Info("saves", "clear: " + res);
 
-        // Re-scan from scratch: the scan itself is what re-creates a record for every group it finds.
+        // 2. Rebuild the live records by asking the plugins, and back up what needs it.
         SetCursor(null);
         RunLibraryScan(ct, progress);
+
+        // 3. Give back the identity of every rebuilt record that names a file we knew, so the copies
+        //    that kept the old group id are still attached to it.
+        foreach (var game in games)
+        {
+            if (ct.IsCancellationRequested) return res;
+            if (game is not ILiteBoxGame lbg2) continue;
+            try
+            {
+                var rows = lbg2.GetSubEntities("GameSave").Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+                bool dirty = false;
+                foreach (var r in rows)
+                {
+                    var abs = SaveManager.AbsPath(r.GetValueOrDefault("FilePath") ?? "");
+                    if (abs.Length == 0 || !identity.TryGetValue(abs, out var id) || id.gid.Length == 0) continue;
+                    if (r.GetValueOrDefault("SaveGroupId") == id.gid) continue;
+                    r["SaveGroupId"] = id.gid;
+                    if (id.lineage.Length > 0) r["MatchLineageId"] = id.lineage;
+                    if (id.name.Length > 0) r["SaveGroupName"] = id.name;
+                    dirty = true;
+                }
+                if (dirty) lbg2.SetSubEntities("GameSave", rows);
+            }
+            catch { }
+        }
+
+        // 4. Adopt the vault files nothing references. This is the half of LaunchBox's button worth
+        //    keeping — it is how a copy left behind by its own sweep becomes visible again.
+        foreach (var game in games)
+        {
+            if (ct.IsCancellationRequested) return res;
+            try { res.SavesAdded += SaveManager.AdoptOrphanCopies(game); }
+            catch (Exception ex) { LbLog.Info("saves", $"adopt \"{Safe(() => game.Title)}\": {ex.Message}"); }
+        }
+
+        LbLog.Info("saves", "clear+rescan: " + res);
         return res;
     }
 

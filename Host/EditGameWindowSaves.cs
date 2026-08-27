@@ -307,13 +307,18 @@ internal sealed partial class EditGameWindow
             };
             card.Controls.Add(name);
 
+            // The chip beside the name: the slot for a save state, otherwise whatever the plugin put in
+            // DisplayChipText — Dolphin sets "Disc Save" on a Wii NAND group. Both are LaunchBox's.
             Label? chip = null;
-            if (g.IsState)
+            string chipText = g.IsState
+                ? "Slot " + (g.Slot is -1 ? "Auto" : (g.Slot?.ToString() ?? "?"))
+                : g.ChipText;
+            if (chipText.Length > 0)
             {
                 chip = new Label
                 {
                     AutoSize = true, ForeColor = SubFg, BackColor = Field, Padding = new Padding(S(6), S(2), S(6), S(2)),
-                    Font = new Font("Segoe UI", 8.5f), Text = "Slot " + (g.Slot is -1 ? "Auto" : (g.Slot?.ToString() ?? "?")),
+                    Font = new Font("Segoe UI", 8.5f), Text = chipText,
                 };
                 card.Controls.Add(chip);
             }
@@ -350,9 +355,10 @@ internal sealed partial class EditGameWindow
             if (g.DuplicateRecord)
                 dot = new StatusDot(StatusKind.Warn,
                     "Duplicate record. This file is already listed above, under the version that owns it — "
-                    + "LaunchBox left this older record behind and never cleaned it up. The save itself is "
-                    + "fine. Use Options ▸ LB · Save Management ▸ Repair save metadata to drop records like "
-                    + "this one.", S(22));
+                    + "LaunchBox left this older record behind when a version started covering the game's "
+                    + "own ROM. The save itself is fine. Repair save metadata will NOT remove it: LaunchBox "
+                    + "keeps these, so we do too. Delete Save on this card drops the record if you want it "
+                    + "gone.", S(22));
             else if (g.RecordOnly)
                 dot = new StatusDot(StatusKind.Error, "The save file this record points to no longer exists on disk.", S(22));
             else if (g.Active != null)

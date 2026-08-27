@@ -28,6 +28,7 @@
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
@@ -95,6 +96,10 @@ internal sealed class SaveGroup
     public string GroupName = "";
     public string EmulatorFileName = "";
     public string EmulatorCore = "";
+
+    /// <summary>A short label the plugin attaches to the group, shown as a chip beside its name.
+    /// Dolphin sets "Disc Save" on a Wii NAND save.</summary>
+    public string ChipText = "";
     public IEmulator? Emulator;                      // the emulator whose scan produced this group
     public EmulatorPlugin? Plugin;                   // …and its integration plugin (used by all actions)
     public GameSaveBase? Active;                     // live scan result; null → record/backups only
@@ -340,6 +345,45 @@ internal static class SaveVault
         }
         res.Sort((x, y) => y.CreatedUtc.CompareTo(x.CreatedUtc));
         return res;
+    }
+
+    /// <summary>The group's OWN vault file, as an entry that can be restored — or null when the group
+    /// has no such file.
+    ///
+    /// <see cref="FromRecords"/> deliberately skips it, and is right to: for a live group that file IS
+    /// the live save, and listing a save as its own backup would be nonsense. But an In Vault group has
+    /// no live save. Its record points into the vault, the card shows a real file, and that file is
+    /// exactly what "Set as Active" promotes. The same exclusion left Backups empty there, which greyed
+    /// the action out — and would have thrown on Backups.First() the moment it was enabled.
+    ///
+    /// Measured: LaunchBox enables "Set as Active" on precisely these cards. Promoting one moves the
+    /// group's identity onto the emulator's file, while the save it displaces keeps its own identity and
+    /// follows the copy it is archived into. Groups do not swap contents; they swap which file they
+    /// point at.</summary>
+    public static VaultEntry? SelfEntry(SaveGroup g)
+    {
+        if (!g.InVault || g.ActivePath.Length == 0) return null;
+        string abs = g.ActivePath;
+        bool isDir = Directory.Exists(abs);
+        if (!isDir && !File.Exists(abs)) return null;
+
+        long size = 0; DateTime when = DateTime.UtcNow;
+        try
+        {
+            if (isDir) when = Directory.GetLastWriteTimeUtc(abs);
+            else { var fi = new FileInfo(abs); size = fi.Length; when = fi.LastWriteTimeUtc; }
+        }
+        catch { }
+
+        return new VaultEntry
+        {
+            GameId = g.GameId, AppId = g.AppId, GroupId = g.GroupId, GroupName = g.GroupName,
+            IsState = g.IsState, Slot = g.Slot,
+            VaultPath = Rel(abs),
+            OriginalFileName = g.Record?.GetValueOrDefault("OriginalFileName") ?? Path.GetFileName(abs),
+            Title = g.Record?.GetValueOrDefault("Title") ?? "",
+            CreatedUtc = when, SizeBytes = size, IsDirectory = isDir,
+        };
     }
 
     /// <summary>Is this path inside &lt;LB&gt;\Saves\ — that is, is it a vault copy rather than a save
@@ -666,6 +710,7 @@ internal static class SaveManager
                 GroupName = row.GetValueOrDefault("SaveGroupName") is { Length: > 0 } n ? n : (save.SaveGroupName ?? DefaultName(save)),
                 EmulatorFileName = row.GetValueOrDefault("EmulatorFileName") ?? sEmuFile,
                 EmulatorCore = row.GetValueOrDefault("EmulatorCore") ?? (save.EmulatorCore ?? ""),
+                ChipText = row.GetValueOrDefault("DisplayChipText") ?? (save.DisplayChipText ?? ""),
                 Emulator = sEmu,
                 Plugin = sPlugin,
                 Active = save,
@@ -788,6 +833,9 @@ internal static class SaveManager
         row["EmulatorFileName"] = save.EmulatorFileName is { Length: > 0 } ef ? ef : emuFile;
         if (!string.IsNullOrEmpty(save.EmulatorCore)) row["EmulatorCore"] = save.EmulatorCore!;
         row["SaveGroupName"] = save.SaveGroupName is { Length: > 0 } n ? n : DefaultName(save);
+        // Supplied by the plugin and persisted by LaunchBox — Dolphin sets "Disc Save" on a Wii NAND
+        // group. Long noted here as unused; it is not.
+        if (!string.IsNullOrEmpty(save.DisplayChipText)) row["DisplayChipText"] = save.DisplayChipText!;
         row["SaveGroupId"] = save.SaveGroupId is { Length: > 0 } sg ? sg : groupId;
         row["MatchLineageId"] = save.MatchLineageId is { Length: > 0 } ml ? ml : row["SaveGroupId"];
         row["FilePath"] = absPath;
@@ -918,7 +966,12 @@ internal static class SaveManager
             //    version's — with the extension normalised (a state is always ".state", whatever slot it
             //    came from), then -01, -02… The real save file name goes to OriginalFileName, which is the
             //    only thing that lets a restore put it back under the name the emulator reads.
+            // Refuse rather than invent. A group whose ROM path has no file name cannot produce a
+            // meaningful backup name, and "save.srm" beside real ones is worse than nothing — it is how
+            // an unscannable entry leaves a trace that looks legitimate.
             string baseName = SaveVault.BaseName(g);
+            if (baseName == "save" && Path.GetFileNameWithoutExtension(OwningRomPath(g) ?? "").Length == 0)
+            { r.Error = "This save has no ROM to name a backup after."; return r; }
             string ext = SaveVault.Extension(g);
             string liveName = Path.GetFileName(g.ActivePath.TrimEnd('\\', '/'));
             if (liveName.Length == 0) liveName = baseName + ext;
@@ -932,8 +985,17 @@ internal static class SaveManager
             };
             if (sourceFile != null)
             {
-                string target = UniqueFile(vaultDir, baseName, ext);
-                File.Copy(sourceFile, target, overwrite: false);
+                    // Adopt instead of duplicating. LaunchBox's sweep leaves copies in the vault with no
+                // record; we cannot see those (records are the index), so we would cheerfully write the
+                // same bytes again beside them. If a file we are ABOUT to create is already sitting there
+                // under a name we would have used, byte for byte identical, record that one instead.
+                //
+                // This is narrow on purpose and not "adopting orphans": same folder, same expected naming,
+                // same content. Anything looser would be claiming files we have no reason to own.
+                string? twin = FindIdenticalInVault(vaultDir, baseName, ext, md5);
+                string target = twin ?? UniqueFile(vaultDir, baseName, ext);
+                if (twin == null) File.Copy(sourceFile, target, overwrite: false);
+                else Diag($"adopted an unrecorded vault copy: {Path.GetFileName(twin)}");
                 entry.VaultPath = SaveVault.Rel(target);
                 entry.SizeBytes = new FileInfo(target).Length;
             }
@@ -941,6 +1003,7 @@ internal static class SaveManager
             {
                 string target = UniqueDir(vaultDir, baseName);
                 CopyDir(sourceDir!, target);
+                WriteDirManifest(target);   // LaunchBox puts one in every folder backup
                 entry.VaultPath = SaveVault.Rel(target);
                 entry.IsDirectory = true;
                 entry.SizeBytes = Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length);
@@ -962,7 +1025,23 @@ internal static class SaveManager
     /// LaunchBox root, and OriginalFileName.
     ///
     /// One row per COPY, not per group: LaunchBox's Backup History lists a group's records, so a copy
-    /// with no record of its own cannot be shown at all.</summary>
+    /// with no record of its own cannot be shown at all.
+    ///
+    /// This is called on EVERY backup, including from the library sweep, and that is the one place LiteBox
+    /// deliberately does not follow LaunchBox. Measured: LaunchBox's own "Backup Now" copies a save it
+    /// discovers into the vault and writes no record for it when the game had none — and a vault file with
+    /// no record does not exist for LaunchBox, so the copy can never be listed, counted, or restored. It
+    /// is write-only. Worse, the dirty-check compares against the group's newest RECORDED copy, so with
+    /// no record there is nothing to compare and every sweep copies the same bytes again.
+    ///
+    /// That defect lands exactly where an automatic backup matters most: a game you have played but whose
+    /// Game Saves page you never opened. Reproducing it would mean writing files the user can neither see
+    /// nor recover, so we write the record instead — the same record, in the same format, that LaunchBox
+    /// writes for a group it already knows. Nothing about the shape diverges; LaunchBox simply finds more
+    /// records than it would have written itself, and reads them normally.
+    ///
+    /// (The badge engine also needs this: a row is the only signal it can read without touching the disk.
+    /// That was the original reason. It is no longer the main one.)</summary>
     private static void WriteBackupRow(SaveGroup g, VaultEntry e)
     {
         if (g.Game is not ILiteBoxGame lbg) return;
@@ -1128,6 +1207,83 @@ internal static class SaveManager
         }
         catch (Exception ex) { return ex.Message; }
     }
+
+    /// <summary>Is this record's file in the vault? Exposed for the maintenance tools.</summary>
+    public static bool IsVaultPath(string filePath) => SaveVault.IsUnderVault(AbsPath(filePath));
+
+    /// <summary>Gives a record to each vault file of this game that nothing references, so a copy left
+    /// behind becomes visible again. Returns how many were adopted.
+    ///
+    /// This is LaunchBox's "Added vaulted saves", done without its two defects:
+    ///
+    ///   • it records an orphan as a COPY of the group it belongs to — Title set, group id shared — not
+    ///     as a live save in a brand-new group. LaunchBox's version promotes every archived copy to an
+    ///     independent save, which turns a handful of groups with their history into dozens of unrelated
+    ///     ones. That is what makes its button destructive despite touching no file.
+    ///
+    ///   • it never matches on an EMPTY base name. An Additional Application of type Link holds a URL,
+    ///     and a URL ending in "/" has no file name — so LaunchBox's "" + "*.*" pattern claims every file
+    ///     in the platform's vault folder and hands them to whichever game holds the Link. Measured, with
+    ///     a Link created through its own UI pointing at its own website.
+    ///
+    /// And it stays silent when it cannot be sure: a file is adopted only when EXACTLY ONE group of the
+    /// game expects that name. Two save-state slots share a base name and an extension, so a "-01" file
+    /// among them is genuinely ambiguous — inventing an owner there would be the same class of mistake,
+    /// just quieter.</summary>
+    public static int AdoptOrphanCopies(IGame game)
+    {
+        if (game is not ILiteBoxGame lbg) return 0;
+        var scan = ScanBase(game);
+        if (scan.Error != null) return 0;
+
+        var groups = scan.Files.Concat(scan.States).Where(g => g.GroupId.Length > 0).ToList();
+        if (groups.Count == 0) return 0;
+
+        var rows = lbg.GetSubEntities("GameSave").Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+        var known = new HashSet<string>(
+            rows.Select(r => AbsPath(r.GetValueOrDefault("FilePath") ?? "")).Where(p => p.Length > 0),
+            StringComparer.OrdinalIgnoreCase);
+
+        string dir = SaveVault.PlatformDir(game);
+        if (!Directory.Exists(dir)) return 0;
+
+        int added = 0;
+        foreach (var g in groups)
+        {
+            string b = SaveVault.BaseName(g), ext = SaveVault.Extension(g);
+            if (b.Length == 0 || b == "save") continue;              // the guard LaunchBox lacks
+            // Ambiguous when another group would claim the very same names.
+            if (groups.Count(o => SaveVault.BaseName(o) == b && SaveVault.Extension(o) == ext) > 1) continue;
+
+            var rx = new Regex("^" + Regex.Escape(b) + @"(-\d+)?" + Regex.Escape(ext) + "$",
+                               RegexOptions.IgnoreCase);
+            foreach (var f in Directory.EnumerateFileSystemEntries(dir))
+            {
+                if (!rx.IsMatch(Path.GetFileName(f))) continue;
+                var abs = AbsPath(f);
+                if (known.Contains(abs) || PathEq(abs, g.ActivePath)) continue;
+
+                var row = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = g.GameId };
+                if (!string.IsNullOrEmpty(g.AppId)) row["AdditionalApplicationId"] = g.AppId!;
+                row["EmulatorFileName"] = g.EmulatorFileName;
+                if (g.EmulatorCore.Length > 0) row["EmulatorCore"] = g.EmulatorCore;
+                row["Title"] = g.IsState ? $"Save State {g.Slot ?? 0}" : "Saved Game";
+                row["SaveGroupName"] = g.GroupName;
+                row["SaveGroupId"] = g.GroupId;
+                row["MatchLineageId"] = g.Record?.GetValueOrDefault("MatchLineageId") ?? g.GroupId;
+                row["FilePath"] = SaveVault.Rel(abs);
+                row["OriginalFileName"] = Path.GetFileName(abs);
+                if (g.IsState && g.Slot != null) row["Slot"] = g.Slot.Value.ToString();
+                rows.Add(row);
+                known.Add(abs);
+                added++;
+            }
+        }
+        if (added > 0) { lbg.SetSubEntities("GameSave", rows); SaveVault.Notify(g0Id(game)); }
+        return added;
+    }
+
+    private static string g0Id(IGame g) => SafeStr(() => g.Id);
 
     /// <summary>Renames the group — which means EVERY record sharing its SaveGroupId, the live one and
     /// each copy alike. Measured: renaming a group in LaunchBox rewrote SaveGroupName on both of its
@@ -1340,6 +1496,26 @@ internal static class SaveManager
         return name.Trim();
     }
 
+    /// <summary>A file already in the vault, under a name this group would have used, whose content is
+    /// the one we are about to write. Null when there is none — which is the normal case.</summary>
+    private static string? FindIdenticalInVault(string dir, string baseName, string ext, string md5)
+    {
+        if (md5.Length == 0 || !Directory.Exists(dir)) return null;
+        try
+        {
+            var rx = new System.Text.RegularExpressions.Regex(
+                "^" + System.Text.RegularExpressions.Regex.Escape(baseName) + @"(-\d+)?"
+                    + System.Text.RegularExpressions.Regex.Escape(ext) + "$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            foreach (var f in Directory.EnumerateFiles(dir))
+                if (rx.IsMatch(Path.GetFileName(f))
+                    && string.Equals(FileMd5(f), md5, StringComparison.OrdinalIgnoreCase))
+                    return f;
+        }
+        catch { }
+        return null;
+    }
+
     private static string UniqueFile(string dir, string baseName, string ext)
     {
         string p = Path.Combine(dir, baseName + ext);
@@ -1384,6 +1560,28 @@ internal static class SaveManager
         catch { return ""; }
     }
 
+    /// <summary>The file LaunchBox drops inside every FOLDER backup: one "name|SHA256" line per file,
+    /// uppercase, sorted, CRLF, no BOM. Measured on a Wii NAND backup made by LaunchBox itself.</summary>
+    public const string DirManifestName = "manifest.sha256";
+
+    private static void WriteDirManifest(string dir)
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+                                       .Where(f => !string.Equals(Path.GetFileName(f), DirManifestName, StringComparison.OrdinalIgnoreCase))
+                                       .OrderBy(f => Path.GetRelativePath(dir, f), StringComparer.Ordinal))
+            {
+                using var st = File.OpenRead(f);
+                sb.Append(Path.GetRelativePath(dir, f).Replace('\\', '/'))
+                  .Append('|').Append(Convert.ToHexString(SHA256.HashData(st))).Append("\r\n");
+            }
+            File.WriteAllText(Path.Combine(dir, DirManifestName), sb.ToString(), new UTF8Encoding(false));
+        }
+        catch (Exception ex) { Console.WriteLine("[saves] manifest write failed: " + ex.Message); }
+    }
+
     /// <summary>Folder signature: md5 over "relpath|md5" lines, sorted — same idea as the plugins'
     /// folder manifests (Saturn/PCSX2), so unchanged folders dedupe too.</summary>
     public static string DirManifestMd5(string dir)
@@ -1391,7 +1589,11 @@ internal static class SaveManager
         try
         {
             var sb = new StringBuilder();
+            // manifest.sha256 is EXCLUDED, and that exclusion is load-bearing. LaunchBox writes it inside
+            // the backup folder and never in the live one, so hashing it would make a backup differ from
+            // its own source for ever — and the dirty-check would copy the same folder again every pass.
             foreach (string f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+                                          .Where(x => !string.Equals(Path.GetFileName(x), DirManifestName, StringComparison.OrdinalIgnoreCase))
                                           .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             {
                 sb.Append(Path.GetRelativePath(dir, f).ToLowerInvariant()).Append('|').Append(FileMd5(f)).Append('\n');

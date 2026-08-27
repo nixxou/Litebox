@@ -624,7 +624,77 @@ Aligné et vérifié : nommage du vault, absence d'index, écriture des lignes d
 curseur de scan (aux clés de LaunchBox), rétention, dédoublonnage, compte affiché, `Title` comme libellé,
 *Edit Label*, backup avant restauration, *Delete Save*, décodage des slots.
 
-**Un écart assumé, un seul : on écrit toujours le record de la copie.**
+### Le tableau des écarts
+
+| # | écart | pourquoi |
+|---|---|---|
+| 1 | **on écrit toujours le record de la copie** | correction du défaut de *Backup Now* (§5.2). Détaillé plus bas. |
+| 2 | **le compte affiché ne compte que les copies** | leur nombre ajoute la save vivante quand le groupe est attribué à une version, si bien qu'une save jamais sauvegardée affiche « 1 Backup ». On l'a reproduit un temps, à tort : voir ci-dessous. |
+| 3 | **on ne reproduit PAS le saut d'une partie sur deux** | §3.7. C'est le défaut le plus coûteux qu'on ait mesuré, et il n'y a aucune raison de parité qui tienne face à une perte de données. Notre capture compare l'état de **fermeture**, celui qu'elle archive. |
+| 4 | **notre *Clear and re-scan* préserve la structure** | §3.0. |
+| 5 | **option « ne jamais écraser le plus ancien backup »** | LiteBox seul, décrite plus bas. |
+| 6 | **on capture plus tôt à la fermeture** | doit passer avant la purge du cache d'extraction. |
+| 7 | **réglages de périodicité et d'inactivité** | LaunchBox n'en expose aucun. |
+
+### 4.2bis Le compte : pourquoi on a cessé de reproduire le leur
+
+**On l'a d'abord répliqué**, sur l'argument que la parité vaut mieux que l'exactitude pour un nombre que
+l'utilisateur compare d'un frontend à l'autre. L'argument ne tient pas, pour deux raisons.
+
+**Ce nombre n'est persisté nulle part.** Aucun champ, aucun `[DataTableExport]` : il est calculé au
+moment du rendu, dans notre code, dans notre fenêtre. Le changer ne modifie rien que LaunchBox puisse
+lire. **La parité est due à ce qu'on ÉCRIT, pas à ce qu'on DESSINE** — et j'avais transporté l'argument
+de l'horodatage (§1.7), où il est valable parce que la valeur part sur le disque, à un cas où il ne l'est
+pas.
+
+**Et on avait copié leur nombre sans copier leur liste.** Leur Backup History affiche la save vivante
+comme une ligne dans le cas « version » ; la nôtre ne l'a jamais fait. Résultat : la carte annonçait N+1,
+le panneau derrière listait N, et son propre en-tête affichait N. **Trois nombres pour une seule chose** —
+pire que l'un ou l'autre choix tenu jusqu'au bout.
+
+Désormais une seule règle, appliquée à la carte, à l'en-tête et aux lignes : le nombre de copies
+récupérables. Quelqu'un qui utilise les deux verra LaunchBox dire « 1 Backup » là où on dit « 0 », et
+ouvrir l'historique le lui expliquera immédiatement.
+
+### 4.2ter L'option « ne jamais écraser le plus ancien backup »
+
+**LiteBox seul**, `[Saves] ProtectOldestBackup`, désactivée par défaut. Elle sort la **première** copie de
+chaque groupe de la rotation, définitivement.
+
+Elle existe parce que rien dans le format de LaunchBox ne distingue une copie demandée d'une copie
+automatique — même dossier, même nommage, aucun marqueur — et que la mesure du §1.5ter a fermé la
+dernière porte : **rien d'inconnu ne survit dans un `<GameSave>`**, donc on ne peut pas y inscrire
+l'origine d'une copie. Le seul porteur possible serait le chemin, c'est-à-dire des sous-dossiers, ce qui
+est un écart de disposition autrement plus lourd.
+
+Protéger « la plus ancienne » n'est pas protéger « les manuelles », et l'aide du réglage le dit. C'est
+l'approximation utile : la copie qu'on regrette est presque toujours la première — la save propre, l'état
+d'avant que ça tourne mal.
+
+La copie protégée **compte toujours dans le plafond**, pour que le nombre de fichiers reste celui que le
+réglage annonce : avec un plafond de 3, une permanente et deux tournantes. Avec un plafond de 1, plus
+rien ne tourne — c'est dit dans l'aide.
+
+Sur le disque, c'est un backup ordinaire qu'on choisit simplement de ne jamais supprimer. LaunchBox le lit
+normalement — et le supprimerait à son tour si c'était lui qui passait la purge.
+
+### 4.2quater Ce qui a été ALIGNÉ après mesure
+
+Ces points-là n'étaient pas des écarts assumés mais des erreurs, trouvées en mesurant :
+
+| ce qui était faux chez nous | corrigé en |
+|---|---|
+| `Prune` triait par **mtime du fichier** | ordre des **records**, le critère mesuré (§3.4bis) |
+| *Set as Active* grisé sur un groupe In Vault, et plantait si activé | `SaveVault.SelfEntry` fournit le fichier propre du groupe |
+| *Set as Active* n'archivait pas la save déplacée quand elle appartenait à un **autre** groupe | l'appelant, qui tient le scan, l'archive sous **son** identité |
+| aucun slot demandé à la restauration | dialogue « Pick a slot », **Auto** par défaut comme eux |
+| *Make New Save* grisé sur un groupe In Vault | activé, comme eux |
+| la pastille **In Vault** était calculée et jamais affichée | affichée |
+| le badge « Has Backup » testait `Title` | teste le **chemin**, seul critère fiable (§1.2) |
+| la confirmation de *Combine* promettait un archivage puis une suppression | elle dit qu'aucun fichier ne bouge, ce qui est le cas |
+| « Also delete its N vault backup(s) » annonçait 0 sur un groupe In Vault | le texte nomme la copie du vault qui va disparaître |
+
+**Un écart assumé, le premier : on écrit toujours le record de la copie.**
 
 C'est une correction délibérée d'un défaut de LaunchBox, pas une négligence, et elle est mesurée. Son
 *Backup Now* copie dans le vault une save qu'il découvre et **n'écrit aucun record** quand le jeu n'en

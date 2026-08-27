@@ -217,8 +217,23 @@ internal sealed partial class EditGameWindow
             // what a core reading the .zip directly legitimately produces. Not a leftover: with
             // auto-extract off it stays the normal mode.
             bool InBucket(SaveGroup g) => string.Equals(g.EntryKey, _entryFilter, StringComparison.OrdinalIgnoreCase);
-            var files = scan.Files.Where(InBucket).ToList();
-            var states = scan.States.Where(InBucket).ToList();
+
+            // The ACTIVE group first — it is the one the emulator reads, so it is the one you came to
+            // look at. Read off a side-by-side comparison, where it led the list while carrying the
+            // OLDEST date of the three, which is what rules out a plain sort by date.
+            //
+            // Then by SLOT, then newest first. The slot key matters and the comparison could not see it:
+            // all three groups in that sample were Slot 0, so "by date" and "by slot" were
+            // indistinguishable there. Dropping it — which an earlier version of this did — scattered the
+            // slots of a multi-slot game into date order, and the scan had been grouping them by slot all
+            // along. Save FILES carry no slot, so they fall straight through to the date.
+            static IEnumerable<SaveGroup> Ordered(IEnumerable<SaveGroup> gs) => gs
+                .OrderByDescending(g => g.Active != null && g.ActiveLive)
+                .ThenBy(g => g.Slot ?? int.MaxValue)
+                .ThenByDescending(g => g.LastModified ?? DateTime.MinValue);
+
+            var files = Ordered(scan.Files.Where(InBucket)).ToList();
+            var states = Ordered(scan.States.Where(InBucket)).ToList();
 
             Header("Save Files");
             if (files.Count == 0) Empty("No save files found.");
@@ -288,7 +303,10 @@ internal sealed partial class EditGameWindow
 
         private Control BuildSaveCard(SaveGroup g)
         {
-            var card = new Panel { Height = S(96), BackColor = PanelC, Margin = new Padding(S(0)), Padding = new Padding(S(12), S(8), S(10), S(8)) };
+            // The record's Title, printed under the group name the way LaunchBox does. Decided here
+            // because the card has to be a line taller when there is one.
+            string subtitle = g.Record?.GetValueOrDefault("Title") ?? "";
+            var card = new Panel { Height = S(subtitle.Length > 0 ? 113 : 96), BackColor = PanelC, Margin = new Padding(S(0)), Padding = new Padding(S(12), S(8), S(10), S(8)) };
             card.Paint += (_, e) =>
             {
                 using var pen = new Pen(Color.FromArgb(58, 58, 70));
@@ -333,21 +351,16 @@ internal sealed partial class EditGameWindow
             menuBtn.Click += (_, _) => BuildSaveMenu(g).Show(menuBtn, new Point(0, menuBtn.Height));
             card.Controls.Add(menuBtn);
 
+            // The status pill. LaunchBox shows "★ Active" on the group the emulator actually reads, and a
+            // violet "In Vault" on a group that lives only as a copy. We computed InVault from the start
+            // and never drew it, so those cards showed nothing at all and looked like a live save with a
+            // strange path.
             Label? pill = null;
             if (g.Active != null && g.ActiveLive)
-            {
-                pill = new Label
-                {
-                    AutoSize = true, ForeColor = Color.FromArgb(120, 220, 130), BackColor = PanelC,
-                    Padding = new Padding(S(8), S(3), S(8), S(3)), Font = new Font("Segoe UI", 9f, FontStyle.Bold), Text = "★ Active",
-                };
-                pill.Paint += (_, e) =>
-                {
-                    using var pen = new Pen(Color.FromArgb(80, 160, 95));
-                    e.Graphics.DrawRectangle(pen, 0, 0, pill.Width - 1, pill.Height - 1);
-                };
-                card.Controls.Add(pill);
-            }
+                pill = StatusPill("★ Active", Color.FromArgb(120, 220, 130), Color.FromArgb(80, 160, 95));
+            else if (g.InVault)
+                pill = StatusPill("◆ In Vault", Color.FromArgb(186, 150, 235), Color.FromArgb(126, 95, 175));
+            if (pill != null) card.Controls.Add(pill);
 
             // Round status dot (LB parity): green ✓ = active save with an up-to-date backup; yellow ! =
             // no/stale backup; red ✕ = record whose file is gone. Absent for pure vault-only groups.
@@ -365,7 +378,27 @@ internal sealed partial class EditGameWindow
                 dot = g.NeedsBackup
                     ? new StatusDot(StatusKind.Warn, "No up-to-date backup in the vault — use Backup Save to protect it.", S(22))
                     : new StatusDot(StatusKind.Ok, "This save has an up-to-date backup in the vault.", S(22));
+            else if (g.InVault)
+                // LaunchBox marks these too. Nothing is at risk — the file is in the vault and the
+                // emulator cannot touch it — so the dot says "present", not "protected".
+                dot = new StatusDot(StatusKind.Ok, "This copy is safe in the vault. Use Set as Active to put it back in play.", S(22));
             if (dot != null) { dot.BackColor = PanelC; card.Controls.Add(dot); }
+
+            // Row 1bis — the record's Title, under the group name. It is a free-text LABEL (a record
+            // planted with "Zorglub" displays as "Zorglub"), and LaunchBox prints it here as a subtitle:
+            // "Save State 0", "Saved Game", or whatever Edit Label put there. We computed it and never
+            // drew it, so a group renamed by the user lost the only clue to which slot it came from.
+            Label? sub = null;
+            if (subtitle.Length > 0)
+            {
+                sub = new Label
+                {
+                    AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = S(16),
+                    Font = new Font("Segoe UI", 8.5f), AutoEllipsis = true, UseMnemonic = false,
+                    Text = subtitle,
+                };
+                card.Controls.Add(sub);
+            }
 
             // Row 2 — the file path, shown LB-style (relative to the LaunchBox root; full path in the tooltip).
             var path = new Label
@@ -399,8 +432,12 @@ internal sealed partial class EditGameWindow
                 if (pill != null) { pill.Location = new Point(x - pill.Width, S(9)); x = pill.Left - S(8); }
                 if (dot != null) { dot.Location = new Point(x - dot.Width, S(10)); }
                 if (chip != null) chip.Location = new Point(name.Right + S(8), S(13));
-                path.SetBounds(S(12), S(40), card.ClientSize.Width - S(24), S(18));
-                info.SetBounds(S(12), S(62), card.ClientSize.Width - S(24), S(18));
+                // The subtitle takes a line of its own between the name and the path; without it the
+                // path simply moves up, as before.
+                int y = S(40);
+                if (sub != null) { sub.SetBounds(S(12), y, card.ClientSize.Width - S(24), S(16)); y += S(17); }
+                path.SetBounds(S(12), y, card.ClientSize.Width - S(24), S(18));
+                info.SetBounds(S(12), y + S(22), card.ClientSize.Width - S(24), S(18));
             }
             card.Resize += (_, _) => Layout();
             Layout();
@@ -478,20 +515,45 @@ internal sealed partial class EditGameWindow
                 return it;
             }
 
-            // LB parity: History/Combine stay enabled even when empty; only "Set as Active" greys out
-            // on the card that IS already active.
+            // An IN VAULT group — record in the vault, no live save — is the case this menu used to get
+            // wrong. Its restorable file is not in Backups (FromRecords skips a group's own file, rightly),
+            // so hasBackups was false, "Set as Active" greyed out, and Backups.First() would have thrown
+            // the moment it was enabled. Measured on LaunchBox: it enables Set as Active AND Make New Save
+            // there, and greys only Backup Save — there is no live save to back up.
+            var self = SaveVault.SelfEntry(g);
+            var promote = self ?? g.Backups.FirstOrDefault();
+
+            // LB parity: History/Combine stay enabled even when empty; "Set as Active" greys out on the
+            // card that IS already active.
             Add("Edit Name", true, () => SaveAction_EditName(g));
             Add("Backup History", true, () => SaveAction_History(g));
             Add("Combine With Another Save…", true, () => SaveAction_Combine(g, others));
-            Add("Set as Active", !hasActive && hasBackups, () => SaveAction_SetActive(g, g.Backups.First()));
+            Add("Set as Active", !hasActive && promote != null, () => SaveAction_SetActive(g, promote!, scan));
             m.Items.Add(new ToolStripSeparator());
             Add("Backup Save", hasActive, () => SaveAction_Backup(g));
-            Add("Make New Save", hasActive, () => SaveAction_MakeNew(g));
+            Add("Make New Save", hasActive || g.InVault, () => SaveAction_MakeNew(g));
             m.Items.Add(new ToolStripSeparator());
             Add("Open Folder", g.ActivePath.Length > 0 || hasBackups, () => SaveAction_OpenFolder(g));
             var del = Add("Delete Save", true, () => SaveAction_Delete(g));
             del.ForeColor = Color.FromArgb(230, 120, 110);
             return m;
+        }
+
+        /// <summary>One of the card's status pills — same shape, colour says which state.</summary>
+        private Label StatusPill(string text, Color fg, Color border)
+        {
+            var pill = new Label
+            {
+                AutoSize = true, ForeColor = fg, BackColor = PanelC,
+                Padding = new Padding(S(8), S(3), S(8), S(3)),
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold), Text = text,
+            };
+            pill.Paint += (_, e) =>
+            {
+                using var pen = new Pen(border);
+                e.Graphics.DrawRectangle(pen, 0, 0, pill.Width - 1, pill.Height - 1);
+            };
+            return pill;
         }
 
         private void SavesError(string message)
@@ -535,14 +597,93 @@ internal sealed partial class EditGameWindow
             Reload();
         }
 
-        private void SaveAction_SetActive(SaveGroup g, VaultEntry e)
+        /// <summary>LaunchBox's "Set as Active" — measured end to end, with every file made identifiable
+        /// beforehand so there was no guessing about what landed where.
+        ///
+        ///   • it asks which SLOT to restore a save state into, and offers "Auto" by default — not the
+        ///     slot the backup came from;
+        ///   • it archives the save it is about to displace, and the promise on its confirmation
+        ///     ("the current active save will be moved into backup history") is kept;
+        ///   • identities do not swap. Each group keeps its own and simply changes which file it points
+        ///     at: the promoted group takes over the live record, the displaced one follows its save into
+        ///     the copy it is archived as.
+        ///
+        /// That last point is why this needs the scan. The save being displaced can belong to a DIFFERENT
+        /// group — which is exactly the In Vault case — and SaveManager.Restore only ever knew about g, so
+        /// it would have archived nothing and let the plugin overwrite another group's live save without
+        /// a trace.</summary>
+        private void SaveAction_SetActive(SaveGroup g, VaultEntry e, SaveScan scan)
         {
-            string? err = SaveManager.Restore(g, e,
+            int? slot = null;
+            if (g.IsState)
+            {
+                slot = PromptSlot(e.Slot);
+                if (slot == null) return;                       // cancelled
+            }
+
+            // Archive whatever currently owns the destination, under ITS identity, before the plugin
+            // overwrites it.
+            foreach (var other in (g.IsState ? scan.States : scan.Files))
+            {
+                if (ReferenceEquals(other, g) || other.Active == null) continue;
+                // Same attribution: the destination is derived from the OWNING ROM — the version's when
+                // the save belongs to one, the game's otherwise — so only a group sharing g's owner can
+                // be sitting on the file about to be overwritten. Without this, a save FILE (which has no
+                // slot to narrow by) made every live group of the game get backed up. The dirty-check
+                // made that mostly harmless, but "mostly harmless" is not a reason to touch groups that
+                // were never at risk — each copy taken costs one of their retention slots.
+                if (!string.Equals(other.AppId ?? "", g.AppId ?? "", StringComparison.OrdinalIgnoreCase)) continue;
+                if (g.IsState && other.Slot != slot) continue;
+                try { SaveManager.Backup(other, force: false); } catch { }
+            }
+
+            string? err = SaveManager.Restore(g, e, slot,
                 confirmOverwrite: () => MessageBox.Show(FindForm(),
                     "A save file already exists at the emulator's location.\nOverwrite it with this backup?",
                     "Set as Active", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes);
             if (err != null) { SavesError(err); return; }
             Reload();
+        }
+
+        /// <summary>"Which slot would you like to restore this save state to?" — LaunchBox's own wording,
+        /// and like it we default to Auto rather than to the backup's own slot.</summary>
+        private int? PromptSlot(int? backupSlot)
+        {
+            using var f = _w.NewDialog("Pick a slot", 420, 170);
+            var lbl = new Label
+            {
+                AutoSize = true, ForeColor = Fg, BackColor = Bg, Location = new Point(S(16), S(14)),
+                Font = new Font("Segoe UI", 9.5f), UseMnemonic = false,
+                Text = "Which slot would you like to restore this save state to?",
+            };
+            var combo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(16), S(44)),
+                Width = S(380), BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9.5f),
+            };
+            // Auto, then 0-9 — and the backup's own slot when it sits ABOVE that range. There is no
+            // ceiling at 9: a .state10 is read back as slot 10 (save-algorithms.md claimed otherwise,
+            // from a method that proposes restore targets rather than bounding the scan). Without this
+            // last entry, a backup taken from slot 12 could not be restored to slot 12.
+            var slots = new List<int> { -1 };                       // -1 = Auto
+            for (int i = 0; i <= 9; i++) slots.Add(i);
+            if (backupSlot is int bs && bs > 9) slots.Add(bs);
+            foreach (var v in slots) combo.Items.Add(v < 0 ? "Auto" : "Slot " + v);
+            combo.SelectedIndex = 0;                                // Auto by default, like LaunchBox
+
+            var ok = _w.DlgBtn("OK", Color.FromArgb(60, 120, 70));
+            var cancel = _w.DlgBtn("Cancel", Color.FromArgb(70, 70, 82));
+            ok.DialogResult = DialogResult.OK; cancel.DialogResult = DialogResult.Cancel;
+            ok.Location = new Point(S(200), S(84)); cancel.Location = new Point(S(300), S(84));
+
+            f.Controls.Add(lbl); f.Controls.Add(combo); f.Controls.Add(ok); f.Controls.Add(cancel);
+            f.AcceptButton = ok; f.CancelButton = cancel;
+            if (f.ShowDialog(FindForm()) != DialogResult.OK) return null;
+            // Read the value out of the list rather than deriving it from the index: with a slot above 9
+            // appended, index-1 would name the wrong slot.
+            int i2 = combo.SelectedIndex;
+            return i2 >= 0 && i2 < slots.Count ? slots[i2] : -1;
         }
 
         private void SaveAction_History(SaveGroup g) => ShowBackupHistory(g);
@@ -557,9 +698,11 @@ internal sealed partial class EditGameWindow
             }
             var dst = PromptCombine(g, others);
             if (dst == null) return;
-            string extra = g.Active != null
-                ? "\n\nThe current active file of the source will first be archived into the destination's history, then removed from disk."
-                : "";
+            // No file is touched. Measured: Combine is pure re-labelling — the source's records take the
+            // destination's SaveGroupId and MatchLineageId, every record of the result takes the SOURCE's
+            // name, and nothing moves on disk. This text used to promise an archive-then-delete that our
+            // first implementation really did perform, and that we removed once we measured theirs.
+            const string extra = "\n\nNo file is moved or deleted — only the grouping changes.";
             if (MessageBox.Show(FindForm(),
                     $"Merge \"{g.GroupName}\" into \"{dst.GroupName}\"?\nBoth histories become one save group.{extra}",
                     "Combine With Another Save", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
@@ -744,9 +887,15 @@ internal sealed partial class EditGameWindow
         {
             alsoBackups = false;
             using var f = _w.NewDialog("Delete Save", 520, 210);
+            // Spell out WHICH file goes. For an In Vault group the card's own file is a vault copy, and
+            // the checkbox below counts zero — saying only "its N vault backups" made the dialog look
+            // harmless while it was about to delete the group's only copy.
+            string what = g.InVault
+                ? "This permanently deletes this group's vault copy on disk — not just the entry."
+                : "This permanently deletes the underlying save file(s) on disk — not just the entry.";
             f.Controls.Add(new Label
             {
-                Text = $"Delete \"{g.GroupName}\"?\n\nThis permanently deletes the underlying save file(s) on disk — not just the entry.",
+                Text = $"Delete \"{g.GroupName}\"?\n\n{what}",
                 AutoSize = false, Location = new Point(S(16), S(14)), Size = new Size(S(475), S(66)), ForeColor = Fg,
             });
             var cb = new CheckBox
@@ -771,9 +920,16 @@ internal sealed partial class EditGameWindow
             f.FormBorderStyle = FormBorderStyle.Sizable;
             f.MinimumSize = new Size(S(560), S(320));
 
-            string Summary() => g.Active != null
-                ? $"Active: {g.LastModified?.ToString("G") ?? "—"}   ·   {FmtSize(g.SizeBytes)}   ·   {g.Backups.Count} backup(s)"
-                : $"{g.Backups.Count} backup(s) in the vault — no live active save";
+            // The live save's line. LaunchBox puts the same three facts in its own header — date, hash,
+            // size — and the hash is what tells two copies of the same day apart, so we show it too.
+            string Summary()
+            {
+                string n = g.Backups.Count == 1 ? "1 backup" : $"{g.Backups.Count} backups";
+                string when = g.LastModified?.ToString("G") ?? "—";
+                return g.Active != null
+                    ? $"Active: {when}   ·   {FmtSize(g.SizeBytes)}   ·   {n} in the vault"
+                    : $"In vault, no live active save   ·   {when}   ·   {FmtSize(g.SizeBytes)}   ·   {n}";
+            }
 
             var header = new Panel { Dock = DockStyle.Top, Height = S(58), BackColor = Bg };
             var hTitle = new Label { AutoSize = true, ForeColor = Fg, BackColor = Bg, Location = new Point(S(16), S(10)), Font = new Font("Segoe UI", 13f, FontStyle.Bold), Text = g.GroupName, UseMnemonic = false };
@@ -793,9 +949,18 @@ internal sealed partial class EditGameWindow
             {
                 list.SuspendLayout();
                 list.Controls.Clear();
-                // The live active version (context, top) + every vault backup (newest first).
+                // Vault copies only, newest first. The live save is NOT a row: it is described in the
+                // header instead.
+                //
+                // It used to be listed on top as context, which put two rows under a card that said
+                // "1 Backup" — the very inconsistency this pass set out to remove. One rule now holds on
+                // all three surfaces: the card's number, the header's number and the row count are the
+                // same thing, the copies you can restore.
+                //
+                // It also matches what LaunchBox shows for a game-attributed group: only the vault entry.
+                // (For a version-attributed one it does list the live save, which is the same quirk that
+                // inflates its count by one — see SaveGroup.DisplayBackupCount for why we do not follow.)
                 var cards = new List<Control>();
-                if (g.Active != null) cards.Add(BuildVersionCard(g, null, f, Rebuild));
                 foreach (var e in g.Backups.OrderByDescending(x => x.CreatedUtc)) cards.Add(BuildVersionCard(g, e, f, Rebuild));
                 if (cards.Count == 0)
                     list.Controls.Add(new Label { Dock = DockStyle.Top, Height = S(40), Text = "No versions.", ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 9.5f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(S(6), S(0), S(0), S(0)) });
@@ -820,7 +985,20 @@ internal sealed partial class EditGameWindow
         {
             bool isActive = entry == null;
             string abs = isActive ? g.ActivePath : SaveVault.Abs(entry!);
-            string md5 = isActive ? "" : (entry!.Md5 ?? "");
+
+            // The hash, computed here rather than during the scan. FromRecords never filled Md5, so the
+            // line that was meant to print it never had anything to print — and the hash is the ONLY way
+            // to tell two copies of the same date apart. The whole measurement campaign leant on exactly
+            // that. Doing it on demand keeps the page load free of I/O: this dialog holds a handful of
+            // rows, and LaunchBox recomputes it too, having nowhere to persist it either.
+            string md5 = "";
+            try
+            {
+                if (abs.Length > 0)
+                    md5 = (entry?.IsDirectory ?? Directory.Exists(abs))
+                        ? SaveManager.DirManifestMd5(abs) : SaveManager.FileMd5(abs);
+            }
+            catch { }
             DateTime? when = isActive ? g.LastModified : entry!.CreatedUtc.ToLocalTime();
             long? size = isActive ? g.SizeBytes : entry!.SizeBytes;
             string title = isActive
@@ -829,7 +1007,8 @@ internal sealed partial class EditGameWindow
                 // name. Falls back to the file name for a record that carries none.
                 : (entry!.Title.Length > 0 ? entry.Title : Path.GetFileName(abs.TrimEnd('\\', '/')));
 
-            var card = new Panel { Height = S(72), BackColor = PanelC, Padding = new Padding(S(12), S(8), S(10), S(8)) };
+            // Three lines now (title, path, facts) instead of two.
+            var card = new Panel { Height = S(88), BackColor = PanelC, Padding = new Padding(S(12), S(8), S(10), S(8)) };
             card.Paint += (_, e) => { using var pen = new Pen(Color.FromArgb(58, 58, 70)); e.Graphics.DrawRectangle(pen, 0, 0, card.Width - 1, card.Height - 1); };
             var wrap = new Panel { Height = card.Height + S(8), BackColor = Bg, Padding = new Padding(S(0), S(0), S(0), S(8)) };
             wrap.Controls.Add(card); card.Dock = DockStyle.Fill;
@@ -855,11 +1034,27 @@ internal sealed partial class EditGameWindow
             pill.Paint += (_, e) => { using var pen = new Pen(pillBorder); e.Graphics.DrawRectangle(pen, 0, 0, pill.Width - 1, pill.Height - 1); };
             card.Controls.Add(pill);
 
+            // The four facts LaunchBox prints on a row, in its order: where the file is, then when, its
+            // hash, the emulator that wrote it, and its size. Ours carried only the date and the size,
+            // which is not enough to tell two copies apart or to know which emulator a copy belongs to.
+            var pathLbl = new Label
+            {
+                AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = S(17),
+                Font = new Font("Segoe UI", 8.5f), AutoEllipsis = true, UseMnemonic = false,
+                Text = abs.Length > 0 ? DisplaySavePath(abs) : "(no file)",
+            };
+            _tips.SetToolTip(pathLbl, abs);
+            card.Controls.Add(pathLbl);
+
+            string emu = g.EmulatorFileName + (g.EmulatorCore.Length > 0 ? $" ({g.EmulatorCore})" : "");
             var info = new Label
             {
                 AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = S(18), Font = new Font("Segoe UI", 9f),
                 AutoEllipsis = true, UseMnemonic = false,
-                Text = $"🗓 {when?.ToString("G") ?? "—"}      💾 {FmtSize(size)}" + (md5.Length >= 8 ? $"      🔑 {md5.Substring(0, 8).ToLowerInvariant()}" : ""),
+                Text = $"🗓 {when?.ToString("G") ?? "—"}"
+                     + (md5.Length >= 8 ? $"      🔒 {md5.Substring(0, 8).ToUpperInvariant()}" : "")
+                     + (emu.Trim().Length > 0 ? $"      🕹 {emu}" : "")
+                     + $"      💾 {FmtSize(size)}",
             };
             _tips.SetToolTip(info, abs);
             card.Controls.Add(info);
@@ -875,7 +1070,7 @@ internal sealed partial class EditGameWindow
                 }
                 else
                 {
-                    Add("Set as Active", true, () => { SaveAction_SetActive(g, entry!); owner.DialogResult = DialogResult.OK; owner.Close(); });
+                    Add("Set as Active", true, () => { SaveAction_SetActive(g, entry!, _scan!); owner.DialogResult = DialogResult.OK; owner.Close(); });
                     Add("Edit Label…", true, () =>
                     {
                         string? l = PromptText("Edit Label", "Label for this backup:", entry!.Title);
@@ -904,7 +1099,8 @@ internal sealed partial class EditGameWindow
                 int right = card.ClientSize.Width - S(10);
                 menuBtn.Location = new Point(right - menuBtn.Width, S(8));
                 pill.Location = new Point(menuBtn.Left - S(8) - pill.Width, S(9));
-                info.SetBounds(S(12), S(42), card.ClientSize.Width - S(24), S(18));
+                pathLbl.SetBounds(S(12), S(36), card.ClientSize.Width - S(24), S(17));
+                info.SetBounds(S(12), S(58), card.ClientSize.Width - S(24), S(18));
             }
             card.Resize += (_, _) => Layout();
             Layout();

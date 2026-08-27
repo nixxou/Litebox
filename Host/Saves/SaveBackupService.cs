@@ -70,6 +70,19 @@ internal static class SaveBackupService
         }
     }
 
+    /// <summary>Take the group's OLDEST backup off the rotation, so retention can never reach it
+    /// ([Saves] ProtectOldestBackup, default off). LiteBox only — LaunchBox has no such notion.
+    ///
+    /// It exists because nothing in LaunchBox's format distinguishes a backup you asked for from one the
+    /// software took on its own: same folder, same naming, no marker. Retention therefore cannot spare a
+    /// deliberate copy, and the one people mind losing is usually the FIRST — the clean save, the one
+    /// from before the fork in the road.
+    ///
+    /// Protecting "the oldest" is not the same as protecting "the manual ones", and the help text says
+    /// so. It is the cheap approximation that needs no new field, no new folder, and nothing LaunchBox
+    /// could fail to understand: on disk it is an ordinary copy that we simply never choose to delete.</summary>
+    public static bool ProtectOldestBackup => IniBool("ProtectOldestBackup", false);
+
     /// <summary>Hours between two library sweeps ([Saves] PeriodicHours, default 24).</summary>
     public static int PeriodicHours => IniInt("PeriodicHours", 24, 1, 24 * 30);
 
@@ -84,6 +97,19 @@ internal static class SaveBackupService
         {
             var raw = LiteBoxConfig.LoadForExe().GetSec(Section, key);
             return int.TryParse(raw, out var n) ? Math.Clamp(n, min, max) : fallback;
+        }
+        catch { return fallback; }
+    }
+
+    private static bool IniBool(string key, bool fallback)
+    {
+        try
+        {
+            var raw = LiteBoxConfig.LoadForExe().GetSec(Section, key);
+            if (string.IsNullOrWhiteSpace(raw)) return fallback;
+            raw = raw.Trim();
+            return raw.Equals("true", StringComparison.OrdinalIgnoreCase) || raw == "1"
+                   || raw.Equals("yes", StringComparison.OrdinalIgnoreCase);
         }
         catch { return fallback; }
     }
@@ -176,17 +202,40 @@ internal static class SaveBackupService
     private static void Prune(IGame game, SaveScan scan)
     {
         int cap = MaxVersionsPerGame;
+        bool keepOldest = ProtectOldestBackup;
+
         foreach (var g in scan.Files.Concat(scan.States))
         {
-            var all = g.Backups.OrderByDescending(b => b.CreatedUtc).ToList();
+            // Oldest FIRST, by record order — the creation order, which is what LaunchBox evicts on.
+            // Sorting on CreatedUtc (the file's mtime) is what we used to do, and two measurements rule
+            // it out: see VaultEntry.Ordinal. The two agree in normal use and part company the moment a
+            // file is touched, restored or moved.
+            var all = g.Backups.OrderBy(b => b.Ordinal).ToList();
             if (all.Count <= cap) continue;
-            foreach (var old in all.Skip(cap))
+
+            // The anchor, when the option is on: the group's oldest copy is taken off the rotation.
+            // Everything after it is the rolling window, so the cap still bounds the file count — the
+            // promise the setting's name makes.
+            var doomed = all.Skip(keepOldest ? 1 : 0).ToList();
+            int excess = all.Count - cap;
+            if (excess <= 0 || doomed.Count == 0) continue;
+            if (excess > doomed.Count)
+            {
+                // Only reachable with the anchor on and a cap so low the rotation cannot hold anything.
+                // Keeping the anchor is the point of the option, so the cap gives way, loudly.
+                LbLog.Info("saves", $"\"{g.GroupName}\": cap {cap} cannot be met while the oldest backup "
+                                    + $"is protected — keeping {all.Count - doomed.Count + 0} of {all.Count}");
+                excess = doomed.Count;
+            }
+
+            foreach (var old in doomed.Take(excess))
             {
                 var err = SaveManager.DeleteBackup(old, game);
                 if (err == null) g.Backups.Remove(old);
                 else LbLog.Info("saves", "prune failed: " + err);
             }
-            LbLog.Info("saves", $"pruned {all.Count - cap} old backup(s) of \"{g.GroupName}\"");
+            LbLog.Info("saves", $"pruned {excess} old backup(s) of \"{g.GroupName}\""
+                                + (keepOldest ? " (oldest kept)" : ""));
         }
     }
 

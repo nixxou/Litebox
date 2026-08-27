@@ -360,7 +360,12 @@ internal sealed class BadgeContext
             bool f = false, st = false;
             foreach (var r in lbg.GetSubEntities("GameSave"))
             {
-                if (!r.TryGetValue("Title", out var t) || string.IsNullOrWhiteSpace(t)) continue;
+                // A backup is a record whose FILE is in the vault. Testing Title instead was the old
+                // heuristic, and it is measurably wrong: Restore Backup labels the line it promotes, so a
+                // LIVE record comes back carrying "Save State 0" and the badge claimed a backup for a game
+                // whose vault is empty. The path test is pure string work — no extra I/O, which is the
+                // constraint this cache exists under.
+                if (!r.TryGetValue("FilePath", out var fp) || !SaveManager.IsVaultPath(fp)) continue;
                 if (r.TryGetValue("Slot", out var slot) && !string.IsNullOrWhiteSpace(slot)) st = true;
                 else f = true;
                 if (f && st) break;

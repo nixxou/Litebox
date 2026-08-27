@@ -79,6 +79,20 @@ internal sealed class VaultEntry
     public string Md5 { get; set; } = "";            // file md5, or folder-manifest md5
     public long SizeBytes { get; set; }
     public bool IsDirectory { get; set; }
+
+    /// <summary>Where this entry's record sits among the game's records — its creation order, since
+    /// records are appended as backups are taken.
+    ///
+    /// This is what LaunchBox's retention evicts on, and it is NOT the file's date. Measured twice, each
+    /// test pitting it against a criterion it agrees with in normal use:
+    ///
+    ///   • against the file's mtime — two copies planted with names and dates in opposite order. The one
+    ///     whose FILE was newest died, because its RECORD came first.
+    ///   • against alphabetical order — after an eviction the freed name is reused by the next backup, so
+    ///     the NEWEST copy ends up carrying the suffix-less name. It survived; the oldest record died.
+    ///
+    /// Our Prune used to sort on CreatedUtc, which is exactly the criterion both tests rule out.</summary>
+    public int Ordinal { get; set; }
     // No Auto/manual flag: LaunchBox's format has nowhere to record it and every copy now sits in the
     // same folder, so nothing on disk tells them apart. Prune says what that costs.
 }
@@ -131,37 +145,30 @@ internal sealed class SaveGroup
     public bool EntryInferred;
     public List<VaultEntry> Backups = new();
 
-    /// <summary>The number LaunchBox puts on the card, replicated including its defect.
+    /// <summary>How many recoverable copies this group has. The number on the card.
     ///
-    /// It is the archived copies, PLUS ONE when the group is attributed to a version — that is, when its
-    /// records carry an AdditionalApplicationId. A version-attributed group counts its own LIVE save as
-    /// an entry; a game-attributed one does not. LaunchBox's Backup History shows the same split: the
-    /// live file appears as a row, marked Active, only in the version case.
+    /// It counts vault copies, and nothing else, because that is what the word means: open Backup
+    /// History and you get this many restorable entries.
     ///
-    /// This is almost certainly a bug on their side — a save that has never been backed up reads
-    /// "1 Backup" with a green tick — and it is reproduced here on purpose, because parity is the goal
-    /// and a number that disagrees with LaunchBox's is worse than one that is odd in the same way.
+    /// LAUNCHBOX COUNTS DIFFERENTLY, and we no longer follow it. Its number is the copies PLUS ONE when
+    /// the group is attributed to a version — its own live save is listed as an entry in that case, so a
+    /// save that has never been backed up reads "1 Backup" with a green tick. Measured over eight groups,
+    /// one variable at a time, with the control that separates attribution from the mere existence of
+    /// versions: point the version at a different ROM and the count drops back to 0.
     ///
-    /// Pinned down by elimination over eight real groups, one variable at a time. The suspects that were
-    /// ruled out first, each by its own measurement: the file name (five candidate spellings planted in
-    /// the vault, none matched), the apostrophe (LaunchBox does sanitise it into OriginalFileName, but
-    /// renaming the file to match changed nothing), and the presence of a recordless copy in the folder.
-    /// The decisive test was the last: one game, empty vault, a single live record — 0 backups; add a
-    /// version pointing at the game's own ROM, changing nothing else — 1 backup, the live file listed.
+    /// We reproduced that for a while, on the argument that parity beats correctness for a number the
+    /// user compares across both frontends. The argument does not hold, for two reasons:
     ///
-    /// And the control that separates ATTRIBUTION from "the game merely has versions": point that same
-    /// version at a different ROM instead. RetroArch's pass 2 then stops skipping the game, the save comes
-    /// back attributed to the game with no AdditionalApplicationId — and the count drops to 0 again, with
-    /// the version still there. So a version only changes the game's page when it takes the game's saves
-    /// away from it, which is the sane half of this behaviour.
+    ///   • the number is not persisted anywhere — no field, no [DataTableExport] — so it is computed at
+    ///     render time, in our code, in our window. Changing it alters nothing LaunchBox can read.
+    ///     Parity is owed to what we WRITE, not to what we DRAW.
+    ///   • we copied their number without copying their list. Our Backup History does not show the live
+    ///     save as an entry, so the card said N+1 while the panel behind it listed N, and its own header
+    ///     said N again. Three numbers for one thing — worse than either choice made consistently.
     ///
-    /// One thing skews it: a FOSSIL record — a second record naming the same live file, left behind when a
-    /// version started covering the game's own ROM. A group with such a twin reads one lower than the same
-    /// group without one (observed: 1 instead of 2, and back to 2 the moment the fossil was removed, every
-    /// other thing equal). Which is one more reason for Repair to clear them: they do not merely clutter
-    /// the page, they make the number wrong.</summary>
-    public int DisplayBackupCount
-        => Backups.Count + (!string.IsNullOrEmpty(AppId) && Active != null ? 1 : 0);
+    /// So: one rule, applied to the card, the header and the rows alike. A user running both will see
+    /// LaunchBox say "1 Backup" where we say "0" — and opening the history explains it immediately.</summary>
+    public int DisplayBackupCount => Backups.Count;
     public Dictionary<string, string>? Record;       // persisted row (null for orphan/vault-only groups)
 
     public DateTime? LastModified
@@ -313,8 +320,10 @@ internal static class SaveVault
     public static List<VaultEntry> FromRecords(SaveGroup g, IEnumerable<Dictionary<string, string>> rows)
     {
         var res = new List<VaultEntry>();
+        int ordinal = -1;
         foreach (var row in rows)
         {
+            ordinal++;                                                                 // position among ALL rows
             if (!string.Equals(row.GetValueOrDefault("SaveGroupId"), g.GroupId, StringComparison.OrdinalIgnoreCase)) continue;
             var abs0 = SaveManager.AbsPath(row.GetValueOrDefault("FilePath") ?? "");
             if (!IsUnderVault(abs0)) continue;                                         // the live file
@@ -341,8 +350,10 @@ internal static class SaveVault
                 OriginalFileName = row.GetValueOrDefault("OriginalFileName") ?? Path.GetFileName(abs),
                 Title = row.GetValueOrDefault("Title") ?? "",
                 CreatedUtc = when, SizeBytes = size, IsDirectory = isDir,
+                Ordinal = ordinal,
             });
         }
+        // Newest first for DISPLAY. Retention must not use this order — see VaultEntry.Ordinal.
         res.Sort((x, y) => y.CreatedUtc.CompareTo(x.CreatedUtc));
         return res;
     }
@@ -991,8 +1002,9 @@ internal static class SaveManager
                 // under a name we would have used, byte for byte identical, record that one instead.
                 //
                 // This is narrow on purpose and not "adopting orphans": same folder, same expected naming,
-                // same content. Anything looser would be claiming files we have no reason to own.
-                string? twin = FindIdenticalInVault(vaultDir, baseName, ext, md5);
+                // same content, AND no record already naming it. Without that last condition it matched
+                // the group's own recorded copy and a forced backup produced nothing at all.
+                string? twin = FindIdenticalInVault(vaultDir, baseName, ext, md5, RecordedVaultPaths(g.Game));
                 string target = twin ?? UniqueFile(vaultDir, baseName, ext);
                 if (twin == null) File.Copy(sourceFile, target, overwrite: false);
                 else Diag($"adopted an unrecorded vault copy: {Path.GetFileName(twin)}");
@@ -1078,7 +1090,10 @@ internal static class SaveManager
 
     /// <summary>Restores a vault backup as the ACTIVE save (LB's "Set as Active"): the plugin copies it
     /// to the emulator's live location under the emulator's expected name (AddSaveFile).</summary>
-    public static string? Restore(SaveGroup g, VaultEntry e, Func<bool> confirmOverwrite)
+    /// <param name="targetSlot">Where the caller wants the state to land, −1 for Auto. Null keeps the
+    /// backup's own slot. LaunchBox always asks and defaults to Auto; passing the backup's slot silently,
+    /// as we used to, restores to a slot the user never picked.</param>
+    public static string? Restore(SaveGroup g, VaultEntry e, int? targetSlot, Func<bool> confirmOverwrite)
     {
         if (g.Plugin is not EmulatorPlugin plugin) return "No integration plugin for this save.";
 
@@ -1086,11 +1101,15 @@ internal static class SaveManager
         // whole point is to replace live progress, and until now it did so with no way back — the plugin
         // copies over the active file and the previous content is simply gone. The dirty-check makes this
         // free when the live save already matches its latest backup.
+        //
+        // This only covers g's OWN live save. When the file being displaced belongs to another group, the
+        // caller archives it first — it is the one holding the scan. See SaveAction_SetActive.
         try { if (g.Active != null) Backup(g, force: false); } catch { }
         string abs = SaveVault.Abs(e);
         if (!File.Exists(abs) && !Directory.Exists(abs)) return "The backup file is missing on disk:\n" + abs;
+        int? slot = targetSlot ?? e.Slot;
         GameSaveBase save = e.IsState
-            ? new GameSaveState { GameId = g.GameId, AdditionalApplicationId = g.AppId, FileLocation = abs, Slot = e.Slot, SaveGroupId = g.GroupId, SaveGroupName = g.GroupName }
+            ? new GameSaveState { GameId = g.GameId, AdditionalApplicationId = g.AppId, FileLocation = abs, Slot = slot, SaveGroupId = g.GroupId, SaveGroupName = g.GroupName }
             : new GameSaveGame { GameId = g.GameId, AdditionalApplicationId = g.AppId, FileLocation = abs, SaveGroupId = g.GroupId, SaveGroupName = g.GroupName };
         try
         {
@@ -1498,7 +1517,20 @@ internal static class SaveManager
 
     /// <summary>A file already in the vault, under a name this group would have used, whose content is
     /// the one we are about to write. Null when there is none — which is the normal case.</summary>
-    private static string? FindIdenticalInVault(string dir, string baseName, string ext, string md5)
+    /// <summary>A vault file that is byte-identical to what we are about to write, sits under a name this
+    /// group would have used, AND that no record already names.
+    ///
+    /// That last condition is the whole point and it used to be missing. The purpose is to reclaim the
+    /// copies LaunchBox's sweep leaves behind with no record — invisible files we would otherwise
+    /// duplicate. A file that already HAS a record is not one of those: adopting it means rewriting a row
+    /// that already exists, creating nothing.
+    ///
+    /// Which is exactly what a forced "Backup Save" did. The user answers "the current save is identical
+    /// to its latest backup — create another copy anyway?" with yes, and the group's own recorded copy
+    /// matched, so the request was swallowed: no file, no new row, and the card unchanged. The dialog
+    /// asked a question whose answer was then ignored.</summary>
+    private static string? FindIdenticalInVault(string dir, string baseName, string ext, string md5,
+                                                HashSet<string> recorded)
     {
         if (md5.Length == 0 || !Directory.Exists(dir)) return null;
         try
@@ -1509,11 +1541,31 @@ internal static class SaveManager
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             foreach (var f in Directory.EnumerateFiles(dir))
                 if (rx.IsMatch(Path.GetFileName(f))
+                    && !recorded.Contains(AbsPath(f))
                     && string.Equals(FileMd5(f), md5, StringComparison.OrdinalIgnoreCase))
                     return f;
         }
         catch { }
         return null;
+    }
+
+    /// <summary>Every vault path this game already has a record for — the set an adoption must not touch.
+    /// Read from the records because they are the index: a file nothing names is precisely what we are
+    /// looking to reclaim.</summary>
+    private static HashSet<string> RecordedVaultPaths(IGame game)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (game is not ILiteBoxGame lbg) return set;
+        try
+        {
+            foreach (var r in lbg.GetSubEntities("GameSave"))
+            {
+                var abs = AbsPath(r.GetValueOrDefault("FilePath") ?? "");
+                if (abs.Length > 0) set.Add(abs);
+            }
+        }
+        catch { }
+        return set;
     }
 
     private static string UniqueFile(string dir, string baseName, string ext)

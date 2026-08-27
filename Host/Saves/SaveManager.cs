@@ -93,6 +93,14 @@ internal sealed class VaultEntry
     ///
     /// Our Prune used to sort on CreatedUtc, which is exactly the criterion both tests rule out.</summary>
     public int Ordinal { get; set; }
+
+    /// <summary>Taken out of the rotation: its creation date sits a century ahead, so retention — which
+    /// evicts the oldest creation date first — can never reach it. See SaveVault's padlock section.</summary>
+    public bool Locked { get; set; }
+
+    /// <summary>The date to SHOW. For a locked copy that is the real one, with the century taken back
+    /// off; printing the stored value would put the year 2126 on the card.</summary>
+    public DateTime DisplayCreatedUtc => Locked ? CreatedUtc.AddYears(-100) : CreatedUtc;
     // No Auto/manual flag: LaunchBox's format has nowhere to record it and every copy now sits in the
     // same folder, so nothing on disk tells them apart. Prune says what that costs.
 }
@@ -179,7 +187,9 @@ internal sealed class SaveGroup
             {
                 if (Active?.LastModifiedDateTime is DateTime d) return d;
                 if (ActivePath.Length > 0 && File.Exists(ActivePath)) return File.GetLastWriteTime(ActivePath);
-                if (Backups.Count > 0) return Backups.Max(b => b.CreatedUtc).ToLocalTime();
+                // La date REELLE : une copie verrouillee porte un siecle d'avance, et la carte
+                // afficherait 2126 comme date du groupe.
+                if (Backups.Count > 0) return Backups.Max(b => b.DisplayCreatedUtc).ToLocalTime();
             }
             catch { }
             return null;
@@ -211,7 +221,10 @@ internal sealed class SaveGroup
             if (Backups.Count == 0) return true;
             try
             {
-                DateTime latest = Backups.Max(b => b.CreatedUtc);
+                // Idem, et ici ca compte plus qu'un affichage : compare a une date de 2126, le
+                // mtime de la save vivante ne serait JAMAIS plus recent, et la pastille dirait
+                // "sauvegarde a jour" pour toujours des qu'une seule copie du groupe est verrouillee.
+                DateTime latest = Backups.Max(b => b.DisplayCreatedUtc);
                 DateTime mtime = ActiveIsDirectory ? DirLastWriteUtc(ActivePath) : File.GetLastWriteTimeUtc(ActivePath);
                 return mtime > latest.AddSeconds(2);
             }
@@ -337,8 +350,11 @@ internal static class SaveVault
             long size = 0; DateTime when = DateTime.UtcNow;
             try
             {
-                if (isDir) when = Directory.GetLastWriteTimeUtc(abs);
-                else { var fi = new FileInfo(abs); size = fi.Length; when = fi.LastWriteTimeUtc; }
+                // CREATION time, not last-write. For a vault copy the two normally agree -- the file
+                // is written once -- but they part company the moment anything touches the content,
+                // and it is the CREATION time that retention evicts on. Measured over six purges.
+                if (isDir) { when = Directory.GetCreationTimeUtc(abs); size = DirContentSize(abs); }
+                else { var fi = new FileInfo(abs); size = fi.Length; when = fi.CreationTimeUtc; }
             }
             catch { }
 
@@ -350,11 +366,13 @@ internal static class SaveVault
                 OriginalFileName = row.GetValueOrDefault("OriginalFileName") ?? Path.GetFileName(abs),
                 Title = row.GetValueOrDefault("Title") ?? "",
                 CreatedUtc = when, SizeBytes = size, IsDirectory = isDir,
-                Ordinal = ordinal,
+                Ordinal = ordinal, Locked = IsLockedPath(abs),
             });
         }
         // Newest first for DISPLAY. Retention must not use this order — see VaultEntry.Ordinal.
-        res.Sort((x, y) => y.CreatedUtc.CompareTo(x.CreatedUtc));
+        // Tri d'AFFICHAGE, sur la date reelle : sans quoi les copies verrouillees remonteraient
+        // toutes en tete de l'historique, un siecle devant les autres.
+        res.Sort((x, y) => y.DisplayCreatedUtc.CompareTo(x.DisplayCreatedUtc));
         return res;
     }
 
@@ -381,8 +399,11 @@ internal static class SaveVault
         long size = 0; DateTime when = DateTime.UtcNow;
         try
         {
-            if (isDir) when = Directory.GetLastWriteTimeUtc(abs);
-            else { var fi = new FileInfo(abs); size = fi.Length; when = fi.LastWriteTimeUtc; }
+            // CREATION time, not last-write. For a vault copy the two normally agree -- the file
+            // is written once -- but they part company the moment anything touches the content,
+            // and it is the CREATION time that retention evicts on. Measured over six purges.
+            if (isDir) { when = Directory.GetCreationTimeUtc(abs); size = DirContentSize(abs); }
+            else { var fi = new FileInfo(abs); size = fi.Length; when = fi.CreationTimeUtc; }
         }
         catch { }
 
@@ -394,7 +415,83 @@ internal static class SaveVault
             OriginalFileName = g.Record?.GetValueOrDefault("OriginalFileName") ?? Path.GetFileName(abs),
             Title = g.Record?.GetValueOrDefault("Title") ?? "",
             CreatedUtc = when, SizeBytes = size, IsDirectory = isDir,
+            Locked = IsLockedPath(abs),
         };
+    }
+
+    // ── The padlock ───────────────────────────────────────────────────────────
+    //
+    // A locked copy is one whose CREATION date has been pushed a century into the future.
+    //
+    // That sounds like a trick until you see what retention actually does: it deletes by creation date,
+    // oldest first — measured, with the three competing criteria separated in one shot (§3.4bis). A copy
+    // dated a hundred years out is therefore always the LAST candidate, and it can only be reached once
+    // every other copy in the group is locked too.
+    //
+    // The reason this beats every other carrier we tried:
+    //
+    //   • it survives a rewrite, unlike a field — nothing unknown lives through LaunchBox's
+    //     re-serialisation of a <GameSave>;
+    //   • it needs no subfolder, so the vault keeps LaunchBox's flat layout;
+    //   • and it protects the copy from LAUNCHBOX'S OWN purge, because LaunchBox sorts on the very same
+    //     date. Numbering the file high does not: the name plays no part, and a planted "-1001" was
+    //     evicted like any other.
+    //
+    // The cost is that the date is visible. LaunchBox will print the year 2126 for a locked copy, and so
+    // would we if we did not subtract the offset back out for display — which DisplayCreatedUtc does.
+    private const int LockOffsetYears = 100;
+
+    /// <summary>Anything created more than half the offset into the future is locked. A margin rather
+    /// than an exact match, so a clock skew or a filesystem that rounds does not silently unlock.</summary>
+    public static bool IsLockedPath(string abs)
+    {
+        try
+        {
+            if (abs.Length == 0) return false;
+            DateTime c = Directory.Exists(abs) ? Directory.GetCreationTimeUtc(abs)
+                                               : (File.Exists(abs) ? File.GetCreationTimeUtc(abs) : DateTime.MinValue);
+            return c > DateTime.UtcNow.AddYears(LockOffsetYears / 2);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Set or clear the lock. Returns null on success, else a message for the user.</summary>
+    public static string? SetLocked(string abs, bool locked)
+    {
+        try
+        {
+            bool isDir = Directory.Exists(abs);
+            if (!isDir && !File.Exists(abs)) return "That backup no longer exists on disk.";
+
+            DateTime c = isDir ? Directory.GetCreationTimeUtc(abs) : File.GetCreationTimeUtc(abs);
+            bool already = c > DateTime.UtcNow.AddYears(LockOffsetYears / 2);
+            if (already == locked) return null;
+
+            DateTime moved = locked ? c.AddYears(LockOffsetYears) : c.AddYears(-LockOffsetYears);
+            if (isDir) Directory.SetCreationTimeUtc(abs, moved);
+            else File.SetCreationTimeUtc(abs, moved);
+            return null;
+        }
+        catch (Exception ex) { return "Could not " + (locked ? "lock" : "unlock") + " this backup:\n" + ex.Message; }
+    }
+
+    /// <summary>Bytes in a folder backup, manifest EXCLUDED.
+    ///
+    /// The entries built from a record only ever set a size for files, so every folder copy — Wii,
+    /// GameCube, PS2 — reported 0 B in Backup History while the live save above it showed its real size.
+    ///
+    /// The manifest is left out on purpose, for the same reason <see cref="DirManifestMd5"/> leaves it
+    /// out: it exists only in the copy. Counting it would make a backup read as bigger than the save it
+    /// is a copy of, and invite the question of what the extra bytes are.</summary>
+    public static long DirContentSize(string dir)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+                            .Where(f => !string.Equals(Path.GetFileName(f), SaveManager.DirManifestName, StringComparison.OrdinalIgnoreCase))
+                            .Sum(f => new FileInfo(f).Length);
+        }
+        catch { return 0; }
     }
 
     /// <summary>Is this path inside &lt;LB&gt;\Saves\ — that is, is it a vault copy rather than a save
@@ -820,7 +917,7 @@ internal static class SaveManager
             catch (Exception ex) { Diag($"vault read \"{g.GroupName}\" failed: {ex.Message}"); }
         }
 
-        foreach (var g in groups) g.Backups.Sort((a, b) => b.CreatedUtc.CompareTo(a.CreatedUtc));
+        foreach (var g in groups) g.Backups.Sort((a, b) => b.DisplayCreatedUtc.CompareTo(a.DisplayCreatedUtc));
 
         // SetSubEntities is read-only-aware (op-log skipped when the store is ReadOnly) — safe to call.
         if (rowsDirty && lbg != null)
@@ -955,12 +1052,24 @@ internal static class SaveManager
             string md5;
             string? sig = null;
             try { bool okSig; string? sigv; lock (_pluginGate) okSig = plugin.TryComputeSaveSignature(g.Active, EmuAppPath(emu), out sigv); if (okSig && !string.IsNullOrEmpty(sigv)) sig = sigv; } catch { }
-            md5 = sig ?? (sourceFile != null ? FileMd5(sourceFile) : DirManifestMd5(sourceDir!));
-            // No cached hash any more — the index that held it is gone, so the newest copy is re-read,
-            // which is what LaunchBox does. Cheap in the case that matters: the file is in the OS cache
-            // moments after the emulator wrote it.
-            var latest = g.Backups.OrderByDescending(b => b.CreatedUtc).FirstOrDefault();
-            if (!force && latest != null && md5.Length > 0)
+            // Two values, deliberately. The plugin's signature (when it offers one) is the better notion
+            // of "has this save changed" for a container format, and it is what the entry records — but it
+            // is computed from the LIVE save through the plugin, and there is no way to recompute it for a
+            // file already sitting in the vault. Comparing a signature against a file hash never matches,
+            // so the dirty-check would have said "changed" every single time and piled up a copy per pass,
+            // which is precisely the defect we hold against LaunchBox's own sweep.
+            string fileHash = sourceFile != null ? FileMd5(sourceFile) : DirManifestMd5(sourceDir!);
+            md5 = sig ?? fileHash;
+
+            // The newest copy is re-read rather than cached: the index that used to hold a hash is gone,
+            // and this is what LaunchBox does too. Cheap in the case that matters — the file is still in
+            // the OS cache moments after the emulator wrote it.
+            //
+            // "Newest" is the last RECORD, not the newest mtime. Records are appended as copies are made,
+            // and the two part company as soon as a file is touched, restored or moved — the same reason
+            // Prune stopped ordering on CreatedUtc.
+            var latest = g.Backups.OrderByDescending(b => b.Ordinal).FirstOrDefault();
+            if (!force && latest != null && fileHash.Length > 0)
             {
                 string prev = "";
                 try
@@ -969,7 +1078,7 @@ internal static class SaveManager
                     prev = latest.IsDirectory ? DirManifestMd5(labs) : (File.Exists(labs) ? FileMd5(labs) : "");
                 }
                 catch { }
-                if (prev.Length > 0 && string.Equals(prev, md5, StringComparison.OrdinalIgnoreCase))
+                if (prev.Length > 0 && string.Equals(prev, fileHash, StringComparison.OrdinalIgnoreCase))
                 { r.Identical = true; return r; }
             }
 

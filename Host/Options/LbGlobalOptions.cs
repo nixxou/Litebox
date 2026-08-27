@@ -140,14 +140,6 @@ internal static class LbGlobalOptions
         int IniGet(string key, int def)
             => int.TryParse(ini.GetSec("Saves", key), out var n) ? n : def;
         void IniSet(string key, int v) { ini.SetSec("Saves", key, v.ToString()); }
-        bool IniBool(string key, bool def)
-        {
-            var raw = ini.GetSec("Saves", key);
-            if (string.IsNullOrWhiteSpace(raw)) return def;
-            raw = raw.Trim();
-            return raw.Equals("true", StringComparison.OrdinalIgnoreCase) || raw == "1";
-        }
-        void IniSetBool(string key, bool v) { ini.SetSec("Saves", key, v ? "true" : "false"); }
 
         int LbNum(string field, int def)
             => int.TryParse(s.Get(field, ""), out var n) && n > 0 ? n : def;
@@ -187,24 +179,11 @@ internal static class LbGlobalOptions
             OptionItem.Number("sm", "Max backup versions per game",
                 () => LbNum("MaxAutoBackupsPerGame", 25),
                 v => s.Set("MaxAutoBackupsPerGame", v.ToString()), 1, 999,
-                help: "Past this count the oldest copy is deleted to make room, as LaunchBox documents. "
-                + "It cannot spare the ones you made by hand: LaunchBox's format has no field marking a "
-                + "backup automatic, and every copy sits in the same folder under the same naming, so "
-                + "nothing on disk tells them apart. The setting below is the cheap way round that."),
-
-            OptionItem.Toggle("sm", "Never overwrite the oldest backup in a group",
-                () => IniBool("ProtectOldestBackup", false), v => IniSetBool("ProtectOldestBackup", v),
-                "Takes each group's FIRST backup off the rotation for good, so retention can never reach "
-                + "it. The copy people mind losing is usually that one — the clean save, the state from "
-                + "before things went wrong.\n\n"
-                + "It protects the OLDEST, which is not the same as protecting the ones you made by hand: "
-                + "a later manual backup is still ordinary. Doing better needs somewhere to record where a "
-                + "copy came from, and LaunchBox's format has nowhere.\n\n"
-                + "The protected copy still counts towards the limit above, so the file count is unchanged "
-                + "— with a limit of 3 you get one permanent plus two rolling. Set the limit to 1 and "
-                + "nothing rotates at all.\n\n"
-                + "LiteBox only. On disk it is an ordinary backup we simply never choose to delete, so "
-                + "LaunchBox reads it normally — and would delete it in its turn if it ran the purge."),
+                help: "Past this count the copy that comes FIRST alphabetically is deleted to make room, "
+                + "which in normal use is the oldest — copies are named in the order they are made. The "
+                + "very first copy of a group, the one with no number, is the exception: a dot sorts after "
+                + "a hyphen, so it always comes last and is always deleted last. LaunchBox behaves the "
+                + "same way, and it is measured on both sides."),
 
             OptionItem.Number("sm", "Hours between background sweeps",
                 () => IniGet("PeriodicHours", 24), v => IniSet("PeriodicHours", v), 1, 720,

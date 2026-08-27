@@ -961,7 +961,7 @@ internal sealed partial class EditGameWindow
                 // (For a version-attributed one it does list the live save, which is the same quirk that
                 // inflates its count by one — see SaveGroup.DisplayBackupCount for why we do not follow.)
                 var cards = new List<Control>();
-                foreach (var e in g.Backups.OrderByDescending(x => x.CreatedUtc)) cards.Add(BuildVersionCard(g, e, f, Rebuild));
+                foreach (var e in g.Backups.OrderByDescending(x => x.DisplayCreatedUtc)) cards.Add(BuildVersionCard(g, e, f, Rebuild));
                 if (cards.Count == 0)
                     list.Controls.Add(new Label { Dock = DockStyle.Top, Height = S(40), Text = "No versions.", ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 9.5f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(S(6), S(0), S(0), S(0)) });
                 else for (int i = cards.Count - 1; i >= 0; i--) { list.Controls.Add(cards[i]); cards[i].Dock = DockStyle.Top; cards[i].BringToFront(); }
@@ -999,7 +999,9 @@ internal sealed partial class EditGameWindow
                         ? SaveManager.DirManifestMd5(abs) : SaveManager.FileMd5(abs);
             }
             catch { }
-            DateTime? when = isActive ? g.LastModified : entry!.CreatedUtc.ToLocalTime();
+            // DisplayCreatedUtc, pas CreatedUtc : une copie verrouillee porte une date de creation
+            // avancee d'un siecle, et l'afficher telle quelle mettrait 2126 sur la ligne.
+            DateTime? when = isActive ? g.LastModified : entry!.DisplayCreatedUtc.ToLocalTime();
             long? size = isActive ? g.SizeBytes : entry!.SizeBytes;
             string title = isActive
                 ? (g.ActivePath.Length > 0 ? Path.GetFileName(g.ActivePath) : g.GroupName)
@@ -1027,10 +1029,12 @@ internal sealed partial class EditGameWindow
             var pill = new Label
             {
                 AutoSize = true, BackColor = PanelC, Padding = new Padding(S(8), S(2), S(8), S(2)), Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                ForeColor = isActive ? Color.FromArgb(120, 220, 130) : Color.FromArgb(150, 180, 235),
-                Text = isActive ? "★ Active" : "Vault",
+                ForeColor = isActive ? Color.FromArgb(120, 220, 130)
+                          : (entry!.Locked ? Color.FromArgb(226, 186, 96) : Color.FromArgb(150, 180, 235)),
+                Text = isActive ? "★ Active" : (entry!.Locked ? "🔒 Locked" : "Vault"),
             };
-            Color pillBorder = isActive ? Color.FromArgb(80, 160, 95) : Color.FromArgb(90, 120, 175);
+            Color pillBorder = isActive ? Color.FromArgb(80, 160, 95)
+                             : (entry!.Locked ? Color.FromArgb(170, 135, 60) : Color.FromArgb(90, 120, 175));
             pill.Paint += (_, e) => { using var pen = new Pen(pillBorder); e.Graphics.DrawRectangle(pen, 0, 0, pill.Width - 1, pill.Height - 1); };
             card.Controls.Add(pill);
 
@@ -1052,7 +1056,7 @@ internal sealed partial class EditGameWindow
                 AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = S(18), Font = new Font("Segoe UI", 9f),
                 AutoEllipsis = true, UseMnemonic = false,
                 Text = $"🗓 {when?.ToString("G") ?? "—"}"
-                     + (md5.Length >= 8 ? $"      🔒 {md5.Substring(0, 8).ToUpperInvariant()}" : "")
+                     + (md5.Length >= 8 ? $"      # {md5.Substring(0, 8).ToUpperInvariant()}" : "")
                      + (emu.Trim().Length > 0 ? $"      🕹 {emu}" : "")
                      + $"      💾 {FmtSize(size)}",
             };
@@ -1071,6 +1075,19 @@ internal sealed partial class EditGameWindow
                 else
                 {
                     Add("Set as Active", true, () => { SaveAction_SetActive(g, entry!, _scan!); owner.DialogResult = DialogResult.OK; owner.Close(); });
+                    Add(entry!.Locked ? "Unlock" : "Lock (never delete)", true, () =>
+                    {
+                        bool target = !entry.Locked;
+                        var err = SaveVault.SetLocked(SaveVault.Abs(entry), target);
+                        if (err != null) { SavesError(err); return; }
+                        // Mettre l'entree en memoire au diapason du disque. refresh() ne fait que
+                        // redessiner a partir de ces objets-la : sans ca le cadenas n'apparaissait
+                        // qu'apres fermeture et reouverture du dialogue, ce qui laissait croire que
+                        // l'action avait echoue alors qu'elle avait reussi.
+                        entry.CreatedUtc = entry.CreatedUtc.AddYears(target ? 100 : -100);
+                        entry.Locked = target;
+                        refresh();
+                    });
                     Add("Edit Label…", true, () =>
                     {
                         string? l = PromptText("Edit Label", "Label for this backup:", entry!.Title);

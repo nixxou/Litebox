@@ -269,10 +269,16 @@ nature.dat|2670C258DBB5E6E3EC8A7C3179740A78AA967B4F3819C06BB0B97B198B877C78
 Les 229 octets se recomptent exactement, ce qui confirme qu'il y a bien un CRLF **après la dernière
 ligne** aussi.
 
-> **Le piège qu'il crée**, et qui nous concerne directement : le manifeste vit dans la copie et jamais
-> dans le dossier vivant. Un contrôle de doublon qui le hacherait trouverait donc une copie éternellement
-> différente de sa propre source, et recopierait le dossier à chaque passage. Notre `DirManifestMd5`
-> l'exclut explicitement.
+> **Le piège, et il l'évite.** Le manifeste vit dans la copie et jamais dans le dossier vivant : un
+> contrôle de doublon qui le hacherait trouverait une copie éternellement différente de sa propre source,
+> et recopierait le dossier à chaque passage.
+>
+> **[MESURÉ]** LaunchBox n'y tombe pas. Sur une save Wii dont le dossier vivant et la copie sont
+> identiques **hors manifeste** et différents **avec**, son *Backup Save* répond
+> *« This save file was already backed up! »* et n'écrit rien. Son dédoublonnage ignore donc le manifeste.
+>
+> L'exclusion dans notre `DirManifestMd5` est par conséquent de la **parité**, pas une correction — la
+> première rédaction de ce paragraphe laissait entendre l'inverse.
 
 Le record d'une save Wii apporte deux choses de plus :
 
@@ -282,9 +288,70 @@ DisplayChipText   Disc Save                                 ← une pastille, af
 OriginalFileName  data                                      ← le nom du dossier source
 ```
 
+### 2.3bis Les copies SUCCESSIVES d'une save-dossier
+
+**[MESURÉ]** On n'avait vu qu'une seule copie de dossier. La deuxième se comporte comme un fichier sur
+tous les points qui comptent :
+
+```
+                              sans manifeste   CREATION              manifeste
+VIVANT   data                 BADF014B         27/08 15:11:38        non
+vault    <base>               8F41BF4C         27/08 15:13:45        OUI
+vault    <base>-01            BADF014B         27/08 23:43:09        OUI
+```
+
+- **le nommage** prend le suffixe `-01`, exactement comme pour un fichier ;
+- **le manifeste est écrit dans CHAQUE copie**, pas seulement la première ;
+- **le contenu** de la nouvelle copie est celui de la save vivante, au bit près ;
+- et **la date de création du dossier copié est celle du BACKUP**, pas celle de la source.
+
+Ce dernier point était le vrai risque. La rétention **et** le cadenas reposent tous deux sur la date de
+création (§3.4bis, §3.4ter), et on ne les avait mesurés que sur des fichiers. Si un dossier copié héritait
+de la date de son original, l'ordre d'éviction serait faux pour tous les formats Wii, GameCube et PS2, et
+un cadenas posé dessus ne tiendrait pas. Il tient.
+
+**Une limite de notre côté**, notée sans être corrigée : la récupération d'une copie orpheline
+(`FindIdenticalInVault`) n'énumère que des **fichiers**. Un dossier de vault abandonné sans record par
+leur balayage ne sera donc pas récupéré mais dupliqué. Le cas est étroit — il faut un balayage de leur
+côté sur un jeu à save-dossier que notre page n'a jamais ouvert — et le remède est le même que pour les
+fichiers si le besoin se présente.
+
 Le `SaveGroupId` de Dolphin est **namespacé**, comme ceux de PCSX2 (`pcsx2:<carte>:<dossier>`) et de
 Saturn (`saturn-<base>`). Troisième plugin à s'en servir — c'est bien un champ texte que LaunchBox
 transporte sans l'interpréter.
+
+### 2.3ter Les saves CONTENEUR — PCSX2 produit aussi un dossier
+
+**[SOURCE]** Une save PCSX2 ne vit pas dans un dossier : elle vit **dans** la carte mémoire, un fichier
+unique contenant une arborescence. Mais le plugin pose `IsSaveContainer = true`, et son `TryBackupSave`
+**extrait** le répertoire du jeu hors de la carte.
+
+Notre `Backup` a donc trois cas, pas deux :
+
+```
+IsSaveContainer      -> le plugin extrait vers un dossier temporaire  -> copie DOSSIER
+ActiveIsDirectory    -> le dossier vivant lui-meme (Dolphin, NAND Wii) -> copie DOSSIER
+sinon                -> le fichier vivant (RetroArch .srm/.state)      -> copie FICHIER
+```
+
+Une sauvegarde PCSX2 emprunte donc **exactement le chemin validé sur Dolphin** (§2.3bis) : nommage `-01`,
+manifeste écrit dans chaque copie, taille calculée, et date de création du **répertoire** — donc rétention
+et cadenas corrects.
+
+**[OUVERT]** Rien de tout ça n'est mesuré : l'install de test n'a ni plateforme PS2 ni PCSX2. C'est déduit
+du contrat du plugin et de notre code, pas observé. Une vérification demanderait un PCSX2 configuré, une
+carte mémoire avec au moins deux jeux, et deux sauvegardes successives.
+
+**Deux subtilités propres au conteneur**, à connaître avant de mesurer :
+
+**La taille** vient d'abord de `ReportedFileSizeBytes`, que le plugin renseigne — la taille de la *save*.
+Le repli sur la taille du fichier ne joue que s'il ne dit rien, et afficherait alors la carte entière.
+
+**Le contrôle « sauvegarde à jour »** (`NeedsBackup`) lit le mtime de `ActivePath`, c'est-à-dire **la
+carte**. Elle change dès qu'un *autre* jeu de la même carte est joué : un jeu PS2 peut donc porter le ⚠
+sans que sa propre save ait bougé. C'est cosmétique — le dédoublonnage compare le contenu **extrait**,
+donc aucune copie parasite n'est créée. Le rendre exact demanderait de hacher l'extraction à chaque
+affichage, ce qui coûterait un appel de plugin par carte à chaque ouverture de page.
 
 ### 2.2 Un fichier sans record n'existe pas
 
@@ -349,7 +416,7 @@ Chaque ligne a été déclenchée dans LaunchBox et l'effet lu dans le XML et le
 |---|---|---|
 | **Backup Save** | copie la save vivante dans le vault et écrit son record | [MESURÉ] |
 | **dédoublonnage** | existe et fonctionne. Sur un contenu inchangé : *« This save file was already backed up! »* | [MESURÉ] |
-| **rétention** | `MaxAutoBackupsPerGame` s'applique **PAR GROUPE** (§3.4) et fait bien la fenêtre glissante que sa doc décrit : une copie arrive, la plus ancienne part. La victime est le **record** le plus ancien — ni le fichier le plus vieux, ni le premier dans l'ordre alphabétique (§3.4bis) | [MESURÉ] |
+| **rétention** | `MaxAutoBackupsPerGame` s'applique **PAR GROUPE** (§3.4) et fait bien la fenêtre glissante que sa doc décrit : une copie arrive, la plus ancienne part. La victime est la copie dont la **date de création** est la plus ancienne — ni le mtime, ni le nom, ni l'ordre des records (§3.4bis) | [MESURÉ] |
 | **la capture saute une partie sur deux** | le défaut le plus coûteux de tous : la décision est prise en comparant la save **du début** de partie au dernier backup, mais c'est le contenu de **fin** qui est archivé. La partie suivante est donc systématiquement ignorée (§3.7) | [MESURÉ] |
 | **Backup Now** (balayage) | copie, dédoublonne, efface les clés de curseur en fin de course et met `LastLibrarySaveScanUtc` à jour. Mais il n'écrit un record que pour un groupe qui en a **déjà** un : une save vivante qu'aucun record ne nomme est copiée dans le vault **sans** record — c'est-à-dire qu'il fabrique lui-même les orphelins invisibles du §2.2 | [MESURÉ] |
 | **fermeture de partie** | fait les TROIS : crée le record de la save vivante, copie dans le vault, et écrit le record de la copie. Sans qu'on ait ouvert aucune page. La save est attribuée à la **version qui a lancé**, pas au jeu. `LastLibrarySaveScanUtc` n'est pas touché : ce n'est pas un balayage | [MESURÉ] |
@@ -440,30 +507,106 @@ elle supprime le **fichier** et **laisse le record** : le groupe garde une ligne
 supprime les deux proprement — mesuré trois fois sur RodLand. C'est donc un défaut du balayage, pas de la
 rétention elle-même.
 
-### 3.4bis Elle évince le RECORD le plus ancien, pas le fichier le plus ancien
+### 3.4bis Elle évince par la DATE DE CRÉATION du fichier
 
-**[MESURÉ]** Deux tests, chacun conçu pour opposer deux critères qui coïncident en usage normal.
+**[MESURÉ]** Dix copies pour un plafond de dix, créées proprement et espacées d'une heure, si bien que le
+nom, l'ordre des records et la date de création se suivent tous les trois. Deux anomalies isolées y sont
+plantées, chacune sur **un seul** axe et sur un fichier différent :
 
-**Ordre des records contre date du fichier.** Deux copies plantées avec les noms et les dates en ordre
-inverse : `-01` daté d'aujourd'hui, `-02` daté de cinq jours plus tôt, mais le record de `-01` inséré en
-premier. C'est **`-01` qui est mort** — le fichier le plus récent, dont le record était le plus ancien.
+```
+-05   date de CREATION vieillie      mtime normal pour sa position
+-07   MTIME vieilli                  date de creation normale pour sa position
+```
 
-**Ordre des records contre ordre alphabétique.** Après une éviction, le nom libéré est **réutilisé** par
-la copie suivante : la plus **récente** se retrouve donc à porter le nom sans suffixe, celui qui vient en
-premier alphabétiquement. À la purge suivante, c'est `-02` qui est mort et la copie sans suffixe qui a
-survécu.
+Une onzième sauvegarde force une éviction. **`-05` est mort.**
 
-Le critère est donc l'**ordre de création**, tel que le donne l'ordre des records dans le XML. En usage
-normal il coïncide avec la date du fichier ; les deux divergent dès qu'un fichier est touché, restauré ou
-déplacé.
+| candidat | verdict |
+|---|---|
+| **date de création** | **c'est lui** — le fichier vieilli sur cet axe est parti |
+| date de modification | écarté — `-07` a survécu |
+| nom du fichier | écarté — `-01` a survécu |
+| ordre des records | écarté — `-01` était aussi le premier record |
 
-> **Ce qu'on croyait, et qui était faux.** La réutilisation du nom libéré faisait craindre un piège : la
-> copie la plus récente héritant du plus petit numéro, elle aurait été la première évincée, et la
-> rétention aurait mangé la progression la plus fraîche. **Mesuré : ça ne se produit pas.** Le nom est bien
-> réutilisé, mais il n'entre pas dans le choix de la victime.
+Les trois hypothèses concurrentes sont donc tombées dans la même mesure, ce qu'aucune des précédentes
+n'avait réussi.
+
+> **Trois conclusions fausses avant celle-là, toutes dues au même défaut d'instrumentation.** J'ai
+> successivement écrit que le critère était le mtime, puis l'ordre des records, puis le nom du fichier.
 >
-> Notre `Prune` trie sur `CreatedUtc`, c'est-à-dire le mtime du fichier. C'est le critère que la mesure
-> écarte.
+> La cause : mes copies plantées étaient antidatées avec `os.utime()`, qui déplace la date de
+> **modification** et laisse intacte la date de **création** Windows. Tous mes tests « date » portaient
+> donc sur un axe que LaunchBox ne regarde pas. Et comme mes scripts écrivaient plusieurs fichiers dans la
+> même milliseconde, leurs dates de création étaient **à égalité** — le départage de cette égalité, arbitraire,
+> se lisait tour à tour comme « le nom décide » puis « le record décide ».
+>
+> Le remède n'était pas de mesurer plus, mais de mesurer **le bon axe** : forcer la date de création
+> demande `SetFileTime`, pas `utime`. Une fois les trois axes réellement séparables, une seule mesure a
+> suffi.
+
+**Sur un dossier, c'est la date du RÉPERTOIRE.** **[MESURÉ]** Trois copies d'une même save Wii, chacune
+décalée sur **un seul** axe : `-01` sur la date de création du **répertoire**, `-02` sur celle de ses
+**fichiers internes**, le témoin sur rien. Plafond à 2, quatre copies, deux mortes :
+
+```
+mortes     le temoin (tout normal)  et  -02 (fichiers decales)
+survivent  -01 (repertoire decale)  et  -03
+```
+
+Seule l'hypothèse « répertoire » prédisait ce couple ; « fichiers internes » et « mtime » désignaient tous
+deux `-01`. Le décalage du seul répertoire suffit donc, et c'est ce que le cadenas fait.
+
+**La rétention ne se déclenche PAS sur un *Backup Save* manuel.** **[MESURÉ]** Quatre copies pour un
+plafond de 2, un backup manuel de plus : la cinquième est créée et **rien n'est supprimé**. Toutes nos
+évictions venaient jusque-là d'une fermeture de partie ou d'un *Backup Now*.
+
+Ça colle au nom du réglage — `Max**Auto**BackupsPerGame` — et notre `Prune` fait pareil sans qu'on l'ait
+voulu : il n'est appelé que depuis la capture de fin de partie et le balayage, jamais depuis le bouton.
+
+**Conséquence pratique, et elle ferme une piste.** Le nom n'entre pas dans le choix, donc **on ne peut pas
+protéger une copie en la numérotant haut**. L'idée d'une plage réservée — `-1001` et au-delà pour les
+copies verrouillées, hors d'atteinte de la purge des deux côtés — a été testée puis mesurée morte : le
+`-1001` planté a été évincé comme les autres. Le seul porteur possible d'un verrou reste donc le chemin.
+
+**Notre `Prune`** trie sur `CreatedUtc`, qui lit désormais la date de **création** du fichier et non son
+mtime. Les deux coïncident pour une copie ordinaire — elle est écrite une fois — et divergent dès que
+quelque chose touche au contenu.
+
+### 3.4ter Le cadenas : le critère devient le verrou
+
+**Ajout LiteBox.** Une copie **verrouillée** est une copie dont la date de création a été avancée d'un
+siècle.
+
+Ça ressemble à une astuce jusqu'à ce qu'on relise le §3.4bis : la purge supprime par date de création, de
+la plus ancienne à la plus récente. Une copie datée de 2126 est donc **toujours la dernière candidate**, et
+elle n'est atteignable que si toutes les autres du groupe sont verrouillées aussi.
+
+Ce que ça a de mieux que tous les porteurs qu'on a essayés :
+
+- **ça survit à une réécriture**, contrairement à un champ — rien d'inconnu ne vit à travers la
+  resérialisation d'un `<GameSave>` (§1.5ter) ;
+- **ça ne demande aucun sous-dossier**, donc le vault garde la disposition à plat de LaunchBox ;
+- et surtout **ça protège de la purge de LaunchBox lui-même**, puisqu'il trie sur cette date-là. Ni le
+  sous-dossier ni le numéro n'y arrivaient : le sous-dossier échappe à son balayage mais pas à sa purge,
+  et le numéro n'entre nulle part.
+
+Deux conséquences à assumer :
+
+**La date est visible.** LaunchBox affichera l'année 2126 sur une copie verrouillée. LiteBox retranche le
+décalage à l'affichage (`VaultEntry.DisplayCreatedUtc`), lui n'en sait rien.
+
+**Le plafond cède devant le cadenas.** Quand tenir le plafond exigerait de supprimer une copie
+verrouillée, `Prune` s'abstient et le dit dans le journal. Garder ce que l'utilisateur a explicitement
+protégé est tout l'objet du mécanisme, et un vault avec un fichier de trop vaut mieux qu'un cadenas rompu
+en silence.
+
+**[MESURÉ] Il tient aussi sur les saves-dossier, et contre LEUR purge.** Une copie Wii verrouillée a
+survécu à un *Backup Now* qui a évincé deux de ses voisines, dont une dont les fichiers internes portaient
+le même décalage — preuve que c'est bien la date du **répertoire** qui compte et que le cadenas vise le bon
+axe. C'est la seule protection qu'on ait trouvée qui vaille des deux côtés.
+
+Interface : *Backup History* → menu d'une ligne → **Lock (never delete)**, et une pastille `🔒 Locked`.
+L'empreinte affichée sur la ligne a perdu son icône de cadenas au passage, qui voulait désormais dire
+autre chose.
 
 ### 3.7 Une partie sur deux n'est JAMAIS sauvegardée
 

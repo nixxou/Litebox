@@ -148,6 +148,14 @@ internal sealed class SaveGroup
     public string? EntryKey;
     /// <summary>The entry's file name, for the picker. Null for the main bucket.</summary>
     public string? EntryLabel;
+
+    /// <summary>The path to hand a plugin so it computes what the emulator actually did for THIS entry —
+    /// the extracted file, not the archive. Null for the main bucket.
+    ///
+    /// The scan already gives it to GetSaves; restoring needs it too, and could not reach it: AddSaveArgs
+    /// carries no IGame, so the plugin resolves the game itself and rebuilds the destination from the
+    /// archive's path. Carrying it on the group is what lets Restore answer that lookup correctly.</summary>
+    public string? EntryProbePath;
     /// <summary>Found by matching an entry name rather than confirmed by a play session — a CANDIDATE.
     /// Session capture is what turns one into a fact; the UI must be able to tell them apart.</summary>
     public bool EntryInferred;
@@ -295,15 +303,57 @@ internal static class SaveVault
 
     /// <summary>Where a group's copies live. The platform folder, flat, exactly like LaunchBox.
     /// (The per-archive sub-folder goes here when archive entries come back.)</summary>
-    public static string GroupDir(SaveGroup g) => PlatformDir(g.Game);
+    /// <summary>Where this group's copies live. The platform folder for an ordinary save; a sub-folder
+    /// named after the ARCHIVE for a save that belongs to one of its entries.
+    ///
+    /// The sub-folder is what makes N entries of one archive legible: flat, they would all be named after
+    /// the archive and only their records would tell them apart. It also puts them out of reach of
+    /// LaunchBox's "Clear all and re-scan", which adopts vault files by enumerating the platform folder
+    /// FLAT — measured, and the button that turns three groups into thirty.</summary>
+    public static string GroupDir(SaveGroup g)
+    {
+        string plat = PlatformDir(g.Game);
+        string? archive = ArchiveFolderName(g);
+        return archive == null ? plat : Path.Combine(plat, archive);
+    }
+
+    /// <summary>The archive sub-folder's name — the archive's own file name, sanitised — or null when the
+    /// group is not an archive entry.</summary>
+    public static string? ArchiveFolderName(SaveGroup g)
+    {
+        if (string.IsNullOrEmpty(g.EntryKey)) return null;
+        string rom = SaveManager.OwningRomPath(g) ?? "";
+        string name = Path.GetFileName(rom.TrimEnd('\\', '/'));
+        return name.Length > 0 ? SaveManager.SanitizeName(name) : null;
+    }
+
+    /// <summary>The entry's file name inside the archive, without extension. Read from the label the scan
+    /// resolved; falls back to the path carried in the SaveGroupId when the entry is no longer in the
+    /// archive — a renamed or rebuilt archive still shows what its copies were named after.</summary>
+    public static string? EntryBaseName(SaveGroup g)
+    {
+        if (string.IsNullOrEmpty(g.EntryKey)) return null;
+        string name = g.EntryLabel ?? "";
+        if (name.Length == 0)
+        {
+            int sep = g.EntryKey!.LastIndexOf(':');
+            if (sep >= 0 && sep + 1 < g.EntryKey.Length)
+                name = Path.GetFileName(g.EntryKey.Substring(sep + 1).Replace('/', '\\'));
+        }
+        name = Path.GetFileNameWithoutExtension(name);
+        return name.Length > 0 ? SaveManager.SanitizeName(name) : null;
+    }
 
     /// <summary>The base name every copy of this group is built from: the ROM's — the game's, or the
     /// owning version's. LaunchBox names a vault copy after the ROM, never after the save file, which is
     /// exactly why OriginalFileName exists.
-    /// (An archive entry will name it after the ENTRY instead, when that comes back: naming N entries of
-    /// one archive after the archive would collapse them all into a single name.)</summary>
+    /// An archive ENTRY is named after the entry instead. Naming N entries of one archive after the
+    /// archive would collapse them into a single name, and the emulator named its save after the entry
+    /// in the first place — so this is also the name a restore has to put back.</summary>
     public static string BaseName(SaveGroup g)
     {
+        string? entry = EntryBaseName(g);
+        if (entry != null) return entry;
         string b = Path.GetFileNameWithoutExtension(SaveManager.OwningRomPath(g) ?? "");
         return b.Length > 0 ? SaveManager.SanitizeName(b) : "save";
     }
@@ -488,11 +538,83 @@ internal static class SaveVault
         try
         {
             return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
-                            .Where(f => !string.Equals(Path.GetFileName(f), SaveManager.DirManifestName, StringComparison.OrdinalIgnoreCase))
+                            .Where(f => !IsManifest(f))
                             .Sum(f => new FileInfo(f).Length);
         }
         catch { return 0; }
     }
+
+    public const string ArchiveManifestName = "litebox-archive.xml";
+
+    /// <summary>The two files a vault folder can carry that describe it rather than belong to the save —
+    /// LaunchBox's manifest.sha256 and ours. Both must stay out of every hash and every size, or a copy
+    /// reads as different from, and bigger than, the save it is a copy of.</summary>
+    internal static bool IsManifest(string path)
+    {
+        var n = Path.GetFileName(path);
+        return string.Equals(n, SaveManager.DirManifestName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(n, ArchiveManifestName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Writes the archive folder's manifest — what this folder is, which archive it belongs to,
+    /// and which entry each copy was taken from.
+    ///
+    /// It is DESCRIPTIVE and never read back. That is the point: a second store describing the same files
+    /// desynchronises, which is why the old saves-vault.json was deleted. Everything here is already
+    /// carried by the records and by the file names; the manifest exists so the folder explains itself to
+    /// a human — after LiteBox is uninstalled, or in a backup, or three years from now.
+    ///
+    /// Same role as the manifest.sha256 LaunchBox drops in a folder backup, and the same reason to keep
+    /// it out of every hash and every size: it belongs to the copy, not to the save.</summary>
+    public static void WriteArchiveManifest(string dir, IGame game)
+    {
+        try
+        {
+            if (!Directory.Exists(dir) || game is not ILiteBoxGame lbg) return;
+
+            var sb = new StringBuilder();
+            sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n");
+            sb.Append("<LiteBoxArchiveSaves>\r\n");
+            sb.Append("  <!-- Written by LiteBox. Descriptive only: nothing reads this file back. -->\r\n");
+            sb.Append("  <Game>").Append(Esc(SaveManager.SafeStr(() => game.Title))).Append("</Game>\r\n");
+            sb.Append("  <GameId>").Append(Esc(SaveManager.SafeStr(() => game.Id))).Append("</GameId>\r\n");
+            sb.Append("  <Platform>").Append(Esc(SaveManager.SafeStr(() => game.Platform))).Append("</Platform>\r\n");
+            sb.Append("  <Archive>").Append(Esc(SaveManager.SafeStr(() => game.ApplicationPath))).Append("</Archive>\r\n");
+
+            string full = Path.GetFullPath(dir);
+            foreach (var row in lbg.GetSubEntities("GameSave"))
+            {
+                var fp = row.GetValueOrDefault("FilePath") ?? "";
+                var abs = SaveManager.AbsPath(fp);
+                if (abs.Length == 0) continue;
+                if (!string.Equals(Path.GetDirectoryName(abs), full, StringComparison.OrdinalIgnoreCase)) continue;
+
+                var key = SaveManager.EntryKeyOf(row.GetValueOrDefault("SaveGroupId")) ?? "";
+                sb.Append("  <Copy>\r\n");
+                sb.Append("    <File>").Append(Esc(Path.GetFileName(abs))).Append("</File>\r\n");
+                sb.Append("    <EntryInArchive>").Append(Esc(EntryPathOfKey(key))).Append("</EntryInArchive>\r\n");
+                sb.Append("    <Label>").Append(Esc(row.GetValueOrDefault("Title") ?? "")).Append("</Label>\r\n");
+                sb.Append("    <SaveName>").Append(Esc(row.GetValueOrDefault("SaveGroupName") ?? "")).Append("</SaveName>\r\n");
+                var slot = row.GetValueOrDefault("Slot");
+                if (!string.IsNullOrEmpty(slot)) sb.Append("    <Slot>").Append(Esc(slot!)).Append("</Slot>\r\n");
+                sb.Append("    <OriginalFileName>").Append(Esc(row.GetValueOrDefault("OriginalFileName") ?? "")).Append("</OriginalFileName>\r\n");
+                sb.Append("  </Copy>\r\n");
+            }
+            sb.Append("</LiteBoxArchiveSaves>\r\n");
+
+            File.WriteAllText(Path.Combine(dir, ArchiveManifestName), sb.ToString(), new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    private static string EntryPathOfKey(string key)
+    {
+        int sep = key.LastIndexOf(':');
+        return sep >= 0 && sep + 1 < key.Length ? key.Substring(sep + 1) : key;
+    }
+
+    private static string Esc(string v)
+        => v.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
     /// <summary>Is this path inside &lt;LB&gt;\Saves\ — that is, is it a vault copy rather than a save
     /// sitting where the emulator keeps it?</summary>
@@ -615,11 +737,19 @@ internal static class SaveManager
     public static bool DeepScan;
 
     /// <summary>Per-ENTRY scanning — handing the plugin an archive entry's path so it derives the name
-    /// the emulator actually used. OFF while this layer is brought to strict LaunchBox parity: it is the
-    /// single largest departure from what LaunchBox does, and it belongs on a base that is known-correct
-    /// rather than mixed into the work that makes it so. The machinery (SaveEntries, EntryGame, the
-    /// "entry:" SaveGroupId and the picker) is untouched and switching this back on revives all of it.</summary>
-    public static bool EntryScan;
+    /// the emulator actually used.
+    ///
+    /// It was OFF for the whole parity campaign, deliberately: it is the largest departure from what
+    /// LaunchBox does, and it belonged on a base known to be correct rather than mixed into the work that
+    /// made it so. That base exists now, so it is on.
+    ///
+    /// What it turns on, beyond the scan itself: a vault sub-folder per archive, copies named after the
+    /// ENTRY rather than the archive (naming N entries after one archive collapses them into a single
+    /// name), the "entry:" SaveGroupId — a form LaunchBox is measured to carry without interpreting, as
+    /// three of its own plugins already do — the entry picker on the page, and the answer given to a
+    /// plugin resolving the game during a restore, which is what stops it writing the save under the
+    /// archive's name.</summary>
+    public static bool EntryScan = true;
 
     public static SaveScan ScanBase(IGame game) => Scan(game, null);
 
@@ -827,6 +957,7 @@ internal static class SaveManager
                 Record = row,
                 EntryKey = entryOf.TryGetValue(abs, out var ent) ? ent.Key : null,
                 EntryLabel = entryOf.TryGetValue(abs, out var ent2) ? ent2.DisplayName : null,
+                EntryProbePath = entryOf.TryGetValue(abs, out var ent3) ? ent3.ProbePath : null,
                 EntryInferred = entryOf.ContainsKey(abs),
             };
             try { lock (_pluginGate) g.ActiveLive = sPlugin.IsSaveActive(save, EmuAppPath(sEmu)); } catch { g.ActiveLive = true; }
@@ -905,6 +1036,7 @@ internal static class SaveManager
                 Record = row,
                 EntryKey = EntryKeyOf(row.GetValueOrDefault("SaveGroupId")),
                 EntryLabel = EntryLabelOf(row.GetValueOrDefault("SaveGroupId"), entries),
+                EntryProbePath = EntryProbePathOf(row.GetValueOrDefault("SaveGroupId"), entries),
             });
         }
 
@@ -964,6 +1096,17 @@ internal static class SaveManager
 
     /// <summary>The display name for an entry-keyed group. Falls back to the path stored in the key when
     /// the archive is no longer listed — a group must stay readable after its archive moved.</summary>
+    /// <summary>The probe path of the entry a record belongs to, or null when the entry is not in the
+    /// list — an archive that has changed, or a record left by a previous configuration. Null is the
+    /// honest answer there: restoring would have to guess a path, and guessing is what put the archive's
+    /// name on a save in the first place.</summary>
+    private static string? EntryProbePathOf(string? saveGroupId, List<SaveEntry> entries)
+    {
+        var key = EntryKeyOf(saveGroupId);
+        if (key == null) return null;
+        return entries.FirstOrDefault(e => string.Equals(e.Key, key, StringComparison.OrdinalIgnoreCase))?.ProbePath;
+    }
+
     private static string? EntryLabelOf(string? saveGroupId, List<SaveEntry> entries)
     {
         var key = EntryKeyOf(saveGroupId);
@@ -1132,6 +1275,9 @@ internal static class SaveManager
 
             Diag($"backup {(auto ? "auto" : "manual")} \"{g.GroupName}\" -> {entry.VaultPath}");
             WriteBackupRow(g, entry);
+            // Le dossier d'archive se decrit lui-meme. Apres le record, pour que le manifeste liste la
+            // copie qu'on vient d'ecrire.
+            if (!string.IsNullOrEmpty(g.EntryKey)) SaveVault.WriteArchiveManifest(vaultDir, g.Game);
             g.Backups.Insert(0, entry);
             SaveVault.Notify(g.GameId);
             r.Entry = entry;
@@ -1222,8 +1368,22 @@ internal static class SaveManager
             : new GameSaveGame { GameId = g.GameId, AdditionalApplicationId = g.AppId, FileLocation = abs, SaveGroupId = g.GroupId, SaveGroupName = g.GroupName };
         try
         {
-            var resp = AddSaveFileCwdSafe(plugin, new AddSaveArgs { SaveToAdd = save, ShouldOverwriteFunc = confirmOverwrite });
-            return resp is { WasSuccess: true } ? null : (resp?.Message ?? "The plugin could not restore this save.");
+            // For an archive entry, tell the data manager to answer this game's id with the ENTRY's path
+            // while the plugin runs. Without it the plugin reads the archive's path and writes the save
+            // under the archive's name — the one place the page was outright wrong on extracted ROMs.
+            //
+            // No probe path means we do not know where the entry was extracted (an archive that changed,
+            // a record from another configuration). We let the plugin do what it would have done rather
+            // than invent a location: a wrong guess here writes a file the emulator silently ignores.
+            IDisposable? scope = null;
+            if (!string.IsNullOrEmpty(g.EntryProbePath) && g.GameId.Length > 0)
+                try { scope = LbApiHost.Host.Data.HostDataManagerXml.AnswerWithEntryPath(g.GameId, g.EntryProbePath!); } catch { }
+            try
+            {
+                var resp = AddSaveFileCwdSafe(plugin, new AddSaveArgs { SaveToAdd = save, ShouldOverwriteFunc = confirmOverwrite });
+                return resp is { WasSuccess: true } ? null : (resp?.Message ?? "The plugin could not restore this save.");
+            }
+            finally { scope?.Dispose(); }
         }
         catch (Exception ex) { return ex.Message; }
     }
@@ -1250,8 +1410,12 @@ internal static class SaveManager
     ///
     /// Note the record carries no Title while pointing into the vault: one more reason location is read
     /// from the path and never from Title.</summary>
+    /// <param name="entry">The archive entry the copy belongs to, or null for the game's own ROM. An
+    /// import made while browsing an entry used to land in the MAIN bucket — visible nowhere near where
+    /// it was made. The entry decides three things at once: the group's identity, the folder the copy
+    /// goes into, and the name it takes.</param>
     public static string? Import(IGame game, string filePath, bool asState, int? slot,
-                                 string? appId, string? platformOverride = null)
+                                 string? appId, string? platformOverride = null, SaveEntry? entry = null)
     {
         if (!File.Exists(filePath)) return "That file no longer exists.";
         if (game is not ILiteBoxGame lbg) return "This library is read-only.";
@@ -1260,7 +1424,6 @@ internal static class SaveManager
             string plat = platformOverride ?? SafeStr(() => game.Platform);
             if (plat.Length == 0) plat = "Unknown";
             string dir = Path.Combine(LbRoot, "Saves", Sanitize(plat));
-            Directory.CreateDirectory(dir);
 
             // The ROM the group is named after: the owning version's when the save belongs to one.
             string rom = SafeStr(() => game.ApplicationPath);
@@ -1270,12 +1433,29 @@ internal static class SaveManager
                     { rom = SafeStr(() => a.ApplicationPath); break; }
             string baseName = Sanitize(Path.GetFileNameWithoutExtension(rom));
             if (baseName.Length == 0) baseName = "save";
-            string ext = asState ? ".state" : (Path.GetExtension(filePath) is { Length: > 0 } e ? e : ".srm");
 
+            // For an archive entry, everything hangs off the entry instead: its own sub-folder, its own
+            // base name. Same layout a backup of that entry would produce, so the copy lands beside its
+            // siblings rather than in the platform folder among unrelated saves.
+            if (entry != null)
+            {
+                string archive = Sanitize(Path.GetFileName(rom.TrimEnd('\\', '/')));
+                if (archive.Length > 0) dir = Path.Combine(dir, archive);
+                string eb = Sanitize(Path.GetFileNameWithoutExtension(entry.FileName));
+                if (eb.Length > 0) baseName = eb;
+            }
+            Directory.CreateDirectory(dir);
+
+            string ext = asState ? ".state" : (Path.GetExtension(filePath) is { Length: > 0 } e ? e : ".srm");
             string target = UniqueFile(dir, baseName, ext);
             File.Copy(filePath, target, overwrite: false);
 
-            string gid = Guid.NewGuid().ToString("N");
+            // The group's identity. An entry save is keyed by the entry, exactly as a scanned one is —
+            // otherwise the imported group would sit in the archive's folder while claiming to belong to
+            // nothing, and the entry filter would never show it.
+            string gid = entry != null
+                ? entry.Key + (asState ? ":s" + (slot ?? 0) : "")
+                : Guid.NewGuid().ToString("N");
             var row = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = SafeStr(() => game.Id) };
             if (!string.IsNullOrEmpty(appId)) row["AdditionalApplicationId"] = appId!;
             row["EmulatorFileName"] = "";
@@ -1289,6 +1469,7 @@ internal static class SaveManager
             var rows = lbg.GetSubEntities("GameSave").Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
             rows.Add(row);
             lbg.SetSubEntities("GameSave", rows);
+            if (entry != null) SaveVault.WriteArchiveManifest(dir, game);
             SaveVault.Notify(SafeStr(() => game.Id));
             return null;
         }
@@ -1586,7 +1767,7 @@ internal static class SaveManager
 
     // ── Small utils ───────────────────────────────────────────────────────
 
-    private static string SafeStr(Func<string?> f) { try { return f() ?? ""; } catch { return ""; } }
+    internal static string SafeStr(Func<string?> f) { try { return f() ?? ""; } catch { return ""; } }
     private static string Try(Func<string?> f) { try { return f() ?? ""; } catch (Exception ex) { return "<threw:" + ex.Message + ">"; } }
 
     public static string AbsPath(string p)
@@ -1754,7 +1935,7 @@ internal static class SaveManager
             // the backup folder and never in the live one, so hashing it would make a backup differ from
             // its own source for ever — and the dirty-check would copy the same folder again every pass.
             foreach (string f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
-                                          .Where(x => !string.Equals(Path.GetFileName(x), DirManifestName, StringComparison.OrdinalIgnoreCase))
+                                          .Where(x => !SaveVault.IsManifest(x))
                                           .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             {
                 sb.Append(Path.GetRelativePath(dir, f).ToLowerInvariant()).Append('|').Append(FileMd5(f)).Append('\n');

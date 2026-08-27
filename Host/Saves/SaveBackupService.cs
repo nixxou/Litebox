@@ -173,9 +173,13 @@ internal static class SaveBackupService
     /// tells them apart — the setting is called MaxAutoBackupsPerGame, but there is no "auto" to read.
     /// Separating them needs somewhere to put that bit; that is what the Manual\ / Auto\ split was for,
     /// and it comes back with it.</summary>
-    private static void Prune(IGame game, SaveScan scan)
+    private static void Prune(IGame game, SaveScan scan) => Prune(game, scan, MaxVersionsPerGame);
+
+    /// <summary>The cap is a parameter so a self-test can exercise the ordering without depending on a
+    /// LaunchBox settings store — the default is 25, and reaching it would mean making 26 copies to
+    /// observe one deletion.</summary>
+    internal static void Prune(IGame game, SaveScan scan, int cap)
     {
-        int cap = MaxVersionsPerGame;
 
         foreach (var g in scan.Files.Concat(scan.States))
         {

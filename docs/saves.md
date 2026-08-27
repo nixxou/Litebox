@@ -872,14 +872,73 @@ qu'un fichier au bon nom appartienne vraiment au groupe — et LaunchBox ne le f
 Deux fonctionnalités développées puis **retirées volontairement**, pour établir la parité sur une base
 saine avant de les réintroduire. Rien n'est supprimé, tout est documenté à l'endroit où ça revient.
 
-**La passe par entrée d'archive** — `SaveManager.EntryScan`, à `false`. Elle donne au plugin le chemin
-d'une entrée d'archive pour qu'il calcule le nom que l'émulateur a réellement utilisé, et porte l'identité
-dans un `SaveGroupId` de la forme `entry:<signature>:<chemin dans l'archive>`. `SaveEntries`, `EntryGame`
-et le sélecteur d'entrées sont intacts : remettre le drapeau à `true` ranime l'ensemble.
+**La passe par entrée d'archive** est désormais **active**. Elle a été tenue à `false` toute la campagne
+de parité — c'est le plus grand écart avec LaunchBox, et il devait se poser sur une base connue pour juste
+plutôt que se mêler au travail qui la rendait telle. Cette base existe.
 
-> Un acquis à ne pas perdre : **LaunchBox relit, réécrit et propage un `SaveGroupId` de cette forme sans
-> l'interpréter**, y compris dans `MatchLineageId` et dans les backups qu'il crée. Vérifié sur données
-> réelles. Les plugins s'en servent déjà comme espace de noms (`saturn-<base>`, `pcsx2:<carte>:<dossier>`).
+### 4.5 Les saves des ROMs extraites d'une archive
+
+**Le problème.** Une archive contient N ROMs. L'émulateur nomme la save d'après la ROM **extraite** ; le
+vault, lui, nomme d'après la ROM du jeu, c'est-à-dire l'**archive**. Les N entrées se retrouvent donc à
+partager un seul nom, et une restauration réécrit sous le nom de l'archive — que l'émulateur ne relira
+jamais.
+
+**La disposition.** Un sous-dossier de vault par archive, et des copies nommées d'après l'entrée :
+
+```
+Saves\<Plateforme>\
+    Sonic Collection.zip\           <- le nom du fichier d'archive, assaini
+        Sonic (USA).srm
+        Sonic (USA)-01.srm
+        Sonic (Japan).srm
+        litebox-archive.xml
+```
+
+Bénéfice qu'on n'avait pas cherché : le *Clear and re-scan* de LaunchBox adopte les fichiers du vault en
+énumérant le dossier de plateforme **à plat** (§3.0). Il n'entre pas dans un sous-dossier, donc les saves
+d'entrées échappent au bouton qui transforme trois groupes en trente.
+
+**L'identité** reste le `SaveGroupId` de forme `entry:<signature>:<chemin dans l'archive>`, et rien ne
+justifiait d'inventer autre chose : on a mesuré que LaunchBox transporte ce champ sans jamais l'interpréter
+(§1.5ter, §2.4), et trois de ses propres plugins s'en servent déjà comme espace de noms. La signature est
+celle du **contenu** de l'archive, donc l'identité survit à son renommage.
+
+**Le manifeste `litebox-archive.xml`** dit ce qu'est le dossier, de quelle archive il vient et quelle
+entrée correspond à quelle copie. Il est **descriptif et jamais relu** — c'est délibéré : un second magasin
+décrivant les mêmes fichiers se désynchronise, ce qui a coûté la suppression de `saves-vault.json`. Tout
+ce qu'il contient est déjà porté par les records et les noms de fichiers ; il existe pour que le dossier
+s'explique à un humain, après une désinstallation ou dans une sauvegarde. Même rôle que le
+`manifest.sha256` de LaunchBox, et même raison de le tenir hors de toute empreinte et de toute taille.
+
+**La restauration**, qui était le seul bouton réellement cassé, l'est encore le temps d'une mesure : le
+correctif est en place mais n'a pas été observé. `AddSaveArgs` ne transporte aucun `IGame`, donc le plugin
+résout le jeu lui-même et reconstruit la destination depuis son `ApplicationPath` — l'archive. Le temps de
+l'appel, `HostDataManagerXml` répond désormais pour cet identifiant avec un `EntryGame` portant le chemin
+de l'entrée. Portée à un fil et à un identifiant, posée juste avant l'appel et retirée dans un `finally`.
+
+**Trois frontières entre entrées** ont été fermées : *Combine* ne propose plus que des groupes de la même
+entrée — deux entrées sont deux ROMs différentes —, la pré-sauvegarde de *Set as Active* ne réveille plus
+les voisines, et *Import* demande **à quelle ROM** la save appartient. Son défaut prend la ROM dont le
+basename correspond à celui du fichier importé, ce qui n'est pas une devinette mais la règle de nommage
+prise à l'envers ; à défaut, l'entrée qu'on est en train de parcourir.
+
+### 4.6 Ce que le harnais couvre, et ce qu'il ne couvre pas
+
+`--selftest-entry-saves` — **54 vérifications**, sur un arbre jetable via `MediaResolver.SwapRootForTest`,
+supprimé à la fin. Aucune bibliothèque réelle n'est touchée, ce qui est la condition pour qu'il tourne
+sans surveillance.
+
+Il couvre l'emplacement et le nommage des copies, l'absence de collision entre entrées, l'assainissement
+des caractères interdits, la frontière du vault sur un sous-dossier, l'exclusion des **deux** manifestes
+de toute empreinte et de toute taille, le cadenas sur un fichier **et** sur un dossier — pose, relecture,
+idempotence, retrait, date affichée —, la rétention par date de création avec l'ordre des records
+délibérément **inversé** pour qu'il ne puisse pas expliquer le résultat, la survie d'une copie verrouillée,
+le plafond qui cède quand tout est verrouillé, le manifeste, et l'aller-retour de l'identité d'entrée.
+
+**Il s'arrête où commencent les plugins.** Scanner et restaurer passent par un plugin et une install
+d'émulateur, qu'un test ne peut pas honnêtement simuler. Ce qui reste donc à mesurer sur une vraie
+install : qu'une partie lancée depuis une entrée produise bien une copie dans le bon dossier, et surtout
+qu'une **restauration** réécrive sous le nom de l'entrée et non sous celui de l'archive.
 
 **Les sous-dossiers `Manual\` / `Auto\`** — seul porteur possible de la distinction automatique/manuel,
 que le format de LaunchBox n'a nulle part. Conséquence immédiate de leur retrait : **la rétention ne peut

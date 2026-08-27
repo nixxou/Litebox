@@ -505,7 +505,13 @@ internal sealed partial class EditGameWindow
             var m = new ContextMenuStrip();
             bool hasActive = g.Active != null;
             bool hasBackups = g.Backups.Count > 0;
-            var others = (g.IsState ? scan.States : scan.Files).Where(x => !ReferenceEquals(x, g)).ToList();
+            // Meme bucket seulement. Deux entrees d'une archive sont deux ROMs differentes : les fusionner
+            // mettrait les saves de l'une dans le groupe de l'autre, et le groupe resultant ne pourrait
+            // plus etre restaure correctement pour aucune des deux.
+            var others = (g.IsState ? scan.States : scan.Files)
+                .Where(x => !ReferenceEquals(x, g)
+                            && string.Equals(x.EntryKey, g.EntryKey, StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
             ToolStripMenuItem Add(string text, bool enabled, Action act)
             {
@@ -633,6 +639,10 @@ internal sealed partial class EditGameWindow
                 // made that mostly harmless, but "mostly harmless" is not a reason to touch groups that
                 // were never at risk — each copy taken costs one of their retention slots.
                 if (!string.Equals(other.AppId ?? "", g.AppId ?? "", StringComparison.OrdinalIgnoreCase)) continue;
+                // Et la meme ENTREE : deux entrees d'une archive partagent le meme AppId, donc
+                // l'attribution seule ne les separe pas. Elles ecrivent pourtant dans des fichiers
+                // differents, et aucune n'est menacee par la restauration de l'autre.
+                if (!string.Equals(other.EntryKey, g.EntryKey, StringComparison.OrdinalIgnoreCase)) continue;
                 if (g.IsState && other.Slot != slot) continue;
                 try { SaveManager.Backup(other, force: false); } catch { }
             }
@@ -643,6 +653,64 @@ internal sealed partial class EditGameWindow
                     "Set as Active", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes);
             if (err != null) { SavesError(err); return; }
             Reload();
+        }
+
+        /// <summary>Asks which ROM inside the archive an imported save belongs to. Returns false when the
+        /// user cancels; leaves <paramref name="entry"/> null for the archive itself.
+        ///
+        /// Silent when there is nothing to choose between — a game that is not an archive, or one whose
+        /// entries we cannot read. The question only exists because one archive holds several ROMs, and
+        /// an imported save belongs to exactly one of them.
+        ///
+        /// The default is picked from the FILE NAME, and that is not a guess: an emulator names a save
+        /// after the ROM's basename, so "Sonic (USA).srm" names "Sonic (USA).smd" by the same rule that
+        /// created it. When the name says nothing, the entry currently being browsed is the better
+        /// assumption than the archive.</summary>
+        private bool PromptImportEntry(string importedFile, out SaveEntry? entry)
+        {
+            entry = null;
+            List<SaveEntry> entries;
+            try { entries = SaveEntries.For(_game!, _focus); } catch { return true; }
+            if (entries.Count == 0) return true;                 // rien a demander
+
+            using var f = _w.NewDialog("Which ROM?", 520, 190);
+            f.Controls.Add(new Label
+            {
+                AutoSize = false, ForeColor = Fg, BackColor = Bg, Location = new Point(S(16), S(12)),
+                Size = new Size(S(478), S(34)), Font = new Font("Segoe UI", 9.5f), UseMnemonic = false,
+                Text = "This game is an archive holding several ROMs.\nWhich one is this save for?",
+            });
+
+            var combo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(16), S(54)),
+                Width = S(478), BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9.5f),
+            };
+            var picks = new List<SaveEntry?> { null };
+            combo.Items.Add("The archive itself (main version)");
+            foreach (var e in entries) { picks.Add(e); combo.Items.Add(e.DisplayName); }
+
+            // 1. le nom du fichier importe, qui designe la ROM par la regle qui l'a nomme
+            string stem = Path.GetFileNameWithoutExtension(importedFile);
+            int def = picks.FindIndex(e => e != null && string.Equals(
+                Path.GetFileNameWithoutExtension(e.FileName), stem, StringComparison.OrdinalIgnoreCase));
+            // 2. sinon, l'entree qu'on est en train de parcourir
+            if (def < 0 && _entryFilter != null)
+                def = picks.FindIndex(e => e != null && string.Equals(e.Key, _entryFilter, StringComparison.OrdinalIgnoreCase));
+            combo.SelectedIndex = def >= 0 ? def : 0;
+
+            var ok = _w.DlgBtn("OK", Color.FromArgb(60, 120, 70));
+            var cancel = _w.DlgBtn("Cancel", Color.FromArgb(70, 70, 82));
+            ok.DialogResult = DialogResult.OK; cancel.DialogResult = DialogResult.Cancel;
+            ok.Location = new Point(S(300), S(100)); cancel.Location = new Point(S(400), S(100));
+            f.Controls.Add(combo); f.Controls.Add(ok); f.Controls.Add(cancel);
+            f.AcceptButton = ok; f.CancelButton = cancel;
+
+            if (f.ShowDialog(FindForm()) != DialogResult.OK) return false;
+            int i = combo.SelectedIndex;
+            entry = i >= 0 && i < picks.Count ? picks[i] : null;
+            return true;
         }
 
         /// <summary>"Which slot would you like to restore this save state to?" — LaunchBox's own wording,
@@ -776,7 +844,11 @@ internal sealed partial class EditGameWindow
                 appId = (asState ? scan.States : scan.Files).FirstOrDefault(x => x.AppId != null)?.AppId
                         ?? scan.Files.Concat(scan.States).FirstOrDefault(x => x.AppId != null)?.AppId;
 
-            string? err = SaveManager.Import(_game, dlg.FileName, asState, slot, appId);
+            // Which ROM does this save belong to? Only asked when the game IS an archive we can read.
+            SaveEntry? entry = null;
+            if (!PromptImportEntry(dlg.FileName, out entry)) return;
+
+            string? err = SaveManager.Import(_game, dlg.FileName, asState, slot, appId, entry: entry);
             if (err != null) { SavesError(err); return; }
             Reload();
         }

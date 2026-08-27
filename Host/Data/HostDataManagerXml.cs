@@ -358,8 +358,44 @@ internal sealed class HostDataManagerXml : DummyDataManager
         if (!string.IsNullOrEmpty(id)) _playlistById.Remove(id);
         _playlists.Remove(pl);
     }
+    // ── Answering a plugin with an ARCHIVE ENTRY's path ───────────────────────
+    //
+    // AddSaveArgs carries no IGame. An integration plugin restoring a save therefore resolves the game
+    // itself, through this method, and rebuilds the destination from gameById.ApplicationPath. For a ROM
+    // extracted from an archive that path is the ARCHIVE, so the save is written under a name the
+    // emulator will never read back — the one action of the Game Saves page that was simply wrong for
+    // extracted ROMs.
+    //
+    // Scoped to one thread and one game id, set immediately around the plugin call and cleared in a
+    // finally. Nothing else in the app sees a different answer, and a plugin that resolves a DIFFERENT
+    // game during the same call still gets the real one.
+
+    [ThreadStatic] private static string? _entryGameId;
+    [ThreadStatic] private static string? _entryPath;
+
+    /// <summary>Makes GetGameById answer for <paramref name="gameId"/> with a game whose ApplicationPath
+    /// is <paramref name="entryPath"/>, until the returned scope is disposed. Nested use is not supported
+    /// and not needed: plugin calls are serialised.</summary>
+    internal static IDisposable AnswerWithEntryPath(string gameId, string entryPath)
+    {
+        _entryGameId = gameId;
+        _entryPath = entryPath;
+        return new EntryPathScope();
+    }
+
+    private sealed class EntryPathScope : IDisposable
+    {
+        public void Dispose() { _entryGameId = null; _entryPath = null; }
+    }
+
     public override IGame GetGameById(string id)
-        => (Guid.TryParse(id, out var g) && _store.ById.TryGetValue(g, out var i)) ? _allGames[i] : null;
+    {
+        var game = (Guid.TryParse(id, out var g) && _store.ById.TryGetValue(g, out var i)) ? _allGames[i] : null;
+        if (game != null && _entryPath != null
+            && string.Equals(id, _entryGameId, StringComparison.OrdinalIgnoreCase))
+            return new Saves.EntryGame(game, _entryPath);
+        return game;
+    }
 
     /// <summary>Pre-size the row buffer for a KNOWN batch of AddNewGame calls (Expand, an import):
     /// one exact reallocation instead of chunked growth. Purely an optimization hint — omitting it

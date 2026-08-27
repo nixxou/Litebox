@@ -560,7 +560,7 @@ internal sealed partial class EditGameWindow
         // ── Game Saves tab (existing versions only — a new one has no ROM to scan yet) ──
         // Full parity with the game's Game Saves page: the SAME SavesPane control (cards, status
         // dots, action menus, Backup History, Import buttons), scoped to THIS version's ROM.
-        if (app != null)
+        if (app != null && Saves.SaveBackupService.Enabled)   // LB's "Enable Save Management" hides it too
         {
             var saves = NewTabPage(tabs, "Game Saves");
             var pane = new SavesPane(this);

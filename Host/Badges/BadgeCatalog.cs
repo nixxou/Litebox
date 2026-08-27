@@ -1,4 +1,4 @@
-// The badge set — LaunchBox's own, name for name.
+﻿// The badge set — LaunchBox's own, name for name.
 //
 // Each entry pairs the pack FILE NAME (which is also the badge's identity in LaunchBox's settings and
 // in its menu) with the wording LaunchBox shows, taken from its string table (Unbroken.LaunchBox.dll →
@@ -105,9 +105,9 @@ internal static class BadgeCatalog
                 Applies = (g, ctx) => ctx.AddApps(g).Select(a => a.Disc).Where(d => d.HasValue)
                                          .Distinct().Count() >= 2 },
         new() { Id = "HasSavedGame", Group = BadgeGroup.GameAttributes, Label = "Has Saved Game",
-                Applies = (g, ctx) => ctx.Saves(g).Any(e => !e.IsState) },
+                Applies = (g, ctx) => ctx.HasBackup(g, states: false) },
         new() { Id = "HasSaveStates", Group = BadgeGroup.GameAttributes, Label = "Has Save States",
-                Applies = (g, ctx) => ctx.Saves(g).Any(e => e.IsState) },
+                Applies = (g, ctx) => ctx.HasBackup(g, states: true) },
         // "Supported" (the machine is in hiscore.dat), which is what LiteBox can answer locally —
         // GameSortCatalog owns that rule and memoises it per game.
         new() { Id = "MAME High Scores", Group = BadgeGroup.GameAttributes, Label = "MAME High Scores",
@@ -336,12 +336,38 @@ internal sealed class BadgeContext
     }
 
     // ── save vault ───────────────────────────────────────────────────────────
-    public IReadOnlyList<VaultEntry> Saves(IGame g)
+    /// <summary>Does this game have at least one backup of the asked-for kind?
+    ///
+    /// Read from the persisted &lt;GameSave&gt; rows, which are Tier-1 resident, and NOT from the vault
+    /// folder. The vault is derived from the file system now, and a badge must never pay for I/O: this
+    /// runs for every visible game on every list render. A backup row carries a Title (LaunchBox writes
+    /// "Saved Game" for a save file, "Save State &lt;slot&gt;" for a state) where an active record has
+    /// none, and every backup we take refreshes its group's row — which is precisely why we refresh it on
+    /// a sweep too, where LaunchBox would not.</summary>
+    public bool HasBackup(IGame g, bool states)
     {
-        if (_saves != null) return _saves;
-        try { _saves = SaveVault.ForGame(Safe(() => g.Id) ?? ""); }
-        catch { _saves = Array.Empty<VaultEntry>(); }
-        return _saves;
+        _backupRows ??= LoadBackupRows(g);
+        return states ? _backupRows.Value.state : _backupRows.Value.file;
+    }
+
+    private (bool file, bool state)? _backupRows;
+
+    private static (bool file, bool state) LoadBackupRows(IGame g)
+    {
+        try
+        {
+            if (g is not ILiteBoxGame lbg) return (false, false);
+            bool f = false, st = false;
+            foreach (var r in lbg.GetSubEntities("GameSave"))
+            {
+                if (!r.TryGetValue("Title", out var t) || string.IsNullOrWhiteSpace(t)) continue;
+                if (r.TryGetValue("Slot", out var slot) && !string.IsNullOrWhiteSpace(slot)) st = true;
+                else f = true;
+                if (f && st) break;
+            }
+            return (f, st);
+        }
+        catch { return (false, false); }
     }
 
     // ── controller categories ────────────────────────────────────────────────

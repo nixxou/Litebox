@@ -1,4 +1,4 @@
-// Edit Game → "Game Saves" — LiteBox's replica of LaunchBox 13.27's save-management page
+﻿// Edit Game → "Game Saves" — LiteBox's replica of LaunchBox 13.27's save-management page
 // (see ExtendDB/docs/lb-save-management.md for the full RE). The whole UI lives in the reusable
 // SavesPane control (cards, status dots, per-card action menu, Backup History dialog, the two
 // Import buttons) so the SAME pane serves two hosts at full parity:
@@ -77,6 +77,8 @@ internal sealed partial class EditGameWindow
         private bool _pending;               // Rescan requested before the handle existed
         private IGame? _game;
         private IAdditionalApplication? _focus;   // null → base-game view; else that version's ROM
+        private string? _entryFilter;             // null → the MAIN bucket; else a SaveEntry.Key
+        private Panel? _entryBar;                 // hidden entirely when the game has only a main bucket
 
         private int S(int v) => _w.S(v);
         private bool ReadOnlyMode => _w._readOnly;
@@ -116,6 +118,7 @@ internal sealed partial class EditGameWindow
         {
             _game = game;
             _focus = focus;
+            _entryFilter = null;
             if (IsHandleCreated) Reload();
             else _pending = true;
         }
@@ -184,6 +187,17 @@ internal sealed partial class EditGameWindow
                 return;
             }
 
+            BuildEntryBar(scan);
+            RenderContent();
+        }
+
+        /// <summary>The two lists for the currently selected bucket. Separate from Render so switching
+        /// ROM in the picker never rebuilds — and never disposes — the picker that raised the event.</summary>
+        private void RenderContent()
+        {
+            var scan = _scan;
+            if (scan == null) return;
+
             _content.SuspendLayout();
             _content.Controls.Clear();
 
@@ -199,15 +213,77 @@ internal sealed partial class EditGameWindow
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(S(6), S(0), S(0), S(0)),
             });
 
+            // The MAIN bucket is the saves named after the ApplicationPath and matched by no entry —
+            // what a core reading the .zip directly legitimately produces. Not a leftover: with
+            // auto-extract off it stays the normal mode.
+            bool InBucket(SaveGroup g) => string.Equals(g.EntryKey, _entryFilter, StringComparison.OrdinalIgnoreCase);
+            var files = scan.Files.Where(InBucket).ToList();
+            var states = scan.States.Where(InBucket).ToList();
+
             Header("Save Files");
-            if (scan.Files.Count == 0) Empty("No save files found.");
-            else foreach (var g in scan.Files) Stack(BuildSaveCard(g));
+            if (files.Count == 0) Empty("No save files found.");
+            else foreach (var g in files) Stack(BuildSaveCard(g));
 
             Header("Save States");
-            if (scan.States.Count == 0) Empty("No save states found.");
-            else foreach (var g in scan.States) Stack(BuildSaveCard(g));
+            if (states.Count == 0) Empty("No save states found.");
+            else foreach (var g in states) Stack(BuildSaveCard(g));
 
             _content.ResumeLayout();
+        }
+
+        /// <summary>The ROM picker above the lists. It exists only when this game HAS more than one
+        /// bucket — a plain ROM, or an archive whose saves all belong to the main path, shows nothing at
+        /// all. Its entries come from the groups actually found, never from the archive listing: a
+        /// 200-ROM set must not produce a 200-line dropdown of ROMs that have no save.</summary>
+        private void BuildEntryBar(SaveScan scan)
+        {
+            if (_entryBar != null) { Controls.Remove(_entryBar); _entryBar.Dispose(); _entryBar = null; }
+
+
+            var all = scan.Files.Concat(scan.States).ToList();
+            var buckets = all.Where(g => g.EntryKey != null)
+                             .GroupBy(g => g.EntryKey!, StringComparer.OrdinalIgnoreCase)
+                             .Select(grp => (Key: grp.Key,
+                                             Label: grp.Select(x => x.EntryLabel).FirstOrDefault(l => !string.IsNullOrEmpty(l)) ?? grp.Key,
+                                             Count: grp.Count()))
+                             .OrderBy(b => b.Label, StringComparer.OrdinalIgnoreCase)
+                             .ToList();
+            if (buckets.Count == 0) return;   // nothing to choose between — stay invisible
+
+            int mainCount = all.Count(g => g.EntryKey == null);
+
+            var bar = new Panel { Dock = DockStyle.Top, Height = S(40), BackColor = Bg, Padding = new Padding(S(2), S(4), S(2), S(4)) };
+            bar.Controls.Add(new Label
+            {
+                Text = "ROM:", AutoSize = true, ForeColor = SubFg, BackColor = Bg,
+                Location = new Point(S(4), S(11)), Font = new Font("Segoe UI", 9f),
+            });
+
+            var combo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(S(44), S(7)), Width = S(430),
+                BackColor = Field, ForeColor = Fg, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9f),
+            };
+            var keys = new List<string?> { null };
+            combo.Items.Add($"Main version — {mainCount} save(s)");
+            foreach (var b in buckets) { keys.Add(b.Key); combo.Items.Add($"{b.Label} — {b.Count} save(s)"); }
+
+            int sel = keys.FindIndex(k => string.Equals(k, _entryFilter, StringComparison.OrdinalIgnoreCase));
+            combo.SelectedIndex = sel >= 0 ? sel : 0;
+            combo.SelectedIndexChanged += (_, _) =>
+            {
+                int i = combo.SelectedIndex;
+                if (i < 0 || i >= keys.Count) return;
+                if (string.Equals(keys[i], _entryFilter, StringComparison.OrdinalIgnoreCase)) return;
+                _entryFilter = keys[i];
+                RenderContent();                // re-filter only; no rescan, the groups are already in hand
+            };
+            bar.Controls.Add(combo);
+
+            Controls.Add(bar);
+            bar.BringToFront();
+            _content.BringToFront();
+            _entryBar = bar;
         }
 
         private Control BuildSaveCard(SaveGroup g)
@@ -271,7 +347,13 @@ internal sealed partial class EditGameWindow
             // Round status dot (LB parity): green ✓ = active save with an up-to-date backup; yellow ! =
             // no/stale backup; red ✕ = record whose file is gone. Absent for pure vault-only groups.
             StatusDot? dot = null;
-            if (g.RecordOnly)
+            if (g.DuplicateRecord)
+                dot = new StatusDot(StatusKind.Warn,
+                    "Duplicate record. This file is already listed above, under the version that owns it — "
+                    + "LaunchBox left this older record behind and never cleaned it up. The save itself is "
+                    + "fine. Use Options ▸ LB · Save Management ▸ Repair save metadata to drop records like "
+                    + "this one.", S(22));
+            else if (g.RecordOnly)
                 dot = new StatusDot(StatusKind.Error, "The save file this record points to no longer exists on disk.", S(22));
             else if (g.Active != null)
                 dot = g.NeedsBackup
@@ -517,6 +599,16 @@ internal sealed partial class EditGameWindow
                 slot = PromptSlot(scan.Plugin);
                 if (slot == null) return;
             }
+            // Importing overwrites whatever is live under the emulator's expected name. Back the existing
+            // groups up first so the replaced progress stays one click away — the dirty-check skips the
+            // ones that already match their latest backup, so this costs nothing in the common case.
+            try
+            {
+                foreach (var g0 in (asState ? scan.States : scan.Files))
+                    if (g0.Active != null) SaveManager.Backup(g0, force: false);
+            }
+            catch { }
+
             string? err = SaveManager.Import(_game, scan.Plugin, dlg.FileName, asState, slot,
                 confirmOverwrite: () => MessageBox.Show(FindForm(),
                     "A save already exists at the emulator's location.\nOverwrite it with the imported file?",
@@ -676,12 +768,12 @@ internal sealed partial class EditGameWindow
         {
             bool isActive = entry == null;
             string abs = isActive ? g.ActivePath : SaveVault.Abs(entry!);
-            string md5 = isActive ? "" : entry!.Md5;
+            string md5 = isActive ? "" : (entry!.Md5 ?? "");
             DateTime? when = isActive ? g.LastModified : entry!.CreatedUtc.ToLocalTime();
             long? size = isActive ? g.SizeBytes : entry!.SizeBytes;
             string title = isActive
                 ? (g.ActivePath.Length > 0 ? Path.GetFileName(g.ActivePath) : g.GroupName)
-                : (entry!.Label.Length > 0 ? entry.Label : Path.GetFileName(abs.TrimEnd('\\', '/')));
+                : Path.GetFileName(abs.TrimEnd('\\', '/'));
 
             var card = new Panel { Height = S(72), BackColor = PanelC, Padding = new Padding(S(12), S(8), S(10), S(8)) };
             card.Paint += (_, e) => { using var pen = new Pen(Color.FromArgb(58, 58, 70)); e.Graphics.DrawRectangle(pen, 0, 0, card.Width - 1, card.Height - 1); };
@@ -730,18 +822,13 @@ internal sealed partial class EditGameWindow
                 else
                 {
                     Add("Set as Active", true, () => { SaveAction_SetActive(g, entry!); owner.DialogResult = DialogResult.OK; owner.Close(); });
-                    Add("Edit Label…", true, () =>
-                    {
-                        string? l = PromptText("Edit Label", "Label for this backup:", entry!.Label);
-                        if (l == null) return; entry.Label = l.Trim(); SaveVault.Changed(); refresh();
-                    });
                     Add("Open Folder", true, () => OpenIn(abs));
                     m.Items.Add(new ToolStripSeparator());
                     var del = new ToolStripMenuItem("Delete") { ForeColor = Color.FromArgb(230, 120, 110) };
                     del.Click += (_, _) =>
                     {
                         if (MessageBox.Show(owner, "Delete this backup from the vault?\nThe backup file is removed from disk.", "Delete Backup", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-                        string? err = SaveManager.DeleteBackup(entry!);
+                        string? err = SaveManager.DeleteBackup(entry!, g.Game);
                         if (err != null) { SavesError(err); return; }
                         g.Backups.Remove(entry!); refresh();
                     };

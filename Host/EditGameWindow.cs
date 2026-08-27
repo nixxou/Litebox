@@ -371,7 +371,10 @@ internal sealed partial class EditGameWindow : Form   // Game Saves page lives i
             metadata.Nodes.Add(N("Alternate Names", "AlternateNames"));
         }
         metadata.Nodes.Add(N("Controller Support", "ControllerSupport"));   // multi has its own aggregated page
-        if (!IsMulti) metadata.Nodes.Add(N("Game Saves", "GameSaves"));     // per-game too (no multi view yet)
+        // LB's "Enable Save Management" (stored inverted as DisableSaveManagement) hides the page in
+        // LaunchBox; honour the same setting rather than offering a page whose backups are switched off.
+        if (!IsMulti && Saves.SaveBackupService.Enabled)
+            metadata.Nodes.Add(N("Game Saves", "GameSaves"));     // per-game too (no multi view yet)
 
         var media = N("Media", "Media");
         var images = N("Images", "Images");

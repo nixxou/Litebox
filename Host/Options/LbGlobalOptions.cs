@@ -1,11 +1,10 @@
-// LaunchBox GLOBAL options (LB parity — the Tools ▸ Options window), backed by
+﻿// LaunchBox GLOBAL options (LB parity — the Tools ▸ Options window), backed by
 // LB\Data\Settings.xml through LbSettingsStore → op-log → scoped flush. These are
 // LAUNCHBOX's settings: editing them here writes what LB will read on its next
 // boot. Options LiteBox itself never reads carry NoImpact = true and render a red
 // "No impact on LiteBox" note (the value still round-trips for LB's benefit).
 //
 // This first pass covers the simple sections. Deferred to later rounds:
-//   - Save Management (big chantier, explicitly parked)
 //   - Startup Applications / Game Progress / Related Games / Media priorities
 //     (grids & trees — incl. the Related-Games mirror file: LB STRIPS unknown
 //     tags from Settings.xml, verified empirically, so the mirror cannot live there)
@@ -125,6 +124,125 @@ internal static class LbGlobalOptions
         // These DO drive LiteBox (startup/end/pause overlays + screenshot hotkey).
         w.AddSection("LB · Gameplay", BuildGameplayPanel(s, readOnly, dpiS, cfg, out var applyGameplay),
             readOnly ? null : applyGameplay);
+
+        // LB "Save Management" branch. The five toggles are LaunchBox's own fields, so switching automatic
+        // backups on here switches them on for LaunchBox too — and, until now, LiteBox read none of them:
+        // the ONLY thing that ever wrote a backup was the manual button. Host\Saves\SaveBackupService is
+        // what honours them. The two scheduling knobs have no LaunchBox equivalent (its periodic backup
+        // exposes no interval) and are LiteBox's own, in LiteBox.ini.
+        w.AddSection("LB · Save Management", BuildSaveManagementItems(s, cfg), readOnly);
+    }
+
+    private static OptionItem[] BuildSaveManagementItems(LbSettingsStore s, LiteBoxConfig? cfg)
+    {
+        var ini = cfg ?? LiteBoxConfig.LoadForExe();
+
+        int IniGet(string key, int def)
+            => int.TryParse(ini.GetSec("Saves", key), out var n) ? n : def;
+        void IniSet(string key, int v) { ini.SetSec("Saves", key, v.ToString()); }
+
+        int LbNum(string field, int def)
+            => int.TryParse(s.Get(field, ""), out var n) && n > 0 ? n : def;
+
+        string lastScan = Saves.SaveBackupService.LastScanUtc is DateTime d
+            ? "Last full scan: " + d.ToLocalTime().ToString("g") + ". "
+            : "Last full scan: never. ";
+
+        return new[]
+        {
+            // LB stores the master switch inverted; showing it inverted too would be a trap.
+            OptionItem.Toggle("sm", "Enable save management",
+                () => !s.GetBool("DisableSaveManagement"),
+                v => s.SetBool("DisableSaveManagement", !v),
+                "Off disables every save feature — the game save pages, the backups, and the automatic "
+                + "tasks below. LaunchBox reads this same setting."),
+
+            OptionItem.Toggle("sm", "Enable automatic save backups",
+                () => s.GetBool("EnableAutomaticSaveBackups"),
+                v => s.SetBool("EnableAutomaticSaveBackups", v),
+                "Master switch for the two automatic triggers below. A backup identical to the previous "
+                + "one is never stored, so an unchanged save costs nothing."),
+
+            OptionItem.Toggle("sm", "Back up saves when a game closes",
+                () => s.GetBool("SaveBackupOnGameClose", true),
+                v => s.SetBool("SaveBackupOnGameClose", v),
+                "The one moment a save's owner is known rather than guessed. Also the only chance to "
+                + "rescue a save an emulator wrote inside an extracted-ROM folder, since that folder is "
+                + "deleted right after."),
+
+            OptionItem.Toggle("sm", "Enable periodic background backups",
+                () => s.GetBool("PeriodicSaveBackupEnabled", true),
+                v => s.SetBool("PeriodicSaveBackupEnabled", v),
+                "Sweeps the whole library on the schedule below, and once at startup when a sweep is "
+                + "overdue."),
+
+            OptionItem.Number("sm", "Max backup versions per game",
+                () => LbNum("MaxAutoBackupsPerGame", 25),
+                v => s.Set("MaxAutoBackupsPerGame", v.ToString()), 1, 999,
+                help: "Past this count the oldest copies are deleted. It cannot currently spare the ones "
+                + "you made by hand: LaunchBox's format has no field marking a backup automatic, and every "
+                + "copy sits in the same folder under the same naming, so nothing on disk tells them apart."),
+
+            OptionItem.Number("sm", "Hours between background sweeps",
+                () => IniGet("PeriodicHours", 24), v => IniSet("PeriodicHours", v), 1, 720,
+                help: "LiteBox's own setting — LaunchBox's periodic backup exposes no interval."),
+
+            OptionItem.Number("sm", "Required idle time before a sweep (minutes)",
+                () => IniGet("IdleMinutes", 60), v => IniSet("IdleMinutes", v), 0, 1440,
+                help: "A sweep drives every integration plugin over every game, so it waits until nothing "
+                + "is going on. It never starts while a game is running or an archive is being extracted, "
+                + "whatever this is set to — a gamepad session looks idle to Windows. 0 = only those two "
+                + "conditions."),
+
+            OptionItem.Action("sm", "Back up now", () => RunSaveJob("Backing up saves",
+                (ct, prog) => Saves.SaveBackupService.RunLibraryScan(ct, prog)),
+                lastScan + "Scans the library now, ignoring the idle and interval conditions."),
+
+            OptionItem.Action("sm", "Repair save metadata", () => RunSaveJob("Repairing save metadata",
+                (ct, _) => Saves.SaveBackupService.RepairMetadata(ct)),
+                "Drops save records and backup entries that no longer point at anything. No save file and "
+                + "no backup is deleted. LaunchBox has a button of this name; what its version does is not "
+                + "observable from outside, so this is LiteBox's own behaviour, not parity."),
+
+            OptionItem.Action("sm", "Clear all and re-scan save metadata", () =>
+            {
+                if (MessageBox.Show(
+                        "Every active save record will be deleted and rebuilt from a fresh scan.\n\n"
+                        + "Backups are NOT touched — neither LiteBox's nor LaunchBox's. Custom names given "
+                        + "to active save groups are lost.\n\nContinue?",
+                        "Clear and re-scan save metadata",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                RunSaveJob("Rebuilding save metadata",
+                    (ct, prog) => Saves.SaveBackupService.ClearAndRescan(ct, prog));
+            },
+                "Use when records have drifted from what is on disk. Backups survive; names given to "
+                + "active save groups do not."),
+        };
+    }
+
+    /// <summary>Runs a save maintenance job off the UI thread behind a progress notification. One at a
+    /// time — they all drive the same plugins over the same library.</summary>
+    private static void RunSaveJob(string title,
+                                   Action<System.Threading.CancellationToken, Action<int, int, string>?> job)
+    {
+        if (Saves.SaveBackupService.IsRunning)
+        { LiteBox.Notifications.NotificationCenter.Info("A save task is already running."); return; }
+
+        var note = LiteBox.Notifications.NotificationCenter.Progress(title + "…");
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                job(System.Threading.CancellationToken.None, (done, total, name) =>
+                {
+                    if (total > 0 && (done % 25 == 0 || done == total))
+                        LiteBox.Notifications.NotificationCenter.Update(note, $"{title}… {done}/{total} — {name}");
+                });
+                LiteBox.Notifications.NotificationCenter.Complete(note, title + " — done.");
+            }
+            catch (Exception ex)
+            { LiteBox.Notifications.NotificationCenter.Complete(note, title + " failed: " + ex.Message, error: true); }
+        });
     }
 
     // ── LB "Gameplay" branch: the startup / pause / screen-capture options that

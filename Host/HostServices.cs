@@ -702,6 +702,11 @@ internal static class HostLaunch
             // exit already put an early cover up.
             if (!DryRun && !adminLaunch) Gameplay.GameScreens.ShowEndEager(endSnap);
             AhkScript.KillGameScript();   // running script dies with the game (LB parity)
+            // Automatic save backup — BEFORE the purge below, which is a recursive delete of the whole
+            // \tmp band. With savefiles_in_content_dir the emulator wrote its save inside the extraction
+            // folder, so after that line it is gone. This is also the only moment attribution is known
+            // rather than inferred: the game that just ran is the one whose save changed.
+            if (!DryRun) { try { Saves.SaveBackupService.OnGameClosed(game); } catch { } }
             // ROM extractor: purge the ephemeral \tmp band now the emulator has released the files
             // (persistent <SIG> cache entries survive; LRU-evicted on the next extraction).
             try { Rom.RomExtractor.OnGameExitCleanup(); } catch { }

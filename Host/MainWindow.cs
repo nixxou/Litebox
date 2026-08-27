@@ -507,6 +507,13 @@ internal sealed partial class MainWindow : Form, IMessageFilter
         // Layout ran while the form was invisible (Control.Visible lies until Show), so the poster
         // may have measured a barless width — one refresh once everything is really on screen.
         Shown += (_, _) => { try { ApplyGameListIndexOptions(); } catch { } };
+        // Automatic save backups: arm the periodic sweep, and run one now if it is overdue (both no-op
+        // when the LaunchBox settings behind them are off). Deliberately after Shown — a library-wide
+        // sweep has no business competing with the first paint.
+        Shown += (_, _) =>
+        {
+            try { Saves.SaveBackupService.Start(); Saves.SaveBackupService.RunAtStartupIfDue(); } catch { }
+        };
         // Launch buttons docked at the bottom of the details pane (always visible,
         // outside the scrolling detail grid). _detailHost (Fill) is added FIRST so
         // the bottom panel reserves its space and the grid fills the rest.

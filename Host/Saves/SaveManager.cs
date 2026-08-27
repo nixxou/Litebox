@@ -1,7 +1,9 @@
 ﻿// Save management — the HOST side of LaunchBox's save-management feature (Edit Game → Game Saves),
 // re-implemented for LiteBox on top of the SAME per-emulator logic LaunchBox uses.
 //
-// Architecture (mirrors LB 13.27, fully RE'd — see ExtendDB/docs/lb-save-management.md):
+// Architecture — see docs/saves.md for what is established and how, and docs/save-algorithms.md for
+// each plugin's algorithm. (ExtendDB/docs/lb-save-management.md is the original RE; two of its
+// conclusions about the vault have since been disproved — saves.md §2.4 says which.)
 //   • All emulator-specific logic (where saves live, how they're named/backed-up/restored) is in the
 //     NON-obfuscated "<Emulator> LaunchBox Integration" plugins (EmulatorPlugin subclasses). LiteBox
 //     already hosts them (EmuPlugins) — this class just drives the same contract LB drives:
@@ -66,6 +68,12 @@ internal sealed class VaultEntry
     public int? Slot { get; set; }
     public string VaultPath { get; set; } = "";      // relative to the LB root when under it (portable)
     public string OriginalFileName { get; set; } = "";
+
+    /// <summary>The record's Title, which is what LaunchBox prints as this entry's heading in Backup
+    /// History — "Saved Game", "Save State 0"… and anything else, verbatim. Proven free text: a record
+    /// planted with Title "Zorglub" is displayed as "Zorglub". So Title is a LABEL that happens to double
+    /// as the "this file is in the vault" flag, not a vocabulary to parse.</summary>
+    public string Title { get; set; } = "";
     public DateTime CreatedUtc { get; set; }
     public string Md5 { get; set; } = "";            // file md5, or folder-manifest md5
     public long SizeBytes { get; set; }
@@ -117,6 +125,38 @@ internal sealed class SaveGroup
     /// Session capture is what turns one into a fact; the UI must be able to tell them apart.</summary>
     public bool EntryInferred;
     public List<VaultEntry> Backups = new();
+
+    /// <summary>The number LaunchBox puts on the card, replicated including its defect.
+    ///
+    /// It is the archived copies, PLUS ONE when the group is attributed to a version — that is, when its
+    /// records carry an AdditionalApplicationId. A version-attributed group counts its own LIVE save as
+    /// an entry; a game-attributed one does not. LaunchBox's Backup History shows the same split: the
+    /// live file appears as a row, marked Active, only in the version case.
+    ///
+    /// This is almost certainly a bug on their side — a save that has never been backed up reads
+    /// "1 Backup" with a green tick — and it is reproduced here on purpose, because parity is the goal
+    /// and a number that disagrees with LaunchBox's is worse than one that is odd in the same way.
+    ///
+    /// Pinned down by elimination over eight real groups, one variable at a time. The suspects that were
+    /// ruled out first, each by its own measurement: the file name (five candidate spellings planted in
+    /// the vault, none matched), the apostrophe (LaunchBox does sanitise it into OriginalFileName, but
+    /// renaming the file to match changed nothing), and the presence of a recordless copy in the folder.
+    /// The decisive test was the last: one game, empty vault, a single live record — 0 backups; add a
+    /// version pointing at the game's own ROM, changing nothing else — 1 backup, the live file listed.
+    ///
+    /// And the control that separates ATTRIBUTION from "the game merely has versions": point that same
+    /// version at a different ROM instead. RetroArch's pass 2 then stops skipping the game, the save comes
+    /// back attributed to the game with no AdditionalApplicationId — and the count drops to 0 again, with
+    /// the version still there. So a version only changes the game's page when it takes the game's saves
+    /// away from it, which is the sane half of this behaviour.
+    ///
+    /// One thing skews it: a FOSSIL record — a second record naming the same live file, left behind when a
+    /// version started covering the game's own ROM. A group with such a twin reads one lower than the same
+    /// group without one (observed: 1 instead of 2, and back to 2 the moment the fossil was removed, every
+    /// other thing equal). Which is one more reason for Repair to clear them: they do not merely clutter
+    /// the page, they make the number wrong.</summary>
+    public int DisplayBackupCount
+        => Backups.Count + (!string.IsNullOrEmpty(AppId) && Active != null ? 1 : 0);
     public Dictionary<string, string>? Record;       // persisted row (null for orphan/vault-only groups)
 
     public DateTime? LastModified
@@ -271,8 +311,9 @@ internal static class SaveVault
         foreach (var row in rows)
         {
             if (!string.Equals(row.GetValueOrDefault("SaveGroupId"), g.GroupId, StringComparison.OrdinalIgnoreCase)) continue;
-            if (string.IsNullOrWhiteSpace(row.GetValueOrDefault("Title"))) continue;   // the live file
-            var abs = SaveManager.AbsPath(row.GetValueOrDefault("FilePath") ?? "");
+            var abs0 = SaveManager.AbsPath(row.GetValueOrDefault("FilePath") ?? "");
+            if (!IsUnderVault(abs0)) continue;                                         // the live file
+            var abs = abs0;
             if (abs.Length == 0) continue;
             if (SaveManager.PathEq(abs, g.ActivePath)) continue;                       // the group's own file
 
@@ -293,11 +334,25 @@ internal static class SaveVault
                 IsState = g.IsState, Slot = g.Slot,
                 VaultPath = Rel(abs),
                 OriginalFileName = row.GetValueOrDefault("OriginalFileName") ?? Path.GetFileName(abs),
+                Title = row.GetValueOrDefault("Title") ?? "",
                 CreatedUtc = when, SizeBytes = size, IsDirectory = isDir,
             });
         }
         res.Sort((x, y) => y.CreatedUtc.CompareTo(x.CreatedUtc));
         return res;
+    }
+
+    /// <summary>Is this path inside &lt;LB&gt;\Saves\ — that is, is it a vault copy rather than a save
+    /// sitting where the emulator keeps it?</summary>
+    public static bool IsUnderVault(string absPath)
+    {
+        if (string.IsNullOrEmpty(absPath)) return false;
+        try
+        {
+            string root = Path.GetFullPath(Path.Combine(SaveManager.LbRoot, "Saves")).TrimEnd('\\', '/');
+            return Path.GetFullPath(absPath).StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     /// <summary>Absolute path of an entry (VaultPath is stored LB-root-relative when possible).</summary>
@@ -655,12 +710,21 @@ internal static class SaveManager
         // are the group's own copies, and step 4 attaches them as backups.
         var liveGroupIds = new HashSet<string>(groups.Select(x => x.GroupId), StringComparer.OrdinalIgnoreCase);
 
+        // ONE group per SaveGroupId, not one per row. A group is the set of records sharing that id, so
+        // several rows of the same id must collapse into a single card — as LaunchBox does. This is not
+        // theoretical: importing a file writes the record TWICE, identical but for the
+        // AdditionalApplicationId, and LaunchBox still shows one card for it.
+        var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var row in baseRows.Where(r => !usedRows.Contains(r)))
         {
             var rowAbs = AbsPath(row.GetValueOrDefault("FilePath") ?? "");
             bool vaultRow = IsVaultRow(row);
-            if (vaultRow && liveGroupIds.Contains(row.GetValueOrDefault("SaveGroupId") ?? ""))
+            var rowGid = row.GetValueOrDefault("SaveGroupId") ?? "";
+            if (vaultRow && liveGroupIds.Contains(rowGid))
                 continue;                                   // a copy of a group already on the page
+            if (rowGid.Length > 0 && !emitted.Add(rowGid))
+                continue;                                   // same group, already has its card
 
             bool exists = rowAbs.Length > 0 && (File.Exists(rowAbs) || Directory.Exists(rowAbs));
             if (vaultRow && !exists) continue;              // a copy that is gone — nothing to show
@@ -709,7 +773,7 @@ internal static class SaveManager
         scan.Files = groups.Where(x => !x.IsState).OrderBy(x => x.GroupName, StringComparer.OrdinalIgnoreCase).ToList();
         scan.States = groups.Where(x => x.IsState).OrderBy(x => x.Slot ?? int.MaxValue).ToList();
         foreach (var g in scan.Files.Concat(scan.States))
-            Diag($"  group \"{g.GroupName}\" active={(g.Active != null)} live={g.ActiveLive} recordOnly={g.RecordOnly} inVault={g.InVault} dup={g.DuplicateRecord} backups={g.Backups.Count} path={g.ActivePath}");
+            Diag($"  group \"{g.GroupName}\" active={(g.Active != null)} live={g.ActiveLive} recordOnly={g.RecordOnly} inVault={g.InVault} dup={g.DuplicateRecord} copies={g.Backups.Count} shown={g.DisplayBackupCount} path={g.ActivePath}");
         return scan;
     }
 
@@ -755,20 +819,20 @@ internal static class SaveManager
     }
 
     /// <summary>A &lt;GameSave&gt; row whose file sits in the VAULT rather than at the emulator's live
-    /// location.
+    /// location. Decided by the PATH, which is the only thing that actually says where a file is.
     ///
-    /// That — not "this row is a backup" — is what a Title means. Every row pointing under
-    /// &lt;LB&gt;\Saves\ carries one ("Saved Game" for a save file, "Save State &lt;slot&gt;" for a state);
-    /// every row pointing at the emulator's folder has none. Observed across 15 real rows, without
-    /// exception.
+    /// It used to test Title instead, on the observation that every vault row carried one and no live row
+    /// did. That correlation held across fifteen records and then broke: "Restore Backup" labels the row
+    /// it promotes, so a LIVE record came back carrying Title "Save State 0". Title is a free-text LABEL —
+    /// the same thing "Edit Label" edits, and the same field that displayed "Zorglub" verbatim when a
+    /// record was planted with it. It says nothing about location.
     ///
-    /// The difference matters because a GROUP is a set of rows sharing a SaveGroupId, and the rows split
-    /// by location, not by purpose: the one without a Title is the live save, the ones with a Title are
-    /// its copies in the vault. A group made only of vault rows has no live save at all — that is exactly
-    /// what LaunchBox's "Make New Save" creates, and it shows it as "In Vault". Reading Title as
-    /// "backup row" made those groups vanish from the page entirely.</summary>
+    /// The consequence of getting this wrong was not cosmetic: the live save would have been read as a
+    /// copy, dropped from the page, and re-recorded under a new group — with the old record left behind
+    /// as a phantom.</summary>
     private static bool IsVaultRow(Dictionary<string, string> row)
-        => !string.IsNullOrWhiteSpace(row.GetValueOrDefault("Title"));
+        => SaveVault.IsUnderVault(AbsPath(row.GetValueOrDefault("FilePath") ?? ""));
+
 
     /// <summary>Drops LaunchBox's &lt;GameSave&gt; row for a vault file we just deleted. Without it the row
     /// dangles and LaunchBox keeps offering a backup whose file is gone.</summary>
@@ -957,22 +1021,69 @@ internal static class SaveManager
         catch (Exception ex) { return ex.Message; }
     }
 
-    /// <summary>Imports an external save/state file as the active save (LB's Import buttons).</summary>
-    public static string? Import(IGame game, EmulatorPlugin plugin, string filePath, bool asState, int? slot, Func<bool> confirmOverwrite,
-        IAdditionalApplication? focus = null)
+    /// <summary>Imports an external file — LaunchBox's "Import Save Game File" / "Import Save State File".
+    ///
+    /// It does NOT make the file active, and it does not touch the live save at all. Measured: importing
+    /// a file called IMPORTME.srm, with content found nowhere else, left the live save byte-identical,
+    /// left the source where it was, and produced a NEW GROUP whose file sits in the vault:
+    ///
+    ///   Saves\&lt;Platform&gt;\Secret of Mana (USA)-02.srm     &lt;- the ROM's basename, next free suffix
+    ///   SaveGroupId       0125ff11…                        &lt;- brand new, lineage equal to it
+    ///   SaveGroupName     "My Save File"                   &lt;- the default, not the source's name
+    ///   OriginalFileName  IMPORTME.srm                     &lt;- the real source name, preserved
+    ///   (no Title)
+    ///
+    /// So it is "Make New Save", seeded from a file you choose instead of from the live save. Making it
+    /// active afterwards is a separate step — Restore Backup.
+    ///
+    /// This used to call AddSaveFile, which copies to the emulator's LIVE location under the ROM's name,
+    /// overwriting whatever was there. That is a different operation with a different blast radius, and
+    /// the UI compensated by backing every group up first — which is no longer needed, because nothing
+    /// gets overwritten.
+    ///
+    /// Note the record carries no Title while pointing into the vault: one more reason location is read
+    /// from the path and never from Title.</summary>
+    public static string? Import(IGame game, string filePath, bool asState, int? slot,
+                                 string? appId, string? platformOverride = null)
     {
-        // With a focused VERSION, stamp its id: the plugins resolve the TARGET save name from the
-        // additional app's ApplicationPath when AdditionalApplicationId is set (verified in the
-        // RetroArch integration), so the import lands on the version's ROM, not the base game's.
-        string? appId = focus != null ? SafeStr(() => focus.Id) : null;
-        if (string.IsNullOrEmpty(appId)) appId = null;
-        GameSaveBase save = asState
-            ? new GameSaveState { GameId = SafeStr(() => game.Id), AdditionalApplicationId = appId, FileLocation = filePath, Slot = slot }
-            : new GameSaveGame { GameId = SafeStr(() => game.Id), AdditionalApplicationId = appId, FileLocation = filePath };
+        if (!File.Exists(filePath)) return "That file no longer exists.";
+        if (game is not ILiteBoxGame lbg) return "This library is read-only.";
         try
         {
-            var resp = AddSaveFileCwdSafe(plugin, new AddSaveArgs { SaveToAdd = save, ShouldOverwriteFunc = confirmOverwrite });
-            return resp is { WasSuccess: true } ? null : (resp?.Message ?? "The plugin could not import this file.");
+            string plat = platformOverride ?? SafeStr(() => game.Platform);
+            if (plat.Length == 0) plat = "Unknown";
+            string dir = Path.Combine(LbRoot, "Saves", Sanitize(plat));
+            Directory.CreateDirectory(dir);
+
+            // The ROM the group is named after: the owning version's when the save belongs to one.
+            string rom = SafeStr(() => game.ApplicationPath);
+            if (!string.IsNullOrEmpty(appId))
+                foreach (var a in game.GetAllAdditionalApplications() ?? Array.Empty<IAdditionalApplication>())
+                    if (string.Equals(SafeStr(() => a.Id), appId, StringComparison.OrdinalIgnoreCase))
+                    { rom = SafeStr(() => a.ApplicationPath); break; }
+            string baseName = Sanitize(Path.GetFileNameWithoutExtension(rom));
+            if (baseName.Length == 0) baseName = "save";
+            string ext = asState ? ".state" : (Path.GetExtension(filePath) is { Length: > 0 } e ? e : ".srm");
+
+            string target = UniqueFile(dir, baseName, ext);
+            File.Copy(filePath, target, overwrite: false);
+
+            string gid = Guid.NewGuid().ToString("N");
+            var row = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = SafeStr(() => game.Id) };
+            if (!string.IsNullOrEmpty(appId)) row["AdditionalApplicationId"] = appId!;
+            row["EmulatorFileName"] = "";
+            row["SaveGroupName"] = asState ? "My Save State" : "My Save File";
+            row["SaveGroupId"] = gid;
+            row["MatchLineageId"] = gid;
+            row["FilePath"] = SaveVault.Rel(target);
+            row["OriginalFileName"] = Path.GetFileName(filePath);
+            if (asState) row["Slot"] = (slot ?? 0).ToString();
+
+            var rows = lbg.GetSubEntities("GameSave").Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+            rows.Add(row);
+            lbg.SetSubEntities("GameSave", rows);
+            SaveVault.Notify(SafeStr(() => game.Id));
+            return null;
         }
         catch (Exception ex) { return ex.Message; }
     }
@@ -996,13 +1107,55 @@ internal static class SaveManager
         finally { try { if (prev != null) Environment.CurrentDirectory = prev; } catch { } }
     }
 
-    /// <summary>Renames the group (SaveGroupName). Only the record carries the name now — the backups
-    /// are files, and their group membership comes from where they sit and what they are called.</summary>
-    public static void Rename(SaveGroup g, string newName)
+    /// <summary>Sets a copy's label — LaunchBox's "Edit Label", which writes the record's Title.
+    ///
+    /// LiteBox used to have this, backed by a field in its own index, and it was dropped when that index
+    /// went away on the grounds that LaunchBox had nowhere to put a label. It has: Title. The two are the
+    /// same feature, and doing it this way means a label set here shows up in LaunchBox as well, which the
+    /// old private one never did.</summary>
+    public static string? SetBackupLabel(SaveGroup g, VaultEntry e, string label)
+    {
+        if (g.Game is not ILiteBoxGame lbg) return "This library is read-only.";
+        try
+        {
+            var rows = lbg.GetSubEntities("GameSave").Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+            var row = rows.FirstOrDefault(r => PathEq(AbsPath(r.GetValueOrDefault("FilePath") ?? ""), SaveVault.Abs(e)));
+            if (row == null) return "No record describes this copy — nothing to label.";
+            row["Title"] = label ?? "";
+            lbg.SetSubEntities("GameSave", rows);
+            e.Title = label ?? "";
+            return null;
+        }
+        catch (Exception ex) { return ex.Message; }
+    }
+
+    /// <summary>Renames the group — which means EVERY record sharing its SaveGroupId, the live one and
+    /// each copy alike. Measured: renaming a group in LaunchBox rewrote SaveGroupName on both of its
+    /// records. This used to touch only the group's own record, leaving its copies under the old name.
+    ///
+    /// <paramref name="activeLabel"/> is LaunchBox's second field ("Enter a label for the active save
+    /// file"), which writes the live record's Title. Null leaves it alone — and leaving it alone is what
+    /// LaunchBox does when the field is submitted unchanged: its prefill is a display default, not a
+    /// stored value, and validating it wrote nothing.</summary>
+    public static void Rename(SaveGroup g, string newName, string? activeLabel = null)
     {
         g.GroupName = newName;
-        if (g.Record != null) { g.Record["SaveGroupName"] = newName; PersistRows(g); }
         foreach (var e in g.Backups) e.GroupName = newName;
+        if (g.Game is not ILiteBoxGame lbg) return;
+        try
+        {
+            var rows = lbg.GetSubEntities("GameSave").Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+            bool dirty = false;
+            foreach (var row in rows)
+            {
+                if (!string.Equals(row.GetValueOrDefault("SaveGroupId"), g.GroupId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (row.GetValueOrDefault("SaveGroupName") != newName) { row["SaveGroupName"] = newName; dirty = true; }
+                if (activeLabel != null && !IsVaultRow(row) && row.GetValueOrDefault("Title") != activeLabel)
+                { row["Title"] = activeLabel; dirty = true; }
+            }
+            if (dirty) { lbg.SetSubEntities("GameSave", rows); g.Record = rows.FirstOrDefault(r => r == g.Record) ?? g.Record; }
+        }
+        catch (Exception ex) { Console.WriteLine("[saves] rename failed: " + ex.Message); }
     }
 
     /// <summary>Deletes the group: active file via plugin.RemoveSave (container-aware), its record,
@@ -1048,28 +1201,47 @@ internal static class SaveManager
     /// <summary>Merges <paramref name="src"/>'s history into <paramref name="dst"/> (LB's "Combine With
     /// Another Save"). The source's vault entries are re-tagged; a still-active source save is first
     /// backed up into the destination group and then removed from disk.</summary>
+    /// <summary>Merges two groups into one. Measured against LaunchBox, and it is a pure RE-LABELLING:
+    ///
+    ///   • every record of the source takes the destination's SaveGroupId AND its MatchLineageId;
+    ///   • every record of the resulting group takes the SOURCE's SaveGroupName — the name you were
+    ///     looking at when you asked for the merge is the one that survives;
+    ///   • nothing on disk moves, is copied, or is deleted.
+    ///
+    /// This used to do something else entirely: it archived the source's live save into the destination —
+    /// creating a file — and then called RemoveSave on it, destroying the live save, before dropping the
+    /// source record. Merging two groups is a bookkeeping operation; it has no business deleting a save.
+    ///
+    /// It is also the one place MatchLineageId has been seen to earn its name: the lineage follows the
+    /// merge, so a record carries the identity of the group it now belongs to rather than the one it was
+    /// created in.</summary>
     public static string? Combine(SaveGroup src, SaveGroup dst)
     {
         if (ReferenceEquals(src, dst) || string.Equals(src.GroupId, dst.GroupId, StringComparison.OrdinalIgnoreCase))
             return "Cannot combine a save with itself.";
-        if (src.Active != null)
+        if (src.Game is not ILiteBoxGame lbg) return "This library is read-only.";
+        try
         {
-            if (src.Plugin == null) return "No integration plugin for this save.";
-            var moved = new SaveGroup   // back the source's active up INTO the destination group
+            var rows = lbg.GetSubEntities("GameSave").Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+            string keepName = src.GroupName;
+            string dstLineage = dst.Record?.GetValueOrDefault("MatchLineageId") ?? dst.GroupId;
+
+            foreach (var row in rows)
             {
-                Game = src.Game, GameId = src.GameId, AppId = src.AppId, IsState = src.IsState, Slot = src.Slot,
-                GroupId = dst.GroupId, GroupName = dst.GroupName,
-                Emulator = src.Emulator, Plugin = src.Plugin,
-                Active = src.Active, ActivePath = src.ActivePath, ActiveIsDirectory = src.ActiveIsDirectory,
-                Backups = dst.Backups,
-            };
-            var b = Backup(moved, force: false);
-            if (b.Error != null) return "Could not archive the source save — nothing was combined: " + b.Error;
-            try { lock (_pluginGate) src.Plugin.RemoveSave(src.Active); } catch { }
+                var gid = row.GetValueOrDefault("SaveGroupId") ?? "";
+                bool isSrc = string.Equals(gid, src.GroupId, StringComparison.OrdinalIgnoreCase);
+                bool isDst = string.Equals(gid, dst.GroupId, StringComparison.OrdinalIgnoreCase);
+                if (!isSrc && !isDst) continue;
+                if (isSrc) { row["SaveGroupId"] = dst.GroupId; row["MatchLineageId"] = dstLineage; }
+                row["SaveGroupName"] = keepName;
+            }
+            lbg.SetSubEntities("GameSave", rows);
+
+            foreach (var e in src.Backups) { e.GroupId = dst.GroupId; e.GroupName = keepName; }
+            foreach (var e in dst.Backups) e.GroupName = keepName;
+            return null;
         }
-        foreach (var e in src.Backups) { e.GroupId = dst.GroupId; e.GroupName = dst.GroupName; }
-        RemoveRow(src);
-        return null;
+        catch (Exception ex) { return ex.Message; }
     }
 
     /// <summary>Deletes one vault version. <paramref name="owner"/> is only needed for a backup that is

@@ -1,5 +1,5 @@
 ﻿// Edit Game → "Game Saves" — LiteBox's replica of LaunchBox 13.27's save-management page
-// (see ExtendDB/docs/lb-save-management.md for the full RE). The whole UI lives in the reusable
+// (see docs/saves.md). The whole UI lives in the reusable
 // SavesPane control (cards, status dots, per-card action menu, Backup History dialog, the two
 // Import buttons) so the SAME pane serves two hosts at full parity:
 //   • the Edit Game "Game Saves" page  → Rescan(game, null)      — base-game view (single-game only)
@@ -375,7 +375,8 @@ internal sealed partial class EditGameWindow
             string date = g.LastModified?.ToString("G") ?? "—";
             string emu = g.EmulatorFileName + (g.EmulatorCore.Length > 0 ? $" ({g.EmulatorCore})" : "");
             string size = FmtSize(g.SizeBytes);
-            string backups = g.Backups.Count == 1 ? "1 Backup" : $"{g.Backups.Count} Backups";
+            int nb = g.DisplayBackupCount;   // LaunchBox's count, not Backups.Count — see the property
+            string backups = nb == 1 ? "1 Backup" : $"{nb} Backups";
             var info = new Label
             {
                 AutoSize = false, ForeColor = SubFg, BackColor = PanelC, Height = S(18),
@@ -492,11 +493,26 @@ internal sealed partial class EditGameWindow
 
         // ── Actions ───────────────────────────────────────────────────────────
 
+        /// <summary>LaunchBox's "Edit Names" — two fields, not one: the group's name, and the label of
+        /// its ACTIVE save (the live record's Title). The label box shows a default when the record
+        /// carries none, and submitting that default unchanged writes nothing.</summary>
         private void SaveAction_EditName(SaveGroup g)
         {
-            string? name = PromptText("Edit Name", "Save group name:", g.GroupName);
-            if (name == null || name.Trim().Length == 0 || name.Trim() == g.GroupName) return;
-            SaveManager.Rename(g, name.Trim());
+            string defLabel = g.Record != null && g.Record.TryGetValue("Title", out var t0) && t0.Length > 0
+                ? t0
+                : (g.IsState ? $"Save State {g.Slot ?? 0}" : "Saved Game");
+            if (!PromptTwo("Edit Names",
+                           "Enter a name for this save group.", g.GroupName,
+                           "Enter a label for the active save file.", defLabel,
+                           out string name, out string label)) return;
+
+            name = name.Trim();
+            if (name.Length == 0) return;
+            // Only pass the label on when it was actually edited — LaunchBox leaves the record's Title
+            // untouched when its prefilled default comes back unchanged.
+            string? lbl = (label.Trim() == defLabel || g.Active == null) ? null : label.Trim();
+            if (name == g.GroupName && lbl == null) return;
+            SaveManager.Rename(g, name, lbl);
             Reload();
         }
 
@@ -599,21 +615,19 @@ internal sealed partial class EditGameWindow
                 slot = PromptSlot(scan.Plugin);
                 if (slot == null) return;
             }
-            // Importing overwrites whatever is live under the emulator's expected name. Back the existing
-            // groups up first so the replaced progress stays one click away — the dirty-check skips the
-            // ones that already match their latest backup, so this costs nothing in the common case.
-            try
-            {
-                foreach (var g0 in (asState ? scan.States : scan.Files))
-                    if (g0.Active != null) SaveManager.Backup(g0, force: false);
-            }
-            catch { }
+            // Nothing is overwritten: the import lands in the vault as a new group, so the live save is
+            // untouched and there is nothing to protect first.
+            //
+            // The group inherits the AdditionalApplicationId this game's saves are already attributed to —
+            // the focused version in a version view, otherwise whatever the existing groups carry, which
+            // is the version covering the game's own ROM whenever one exists.
+            string? appId = null;
+            try { appId = _focus?.Id; } catch { }
+            if (string.IsNullOrEmpty(appId))
+                appId = (asState ? scan.States : scan.Files).FirstOrDefault(x => x.AppId != null)?.AppId
+                        ?? scan.Files.Concat(scan.States).FirstOrDefault(x => x.AppId != null)?.AppId;
 
-            string? err = SaveManager.Import(_game, scan.Plugin, dlg.FileName, asState, slot,
-                confirmOverwrite: () => MessageBox.Show(FindForm(),
-                    "A save already exists at the emulator's location.\nOverwrite it with the imported file?",
-                    "Import Save", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes,
-                focus: _focus);
+            string? err = SaveManager.Import(_game, dlg.FileName, asState, slot, appId);
             if (err != null) { SavesError(err); return; }
             Reload();
         }
@@ -638,12 +652,44 @@ internal sealed partial class EditGameWindow
             return f.ShowDialog(FindForm()) == DialogResult.OK ? tb.Text : null;
         }
 
+        /// <summary>Two labelled text boxes in one dialog — LaunchBox's "Edit Names" shape.</summary>
+        private bool PromptTwo(string title, string label1, string initial1, string label2, string initial2,
+                               out string value1, out string value2)
+        {
+            value1 = initial1; value2 = initial2;
+            using var f = _w.NewDialog(title, 460, 236);
+            TextBox Box(int y, string init)
+            {
+                var t = new TextBox
+                {
+                    Location = new Point(S(16), y), Width = S(410), Text = init,
+                    BackColor = Field, ForeColor = Fg, BorderStyle = BorderStyle.FixedSingle,
+                };
+                f.Controls.Add(t);
+                return t;
+            }
+            f.Controls.Add(new Label { Text = label1, AutoSize = true, Location = new Point(S(16), S(16)), ForeColor = Fg });
+            var t1 = Box(S(42), initial1);
+            f.Controls.Add(new Label { Text = label2, AutoSize = true, Location = new Point(S(16), S(84)), ForeColor = Fg });
+            var t2 = Box(S(110), initial2);
+            var ok = _w.DlgBtn("OK", Color.FromArgb(50, 110, 65)); ok.Location = new Point(S(16), S(152)); ok.DialogResult = DialogResult.OK;
+            var cancel = _w.DlgBtn("Cancel", Color.FromArgb(70, 70, 82)); cancel.Location = new Point(S(96), S(152)); cancel.DialogResult = DialogResult.Cancel;
+            f.Controls.Add(ok); f.Controls.Add(cancel);
+            f.AcceptButton = ok; f.CancelButton = cancel;
+            t1.SelectAll();
+            if (f.ShowDialog(FindForm()) != DialogResult.OK) return false;
+            value1 = t1.Text; value2 = t2.Text;
+            return true;
+        }
+
         private SaveGroup? PromptCombine(SaveGroup src, List<SaveGroup> others)
         {
             using var f = _w.NewDialog("Combine With Another Save", 500, 190);
             f.Controls.Add(new Label
             {
-                Text = $"Merge \"{src.GroupName}\" into:", AutoSize = true, Location = new Point(S(16), S(16)), ForeColor = Fg,
+                // The merged group keeps the SOURCE's name, so "into" would read backwards.
+                Text = "Choose the save file you want to combine with.", AutoSize = true,
+                Location = new Point(S(16), S(16)), ForeColor = Fg,
             });
             var combo = new ComboBox
             {
@@ -773,7 +819,9 @@ internal sealed partial class EditGameWindow
             long? size = isActive ? g.SizeBytes : entry!.SizeBytes;
             string title = isActive
                 ? (g.ActivePath.Length > 0 ? Path.GetFileName(g.ActivePath) : g.GroupName)
-                : Path.GetFileName(abs.TrimEnd('\\', '/'));
+                // LaunchBox heads an archived entry with its record's Title, verbatim — not with the file
+                // name. Falls back to the file name for a record that carries none.
+                : (entry!.Title.Length > 0 ? entry.Title : Path.GetFileName(abs.TrimEnd('\\', '/')));
 
             var card = new Panel { Height = S(72), BackColor = PanelC, Padding = new Padding(S(12), S(8), S(10), S(8)) };
             card.Paint += (_, e) => { using var pen = new Pen(Color.FromArgb(58, 58, 70)); e.Graphics.DrawRectangle(pen, 0, 0, card.Width - 1, card.Height - 1); };
@@ -822,6 +870,14 @@ internal sealed partial class EditGameWindow
                 else
                 {
                     Add("Set as Active", true, () => { SaveAction_SetActive(g, entry!); owner.DialogResult = DialogResult.OK; owner.Close(); });
+                    Add("Edit Label…", true, () =>
+                    {
+                        string? l = PromptText("Edit Label", "Label for this backup:", entry!.Title);
+                        if (l == null) return;
+                        var err = SaveManager.SetBackupLabel(g, entry, l.Trim());
+                        if (err != null) { SavesError(err); return; }
+                        refresh();
+                    });
                     Add("Open Folder", true, () => OpenIn(abs));
                     m.Items.Add(new ToolStripSeparator());
                     var del = new ToolStripMenuItem("Delete") { ForeColor = Color.FromArgb(230, 120, 110) };

@@ -1,4 +1,4 @@
-# Emulator save algorithms — what each integration plugin actually does
+﻿# Emulator save algorithms — what each integration plugin actually does
 
 > **Point 1 of the archive/save investigation.** Establishes, per plugin and to the line, where a save
 > lives, what identifies it, and what happens to that identity when the ROM LiteBox launches is a file
@@ -75,8 +75,14 @@ A **prefix wildcard**, not an exact match. Then:
 - exactly one file → that is the save;
 - several → prefer `.srm`, then `.mcr`, else take them all;
 - states: `fileNameWithoutExtension + ".state*"` (l. 1276), slot parsed from the suffix —
-  `.state` = 0, `.state.auto` = -1, `.stateN` = N. **Only slots 0–9 exist** in
-  `GetPotentialSaveSlots`, so `.state10` and up are never scanned.
+  `.state` = 0, `.state.auto` = -1, `.stateN` = N.
+
+  > ⚠ **Corrigé le 2026-08-27.** Ce paragraphe affirmait que seuls les slots 0–9 existent, d'après
+  > `GetPotentialSaveSlots`, et donc que `.state10` n'est jamais scanné. **C'est faux** : un
+  > `.state10` posé dans le dossier states est bien remonté, en slot 10, par LaunchBox comme par
+  > LiteBox. `GetPotentialSaveSlots` sert à autre chose — proposer une cible à la restauration, où
+  > l'on voit bien un déroulant « Auto + slots ». Le décodage du suffixe, lui, n'a pas de plafond.
+  > Au passage, le slot −1 s'affiche « Slot Auto » dans les deux interfaces.
 - Pass 1 over `AdditionalApplications` (l. 1190), pass 2 over `Games` whose `ApplicationPath` no app
   already covered (l. 1323) — that is the deduplication.
 - Default group names come from the plugin, not the user: `"My Save File"` / `"My Save State"`.

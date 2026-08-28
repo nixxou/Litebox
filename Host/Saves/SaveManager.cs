@@ -234,7 +234,23 @@ internal sealed class SaveGroup
                 // "sauvegarde a jour" pour toujours des qu'une seule copie du groupe est verrouillee.
                 DateTime latest = Backups.Max(b => b.DisplayCreatedUtc);
                 DateTime mtime = ActiveIsDirectory ? DirLastWriteUtc(ActivePath) : File.GetLastWriteTimeUtc(ActivePath);
-                return mtime > latest.AddSeconds(2);
+                if (mtime <= latest.AddSeconds(2)) return false;
+
+                // The date says the file was WRITTEN, not that it changed. RetroArch rewrites a .srm
+                // when it closes whether or not anything happened, so the mtime moves while the content
+                // does not — and the dot warned about a backup that was already byte-identical, with the
+                // same hash printed on both lines of Backup History.
+                //
+                // Compared against the latest copy BY ORDINAL, which is what Backup(force:false) compares
+                // against too. That is the definition worth having: the dot is green exactly when pressing
+                // Backup Save would create nothing. One hash of one small file, on a page the user opened.
+                var newest = Backups.OrderByDescending(b => b.Ordinal).FirstOrDefault();
+                if (newest == null) return true;
+                string liveHash = ActiveIsDirectory ? SaveManager.DirManifestMd5(ActivePath) : SaveManager.FileMd5(ActivePath);
+                if (liveHash.Length == 0) return true;
+                string absNewest = SaveVault.Abs(newest);
+                string copyHash = newest.IsDirectory ? SaveManager.DirManifestMd5(absNewest) : SaveManager.FileMd5(absNewest);
+                return !string.Equals(liveHash, copyHash, StringComparison.OrdinalIgnoreCase);
             }
             catch { return false; }
         }

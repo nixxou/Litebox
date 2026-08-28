@@ -1000,9 +1000,23 @@ internal sealed partial class EditGameWindow
             {
                 string n = g.Backups.Count == 1 ? "1 backup" : $"{g.Backups.Count} backups";
                 string when = g.LastModified?.ToString("G") ?? "—";
+                // Same hash the rows below print, same eight characters, same casing — the point is to
+                // compare them at a glance, so a different format would defeat it. Computed on demand
+                // like the rows: one file, in a dialog the user opened.
+                string h = "";
+                try
+                {
+                    if (g.ActivePath.Length > 0)
+                    {
+                        var raw = g.ActiveIsDirectory ? SaveManager.DirManifestMd5(g.ActivePath)
+                                                      : SaveManager.FileMd5(g.ActivePath);
+                        if (raw.Length >= 8) h = $"   ·   # {raw.Substring(0, 8).ToUpperInvariant()}";
+                    }
+                }
+                catch { }
                 return g.Active != null
-                    ? $"Active: {when}   ·   {FmtSize(g.SizeBytes)}   ·   {n} in the vault"
-                    : $"In vault, no live active save   ·   {when}   ·   {FmtSize(g.SizeBytes)}   ·   {n}";
+                    ? $"Active: {when}{h}   ·   {FmtSize(g.SizeBytes)}   ·   {n} in the vault"
+                    : $"In vault, no live active save   ·   {when}{h}   ·   {FmtSize(g.SizeBytes)}   ·   {n}";
             }
 
             var header = new Panel { Dock = DockStyle.Top, Height = S(58), BackColor = Bg };

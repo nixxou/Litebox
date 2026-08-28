@@ -916,6 +916,17 @@ résout le jeu lui-même et reconstruit la destination depuis son `ApplicationPa
 l'appel, `HostDataManagerXml` répond désormais pour cet identifiant avec un `EntryGame` portant le chemin
 de l'entrée. Portée à un fil et à un identifiant, posée juste avant l'appel et retirée dans un `finally`.
 
+**Le nom par défaut d'un groupe** nomme la ROM extraite : `Sonic (USA) — My Save File`. Une save
+ordinaire garde le nom de LaunchBox à l'identique. Le préfixe n'est pas décoratif — LiteBox a un sélecteur
+d'entrées, LaunchBox n'en a aucun, donc toutes les entrées d'une archive y tombent dans une seule liste et
+s'y appelleraient toutes « My Save File ». Mettre la ROM en tête les groupe aussi, LaunchBox triant les
+Save Files par nom.
+
+Le suffixe est conservé parce que le nom réapparaît dans le titre de *Backup History* et dans la liste de
+*Combine*, où la section ne dit plus de quoi il s'agit. C'est un **défaut** : dès qu'un groupe est renommé,
+le record porte le nom de l'utilisateur. Il se dérive du `SaveGroupId`, donc les quatre endroits qui
+produisaient un nom sont servis par une seule fonction.
+
 **Trois frontières entre entrées** ont été fermées : *Combine* ne propose plus que des groupes de la même
 entrée — deux entrées sont deux ROMs différentes —, la pré-sauvegarde de *Set as Active* ne réveille plus
 les voisines, et *Import* demande **à quelle ROM** la save appartient. Son défaut prend la ROM dont le

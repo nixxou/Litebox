@@ -945,7 +945,7 @@ internal static class SaveManager
                 IsState = save is GameSaveState,
                 Slot = (save as GameSaveState)?.Slot,
                 GroupId = row.GetValueOrDefault("SaveGroupId") ?? "",
-                GroupName = row.GetValueOrDefault("SaveGroupName") is { Length: > 0 } n ? n : (save.SaveGroupName ?? DefaultName(save)),
+                GroupName = row.GetValueOrDefault("SaveGroupName") is { Length: > 0 } n ? n : (save.SaveGroupName ?? DefaultName(save, row.GetValueOrDefault("SaveGroupId"))),
                 EmulatorFileName = row.GetValueOrDefault("EmulatorFileName") ?? sEmuFile,
                 EmulatorCore = row.GetValueOrDefault("EmulatorCore") ?? (save.EmulatorCore ?? ""),
                 ChipText = row.GetValueOrDefault("DisplayChipText") ?? (save.DisplayChipText ?? ""),
@@ -1026,7 +1026,7 @@ internal static class SaveManager
                 IsState = SlotOf(row) != null,
                 Slot = SlotOf(row),
                 GroupId = row.GetValueOrDefault("SaveGroupId") ?? "",
-                GroupName = row.GetValueOrDefault("SaveGroupName") ?? "My Save File",
+                GroupName = row.GetValueOrDefault("SaveGroupName") ?? DefaultGroupName(SlotOf(row) != null, row.GetValueOrDefault("SaveGroupId")),
                 EmulatorFileName = row.GetValueOrDefault("EmulatorFileName") ?? primaryEmuFile,
                 EmulatorCore = row.GetValueOrDefault("EmulatorCore") ?? "",
                 Emulator = pair.emu,
@@ -1072,7 +1072,7 @@ internal static class SaveManager
         if (!string.IsNullOrEmpty(save.AdditionalApplicationId)) row["AdditionalApplicationId"] = save.AdditionalApplicationId!;
         row["EmulatorFileName"] = save.EmulatorFileName is { Length: > 0 } ef ? ef : emuFile;
         if (!string.IsNullOrEmpty(save.EmulatorCore)) row["EmulatorCore"] = save.EmulatorCore!;
-        row["SaveGroupName"] = save.SaveGroupName is { Length: > 0 } n ? n : DefaultName(save);
+        row["SaveGroupName"] = save.SaveGroupName is { Length: > 0 } n ? n : DefaultName(save, groupId);
         // Supplied by the plugin and persisted by LaunchBox — Dolphin sets "Disc Save" on a Wii NAND
         // group. Long noted here as unused; it is not.
         if (!string.IsNullOrEmpty(save.DisplayChipText)) row["DisplayChipText"] = save.DisplayChipText!;
@@ -1148,7 +1148,37 @@ internal static class SaveManager
         catch (Exception ex) { Console.WriteLine("[saves] external row cleanup failed: " + ex.Message); }
     }
 
-    private static string DefaultName(GameSaveBase save) => save is GameSaveState ? "My Save State" : "My Save File";
+    /// <summary>The entry's file name read out of an "entry:" SaveGroupId — the identity already carries
+    /// it, so nothing has to be threaded through to reach it.</summary>
+    private static string? EntryFileNameOf(string? saveGroupId)
+    {
+        var key = EntryKeyOf(saveGroupId);
+        if (key == null) return null;
+        int sep = key.LastIndexOf(':');
+        if (sep < 0 || sep + 1 >= key.Length) return null;
+        var name = Path.GetFileName(key.Substring(sep + 1).Replace('/', '\\'));
+        return name.Length > 0 ? name : null;
+    }
+
+    /// <summary>The name a new group starts with: LaunchBox's "My Save File" / "My Save State", led by
+    /// the ROM when the save belongs to an archive entry.
+    ///
+    /// The prefix is not decoration. LiteBox has an entry picker — LaunchBox has none, so every entry of
+    /// an archive lands in one list there, and without it they all read "My Save File" and cannot be told
+    /// apart. Leading with the ROM also groups them, since LaunchBox orders Save Files by name.
+    ///
+    /// A DEFAULT only. The moment the user renames a group the record carries their name, and this is
+    /// never consulted for it again.</summary>
+    internal static string DefaultGroupName(bool isState, string? saveGroupId)
+    {
+        string kind = isState ? "My Save State" : "My Save File";
+        string rom = Path.GetFileNameWithoutExtension(EntryFileNameOf(saveGroupId) ?? "");
+        return rom.Length > 0 ? rom + " \u2014 " + kind : kind;
+    }
+
+    private static string DefaultName(GameSaveBase save, string? groupId)
+        => DefaultGroupName(save is GameSaveState,
+                            save.SaveGroupId is { Length: > 0 } sg ? sg : groupId);
     private static int? SlotOf(Dictionary<string, string> row)
         => int.TryParse(row.GetValueOrDefault("Slot"), out int s) ? s : (int?)null;
 
@@ -1459,7 +1489,7 @@ internal static class SaveManager
             var row = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = SafeStr(() => game.Id) };
             if (!string.IsNullOrEmpty(appId)) row["AdditionalApplicationId"] = appId!;
             row["EmulatorFileName"] = "";
-            row["SaveGroupName"] = asState ? "My Save State" : "My Save File";
+            row["SaveGroupName"] = DefaultGroupName(asState, gid);
             row["SaveGroupId"] = gid;
             row["MatchLineageId"] = gid;
             row["FilePath"] = SaveVault.Rel(target);

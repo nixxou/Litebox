@@ -108,6 +108,7 @@ internal static class EntrySaveSelfTest
             Retention(temp);
             ArchiveManifest(temp);
             KeyRoundTrip();
+            DefaultNames();
 
             Console.WriteLine();
             Console.WriteLine($"=== {_pass} ok, {_fail} echec(s) ===");
@@ -369,6 +370,37 @@ internal static class EntrySaveSelfTest
 
     private static bool TryParse(string xml)
     { try { System.Xml.Linq.XDocument.Parse(xml); return true; } catch { return false; } }
+
+    // 9. Le nom par defaut d'un groupe ────────────────────────────────────────
+    private static void DefaultNames()
+    {
+        Console.WriteLine("-- noms de groupe par defaut --");
+
+        Eq("une save ordinaire garde le nom de LaunchBox", "My Save File",
+           SaveManager.DefaultGroupName(false, Guid.NewGuid().ToString("N")));
+        Eq("un savestate ordinaire aussi", "My Save State",
+           SaveManager.DefaultGroupName(true, Guid.NewGuid().ToString("N")));
+
+        var e = Entry("Sonic (USA).smd", "Sonic (USA).smd");
+        Eq("une save d'entree nomme la ROM", "Sonic (USA) — My Save File",
+           SaveManager.DefaultGroupName(false, e.Key));
+        Eq("un savestate d'entree aussi, slot compris dans la cle", "Sonic (USA) — My Save State",
+           SaveManager.DefaultGroupName(true, e.Key + ":s3"));
+
+        var deep = Entry("Sonic (Japan).smd", "disc1/roms/Sonic (Japan).smd");
+        Eq("le chemin dans l'archive est reduit au nom de fichier", "Sonic (Japan) — My Save File",
+           SaveManager.DefaultGroupName(false, deep.Key));
+
+        Console.WriteLine();
+        Console.WriteLine("     exemples, une archive a trois ROMs :");
+        foreach (var name in new[] { "Sonic (USA).smd", "Sonic (Japan).smd", "Sonic (Europe).smd" })
+        {
+            var x = Entry(name, name);
+            Console.WriteLine($"       {SaveManager.DefaultGroupName(false, x.Key)}");
+            Console.WriteLine($"       {SaveManager.DefaultGroupName(true, x.Key + ":s0")}");
+        }
+        Console.WriteLine();
+    }
 
     // 8. L'identite d'entree fait l'aller-retour ──────────────────────────────
     private static void KeyRoundTrip()

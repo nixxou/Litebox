@@ -1090,9 +1090,26 @@ internal static class SaveManager
     {
         if (string.IsNullOrEmpty(saveGroupId) || !saveGroupId!.StartsWith("entry:", StringComparison.Ordinal))
             return null;
-        int slot = saveGroupId.LastIndexOf(":s", StringComparison.Ordinal);
-        return slot > "entry:".Length ? saveGroupId.Substring(0, slot) : saveGroupId;
+        var id = saveGroupId;
+
+        // "#<guid>" marks a BRANCH: a second group on the same entry, made by Make New Save. It has to be
+        // part of the id -- two groups cannot share one -- and it has to be invisible to everything that
+        // asks "which ROM is this?", which is every caller here. Stripped before the slot suffix because
+        // it is always last.
+        int branch = id.IndexOf('#', StringComparison.Ordinal);
+        if (branch > "entry:".Length) id = id.Substring(0, branch);
+
+        int slot = id.LastIndexOf(":s", StringComparison.Ordinal);
+        return slot > "entry:".Length ? id.Substring(0, slot) : id;
     }
+
+    /// <summary>A group id for a NEW group on the same archive entry. Keeps the entry identity so the ROM
+    /// filter still shows it and its copies still land beside their siblings; the suffix is what makes it
+    /// a different group.</summary>
+    private static string BranchGroupId(string? saveGroupId)
+        => EntryKeyOf(saveGroupId) is string k && k.Length > 0
+            ? k + "#" + Guid.NewGuid().ToString("N").Substring(0, 8)
+            : Guid.NewGuid().ToString("N");
 
     /// <summary>The display name for an entry-keyed group. Falls back to the path stored in the key when
     /// the archive is no longer listed — a group must stay readable after its archive moved.</summary>
@@ -1675,22 +1692,66 @@ internal static class SaveManager
 
     /// <summary>LB's "Make New Save": archive the current active into the vault, then remove the live
     /// file so the emulator starts a FRESH save. The old history stays as a vault-only group.</summary>
-    public static string? MakeNewSave(SaveGroup g)
+    /// <summary>LaunchBox's "Make New Save": a NEW group, seeded with a copy of this group's save.
+    ///
+    /// Measured 2026-08-28 (§4.1bis): the seed is the save of the group whose menu was used — not the
+    /// most recent, not the first listed — the live save is NOT touched, the new group gets a fresh
+    /// SaveGroupId and, uniquely, a MatchLineageId that differs from it, and the copy is marked
+    /// "-NewSave-&lt;guid&gt;" in OriginalFileName.
+    ///
+    /// This used to archive the live save and then call plugin.RemoveSave to DELETE it, so the emulator
+    /// would start fresh. Same name, opposite act: theirs branches, ours destroyed. Nobody asked for a
+    /// destructive Make New Save, and the history it left behind was no consolation.
+    ///
+    /// One deliberate divergence. On a ROM extracted from an archive we KEEP the entry: the copy takes
+    /// the entry's basename, lands in the archive's sub-folder, and the new group id stays entry-keyed
+    /// (with a "#branch" suffix) so the per-ROM filter still shows it. LaunchBox cannot do this — it has
+    /// no notion of entries, and its own Make New Save drops the attachment, naming the copy after the
+    /// archive and filing it in the platform folder. Losing the entry here would undo §4.5 entirely.</summary>
+    /// <param name="name">The new group's name, as asked for in the dialog.</param>
+    public static string? MakeNewSave(SaveGroup g, string name)
     {
-        if (g.Active == null) return "There is no active save to archive.";
-        if (g.Plugin is not EmulatorPlugin plugin) return "No integration plugin for this save.";
-        var b = Backup(g, force: false);
-        if (b.Error != null) return "Backup failed — nothing was changed: " + b.Error;
+        if (g.Game is not ILiteBoxGame lbg) return "This library is read-only.";
+
+        // The seed: the live save when there is one, else the group's own vault file (an In Vault group
+        // has no live save, and LaunchBox offers Make New Save there too).
+        string seed = g.ActivePath;
+        if (seed.Length == 0 || (!File.Exists(seed) && !Directory.Exists(seed)))
+            seed = g.Backups.Count > 0 ? SaveVault.Abs(g.Backups[0]) : "";
+        if (seed.Length == 0 || !File.Exists(seed)) return "There is no save to seed a new one from.";
+
         try
         {
-            PluginResponse resp;
-            lock (_pluginGate) resp = plugin.RemoveSave(g.Active);
-            if (resp is { WasSuccess: false }) return resp.Message ?? "The plugin could not remove the active save.";
+            string dir = SaveVault.GroupDir(g);
+            Directory.CreateDirectory(dir);
+
+            string baseName = SaveVault.BaseName(g);
+            string ext = Path.GetExtension(seed) is { Length: > 0 } e ? e : SaveVault.Extension(g);
+            string target = UniqueFile(dir, baseName, ext);
+            File.Copy(seed, target, overwrite: false);
+
+            string gid = BranchGroupId(g.GroupId);
+            var row = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = SafeStr(() => g.Game.Id) };
+            if (!string.IsNullOrEmpty(g.AppId)) row["AdditionalApplicationId"] = g.AppId!;
+            row["EmulatorFileName"] = g.EmulatorFileName;
+            row["SaveGroupName"] = string.IsNullOrWhiteSpace(name) ? DefaultGroupName(g.IsState, gid) : name.Trim();
+            row["SaveGroupId"] = gid;
+            // A lineage of its own, which is what LaunchBox writes here and nowhere else (§1.4).
+            row["MatchLineageId"] = Guid.NewGuid().ToString("N");
+            row["FilePath"] = SaveVault.Rel(target);
+            row["OriginalFileName"] = Path.GetFileNameWithoutExtension(target)
+                                    + "-NewSave-" + Guid.NewGuid().ToString("N") + ext;
+            row["Title"] = g.IsState ? "Save State " + (g.Slot ?? 0) : "Saved Game";
+            if (g.IsState) row["Slot"] = (g.Slot ?? 0).ToString();
+
+            var rows = lbg.GetSubEntities("GameSave")
+                .Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+            rows.Add(row);
+            lbg.SetSubEntities("GameSave", rows);
+            SaveVault.Notify(SafeStr(() => g.Game.Id));
+            return null;
         }
         catch (Exception ex) { return ex.Message; }
-        // The record row goes with the active file; the vault entries (old GroupId) survive as history.
-        RemoveRow(g);
-        return null;
     }
 
     /// <summary>Merges <paramref name="src"/>'s history into <paramref name="dst"/> (LB's "Combine With

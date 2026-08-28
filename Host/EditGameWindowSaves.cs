@@ -781,11 +781,13 @@ internal sealed partial class EditGameWindow
 
         private void SaveAction_MakeNew(SaveGroup g)
         {
-            if (MessageBox.Show(FindForm(),
-                    "Make a new save?\n\nThe current save is archived into the vault, then the live file is removed so the "
-                    + "emulator starts a brand-new save on next launch. The old history stays available under Backup History.",
-                    "Make New Save", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            string? err = SaveManager.MakeNewSave(g);
+            // A name, like LaunchBox asks for, and nothing else. It used to warn that the live save was
+            // about to be deleted — which it was, and which is no longer what this does (§4.1bis).
+            var name = PromptText("New Save Group", "Enter a name for the new save group.",
+                                  SaveManager.DefaultGroupName(g.IsState, g.GroupId));
+            if (name == null) return;
+
+            string? err = SaveManager.MakeNewSave(g, name);
             if (err != null) { SavesError(err); return; }
             Reload();
         }

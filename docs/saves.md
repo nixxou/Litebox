@@ -423,7 +423,7 @@ Chaque ligne a été déclenchée dans LaunchBox et l'effet lu dans le XML et le
 | **ouvrir la page** | peut créer des copies pour les groupes qui n'en ont aucune — et dans ce cas **sans écrire de record** | [MESURÉ], voir §5 |
 | **Restore Backup** | archive d'abord la save courante (« *the current active save will be moved into backup history* »), demande un **slot cible**, écrit sous le basename de la ROM, et **libelle** les deux lignes | [MESURÉ] |
 | **Delete Save** | supprime le **fichier** et le record. *« This will permanently delete the save file. This cannot be undone. »* | [MESURÉ] |
-| **Make New Save** | crée un **groupe** neuf : nom demandé, `SaveGroupId` neuf, **lignée neuve**, et une graine marquée `-NewSave-<guid>` dans `OriginalFileName` | [MESURÉ] |
+| **Make New Save** | crée un **groupe** neuf : nom demandé, `SaveGroupId` neuf, **lignée neuve**, et une graine marquée `-NewSave-<guid>` dans `OriginalFileName`. La graine est la save **du groupe dont on ouvre le menu** — pas la plus récente, pas la première de la liste (§4.1bis). Il ne touche **pas** à la save vivante | [MESURÉ] |
 | **Clear All and Re-scan** | efface **tous** les records puis reconstruit en balayant les émulateurs **et le vault**. Ne touche à aucun fichier (vérifié : 20 fichiers, 0 modifié, 0 supprimé) et ne change aucun réglage — pas même `LastLibrarySaveScanUtc`. Mais il détruit la structure : voir §3.3 | [MESURÉ] |
 | **Repair Save Metadata** | trois choses : supprime les records dont le fichier est absent ou dont le `FilePath` est vide, supprime les doublons EXACTS (même groupe, même fichier), et enregistre les saves vivantes qu'aucun record ne nommait. Il **garde** un fossile (même fichier, groupe différent) et **n'adopte pas** un fichier vault orphelin. Son message ne compte que la première catégorie — trois records ont disparu sur un run annonçant « Removed missing records: 1 » | [MESURÉ] |
 | **Edit Label** | écrit le `Title` du record | [MESURÉ] |
@@ -965,6 +965,58 @@ C'est l'outil qui a permis toutes les comparaisons de cette campagne.
 **`Core\litebox\saves-diag.log`** — trace de chaque scan, écrite au fil de l'eau.
 
 ---
+
+### 4.1bis *Make New Save* — la graine, et ce qu'il perd sur une archive
+
+**[MESURÉ 2026-08-28]** Trois groupes actifs sur un même jeu, chacun sur une entrée différente de la
+même archive, avec des contenus distincts :
+
+| groupe | md5 | date | rang affiché |
+|---|---|---|---|
+| Japan `[!!]` | `745e184eb939` | 20:43:13 | le plus récent, **premier** |
+| Europe `[Rev 1][!!]` | `fc0f713ccd9b` | 20:23:46 | milieu |
+| luigi_smw2_hack | `00e1072daec5` | 17:54:11 | le plus ancien, **dernier** |
+
+*Make New Save* déclenché depuis le menu de **luigi** — le plus ancien ET le dernier, donc le seul
+choix qui fasse diverger les trois hypothèses. Prédiction écrite avant la mesure : la graine serait
+celle du menu. Le record obtenu :
+
+```
+FilePath          Saves\<Plateforme>\Super Mario World 2 - Yoshi's Island-02.srm
+SaveGroupName     TEST-LUIGI
+SaveGroupId       586adf4947ee47aaaf3dd476ff657b49
+MatchLineageId    f58aee1740d44b62a8c97d8155744557          ← différent du SaveGroupId
+OriginalFileName  …-02-NewSave-b883d177f8ab4238b5d7f7a8effed4b7.srm
+Title             Saved Game
+md5               00e1072daec5                              ← luigi
+```
+
+**La graine est celle du groupe dont on ouvre le menu.** Ni la plus récente, ni la première de la
+liste. C'est aussi la confirmation du seul cas connu où `MatchLineageId` diffère du `SaveGroupId`
+(§1.4).
+
+**[MESURÉ]** Et il **perd l'identité d'entrée**. La graine appartenait au groupe
+`entry:<sig>:…luigi_smw2_hack.smc` ; le nouveau groupe reçoit un **GUID nu**, le fichier atterrit dans
+le dossier de plateforme — pas dans le sous-dossier de l'archive — et il est nommé d'après
+**l'archive**, pas d'après l'entrée. Cohérent : LaunchBox ignore tout du système d'entrées. Mais un
+*Make New Save* fait chez EUX casse le rattachement que nous maintenons.
+
+**[MESURÉ]** Au passage, LaunchBox a **normalisé nos chemins**. Six records de saves vivantes que nous
+avions écrits en absolu (`G:\LB1326\Emulators\…`) sont ressortis en relatif (`Emulators\…`), mêmes
+fichiers, mêmes md5. Sans conséquence — nous résolvons les deux formes — mais nos records ne survivent
+pas *tels quels* à un passage dans LaunchBox.
+
+### Ce que LiteBox fait, et pourquoi
+
+Notre *Make New Save* faisait tout autre chose : il archivait la save vivante puis appelait
+`plugin.RemoveSave` pour **la détruire**, afin que l'émulateur reparte de zéro. Ce n'est pas une
+variante, c'est un autre geste sous le même nom — et le nôtre était destructeur là où le leur ne
+touche à rien.
+
+Aligné sur le leur, avec une divergence assumée : **sur une ROM extraite, nous conservons le
+rattachement à l'entrée** — basename de l'entrée, sous-dossier de l'archive, et une clé de groupe qui
+reste de la forme `entry:` pour que le filtre par ROM continue de la voir. LaunchBox ne peut pas le
+faire, n'ayant pas la notion ; nous l'avons, et perdre l'entrée ici annulerait tout le travail du §4.5.
 
 ## 5. Ce qu'il reste à creuser
 

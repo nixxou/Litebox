@@ -968,6 +968,28 @@ C'est l'outil qui a permis toutes les comparaisons de cette campagne.
 
 ## 5. Ce qu'il reste à creuser
 
+### 5.0 À MESURER SUR UNE VRAIE INSTALL — le reliquat du lot « ROMs extraites »
+
+Tout ce qui suit est **écrit, compilé, déployé et couvert par `--selftest-entry-saves`** (59
+vérifications). Rien n'y est observé face à un vrai plugin, et le harnais s'arrête là par construction :
+scanner et restaurer passent par une install d'émulateur qu'un test ne peut pas honnêtement simuler.
+
+**Il faut un jeu dont la ROM est une archive à plusieurs entrées.** Protocole habituel : une variable par
+lancement, l'état d'avant relevé, et la prédiction écrite AVANT la mesure.
+
+| # | à mesurer | pourquoi ça compte |
+|---|---|---|
+| 1 | Une partie lancée depuis une entrée produit une copie dans le sous-dossier de l'archive, sous le nom de l'ENTRÉE | c'est toute la disposition du §4.5 |
+| 2 | Une **restauration** réécrit sous le nom de l'entrée, **pas** sous celui de l'archive | le correctif le plus important du lot, et le seul dont on n'ait aucune preuve d'exécution : le mécanisme `GetGameById` → `EntryGame` est en place mais n'a jamais tourné face à un plugin |
+| 3 | Le **cadenas** posé depuis l'interface LiteBox survit à une purge | il a été éprouvé côté LaunchBox (§3.4ter) et dans le harnais, jamais par un clic dans LiteBox suivi d'une éviction |
+| 4 | **PCSX2** produit bien un dossier, et la rétention y trie comme ailleurs | §2.3ter est déduit du contrat du plugin ; l'install n'a ni plateforme PS2 ni émulateur |
+
+Les deux premiers se mesurent ensemble sur un même jeu. Le troisième tient en un lancement une fois qu'un
+groupe a deux copies. Le quatrième demande d'installer PCSX2 et une carte mémoire portant au moins deux
+jeux — sans quoi on ne verra pas ce qui distingue un conteneur d'un dossier.
+
+### 5.1 Le reste
+
 Par ordre d'utilité.
 
 **La sauvegarde périodique.** `PeriodicSaveBackupEnabled` est à `true` et on n'a **jamais** vu la tâche

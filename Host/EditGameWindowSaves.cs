@@ -627,6 +627,8 @@ internal sealed partial class EditGameWindow
                 if (slot == null) return;                       // cancelled
             }
 
+            string destination = "";
+
             // Archive whatever currently owns the destination, under ITS identity, before the plugin
             // overwrites it.
             foreach (var other in (g.IsState ? scan.States : scan.Files))
@@ -645,6 +647,10 @@ internal sealed partial class EditGameWindow
                 if (!string.Equals(other.EntryKey, g.EntryKey, StringComparison.OrdinalIgnoreCase)) continue;
                 if (g.IsState && other.Slot != slot) continue;
                 try { SaveManager.Backup(other, force: false); } catch { }
+                // The file about to be overwritten. Remembered here because this loop is the only place
+                // that knows which group holds it — after the restore, the record of that path must
+                // change hands, or the next scan gives the file straight back to its old owner.
+                if (destination.Length == 0) destination = other.ActivePath;
             }
 
             string? err = SaveManager.Restore(g, e, slot,
@@ -652,6 +658,14 @@ internal sealed partial class EditGameWindow
                     "A save file already exists at the emulator's location.\nOverwrite it with this backup?",
                     "Set as Active", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes);
             if (err != null) { SavesError(err); return; }
+
+            // Move the identity, not just the bytes. Without this the promoted group keeps pointing at
+            // its vault copy and the card never changes — which is exactly what it did.
+            if (destination.Length > 0)
+            {
+                var rerr = SaveManager.ReassignRecord(g, destination);
+                if (rerr != null) SavesError(rerr);
+            }
             Reload();
         }
 

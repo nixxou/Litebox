@@ -1558,6 +1558,52 @@ internal static class SaveManager
         finally { try { if (prev != null) Environment.CurrentDirectory = prev; } catch { } }
     }
 
+    /// <summary>Hands the file at <paramref name="absPath"/> over to <paramref name="to"/>.
+    ///
+    /// The other half of "Set as Active". Restore asks the plugin to write the bytes at the emulator's
+    /// location and stops there — but the RECORD of that location still names the group that used to own
+    /// it, so the next scan gives the file straight back and nothing appears to have happened. Measured
+    /// on LaunchBox: promoting a copy "moves the group's identity onto the emulator's file"; groups do
+    /// not swap contents, they swap which file they point at. This is that move.
+    ///
+    /// MatchLineageId follows the group. NOT measured — the campaign saw it survive a merge and ignore a
+    /// rename, never a promotion — but leaving a record whose lineage names a group it no longer belongs
+    /// to would be its own kind of wrong, and every other write here keeps the two together.
+    ///
+    /// A destination nothing records gets a record: an unrecorded live save exists (§2.2), and promoting
+    /// onto one must not leave it nameless.</summary>
+    internal static string? ReassignRecord(SaveGroup to, string absPath)
+    {
+        if (to.Game is not ILiteBoxGame lbg) return "This library is read-only.";
+        if (string.IsNullOrEmpty(absPath)) return null;
+        try
+        {
+            var rows = lbg.GetSubEntities("GameSave")
+                .Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+            var row = rows.FirstOrDefault(r => PathEq(AbsPath(r.GetValueOrDefault("FilePath") ?? ""), absPath));
+            if (row == null)
+            {
+                row = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["GameId"] = SafeStr(() => to.Game.Id),
+                    ["EmulatorFileName"] = to.EmulatorFileName,
+                    ["FilePath"] = SaveVault.Rel(absPath),
+                    ["OriginalFileName"] = Path.GetFileName(absPath),
+                };
+                if (to.IsState) row["Slot"] = (to.Slot ?? 0).ToString();
+                rows.Add(row);
+            }
+            if (!string.IsNullOrEmpty(to.AppId)) row["AdditionalApplicationId"] = to.AppId!;
+            row["SaveGroupId"] = to.GroupId;
+            row["MatchLineageId"] = to.GroupId;
+            row["SaveGroupName"] = to.GroupName;
+            lbg.SetSubEntities("GameSave", rows);
+            SaveVault.Notify(SafeStr(() => to.Game.Id));
+            return null;
+        }
+        catch (Exception ex) { return ex.Message; }
+    }
+
     /// <summary>Sets a copy's label — LaunchBox's "Edit Label", which writes the record's Title.
     ///
     /// LiteBox used to have this, backed by a field in its own index, and it was dropped when that index

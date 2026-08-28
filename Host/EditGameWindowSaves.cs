@@ -1066,7 +1066,11 @@ internal sealed partial class EditGameWindow
                 foreach (var e in g.Backups.OrderByDescending(x => x.DisplayCreatedUtc)) cards.Add(BuildVersionCard(g, e, f, Rebuild));
                 if (cards.Count == 0)
                     list.Controls.Add(new Label { Dock = DockStyle.Top, Height = S(40), Text = "No versions.", ForeColor = SubFg, BackColor = Bg, Font = new Font("Segoe UI", 9.5f, FontStyle.Italic), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(S(6), S(0), S(0), S(0)) });
-                else for (int i = cards.Count - 1; i >= 0; i--) { list.Controls.Add(cards[i]); cards[i].Dock = DockStyle.Top; cards[i].BringToFront(); }
+                // Newest at the top. For docked children WinForms lays out from the BACK of the
+                // z-order, so the card that must sit highest is the one sent to back — the old
+                // loop brought each to FRONT, which put the newest at the bottom and the whole
+                // list upside down despite the descending sort above.
+                else foreach (var c in cards) { list.Controls.Add(c); c.Dock = DockStyle.Top; c.SendToBack(); }
                 list.ResumeLayout();
                 hSub.Text = Summary();
             }

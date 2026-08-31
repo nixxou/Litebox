@@ -57,6 +57,19 @@ internal static class OptionKeys
         new("ForceFrontendFocusOnShutdown",       GameEmuGlob, OptionType.Bool,   OptionCache.Hot, "Gameplay/ProblemKeys"),
         new("MonitorStartupShutdownWithProcess",  GameEmuGlob, OptionType.Bool,   OptionCache.Hot, "Gameplay/ProblemKeys"),
 
+        // The v14 pair, global-only: unlike the four above they have no per-entity tier, being a
+        // window's display option and not a launch behaviour.
+        //
+        // A key in ProblemKeys MUST have its twin here. The two registries are orthogonal and both
+        // are needed: ProblemKeys says WHERE a key lives (LaunchBox's shared XML on an LB that
+        // understands it, our DB on one that would strip it), while this list declares the DB's
+        // namespace and carries the strict guard. Declaring only the first half is not a smaller
+        // version of the change — against a pre-14 LaunchBox the key becomes DB-managed, the DB
+        // refuses a name it was never told about, and --debug turns that refusal into a crash at
+        // boot on the very first read.
+        new("UseArrangeScrollBar",        Glob, OptionType.Bool, OptionCache.Hot, "GameListIndex/ProblemKeys"),
+        new("AlwaysShowArrangeScrollBar", Glob, OptionType.Bool, OptionCache.Hot, "GameListIndex/ProblemKeys"),
+
         // ── Module master switches (LbModules; row absent = module default) ──
         // Per-game "Run as ADMINISTRATOR" (Edit Game > Launching > Startup/Pause): elevated spawn,
         // screen system disabled for that launch (UIPI). The emulator-level twin is a launch rule.

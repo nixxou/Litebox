@@ -1,4 +1,4 @@
-// Everything RomM keeps between runs — its own database, Core\litebox\romm.db.
+﻿// Everything RomM keeps between runs — its own database, Core\litebox\romm.db.
 //
 // It replaces romm-ids.json, which held five string→int dictionaries and kept all of them RESIDENT: on a
 // 3057-game library that is 2.8 MB of keys that nothing reads on the hot path, and it grows linearly with
@@ -156,12 +156,38 @@ internal static class RommDb
         catch (Exception ex) { Log($"{table} resolve failed: " + ex.Message); return 0; }
     }
 
-    public static int PlatformId(string lbPlatformName) => ResolveSafe("platform", "platform_id", "lb_name", lbPlatformName);
+    // Platform and collection ids are minted once and NEVER change — that stability is what lets
+    // clients cache them, so it also lets US cache them: without this, every resolution opened its own
+    // SQLite connection, and filter_values alone did it once per game — measured at 1.9s of a 2.1s
+    // Arcade listing (2965 games), every page, every request.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _platIds = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, string> _platNames = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _collIds = new(StringComparer.OrdinalIgnoreCase);
+
+    public static int PlatformId(string lbPlatformName)
+    {
+        if (_platIds.TryGetValue(lbPlatformName, out var hit)) return hit;
+        var id = ResolveSafe("platform", "platform_id", "lb_name", lbPlatformName);
+        if (id > 0) { _platIds[lbPlatformName] = id; _platNames[id] = lbPlatformName; }
+        return id;
+    }
     public static int FileId(string gameGuid, string fileKey) => ResolveSafe("file", "file_id", "k", gameGuid + "|" + fileKey);
     public static int AssetId(string assetKey) => ResolveSafe("asset", "asset_id", "k", assetKey);
-    public static int CollectionId(string name) => ResolveSafe("collection", "collection_id", "lb_name", name);
+    public static int CollectionId(string name)
+    {
+        if (_collIds.TryGetValue(name, out var hit)) return hit;
+        var id = ResolveSafe("collection", "collection_id", "lb_name", name);
+        if (id > 0) _collIds[name] = id;
+        return id;
+    }
 
-    public static string? PlatformNameOf(int id) => ReverseSafe("platform", "platform_id", "lb_name", id);
+    public static string? PlatformNameOf(int id)
+    {
+        if (_platNames.TryGetValue(id, out var hit)) return hit;
+        var name = ReverseSafe("platform", "platform_id", "lb_name", id);
+        if (name != null) { _platNames[id] = name; _platIds[name] = id; }
+        return name;
+    }
     public static string? FileKeyOf(int id) => ReverseSafe("file", "file_id", "k", id);
     public static string? AssetKeyOf(int id) => ReverseSafe("asset", "asset_id", "k", id);
     public static string? CollectionNameOf(int id) => ReverseSafe("collection", "collection_id", "lb_name", id);

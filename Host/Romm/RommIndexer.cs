@@ -1,4 +1,4 @@
-// La passe : construire romm_games pour toute la bibliothèque, plateforme par plateforme.
+﻿// La passe : construire romm_games pour toute la bibliothèque, plateforme par plateforme.
 //
 // Runs on a background thread once everything else has loaded — the IGames above all — and the RomM
 // server does not listen until it has finished. A client that gets a refused connection retries; a
@@ -249,6 +249,35 @@ internal static class RommIndexer
             foreach (var r in rows)
                 if (!ReferenceEquals(r, target) && r.Clients.Remove(clientId)) r.Touch();
             if (!target.Clients.Contains(clientId)) { target.Clients.Add(clientId); target.Touch(); }
+
+            RommGamesTable.Flush(conn, rows.Where(r => r.Action != RommRowAction.None).ToList());
+            RommRoms.ReloadGame(conn, guid);
+        }
+        return true;
+    }
+
+    /// <summary>Releases a client from EVERY row of the game — nothing stored, not even on the default:
+    /// an inscription on today's default row turns into a real pin the day the default moves, and what
+    /// "back to default" means here is the default AS COMPUTED AT EACH INSTANT, for ever. The Assignment
+    /// tab's UnpinClient keeps its snapshot semantics; this is the dropped-status gesture's.</summary>
+    public static bool ReleaseClient(IGame game, int tokenId)
+    {
+        var guid = RommLibrary.IdOf(game);
+        if (guid.Length == 0 || tokenId <= 0) return false;
+
+        lock (_gate)
+        {
+            using var conn = RommDb.OpenForIndex();
+            if (conn == null) return false;
+
+            int clientId = RommGamesTable.ClientIdFor(conn, tokenId);
+            if (clientId <= 0) return false;
+            var rows = RommGamesTable.ByGame(conn, guid);
+
+            bool any = false;
+            foreach (var r in rows)
+                if (r.Clients.Remove(clientId)) { r.Touch(); any = true; }
+            if (!any) return false;
 
             RommGamesTable.Flush(conn, rows.Where(r => r.Action != RommRowAction.None).ToList());
             RommRoms.ReloadGame(conn, guid);

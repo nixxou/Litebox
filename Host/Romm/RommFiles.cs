@@ -1,4 +1,4 @@
-// Which playable files a game has, and which one a rom_id means.
+﻿// Which playable files a game has, and which one a rom_id means.
 //
 // One rom_id names one file. A file is one of three things, and the key is the same vocabulary the id
 // ledger has always used:
@@ -191,6 +191,7 @@ internal static class RommFiles
     public static void ForgetEmulatorMap()
     {
         lock (_emuGate) { _platformEmu = null; _extractOn.Clear(); }
+        RommPlatformMap.ForgetZipNative();
     }
 
     private static string? DefaultEmulatorTitle(IGame game)
@@ -309,6 +310,12 @@ internal static class RommFiles
             //      module runs at all.
             //   2. only then, HOW: RomConfig's mode. DoNothing means the emulator reads the archive
             //      natively. That is the second question, never the first.
+            // The zip-native family answers BEFORE the option: on these platforms the archive is
+            // the rom format itself (Argosy launches it whole, hashes it whole), so whatever the
+            // extraction module is set to, RomM serves the file as-is. Scrape As carries custom
+            // platforms into the family.
+            if (RommPlatformMap.ZipNative(RommLibrary.PlatformOf(game))) return false;
+
             if (!ExtractionEnabled(game)) return false;
 
             var platform = RommLibrary.PlatformOf(game);

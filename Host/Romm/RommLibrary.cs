@@ -62,6 +62,7 @@ internal static class RommLibrary
             string name;
             try { name = p?.Name ?? ""; } catch { continue; }
             if (name.Length == 0) continue;
+            if (!RommConfig.PlatformIncluded(name)) continue;
             if (st != null && st.IsHidden(name)) continue;
 
             var slug = RommPlatformMap.SlugFor(name);
@@ -106,6 +107,7 @@ internal static class RommLibrary
     public static List<IGame> GamesOf(string lbPlatformName, WebParentalState? st, int? tokenId = null,
                                       bool ignorePins = false)
     {
+        if (!RommConfig.PlatformIncluded(lbPlatformName)) return new List<IGame>();
         IPlatform? platform = null;
         try
         {
@@ -149,8 +151,12 @@ internal static class RommLibrary
     {
         var row = RommIndexer.RowOf(romId);
         if (row == null) return null;
-        try { return PluginHelper.DataManager?.GetGameById(row.GuidLb); }
+        IGame? g;
+        try { g = PluginHelper.DataManager?.GetGameById(row.GuidLb); }
         catch { return null; }
+        // A row minted while the platform was included stays in romm.db (assignments and pins with it),
+        // but as long as the platform is out, the rom does not answer.
+        return g != null && RommConfig.PlatformIncluded(PlatformOf(g)) ? g : null;
     }
 
     // ── Sorted-list cache ─────────────────────────────────────────────────────

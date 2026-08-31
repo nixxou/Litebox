@@ -245,8 +245,7 @@ internal static class RommPanel
                 return;
             try
             {
-                var name = "Paired device — " + DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-                var (record, secret) = RommAuth.CreateClientToken(name);
+                var (record, secret) = RommAuth.CreateClientToken(PairName());
                 txtCode.Text = RommAuth.CreatePairCode(record.Id, secret);
                 codeExpiresUtc = DateTime.UtcNow.AddMinutes(5);
                 codeTimer.Start();
@@ -264,7 +263,7 @@ internal static class RommPanel
         // ── Clients ───────────────────────────────────────────────────────────
         var gCli = ModulePanelKit.Group("Paired clients", dpiS);
         gCli.Location = new Point(S(4), yc);
-        gCli.Size = new Size(S(GroupW), S(260));
+        gCli.Size = new Size(S(GroupW), S(236));
         pClients.Controls.Add(gCli);
         yc += gCli.Height + S(12);
 
@@ -319,18 +318,48 @@ internal static class RommPanel
 
         var btnRevoke = ModulePanelKit.Button("Revoke…", dpiS, readOnly);
         btnRevoke.Location = new Point(S(14), S(196));
+
+        var btnRename = ModulePanelKit.Button("Rename…", dpiS, readOnly);
+        btnRename.Location = new Point(S(150), S(196));
+        btnRename.Click += (_, _) =>
+        {
+            if (SelectedToken() is not int renId) return;
+            var current = grid.CurrentRow?.Cells[0].Value?.ToString() ?? "";
+            var fresh = PromptRename(current);
+            if (fresh == null || fresh == current) return;
+            try
+            {
+                if (!Romm.RommAuth.RenameToken(renId, fresh))
+                    throw new InvalidOperationException("This client no longer exists.");
+                // The library follows: branch groups still bearing the old name, and every
+                // "RomM · old" label — vault copies and promoted records alike.
+                try { Romm.RommAssetsApi.RenameClientMarks(renId, current, fresh); } catch { }
+                Reload();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not rename this client:\n\n" + ex.Message,
+                    "RomM server", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        gCli.Controls.Add(btnRename);
+        // Double-clicking the name row is the same gesture.
+        grid.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0 && !readOnly) btnRename.PerformClick(); };
         btnRevoke.Width = S(120);
+        btnRename.Width = S(120);
         btnRevoke.Click += (_, _) =>
         {
             if (SelectedToken() is not int id) return;
             var name = grid.CurrentRow?.Cells[0].Value?.ToString() ?? "this client";
 
-            var answer = MessageBox.Show($"Revoke \"{name}\"? It will have to be paired again.",
-                "RomM server", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
-            if (answer != DialogResult.OK) return;
+            var (proceed, delSaves, delPromoted) = PromptRevoke(name);
+            if (!proceed) return;
 
             try
             {
+                // The lines go FIRST: the client index resolves through the token being revoked.
+                if (delSaves)
+                    try { Romm.RommAssetsApi.DeleteClientLines(id, delPromoted); } catch { }
                 RommAuth.DeleteToken(id);
                 // A revoked client's pins go with it: they name a credential that no longer exists, and
                 // leaving them would pin a token id a future client could be given.
@@ -345,24 +374,13 @@ internal static class RommPanel
         };
         gCli.Controls.Add(btnRevoke);
 
-        var lblBindHint = ModulePanelKit.Caption(
-            "On push decides only WHERE a client's saves land — never what it is shown, which is always "
-          + "the ROM's own save line AND the client's. \"Replace the save in play\" overwrites the "
-          + "active save and files the displaced one in the vault; \"Keep to its own line\" leaves the "
-          + "active save alone and stores in a group named after the client.\n\n"
-          + "Pinned elsewhere counts the games where this client is on a file other than the default — "
-          + "move it in the Assignment tab. Only PAIRED clients can be pinned; one signing in with the "
-          + "account password always gets the default.",
-            dpiS, maxWidth: 560);
-        lblBindHint.Location = new Point(S(14), S(226));
-        gCli.Controls.Add(lblBindHint);
 
         RefreshDevices();
 
         // ── Library ───────────────────────────────────────────────────────────
         var gLib = ModulePanelKit.Group("Library", dpiS);
         gLib.Location = new Point(S(4), yl);
-        gLib.Size = new Size(S(GroupW), S(96));
+        gLib.Size = new Size(S(GroupW), S(368));
         pLib.Controls.Add(gLib);
         yl += gLib.Height + S(12);
 
@@ -375,6 +393,107 @@ internal static class RommPanel
         chkParental.Location = new Point(S(14), S(58));
         chkParental.Width = S(500);
         gLib.Controls.Add(chkParental);
+
+        var lblPlat = ModulePanelKit.Caption("Platforms served to clients — none are included by default. “Archives” means "
+          + "the games are archives read through extraction: an archive must be scanned once before its game "
+          + "can be served, and Unscanned counts the games still waiting.", dpiS, maxWidth: 540);
+        lblPlat.Location = new Point(S(14), S(90));
+        gLib.Controls.Add(lblPlat);
+
+        var gridPlat = ModulePanelKit.Grid(dpiS);
+        gridPlat.Location = new Point(S(14), S(128));
+        gridPlat.Size = new Size(S(540), S(180));
+        gridPlat.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+        gridPlat.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Include", Width = S(60) });
+        gridPlat.Columns.Add("plat", "Platform");
+        gridPlat.Columns.Add("mode", "Mode");
+        gridPlat.Columns.Add("unscanned", "Unscanned");
+        gridPlat.Columns[1].Width = S(260);
+        gridPlat.Columns[2].Width = S(90);
+        gridPlat.Columns[3].Width = S(90);
+        gridPlat.Columns[1].ReadOnly = true;
+        gridPlat.Columns[2].ReadOnly = true;
+        gridPlat.Columns[3].ReadOnly = true;
+        if (readOnly) gridPlat.ReadOnly = true;
+        gridPlat.DataError += (_, e) => { e.ThrowException = false; };
+        gLib.Controls.Add(gridPlat);
+
+        var btnScan = ModulePanelKit.Button("Scan archives", dpiS, readOnly);
+        btnScan.Location = new Point(S(14), S(316));
+        btnScan.Width = S(120);
+        gLib.Controls.Add(btnScan);
+
+        var lblScan = ModulePanelKit.Caption("", dpiS, maxWidth: 390);
+        lblScan.Location = new Point(S(146), S(321));
+        gLib.Controls.Add(lblScan);
+
+        // The survey walks every game of every platform (cache lookups, no archive is opened) — too
+        // slow for the UI thread, so rows appear at once and the Mode/Unscanned cells fill in as the
+        // background walk reports. Rows are matched by platform NAME: the grid may be re-sorted or the
+        // panel disposed before a late result lands.
+        void SetSurveyCells(string name, string mode, string unscanned)
+        {
+            if (gridPlat.IsDisposed) return;
+            foreach (DataGridViewRow r in gridPlat.Rows)
+                if (string.Equals(r.Cells[1].Value as string, name, StringComparison.OrdinalIgnoreCase))
+                { r.Cells[2].Value = mode; r.Cells[3].Value = unscanned; return; }
+        }
+        void SurveyAsync()
+        {
+            var names = new List<string>();
+            foreach (DataGridViewRow r in gridPlat.Rows)
+                if (r.Cells[1].Value is string n && n.Length > 0) names.Add(n);
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                foreach (var n in names)
+                {
+                    Romm.RommPlatformSurvey sv;
+                    try { sv = Romm.RommScan.Survey(n); } catch { continue; }
+                    try
+                    {
+                        if (!gridPlat.IsDisposed)
+                            gridPlat.BeginInvoke(() => SetSurveyCells(n, sv.ModeWord,
+                                sv.Unknown == 0 ? (sv.Games == 0 ? "?" : "-") : sv.Unknown.ToString(CultureInfo.InvariantCulture)));
+                    }
+                    catch { }
+                }
+            });
+        }
+
+        btnScan.Click += (_, _) =>
+        {
+            if (Romm.RommScan.Running) { Romm.RommScan.Stop(); return; }
+            int i = gridPlat.CurrentRow?.Index ?? -1;
+            var name = i >= 0 ? gridPlat.Rows[i].Cells[1].Value as string : null;
+            if (string.IsNullOrEmpty(name)) { lblScan.Text = "Select a platform first."; return; }
+            btnScan.Text = "Stop";
+            lblScan.Text = "Scanning “" + name + "”…";
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                int done = Romm.RommScan.Scan(name!, (d, tot) =>
+                {
+                    try
+                    {
+                        if (!gridPlat.IsDisposed)
+                            gridPlat.BeginInvoke(() => lblScan.Text = "Scanning “" + name + "”… " + d + "/" + tot);
+                    }
+                    catch { }
+                });
+                try
+                {
+                    if (gridPlat.IsDisposed) return;
+                    gridPlat.BeginInvoke(() =>
+                    {
+                        btnScan.Text = "Scan archives";
+                        lblScan.Text = done < 0 ? "A scan is already running." : "Done — " + done + " archive(s) listed.";
+                        var sv = Romm.RommScan.Survey(name!);
+                        SetSurveyCells(name!, sv.ModeWord,
+                            sv.Unknown == 0 ? "-" : sv.Unknown.ToString(CultureInfo.InvariantCulture));
+                    });
+                }
+                catch { }
+            });
+        };
 
         // "ROMs listed per archive" lived here. It capped how many of an archive's entries a rom
         // advertised, back when a rom advertised several — a client then rendered a picker over them.
@@ -390,6 +509,22 @@ internal static class RommPanel
             txtUser.Text = RommConfig.Username;
             chkHidden.Checked = RommConfig.ExposeHiddenGames;
             chkParental.Checked = RommConfig.IgnoreParental;
+
+            var names = new List<string>();
+            try
+            {
+                foreach (var pf in Unbroken.LaunchBox.Plugins.PluginHelper.DataManager.GetAllPlatforms())
+                { var n = pf?.Name ?? ""; if (n.Length > 0) names.Add(n); }
+            }
+            catch { }
+            // A name the config carries but LaunchBox no longer has (renamed platform) still shows,
+            // ticked — otherwise it could never be unticked.
+            foreach (var n in RommConfig.IncludedPlatforms)
+                if (!names.Contains(n, StringComparer.OrdinalIgnoreCase)) names.Add(n);
+            names.Sort(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in names)
+                gridPlat.Rows.Add(RommConfig.PlatformIncluded(n), n, "…", "…");
+            SurveyAsync();
             chkLog.Checked = RommConfig.LogRequests;
         }
         catch { }
@@ -408,6 +543,12 @@ internal static class RommPanel
                 c.SetSec(Sec, "AllowedIps", (txtIps.Text ?? "").Trim());
                 c.SetSec(Sec, "Username", (txtUser.Text ?? "").Trim());
                 c.SetSec(Sec, "ExposeHiddenGames", chkHidden.Checked ? "true" : "false");
+                gridPlat.EndEdit();
+                var included = new List<string>();
+                foreach (DataGridViewRow r in gridPlat.Rows)
+                    if (r.Cells[0].Value is true && r.Cells[1].Value is string pn && pn.Length > 0)
+                        included.Add(pn);
+                c.SetSec(Sec, "IncludedPlatforms", string.Join("|", included));
                 c.SetSec(Sec, "IgnoreParental", chkParental.Checked ? "true" : "false");
                 c.SetSec(Sec, "LogRequests", chkLog.Checked ? "true" : "false");
                 c.Save();
@@ -492,4 +633,105 @@ internal static class RommPanel
         try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
         catch { }
     }
+    // ── Pairing names ──
+    //
+    // "Paired device — 2026-08-28 10:11" told two devices apart by the minute they enrolled, which is
+    // no way to remember which one is the handheld and which the phone. A generated AdjectiveAnimal is
+    // memorable, unique against the live list, and stays editable — it is only the display name.
+
+    private static readonly string[] PairAdjectives =
+    {
+        "Agile", "Amber", "Bold", "Brave", "Bright", "Calm", "Clever", "Cosmic", "Crimson", "Curious",
+        "Daring", "Dashing", "Eager", "Electric", "Fierce", "Frosty", "Gentle", "Golden", "Happy",
+        "Hidden", "Jolly", "Lucky", "Majestic", "Mellow", "Mighty", "Nimble", "Noble", "Plucky",
+        "Quiet", "Rapid", "Royal", "Rustic", "Silent", "Silver", "Sneaky", "Solar", "Spicy", "Stellar",
+        "Swift", "Turbo", "Velvet", "Vivid", "Wild", "Witty", "Zesty",
+    };
+
+    private static readonly string[] PairAnimals =
+    {
+        "Badger", "Bison", "Cobra", "Condor", "Coyote", "Dingo", "Dolphin", "Falcon", "Ferret", "Fox",
+        "Gecko", "Heron", "Ibex", "Jackal", "Jaguar", "Koala", "Lemur", "Lynx", "Marmot", "Meerkat",
+        "Monkey", "Moose", "Narwhal", "Ocelot", "Otter", "Owl", "Panda", "Panther", "Penguin", "Puffin",
+        "Raccoon", "Raven", "Salmon", "Sparrow", "Tapir", "Tiger", "Toucan", "Viper", "Walrus", "Weasel",
+        "Wombat", "Yak", "Zebra",
+    };
+
+    /// <summary>A fresh AdjectiveAnimal no live token already bears; dated as a last resort.</summary>
+    private static string PairName()
+    {
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try { foreach (var t in RommAuth.ListTokens()) taken.Add(t.Name ?? ""); } catch { }
+        var rng = Random.Shared;
+        for (int i = 0; i < 40; i++)
+        {
+            var name = PairAdjectives[rng.Next(PairAdjectives.Length)]
+                     + PairAnimals[rng.Next(PairAnimals.Length)];
+            if (!taken.Contains(name)) return name;
+        }
+        return "PairedDevice-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>A one-line rename prompt. The name is display only — branches key on the client index —
+    /// so anything non-empty is acceptable; it is trimmed and that is all.</summary>
+    private static string PromptRename(string current)
+    {
+        using var f = new Form
+        {
+            Text = "Rename client",
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false,
+            StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(360, 96),
+        };
+        var box = new TextBox { Text = current, Location = new Point(12, 14), Width = 336 };
+        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(192, 54), Width = 75 };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(273, 54), Width = 75 };
+        f.Controls.Add(box); f.Controls.Add(ok); f.Controls.Add(cancel);
+        f.AcceptButton = ok; f.CancelButton = cancel;
+        box.SelectAll();
+        if (f.ShowDialog() != DialogResult.OK) return null;
+        var t = (box.Text ?? "").Trim();
+        return t.Length == 0 ? null : t;
+    }
+
+    /// <summary>The revoke dialog: the credential always goes; the client's SAVES only go when asked,
+    /// and a line promoted as the save in play only with the second, deliberate tick.</summary>
+    private static (bool proceed, bool delSaves, bool delPromoted) PromptRevoke(string name)
+    {
+        using var f = new Form
+        {
+            Text = "Revoke client",
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false,
+            StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(430, 158),
+        };
+        var lbl = new Label
+        {
+            Text = "Revoke \u201C" + name + "\u201D? It will have to be paired again.",
+            Location = new Point(12, 12), Size = new Size(406, 32),
+        };
+        var cbSaves = new CheckBox
+        {
+            Text = "Also delete its saves and savestates (its line and history, every game)",
+            Location = new Point(12, 50), Size = new Size(406, 22),
+        };
+        var cbPromoted = new CheckBox
+        {
+            Text = "Including lines promoted as the save in play (deletes active saves)",
+            Location = new Point(30, 74), Size = new Size(388, 22), Enabled = false,
+        };
+        cbSaves.CheckedChanged += (_, _) =>
+        { cbPromoted.Enabled = cbSaves.Checked; if (!cbSaves.Checked) cbPromoted.Checked = false; };
+        var ok = new Button { Text = "Revoke", DialogResult = DialogResult.OK, Location = new Point(262, 116), Width = 75 };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(343, 116), Width = 75 };
+        f.Controls.Add(lbl); f.Controls.Add(cbSaves); f.Controls.Add(cbPromoted);
+        f.Controls.Add(ok); f.Controls.Add(cancel);
+        f.AcceptButton = ok; f.CancelButton = cancel;
+        return f.ShowDialog() == DialogResult.OK
+            ? (true, cbSaves.Checked, cbPromoted.Checked)
+            : (false, false, false);
+    }
+
 }

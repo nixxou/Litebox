@@ -1,4 +1,4 @@
-// Snapshot of the LiteBox.ini [RommServer] section, plus the secrets that must never sit in an ini.
+﻿// Snapshot of the LiteBox.ini [RommServer] section, plus the secrets that must never sit in an ini.
 //
 // Split on purpose: the knobs a user edits (port, LAN allow-list, account name, what the library exposes)
 // live in LiteBox.ini like every other module's settings; the password verifier and the token-signing key
@@ -38,6 +38,15 @@ internal static class RommConfig
     /// <summary>Serve games flagged Hidden in LaunchBox ([RommServer] ExposeHiddenGames, default false).</summary>
     public static bool ExposeHiddenGames { get; private set; }
 
+    /// <summary>The LaunchBox platforms served to clients ([RommServer] IncludedPlatforms, pipe-separated
+    /// names). DEFAULT IS NONE: a fresh install serves an empty library until platforms are ticked in the
+    /// module page. Exclusion is a serving gate only — romm ids, assignments and client pins stay in
+    /// romm.db untouched, so re-including a platform restores exactly what the clients had.</summary>
+    public static HashSet<string> IncludedPlatforms { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public static bool PlatformIncluded(string? lbPlatformName)
+        => !string.IsNullOrEmpty(lbPlatformName) && IncludedPlatforms.Contains(lbPlatformName);
+
     /// <summary>Serve games the parental lock hides ([RommServer] IgnoreParental, default false). Off means
     /// a locked library looks the same to a phone as it does to the TV.</summary>
     public static bool IgnoreParental { get; private set; }
@@ -63,9 +72,6 @@ internal static class RommConfig
     // date is consulted -- but that is a deduction, and these turn it into a measurement. Delete both
     // once the answer is written down.
 
-    /// <summary>Replace every game's description with the moment the response was built ([RommServer]
-    /// DebugStampSummary). Makes "how old is what I am looking at" readable at a glance in the client.</summary>
-    public static bool DebugStampSummary { get; private set; }
 
     /// <summary>Added to every platform's rom_count ([RommServer] DebugBumpRomCount, default 0). A client
     /// that keys its cache on the count should notice one refresh and then settle -- it stores the new
@@ -83,10 +89,13 @@ internal static class RommConfig
             var user = (c.GetSec(Section, "Username", "") ?? "").Trim();
             Username = user.Length > 0 ? user : "litebox";
             ExposeHiddenGames = c.GetSecBool(Section, "ExposeHiddenGames", false);
+            IncludedPlatforms = new HashSet<string>(
+                (c.GetSec(Section, "IncludedPlatforms", "") ?? "")
+                    .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                StringComparer.OrdinalIgnoreCase);
             IgnoreParental = c.GetSecBool(Section, "IgnoreParental", false);
             LogRequests = c.GetSecBool(Section, "LogRequests", false);
             LogBodies = c.GetSecBool(Section, "LogBodies", false);
-            DebugStampSummary = c.GetSecBool(Section, "DebugStampSummary", false);
             DebugBumpRomCount = ParseCount(c.GetSec(Section, "DebugBumpRomCount"), 0);
         }
         catch (Exception ex) { LbLog.Warn("romm", "config reload failed: " + ex.Message); }

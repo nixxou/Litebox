@@ -490,8 +490,23 @@ internal static class RommAssetsApi
             var parts = key.Split('|');
             if (parts.Length < 3) return null;
             var e = FindVaultEntry(parts[1], string.Join("|", parts, 2, parts.Length - 2));
+            if (e == null) return null;
+
+            // The LISTING's view first: it knows the group, so it names the channel and the wire file
+            // the way every other route does — ViewOf alone can only say the family ("lb"), and one
+            // asset answering under two identities depending on the route is how a client's merge
+            // breaks. ViewOf remains the fallback for copies the listing does not carry (a set-aside
+            // group's history).
+            var g2 = SafeGame(parts[1]);
+            if (g2 != null)
+                try
+                {
+                    var fromList = ListForGame(g2, e.IsState, tokenId).FirstOrDefault(a => a.Id == assetId);
+                    if (fromList != null) return fromList;
+                }
+                catch { }
             int idx = tokenId is int t ? RommRoms.ClientIndexOf(t) : 0;
-            return e == null ? null : ViewOf(e, assetId, idx > 0 ? "c" + idx : null);
+            return ViewOf(e, assetId, idx > 0 ? "c" + idx : null);
         }
 
         if (key.StartsWith("screen|", StringComparison.Ordinal))
@@ -617,12 +632,15 @@ internal static class RommAssetsApi
 
     /// <summary>A client that cannot read slots: it takes the newest of whatever it is shown and
     /// writes the served file name to disk verbatim, so it gets the single-line view. Freegosy is the
-    /// one known case, and its Flutter HTTP stack says so ("Dart/x.y (dart:io)"). Unknown agents get
-    /// the full view — the protocol documents `slot`, and both other clients read it.</summary>
+    /// one known case — and it NAMES ITSELF: "Freegosy/0.5.11", measured live, where the assumed
+    /// Flutter default ("Dart/x.y (dart:io)") only shows on its side requests. Both spellings match,
+    /// so a build that drops the custom header stays covered. Unknown agents get the full view — the
+    /// protocol documents `slot`, and both other clients read it.</summary>
     internal static bool SlotBlind(HttpRequest? req)
     {
         var ua = req?.GetHeader("User-Agent") ?? "";
-        return ua.IndexOf("dart", StringComparison.OrdinalIgnoreCase) >= 0;
+        return ua.IndexOf("freegosy", StringComparison.OrdinalIgnoreCase) >= 0
+            || ua.IndexOf("dart", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     // ── DTO ───────────────────────────────────────────────────────────────────
@@ -826,6 +844,7 @@ internal static class RommAssetsApi
         string? mine0 = clientIdx0 > 0 ? "c" + clientIdx0 : null;
         foreach (var g in games)
         {
+            if (!RommConfig.PlatformIncluded(RommLibrary.PlatformOf(g))) continue;
             foreach (var e in VaultEntriesOf(g))
             {
                 if (e.IsState != states) continue;
@@ -1344,6 +1363,153 @@ internal static class RommAssetsApi
     /// <summary>What a file received from a client is called, wherever it ends up. One label, because
     /// there is one fact to record: these bytes came from that client. Whether they are in play or in the
     /// history is not the label's business — that is what the path says.</summary>
+    /// <summary>Moves the row whose FilePath is <paramref name="freshAbs"/> in front of the first row
+    /// of <paramref name="groupId"/>, making it the row the scan reads as the group's record. Pure list
+    /// surgery so the self-test can pin it; true when something actually moved.</summary>
+    internal static bool ReanchorRows(List<Dictionary<string, string>> rows, string groupId, string freshAbs)
+    {
+        int anchor = -1, freshIdx = -1;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            if (!string.Equals(rows[i].GetValueOrDefault("SaveGroupId"), groupId, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (anchor < 0) anchor = i;
+            if (SaveManager.PathEq(SaveManager.AbsPath(rows[i].GetValueOrDefault("FilePath") ?? ""), freshAbs))
+            { freshIdx = i; break; }
+        }
+        if (anchor < 0 || freshIdx < 0 || freshIdx == anchor) return false;
+        var moved = rows[freshIdx];
+        rows.RemoveAt(freshIdx);
+        rows.Insert(anchor, moved);
+        return true;
+    }
+
+    /// <summary>Deletes a revoked client's save lines across the library: every branch group of that
+    /// client — saves and savestates, records AND files, history included. A PROMOTED branch is the
+    /// game's save in play; it is only touched when <paramref name="includePromoted"/> says so, and an
+    /// un-included promoted line is left WHOLE — half-deleting a line the emulator reads would leave a
+    /// live save with no history for no one's benefit. Called BEFORE the token goes: the client index
+    /// resolves through it.</summary>
+    internal static (int groups, int files) DeleteClientLines(int tokenId, bool includePromoted)
+    {
+        int idx;
+        try { idx = RommRoms.ClientIndexOf(tokenId); } catch { return (0, 0); }
+        if (idx <= 0) return (0, 0);
+        string mine = "c" + idx;
+
+        int groups = 0, files = 0;
+        Unbroken.LaunchBox.Plugins.Data.IGame[] games;
+        try { games = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IGame>(); }
+        catch { return (0, 0); }
+
+        foreach (var game in games)
+        {
+            if (game is not ILiteBoxGame lbg) continue;
+            List<Dictionary<string, string>> rows;
+            try
+            {
+                rows = lbg.GetSubEntities("GameSave")
+                          .Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+            }
+            catch { continue; }
+            if (rows.Count == 0) continue;
+
+            // The client's groups on this game, and whether each is promoted (a record whose file lives
+            // OUTSIDE the vault is the save the emulator reads).
+            var mineRows = rows.Where(r => string.Equals(BranchOf(r.GetValueOrDefault("SaveGroupId")), mine,
+                                                         StringComparison.OrdinalIgnoreCase)).ToList();
+            if (mineRows.Count == 0) continue;
+
+            var byGroup = mineRows.GroupBy(r => r.GetValueOrDefault("SaveGroupId") ?? "",
+                                           StringComparer.OrdinalIgnoreCase);
+            var doomed = new List<Dictionary<string, string>>();
+            foreach (var grp in byGroup)
+            {
+                bool promoted = grp.Any(r =>
+                {
+                    var abs = SaveManager.AbsPath(r.GetValueOrDefault("FilePath") ?? "");
+                    return abs.Length > 0 && !SaveVault.IsUnderVault(abs);
+                });
+                if (promoted && !includePromoted) continue;   // the line in play stays whole
+                doomed.AddRange(grp);
+                groups++;
+            }
+            if (doomed.Count == 0) continue;
+
+            foreach (var r in doomed)
+            {
+                var abs = SaveManager.AbsPath(r.GetValueOrDefault("FilePath") ?? "");
+                if (abs.Length == 0) continue;
+                try
+                {
+                    if (Directory.Exists(abs)) { Directory.Delete(abs, recursive: true); files++; }
+                    else if (File.Exists(abs)) { File.Delete(abs); files++; }
+                }
+                catch (Exception ex) { LbLog.Warn("romm", "could not delete a client save file: " + ex.Message); }
+            }
+            try
+            {
+                var kept = rows.Where(r => !doomed.Contains(r)).ToList();
+                lbg.SetSubEntities("GameSave", kept);
+                SaveVault.Notify(RommLibrary.IdOf(game));
+            }
+            catch (Exception ex) { LbLog.Warn("romm", "could not drop a client's save records: " + ex.Message); }
+        }
+        if (groups > 0) LbLog.Info("romm", $"revoked client: {groups} save line(s) deleted, {files} file(s)");
+        return (groups, files);
+    }
+
+    /// <summary>Carries a client's rename into the library: the branch groups still bearing the OLD
+    /// name take the new one — a group the user renamed by hand in Game Saves is left alone — and every
+    /// « RomM · old » label follows, vault copies and promoted live records alike. Without this, Game
+    /// Saves keeps speaking the old name and the rename creates the very confusion it was meant to end.
+    /// One user-triggered walk over in-memory records; returns how many rows moved.</summary>
+    internal static int RenameClientMarks(int tokenId, string oldName, string newName)
+    {
+        int idx;
+        try { idx = RommRoms.ClientIndexOf(tokenId); } catch { return 0; }
+        if (idx <= 0 || string.IsNullOrWhiteSpace(oldName) || string.IsNullOrWhiteSpace(newName)) return 0;
+        string mine = "c" + idx;
+        string oldLabel = RommLabel(oldName), newLabel = RommLabel(newName);
+
+        int moved = 0;
+        Unbroken.LaunchBox.Plugins.Data.IGame[] games;
+        try { games = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IGame>(); }
+        catch { return 0; }
+        foreach (var game in games)
+        {
+            if (game is not ILiteBoxGame lbg) continue;
+            List<Dictionary<string, string>> rows;
+            try
+            {
+                rows = lbg.GetSubEntities("GameSave")
+                          .Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+            }
+            catch { continue; }
+            if (rows.Count == 0) continue;
+
+            bool dirty = false;
+            foreach (var row in rows)
+            {
+                bool isMine = string.Equals(BranchOf(row.GetValueOrDefault("SaveGroupId")), mine,
+                                            StringComparison.OrdinalIgnoreCase);
+                if (isMine && string.Equals(row.GetValueOrDefault("SaveGroupName"), oldName, StringComparison.Ordinal))
+                { row["SaveGroupName"] = newName; dirty = true; moved++; }
+                if (string.Equals(row.GetValueOrDefault("Title"), oldLabel, StringComparison.Ordinal))
+                { row["Title"] = newLabel; dirty = true; moved++; }
+            }
+            if (!dirty) continue;
+            try
+            {
+                lbg.SetSubEntities("GameSave", rows);
+                SaveVault.Notify(RommLibrary.IdOf(game));
+            }
+            catch (Exception ex) { LbLog.Warn("romm", "rename propagation failed on a game: " + ex.Message); }
+        }
+        if (moved > 0) LbLog.Info("romm", $"client rename: {moved} record(s) now say \"{newName}\"");
+        return moved;
+    }
+
     private static string RommLabel(string? client)
         => "RomM · " + (string.IsNullOrWhiteSpace(client) ? "unknown client" : client);
 
@@ -1369,6 +1535,17 @@ internal static class RommAssetsApi
             row["SaveGroupName"] = g.GroupName;
             row["Title"] = RommLabel(client);           // LaunchBox prints Title as the copy's heading
             if (!string.IsNullOrEmpty(g.AppId)) row["AdditionalApplicationId"] = g.AppId!;
+
+            // Re-anchor an In-Vault branch onto its newest copy. The scan takes the FIRST row of a
+            // SaveGroupId as the group's record, so a branch created by the first push stayed pinned
+            // to it for ever: the card read the oldest date while the branch's life was in the
+            // backups. A PROMOTED branch needs none of this — its face is the live file, which the
+            // push just rewrote. Only strictly-newer content moves the anchor: the pieces of a bundle
+            // arrive newest first, and the older ones must not drag it back.
+            if (g.Active == null && g.ActivePath.Length > 0 && SaveVault.IsUnderVault(g.ActivePath)
+                && ContentTimeUtc(abs, DateTime.MinValue) >= ContentTimeUtc(g.ActivePath, DateTime.MaxValue))
+                ReanchorRows(rows, g.GroupId, abs);
+
             lbg.SetSubEntities("GameSave", rows);
             e.GroupId = g.GroupId; e.GroupName = g.GroupName; e.Title = row["Title"];
             SaveVault.Notify(e.GameId);

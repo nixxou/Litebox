@@ -1,4 +1,4 @@
-// LaunchBox platform name → RomM platform slug — the join every RomM client depends on.
+﻿// LaunchBox platform name → RomM platform slug — the join every RomM client depends on.
 //
 // RomM keys platforms by its UniversalPlatformSlug values (IGDB-ish: "nes", "snes", "psx"), and clients
 // map slug → their local emulator/core config. LaunchBox names are free text. This is the hand-curated
@@ -247,6 +247,66 @@ internal static class RommPlatformMap
 
     /// <summary>The RomM slug for a LaunchBox platform name, or null when it is not exported. The options
     /// override ("Romm.PlatformSlug", platform scope) wins over the table; "-" disables the platform.</summary>
+    // ── Zip-native platforms ──────────────────────────────────────────────────
+    // The family where the archive IS the rom format — romsets an emulator reads whole, never
+    // extracted. Mirrors Argosy's ZipExtractor.ZIP_AS_ROM_PLATFORMS (its downloads skip extraction,
+    // its launches hand the zip over, its RetroAchievements hashing hashes the zip): the two sides
+    // must agree, or a client unpacks what the server meant whole. Slug vocabulary, ours + Argosy's
+    // aliases for the same machines.
+    private static readonly HashSet<string> ZipNativeSlugs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "arcade", "mame", "fbneo", "fba",
+        "neogeoaes", "neogeomvs", "neo-geo-cd", "neogeocd",
+        "cps1", "cps2", "cps3",
+        "naomi", "naomi2", "atomiswave",
+        "model2", "model3",
+        "hyperneogeo64", "hyper-neo-geo-64",
+        "g-and-w", "gameandwatch",
+        "psvita", "vita",
+        "dos",
+    };
+
+    /// <summary>Is this LaunchBox platform one where the zip is the rom itself? Decided by the
+    /// platform's own slug first, then by its SCRAPE AS — a custom platform scraped as Arcade is
+    /// arcade here too, whatever it is called. Forces the RomM candidates to Direct (the archive is
+    /// served whole, no listing needed) and never touches how the desktop launches anything.</summary>
+    public static bool ZipNative(string? lbPlatformName)
+    {
+        if (string.IsNullOrWhiteSpace(lbPlatformName)) return false;
+        lock (_lock)
+        {
+            _zipNative ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            if (_zipNative.TryGetValue(lbPlatformName!, out var hit)) return hit;
+        }
+        bool v = IsZipNativeSlug(SlugFor(lbPlatformName))
+              || IsZipNativeSlug(Normalize(lbPlatformName!))
+              || IsZipNativeSlug(SlugFor(ScrapeAsOf(lbPlatformName!)))
+              || IsZipNativeSlug(Normalize(ScrapeAsOf(lbPlatformName!) ?? ""));
+        lock (_lock) _zipNative![lbPlatformName!] = v;
+        return v;
+    }
+
+    public static bool IsZipNativeSlug(string? slug)
+        => !string.IsNullOrEmpty(slug) && ZipNativeSlugs.Contains(slug!);
+
+    /// <summary>Drops the memo — called with the emulator map when a pass starts, so a Scrape As
+    /// edited in LaunchBox is seen by the next pass.</summary>
+    public static void ForgetZipNative() { lock (_lock) _zipNative = null; }
+
+    private static Dictionary<string, bool>? _zipNative;
+
+    private static string? ScrapeAsOf(string lbPlatformName)
+    {
+        try
+        {
+            foreach (var pf in Unbroken.LaunchBox.Plugins.PluginHelper.DataManager.GetAllPlatforms())
+                if (string.Equals(pf?.Name, lbPlatformName, StringComparison.OrdinalIgnoreCase))
+                    return pf!.ScrapeAs;
+        }
+        catch { }
+        return null;
+    }
+
     public static string? SlugFor(string? lbPlatformName)
     {
         if (string.IsNullOrWhiteSpace(lbPlatformName)) return null;

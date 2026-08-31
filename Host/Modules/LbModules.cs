@@ -53,7 +53,7 @@ internal static class LbModules
         new(LbModule.Rules, "rules", "Launch rules",
             "BigBoxProfile's probes & actions, native: ordered rules attached to an EMULATOR rewrite the command line right before the spawn, guarded by filters — per-game targeting via marker arguments in the game's custom parameters, stripped before the emulator sees them. Ported action by action — today: Prefix, Suffix, Change exe, Change rom path, Replace (with a variables system), Replace in file, Create file, HID device detector, Copy file, Use file content, Monitor profile, Run C# script, Run AHK script, Run as administrator, Run commands as admin. Off: launches run untouched.", false, true),
         new(LbModule.RommServer, "romm", "RomM server",
-            "Serves the library as a RomM instance on its own port, so the official RomM clients (Argosy on Android, Grout on handhelds, the Playnite plugin) browse it, download games and sync their saves against LiteBox's own save vault. One account, one password; the network is reachable only through the LAN allow-list. Off: nothing listens.", false, true),
+            "EXPERIMENTAL. Serves the library as a RomM instance on its own port, so the official RomM clients (Argosy on Android, Grout on handhelds, the Playnite plugin) browse it, download games and sync their saves against LiteBox's own save vault. Each RomM game is bound to a single file, and save synchronization is not fully tested yet — use with caution. One account, one password; only the platforms you tick are served, and the network is reachable only through the LAN allow-list. Off: nothing listens.", false, true),
     };
 
     public static Info Meta(LbModule m) => Catalog.First(c => c.Module == m);

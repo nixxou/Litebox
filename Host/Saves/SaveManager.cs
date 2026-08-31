@@ -951,6 +951,26 @@ internal static class SaveManager
             }
             else if (!PathEq(AbsPath(row.GetValueOrDefault("FilePath") ?? ""), abs))
             { row["FilePath"] = abs; rowsDirty = true; }
+            // The record remembers who owned it WHEN IT WAS WRITTEN; the live scan knows who reads the
+            // file NOW — the plugin derived this very path from the emulator's core. When they disagree
+            // the record is stale (a promotion moved a group onto another core's location, a default
+            // emulator changed), and everything downstream lies from it: the card's chip and RomM's
+            // lb-ra-<core> slot both read the row. Measured: a record stamped bsnes_libretro pointing
+            // into saves\Snes9x. The live value wins and the row follows, like FilePath just above.
+            //
+            // And the plugin's own claim is not gospel either. Two LaunchBox emulator entries can share
+            // one RetroArch install with different -L cores; the scan asks the game's ASSOCIATED
+            // emulator first, whose plugin stamps saves with ITS configured core — measured: a fresh
+            // save in saves\Snes9x stamped bsnes_libretro because the game was assigned to the bsnes
+            // entry. The FOLDER never lies: RetroArch itself writes it (sort-by-core). So the folder
+            // outranks the claim, the claim outranks the record, and the row follows.
+            string liveCore = save.EmulatorCore ?? "";
+            string folderCore = CoreFromSortedPath(abs);
+            if (folderCore.Length > 0 && !CoreEq(folderCore, liveCore))
+                liveCore = folderCore.ToLowerInvariant() + "_libretro";
+            if (liveCore.Length > 0
+                && !string.Equals(row.GetValueOrDefault("EmulatorCore") ?? "", liveCore, StringComparison.OrdinalIgnoreCase))
+            { row["EmulatorCore"] = liveCore; rowsDirty = true; }
             usedRows.Add(row);
 
             var g = new SaveGroup
@@ -1162,6 +1182,44 @@ internal static class SaveManager
     /// The consequence of getting this wrong was not cosmetic: the live save would have been read as a
     /// copy, dropped from the page, and re-recorded under a new group — with the old record left behind
     /// as a phantom.</summary>
+    /// <summary>The core folder a RetroArch-style sorted path names — "…\saves\Snes9x\rom.srm" →
+    /// "Snes9x" — or "" for any other shape. The folder is written by the emulator itself, which makes
+    /// it the one core claim that cannot be stale.</summary>
+    internal static string CoreFromSortedPath(string abs)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(abs);
+            if (string.IsNullOrEmpty(dir)) return "";
+            var parent = Path.GetDirectoryName(dir);
+            if (string.IsNullOrEmpty(parent)) return "";
+            var kind = Path.GetFileName(parent);
+            if (!kind.Equals("saves", StringComparison.OrdinalIgnoreCase)
+                && !kind.Equals("states", StringComparison.OrdinalIgnoreCase)) return "";
+            // Only under a RetroArch install: sort-by-core is ITS convention, and the vault's own
+            // Saves\<Platform> layout would otherwise read as a core named after a platform.
+            for (var up = Path.GetDirectoryName(parent); !string.IsNullOrEmpty(up); up = Path.GetDirectoryName(up))
+                if ((Path.GetFileName(up) ?? "").IndexOf("retroarch", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return Path.GetFileName(dir) ?? "";
+            return "";
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>"Snes9x" and "snes9x_libretro" are the same core: the folder carries the display name,
+    /// the claim the library name. Compared lowercased, suffix-stripped, alphanumerics only.</summary>
+    internal static bool CoreEq(string a, string b)
+    {
+        static string N(string x)
+        {
+            x = (x ?? "").ToLowerInvariant();
+            if (x.EndsWith("_libretro", StringComparison.Ordinal)) x = x.Substring(0, x.Length - 9);
+            return new string(x.Where(char.IsLetterOrDigit).ToArray());
+        }
+        var na = N(a); var nb = N(b);
+        return na.Length > 0 && na == nb;
+    }
+
     private static bool IsVaultRow(Dictionary<string, string> row)
         => SaveVault.IsUnderVault(AbsPath(row.GetValueOrDefault("FilePath") ?? ""));
 

@@ -1,4 +1,4 @@
-// PUT /api/roms/{id}/user + the collections — the write-backs a phone is allowed to make.
+﻿// PUT /api/roms/{id}/user + the collections — the write-backs a phone is allowed to make.
 //
 // The rom_user fields split by where the truth lives:
 //   • hidden → IGame.Hide, rating (0–10) → IGame.StarRatingFloat (0–5), status "finished" ↔
@@ -88,19 +88,40 @@ internal static class RommUserApi
         {
             try { game.StarRatingFloat = Math.Clamp(rating, 0, 10) / 2f; lbDirty = true; } catch { }
         }
+        bool progressAxisTouched = false;
         if (body.TryGetProperty("status", out var stat))
         {
             var status = stat.ValueKind == JsonValueKind.String ? stat.GetString() : null;
+            var priorStatus = AsString(extras.GetValueOrDefault("status"));
             extras["status"] = status;
+            progressAxisTouched = true;
             // IGame.Completed is set below, once completion has been read too.
 
+            // ABANDONING a game releases the CALLING client from every file of it — dropped, retired
+            // and never_playing all say "I'm done with this here". The old ROM lock had this exact
+            // escape hatch and the pins inherited the need: a handheld has no other gesture to leave
+            // an assignment. Nothing is stored, not even on today's default; released, the client
+            // follows the default AS COMPUTED at every instant. And it fires on the TRANSITION only:
+            // clients re-send the whole rom_user unchanged, and a value merely sitting there must not
+            // keep releasing — already dropped? set it active and drop again. Scoped to the calling
+            // token — another device's pin is not this one's to undo — and traced.
+            if (IsAbandon(status) && !IsAbandon(priorStatus) && identity?.TokenId is int droppingToken)
+                try
+                {
+                    if (RommIndexer.ReleaseClient(game, droppingToken))
+                        RommTrace.Note($"status {status}: this client now follows the game's default");
+                }
+                catch (Exception ex) { LbLog.Warn("romm", "abandon: could not release the pin: " + ex.Message); }
         }
         foreach (var name in new[] { "backlogged", "now_playing" })
             if (body.TryGetProperty(name, out var v) && (v.ValueKind is JsonValueKind.True or JsonValueKind.False))
-                extras[name] = v.GetBoolean();
+            { extras[name] = v.GetBoolean(); progressAxisTouched = true; }
         foreach (var name in new[] { "difficulty", "completion" })
             if (body.TryGetProperty(name, out var v) && v.TryGetInt32(out var n))
+            {
                 extras[name] = Math.Clamp(n, 0, name == "completion" ? 100 : 10);
+                if (name == "completion") progressAxisTouched = true;
+            }
 
         // Both signals, merged with whatever was already stored, decide the one LaunchBox flag. Reading
         // `extras` rather than the body is what makes a client that sends only "completion" keep its
@@ -112,6 +133,44 @@ internal static class RommUserApi
             lbDirty = true;
         }
         catch { }
+
+        // The write lands on LaunchBox's Progress too — but only when this request touched the axis
+        // (a rating-only PUT must not move a status), only through the library's OWN vocabulary
+        // (RommProgress resolves against the user's freely-edited list and stays silent when nothing
+        // matches), and never as a downgrade of a refinement RomM cannot express: Mastered survives
+        // completed_100, Continuous survives now_playing.
+        if (progressAxisTouched)
+            try
+            {
+                bool everPlayed = RommLibrary.LastPlayedOf(game) != null || updateLastPlayed;
+                if (!everPlayed) try { everPlayed = RommLibrary.PlayCountOf(game) > 0; } catch { }
+                var target = RommProgress.TargetOf(
+                    AsString(extras.GetValueOrDefault("status")),
+                    AsInt(extras.GetValueOrDefault("completion")),
+                    AsBool(extras.GetValueOrDefault("backlogged")),
+                    AsBool(extras.GetValueOrDefault("now_playing")),
+                    everPlayed);
+                string current = "";
+                try { current = game.Progress ?? ""; } catch { }
+                var cur = RommProgress.Classify(current);
+                bool keep = target == ProgressKind.Unknown
+                         || cur == target
+                         || (cur == ProgressKind.Mastered && target == ProgressKind.Completed)
+                         || (cur == ProgressKind.Continuous && target == ProgressKind.InProgress);
+                if (!keep)
+                {
+                    var resolved = RommProgress.Resolve(target);
+                    if (resolved == null)
+                        RommTrace.Note($"progress: this library's vocabulary has no value for '{target}' — left as is");
+                    else if (!string.Equals(resolved, current, StringComparison.Ordinal))
+                    {
+                        game.Progress = resolved;
+                        lbDirty = true;
+                        RommTrace.Note($"progress: \"{current}\" → \"{resolved}\"");
+                    }
+                }
+            }
+            catch (Exception ex) { LbLog.Warn("romm", "progress write failed: " + ex.Message); }
 
         if (updateLastPlayed) { try { game.LastPlayedDate = DateTime.Now; lbDirty = true; } catch { } }
         else if (removeLastPlayed) { try { game.LastPlayedDate = null; lbDirty = true; } catch { } }
@@ -157,6 +216,17 @@ internal static class RommUserApi
         bool completed = lbCompleted || completion >= 100;
         if (completed) completion = Math.Max(completion, 100);
 
+        // LaunchBox's Progress, when it says something the classifier understands, is the richest
+        // truth this side owns and overrides the derivation: it is what the user sees and sets in the
+        // game menu. A mute value (free vocabulary) changes nothing.
+        string progress = "";
+        try { progress = game.Progress ?? ""; } catch { }
+        var lbKind = RommProgress.Classify(progress);
+        var imposed = RommProgress.RomUserOf(lbKind);
+        bool backloggedOut = imposed?.backlogged ?? Val("backlogged", false);
+        bool nowPlayingOut = imposed?.nowPlaying ?? Val("now_playing", false);
+        if (imposed is { completionFloor: > 0 } f) { completion = Math.Max(completion, f.completionFloor); completed = true; }
+
         return new
         {
             id = romId,
@@ -166,13 +236,14 @@ internal static class RommUserApi
             updated_at = RommAuthApi.Iso(RommLibrary.ModifiedOf(game)),
             last_played = lastPlayed == null ? null : RommAuthApi.Iso(lastPlayed.Value),
             is_main_sibling = false,
-            backlogged = Val("backlogged", false),
-            now_playing = Val("now_playing", false),
+            backlogged = backloggedOut,
+            now_playing = nowPlayingOut,
             hidden = RommLibrary.HiddenOf(game),
             rating = (int)Math.Round(RommLibrary.RatingOf(game) * 2),
             difficulty = Val("difficulty", 0),
             completion = completion,
-            status = StatusOf(completed, Val<string?>("status", null), lastPlayed, game),
+            status = imposed != null ? imposed.Value.status
+                   : StatusOf(completed, Val<string?>("status", null), lastPlayed, game),
         };
     }
 
@@ -209,6 +280,19 @@ internal static class RommUserApi
         return 0;
     }
 
+    private static bool AsBool(object? v)
+    {
+        if (v is bool b) return b;
+        return v is JsonElement e && e.ValueKind is JsonValueKind.True;
+    }
+
+    /// <summary>The three "I'm done with this here" statuses — RomM's retired and never_playing, plus
+    /// the "dropped" spelling Freegosy sends.</summary>
+    private static bool IsAbandon(string? status)
+        => string.Equals(status, "dropped", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(status, "retired", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(status, "never_playing", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsFinished(string? status)
         => string.Equals(status, "finished", StringComparison.OrdinalIgnoreCase)
         || string.Equals(status, "completed_100", StringComparison.OrdinalIgnoreCase);
@@ -244,14 +328,11 @@ internal static class RommUserApi
         var refused = RommAuthApi.Require(ctx, RommScopes.CollectionsRead, out var identity);
         if (refused != null) return refused;
 
+        // Favorites only. LaunchBox playlists used to be exported read-only here; they are the
+        // desktop's arrangement, not the server's contract, and they leak titles from platforms the
+        // library page does not serve — so they stay home.
         var st = RommLibrary.Parental(ctx.Request);
-        var list = new List<object> { FavoritesDto(st, identity?.TokenId) };
-        foreach (var pl in Playlists())
-        {
-            var dto = PlaylistDto(pl, st, identity?.TokenId);
-            if (dto != null) list.Add(dto);
-        }
-        return RommApi.Json(list.ToArray());
+        return RommApi.Json(new object[] { FavoritesDto(st, identity?.TokenId) });
     }
 
     public static HttpResponse CollectionById(RouteContext ctx)
@@ -264,12 +345,9 @@ internal static class RommUserApi
         var name = RommIdMap.CollectionNameOf(id);
         if (name == null) return RommApi.Error(404, "Collection not found");
 
-        if (string.Equals(name, FavoritesName, StringComparison.OrdinalIgnoreCase))
-            return RommApi.Json(FavoritesDto(st, identity?.TokenId));
-
-        var pl = Playlists().FirstOrDefault(p => Safe(() => p.Name) == name);
-        var dto = pl == null ? null : PlaylistDto(pl, st, identity?.TokenId);
-        return dto == null ? RommApi.Error(404, "Collection not found") : RommApi.Json(dto);
+        return string.Equals(name, FavoritesName, StringComparison.OrdinalIgnoreCase)
+            ? RommApi.Json(FavoritesDto(st, identity?.TokenId))
+            : RommApi.Error(404, "Collection not found");
     }
 
     /// <summary>POST /api/collections/{id}/roms {rom_ids:[…]} — membership add. Only Favorites is
@@ -347,28 +425,6 @@ internal static class RommUserApi
             "Your LaunchBox favorites", romIds, isFavorite: true);
     }
 
-    private static object? PlaylistDto(IPlaylist pl, WebParentalState? st, int? tokenId)
-    {
-        var name = Safe(() => pl.Name);
-        if (string.IsNullOrEmpty(name)) return null;
-
-        var romIds = new List<int>();
-        try
-        {
-            foreach (var g in pl.GetAllGames(true) ?? Array.Empty<IGame>())
-            {
-                if (g == null) continue;
-                if (st != null && (st.IsHidden(RommLibrary.PlatformOf(g)) || !st.IsRatingAllowed(RommLibrary.EsrbOf(g)))) continue;
-                if (RommLibrary.HiddenOf(g) && !RommConfig.ExposeHiddenGames) continue;
-                romIds.Add((int)RommRoms.RomIdFor(g, tokenId));
-            }
-        }
-        catch { }
-        if (romIds.Count == 0) return null;
-
-        return CollectionDto(RommIdMap.CollectionId(name!), name!, "", romIds, isFavorite: false);
-    }
-
     private static object CollectionDto(int id, string name, string description, List<int> romIds, bool isFavorite) => new
     {
         id,
@@ -391,15 +447,4 @@ internal static class RommUserApi
         owner_username = RommConfig.Username,
     };
 
-    private static List<IPlaylist> Playlists()
-    {
-        try
-        {
-            return (PluginHelper.DataManager.GetAllPlaylists() ?? Array.Empty<IPlaylist>())
-                .Where(p => p != null).ToList();
-        }
-        catch { return new List<IPlaylist>(); }
-    }
-
-    private static string? Safe(Func<string?> f) { try { return f(); } catch { return null; } }
 }

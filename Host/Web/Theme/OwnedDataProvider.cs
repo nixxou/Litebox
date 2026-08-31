@@ -1,4 +1,4 @@
-// The data source for both theme surfaces (BigBox Web + LiteBox Web): builds the JSON contract from the user's
+﻿// The data source for both theme surfaces (BigBox Web + LiteBox Web): builds the JSON contract from the user's
 // REAL library, read live from PluginHelper.DataManager (LiteBox's own in-process HostDataManagerXml) + the
 // in-memory GameCache for media. This is exactly what a LaunchBox/BigBox host browses — the SDK types (IGame /
 // IPlatform / IPlaylist / IPlatformCategory) are real in-process, so the data reads compile as-is.
@@ -772,6 +772,65 @@ internal static class OwnedDataProvider
         if (url == null) return ("", "");
         return (url + "?q=thumb&v=" + size, url + "?q=full&v=" + size);
     }
+
+    /// <summary>merged_screenshots for the RomM DTO: the screenshots the desktop grid would show, in the
+    /// same order (type rank, then region), full tier — a phone shows them fullscreen, and a client that
+    /// wants small fetches the cover, not these. Cache-first with the same disk fallback as the covers.</summary>
+    internal static string[] ScreenshotFullUrls(IGame game, int max)
+    {
+        var urls = new List<string>();
+        try
+        {
+            var cg = ResolveCacheGame(game);
+            List<GameCacheImageRef> imgs = null;
+            if (cg != null) try { imgs = cg.GetAllImagesTypeFirst("Screenshots", max); } catch { }
+            if (imgs != null)
+                foreach (var r in imgs)
+                {
+                    if (r == null || string.IsNullOrEmpty(r.FullPath)) continue;
+                    long size = 0; try { size = r.GetFileSize(); } catch { }
+                    if (size == 0) size = SizeOf(r.FullPath);
+                    var u = MediaProxy.BuildProxyUrl(r.FullPath, null, 0, ExtOf(r.FullPath), "local", "Screenshots");
+                    if (u != null) urls.Add(u + "?q=full&v=" + size);
+                }
+            if (urls.Count == 0)
+            {
+                var disk = DiskPath(game, "Screenshots");
+                if (!string.IsNullOrEmpty(disk))
+                {
+                    var u = MediaProxy.BuildProxyUrl(disk, null, 0, ExtOf(disk), "local", "Screenshots");
+                    if (u != null) urls.Add(u + "?q=full&v=" + SizeOf(disk));
+                }
+            }
+        }
+        catch { }
+        return urls.ToArray();
+    }
+
+    /// <summary>The game's manual as a served URL: the PINNED document first (ManualPath — the user chose
+    /// it), else the resolver's best match, the same order the Documents page uses. One directory walk —
+    /// callers on a listing path must not use this; the badge bit answers "has one?" for free there.</summary>
+    internal static (bool has, string url) ManualInfo(IGame game)
+    {
+        try
+        {
+            string path = null;
+            try { path = game.ManualPath; } catch { }
+            if (!string.IsNullOrEmpty(path) && !System.IO.Path.IsPathRooted(path))
+                try { path = System.IO.Path.Combine(Media.MediaResolver.LbRoot ?? "", path); } catch { }
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+            {
+                var gid = Guid.TryParse(SafeStr(() => game.Id), out var x) ? x : Guid.Empty;
+                path = Media.MediaResolver.Manual(SafeStr(() => game.Platform), gid, SafeStr(() => game.Title));
+            }
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return (false, null);
+            var u = MediaProxy.BuildProxyUrl(path, null, 0, ExtOf(path), "local", "Manual");
+            return u == null ? (false, null) : (true, u + "?v=" + SizeOf(path));
+        }
+        catch { return (false, null); }
+    }
+
+    private static string SafeStr(Func<string> f) { try { return f() ?? ""; } catch { return ""; } }
 
     // Cache absent -> disk, and the SAME answer either way.
     //

@@ -20,6 +20,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using LbApiHost.Host.Diag;
 using LbApiHost.Host.Web;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -130,12 +131,16 @@ internal static class RommLibraryApi
             if (int.TryParse(first, out var pid)) platformId = pid;
         }
 
+        RommPerf.Reset();
+        var tRoute = RommPerf.Tick();
+        var t = RommPerf.Tick();
         var games = RommLibrary.Query(
             platformId,
             req.GetQuery("search_term"),
             (req.GetQuery("order_by") ?? "name").ToLowerInvariant(),
             (req.GetQuery("order_dir") ?? "asc").ToLowerInvariant(),
             st, identity?.TokenId);
+        RommPerf.Add("query", t);
 
         int limit = Math.Clamp(req.GetQueryInt("limit", 50), 1, 10_000);
         int offset = Math.Max(0, req.GetQueryInt("offset", 0));
@@ -144,15 +149,19 @@ internal static class RommLibraryApi
         // its own on the detail page.
         // Les rom_id de la page, puis LEURS lignes en une seule requete — pas une par ligne.
         var slice = games.Skip(offset).Take(limit).ToList();
+        t = RommPerf.Tick();
         var ids = slice.Select(g => RommRoms.RomIdFor(g, identity?.TokenId)).Where(v => v > 0).ToList();
         var rows = RommIndexer.RowsOf(ids);
+        RommPerf.Add("rows", t);
 
+        t = RommPerf.Tick();
         var page = slice.Select(g =>
         {
             long id = RommRoms.RomIdFor(g, identity?.TokenId);
             rows.TryGetValue(id, out var r);
             return RomDto(g, detailed: false, identity?.TokenId, r);
         }).ToArray();
+        RommPerf.Add("dto-other", t);
 
         // The sidecar indexes back RomM's virtual scroll; each is gated by its query flag like upstream.
         var charIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -166,10 +175,16 @@ internal static class RommLibraryApi
             }
         }
 
+        t = RommPerf.Tick();
         var romIdIndex = req.GetQueryBool("with_rom_id_index", true)
             ? games.Select(g => (int)RommRoms.RomIdFor(g, identity?.TokenId)).ToArray()
             : Array.Empty<int>();
+        RommPerf.Add("index", t);
 
+        // Argosy says with_filter_values=false on every browse — building the object anyway cost a
+        // platform-id resolution per game of the RESULT SET, not the page.
+        bool wantFilters = req.GetQueryBool("with_filter_values", true);
+        t = RommPerf.Tick();
         object filterValues = new
         {
             genres = Array.Empty<string>(),
@@ -182,8 +197,16 @@ internal static class RommLibraryApi
             regions = Array.Empty<string>(),
             languages = Array.Empty<string>(),
             tags = Array.Empty<string>(),
-            platforms = games.Select(g => RommIdMap.PlatformId(RommLibrary.PlatformOf(g))).Distinct().ToArray(),
+            platforms = wantFilters
+                ? games.Select(g => RommIdMap.PlatformId(RommLibrary.PlatformOf(g))).Distinct().ToArray()
+                : Array.Empty<int>(),
         };
+        RommPerf.Add("filters", t);
+
+        double routeMs = (RommPerf.Tick() - tRoute) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        if (routeMs > 300)
+            RommTrace.Note("perf n=" + slice.Count + "/" + games.Count
+                + " route=" + routeMs.ToString("0") + "ms " + RommPerf.Report());
 
         return RommApi.Json(new
         {
@@ -227,8 +250,14 @@ internal static class RommLibraryApi
         // binding can narrow.
         // The row travels too: without it the embedded saves cover the whole game — with extraction
         // on, another entry's saves land in this ROM's detail, stamped with the wrong rom id.
-        return RommApi.Json(RomDto(game, detailed: true, identity?.TokenId,
-                                   RommIndexer.RowOf(ctx.GetRouteInt("id", -1))));
+        RommPerf.Reset();
+        var tRoute = RommPerf.Tick();
+        var dto = RomDto(game, detailed: true, identity?.TokenId,
+                         RommIndexer.RowOf(ctx.GetRouteInt("id", -1)));
+        double routeMs = (RommPerf.Tick() - tRoute) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        if (routeMs > 300)
+            RommTrace.Note("perf " + RommPerf.Report());
+        return RommApi.Json(dto);
     }
 
     public static HttpResponse Stats(RouteContext ctx)
@@ -262,12 +291,14 @@ internal static class RommLibraryApi
         var slug = RommPlatformMap.SlugFor(platformName) ?? "unknown";
         int platformId = RommIdMap.PlatformId(platformName);
 
+        var tFs = RommPerf.Tick();
         var absPath = RommLibrary.RomAbsPath(g);
         var fsName = absPath != null ? Path.GetFileName(absPath) : (RommLibrary.TitleOf(g) + ".rom");
         long size = RommLibrary.SizeOf(g);
         var fsPath = "roms/" + slug;
         string fsNameNoExt, fsExt;
         bool missing = absPath == null || !SafeFileExists(absPath);
+        RommPerf.Add("fs", tFs);
 
         // ONE rom, ONE file. The rom_id already names which — either this client's lock, or the game's
         // default slot, which resolves to what the desktop picker would select.
@@ -312,11 +343,22 @@ internal static class RommLibraryApi
         var lastPlayed = RommLibrary.LastPlayedOf(g);
         var release = RommLibrary.ReleaseOf(g);
 
+        var tCover = RommPerf.Tick();
         var cover = CoverUrls(g);
+        RommPerf.Add("cover", tCover);
+        var tMan = RommPerf.Tick();
+        var manual = detailed ? OwnedDataProvider.ManualInfo(g)
+                              : (has: HasManualBit(g), url: (string?)null);
+        RommPerf.Add("manual", tMan);
         var regions = SplitList(RommLibrary.RegionOf(g));
         var genres = SplitList(RommLibrary.GenresOf(g));
 
+        var tShots = RommPerf.Tick();
+        var shots = OwnedDataProvider.ScreenshotFullUrls(g, 12);
+        RommPerf.Add("shots", tShots);
+        var tFiles = RommPerf.Tick();
         var files = BuildFiles(g, gameId, romId, fsPath, added, modified, chosen);
+        RommPerf.Add("files", tFiles);
 
         var dto = new Dictionary<string, object?>
         {
@@ -353,11 +395,7 @@ internal static class RommLibraryApi
             ["name"] = title,
             ["name_sort_key"] = RommLibrary.SortNameOf(g).ToLowerInvariant(),
             ["slug"] = Slugify(title),
-            // Probe: the description becomes the moment this response was built, so how stale a client's
-            // copy is can be read straight off the game page. See RommConfig.DebugStampSummary.
-            ["summary"] = RommConfig.DebugStampSummary
-                ? "SYNC " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
-                : NullIfEmpty(RommLibrary.NotesOf(g)),
+            ["summary"] = NullIfEmpty(RommLibrary.NotesOf(g)),
 
             ["alternative_names"] = Array.Empty<string>(),
             ["youtube_video_id"] = null,
@@ -370,7 +408,7 @@ internal static class RommLibraryApi
                 companies = CompaniesOf(g),
                 game_modes = SplitList(RommLibrary.PlayModeOf(g)),
                 age_ratings = SplitList(RommLibrary.EsrbOf(g)),
-                player_count = "",
+                player_count = MaxPlayersText(g),
                 first_release_date = release == null
                     ? (long?)null
                     : new DateTimeOffset(release.Value.ToUniversalTime()).ToUnixTimeMilliseconds(),
@@ -390,9 +428,11 @@ internal static class RommLibraryApi
             ["path_cover_large"] = cover.large,
             ["url_cover"] = "",
 
-            ["has_manual"] = false,
+            // The listing answers from the badge bit (no I/O — the sweep filled it); only the detail
+            // pays the resolver's walk and hands out the actual file.
+            ["has_manual"] = manual.has,
             ["has_soundtrack"] = false,
-            ["path_manual"] = null,
+            ["path_manual"] = manual.url,
             ["url_manual"] = null,
             ["path_video"] = null,
 
@@ -420,7 +460,7 @@ internal static class RommLibraryApi
             ["has_notes"] = false,
 
             ["rom_user"] = RommUserApi.RomUserDto(g),
-            ["merged_screenshots"] = Array.Empty<string>(),
+            ["merged_screenshots"] = shots,
             ["merged_ra_metadata"] = null,
 
             ["files"] = files,
@@ -434,11 +474,13 @@ internal static class RommLibraryApi
             // travel: without the row this covered the whole game's saves, and without the token the
             // requester's own branch was filtered out — /api/saves answered differently, and of two
             // contradicting views this one was the wrong one.
+            var tAssets = RommPerf.Tick();
             object[] saves, states;
             try { saves = RommAssetsApi.ListForGame(g, states: false, tokenId, row).Select(a => RommAssetsApi.AssetDto(a, "saves")).ToArray(); }
             catch { saves = Array.Empty<object>(); }
             try { states = RommAssetsApi.ListForGame(g, states: true, tokenId, row).Select(a => RommAssetsApi.AssetDto(a, "states")).ToArray(); }
             catch { states = Array.Empty<object>(); }
+            RommPerf.Add("assets", tAssets);
             dto["user_saves"] = saves;
             dto["user_states"] = states;
             dto["all_user_saves"] = saves;
@@ -560,6 +602,26 @@ internal static class RommLibraryApi
     private static bool SafeFileExists(string p) { try { return File.Exists(p); } catch { return false; } }
 
     private static string? NullIfEmpty(string s) => string.IsNullOrWhiteSpace(s) ? null : s;
+
+    /// <summary>metadatum.player_count, from LaunchBox's MaxPlayers. A string because upstream's is.</summary>
+    private static string MaxPlayersText(IGame g)
+    {
+        try { return g.MaxPlayers is int n && n > 0 ? n.ToString(CultureInfo.InvariantCulture) : ""; }
+        catch { return ""; }
+    }
+
+    /// <summary>"Has a manual?" without touching the disk: the badge sweep's document bit, plus the
+    /// pinned path — a pin outside the scanned tree is a manual the bit may not know about.</summary>
+    private static bool HasManualBit(IGame g)
+    {
+        try
+        {
+            if (g is Data.HostGame hg && hg.HasManual) return true;
+            string p = null; try { p = g.ManualPath; } catch { }
+            return !string.IsNullOrEmpty(p);
+        }
+        catch { return false; }
+    }
 
     private static int? LaunchBoxDbIdOf(IGame g) { try { return g.LaunchBoxDbId; } catch { return null; } }
 

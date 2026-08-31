@@ -162,6 +162,10 @@ internal static class RommSelfTest
         Assets(http, baseUrl);
         RomSlots();
         SyncDecisions();
+        Reanchor();
+        ProgressMapping();
+        FolderCore();
+        ZipNative();
         GamesTable();
         PushBundles();
     }
@@ -306,10 +310,130 @@ internal static class RommSelfTest
         // The slot-blind detector: Freegosy's Flutter stack, and nothing else known.
         Check("a Dart agent gets the single-line view",
             RommAssetsApi.SlotBlind(new HttpRequest { Headers = { ["User-Agent"] = "Dart/3.3 (dart:io)" } }));
+        // Mesure en direct : Freegosy se nomme lui-meme, et ce n'est PAS l'UA Dart supposee.
+        Check("Freegosy's own name gets the single-line view",
+            RommAssetsApi.SlotBlind(new HttpRequest { Headers = { ["User-Agent"] = "Freegosy/0.5.11" } }));
         Check("okhttp (Argosy) gets the full view",
             !RommAssetsApi.SlotBlind(new HttpRequest { Headers = { ["User-Agent"] = "okhttp/5.3.2" } }));
         Check("an unknown agent gets the full view",
             !RommAssetsApi.SlotBlind(new HttpRequest()));
+    }
+
+    // ── Re-anchoring a branch ─────────────────────────────────────────────────
+    //
+    // The scan takes the FIRST row of a SaveGroupId as the group's record, so the row order IS the
+    // anchor. Adopt moves the freshly pushed copy in front when its content is newer, and the old
+    // anchor becomes an ordinary backup. Pure list surgery, pinned here.
+
+    private static void Reanchor()
+    {
+        System.Collections.Generic.Dictionary<string, string> Row(string gid, string path) =>
+            new(System.StringComparer.Ordinal) { ["SaveGroupId"] = gid, ["FilePath"] = path };
+
+        var rows = new System.Collections.Generic.List<System.Collections.Generic.Dictionary<string, string>>
+        {
+            Row("other", "X:\\va\\o.srm"),
+            Row("g1", "X:\\va\\first.srm"),
+            Row("g1", "X:\\va\\second.srm"),
+        };
+
+        Check("the fresh row moves in front of the group's first row",
+            RommAssetsApi.ReanchorRows(rows, "g1", "X:\\va\\second.srm")
+            && rows[1].GetValueOrDefault("FilePath") == "X:\\va\\second.srm"
+            && rows[2].GetValueOrDefault("FilePath") == "X:\\va\\first.srm");
+        Check("rows of other groups do not move",
+            rows[0].GetValueOrDefault("SaveGroupId") == "other");
+        Check("re-anchoring the anchor itself is a no-op",
+            !RommAssetsApi.ReanchorRows(rows, "g1", "X:\\va\\second.srm"));
+        Check("an unknown path moves nothing",
+            !RommAssetsApi.ReanchorRows(rows, "g1", "X:\\va\\ghost.srm"));
+    }
+
+    // ── Le coeur derive du dossier ────────────────────────────────────────────
+    //
+    // Deux entrees d'emulateur LaunchBox peuvent partager un meme RetroArch avec des -L differents ;
+    // le greffon de l'emulateur ASSOCIE etiquette alors la save de SON coeur configure, meme quand le
+    // fichier vit dans le dossier d'un autre. Le dossier, ecrit par RetroArch lui-meme, fait foi.
+
+    private static void FolderCore()
+    {
+        Check("un chemin trie par coeur nomme son dossier",
+            Saves.SaveManager.CoreFromSortedPath(@"G:\Emu\RetroArch\saves\Snes9x\Zelda.srm") == "Snes9x"
+            && Saves.SaveManager.CoreFromSortedPath(@"G:\Emu\RetroArch\states\bsnes\Zelda.state") == "bsnes");
+        Check("un chemin plat n'invente rien",
+            Saves.SaveManager.CoreFromSortedPath(@"G:\Emu\RetroArch\saves\Zelda.srm") == ""
+            && Saves.SaveManager.CoreFromSortedPath(@"G:\Saves\SNES\Zelda.srm") == "");
+        Check("le nom d'affichage et le nom de lib sont le meme coeur",
+            Saves.SaveManager.CoreEq("Snes9x", "snes9x_libretro")
+            && Saves.SaveManager.CoreEq("bsnes", "bsnes_libretro")
+            && !Saves.SaveManager.CoreEq("Snes9x", "bsnes_libretro")
+            && !Saves.SaveManager.CoreEq("", "snes9x_libretro"));
+    }
+
+    private static void ZipNative()
+    {
+        Check("la famille zip-natif reconnait ses machines par le slug",
+            RommPlatformMap.ZipNative("Arcade")
+            && RommPlatformMap.ZipNative("MAME")
+            && RommPlatformMap.ZipNative("SNK Neo Geo AES")
+            && RommPlatformMap.ZipNative("Capcom CPS2")
+            && RommPlatformMap.ZipNative("Sega Model 3")
+            && RommPlatformMap.ZipNative("Sega Naomi"));
+        Check("le reste du monde n'y entre pas",
+            !RommPlatformMap.ZipNative("Super Nintendo Entertainment System")
+            && !RommPlatformMap.ZipNative("Nintendo Game Boy")
+            && !RommPlatformMap.ZipNative("Sony Playstation")
+            && !RommPlatformMap.ZipNative(""));
+    }
+
+    // ── Progress ↔ rom_user ───────────────────────────────────────────────────
+    //
+    // The vocabulary is the user's, so recognition is by meaning and writing resolves against the
+    // live list (not testable here — it needs the settings store). The pure halves pin exactly.
+
+    private static void ProgressMapping()
+    {
+        Check("the stock strings all classify",
+            RommProgress.Classify("Not Started / Unplayed") == ProgressKind.Unplayed
+            && RommProgress.Classify("Not Started / Want to Play") == ProgressKind.WantToPlay
+            && RommProgress.Classify("Not Started / Won't Play") == ProgressKind.WontPlay
+            && RommProgress.Classify("Active / In Progress") == ProgressKind.InProgress
+            && RommProgress.Classify("Active / Continuous") == ProgressKind.Continuous
+            && RommProgress.Classify("Active / Paused") == ProgressKind.Paused
+            && RommProgress.Classify("Done / Beaten") == ProgressKind.Beaten
+            && RommProgress.Classify("Done / Completed") == ProgressKind.Completed
+            && RommProgress.Classify("Done / Mastered") == ProgressKind.Mastered
+            && RommProgress.Classify("Done / Dropped") == ProgressKind.Dropped);
+        Check("a renamed value still classifies by its word",
+            RommProgress.Classify("Fini / Termine") == ProgressKind.Completed
+            && RommProgress.Classify("Abandonne") == ProgressKind.Dropped);
+        Check("a free value is mute, not an error",
+            RommProgress.Classify("MaCategorieAMoi") == ProgressKind.Unknown
+            && RommProgress.Classify("") == ProgressKind.Unknown
+            && RommProgress.Classify(null) == ProgressKind.Unknown);
+
+        Check("explicit status outranks the derivations",
+            RommProgress.TargetOf("never_playing", 50, true, true, true) == ProgressKind.WontPlay
+            && RommProgress.TargetOf("retired", 0, false, false, true) == ProgressKind.Dropped
+            && RommProgress.TargetOf("dropped", 0, false, false, true) == ProgressKind.Dropped
+            && RommProgress.TargetOf("finished", 0, false, false, true) == ProgressKind.Beaten);
+        Check("completion 100 means Completed even without the status",
+            RommProgress.TargetOf(null, 100, false, false, true) == ProgressKind.Completed);
+        Check("now_playing beats a mere percentage",
+            RommProgress.TargetOf("incomplete", 40, false, true, true) == ProgressKind.InProgress);
+        Check("a percentage without play-now reads as Paused",
+            RommProgress.TargetOf("incomplete", 40, false, false, true) == ProgressKind.Paused);
+        Check("backlogged with nothing else is Want to Play",
+            RommProgress.TargetOf("incomplete", 0, true, false, false) == ProgressKind.WantToPlay);
+        Check("a played game with no signal is left alone",
+            RommProgress.TargetOf("incomplete", 0, false, false, true) == ProgressKind.Unknown);
+        Check("a never-played game with no signal reads Unplayed",
+            RommProgress.TargetOf(null, 0, false, false, false) == ProgressKind.Unplayed);
+
+        Check("families group as the stickiness expects",
+            RommProgress.FamilyOf(ProgressKind.Mastered) == RommProgress.FamilyOf(ProgressKind.Completed)
+            && RommProgress.FamilyOf(ProgressKind.Continuous) == RommProgress.FamilyOf(ProgressKind.InProgress)
+            && RommProgress.FamilyOf(ProgressKind.WantToPlay) != RommProgress.FamilyOf(ProgressKind.Paused));
     }
 
     // ── Negotiate: the decision core ──────────────────────────────────────────

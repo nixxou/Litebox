@@ -297,6 +297,21 @@ internal static class RommAuth
         catch (Exception ex) { LbLog.Warn("romm", "token store failed: " + ex.Message); }
     }
 
+    /// <summary>Renames a token. Purely display: nothing routes on the name — a branch is keyed on the
+    /// client INDEX (itself keyed on the immutable token id) — so this touches labels-to-come and the
+    /// options grid, never an identity. Existing branch groups keep the SaveGroupName they were written
+    /// with; a device that pairs AGAIN mints a new token named after its model, as always.</summary>
+    public static bool RenameToken(int id, string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        var all = ListTokens();
+        var t = all.FirstOrDefault(x => x.Id == id);
+        if (t == null) return false;
+        t.Name = name.Trim();
+        SaveTokens(all);
+        return true;
+    }
+
     /// <summary>Mints a token. The secret is returned ONCE — only its hash is kept, so a lost token is
     /// regenerated, never recovered.</summary>
     public static (RommClientToken record, string secret) CreateClientToken(string name, IEnumerable<string>? scopes = null, DateTime? expiresUtc = null, string? deviceId = null)

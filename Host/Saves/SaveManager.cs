@@ -1392,7 +1392,10 @@ internal static class SaveManager
             if (!string.IsNullOrEmpty(g.AppId)) row["AdditionalApplicationId"] = g.AppId!;
             row["EmulatorFileName"] = g.EmulatorFileName;
             if (g.EmulatorCore.Length > 0) row["EmulatorCore"] = g.EmulatorCore;
-            row["Title"] = g.IsState ? $"Save State {g.Slot ?? 0}" : "Saved Game";
+            // The label belongs to the FILE, not to the shelf it sits on. A save labelled while it was
+            // in play keeps that label once archived, and gets it back if it is restored — so a copy
+            // inherits the live record's label instead of being stamped with the generic one.
+            row["Title"] = ActiveLabelOf(g) ?? (g.IsState ? $"Save State {g.Slot ?? 0}" : "Saved Game");
             row["SaveGroupName"] = g.GroupName;
             row["SaveGroupId"] = g.GroupId;
             row["MatchLineageId"] = g.Record?.GetValueOrDefault("MatchLineageId") ?? g.GroupId;
@@ -1423,7 +1426,9 @@ internal static class SaveManager
         // This only covers g's OWN live save. When the file being displaced belongs to another group, the
         // caller archives it first — it is the one holding the scan. See SaveAction_SetActive.
         try { if (g.Active != null) Backup(g, force: false); } catch { }
-        return RestoreFrom(g, SaveVault.Abs(e), targetSlot ?? e.Slot, e.IsState, confirmOverwrite);
+        // The copy's own label comes back with it — including an empty one, which clears the live
+        // record. The save being displaced kept its label on the way into the vault, just above.
+        return RestoreFrom(g, SaveVault.Abs(e), targetSlot ?? e.Slot, e.IsState, confirmOverwrite, e.Title);
     }
 
     /// <summary>Puts the file at <paramref name="abs"/> in play as this group's save, whatever it is and
@@ -1435,8 +1440,10 @@ internal static class SaveManager
     ///
     /// Unlike Restore, this does NOT archive what it displaces. The caller decides, because only it knows
     /// whether the displaced save is already safe.</summary>
+    /// <param name="label">What the incoming file is called. Null leaves the live record's label as it
+    /// is; empty clears it. It travels with the file — see SetActiveLabel.</param>
     internal static string? RestoreFrom(SaveGroup g, string abs, int? slot, bool asState,
-                                        Func<bool> confirmOverwrite)
+                                        Func<bool> confirmOverwrite, string? label = null)
     {
         if (g.Plugin is not EmulatorPlugin plugin) return "No integration plugin for this save.";
         if (!File.Exists(abs) && !Directory.Exists(abs)) return "The file is missing on disk:\n" + abs;
@@ -1458,7 +1465,10 @@ internal static class SaveManager
             try
             {
                 var resp = AddSaveFileCwdSafe(plugin, new AddSaveArgs { SaveToAdd = save, ShouldOverwriteFunc = confirmOverwrite });
-                return resp is { WasSuccess: true } ? null : (resp?.Message ?? "The plugin could not restore this save.");
+                if (resp is not { WasSuccess: true })
+                    return resp?.Message ?? "The plugin could not restore this save.";
+                SetActiveLabel(g, label);
+                return null;
             }
             finally { scope?.Dispose(); }
         }
@@ -1725,6 +1735,39 @@ internal static class SaveManager
     /// file"), which writes the live record's Title. Null leaves it alone — and leaving it alone is what
     /// LaunchBox does when the field is submitted unchanged: its prefill is a display default, not a
     /// stored value, and validating it wrote nothing.</summary>
+    /// <summary>The label carried by this group's LIVE save, or null when it has none — which is the
+    /// ordinary state, since LaunchBox writes no Title on a live record until someone names one.
+    ///
+    /// Reads the record and not the group, and only when that record really is the live one: an In Vault
+    /// group's Record points at a copy, whose label is that copy's and nobody else's.</summary>
+    private static string? ActiveLabelOf(SaveGroup g)
+    {
+        var r = g.Record;
+        if (r == null || IsVaultRow(r)) return null;
+        return r.GetValueOrDefault("Title") is { Length: > 0 } t ? t : null;
+    }
+
+    /// <summary>Labels this group's live save. An empty label REMOVES the field, which is what a file
+    /// carrying no label means — not the same as passing null, which leaves whatever is there alone.</summary>
+    internal static void SetActiveLabel(SaveGroup g, string? label)
+    {
+        if (label == null || g.Game is not ILiteBoxGame lbg) return;
+        try
+        {
+            var rows = lbg.GetSubEntities("GameSave").Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
+            bool dirty = false;
+            foreach (var row in rows)
+            {
+                if (!string.Equals(row.GetValueOrDefault("SaveGroupId"), g.GroupId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (IsVaultRow(row)) continue;
+                if (label.Length == 0) { if (row.Remove("Title")) dirty = true; }
+                else if (row.GetValueOrDefault("Title") != label) { row["Title"] = label; dirty = true; }
+            }
+            if (dirty) lbg.SetSubEntities("GameSave", rows);
+        }
+        catch (Exception ex) { Diag($"labelling the live save failed: {ex.Message}"); }
+    }
+
     public static void Rename(SaveGroup g, string newName, string? activeLabel = null)
     {
         g.GroupName = newName;

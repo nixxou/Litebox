@@ -1,4 +1,4 @@
-# Audit du stockage — LiteBox (+ ExtendDB) — 2026-07-26 (revu 2026-08-26, LiteBox 0.9.3)
+# Audit du stockage — LiteBox (+ ExtendDB) — 2026-07-26 (revu 2026-09-01, LiteBox 0.9.4)
 
 État des lieux exhaustif de TOUT ce que LiteBox persiste, où, sous quelle forme, et les pistes de
 standardisation. Déclencheur : la découverte tardive de `litebox-options.db` pendant le chantier
@@ -15,10 +15,10 @@ locks/3D — trop de stores épars pour garder le fil.
 | 3 | **Options-db** | `Core\litebox\litebox-options.db` | store durable EAV | LA bdd guid-keyée pour les données par-entité LiteBox-own + clés Settings « problématiques » selon la version LB. Jamais flushée vers les XML |
 | 4 | **LiteBox.ini** | `Core\litebox\LiteBox.ini` | config globale | ~28+ clés plates (LiteBoxConfig, merge-save) + sections (`[Rom]`…) |
 | 5 | **JSON par feature** | `Core\litebox\*.json` | configs/données | 1 fichier / feature (détail §3) |
-| 6 | **SQLite par feature** | `launch-history.db`, `rom-archive-cache.db`, `rom-archive-history.db` | données/caches | dbs dédiées, `user_version` gaté |
+| 6 | **SQLite par feature** | `launch-history.db`, `rom-archive-cache.db`, `rom-archive-history.db`, `romm.db` | données/caches | dbs dédiées, `user_version` gaté |
 | 7 | **Caches disque** | `cache\`, + dirs racine (§4) | rebuildable | thumbs, GLB 3D, RA, badges, webview2… |
 | 8 | **ADS par fichier** | streams NTFS sur les images/roms | méta du FICHIER | `:crc32`, `:info`, `:lock` (partagé plugin), `:lb.dupcheck` ; fallback sidecar `.ads\` |
-| 9 | **Logs** | `litebox-debug.log`, `litebox-store.log`, `mame-submit.log`, `saves-diag.log` | diagnostic | |
+| 9 | **Logs** | `litebox-debug.log`, `litebox-store.log`, `mame-submit.log`, `saves-diag.log`, `romm-requests.log` (opt-in `[RommServer] LogRequests`, absent sinon) | diagnostic | |
 
 ---
 
@@ -32,6 +32,10 @@ locks/3D — trop de stores épars pour garder le fil.
   `ForceFrontendFocusOnShutdown`, `MonitorStartupShutdownWithProcess`.
 - **Modules** : `Module.base`, `Module.rom`, `Module.retroachievements`, `Module.parental`,
   `Module.web`, `Module.monitors`, `Module.rules` (LbModules ; row absente = défaut du module).
+- **RomM** (module "romm", 0.9.4) : `Romm.Devices` + `Romm.DeviceSyncs` (JSON — appareils RomM vus
+  et leurs marques de sync par device_id). `Romm.PasswordHash` / `Romm.SigningKey` /
+  `Romm.ClientTokens` restent DÉCLARÉS mais sont **legacy** : déménagés dans `romm.db` (table `kv`),
+  les rows résiduelles sont effacées au démarrage du module — un fichier = tout l'état (voir §2bis).
 - **Monitor Profiles** (Host\Monitors, ajouté 2026-08) : `MonitorProfiles` (JSON, la liste entière —
   chaque profil porte aussi ses scripts avant/après application : `ScriptBefore`/`ScriptAfter` +
   leur langue `cs`|`ahk`, 0.9.3),
@@ -83,9 +87,40 @@ Résolution jeu → émulateur → global (`LiteBoxOption.ResolveBool/ResolveStr
   `RunAsAdmin`, sondée, donc pas de clé db.
 
 ### scope `platform`
-Déclaré (`LiteBoxOption.ScopePlatform`) mais **aucune clé en service à ce jour**.
+- `RaConsoleKey` (migré de `ra-platform-overrides.json`, sentinelle `"-"`).
+- `Romm.PlatformSlug` (0.9.4) : override du slug RomM d'une plateforme (`"-"` = ne pas exporter) —
+  gagne sur la table codée de `RommPlatformMap`.
+
+### scope `game` — RomM (0.9.4)
+- `Romm.RomUser` = JSON des extras rom_user d'un jeu (status, completion, difficulty, backlogged,
+  now_playing) — ce que les clients RomM écrivent et que le Progress LaunchBox ne porte pas.
 
 ⚠ Aucun GC : les rows d'entités supprimées restent (bénin, à balayer un jour post-GameCache).
+
+---
+
+## 2bis. `romm.db` — l'état du module RomM (0.9.4)
+
+`Core\liteboxomm.db`, `user_version` gaté + `EnsureColumn` pour les colonnes ajoutées après coup.
+**Un fichier = TOUT l'état du module** : le supprimer réinitialise ids, assignations, clients,
+sessions ET credentials d'un bloc, jamais désynchronisés (décision 2026-09-01, sans migration —
+ré-appairage à zéro assumé). Tables :
+
+| Table | Contenu |
+|---|---|
+| `romm_games` | une ligne par fichier jouable d'un jeu (guid LB, app, chemins, extract, clients épinglés, générations disable/défaut) — rien n'est jamais supprimé, une ligne invalide est désactivée |
+| `client` | index persistant des clients appairés (`token_id` immuable → index `cN` des branches de saves) — survit à la révocation pour que `#c3` garde son sens |
+| `sync_session` | sessions negotiate (Grout/Argosy) — persistées pour survivre à un restart |
+| `platform` / `file` / `asset` / `collection` | mintage des ids entiers stables servis aux clients (nom/clé → int, jamais réattribués) |
+| `kv` | la liste des jetons clients (**hash SHA-256 seulement**, jamais le secret), le hash PBKDF2 du mot de passe du compte, la clé de signature HS256 |
+
+Cache runtime associé : `GameRow.RommRomId` (tier 1 du GameStore, 4 octets/jeu) — restampé depuis
+`romm.db` au boot, jamais persisté ailleurs. Les branches de saves des clients (`SaveGroupId#cN`)
+vivent dans la couche saves NORMALE (records GameSave + fichiers du vault `<LB>\Saves\`) : ce sont
+des données utilisateur, pas de l'état module. Config : section `[RommServer]` de `LiteBox.ini`
+(Port, AllowedIps, Username, ExposeHiddenGames, IgnoreParental, LogRequests, LogBodies,
+IncludedPlatforms — toutes avec défaut sûr, aucune requise). Désinstallation : couverte par le
+`rmdir Core\litebox` (§ Uninstaller), le vault reste (saves de l'utilisateur).
 
 ---
 

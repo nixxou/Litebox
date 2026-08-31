@@ -1,4 +1,4 @@
-// Data-contract handlers for the BigBox Web theme's /bigbox/data/* + /bigbox/api/* routes. Each handler
+﻿// Data-contract handlers for the BigBox Web theme's /bigbox/data/* + /bigbox/api/* routes. Each handler
 // forwards to OwnedDataProvider, which reads LiteBox's real in-memory library (PluginHelper.DataManager) +
 // GameCache media — the same JSON contract the shipped theme JS (engine/data.js) fetches over HTTP.
 //
@@ -36,12 +36,18 @@ internal static class BigBoxThemeApi
         var menu = new List<object>
         {
             new { label = "Play",        action = "play" },
+        };
+        // In-browser play (S7): a browser tab is not the kiosk's controlled TV surface, so the entry
+        // only exists off-kiosk. The player page itself says "not playable" for unsupported platforms.
+        if (!WebParentalState.IsKioskRequest(ctx.Request))
+        menu.AddRange(new object[]
+        {
             new { label = "Star Rating", action = "rating" },
             new { label = "View Related Games", action = "related" },
             new { label = "Favorite",       action = "favorite" },
             new { label = "Hide",           action = "hide" },
             new { label = "Mark as Broken", action = "broken" },
-        };
+        });
         if (WebParentalState.From(ctx.Request).IsActive)
             menu.Add(new { label = "Unlock", action = "unlock" });
         return Json(menu.ToArray());

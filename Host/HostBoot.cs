@@ -1071,6 +1071,19 @@ internal static class HostBoot
         }
         catch (Exception ex) { Console.WriteLine("[web] start failed: " + ex.Message); }
 
+        // ── RomM server (RommServer module) ─────────────────────────────────
+        // Its own listener on its own port so the official RomM clients reach the library. Only when the
+        // module is on; never started otherwise. Non-fatal.
+        try
+        {
+            if (Modules.LbModules.On(Modules.LbModule.RommServer))
+            {
+                Romm.RommConfig.Reload();
+                Romm.RommServer.Start(Romm.RommConfig.Port);   // logs the listen URL itself
+            }
+        }
+        catch (Exception ex) { Console.WriteLine("[romm] start failed: " + ex.Message); }
+
         for (int i = 0; i < reg.SystemMenus.Count; i++)
         {
             try

@@ -82,6 +82,24 @@ internal static class OptionKeys
         new("Module.web",              Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
         new("Module.monitors",         Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
         new("Module.rules",            Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
+        new("Module.romm",             Glob, OptionType.Bool, OptionCache.Hot, "LbModules"),
+
+        // ── RomM server secrets (never in LiteBox.ini: the account verifier, the token-signing key,
+        //    and the issued client tokens). Cold — read once when the surface authenticates. ──
+        new("Romm.PasswordHash",  Glob, OptionType.String, OptionCache.Cold, "Romm/RommConfig"),
+        new("Romm.SigningKey",    Glob, OptionType.String, OptionCache.Cold, "Romm/RommConfig"),
+        new("Romm.ClientTokens",  Glob, OptionType.Json,   OptionCache.Cold, "Romm/RommAuth"),
+        // Per-platform slug override for the RomM export ("-" = do not export this platform).
+        new("Romm.PlatformSlug",  Platform, OptionType.String, OptionCache.Cold, "Romm/RommPlatformMap"),
+        // Registered client devices + their per-save sync marks (the Grout push-vs-pull decision).
+        new("Romm.Devices",       Glob, OptionType.Json, OptionCache.Cold, "Romm/RommDevices"),
+        new("Romm.DeviceSyncs",   Glob, OptionType.Json, OptionCache.Cold, "Romm/RommDevices"),
+        // Which ROM of an archive each paired client is bound to, per game — what stops a device that
+        // played one version from pulling another version's save on top of it.
+        new("Romm.RomPicks",      Glob, OptionType.Json, OptionCache.Cold, "Romm/RommRomPicks"),
+        // Per-game RomM user-state with no LaunchBox twin (backlogged / now_playing / difficulty /
+        // completion / status) — what PUT /api/roms/{id}/user persists beyond the LB fields.
+        new("Romm.RomUser",       Game, OptionType.Json, OptionCache.Cold, "Romm/RommUserApi"),
 
         // ── Gameplay PER-ENTITY overrides (tri-state: no row = inherit; game → emulator → GLOBAL) ──
         // ONLY the per-entity tiers (game/emulator) live in the DB — that's what the EAV store is for.

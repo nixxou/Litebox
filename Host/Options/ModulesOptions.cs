@@ -218,6 +218,20 @@ internal static class ModulesOptions
             else if (!want && running) Web.EmbeddedWebServer.Stop();
         }
         catch { }
+
+        // The RomM surface owns its own listener, so the same reconcile applies to it independently.
+        try
+        {
+            bool want = LbModules.On(LbModule.RommServer);
+            bool running = Romm.RommServer.IsRunning;
+            if (want && !running)
+            {
+                Romm.RommConfig.Reload();
+                Romm.RommServer.Start(Romm.RommConfig.Port);
+            }
+            else if (!want && running) Romm.RommServer.Stop();
+        }
+        catch { }
     }
 
     /// <summary>Short, consistent tab label for a module's config tab (the catalog Title is often too long).</summary>
@@ -229,6 +243,7 @@ internal static class ModulesOptions
         LbModule.Web               => "Web",
         LbModule.Monitors          => "Monitor profiles",
         LbModule.Rules             => "Launch rules",
+        LbModule.RommServer        => "RomM server",
         _                          => m.ToString(),
     };
 
@@ -241,6 +256,7 @@ internal static class ModulesOptions
         LbModule.Web              => WebPanel.Build(dpiS, readOnly),
         LbModule.Monitors         => MonitorsPanel.Build(dpiS, readOnly),
         LbModule.Rules            => RulesPanel.Build(dpiS, readOnly),
+        LbModule.RommServer       => RommPanel.Build(dpiS, readOnly),
         _                         => (new Panel { Dock = DockStyle.Fill, BackColor = LiteBoxTheme.Bg }, (Action?)null),
     };
 }

@@ -26,6 +26,7 @@ internal enum LbModule
     Web,                // embedded web frontends (LiteBox Web / BigBox Web / database Web)
     Monitors,           // monitor profiles: layout / display mode / sound card, switchable from Tools
     Rules,              // launch rules: BigBoxProfile's sondes & actions on the command line, per entity
+    RommServer,         // RomM-compatible API on its own port, so the official RomM clients see the library
 }
 
 internal static class LbModules
@@ -51,6 +52,8 @@ internal static class LbModules
             "Named desktop presets — monitor layout (position, resolution, refresh, rotation, per-screen zoom), a single monitor's display mode, the default sound card and its volume, or a solo-primary blackout. Switch between them from Tools. Off: the Tools entry is hidden and nothing touches the display.", false, true),
         new(LbModule.Rules, "rules", "Launch rules",
             "BigBoxProfile's probes & actions, native: ordered rules attached to an EMULATOR rewrite the command line right before the spawn, guarded by filters — per-game targeting via marker arguments in the game's custom parameters, stripped before the emulator sees them. Ported action by action — today: Prefix, Suffix, Change exe, Change rom path, Replace (with a variables system), Replace in file, Create file, HID device detector, Copy file, Use file content, Monitor profile, Run C# script, Run AHK script, Run as administrator, Run commands as admin. Off: launches run untouched.", false, true),
+        new(LbModule.RommServer, "romm", "RomM server",
+            "Serves the library as a RomM instance on its own port, so the official RomM clients (Argosy on Android, Grout on handhelds, the Playnite plugin) browse it, download games and sync their saves against LiteBox's own save vault. One account, one password; the network is reachable only through the LAN allow-list. Off: nothing listens.", false, true),
     };
 
     public static Info Meta(LbModule m) => Catalog.First(c => c.Module == m);

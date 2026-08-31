@@ -29,11 +29,12 @@ internal sealed class StaticFileHandler
     }
 
     /// <summary>Route entry point: serves the captured <c>path</c> group under the root.</summary>
-    public HttpResponse Handle(RouteContext ctx) => Serve(ctx.GetRoute("path"));
+    public HttpResponse Handle(RouteContext ctx) => Serve(ctx.GetRoute("path"), ctx.Request);
 
     /// <summary>Serves <paramref name="relPath"/> relative to the root. Empty / "/" → index.html. Missing
-    /// file or a path that escapes the root → 404.</summary>
-    public HttpResponse Serve(string relPath)
+    /// file or a path that escapes the root → 404. Passing <paramref name="req"/> enables Range replies —
+    /// which media elements and the EmulatorJS core loader both ask for.</summary>
+    public HttpResponse Serve(string relPath, HttpRequest req = null)
     {
         string root = _rootProvider();
         relPath = (relPath ?? "").Replace('\\', '/').TrimStart('/');
@@ -63,11 +64,9 @@ internal sealed class StaticFileHandler
             return HttpResponse.NotFound();
         }
 
-        byte[] bytes;
-        try { bytes = File.ReadAllBytes(full); }
-        catch (Exception ex) { LbLog.Warn("web", $"{_tag} read failed {full}: {ex.Message}"); return HttpResponse.ServerError("read error"); }
-
-        var resp = HttpResponse.Bytes(bytes, ContentTypeFor(Path.GetExtension(full)));
+        // Streamed, not buffered: a theme is small but the vendor mount also carries the EmulatorJS cores
+        // (tens of MB each) and video/audio, which the browser fetches by Range.
+        var resp = HttpResponse.FromFile(full, ContentTypeFor(Path.GetExtension(full)), req);
         // Dev-friendly: never cache the shell so theme edits appear on reload.
         resp.Headers["Cache-Control"] = "no-cache";
         return resp;

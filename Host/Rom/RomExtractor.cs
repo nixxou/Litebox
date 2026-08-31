@@ -553,6 +553,59 @@ internal static class RomExtractor
     public static string? ResolveArchiveAbsolutePath(IGame game, string? appId)
         => game == null || !Available ? null : ResolveArchivePath(game, appId);
 
+    /// <summary>Extracts ONE named entry of a game's archive into the regular cache and returns its
+    /// absolute path — the RomM download endpoint's seam. No emulator is involved in a download, so the
+    /// profile row resolves from the platform + the game's default emulator title, same as the listing.
+    /// <c>dir</c> is non-null when companions were extracted alongside (a .cue's .bins): the caller then
+    /// serves the whole directory, because the file alone would be broken. (null, null) on any failure —
+    /// the caller falls back to serving the archive as-is.</summary>
+    public static (string? file, string? dir) ExtractEntryForDownload(IGame game, string? appId, string entryPathOrName)
+    {
+        if (game == null || !Available || string.IsNullOrEmpty(entryPathOrName)) return (null, null);
+        try
+        {
+            var absPath = ResolveArchivePath(game, appId);
+            if (absPath == null || !File.Exists(absPath)) return (null, null);
+
+            string platform = Safe(() => game.Platform) ?? "";
+            string gameTitle = Safe(() => game.Title) ?? "";
+            var emuTitle = ResolveEmuTitle(game);
+            var row = RomConfig.Instance.Resolve(platform, emuTitle);
+
+            ArchiveAnalysis analysis;
+            try { analysis = ArchiveAnalyzer.Analyze(absPath, RomConfig.Instance, row.Priority, row.RomExtensions, row.IgnoredExtensions); }
+            catch (Exception ex) { LbLog.Info("rom", "download: analyze failed: " + ex.Message); return (null, null); }
+
+            ArchiveEntryInfo? target = null;
+            foreach (var f in analysis.StandaloneFiles)
+                if (string.Equals(f.PathInArchive, entryPathOrName, StringComparison.OrdinalIgnoreCase)) { target = f; break; }
+            if (target == null)
+                foreach (var f in analysis.StandaloneFiles)
+                    if (string.Equals(f.FileName, entryPathOrName, StringComparison.OrdinalIgnoreCase)) { target = f; break; }
+            if (target == null) { LbLog.Info("rom", $"download: entry \"{entryPathOrName}\" not in \"{absPath}\""); return (null, null); }
+
+            long archiveSize = 0; try { archiveSize = new FileInfo(absPath).Length; } catch { }
+            string sig = ArchiveSig.ComputePathSignature(absPath, archiveSize);
+            bool outOfBand = !ArchiveCacheEvictor.QualifiesForCache(analysis.UnpackedSize, RomConfig.Instance.CacheMinMb, RomConfig.Instance.CacheMaxMb);
+
+            ArchiveExtractionResult result;
+            try { result = ArchiveExtractor.ExtractOrReuse(analysis, target, row, CacheRoot, sig, outOfBand, gameTitle, platform, emuTitle); }
+            catch (Exception ex) { LbLog.Info("rom", "download: ExtractOrReuse threw: " + ex.Message); return (null, null); }
+            if (!result.Success) { LbLog.Info("rom", "download: extraction failed: " + result.ErrorMessage); return (null, null); }
+
+            if (IsPersistentCachePath(CacheRoot, result.OutputFilePath))
+                ArchiveCacheIndex.Record(CacheRoot, sig, gameTitle, platform, emuTitle, absPath, row.Mode.ToString(), result.OutputFilePath);
+
+            bool withCompanions = (row?.ExtractCompanions ?? false) && analysis.CompanionFiles.Count > 0;
+            return (result.OutputFilePath, withCompanions ? result.OutputDirectory : null);
+        }
+        catch (Exception ex)
+        {
+            LbLog.Info("rom", "download: " + ex.Message);
+            return (null, null);
+        }
+    }
+
     /// <summary>The archive's SHORT content signature for (game, version-appId) — the key the favourite
     /// toggle needs — resolved through the listing cache (analyse + memoise on a miss). "" when there is
     /// no on-disk recognised archive. Lighter than <see cref="ListEntriesDetailed"/> (no decoration/sort).</summary>

@@ -1,23 +1,13 @@
-﻿// Lifecycle owner of LiteBox's local HTTP server.
+﻿// Lifecycle owner of LiteBox's theme/database HTTP surface.
 //
-// Binds 127.0.0.1:{port} (loopback only) by default — no auth, no TLS. LAN access is opt-in: when [Web]
-// AllowedIps lists wildcard IP patterns, the server binds 0.0.0.0 and the accept loop admits a connection only
-// if its remote IP matches a pattern (loopback is ALWAYS allowed; the allow-list is the only gate). One task
-// per accepted connection, a keep-alive loop per socket, and a per-request concurrency cap (~20) so bursts
-// don't spin up unbounded work. Start is idempotent while running; the route table is rebuilt on every Start
-// so the per-site enable flags take effect on a restart. Gated as a whole on LbModule.Web.
-//
-// Slice S1 registers ONLY the static-serving routes (robots + vendor + the three site mounts); the data/API
-// routes land in later slices.
+// Owns the route table and the per-site enable flags; the listener, the accept loop and the keep-alive
+// request loop live in HttpHost, which the RomM API surface reuses on its own port. Binds 127.0.0.1:{port}
+// (loopback only) by default — no auth, no TLS. LAN access is opt-in: when [Web] AllowedIps lists wildcard
+// IP patterns the bind flips to 0.0.0.0 and only matching remotes are admitted (loopback is ALWAYS allowed).
+// Start is idempotent while running; the route table is rebuilt on every Start so the per-site enable flags
+// take effect on a restart. Gated as a whole on LbModule.Web.
 
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Net;
-using System.Net.Sockets;
-using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using LbApiHost.Host;
 using LbApiHost.Host.Diag;
 using LbApiHost.Host.Modules;
@@ -26,19 +16,7 @@ namespace LbApiHost.Host.Web;
 
 internal static class EmbeddedWebServer
 {
-    private static TcpListener _listener;
-    private static CancellationTokenSource _cts;
-    private static Task _acceptLoop;
     private static readonly Router _router = new();
-    private static int _currentPort;
-
-    // Compiled remote-IP allow-list (wildcard patterns from config). Empty ⇒ loopback-only bind; non-empty
-    // ⇒ 0.0.0.0 bind + per-connection filtering. Loopback is always allowed regardless.
-    private static List<Regex> _allowedPatterns = new();
-
-    // Cap on requests processed concurrently. Acquired per-request inside the keep-alive loop (not per
-    // connection) so idle keep-alive sockets don't hold a slot.
-    private static readonly SemaphoreSlim _concurrencyGate = new(20);
 
     // One static-file handler per mount. Roots resolve lazily each request (LiteBoxPaths.Web creates on demand).
     private static readonly StaticFileHandler _vendor  = new(() => LiteBoxPaths.Web("vendor"),   "vendor");
@@ -46,8 +24,17 @@ internal static class EmbeddedWebServer
     private static readonly StaticFileHandler _litebox = new(() => LiteBoxPaths.Web("litebox"),  "litebox");
     private static readonly StaticFileHandler _database = new(() => LiteBoxPaths.Web("database"), "database");
 
-    public static bool IsRunning => _listener != null;
-    public static int CurrentPort => _currentPort;
+    // Listener + connection loop (shared with the other HTTP surfaces — see HttpHost).
+    private static readonly HttpHost _host = new("web", _router)
+    {
+        AllowedIpsProvider = () => WebConfig.AllowedIps,
+        Observe = req => WebSelectionBridge.Observe(req),   // a kiosk browsing IS a selection
+        DegradedProbe = IsDegraded,
+        Decorate = MarkIfDegraded,
+    };
+
+    public static bool IsRunning => _host.IsRunning;
+    public static int CurrentPort => _host.CurrentPort;
 
     public static void Start(int port)
     {
@@ -58,7 +45,7 @@ internal static class EmbeddedWebServer
             LbLog.Once("web", "embedded web server start refused (web module off)");
             return;
         }
-        if (_listener != null) return;
+        if (_host.IsRunning) return;
         try
         {
             // Refresh the [Web] snapshot (enable flags, gzip, allowed IPs) and rebuild the table so a restart
@@ -67,22 +54,7 @@ internal static class EmbeddedWebServer
             RegisterRoutes();
             Media.MediaPolicyStore.Bootstrap();   // warm the remote media-policy slots (no-op when URLs blank)
 
-            _cts = new CancellationTokenSource();
-
-            // LAN access is opt-in: any configured IP pattern flips the bind from loopback to all interfaces;
-            // the accept loop then filters.
-            _allowedPatterns = ParseAllowedIpPatterns(WebConfig.AllowedIps);
-            var bindAddr = _allowedPatterns.Count > 0 ? IPAddress.Any : IPAddress.Loopback;
-
-            _listener = new TcpListener(bindAddr, port);
-            _listener.Start();
-            _currentPort = ((IPEndPoint)_listener.LocalEndpoint).Port;
-
-            LbLog.Info("web", _allowedPatterns.Count > 0
-                ? $"listening on http://0.0.0.0:{_currentPort}/ (LAN access: {_allowedPatterns.Count} pattern(s) + loopback)"
-                : $"listening on http://127.0.0.1:{_currentPort}/ (loopback only)");
-
-            _acceptLoop = Task.Run(() => AcceptLoop(_cts.Token));
+            _host.Start(port);
         }
         catch (Exception ex)
         {
@@ -91,129 +63,7 @@ internal static class EmbeddedWebServer
         }
     }
 
-    public static void Stop()
-    {
-        try { _cts?.Cancel(); } catch { }
-        try { _listener?.Stop(); } catch { }
-        _listener = null;
-        _cts = null;
-        _acceptLoop = null;
-        LbLog.Info("web", "stopped");
-    }
-
-    private static async Task AcceptLoop(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested && _listener != null)
-        {
-            TcpClient client;
-            try
-            {
-                client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { break; }
-            catch (ObjectDisposedException) { break; }
-            catch (Exception ex)
-            {
-                LbLog.Warn("web", "accept error: " + ex.Message);
-                continue;
-            }
-
-            // Reject connections outside the allow-list before doing any work (loopback is always allowed;
-            // an empty list ⇒ loopback bind, so every connection here is already loopback).
-            if (!IsRemoteAllowed(client))
-            {
-                try { client.Close(); } catch { }
-                continue;
-            }
-
-            _ = Task.Run(() => HandleClient(client));
-        }
-    }
-
-    private static void HandleClient(TcpClient client)
-    {
-        try
-        {
-            using (client)
-            using (var stream = client.GetStream())
-            {
-                stream.ReadTimeout = 10000;   // idle keep-alive ceiling
-                stream.WriteTimeout = 30000;  // guard against a wedged client mid-write
-
-                while (true)
-                {
-                    HttpRequest req;
-                    try { req = HttpRequest.TryRead(stream); }
-                    catch (IOException) { return; } // peer disconnect / read timeout
-                    if (req == null)
-                    {
-                        // On a kept-alive socket "null" is usually EOF (browser closed) — exit quietly.
-                        try { HttpResponse.BadRequest("Malformed request").Write(stream); } catch { }
-                        return;
-                    }
-
-                    // HTTP/1.1 default is keep-alive unless the client sent "Connection: close".
-                    var connHdr = req.GetHeader("Connection") ?? "";
-                    bool keepAlive = !connHdr.Equals("close", StringComparison.OrdinalIgnoreCase);
-
-                    // Per-request concurrency gate (not per connection) so idle keep-alive sockets hold no slot.
-                    _concurrencyGate.Wait();
-                    HttpResponse resp;
-                    // Sampled BEFORE the handler runs as well as after: a payload is built DURING dispatch,
-                    // and a request that spans the moment a game exits would otherwise be assembled from the
-                    // thin data and then labelled healthy — cached for the session, which is the one thing
-                    // this whole mechanism exists to prevent. Either sample counts.
-                    bool degradedBefore = IsDegraded();
-                    try
-                    {
-                        try
-                        {
-                            if (req.Method != "GET" && req.Method != "HEAD" && req.Method != "POST")
-                            {
-                                resp = HttpResponse.PlainText("Method not allowed", 405);
-                            }
-                            else
-                            {
-                                WebSelectionBridge.Observe(req);   // a kiosk browsing IS a selection
-                                resp = _router.Dispatch(req) ?? HttpResponse.NotFound($"No route for {req.Path}");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            resp = HttpResponse.ServerError($"Dispatch error: {ex.Message}");
-                        }
-                    }
-                    finally { _concurrencyGate.Release(); }
-
-                    MarkIfDegraded(req, resp, degradedBefore);
-                    resp.Headers["Connection"] = keepAlive ? "keep-alive" : "close";
-                    if (keepAlive)
-                        resp.Headers["Keep-Alive"] = "timeout=10";
-
-                    // Forward the client's gzip preference (HEAD has no body — skip).
-                    if (req.Method != "HEAD")
-                    {
-                        var ae = req.GetHeader("Accept-Encoding");
-                        resp.AcceptsGzip = ae != null
-                            && ae.IndexOf("gzip", StringComparison.OrdinalIgnoreCase) >= 0;
-                    }
-
-                    try
-                    {
-                        if (req.Method == "HEAD") resp.Body = Array.Empty<byte>();
-                        resp.Write(stream);
-                    }
-                    catch (IOException) { return; /* client disconnected */ }
-
-                    if (!keepAlive) return;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            LbLog.Warn("web", "client error: " + ex.Message);
-        }
-    }
+    public static void Stop() => _host.Stop();
 
     // ── Route table (S1: static serving only) ─────────────────────────────────
 
@@ -284,6 +134,8 @@ internal static class EmbeddedWebServer
             _router.Add(@"/bigbox/api/games/(?<id>[^/]+)/archive-entries", ArchiveListingApi.Handle);
             _router.Add(@"/bigbox/api/games/(?<id>[^/]+)/archive-favorite", ArchiveListingApi.HandleFavorite);
             _router.Add(@"/bigbox/api/games/(?<id>[^/]+)/archive-metadata", ArchiveMetadataApi.Handle);
+            // S7: in-browser play (non-kiosk). The dashed/keyworded routes are disjoint from the [a-z]+
+            // {kind} mutation capture; registered before it to keep intent readable.
             _router.Add(@"/bigbox/api/games/(?<id>[^/]+)/(?<kind>[a-z]+)", BigBoxMutationApi.Handle);
             _router.Add(@"/bigbox/api/keybinds", WebKeyBindsApi.Handle);
 
@@ -371,7 +223,7 @@ internal static class EmbeddedWebServer
     private static HttpResponse DatabaseSite(RouteContext ctx)
     {
         var rel = ctx.GetRoute("path") ?? "";
-        var resp = _database.Serve(rel);
+        var resp = _database.Serve(rel, ctx.Request);
         if (resp.StatusCode == 404 && IsIndexRequest(rel))
             return HttpResponse.Html(DatabasePlaceholderHtml);
         return resp;
@@ -391,44 +243,6 @@ internal static class EmbeddedWebServer
         "display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0\">" +
         "<main style=\"text-align:center\"><h1 style=\"font-weight:600\">LiteBox Web</h1>" +
         "<p style=\"opacity:.7\">database site coming soon</p></main></body></html>";
-
-    // ── IP allow-list ─────────────────────────────────────────────────────────
-
-    /// <summary>Parses the config string (comma/semicolon/whitespace-separated wildcard patterns, <c>*</c> =
-    /// any run) into anchored regexes. Empty / null → empty list (⇒ loopback-only bind).</summary>
-    private static List<Regex> ParseAllowedIpPatterns(string raw)
-    {
-        var list = new List<Regex>();
-        if (string.IsNullOrWhiteSpace(raw)) return list;
-        foreach (var tok in raw.Split(new[] { ',', ';', ' ', '\t', '\r', '\n' },
-                                      StringSplitOptions.RemoveEmptyEntries))
-        {
-            var p = tok.Trim();
-            if (p.Length == 0) continue;
-            try
-            {
-                var rx = "^" + Regex.Escape(p).Replace("\\*", ".*") + "$";
-                list.Add(new Regex(rx, RegexOptions.Compiled | RegexOptions.IgnoreCase));
-            }
-            catch (Exception ex) { LbLog.Warn("web", $"bad IP pattern '{p}': {ex.Message}"); }
-        }
-        return list;
-    }
-
-    /// <summary>True if the client's remote IP is loopback (always) or matches an allow-list pattern.
-    /// IPv4-mapped IPv6 remotes are normalised to IPv4 first.</summary>
-    private static bool IsRemoteAllowed(TcpClient client)
-    {
-        IPAddress addr;
-        try { addr = (client.Client.RemoteEndPoint as IPEndPoint)?.Address; }
-        catch { return false; }
-        if (addr == null) return false;
-        if (addr.IsIPv4MappedToIPv6) addr = addr.MapToIPv4();
-        if (IPAddress.IsLoopback(addr)) return true;          // 127.0.0.1 / ::1 always
-        var s = addr.ToString();
-        foreach (var rx in _allowedPatterns) if (rx.IsMatch(s)) return true;
-        return false;
-    }
 
     // ── Degraded mode: served, but never kept ───────────────────────────────────────────────────────
     // A game launch frees the optional tier and empties the media cache, so a data payload built during

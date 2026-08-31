@@ -750,6 +750,29 @@ internal static class OwnedDataProvider
     /// numeric /api/media/{dbid}.jpg endpoint in that case, exactly like the plugin did.</summary>
     internal static string RelatedLocalThumb(IGame game) => ThumbProxy(game, ResolveCacheGame(game), "Front");
 
+    /// <summary>Box-front proxy URLs (degraded + full) for one game, through the SAME resolution the
+    /// themes use: the GameCache first, the LB image path only as a fallback. The RomM surface calls
+    /// this rather than reading IGame.FrontImagePath itself — that property is empty on plenty of games
+    /// whose cover the cache knows perfectly well, which is exactly how a client ends up showing blanks.
+    /// Both strings are empty when the game genuinely has no cover.</summary>
+    internal static (string small, string large) CoverPair(IGame game)
+    {
+        var cg = ResolveCacheGame(game);
+        GameCacheImageRef r = null;
+        if (cg != null) try { r = cg.GetBestImageTypeFirst("Front"); } catch { }
+
+        string path = r != null && !string.IsNullOrEmpty(r.FullPath) ? r.FullPath : DiskPath(game, "Front");
+        if (string.IsNullOrEmpty(path)) return ("", "");
+
+        long size = 0;
+        if (r != null) { try { size = r.GetFileSize(); } catch { } }
+        if (size == 0) size = SizeOf(path);
+
+        var url = MediaProxy.BuildProxyUrl(path, null, 0, ExtOf(path), "local", "Front");
+        if (url == null) return ("", "");
+        return (url + "?q=thumb&v=" + size, url + "?q=full&v=" + size);
+    }
+
     // Cache absent -> disk, and the SAME answer either way.
     //
     // Every media URL below came from the GameCache and nowhere else, so the moment it is emptied — which is

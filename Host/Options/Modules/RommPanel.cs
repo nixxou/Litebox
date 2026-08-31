@@ -1,0 +1,645 @@
+// RomM server module config panel.
+//
+// Three tabs:
+//   • Server      — port (+ live in-use probe), LAN allow-list, and the plain warning that this surface has
+//                    no TLS: the account password is the only wall between a phone and the whole library.
+//   • Account     — the single user name + password. The password is written through RommConfig (PBKDF2 in
+//                    litebox-options.db), never into LiteBox.ini, and is never read back for display.
+//   • Clients     — the paired clients: mint a pairing code, revoke one, and edit which ROM of an
+//                    archive each is bound to (RommRomPicks — the binding that stops a device pulling
+//                    another version's save onto the one it plays).
+//   • Library     — what the clients get to see (hidden games, parental-locked games) and how many of an
+//                    archive's ROMs a rom advertises.
+//
+// Ini keys: [RommServer] Port / AllowedIps / Username / ExposeHiddenGames / IgnoreParental /
+// MaxArchiveEntries / LogRequests. Applying restarts a live server so a port or allow-list change takes effect at
+// once, the way the Web panel does.
+
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
+using System.Windows.Forms;
+using LbApiHost.Host;
+using LbApiHost.Host.Modules;
+using LbApiHost.Host.Romm;
+using LbApiHost.Host.UiKit;
+using Unbroken.LaunchBox.Plugins.Data;
+
+namespace LbApiHost.Host.Options;
+
+internal static class RommPanel
+{
+    private const string Sec = "RommServer";
+
+    public static (Control panel, Action? apply) Build(float dpiS, bool readOnly)
+    {
+        int S(int px) => ModulePanelKit.Sc(dpiS, px);
+
+        // Three scrolling surfaces, one per tab. The groups stay built inline here because Apply()
+        // closes over their controls; only which panel they land in changes.
+        var pServer = ModulePanelKit.Root(dpiS);
+        var pClients = ModulePanelKit.Root(dpiS);
+        var pLib = ModulePanelKit.Root(dpiS);
+
+        int y = S(6), yc = S(6), yl = S(6);
+        const int GroupW = 560;
+
+        var cfg = LiteBoxConfig.LoadForExe();
+
+        // ── Server ────────────────────────────────────────────────────────────
+        var gServer = ModulePanelKit.Group("Server", dpiS);
+        gServer.Location = new Point(S(4), y);
+        gServer.Size = new Size(S(GroupW), S(214));
+        pServer.Controls.Add(gServer);
+        y += gServer.Height + S(12);
+
+        var lblPort = ModulePanelKit.Caption("Port:", dpiS);
+        lblPort.Location = new Point(S(14), S(28));
+        gServer.Controls.Add(lblPort);
+        var numPort = new NumericUpDown
+        {
+            Minimum = 1, Maximum = 65535, Location = new Point(S(70), S(25)), Width = S(90),
+            BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, BorderStyle = BorderStyle.FixedSingle,
+            Font = new Font("Segoe UI", 9f), Enabled = !readOnly,
+        };
+        gServer.Controls.Add(numPort);
+        var lblPortStatus = ModulePanelKit.Caption("", dpiS);
+        lblPortStatus.Location = new Point(S(175), S(28));
+        gServer.Controls.Add(lblPortStatus);
+
+        var lblIps = ModulePanelKit.Caption("Allowed IPs (LAN, comma-separated; empty = loopback only):", dpiS);
+        lblIps.Location = new Point(S(14), S(62));
+        gServer.Controls.Add(lblIps);
+        var txtIps = ModulePanelKit.TextField(dpiS, readOnly, width: 500);
+        txtIps.Location = new Point(S(14), S(84));
+        gServer.Controls.Add(txtIps);
+
+        var warn = ModulePanelKit.Caption(
+            "No TLS on this port: traffic is plain HTTP and the account password is the only protection. " +
+            "Open it to the LAN only on a network you trust.", dpiS, maxWidth: 520);
+        warn.Location = new Point(S(14), S(116));
+        warn.ForeColor = Color.FromArgb(220, 180, 120);
+        gServer.Controls.Add(warn);
+
+        var lnkAddr = new LinkLabel
+        {
+            Text = "", AutoSize = true, Location = new Point(S(14), S(150)), BackColor = ModulePanelKit.Bg,
+            LinkColor = Color.FromArgb(120, 170, 255), ActiveLinkColor = Color.White,
+            Font = new Font("Segoe UI", 9f),
+        };
+        lnkAddr.LinkClicked += (_, _) => OpenUrl(lnkAddr.Text);
+        gServer.Controls.Add(lnkAddr);
+
+        var chkLog = ModulePanelKit.Check(
+            @"Log every request to Core\litebox\romm-requests.log", dpiS, readOnly: readOnly);
+        chkLog.Location = new Point(S(14), S(176));
+        chkLog.Width = S(420);
+        gServer.Controls.Add(chkLog);
+
+        void RefreshPortStatus()
+        {
+            int port = (int)numPort.Value;
+            bool ours = false;
+            try { ours = RommServer.IsRunning && RommServer.CurrentPort == port; } catch { }
+            if (ours)
+            {
+                lblPortStatus.Text = "● in use by LiteBox (running)";
+                lblPortStatus.ForeColor = Color.FromArgb(120, 200, 140);
+            }
+            else
+            {
+                bool ok = TryProbePort(port, out var reason);
+                lblPortStatus.Text = ok ? "✓ available" : "✗ " + reason;
+                lblPortStatus.ForeColor = ok ? Color.FromArgb(120, 200, 140) : Color.IndianRed;
+            }
+            lnkAddr.Text = $"http://{LocalAddress(txtIps.Text)}:{port}";
+        }
+
+        // ── Account ───────────────────────────────────────────────────────────
+        var gAccount = ModulePanelKit.Group("Account", dpiS);
+        gAccount.Location = new Point(S(4), y);
+        gAccount.Size = new Size(S(GroupW), S(150));
+        pServer.Controls.Add(gAccount);
+        y += gAccount.Height + S(12);
+
+        var accIntro = ModulePanelKit.Caption(
+            "One account, used by every client. Clients sign in with these, or pair a token from them.", dpiS, maxWidth: 520);
+        accIntro.Location = new Point(S(14), S(24));
+        gAccount.Controls.Add(accIntro);
+
+        var lblUser = ModulePanelKit.Caption("User name:", dpiS);
+        lblUser.Location = new Point(S(14), S(54));
+        gAccount.Controls.Add(lblUser);
+        var txtUser = ModulePanelKit.TextField(dpiS, readOnly, width: 220);
+        txtUser.Location = new Point(S(100), S(51));
+        gAccount.Controls.Add(txtUser);
+
+        var lblPass = ModulePanelKit.Caption("Password:", dpiS);
+        lblPass.Location = new Point(S(14), S(88));
+        gAccount.Controls.Add(lblPass);
+        var txtPass = ModulePanelKit.TextField(dpiS, readOnly, password: true, width: 220);
+        txtPass.Location = new Point(S(100), S(85));
+        gAccount.Controls.Add(txtPass);
+
+        var lblPassState = ModulePanelKit.Caption("", dpiS);
+        lblPassState.Location = new Point(S(334), S(88));
+        gAccount.Controls.Add(lblPassState);
+
+        void RefreshPassState()
+        {
+            bool set = RommConfig.HasPassword;
+            lblPassState.Text = set ? "● set (leave blank to keep)" : "✗ not set — the server refuses everything";
+            lblPassState.ForeColor = set ? Color.FromArgb(120, 200, 140) : Color.IndianRed;
+        }
+
+        var btnSignOut = ModulePanelKit.Button("Sign every client out", dpiS, readOnly);
+        btnSignOut.Location = new Point(S(14), S(116));
+        btnSignOut.Width = S(180);
+        btnSignOut.Click += (_, _) =>
+        {
+            RommConfig.RotateSigningKey();
+            MessageBox.Show("Every issued token is now invalid. Clients will have to sign in again.",
+                "RomM server", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+        gAccount.Controls.Add(btnSignOut);
+
+        // ── Devices ───────────────────────────────────────────────────────────
+        // The pairing flow existed end to end and had no way in: a client asks for an eight-digit code
+        // and nothing here could produce one, so "connect a handheld" was unreachable from the UI.
+        var gDev = ModulePanelKit.Group("Devices", dpiS);
+        gDev.Location = new Point(S(4), yc);
+        gDev.Size = new Size(S(GroupW), S(172));
+        pClients.Controls.Add(gDev);
+        yc += gDev.Height + S(12);
+
+        var devIntro = ModulePanelKit.Caption(
+            "Pairing hands a client its own token without typing one on the device: press the button, "
+          + "then enter the code on the client. The code lasts five minutes and works once.", dpiS, maxWidth: 520);
+        devIntro.Location = new Point(S(14), S(24));
+        gDev.Controls.Add(devIntro);
+
+        var btnPair = ModulePanelKit.Button("Pair a device", dpiS, readOnly);
+        btnPair.Location = new Point(S(14), S(66));
+        btnPair.Width = S(150);
+        gDev.Controls.Add(btnPair);
+
+        var txtCode = ModulePanelKit.TextField(dpiS, readOnly: true, width: 170);
+        txtCode.Location = new Point(S(180), S(64));
+        txtCode.Font = new Font(FontFamily.GenericMonospace, 15f * dpiS, FontStyle.Bold);
+        txtCode.TextAlign = HorizontalAlignment.Center;
+        txtCode.Height = S(34);
+        gDev.Controls.Add(txtCode);
+
+        var lblCodeState = ModulePanelKit.Caption("", dpiS, maxWidth: 200);
+        lblCodeState.Location = new Point(S(362), S(72));
+        gDev.Controls.Add(lblCodeState);
+
+        var lblDevices = ModulePanelKit.Caption("", dpiS, maxWidth: 330);
+        lblDevices.Location = new Point(S(14), S(112));
+        gDev.Controls.Add(lblDevices);
+
+        // Set below, once the grid exists; the pairing button refreshes it after minting a code.
+        Action? ReloadClients = null;
+
+        void RefreshDevices()
+        {
+            int n = 0;
+            try { n = RommAuth.ListTokens().Count; } catch { }
+            lblDevices.Text = n == 0
+                ? "No client is paired."
+                : (n == 1 ? "1 paired client." : n + " paired clients.");
+            ReloadClients?.Invoke();
+        }
+
+        DateTime codeExpiresUtc = DateTime.MinValue;
+        var codeTimer = new System.Windows.Forms.Timer { Interval = 500 };
+        codeTimer.Tick += (_, _) =>
+        {
+            var left = codeExpiresUtc - DateTime.UtcNow;
+            if (left <= TimeSpan.Zero)
+            {
+                codeTimer.Stop();
+                txtCode.Text = "";
+                lblCodeState.Text = "the code has expired";
+                lblCodeState.ForeColor = ModulePanelKit.Sub;
+                RefreshDevices();
+                return;
+            }
+            lblCodeState.Text = $"valid for {left.Minutes}:{left.Seconds:00}";
+            lblCodeState.ForeColor = Color.FromArgb(120, 200, 140);
+        };
+        pClients.Disposed += (_, _) => { try { codeTimer.Stop(); codeTimer.Dispose(); } catch { } };
+
+        btnPair.Click += (_, _) =>
+        {
+            // A code is only worth anything if something is listening to redeem it against.
+            bool up = false;
+            try { up = RommServer.IsRunning; } catch { }
+            if (!up && MessageBox.Show(
+                    "The server is not running, so no client can redeem this code yet.\n\nCreate it anyway?",
+                    "RomM server", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                return;
+            try
+            {
+                var name = "Paired device — " + DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                var (record, secret) = RommAuth.CreateClientToken(name);
+                txtCode.Text = RommAuth.CreatePairCode(record.Id, secret);
+                codeExpiresUtc = DateTime.UtcNow.AddMinutes(5);
+                codeTimer.Start();
+                RefreshDevices();
+            }
+            catch (Exception ex)
+            {
+                txtCode.Text = "";
+                lblCodeState.Text = "";
+                MessageBox.Show("Could not create a pairing code:\n\n" + ex.Message,
+                    "RomM server", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+
+        // ── Clients ───────────────────────────────────────────────────────────
+        var gCli = ModulePanelKit.Group("Paired clients", dpiS);
+        gCli.Location = new Point(S(4), yc);
+        gCli.Size = new Size(S(GroupW), S(260));
+        pClients.Controls.Add(gCli);
+        yc += gCli.Height + S(12);
+
+        var grid = ModulePanelKit.Grid(dpiS, readOnly: true);   // a row is selected, never typed into
+        grid.Location = new Point(S(14), S(24));
+        grid.Size = new Size(S(GroupW - 32), S(160));
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+        grid.Columns.Add("name", "Client");
+        grid.Columns.Add("created", "Paired");
+        grid.Columns.Add("used", "Last used");
+        grid.Columns.Add("binds", "ROM bindings");
+        grid.Columns[0].Width = S(210);
+        grid.Columns[1].Width = S(90);
+        grid.Columns[2].Width = S(90);
+        grid.Columns[3].Width = S(100);
+        gCli.Controls.Add(grid);
+
+        var tokenIds = new List<int>();
+
+        void Reload()
+        {
+            grid.Rows.Clear();
+            tokenIds.Clear();
+            List<RommClientToken> tokens;
+            try { tokens = RommAuth.ListTokens(); } catch { tokens = new List<RommClientToken>(); }
+            foreach (var t in tokens)
+            {
+                tokenIds.Add(t.Id);
+                int binds = 0;
+                try { binds = RommRomPicks.CountFor(t.Id); } catch { }
+                grid.Rows.Add(
+                    t.Name,
+                    t.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    t.LastUsedUtc?.ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "never",
+                    binds == 0 ? "—" : binds.ToString(CultureInfo.InvariantCulture));
+            }
+        }
+        ReloadClients = Reload;
+
+        int? SelectedToken()
+        {
+            int i = grid.CurrentRow?.Index ?? -1;
+            return i >= 0 && i < tokenIds.Count ? tokenIds[i] : null;
+        }
+
+        var btnBind = ModulePanelKit.Button("ROM bindings…", dpiS, readOnly);
+        btnBind.Location = new Point(S(14), S(196));
+        btnBind.Width = S(150);
+        btnBind.Click += (_, _) =>
+        {
+            if (SelectedToken() is not int id) return;
+            var name = grid.CurrentRow?.Cells[0].Value?.ToString() ?? "client";
+            using var dlg = new BindingsDialog(id, name);
+            dlg.ShowDialog(pClients.FindForm());
+            Reload();
+        };
+        gCli.Controls.Add(btnBind);
+
+        var btnRevoke = ModulePanelKit.Button("Revoke…", dpiS, readOnly);
+        btnRevoke.Location = new Point(S(174), S(196));
+        btnRevoke.Width = S(120);
+        btnRevoke.Click += (_, _) =>
+        {
+            if (SelectedToken() is not int id) return;
+            var name = grid.CurrentRow?.Cells[0].Value?.ToString() ?? "this client";
+            int binds = 0;
+            try { binds = RommRomPicks.CountFor(id); } catch { }
+
+            // Three outcomes, because the bindings outlive the credential and only you know whether the
+            // same device is coming back: Yes forgets them, No keeps them, Cancel does nothing.
+            var msg = $"Revoke \"{name}\"? It will have to be paired again.";
+            msg += binds == 0
+                ? "\n\nIt has no ROM bindings."
+                : $"\n\nIt is bound to {binds} game(s). Forget those bindings too?"
+                + "\n\nYes — revoke and forget them."
+                + "\nNo — revoke but keep them.";
+            var btns = binds == 0 ? MessageBoxButtons.OKCancel : MessageBoxButtons.YesNoCancel;
+            var answer = MessageBox.Show(msg, "RomM server", btns, MessageBoxIcon.Warning);
+            if (answer is DialogResult.Cancel or DialogResult.None) return;
+
+            try
+            {
+                RommAuth.DeleteToken(id);
+                if (answer == DialogResult.Yes) RommRomPicks.ClearToken(id);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not revoke: " + ex.Message, "RomM server",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            RefreshDevices();
+        };
+        gCli.Controls.Add(btnRevoke);
+
+        var lblBindHint = ModulePanelKit.Caption(
+            "A binding ties a client to ONE ROM inside an archive: it is created when the client "
+          + "downloads that ROM, and until it exists no save is served for that game. Only PAIRED clients "
+          + "can be bound — one signing in with the account password cannot be.", dpiS, maxWidth: 520);
+        lblBindHint.Location = new Point(S(14), S(226));
+        gCli.Controls.Add(lblBindHint);
+
+        RefreshDevices();
+
+        // ── Library ───────────────────────────────────────────────────────────
+        var gLib = ModulePanelKit.Group("Library", dpiS);
+        gLib.Location = new Point(S(4), yl);
+        gLib.Size = new Size(S(GroupW), S(152));
+        pLib.Controls.Add(gLib);
+        yl += gLib.Height + S(12);
+
+        var chkHidden = ModulePanelKit.Check("Include games marked Hidden in LaunchBox", dpiS, readOnly: readOnly);
+        chkHidden.Location = new Point(S(14), S(28));
+        chkHidden.Width = S(500);
+        gLib.Controls.Add(chkHidden);
+
+        var chkParental = ModulePanelKit.Check("Ignore the parental lock (clients see restricted games)", dpiS, readOnly: readOnly);
+        chkParental.Location = new Point(S(14), S(58));
+        chkParental.Width = S(500);
+        gLib.Controls.Add(chkParental);
+
+        var lblMax = ModulePanelKit.Caption("ROMs listed per archive:", dpiS);
+        lblMax.Location = new Point(S(14), S(92));
+        gLib.Controls.Add(lblMax);
+        var numMax = new NumericUpDown
+        {
+            Minimum = 0, Maximum = 9999, Location = new Point(S(170), S(89)), Width = S(80),
+            BackColor = ModulePanelKit.Field, ForeColor = ModulePanelKit.Fg, BorderStyle = BorderStyle.FixedSingle,
+            Font = new Font("Segoe UI", 9f), Enabled = !readOnly,
+        };
+        gLib.Controls.Add(numMax);
+        var lblMaxHint = ModulePanelKit.Caption(
+            "0 = all. The best-ranked ones are kept — a set of hundreds makes an unusable picker.",
+            dpiS, maxWidth: 500);
+        lblMaxHint.Location = new Point(S(14), S(118));
+        gLib.Controls.Add(lblMaxHint);
+
+        // ── Load ──────────────────────────────────────────────────────────────
+        try
+        {
+            RommConfig.Reload();
+            numPort.Value = Math.Min(Math.Max(RommConfig.Port, 1), 65535);
+            txtIps.Text = RommConfig.AllowedIps;
+            txtUser.Text = RommConfig.Username;
+            chkHidden.Checked = RommConfig.ExposeHiddenGames;
+            chkParental.Checked = RommConfig.IgnoreParental;
+            numMax.Value = Math.Min(Math.Max(RommConfig.MaxArchiveEntries, 0), 9999);
+            chkLog.Checked = RommConfig.LogRequests;
+        }
+        catch { }
+        RefreshPortStatus();
+        RefreshPassState();
+        numPort.ValueChanged += (_, _) => RefreshPortStatus();
+        txtIps.TextChanged += (_, _) => RefreshPortStatus();
+
+        void Apply()
+        {
+            if (readOnly) return;
+            try
+            {
+                var c = LiteBoxConfig.LoadForExe();
+                c.SetSec(Sec, "Port", ((int)numPort.Value).ToString(CultureInfo.InvariantCulture));
+                c.SetSec(Sec, "AllowedIps", (txtIps.Text ?? "").Trim());
+                c.SetSec(Sec, "Username", (txtUser.Text ?? "").Trim());
+                c.SetSec(Sec, "ExposeHiddenGames", chkHidden.Checked ? "true" : "false");
+                c.SetSec(Sec, "IgnoreParental", chkParental.Checked ? "true" : "false");
+                c.SetSec(Sec, "MaxArchiveEntries", ((int)numMax.Value).ToString(CultureInfo.InvariantCulture));
+                c.SetSec(Sec, "LogRequests", chkLog.Checked ? "true" : "false");
+                c.Save();
+
+                // A blank box KEEPS the current password — it is never read back for display, so blank
+                // cannot mean "clear it" without silently locking every client out on an unrelated Apply.
+                var pass = txtPass.Text ?? "";
+                if (pass.Length > 0)
+                {
+                    RommConfig.SetPassword(pass);
+                    txtPass.Text = "";
+                }
+
+                try
+                {
+                    RommConfig.Reload();
+                    if (RommServer.IsRunning) RommServer.Restart();
+                }
+                catch { }
+
+                RefreshPassState();
+                RefreshPortStatus();
+            }
+            catch { }
+        }
+
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        void Page(string title, Control c)
+        {
+            var pg = new TabPage(title) { BackColor = ModulePanelKit.Bg };
+            c.Dock = DockStyle.Fill;
+            pg.Controls.Add(c);
+            tabs.TabPages.Add(pg);
+        }
+        Page("Server", pServer);
+        Page("Clients", pClients);
+        Page("Library", pLib);
+
+        var root = new Panel { Dock = DockStyle.Fill, BackColor = ModulePanelKit.Bg };
+        root.Controls.Add(tabs);
+        return (root, Apply);
+    }
+
+    // ── The bindings editor ───────────────────────────────────────────────────
+
+    /// <summary>Which ROM of each archive one client is bound to. One row per bound game, the second
+    /// column a per-row combo of THAT archive's entries plus a "let it choose again" escape.</summary>
+    private sealed class BindingsDialog : LiteBoxForm
+    {
+        private const string Unbind = "(none — let the client choose again)";
+        private readonly DataGridView _grid = new();
+        private readonly List<(int TokenId, string GameId, List<Rom.RomEntryView> Entries)> _rows = new();
+
+        public BindingsDialog(int tokenId, string clientName)
+        {
+            Text = "ROM bindings — " + clientName;
+            ClientSize = new Size(S(680), S(400));
+            StartPosition = FormStartPosition.CenterParent;
+            MinimizeBox = false; MaximizeBox = false;
+
+            var intro = new Label
+            {
+                Text = "Each row is a game this client has downloaded a ROM from. Change the ROM to move "
+                     + "the binding, or clear it so the client picks again on its next download.",
+                AutoSize = false, Location = new Point(S(14), S(12)), Size = new Size(S(650), S(36)),
+                ForeColor = LiteBoxTheme.SubFg,
+            };
+
+            _grid.Location = new Point(S(14), S(54));
+            _grid.Size = new Size(S(650), S(280));
+            _grid.BackgroundColor = LiteBoxTheme.PanelC;
+            _grid.ForeColor = LiteBoxTheme.Fg;
+            _grid.GridColor = LiteBoxTheme.Panel2;
+            _grid.BorderStyle = BorderStyle.None;
+            _grid.EnableHeadersVisualStyles = false;
+            _grid.AllowUserToAddRows = false;
+            _grid.AllowUserToResizeRows = false;
+            _grid.RowHeadersVisible = false;
+            _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            _grid.MultiSelect = false;
+            _grid.ColumnHeadersDefaultCellStyle.BackColor = LiteBoxTheme.Panel2;
+            _grid.ColumnHeadersDefaultCellStyle.ForeColor = LiteBoxTheme.Fg;
+            _grid.DefaultCellStyle.BackColor = LiteBoxTheme.PanelC;
+            _grid.DefaultCellStyle.ForeColor = LiteBoxTheme.Fg;
+            _grid.DefaultCellStyle.SelectionBackColor = LiteBoxTheme.Accent;
+            _grid.DefaultCellStyle.SelectionForeColor = Color.White;
+
+            var colGame = new DataGridViewTextBoxColumn { HeaderText = "Game", ReadOnly = true, Width = S(300) };
+            var colRom = new DataGridViewComboBoxColumn
+            {
+                HeaderText = "Bound ROM", Width = S(330),
+                DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
+                FlatStyle = FlatStyle.Flat,
+            };
+            _grid.Columns.Add(colGame);
+            _grid.Columns.Add(colRom);
+
+            // A combo pick must commit without the user leaving the cell, and a row whose stored value is
+            // not in its list (the archive changed) must not throw while the grid is being filled.
+            _grid.CurrentCellDirtyStateChanged += (_, _) =>
+            { if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
+            _grid.DataError += (_, e) => { e.ThrowException = false; };
+
+            Fill(tokenId);
+
+            var footer = new FooterBar();
+            footer.AddButton("Cancel", Color.FromArgb(70, 70, 82), (_, _) => { DialogResult = DialogResult.Cancel; Close(); });
+            footer.AddButton("Save", Color.FromArgb(50, 110, 65), (_, _) => { Persist(); DialogResult = DialogResult.OK; Close(); });
+
+            Controls.Add(intro);
+            Controls.Add(_grid);
+            Controls.Add(footer);
+        }
+
+        private void Fill(int tokenId)
+        {
+            List<RommRomPick> picks;
+            try { picks = RommRomPicks.OfToken(tokenId); } catch { return; }
+
+            foreach (var p in picks)
+            {
+                var game = SafeGame(p.GameId);
+                var entries = new List<Rom.RomEntryView>();
+                try { if (game != null) entries = Rom.RomExtractor.ListEntriesDetailed(game, null).Entries.ToList(); }
+                catch { }
+
+                int i = _grid.Rows.Add();
+                _rows.Add((tokenId, p.GameId, entries));
+                _grid.Rows[i].Cells[0].Value = game != null ? RommLibrary.TitleOf(game) : "(missing game " + p.GameId + ")";
+
+                // Cast to the cell BEFORE setting Value: that unshares it, so each row can carry its own
+                // archive's entries instead of every row sharing the column's single list.
+                var cell = (DataGridViewComboBoxCell)_grid.Rows[i].Cells[1];
+                cell.Items.Add(Unbind);
+                foreach (var e in entries) cell.Items.Add(e.FileName);
+
+                var bound = entries.FirstOrDefault(e =>
+                    string.Equals(e.PathInArchive, p.PathInArchive, StringComparison.OrdinalIgnoreCase));
+                if (bound != null) cell.Value = bound.FileName;
+                else
+                {
+                    // The archive no longer holds it. Show what was recorded so the row is readable
+                    // rather than blank, and let the user clear or re-point it.
+                    cell.Items.Add(p.EntryFileName + "  (gone)");
+                    cell.Value = p.EntryFileName + "  (gone)";
+                }
+            }
+        }
+
+        private void Persist()
+        {
+            for (int i = 0; i < _rows.Count && i < _grid.Rows.Count; i++)
+            {
+                var (tokenId, gameId, entries) = _rows[i];
+                var chosen = _grid.Rows[i].Cells[1].Value?.ToString() ?? "";
+                if (chosen == Unbind) { try { RommRomPicks.Clear(tokenId, gameId); } catch { } continue; }
+
+                var entry = entries.FirstOrDefault(e =>
+                    string.Equals(e.FileName, chosen, StringComparison.OrdinalIgnoreCase));
+                if (entry == null) continue;      // "(gone)" or unchanged-but-missing: leave it alone
+                try { RommRomPicks.Set(tokenId, gameId, entry.PathInArchive, entry.FileName); } catch { }
+            }
+        }
+
+        private static IGame? SafeGame(string gameId)
+        {
+            try { return Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(gameId); }
+            catch { return null; }
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+
+    /// <summary>The address a client should be pointed at: this machine's LAN IPv4 when the allow-list opens
+    /// the surface up, otherwise loopback (which is all that would answer).</summary>
+    private static string LocalAddress(string? allowedIps)
+    {
+        if (string.IsNullOrWhiteSpace(allowedIps)) return "127.0.0.1";
+        try
+        {
+            foreach (var a in Dns.GetHostAddresses(Dns.GetHostName()))
+                if (a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a))
+                    return a.ToString();
+        }
+        catch { }
+        return "127.0.0.1";
+    }
+
+    /// <summary>Can we bind this port right now? Answers the "is something else already there" question
+    /// before the user applies a port they cannot have.</summary>
+    private static bool TryProbePort(int port, out string reason)
+    {
+        try
+        {
+            var l = new TcpListener(IPAddress.Loopback, port);
+            l.Start();
+            l.Stop();
+            reason = "";
+            return true;
+        }
+        catch (SocketException ex) { reason = ex.SocketErrorCode == SocketError.AddressAlreadyInUse ? "in use" : ex.SocketErrorCode.ToString(); return false; }
+        catch (Exception ex) { reason = ex.Message; return false; }
+    }
+
+    private static void OpenUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch { }
+    }
+}

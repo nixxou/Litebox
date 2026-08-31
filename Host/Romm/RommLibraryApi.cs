@@ -73,7 +73,8 @@ internal static class RommLibraryApi
         id = p.Id,
         slug = p.Slug,
         fs_slug = p.Slug,
-        rom_count = p.RomCount,
+        // Probe: a client keying its cache on this count should refresh exactly once after it moves.
+        rom_count = p.RomCount + RommConfig.DebugBumpRomCount,
         name = p.LbName,
         // The slug side of our map IS the IGDB-ish vocabulary, so advertising it as igdb_slug lets a
         // client that keys its emulator map off igdb_slug work unchanged.
@@ -313,7 +314,11 @@ internal static class RommLibraryApi
             ["name"] = title,
             ["name_sort_key"] = RommLibrary.SortNameOf(g).ToLowerInvariant(),
             ["slug"] = Slugify(title),
-            ["summary"] = NullIfEmpty(RommLibrary.NotesOf(g)),
+            // Probe: the description becomes the moment this response was built, so how stale a client's
+            // copy is can be read straight off the game page. See RommConfig.DebugStampSummary.
+            ["summary"] = RommConfig.DebugStampSummary
+                ? "SYNC " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                : NullIfEmpty(RommLibrary.NotesOf(g)),
 
             ["alternative_names"] = Array.Empty<string>(),
             ["youtube_video_id"] = null,
@@ -424,7 +429,9 @@ internal static class RommLibraryApi
         {
             if (absPath == null || !Rom.RomExtractor.Available || !Rom.RomExtractor.IsArchive(absPath))
                 return Array.Empty<Rom.RomEntryView>();
-            var listing = Rom.RomExtractor.ListEntriesDetailed(g, null).Entries;
+            // No cache probe: this is a JSON projection, not the picker, and the probe is what made a
+            // 50-game listing take two seconds.
+            var listing = Rom.RomExtractor.ListEntriesDetailed(g, null, probeCache: false).Entries;
             return listing.Count > 1 ? listing : Array.Empty<Rom.RomEntryView>();
         }
         catch { return Array.Empty<Rom.RomEntryView>(); }

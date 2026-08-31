@@ -12,6 +12,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -159,6 +160,79 @@ internal static class RommSelfTest
         Devices(http, baseUrl);
         Assets(http, baseUrl);
         RomPicks();
+        PushBundles();
+    }
+
+    // ── What a client actually pushed ─────────────────────────────────────────
+    //
+    // Freegosy sends one file under its own name, or a ZIP holding a sync marker plus every file under
+    // ITS original name — and its background queue always sends the ZIP. It also rebuilds the archive
+    // each time "to bypass server-side deduplication", so the upload's own bytes are worthless as a
+    // comparison. Everything downstream depends on getting the pieces back out correctly.
+
+    private static void PushBundles()
+    {
+        Check("a savestate is recognised by its name",
+            RommPushPlanner.IsStateName("Sonic.state")
+            && RommPushPlanner.IsStateName("Sonic.state3")
+            && RommPushPlanner.IsStateName("Sonic.state.auto"));
+        Check("a save file is not mistaken for one",
+            !RommPushPlanner.IsStateName("Sonic.srm") && !RommPushPlanner.IsStateName("Sonic.sav"));
+
+        var dir = Path.Combine(Path.GetTempPath(), "litebox-romm-bundle-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var plain = Path.Combine(dir, "Sonic (Japan).srm");
+            File.WriteAllText(plain, "battery");
+
+            var single = RommPushPlanner.Expand(plain, "Sonic (Japan).srm", Path.Combine(dir, "w1"));
+            Check("a lone file answers with itself",
+                single.Count == 1 && single[0].FileName == "Sonic (Japan).srm" && !single[0].IsState);
+
+            // A bundle the way Freegosy builds one: the marker, a save, and a state, with distinct dates.
+            var srm = Path.Combine(dir, "src.srm"); File.WriteAllText(srm, "battery");
+            var st = Path.Combine(dir, "src.state"); File.WriteAllText(st, "snapshot");
+            var mark = Path.Combine(dir, "freegosy_sync.txt"); File.WriteAllText(mark, "2026-08-28T21:00:00");
+            var zipPath = Path.Combine(dir, "Game.zip");
+            using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+            {
+                // The stamp has to be set BEFORE the entry is written: Create mode refuses to modify one
+                // that has already been opened.
+                void Add(string name, string from, DateTimeOffset when)
+                {
+                    var e = zip.CreateEntry(name);
+                    e.LastWriteTime = when;
+                    using var outS = e.Open();
+                    using var inS = File.OpenRead(from);
+                    inS.CopyTo(outS);
+                }
+                Add("freegosy_sync.txt", mark, DateTimeOffset.UtcNow);
+                Add("Sonic (Japan).srm", srm, new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero));
+                Add("Sonic (Japan).state", st, new DateTimeOffset(2026, 8, 2, 10, 0, 0, TimeSpan.Zero));
+            }
+
+            var many = RommPushPlanner.Expand(zipPath, "Game.zip", Path.Combine(dir, "w2"));
+            Check("a bundle is opened", many.Count == 2);
+            Check("the sync marker is not a save", many.All(x => x.FileName != "freegosy_sync.txt"));
+            Check("names inside the bundle are kept",
+                many.Any(x => x.FileName == "Sonic (Japan).srm") && many.Any(x => x.FileName == "Sonic (Japan).state"));
+            Check("save and state are told apart",
+                many.Count(x => x.IsState) == 1 && many.Count(x => !x.IsState) == 1);
+            Check("each piece keeps the date the ARCHIVE recorded, not the moment it arrived",
+                many.First(x => !x.IsState).ModifiedUtc.Date == new DateTime(2026, 8, 1)
+                && many.First(x => x.IsState).ModifiedUtc.Date == new DateTime(2026, 8, 2));
+            Check("a save and a state of one ROM are planned apart",
+                many.Select(x => x.Key).Distinct().Count() == 2);
+
+            // Named anything at all: Freegosy sniffs bytes on its own restore path, and so do we.
+            var misnamed = Path.Combine(dir, "not-a-zip.srm");
+            File.Copy(zipPath, misnamed);
+            Check("a bundle stored under a save's name is still opened",
+                RommPushPlanner.Expand(misnamed, "not-a-zip.srm", Path.Combine(dir, "w3")).Count == 2);
+        }
+        catch (Exception ex) { Fail("push-bundles", ex.ToString()); }
+        finally { try { Directory.Delete(dir, recursive: true); } catch { } }
     }
 
     // ── The client → ROM bindings ─────────────────────────────────────────────

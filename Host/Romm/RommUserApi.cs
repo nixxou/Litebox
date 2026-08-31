@@ -4,8 +4,17 @@
 //   • hidden → IGame.Hide, rating (0–10) → IGame.StarRatingFloat (0–5), status "finished" ↔
 //     IGame.Completed, last_played (the update_last_played query flag) → IGame.LastPlayedDate —
 //     written through the game's setters + DataManager.Save, so BigBox shows what the phone set.
-//   • backlogged / now_playing / difficulty / completion / status → no LaunchBox twin; persisted
-//     per-game in the options DB ("Romm.RomUser", game scope) so they round-trip honestly.
+//   • backlogged / now_playing / difficulty / completion → no LaunchBox twin; persisted per-game in
+//     the options DB ("Romm.RomUser", game scope) so they round-trip honestly.
+//   • status AND completion are both. RomM says "done" twice — a status of finished/completed_100 and
+//     a progress bar at 100 — where LaunchBox has one flag, so EITHER signal sets IGame.Completed and
+//     the flag reports back as both. A client sending only one of the two does not erase the other:
+//     what it sends is merged with what was already stored before the flag is computed.
+//     Its finished axis is IGame.Completed, which somebody can also flip from BigBox,
+//     so LaunchBox decides that axis on the way out; the finer values RomM has and LaunchBox does not
+//     (retired, and the never-played / incomplete distinction) come from the stored value or, failing
+//     that, from the play history. A game marked Completed in LaunchBox now reads "finished" on a phone
+//     that never set anything, which is the point of a shared library.
 //
 // Collections: LaunchBox playlists, read-only, plus ONE writable synthetic collection — "Favorites"
 // (is_favorite = true), whose membership IS IGame.Favorite. That is not a convenience: RomM has no
@@ -33,25 +42,40 @@ internal static class RommUserApi
 
     // ── PUT /api/roms/{id}/user ───────────────────────────────────────────────
 
+    /// <summary>A boolean sitting at the body's root, for the callers that put the flags there instead of
+    /// in the query string.</summary>
+    private static bool BodyFlag(JsonElement root, string name)
+        => root.ValueKind == JsonValueKind.Object
+        && root.TryGetProperty(name, out var v)
+        && v.ValueKind == JsonValueKind.True;
+
     public static HttpResponse UpdateRomUser(RouteContext ctx)
     {
         if (!string.Equals(ctx.Request?.Method, "PUT", StringComparison.OrdinalIgnoreCase))
             return RommApi.Error(405, "Method not allowed");
-        var refused = RommAuthApi.Require(ctx, RommScopes.RomsUserWrite, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.RomsUserWrite, out var identity);
         if (refused != null) return refused;
 
         var game = RommLibrary.GameByRomId(ctx.GetRouteInt("id", -1));
         if (game == null) return RommApi.Error(404, "Rom not found");
         var gameId = RommLibrary.IdOf(game);
 
-        bool updateLastPlayed = ctx.Request!.GetQueryBool("update_last_played");
-        bool removeLastPlayed = ctx.Request.GetQueryBool("remove_last_played");
+        JsonElement root;
+        try { root = JsonDocument.Parse(string.IsNullOrEmpty(ctx.Request!.Body) ? "{}" : ctx.Request.Body).RootElement; }
+        catch { return RommApi.Error(400, "Malformed body"); }
+
+        // Two shapes in the wild for the same write. Fields at the root with the flags in the query
+        // string, and fields nested under "data" with the flags in the body -- which is what Freegosy
+        // sends. Reading both costs a few lines and spares a client an error it cannot act on.
+        var body = root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("data", out var wrapped)
+                && wrapped.ValueKind == JsonValueKind.Object
+            ? wrapped : root;
+
+        bool updateLastPlayed = ctx.Request.GetQueryBool("update_last_played") || BodyFlag(root, "update_last_played");
+        bool removeLastPlayed = ctx.Request.GetQueryBool("remove_last_played") || BodyFlag(root, "remove_last_played");
         if (updateLastPlayed && removeLastPlayed)
             return RommApi.Error(400, "update_last_played and remove_last_played are mutually exclusive.");
-
-        JsonElement body;
-        try { body = JsonDocument.Parse(string.IsNullOrEmpty(ctx.Request.Body) ? "{}" : ctx.Request.Body).RootElement; }
-        catch { return RommApi.Error(400, "Malformed body"); }
 
         var extras = LoadExtras(gameId);
         bool lbDirty = false;
@@ -68,9 +92,25 @@ internal static class RommUserApi
         {
             var status = stat.ValueKind == JsonValueKind.String ? stat.GetString() : null;
             extras["status"] = status;
-            try { game.Completed = string.Equals(status, "finished", StringComparison.OrdinalIgnoreCase)
-                                   || string.Equals(status, "completed_100", StringComparison.OrdinalIgnoreCase); lbDirty = true; }
-            catch { }
+            // IGame.Completed is set below, once completion has been read too.
+
+            // "Dropped" releases this client's ROM binding — the one gesture a stock RomM client has for
+            // saying "I am done with this version". Without it the only way out of the lock is the
+            // desktop's Clients tab, which is no help on a handheld. Scoped to the CALLING client:
+            // another device's choice is not this one's to undo.
+            if (string.Equals(status, "retired", StringComparison.OrdinalIgnoreCase)
+             || string.Equals(status, "dropped", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    if (identity?.TokenId is int tid && RommRomPicks.Clear(tid, gameId))
+                    {
+                        RommTrace.Note($"dropped: released token #{tid}'s ROM binding");
+                        LbLog.Info("romm", $"status dropped → released client token {tid} from game {gameId}");
+                    }
+                }
+                catch (Exception ex) { LbLog.Warn("romm", "could not release the binding: " + ex.Message); }
+            }
         }
         foreach (var name in new[] { "backlogged", "now_playing" })
             if (body.TryGetProperty(name, out var v) && (v.ValueKind is JsonValueKind.True or JsonValueKind.False))
@@ -78,6 +118,17 @@ internal static class RommUserApi
         foreach (var name in new[] { "difficulty", "completion" })
             if (body.TryGetProperty(name, out var v) && v.TryGetInt32(out var n))
                 extras[name] = Math.Clamp(n, 0, name == "completion" ? 100 : 10);
+
+        // Both signals, merged with whatever was already stored, decide the one LaunchBox flag. Reading
+        // `extras` rather than the body is what makes a client that sends only "completion" keep its
+        // status, and the other way round.
+        try
+        {
+            game.Completed = IsFinished(AsString(extras.GetValueOrDefault("status")))
+                          || AsInt(extras.GetValueOrDefault("completion")) >= 100;
+            lbDirty = true;
+        }
+        catch { }
 
         if (updateLastPlayed) { try { game.LastPlayedDate = DateTime.Now; lbDirty = true; } catch { } }
         else if (removeLastPlayed) { try { game.LastPlayedDate = null; lbDirty = true; } catch { } }
@@ -115,6 +166,14 @@ internal static class RommUserApi
             return dflt;
         }
 
+        // A game LaunchBox calls completed reads as 100% even if nobody ever moved the bar — the two
+        // are the same claim — and a bar at 100 counts as completed even when the flag was never ticked.
+        bool lbCompleted = false;
+        try { lbCompleted = game.Completed; } catch { }
+        int completion = Val("completion", 0);
+        bool completed = lbCompleted || completion >= 100;
+        if (completed) completion = Math.Max(completion, 100);
+
         return new
         {
             id = romId,
@@ -129,10 +188,47 @@ internal static class RommUserApi
             hidden = RommLibrary.HiddenOf(game),
             rating = (int)Math.Round(RommLibrary.RatingOf(game) * 2),
             difficulty = Val("difficulty", 0),
-            completion = Val("completion", 0),
-            status = Val<string?>("status", null),
+            completion = completion,
+            status = StatusOf(completed, Val<string?>("status", null), lastPlayed, game),
         };
     }
+
+    /// <summary>RomM's vocabulary for "where am I with this game", resolved from both stores.
+    ///
+    /// LaunchBox owns the finished axis: <c>IGame.Completed</c> is what BigBox shows and what a person
+    /// can tick there, so it wins on the way out — otherwise a game completed on the desktop would keep
+    /// reading "incomplete" on a phone for ever. Everything LaunchBox cannot express falls back to the
+    /// stored value, and a game nobody has ever set anything on is described by its play history rather
+    /// than by nothing at all.</summary>
+    private static string? StatusOf(bool completed, string? stored, DateTime? lastPlayed, IGame game)
+    {
+        if (completed)
+            return string.Equals(stored, "completed_100", StringComparison.OrdinalIgnoreCase)
+                ? "completed_100" : "finished";
+
+        // Not completed in LaunchBox: a stored value that says otherwise is stale, anything else stands.
+        if (!string.IsNullOrEmpty(stored) && !IsFinished(stored)) return stored;
+
+        int plays = 0;
+        try { plays = RommLibrary.PlayCountOf(game); } catch { }
+        return plays == 0 && lastPlayed == null ? "never_played" : "incomplete";
+    }
+
+    /// <summary>Reads a value out of the extras bag, which holds JsonElements for what was loaded and
+    /// plain values for what this request just set.</summary>
+    private static string? AsString(object? v)
+        => v is JsonElement e ? (e.ValueKind == JsonValueKind.String ? e.GetString() : null) : v as string;
+
+    private static int AsInt(object? v)
+    {
+        if (v is int i) return i;
+        if (v is JsonElement e && e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out var n)) return n;
+        return 0;
+    }
+
+    private static bool IsFinished(string? status)
+        => string.Equals(status, "finished", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(status, "completed_100", StringComparison.OrdinalIgnoreCase);
 
     private static Dictionary<string, object?> LoadExtras(string gameId)
     {

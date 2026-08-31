@@ -10,6 +10,10 @@
 //     live save is never touched (format honesty: silently copying a client's bytes over a real save
 //     is the one outcome this feature must never produce).
 //   • bulk delete deletes VAULT entries only; the live save is never deleted through this API.
+//   • before a sync overwrites a live save, what is there is copied into the vault and LABELLED with
+//     the client that caused it. Restore takes a copy of its own, but silently and unnamed; doing it
+//     first means the history says where the overwrite came from, which is the difference between a
+//     recoverable accident and an unexplained one.
 //   • a game whose ROM is a multi-entry archive answers ONLY a client bound to one of those entries
 //     (RommRomPicks), and then only with that entry's saves. Unbound gets an empty list: the versions
 //     share a rom id, the client sorts by date and takes the newest, so anything else is a coin toss
@@ -51,7 +55,14 @@ internal sealed class RommAssetView
     public DateTime UpdatedUtc;
     public DateTime CreatedUtc;
     public string? Emulator;
-    public string? Slot;
+    /// <summary>LaunchBox's savestate NUMBER, or null for a save file. Internal: it is what Import and
+    /// Restore need, and it is NOT what RomM calls a slot.</summary>
+    public int? Slot;
+
+    /// <summary>RomM's slot: the free-form channel name a client pushed to. This is what the DTO
+    /// reports and what /api/saves?slot= filters on.</summary>
+    public string? SlotRomm;
+
     public string? Md5;
     public bool Missing;
 }
@@ -63,7 +74,11 @@ internal static class RommAssetsApi
     /// <summary>Every save OR state of one game: the live groups plus their vault versions. Drives the
     /// plugin scan, so it is per-game by design — a whole-library scan would hammer every emulator
     /// integration at once.</summary>
-    public static List<RommAssetView> ListForGame(IGame game, bool states, int? tokenId = null)
+    /// <param name="gated">Apply the ROM binding. TRUE for anything a client is shown; FALSE when the
+    /// caller is resolving something it already knows about — an asset id, or the live save just written
+    /// by a push. Those are not listings, and hiding from them turns a success into "not found": a push
+    /// that worked answered 500 because the check afterwards could not see what it had just written.</param>
+    public static List<RommAssetView> ListForGame(IGame game, bool states, int? tokenId = null, bool gated = true)
     {
         var result = new List<RommAssetView>();
         var gameId = RommLibrary.IdOf(game);
@@ -73,7 +88,7 @@ internal static class RommAssetsApi
         // them apart — it re-sorts this list by date and takes the newest — so the server decides, and
         // an unbound client is served NOTHING rather than a coin toss between somebody else's saves.
         string? boundEntry = null;
-        if (IsMultiEntryArchive(game))
+        if (gated && IsMultiEntryArchive(game))
         {
             boundEntry = RommRomPicks.For(tokenId, gameId)?.PathInArchive;
             if (boundEntry == null) return result;
@@ -86,14 +101,24 @@ internal static class RommAssetsApi
 
         foreach (var g in states ? scan.States : scan.Files)
         {
-            if (boundEntry != null && !BelongsToEntry(g, boundEntry)) continue;
+            if (boundEntry != null)
+            {
+                if (!BelongsToEntry(g, boundEntry)) continue;
+                // The ACTIVE group only. One entry can carry several groups — Make New Save branches one
+                // — and a client that sorts by date and takes the newest would pick between them at
+                // random. There is one save in play for a ROM, and that is what a client is told about.
+                if (g.Active == null) continue;
+            }
 
+            // Hoisted: the copies below are compared against it.
+            string liveMd5 = "";
             if (g.Active != null && g.ActivePath.Length > 0)
             {
                 var mtime = g.LastModified?.ToUniversalTime() ?? DateTime.UtcNow;
                 string md5 = "";
                 try { md5 = g.ActiveIsDirectory ? SaveManager.DirManifestMd5(g.ActivePath) : SaveManager.FileMd5(g.ActivePath); }
                 catch { }
+                liveMd5 = md5;
                 result.Add(new RommAssetView
                 {
                     Id = RommIdMap.AssetId($"live|{gameId}|{g.GroupId}|{(states ? "s" : "f")}"),
@@ -108,7 +133,8 @@ internal static class RommAssetsApi
                     UpdatedUtc = mtime,
                     CreatedUtc = mtime,
                     Emulator = EmulatorLabel(g),
-                    Slot = g.Slot?.ToString(),
+                    Slot = g.Slot,
+                    SlotRomm = RommSaveSlots.Of(g.ActivePath),
                     Md5 = md5,
                     Missing = !(g.ActiveIsDirectory ? Directory.Exists(g.ActivePath) : File.Exists(g.ActivePath)),
                 });
@@ -118,6 +144,17 @@ internal static class RommAssetsApi
             {
                 if (b.IsState != states) continue;
                 var abs = SaveVault.Abs(b);
+
+                // A copy identical to the live save is not a version of it, it IS it — offering both
+                // gives a client two entries for one state of the game and a choice with no meaning.
+                // FromRecords never fills Md5, so this is computed here; the file is small and the list
+                // is one group's history.
+                string bMd5 = "";
+                try { bMd5 = b.IsDirectory ? SaveManager.DirManifestMd5(abs) : SaveManager.FileMd5(abs); }
+                catch { }
+                if (bMd5.Length > 0 && liveMd5.Length > 0
+                    && string.Equals(bMd5, liveMd5, StringComparison.OrdinalIgnoreCase)) continue;
+
                 result.Add(new RommAssetView
                 {
                     Id = VaultAssetId(b),
@@ -129,19 +166,40 @@ internal static class RommAssetsApi
                     IsState = states,
                     IsLive = false,
                     Size = b.SizeBytes,
-                    // DisplayCreatedUtc, not CreatedUtc: a padlocked copy carries its date a
-                    // century ahead on purpose, and a device told a save was made in 2126 would
-                    // hold it newest for ever and never pull again.
-                    UpdatedUtc = b.DisplayCreatedUtc,
-                    CreatedUtc = b.DisplayCreatedUtc,
+                    // The CONTENT's date, not the copy's. A client sorts by this and takes the newest,
+                    // and it has no idea which save is the active one — so a copy dated when it was
+                    // TAKEN could outrank the very save it was taken from, and the device would pull its
+                    // own history back over the game in play. File.Copy preserves the modification time,
+                    // so a copy carries the date of the save it captured and can never overtake it.
+                    //
+                    // It also answers the padlock, which shifts the CREATION date a century ahead: that
+                    // date never reaches a client now, so a locked copy cannot pin itself as newest.
+                    UpdatedUtc = ContentTimeUtc(abs, b.DisplayCreatedUtc),
+                    CreatedUtc = ContentTimeUtc(abs, b.DisplayCreatedUtc),
                     Emulator = EmulatorLabel(g),
-                    Slot = b.Slot?.ToString(),
-                    Md5 = b.Md5,
+                    Slot = b.Slot,
+                    SlotRomm = RommSaveSlots.Of(b.VaultPath),
+                    // Now that it is computed, report it: the field went out empty before.
+                    Md5 = bMd5,
                     Missing = !(b.IsDirectory ? Directory.Exists(abs) : File.Exists(abs)),
                 });
             }
         }
         return result;
+    }
+
+    /// <summary>When this file's CONTENT was written. Falls back to the supplied date when the file
+    /// cannot be read — a listing must not fail because one copy is locked or gone.</summary>
+    private static DateTime ContentTimeUtc(string abs, DateTime fallback)
+    {
+        try
+        {
+            if (Directory.Exists(abs))
+                return Directory.EnumerateFiles(abs, "*", SearchOption.AllDirectories)
+                    .Select(File.GetLastWriteTimeUtc).DefaultIfEmpty(fallback).Max();
+            return File.Exists(abs) ? File.GetLastWriteTimeUtc(abs) : fallback;
+        }
+        catch { return fallback; }
     }
 
     /// <summary>Does this game's ROM hold several playable entries? Uses the same listing the rom DTO
@@ -153,7 +211,7 @@ internal static class RommAssetsApi
             if (!Rom.RomExtractor.Available) return false;
             var abs = RommLibrary.RomAbsPath(game);
             if (abs == null || !Rom.RomExtractor.IsArchive(abs)) return false;
-            return Rom.RomExtractor.ListEntriesDetailed(game, null).Entries.Count > 1;
+            return Rom.RomExtractor.ListEntriesDetailed(game, null, probeCache: false).Entries.Count > 1;
         }
         catch { return false; }
     }
@@ -193,7 +251,7 @@ internal static class RommAssetsApi
             var game = SafeGame(parts[1]);
             if (game == null) return null;
             bool states = parts[3] == "s";
-            return ListForGame(game, states).FirstOrDefault(a => a.Id == assetId);
+            return ListForGame(game, states, gated: false).FirstOrDefault(a => a.Id == assetId);
         }
 
         if (key.StartsWith("vault|", StringComparison.Ordinal))
@@ -308,9 +366,10 @@ internal static class RommAssetsApi
             IsState = e.IsState,
             IsLive = false,
             Size = e.SizeBytes,
-            UpdatedUtc = e.DisplayCreatedUtc,
-            CreatedUtc = e.DisplayCreatedUtc,
-            Slot = e.Slot?.ToString(),
+            UpdatedUtc = ContentTimeUtc(abs, e.DisplayCreatedUtc),
+            CreatedUtc = ContentTimeUtc(abs, e.DisplayCreatedUtc),
+            Slot = e.Slot,
+            SlotRomm = RommSaveSlots.Of(e.VaultPath),
             Md5 = e.Md5,
             Missing = !(e.IsDirectory ? Directory.Exists(abs) : File.Exists(abs)),
         };
@@ -372,7 +431,7 @@ internal static class RommAssetsApi
         }
         if (kind == "saves")
         {
-            dto["slot"] = a.Slot;
+            dto["slot"] = a.SlotRomm;
             dto["content_hash"] = a.Md5;
             dto["origin_device_id"] = null;
             dto["device_syncs"] = syncs;
@@ -412,8 +471,10 @@ internal static class RommAssetsApi
             var game = RommLibrary.GameByRomId(romId);
             if (game == null) return RommApi.Error(404, "Rom not found");
             var list = ListForGame(game, states, tokenId);
+            // Filtered on RomM's channel, the thing the client actually named.
             var slot = req.GetQuery("slot");
-            if (!string.IsNullOrEmpty(slot)) list = list.Where(a => a.Slot == slot).ToList();
+            if (!string.IsNullOrEmpty(slot))
+                list = list.Where(a => string.Equals(a.SlotRomm, slot, StringComparison.OrdinalIgnoreCase)).ToList();
             return RommApi.Json(list.Select(a => AssetDto(a, kind, deviceId)).ToArray());
         }
 
@@ -506,7 +567,7 @@ internal static class RommAssetsApi
 
         // Device-conflict guard (upstream's 409): the device pushes over an asset that moved since its
         // last sync, and did not say overwrite → refuse, the device pulls first.
-        var existing = ListForGame(game, states).FirstOrDefault(a =>
+        var existing = ListForGame(game, states, tokenId, gated: false).FirstOrDefault(a =>
             a.IsLive && string.Equals(a.FileName, fileName, StringComparison.OrdinalIgnoreCase));
         if (deviceId != null && existing != null && !overwrite)
         {
@@ -528,8 +589,12 @@ internal static class RommAssetsApi
             try { scan = SaveManager.ScanBase(game); }
             catch (Exception ex) { return RommApi.Error(500, "Save scan failed: " + ex.Message); }
 
+            // Both readings of one word. A numeric channel ("0", "1") doubles as LaunchBox's savestate
+            // slot, which is a happy accident rather than a rule; "freegosy" is a channel and nothing
+            // more, and used to be dropped here for failing to parse.
             int? slotInt = int.TryParse(slot, out var si) ? si : null;
-            var (fresh, target, lerr) = LandUpload(game, scan, tmpFile, fileName, states, slotInt, tokenId);
+            var (fresh, target, lerr) = LandUpload(game, scan, tmpFile, fileName, states, slotInt,
+                                                   tokenId, ClientLabel(tokenId, deviceId), slot);
             if (lerr != null) return RommApi.Error(500, lerr);
 
             if (target == null)
@@ -542,9 +607,9 @@ internal static class RommAssetsApi
                 return RommApi.Json(AssetDto(v, kind, deviceId), 201);
             }
 
-            var after = ListForGame(game, states).FirstOrDefault(a =>
+            var after = ListForGame(game, states, tokenId, gated: false).FirstOrDefault(a =>
                 a.IsLive && string.Equals(a.FileName, fileName, StringComparison.OrdinalIgnoreCase))
-                ?? ListForGame(game, states).FirstOrDefault(a => a.IsLive);
+                ?? ListForGame(game, states, tokenId, gated: false).FirstOrDefault(a => a.IsLive);
             if (after == null) return RommApi.Error(500, "The save was applied but no live save was found");
 
             if (deviceId != null) RommDevices.MarkSynced(deviceId, after.Id);
@@ -563,33 +628,154 @@ internal static class RommAssetsApi
     /// it archives whatever it displaces on the way, so the pre-upload state stays one click away in
     /// Game Saves. With no plugin the second half simply does not happen, and the caller is told.</summary>
     private static (VaultEntry? entry, SaveGroup? group, string? error) LandUpload(
-        IGame game, SaveScan scan, string tmpFile, string fileName, bool states, int? slot, int? tokenId = null)
+        IGame game, SaveScan scan, string tmpFile, string fileName, bool states, int? slot,
+        int? tokenId = null, string? client = null, string? slotRomm = null)
     {
-        // Which ROM of the archive this save belongs to. The binding is authoritative — it is what the
-        // client was actually given — and the file name is the fallback, the same rule the Game Saves
-        // dialog pre-selects with. Without one of the two the copy lands in the main bucket under a
-        // fresh group, which is where every RomM upload used to go.
-        var entry = ResolveEntry(game, fileName, tokenId);
+        // What was pushed, unpacked. One upload can hold several saves for several ROMs — Freegosy
+        // bundles whenever it has more than one file, and its background queue bundles always.
+        var work = Path.Combine(Path.GetDirectoryName(tmpFile) ?? Path.GetTempPath(), "unpack");
+        var candidates = RommPushPlanner.Expand(tmpFile, fileName, work);
+        if (candidates.Count == 0) return (null, null, "Nothing usable in the upload");
 
-        // The group this upload is FOR: the live save carrying the same name, as before.
-        var target = (states ? scan.States : scan.Files).FirstOrDefault(g =>
-            g.Active != null && g.Plugin != null &&
-            string.Equals(Path.GetFileName(g.ActivePath.TrimEnd('\\', '/')), fileName, StringComparison.OrdinalIgnoreCase));
+        foreach (var c in candidates) c.Entry = ResolveEntry(game, c.FileName, tokenId);
 
-        // Import returns an error or nothing, never the copy it made — so the new record is the one
-        // that was not there a moment ago.
+        VaultEntry? firstFresh = null;
+        SaveGroup? firstTarget = null;
+        string? firstError = null;
+
+        // One ROM and one kind at a time: a bundle carries a save AND a state for the same ROM, and they
+        // belong to different groups.
+        foreach (var lot in candidates.GroupBy(c => c.Key))
+        {
+            var ordered = lot.OrderByDescending(c => c.ModifiedUtc).ToList();
+            bool lotStates = ordered[0].IsState;
+            var entry = ordered[0].Entry;
+
+            var target = (lotStates ? scan.States : scan.Files).FirstOrDefault(g =>
+                g.Active != null && g.Plugin != null && SameEntry(g, entry) &&
+                string.Equals(Path.GetFileName(g.ActivePath.TrimEnd('\\', '/')),
+                              ordered[0].FileName, StringComparison.OrdinalIgnoreCase));
+
+            // What we already hold for this group, live and archived. A push that brings back what is
+            // already here is the normal end of a round trip and must cost nothing.
+            var known = KnownHashes(target);
+
+            bool tookLive = false;
+            foreach (var c in ordered)
+            {
+                if (c.Md5.Length > 0 && known.Contains(c.Md5))
+                {
+                    RommTrace.Note($"already held: {c.FileName}");
+                    continue;
+                }
+
+                // The newest one that is genuinely new is the candidate for the live save; everything
+                // after it is history and goes to the vault at its own date.
+                bool wantsLive = !tookLive;
+                tookLive = true;
+
+                var (fresh, err) = Land(game, c, lotStates, slot, target, entry, slotRomm,
+                                        client, wantsLive, known);
+                if (err != null) { firstError ??= err; continue; }
+                if (fresh != null) { firstFresh ??= fresh; known.Add(c.Md5); }
+                firstTarget ??= target;
+            }
+        }
+
+        if (firstFresh == null && firstError != null) return (null, null, firstError);
+        if (firstFresh == null) return (null, firstTarget, null);   // everything was already held
+        return (firstFresh, firstTarget, null);
+    }
+
+    /// <summary>Files one candidate: into the vault always, and onto the live save when it is newer than
+    /// what is there.</summary>
+    private static (VaultEntry? fresh, string? error) Land(
+        IGame game, PushCandidate c, bool states, int? slot, SaveGroup? target, SaveEntry? entry,
+        string? slotRomm, string? client, bool wantsLive, HashSet<string> known)
+    {
+        bool replaces = wantsLive && target?.Active != null
+                     && c.ModifiedUtc > (target.LastModified?.ToUniversalTime() ?? DateTime.MinValue);
+
+        // An older copy only earns a place if the cap has one to give. Evicting a newer save to file an
+        // older one would be the opposite of what a retention limit is for.
+        if (!replaces && target != null && !HasRoomFor(target, c.ModifiedUtc))
+        {
+            RommTrace.Note($"skipped (older than everything the cap holds): {c.FileName}");
+            return (null, null);
+        }
+
         var before = new HashSet<string>(VaultEntriesOf(game).Select(e => e.VaultPath), StringComparer.OrdinalIgnoreCase);
-        var err = SaveManager.Import(game, tmpFile, states, slot, target?.AppId, entry: entry);
-        if (err != null) return (null, null, "Import failed: " + err);
+        var err = SaveManager.Import(game, c.TempPath, states, slot, target?.AppId, entry: entry);
+        if (err != null) return (null, "Import failed: " + err);
 
         var fresh = VaultEntriesOf(game).FirstOrDefault(e => !before.Contains(e.VaultPath));
-        if (fresh == null) return (null, null, "Import reported success but no version was recorded");
-        if (target == null) return (fresh, null, null);
+        if (fresh == null) return (null, "Import reported success but no version was recorded");
 
-        Adopt(game, fresh, target);
-        var rerr = SaveManager.Restore(target, fresh, slot, () => true);
-        if (rerr != null) return (fresh, target, "Could not apply the save: " + rerr);
-        return (fresh, target, null);
+        RommSaveSlots.Set(fresh.VaultPath, slotRomm);
+
+        // Dated by its own content, so the history reads chronologically instead of by arrival. It is
+        // also what retention evicts on, which is the point: the oldest SAVE goes, not the oldest copy.
+        try { File.SetCreationTimeUtc(SaveVault.Abs(fresh), c.ModifiedUtc); } catch { }
+
+        if (target != null) Adopt(game, fresh, target);
+        if (!replaces)
+        {
+            RommTrace.Note($"archived as a version: {c.FileName} ({c.ModifiedUtc:HH:mm:ss})");
+            return (fresh, null);
+        }
+
+        PreserveBeforeOverwrite(target!, client);
+        var rerr = SaveManager.Restore(target!, fresh, slot, () => true);
+        if (rerr != null)
+        {
+            RommTrace.Note("restore refused: " + rerr);
+            return (fresh, "Could not apply the save: " + rerr);
+        }
+        RommTrace.Note($"promoted to the live save: {c.FileName}");
+        return (fresh, null);
+    }
+
+    /// <summary>Does this group belong to <paramref name="entry"/>? Both null means the game is not an
+    /// archive and there is nothing to match.</summary>
+    private static bool SameEntry(SaveGroup g, SaveEntry? entry)
+    {
+        var key = SaveManager.EntryKeyOf(g.GroupId);
+        if (entry == null) return key == null;
+        return key != null && string.Equals(key, entry.Key, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Every content hash the group already holds, live and archived.</summary>
+    private static HashSet<string> KnownHashes(SaveGroup? g)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (g == null) return set;
+        try
+        {
+            if (g.Active != null && g.ActivePath.Length > 0 && !g.ActiveIsDirectory && File.Exists(g.ActivePath))
+                set.Add(SaveManager.FileMd5(g.ActivePath));
+            foreach (var b in g.Backups)
+            {
+                var abs = SaveVault.Abs(b);
+                if (!b.IsDirectory && File.Exists(abs)) set.Add(SaveManager.FileMd5(abs));
+            }
+        }
+        catch { }
+        set.Remove("");
+        return set;
+    }
+
+    /// <summary>Is there room for a copy of this age? Under the cap, always. At the cap, only if it is
+    /// newer than the oldest copy already there — which will then make way for it.</summary>
+    private static bool HasRoomFor(SaveGroup g, DateTime when)
+    {
+        try
+        {
+            int cap = SaveBackupService.MaxVersionsPerGame;
+            if (cap <= 0 || g.Backups.Count < cap) return true;
+            var oldest = g.Backups.Min(b => b.DisplayCreatedUtc);
+            return when > oldest;
+        }
+        catch { return true; }
     }
 
     /// <summary>The archive entry an uploaded save belongs to, or null when the game is not an archive
@@ -606,19 +792,113 @@ internal static class RommAssetsApi
             var entries = SaveEntries.For(game, null);
             if (entries.Count == 0) return null;
 
+            // The FILE NAME first. Both ends derive it from the ROM that actually ran — a handheld that
+            // played "Sonic (Japan).md" writes "Sonic (Japan).srm" — so it is evidence about THIS file.
+            // The binding is only evidence about what the client downloaded most recently, and the two
+            // come apart exactly when it matters: unbind, bind to another ROM, and the save still sitting
+            // on the device belongs to the previous one. Trusting the binding there would file a save
+            // under a ROM it was never played on.
+            var stem = Path.GetFileNameWithoutExtension(fileName);
+            var byName = entries.FirstOrDefault(e => string.Equals(
+                Path.GetFileNameWithoutExtension(e.FileName), stem, StringComparison.OrdinalIgnoreCase));
+
             var pick = RommRomPicks.For(tokenId, RommLibrary.IdOf(game));
-            if (pick != null)
+            var bound = pick == null ? null : entries.FirstOrDefault(e =>
+                string.Equals(e.PathInArchive, pick.PathInArchive, StringComparison.OrdinalIgnoreCase));
+
+            if (byName != null)
             {
-                var bound = entries.FirstOrDefault(e =>
-                    string.Equals(e.PathInArchive, pick.PathInArchive, StringComparison.OrdinalIgnoreCase));
-                if (bound != null) return bound;
+                // Worth saying out loud: it means the device is pushing a save from a ROM it is no longer
+                // bound to, which is either a stale file or a binding that moved too soon.
+                if (bound != null && !ReferenceEquals(byName, bound))
+                    RommTrace.Note($"name says \"{byName.FileName}\", binding says \"{bound.FileName}\" — trusting the name");
+                return byName;
             }
 
-            var stem = Path.GetFileNameWithoutExtension(fileName);
-            return entries.FirstOrDefault(e => string.Equals(
-                Path.GetFileNameWithoutExtension(e.FileName), stem, StringComparison.OrdinalIgnoreCase));
+            // No name match: a client that renames its saves, or a name mangled on the way. The binding
+            // is the only thing left, and it is better than the main bucket.
+            if (bound != null) RommTrace.Note($"no entry matches \"{fileName}\" — falling back to the binding");
+            return bound;
         }
         catch { return null; }
+    }
+
+    /// <summary>Would writing <paramref name="incoming"/> actually change the live save? Compared by
+    /// content, not by date or size: a client that pushes the same bytes back — which is the normal end
+    /// of a sync round trip — must not leave a copy behind every time.
+    ///
+    /// Unreadable, missing, or a folder save on the other side all answer true. Assuming a change costs
+    /// one redundant copy; assuming none could lose the only record of what was there.</summary>
+    private static bool WouldChange(string incoming, SaveGroup g)
+    {
+        try
+        {
+            if (g.Active == null || g.ActivePath.Length == 0) return true;
+            if (g.ActiveIsDirectory || !File.Exists(g.ActivePath)) return true;
+            return !string.Equals(SaveManager.FileMd5(incoming), SaveManager.FileMd5(g.ActivePath),
+                                  StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return true; }
+    }
+
+    /// <summary>Copies the live save into the vault before a sync overwrites it, labelled with the
+    /// client that asked for the write.
+    ///
+    /// Restore already backs up what it displaces, so this is not about whether a copy exists — it is
+    /// about whether the history can be read six months later. An unnamed copy among a dozen others
+    /// tells you nothing; "RomM sync · Steam Deck" tells you a device pushed over your desktop progress
+    /// and which one. The dirty check means an unchanged save costs nothing: the original is already in
+    /// the vault, and no second copy is made.</summary>
+    private static void PreserveBeforeOverwrite(SaveGroup g, string? client)
+    {
+        try
+        {
+            if (g.Active == null || g.ActivePath.Length == 0) return;
+
+            var res = SaveManager.Backup(g, force: false, auto: true);
+            if (res == null) return;
+            if (res.Error != null) { RommTrace.Note("could not keep the live save: " + res.Error); return; }
+            if (res.Entry == null)
+            {
+                // Identical to the latest copy — the original is already in the vault, under whatever
+                // label it was given then. Nothing to add, and a duplicate would only clutter.
+                RommTrace.Note("live save already archived, nothing to keep");
+                return;
+            }
+
+            var label = "RomM sync · " + (string.IsNullOrWhiteSpace(client) ? "unknown client" : client);
+            var err = SaveManager.SetBackupLabel(g, res.Entry, label);
+            RommTrace.Note(err == null ? "kept the live save as \"" + label + "\""
+                                       : "kept the live save, but could not label it: " + err);
+        }
+        catch (Exception ex) { RommTrace.Note("could not keep the live save: " + ex.Message); }
+    }
+
+    /// <summary>Who caused a write, in the terms the save history should show: the paired client's name
+    /// when it authenticated with a token, else the device id it volunteered, else nothing useful.</summary>
+    private static string? ClientLabel(int? tokenId, string? deviceId)
+    {
+        try
+        {
+            if (tokenId is int id)
+            {
+                var name = RommAuth.ListTokens().FirstOrDefault(t => t.Id == id)?.Name;
+                if (!string.IsNullOrWhiteSpace(name)) return name;
+                return "client #" + id;
+            }
+        }
+        catch { }
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            try
+            {
+                var dev = RommDevices.ById(deviceId!);
+                if (!string.IsNullOrWhiteSpace(dev?.Name)) return dev!.Name;
+            }
+            catch { }
+            return "device " + deviceId;
+        }
+        return null;
     }
 
     /// <summary>Moves a freshly imported copy into the group it is a version of.
@@ -678,7 +958,9 @@ internal static class RommAssetsApi
             // PUT replaces a LIVE save, so the version alone is not an acceptable outcome here — unlike
             // POST, which is happy to leave one when no plugin can promote it.
             var (_, target, lerr) = LandUpload(game, scan, tmpFile, a.FileName, a.IsState,
-                                               int.TryParse(a.Slot, out var si) ? si : null, tokenId);
+                                               a.Slot, tokenId,
+                                               ClientLabel(tokenId, ctx.Request!.GetQuery("device_id")),
+                                               a.SlotRomm);
             if (lerr != null) return RommApi.Error(500, lerr);
             if (target == null) return RommApi.Error(422, "No integration plugin could apply this save");
 
@@ -726,7 +1008,11 @@ internal static class RommAssetsApi
             // Hand the owner over: deleting a copy also removes the record that describes it, and the
             // record lives on the game. Re-resolving it from the path alone is exactly what is no
             // longer possible.
-            if (SaveManager.DeleteBackup(e, SafeGame(e.GameId)) == null) deleted.Add(id);
+            if (SaveManager.DeleteBackup(e, SafeGame(e.GameId)) == null)
+            {
+                RommSaveSlots.Forget(e.VaultPath);
+                deleted.Add(id);
+            }
         }
         return RommApi.Json(deleted.ToArray());
     }

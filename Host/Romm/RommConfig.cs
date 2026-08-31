@@ -56,6 +56,22 @@ internal static class RommConfig
     /// unless somebody is actually looking.</summary>
     public static bool LogRequests { get; private set; }
 
+    // ── Two throwaway probes ──────────────────────────────────────────────────
+    //
+    // Both exist to answer one question: what makes a client drop its cached copy of the library?
+    // Reading Freegosy's source says the per-platform view compares rom_count and nothing else -- no
+    // date is consulted -- but that is a deduction, and these turn it into a measurement. Delete both
+    // once the answer is written down.
+
+    /// <summary>Replace every game's description with the moment the response was built ([RommServer]
+    /// DebugStampSummary). Makes "how old is what I am looking at" readable at a glance in the client.</summary>
+    public static bool DebugStampSummary { get; private set; }
+
+    /// <summary>Added to every platform's rom_count ([RommServer] DebugBumpRomCount, default 0). A client
+    /// that keys its cache on the count should notice one refresh and then settle -- it stores the new
+    /// count. Bump it again for another round; the value is read at startup.</summary>
+    public static int DebugBumpRomCount { get; private set; }
+
     /// <summary>Re-read the [RommServer] section. Failures leave the last good values in place.</summary>
     public static void Reload()
     {
@@ -70,6 +86,8 @@ internal static class RommConfig
             IgnoreParental = c.GetSecBool(Section, "IgnoreParental", false);
             MaxArchiveEntries = ParseCount(c.GetSec(Section, "MaxArchiveEntries"), 25);
             LogRequests = c.GetSecBool(Section, "LogRequests", false);
+            DebugStampSummary = c.GetSecBool(Section, "DebugStampSummary", false);
+            DebugBumpRomCount = ParseCount(c.GetSec(Section, "DebugBumpRomCount"), 0);
         }
         catch (Exception ex) { LbLog.Warn("romm", "config reload failed: " + ex.Message); }
     }

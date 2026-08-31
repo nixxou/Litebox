@@ -125,7 +125,7 @@ internal static class RommDownloadApi
             var abs = RommLibrary.RomAbsPath(game);
             if (abs == null) return "as-is: no ROM path";
             if (!RomExtractor.IsArchive(abs)) return "as-is: not a recognised archive";
-            var entries = RomExtractor.ListEntriesDetailed(game, null).Entries;
+            var entries = RomExtractor.ListEntriesDetailed(game, null, probeCache: false).Entries;
             if (entries.Count == 0) return "archive as-is: it lists no playable entry";
             int hits = entries.Count(e => string.Equals(e.FileName, requested, StringComparison.OrdinalIgnoreCase));
             if (hits > 1) return $"archive as-is: \"{requested}\" matches {hits} entries, refusing to guess";
@@ -171,7 +171,7 @@ internal static class RommDownloadApi
             var mainAbs = RommLibrary.RomAbsPath(game);
             if (mainAbs == null || !RomExtractor.IsArchive(mainAbs)) return null;
 
-            var hits = RomExtractor.ListEntriesDetailed(game, null).Entries
+            var hits = RomExtractor.ListEntriesDetailed(game, null, probeCache: false).Entries
                 .Where(e => string.Equals(e.FileName, requested, StringComparison.OrdinalIgnoreCase))
                 .Take(2).ToList();
             return hits.Count == 1 ? hits[0].PathInArchive : null;

@@ -452,7 +452,11 @@ internal static class RomExtractor
     /// titles and the achievement auto-pick bonus are sourced from the RA engine's store
     /// (RaStore.GetEntryRaTitles / GetRaMatchedPaths, filled at select/scan time) — an archive the
     /// engine hasn't parsed yet simply shows no 🏆 marker until it is.</summary>
-    public static RomEntryListing ListEntriesDetailed(IGame game, string? appId)
+    /// <param name="probeCache">Fill <see cref="RomEntryView.IsCached"/>. It is the picker's ✓ column and
+    /// nothing else reads it, but it costs two placement computations and two file stats PER ENTRY — on a
+    /// 92-entry set inside a 50-game listing that is thousands of stats, measured at two seconds. Callers
+    /// that only need names, sizes and the ranking pass false.</param>
+    public static RomEntryListing ListEntriesDetailed(IGame game, string? appId, bool probeCache = true)
     {
         if (game == null || !Available) return RomEntryListing.Empty;
         try
@@ -539,7 +543,7 @@ internal static class RomExtractor
                 IsLastPlayed = lastPlayedSet.Contains(e.PathInArchive) || lastPlayedSet.Contains(e.FileName),
                 RaTitle = raTitles.TryGetValue(e.PathInArchive ?? "", out var rt) ? rt
                         : (raTitles.TryGetValue(e.FileName ?? "", out var rt2) ? rt2 : ""),
-                IsCached = CachedProbe(e),
+                IsCached = probeCache && CachedProbe(e),
             }).ToList();
 
             return new RomEntryListing { ArchivePath = absPath, Key = key, ShortSignature = shortSig, Entries = views };

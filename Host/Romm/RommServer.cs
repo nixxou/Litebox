@@ -123,6 +123,9 @@ internal static class RommServer
         router.Add(@"/api/roms/(?<id>\d+)", RommLibraryApi.RomById);
         router.Add(@"/api/roms/(?<id>\d+)/content/(?<file_name>[^/]+)", RommDownloadApi.Content);
         router.Add(@"/api/roms/(?<id>\d+)/user", RommUserApi.UpdateRomUser);
+        // Same handler: clients in the wild use "props" for this write. Freegosy does, and answering
+        // 501 there is what put "An unexpected error occurred" on its status picker.
+        router.Add(@"/api/roms/(?<id>\d+)/props", RommUserApi.UpdateRomUser);
 
         // Collections: LB playlists read-only + the writable Favorites (IGame.Favorite is its membership).
         router.Add(@"/api/collections", RommUserApi.Collections);

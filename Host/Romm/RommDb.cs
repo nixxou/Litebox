@@ -192,6 +192,42 @@ internal static class RommDb
     public static string? AssetKeyOf(int id) => ReverseSafe("asset", "asset_id", "k", id);
     public static string? CollectionNameOf(int id) => ReverseSafe("collection", "collection_id", "lb_name", id);
 
+    /// <summary>The module's own key-value slots (token list, password hash). Null clears.</summary>
+    public static string? GetKv(string k)
+    {
+        try
+        {
+            using var conn = Open(); if (conn == null) return null;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT v FROM kv WHERE k=$k";
+            cmd.Parameters.AddWithValue("$k", k);
+            return cmd.ExecuteScalar() as string;
+        }
+        catch (Exception ex) { Log("kv read failed: " + ex.Message); return null; }
+    }
+
+    public static void SetKv(string k, string? v)
+    {
+        try
+        {
+            using var conn = Open(); if (conn == null) return;
+            using var cmd = conn.CreateCommand();
+            if (v == null)
+            {
+                cmd.CommandText = "DELETE FROM kv WHERE k=$k";
+                cmd.Parameters.AddWithValue("$k", k);
+            }
+            else
+            {
+                cmd.CommandText = "INSERT INTO kv(k,v) VALUES($k,$v) ON CONFLICT(k) DO UPDATE SET v=$v";
+                cmd.Parameters.AddWithValue("$k", k);
+                cmd.Parameters.AddWithValue("$v", v);
+            }
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex) { Log("kv write failed: " + ex.Message); }
+    }
+
     private static string? ReverseSafe(string table, string idCol, string keyCol, int id)
     {
         if (id <= 0) return null;

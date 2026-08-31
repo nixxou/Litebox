@@ -95,7 +95,7 @@ internal static class RommConfig
     // PBKDF2-SHA256 rather than RomM's bcrypt: nobody but us ever verifies these hashes, so matching
     // upstream's algorithm would buy nothing and cost a dependency.
 
-    private const string PasswordKey = "Romm.PasswordHash";
+    private const string PasswordKey = "password_hash";   // romm.db kv — beside the tokens it guards
     private const int PbkdfIterations = 100_000;
 
     /// <summary>True once a password has been set. Without one the server refuses every request — an open
@@ -104,7 +104,7 @@ internal static class RommConfig
     {
         get
         {
-            try { return !string.IsNullOrEmpty(LiteBoxOptionsDb.GetGlobal(PasswordKey)); }
+            try { return !string.IsNullOrEmpty(RommDb.GetKv(PasswordKey)); }
             catch { return false; }
         }
     }
@@ -116,12 +116,12 @@ internal static class RommConfig
     {
         try
         {
-            if (string.IsNullOrEmpty(plain)) { LiteBoxOptionsDb.SetGlobal(PasswordKey, null); return; }
+            if (string.IsNullOrEmpty(plain)) { RommDb.SetKv(PasswordKey, null); return; }
 
             var salt = RandomNumberGenerator.GetBytes(16);
             var hash = Derive(plain!, salt);
             var encoded = $"pbkdf2${PbkdfIterations}${Convert.ToBase64String(salt)}${Convert.ToBase64String(hash)}";
-            LiteBoxOptionsDb.SetGlobal(PasswordKey, encoded);
+            RommDb.SetKv(PasswordKey, encoded);
         }
         catch (Exception ex) { LbLog.Warn("romm", "password store failed: " + ex.Message); }
     }
@@ -132,7 +132,7 @@ internal static class RommConfig
         if (string.IsNullOrEmpty(plain)) return false;
         try
         {
-            var stored = LiteBoxOptionsDb.GetGlobal(PasswordKey);
+            var stored = RommDb.GetKv(PasswordKey);
             if (string.IsNullOrEmpty(stored)) return false;
 
             var parts = stored!.Split('$');
@@ -155,11 +155,12 @@ internal static class RommConfig
 
     // ── The token-signing key ─────────────────────────────────────────────────
 
-    private const string SigningKeyKey = "Romm.SigningKey";
+    private const string SigningKeyKey = "signing_key";   // romm.db kv
     private static byte[]? _signingKey;
 
-    /// <summary>HS256 key for the access / refresh tokens, generated once per install and kept in the
-    /// options DB. Rotating it invalidates every issued token, which is what "sign everyone out" means.</summary>
+    /// <summary>HS256 key for the access / refresh tokens, generated once per install and kept in
+    /// romm.db beside the credentials it signs for. Rotating it invalidates every issued token,
+    /// which is what "sign everyone out" means.</summary>
     public static byte[] SigningKey
     {
         get
@@ -167,7 +168,7 @@ internal static class RommConfig
             if (_signingKey != null) return _signingKey;
             try
             {
-                var stored = LiteBoxOptionsDb.GetGlobal(SigningKeyKey);
+                var stored = RommDb.GetKv(SigningKeyKey);
                 if (!string.IsNullOrEmpty(stored))
                 {
                     _signingKey = Convert.FromBase64String(stored!);
@@ -177,7 +178,7 @@ internal static class RommConfig
             catch { }
 
             var fresh = RandomNumberGenerator.GetBytes(32);
-            try { LiteBoxOptionsDb.SetGlobal(SigningKeyKey, Convert.ToBase64String(fresh)); } catch { }
+            try { RommDb.SetKv(SigningKeyKey, Convert.ToBase64String(fresh)); } catch { }
             _signingKey = fresh;
             return fresh;
         }
@@ -187,6 +188,6 @@ internal static class RommConfig
     public static void RotateSigningKey()
     {
         _signingKey = null;
-        try { LiteBoxOptionsDb.SetGlobal(SigningKeyKey, null); } catch { }
+        try { RommDb.SetKv(SigningKeyKey, null); } catch { }
     }
 }

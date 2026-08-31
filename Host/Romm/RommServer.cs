@@ -40,6 +40,17 @@ internal static class RommServer
 
     public static void Start(int port)
     {
+        // The old homes of the credentials (generic options store) are wiped on sight: tokens and
+        // password moved into romm.db, deliberately without migration — stale copies must not linger
+        // as secrets in a file the module no longer reads.
+        try
+        {
+            LbApiHost.Host.Data.LiteBoxOptionsDb.SetGlobal("Romm.ClientTokens", null);
+            LbApiHost.Host.Data.LiteBoxOptionsDb.SetGlobal("Romm.PasswordHash", null);
+            LbApiHost.Host.Data.LiteBoxOptionsDb.SetGlobal("Romm.SigningKey", null);
+        }
+        catch { }
+
         if (!LbModules.On(LbModule.RommServer))
         {
             LbLog.Once("romm", "server start refused (module off)");

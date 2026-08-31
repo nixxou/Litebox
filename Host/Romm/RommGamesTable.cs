@@ -115,7 +115,14 @@ internal static class RommGamesTable
         "  completed_utc TEXT," +
         "  ops_planned   INTEGER NOT NULL DEFAULT 0," +
         "  ops_completed INTEGER NOT NULL DEFAULT 0," +
-        "  ops_failed    INTEGER NOT NULL DEFAULT 0);";
+        "  ops_failed    INTEGER NOT NULL DEFAULT 0);" +
+
+        // The module's own key-values: the token list and the account password hash. In romm.db and
+        // not the generic options store, so ONE file is the whole module state — delete romm.db and
+        // clients, indexes, assignations and credentials reset together, never out of step.
+        "CREATE TABLE IF NOT EXISTS kv(" +
+        "  k TEXT PRIMARY KEY," +
+        "  v TEXT NOT NULL);";
 
     /// <summary>Adds a column an existing database does not have yet.
     ///

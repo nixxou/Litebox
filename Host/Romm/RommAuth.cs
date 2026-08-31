@@ -118,7 +118,9 @@ internal sealed class RommClientToken
 
 internal static class RommAuth
 {
-    private const string TokensKey = "Romm.ClientTokens";
+    // In romm.db (kv), NOT the generic options store: one file is the whole module state. No
+    // migration from the old options key — the switch was made on a fresh re-pair.
+    private const string TokensKey = "client_tokens";
     private const string TokenPrefix = "rmm_";
 
     public static readonly TimeSpan AccessTtl = TimeSpan.FromMinutes(30);
@@ -284,7 +286,7 @@ internal static class RommAuth
     {
         try
         {
-            var raw = LiteBoxOptionsDb.GetGlobal(TokensKey);
+            var raw = RommDb.GetKv(TokensKey);
             if (string.IsNullOrEmpty(raw)) return new List<RommClientToken>();
             return JsonSerializer.Deserialize<List<RommClientToken>>(raw!) ?? new List<RommClientToken>();
         }
@@ -293,7 +295,7 @@ internal static class RommAuth
 
     private static void SaveTokens(List<RommClientToken> tokens)
     {
-        try { LiteBoxOptionsDb.SetGlobal(TokensKey, JsonSerializer.Serialize(tokens)); }
+        try { RommDb.SetKv(TokensKey, JsonSerializer.Serialize(tokens)); }
         catch (Exception ex) { LbLog.Warn("romm", "token store failed: " + ex.Message); }
     }
 

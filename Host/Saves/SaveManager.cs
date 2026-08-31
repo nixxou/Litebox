@@ -1423,10 +1423,24 @@ internal static class SaveManager
         // This only covers g's OWN live save. When the file being displaced belongs to another group, the
         // caller archives it first — it is the one holding the scan. See SaveAction_SetActive.
         try { if (g.Active != null) Backup(g, force: false); } catch { }
-        string abs = SaveVault.Abs(e);
-        if (!File.Exists(abs) && !Directory.Exists(abs)) return "The backup file is missing on disk:\n" + abs;
-        int? slot = targetSlot ?? e.Slot;
-        GameSaveBase save = e.IsState
+        return RestoreFrom(g, SaveVault.Abs(e), targetSlot ?? e.Slot, e.IsState, confirmOverwrite);
+    }
+
+    /// <summary>Puts the file at <paramref name="abs"/> in play as this group's save, whatever it is and
+    /// wherever it sits.
+    ///
+    /// Restore only ever took a VaultEntry, which forced a caller holding a file elsewhere to copy it
+    /// into the vault first just to have something to promote — and that copy then sat in the history
+    /// byte-identical to the save it had just become. The plugin never needed the copy: it takes a path.
+    ///
+    /// Unlike Restore, this does NOT archive what it displaces. The caller decides, because only it knows
+    /// whether the displaced save is already safe.</summary>
+    internal static string? RestoreFrom(SaveGroup g, string abs, int? slot, bool asState,
+                                        Func<bool> confirmOverwrite)
+    {
+        if (g.Plugin is not EmulatorPlugin plugin) return "No integration plugin for this save.";
+        if (!File.Exists(abs) && !Directory.Exists(abs)) return "The file is missing on disk:\n" + abs;
+        GameSaveBase save = asState
             ? new GameSaveState { GameId = g.GameId, AdditionalApplicationId = g.AppId, FileLocation = abs, Slot = slot, SaveGroupId = g.GroupId, SaveGroupName = g.GroupName }
             : new GameSaveGame { GameId = g.GameId, AdditionalApplicationId = g.AppId, FileLocation = abs, SaveGroupId = g.GroupId, SaveGroupName = g.GroupName };
         try

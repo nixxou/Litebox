@@ -116,6 +116,7 @@ internal static class RommDb
                             RommGamesTable.Schema;
                         cmd.ExecuteNonQuery();
                     }
+                    RommGamesTable.Migrate(conn);
                     _ready = true;
                     TryImportLedger(conn);
                 }

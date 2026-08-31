@@ -1,4 +1,4 @@
-// La moitié résidente du modèle d'identité.
+﻿// La moitié résidente du modèle d'identité.
 //
 // Two structures, and the asymmetry is the design:
 //
@@ -242,6 +242,15 @@ internal static class RommRoms
     {
         lock (_gate) return _clientOf.TryGetValue(tokenId, out var cid) ? cid : 0;
     }
+
+    /// <summary>How this client's pushes land: 1 replaces the save in play, 2 keeps to its own line.
+    /// One query, and only when the Clients grid is drawn — never on a request path.
+    ///
+    /// 2 is the default, here and in the schema: a client that syncs on its own schedule should not be
+    /// able to overwrite the save someone is playing before anyone has said it may.</summary>
+    // Le mode de push n'existe plus : un push atterrit toujours dans la branche du client, et la save
+    // en jeu n'est touchee que via une branche PROMUE dans Game Saves. La colonne push_mode reste dans
+    // le schema (une colonne se retire mal), plus rien ne la lit.
 
     /// <summary>Games whose default moved outside a full pass — a new client cannot take the fast path
     /// for these and must go through the procedure.</summary>

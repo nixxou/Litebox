@@ -26,7 +26,13 @@ internal static class RommServer
     {
         AllowedIpsProvider = () => RommConfig.AllowedIps,
         Decorate = Decorate,
-        Intercept = req => string.Equals(req.Method, "OPTIONS", StringComparison.Ordinal) ? RommApi.Preflight() : null,
+        // Intercept court AVANT le traitement : c'est le seul endroit ou le corps d'une requete est
+        // encore intact, un gestionnaire d'upload le consommant et supprimant son fichier temporaire.
+        Intercept = req =>
+        {
+            RommTrace.Capture(req);
+            return string.Equals(req.Method, "OPTIONS", StringComparison.Ordinal) ? RommApi.Preflight() : null;
+        },
     };
 
     public static bool IsRunning => _host.IsRunning;
@@ -148,6 +154,7 @@ internal static class RommServer
         // (delete/identifiers) before the numeric {id} routes, sub-routes of {id} after it — the regexes
         // are anchored and disjoint, order just keeps intent readable.
         router.Add(@"/api/saves", RommAssetsApi.SavesCollection);
+        router.Add(@"/api/saves/summary", RommAssetsApi.SavesSummary);
         router.Add(@"/api/saves/delete", RommAssetsApi.DeleteSaves);
         router.Add(@"/api/saves/(?<id>\d+)", RommAssetsApi.SaveById);
         router.Add(@"/api/saves/(?<id>\d+)/content", RommAssetsApi.Content);
@@ -161,6 +168,11 @@ internal static class RommServer
         router.Add(@"/api/screenshots", RommAssetsApi.ScreenshotsCollection);
         router.Add(@"/api/screenshots/(?<id>\d+)", RommAssetsApi.ScreenshotById);
         router.Add(@"/api/screenshots/(?<id>\d+)/content", RommAssetsApi.Content);
+
+        // The sync orchestrator: negotiate + session close. Grout REQUIRES these two — its save sync
+        // has no other path and aborts on any error here.
+        router.Add(@"/api/sync/negotiate", RommSyncApi.Negotiate);
+        router.Add(@"/api/sync/sessions/(?<id>\d+)/complete", RommSyncApi.Complete);
 
         // Devices (the Grout sync contract).
         router.Add(@"/api/devices", RommDevicesApi.Collection);

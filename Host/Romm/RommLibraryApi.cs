@@ -142,7 +142,17 @@ internal static class RommLibraryApi
 
         // The binding narrows the list view too, or a bound client would see every entry here and only
         // its own on the detail page.
-        var page = games.Skip(offset).Take(limit).Select(g => RomDto(g, detailed: false, identity?.TokenId)).ToArray();
+        // Les rom_id de la page, puis LEURS lignes en une seule requete — pas une par ligne.
+        var slice = games.Skip(offset).Take(limit).ToList();
+        var ids = slice.Select(g => RommRoms.RomIdFor(g, identity?.TokenId)).Where(v => v > 0).ToList();
+        var rows = RommIndexer.RowsOf(ids);
+
+        var page = slice.Select(g =>
+        {
+            long id = RommRoms.RomIdFor(g, identity?.TokenId);
+            rows.TryGetValue(id, out var r);
+            return RomDto(g, detailed: false, identity?.TokenId, r);
+        }).ToArray();
 
         // The sidecar indexes back RomM's virtual scroll; each is gated by its query flag like upstream.
         var charIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -215,7 +225,10 @@ internal static class RommLibraryApi
 
         // The detail view is the only one that opens an archive, so it is the only one a client's ROM
         // binding can narrow.
-        return RommApi.Json(RomDto(game, detailed: true, identity?.TokenId));
+        // The row travels too: without it the embedded saves cover the whole game — with extraction
+        // on, another entry's saves land in this ROM's detail, stamped with the wrong rom id.
+        return RommApi.Json(RomDto(game, detailed: true, identity?.TokenId,
+                                   RommIndexer.RowOf(ctx.GetRouteInt("id", -1))));
     }
 
     public static HttpResponse Stats(RouteContext ctx)
@@ -239,7 +252,9 @@ internal static class RommLibraryApi
 
     // ── The rom DTO ───────────────────────────────────────────────────────────
 
-    internal static object RomDto(IGame g, bool detailed, int? tokenId = null)
+    /// <param name="row">The romm_games row this client is served, when the caller already fetched it
+    /// for the whole page. Null means "look it up" — right for a single game, wrong for a listing.</param>
+    internal static object RomDto(IGame g, bool detailed, int? tokenId = null, RommGameRow? row = null)
     {
         var gameId = RommLibrary.IdOf(g);
         int romId = (int)RommRoms.RomIdFor(g, tokenId);
@@ -269,11 +284,19 @@ internal static class RommLibraryApi
         // le chemin dans l'archive, donc son basename est la réponse — et c'est ce qui rend un listing à
         // la fois vrai et gratuit. Mesuré : un client construit son URL de téléchargement depuis ce
         // champ et le met en cache dès qu'il voit la ligne.
-        var pin = RommRoms.PinnedFor(g, tokenId);
-        string? served = pin != null
-            ? (pin.RomPath.Length > 0 ? pin.RomPath : pin.FilePath)
-            : null;
-        if (served != null) fsName = Path.GetFileName(served.Replace('/', '\\').TrimEnd('\\'));
+        // La ligne SERVIE — defaut compris. Lire seulement les epingles etait le defaut : tout le
+        // monde est sur le defaut, donc le nom n'etait jamais remplace et le client telechargeait sous
+        // le nom de l'archive. Mesure : "…/content/Super Mario World 2 - Yoshi's Island.7z".
+        row ??= romId > 0 ? RommIndexer.RowOf(romId) : null;
+        if (row != null && row.Emulated)
+        {
+            var served = row.RomPath.Length > 0 ? row.RomPath : row.FilePath;
+            if (served.Length > 0)
+            {
+                fsName = Path.GetFileName(served.Replace('/', '\\').TrimEnd('\\'));
+                if (row.RomPath.Length == 0) size = SafeSize(row.FilePath, size);
+            }
+        }
 
         RommFile? chosen = null;
         bool nameIsTitle = false;
@@ -407,11 +430,14 @@ internal static class RommLibraryApi
 
         if (detailed)
         {
-            // One user ⇒ the "all users" views are the same list as the user's own.
+            // One user ⇒ the "all users" views are the same list as the user's own. Row and token
+            // travel: without the row this covered the whole game's saves, and without the token the
+            // requester's own branch was filtered out — /api/saves answered differently, and of two
+            // contradicting views this one was the wrong one.
             object[] saves, states;
-            try { saves = RommAssetsApi.ListForGame(g, states: false).Select(a => RommAssetsApi.AssetDto(a, "saves")).ToArray(); }
+            try { saves = RommAssetsApi.ListForGame(g, states: false, tokenId, row).Select(a => RommAssetsApi.AssetDto(a, "saves")).ToArray(); }
             catch { saves = Array.Empty<object>(); }
-            try { states = RommAssetsApi.ListForGame(g, states: true).Select(a => RommAssetsApi.AssetDto(a, "states")).ToArray(); }
+            try { states = RommAssetsApi.ListForGame(g, states: true, tokenId, row).Select(a => RommAssetsApi.AssetDto(a, "states")).ToArray(); }
             catch { states = Array.Empty<object>(); }
             dto["user_saves"] = saves;
             dto["user_states"] = states;
@@ -519,6 +545,17 @@ internal static class RommLibraryApi
     }
 
     // ── Small helpers ─────────────────────────────────────────────────────────
+
+    /// <summary>The size of a recorded path, or the fallback when it cannot be read.</summary>
+    private static long SafeSize(string rel, long fallback)
+    {
+        try
+        {
+            var abs = Rom.RomPaths.ResolveAbsolute(rel);
+            return !string.IsNullOrEmpty(abs) && File.Exists(abs) ? new FileInfo(abs).Length : fallback;
+        }
+        catch { return fallback; }
+    }
 
     private static bool SafeFileExists(string p) { try { return File.Exists(p); } catch { return false; } }
 

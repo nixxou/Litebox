@@ -14,12 +14,29 @@
 //     the client that caused it. Restore takes a copy of its own, but silently and unnamed; doing it
 //     first means the history says where the overwrite came from, which is the difference between a
 //     recoverable accident and an unexplained one.
-//   • a game whose ROM is a multi-entry archive answers with EVERY version that has a save in play,
-//     each carrying its ROM's file name as the RomM `slot`. The versions share a rom id and a client
-//     sorts the list by date, so something has to keep them apart; `slot` is RomM's own free-form sync
-//     channel, and one channel per ROM is a distinction the protocol already knows how to respect.
-//     This replaces a server-side lock that bound a client to one entry and served nothing until it
-//     had one — a constraint that cost more than it protected.
+//   • every save group answers on its own RomM `slot` — the NAMED channel the ecosystem's clients put
+//     in front of the user (Grout shows a picker the first time a ROM offers several; the default one
+//     is spelled "autosave" across the ecosystem). One channel per GROUP, never per copy: a group is a
+//     line the emulator keeps writing to, a vault copy is frozen history that retention evicts, and a
+//     slot pointing at one would vanish under a client that had pinned it.
+//
+//     The channels, per REQUESTING CLIENT (docs/romm-server-plan.md §5.6ter):
+//       autosave    the requester's own branch — the only place its pushes ever land. When it has no
+//                   branch yet for a ROM, the game's primary LiteBox line stands in under this name
+//                   (real asset id, real file name), so a fresh client pulls something by default and
+//                   its pull→play→push round trip never leaves its own channel.
+//       romm-cN     another client's branch, a read-only extra.
+//       lb-…        a LiteBox group: "lb-ra-<core>" under RetroArch, "lb-<emulator>" elsewhere. Groups
+//                   with nothing in play are served too (their line lives in the vault); when several
+//                   groups answer to one name, the one in play wins, else the most recently written.
+//     A client that cannot read slots at all (Freegosy takes the newest of whatever it is shown, and
+//     writes the served file name to disk VERBATIM) is detected by its User-Agent and given only the
+//     autosave line — for it, the multi-line view would not read as a choice but as the truth.
+//   • the `file_name` an asset is ADVERTISED under follows its slot — Argosy seeds its slot table from
+//     the file name alone (parseServerChannelNameForSync never reads `slot`) — EXCEPT on the autosave
+//     channel, which carries the file's real name: a name equal to the ROM's base name is precisely
+//     what says "the latest save" to Argosy, and it is the name Freegosy writes to disk, where only
+//     the real one lets the emulator find the save. Bytes and paths on disk are untouched either way.
 //
 // Asset identity in the ledger: "live|{gameId}|{groupId}|{s|f}" for a live group,
 // "vault|{gameId}|{vaultPath}" for a backup, "screen|{relPath}" for a screenshot. The game id is
@@ -65,6 +82,11 @@ internal sealed class RommAssetView
     /// reports and what /api/saves?slot= filters on.</summary>
     public string? SlotRomm;
 
+    /// <summary>Serve this asset under its REAL file name rather than its slot's. True on the autosave
+    /// channel: the real name is what tells Argosy "this is the latest save", and what a name-blind
+    /// client (Freegosy) can safely write to disk.</summary>
+    public bool ServeRealName;
+
     public string? Md5;
     public bool Missing;
 }
@@ -73,28 +95,95 @@ internal static class RommAssetsApi
 {
     // ── Listing ───────────────────────────────────────────────────────────────
 
-    /// <summary>Every save OR state of one game: the live groups plus their vault versions. Drives the
-    /// plugin scan, so it is per-game by design — a whole-library scan would hammer every emulator
-    /// integration at once.</summary>
-    public static List<RommAssetView> ListForGame(IGame game, bool states, int? tokenId = null)
+    /// <summary>Every save OR state of one ROM: the group in play, plus this client's own branch.
+    ///
+    /// Two timelines, deliberately. The ACTIVE group is what the desktop plays; the BRANCH is where a
+    /// client in mode 2 lands its pushes. A client sees both in either mode — the mode decides only
+    /// where a push goes, never what is visible, so a client's own progress is always reachable.
+    ///
+    /// Another client's branch is never shown: it is somebody else's timeline for the same ROM, and
+    /// offering it would put a choice with no meaning in front of a client that sorts by date.
+    ///
+    /// Drives the plugin scan, so it is per-game by design — a whole-library scan would hammer every
+    /// emulator integration at once.</summary>
+    /// <param name="rom">The row the rom_id names. Null lists every group of the game, which is what the
+    /// bare vault view wants; non-null narrows to that ROM.</param>
+    /// <param name="slotBlind">The requester takes the newest of whatever it is shown (Freegosy): serve
+    /// only the autosave line, because extra lines would not read as choices but as the truth.</param>
+    public static List<RommAssetView> ListForGame(IGame game, bool states, int? tokenId = null,
+                                                  RommGameRow? rom = null, bool slotBlind = false)
     {
         var result = new List<RommAssetView>();
         var gameId = RommLibrary.IdOf(game);
-        int romId = (int)RommRoms.DefaultRomId(game, gameId);
+        int romId = rom != null ? (int)rom.RomId : (int)RommRoms.DefaultRomId(game, gameId);
+
+        // "#c3" — this client's branch on any ROM. Deterministic, so it survives restarts.
+        int clientIdx = tokenId is int tid ? RommRoms.ClientIndexOf(tid) : 0;
+        string? mine = clientIdx > 0 ? "c" + clientIdx : null;
 
         SaveScan scan;
         try { scan = SaveManager.ScanBase(game); }
         catch (Exception ex) { LbLog.Warn("romm", "save scan failed: " + ex.Message); return result; }
         if (scan.Error != null) return result;
 
+        // Which groups this client sees, and under which channel — settled BEFORE anything is emitted,
+        // because the choices depend on each other: the client's own branch is its autosave, and only
+        // when it has none does the primary LiteBox line stand in under that name.
+        var candidates = new List<SaveGroup>();
         foreach (var g in states ? scan.States : scan.Files)
         {
-            // Groups WITH a save in play, and only those. One ROM can carry several groups — Make New
-            // Save branches one — and a client that sorts by date and takes the newest would pick
-            // between them at random. There is one save in play per ROM, and that is what is offered.
-            if (g.Active == null) continue;
+            if (rom != null && !BelongsToRom(g, rom)) continue;
+            // Nothing recoverable behind these: RecordOnly's file is gone, DuplicateRecord is a fossil
+            // another group already owns.
+            if (g.RecordOnly || g.DuplicateRecord) continue;
+            candidates.Add(g);
+        }
 
-            var romSlot = SlotForRom(game, gameId, g.GroupId);
+        // (group, channel, served under its real file name). The real name travels with the autosave
+        // channel and only with it.
+        var chosen = new List<(SaveGroup g, string slot, bool real)>();
+
+        // The client's own branch — its autosave.
+        var own = new List<SaveGroup>();
+        if (mine != null)
+            own.AddRange(candidates.Where(g =>
+                string.Equals(BranchOf(g.GroupId), mine, StringComparison.OrdinalIgnoreCase)));
+        foreach (var g in own) chosen.Add((g, StateSuffixed(DefaultSlot, g), true));
+
+        // LiteBox's groups, one winner per channel name: LaunchBox's "Make New Save" builds a second
+        // In-Vault group on the same core, and a client sorting a channel by date must not be handed
+        // both. The one IN PLAY owns the name, else the most recently written; the others are set
+        // aside and the trace says so — losing a genuinely-kept second line silently would be worse.
+        var lbGroups = candidates
+            .Where(g => BranchOf(g.GroupId) == null && (g.Active != null || g.InVault)).ToList();
+        var primary = PickPrimary(lbGroups);
+        foreach (var lot in lbGroups.GroupBy(LbSlot, StringComparer.OrdinalIgnoreCase))
+        {
+            var members = lot.ToList();
+            var winner = PickPrimary(members)!;
+            foreach (var loser in members)
+                if (!ReferenceEquals(loser, winner))
+                    RommTrace.Note($"slot {lot.Key}: group \"{loser.GroupName}\" set aside (another group owns the name)");
+            // The seed: with no branch of its own, the client's autosave IS the primary line — real
+            // id, real file name — so its first pull, and the push that follows, stay on the default
+            // channel for the whole round trip.
+            bool seeds = own.Count == 0 && ReferenceEquals(winner, primary);
+            chosen.Add((winner, StateSuffixed(seeds ? DefaultSlot : lot.Key, winner), seeds));
+        }
+
+        // Other clients' branches: read-only extras, by name.
+        foreach (var g in candidates)
+        {
+            var br = BranchOf(g.GroupId);
+            if (br != null && !string.Equals(br, mine, StringComparison.OrdinalIgnoreCase))
+                chosen.Add((g, StateSuffixed("romm-" + br.ToLowerInvariant(), g), false));
+        }
+
+        // A slot-blind client gets the autosave line and nothing else.
+        if (slotBlind) chosen.RemoveAll(t => !t.real);
+
+        foreach (var (g, romSlot, slotIsRom) in chosen)
+        {
 
             // Hoisted: the copies below are compared against it.
             string liveMd5 = "";
@@ -121,9 +210,27 @@ internal static class RommAssetsApi
                     Emulator = EmulatorLabel(g),
                     Slot = g.Slot,
                     SlotRomm = romSlot,
+                    ServeRealName = slotIsRom,
                     Md5 = md5,
                     Missing = !(g.ActiveIsDirectory ? Directory.Exists(g.ActivePath) : File.Exists(g.ActivePath)),
                 });
+            }
+
+            // Un groupe sans save en jeu detient quand meme un fichier : celui que son enregistrement
+            // designe. FromRecords l'ecarte des copies — « the group's own file » — ce qui est juste
+            // pour un groupe vivant, ou ce fichier est celui de l'emulateur et n'est pas une copie.
+            // Ici c'en est une comme les autres, et la SEULE dont personne ne serait jamais informe.
+            if (g.Active == null && g.ActivePath.Length > 0 && SaveVault.IsUnderVault(g.ActivePath))
+            {
+                var ownFile = FindVaultEntry(gameId, SaveVault.Rel(g.ActivePath));
+                if (ownFile != null && ownFile.IsState == states)
+                {
+                    // Under the channel this listing chose for the group — ViewOf alone only knows
+                    // the family, and two names for one line would split it across two slots.
+                    var v = ViewOf(ownFile);
+                    v.SlotRomm = romSlot; v.ServeRealName = slotIsRom;
+                    result.Add(v);
+                }
             }
 
             foreach (var b in g.Backups)
@@ -164,7 +271,8 @@ internal static class RommAssetsApi
                     CreatedUtc = ContentTimeUtc(abs, b.DisplayCreatedUtc),
                     Emulator = EmulatorLabel(g),
                     Slot = b.Slot,
-                    SlotRomm = romSlot,          // the channel names the ROM, not the copy
+                    SlotRomm = romSlot,          // the channel names the group, not the copy
+                    ServeRealName = slotIsRom,
                     // Now that it is computed, report it: the field went out empty before.
                     Md5 = bMd5,
                     Missing = !(b.IsDirectory ? Directory.Exists(abs) : File.Exists(abs)),
@@ -190,48 +298,166 @@ internal static class RommAssetsApi
 
     /// <summary>Does this game's ROM hold several playable entries? Uses the same listing the rom DTO
     /// advertises from, so what we decide on and what the client was shown cannot disagree.</summary>
-    /// <summary>The ROM a save belongs to, named as the client sees the sync channel.
+    /// <summary>Does this save group belong to the ROM the rom_id names?
     ///
-    /// Several versions of one game share a rom id and land in one list; the channel is what keeps them
-    /// apart, and RomM lets it be any string. An extracted ROM answers with its own file name inside the
-    /// archive — read straight out of the group id, which carries it as "entry:{signature}:{path}", so
-    /// this costs no I/O on a listing that runs on every client poll. Anything else answers with the
-    /// game's ROM file name.</summary>
-    private static string? SlotForRom(IGame? game, string gameId, string? groupId)
+    /// Three shapes, and the row already says which: an extracted ROM compares the PATH inside the
+    /// archive — two entries can share a file name in different folders; a version compares the
+    /// additional application; the game's own ROM is the main bucket, neither of the two.
+    ///
+    /// No name matching anywhere. That is the whole gain of the rom_id naming a file: the question
+    /// "which ROM is this save for" is answered before the save layer is opened.</summary>
+    private static bool BelongsToRom(SaveGroup g, RommGameRow rom)
     {
-        var key = SaveManager.EntryKeyOf(groupId);
-        if (key != null)
+        var key = SaveManager.EntryKeyOf(g.GroupId);
+
+        if (rom.RomPath.Length > 0)
         {
+            if (key == null) return false;
             int sep = key.IndexOf(':', "entry:".Length);
-            if (sep >= 0)
-            {
-                var name = Path.GetFileName(key.Substring(sep + 1).Replace('/', '\\').TrimEnd('\\'));
-                if (name.Length > 0) return name;
-            }
+            if (sep < 0) return false;
+            return RommIndexPass.PathEq(key.Substring(sep + 1), rom.RomPath);
         }
-        return RomFileName(game, gameId);
+
+        if (key != null) return false;                       // an entry group, but the rom names no entry
+        var app = g.AppId ?? "";
+        return string.Equals(app, rom.AppId ?? "", StringComparison.Ordinal);
     }
 
-    /// <summary>The game's own ROM file name, memoised: the bare listing walks the whole library and
-    /// would otherwise resolve the same path once per copy.</summary>
-    private static readonly Dictionary<string, string?> _romNames = new(StringComparer.OrdinalIgnoreCase);
-
-    private static string? RomFileName(IGame? game, string gameId)
+    /// <summary>The branch a group id carries, or null for the ROM's own line. "#c3" is client 3's.</summary>
+    private static string? BranchOf(string? groupId)
     {
-        lock (_romNames)
+        if (string.IsNullOrEmpty(groupId)) return null;
+        int i = groupId!.IndexOf('#');
+        return i >= 0 && i + 1 < groupId.Length ? groupId.Substring(i + 1) : null;
+    }
+
+    /// <summary>The group id a client's own line takes for a ROM: the ROM's group, plus its branch.</summary>
+    internal static string BranchGroupIdFor(string romGroupId, int clientIdx)
+        => romGroupId + "#c" + clientIdx;
+
+    /// <summary>The name RomM's default channel carries. Clients special-case it — a game with this one
+    /// slot and no other is the ordinary case and gets no picker — so it has to be spelled their way.</summary>
+    internal const string DefaultSlot = "autosave";
+
+    /// <summary>A slot family suffixed with the savestate number: two state slots of one ROM are two
+    /// different saves, and telling them apart is what a picker is for. Slot 0 — the plain ".state",
+    /// the default one — stays unqualified.</summary>
+    internal static string StateSuffixed(string name, SaveGroup g)
+        => StateSuffixed(name, g.IsState, g.Slot);
+
+    internal static string StateSuffixed(string name, bool isState, int? stateSlot)
+    {
+        if (isState && stateSlot is int n && n != 0)
+            return name + (n < 0 ? "-auto" : "-state" + n);
+        return name;
+    }
+
+    /// <summary>The channel of a LiteBox-owned group: "lb-ra-&lt;core&gt;" under RetroArch, "lb-&lt;core&gt;"
+    /// for another cored emulator, "lb-&lt;emulator&gt;" for one with no cores. Only characters every
+    /// client survives: no ':' (illegal in a Windows file name — the wire name follows the slot), no '.'
+    /// (Argosy cuts channel names at the last one), no '#' (an unencoded ?slot= would truncate at the
+    /// fragment), and '@' left out as a precaution against naive sanitisers.</summary>
+    internal static string LbSlot(SaveGroup g)
+    {
+        var core = (g.EmulatorCore ?? "").Trim();
+        string label;
+        if (core.Length > 0)
         {
-            if (_romNames.TryGetValue(gameId, out var cached)) return cached;
-            string? name = null;
-            try
-            {
-                var g = game ?? SafeGame(gameId);
-                var abs = g == null ? null : RommLibrary.RomAbsPath(g);
-                if (!string.IsNullOrEmpty(abs)) name = Path.GetFileName(abs!);
-            }
-            catch { }
-            _romNames[gameId] = name;
-            return name;
+            if (core.EndsWith("_libretro", StringComparison.OrdinalIgnoreCase))
+                core = core.Substring(0, core.Length - "_libretro".Length);
+            var exe = Path.GetFileNameWithoutExtension(g.EmulatorFileName ?? "");
+            bool retroarch = exe.IndexOf("retroarch", StringComparison.OrdinalIgnoreCase) >= 0;
+            label = (retroarch ? "ra-" : "") + core;
         }
+        else
+        {
+            string emu = "";
+            try { emu = (g.Emulator?.Title ?? "").Trim(); } catch { }
+            if (emu.Length == 0) emu = Path.GetFileNameWithoutExtension(g.EmulatorFileName ?? "");
+            label = emu;
+        }
+        var safe = SlotSafe(label);
+        return safe.Length == 0 ? "lb" : "lb-" + safe;
+    }
+
+    /// <summary>A label as a slot spells it: lowercase, spaces to dashes, and only characters that
+    /// survive a file name, a query string and every client's channel parser.</summary>
+    private static string SlotSafe(string label)
+    {
+        var sb = new System.Text.StringBuilder(label.Length);
+        foreach (var c in label.Trim().ToLowerInvariant())
+        {
+            if (c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') sb.Append(c);
+            else if (c == ' ' || c == '.') sb.Append('-');
+        }
+        return sb.ToString().Trim('-');
+    }
+
+    /// <summary>The winner of a channel name: the group in play, else the one most recently written.
+    /// Deterministic, so the name stays on the same line between two listings.</summary>
+    private static SaveGroup? PickPrimary(IReadOnlyList<SaveGroup> groups)
+    {
+        SaveGroup? best = null; var bestKey = (active: false, when: DateTime.MinValue);
+        foreach (var g in groups)
+        {
+            var when = g.LastModified?.ToUniversalTime() ?? DateTime.MinValue;
+            if (g.Active == null)
+                foreach (var b in g.Backups)
+                    if (b.DisplayCreatedUtc > when) when = b.DisplayCreatedUtc;
+            var key = (active: g.Active != null, when);
+            if (best == null || key.active && !bestKey.active
+                || key.active == bestKey.active && key.when > bestKey.when)
+            { best = g; bestKey = key; }
+        }
+        return best;
+    }
+
+    /// <summary>The channel of a bare vault row, where no scanned group gives context: the requester's
+    /// own branch is its autosave, another's branch is named, and a LiteBox group is "lb" — with no
+    /// emulator to read, the family is all this view can say.</summary>
+    internal static string SlotOfGroupId(string? groupId, string? mine, bool isState, int? stateSlot)
+    {
+        var br = BranchOf(groupId);
+        string name = br == null ? "lb"
+            : string.Equals(br, mine, StringComparison.OrdinalIgnoreCase) ? DefaultSlot
+            : "romm-" + br.ToLowerInvariant();
+        return StateSuffixed(name, isState, stateSlot);
+    }
+
+    /// <summary>The name an asset is advertised and downloaded under: its channel, plus the real file's
+    /// extension.
+    ///
+    /// Not cosmetic. Argosy seeds its slot table from the file name alone
+    /// (SaveSyncApiClient.parseServerChannelNameForSync never looks at `slot`), and a name equal to the
+    /// ROM's base name means "the latest save" to it — so two groups of one ROM both named after the ROM
+    /// arrived as one autosave channel no matter what `slot` said. Naming the file after the channel is
+    /// what its own uploads already do: the copy this device pushed is called "autosave.srm".
+    ///
+    /// Nothing on disk moves. A client resolves its own write target from the emulator and the ROM, and
+    /// reads only the extension out of this name — the folder case (".zip") and the savestate case
+    /// (".stateN"), both of which the extension carries unchanged.
+    ///
+    /// The autosave channel is left alone: the real name is what tells Argosy "this is the latest
+    /// save", and what a name-blind client can safely write to disk.</summary>
+    internal static string WireName(RommAssetView a)
+    {
+        if (a.ServeRealName || string.IsNullOrWhiteSpace(a.SlotRomm)) return a.FileName;
+        var safe = SanitizeName(a.SlotRomm!);
+        return safe.Length == 0 ? a.FileName : safe + Path.GetExtension(a.FileName);
+    }
+
+    /// <summary>Does this asset answer to that name — the one on disk, or the one it was served under?</summary>
+    private static bool NameMatches(RommAssetView a, string fileName)
+        => string.Equals(a.FileName, fileName, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(WireName(a), fileName, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A slot as a file name. Client names reach this — a branch is named after its client —
+    /// so what a person typed on a handheld has to survive being a name here.</summary>
+    private static string SanitizeName(string s)
+    {
+        var bad = Path.GetInvalidFileNameChars();
+        var kept = new string(s.Where(c => Array.IndexOf(bad, c) < 0).ToArray()).Trim();
+        return kept.TrimEnd('.');
     }
 
     private static string? EmulatorLabel(SaveGroup g)
@@ -242,7 +468,7 @@ internal static class RommAssetsApi
 
     /// <summary>Resolves one asset id back to its current on-disk truth. Null when the id is unknown or
     /// the entity is gone.</summary>
-    public static RommAssetView? ById(int assetId)
+    public static RommAssetView? ById(int assetId, int? tokenId = null)
     {
         var key = RommIdMap.AssetKeyOf(assetId);
         if (key == null) return null;
@@ -254,7 +480,7 @@ internal static class RommAssetsApi
             var game = SafeGame(parts[1]);
             if (game == null) return null;
             bool states = parts[3] == "s";
-            return ListForGame(game, states).FirstOrDefault(a => a.Id == assetId);
+            return ListForGame(game, states, tokenId).FirstOrDefault(a => a.Id == assetId);
         }
 
         if (key.StartsWith("vault|", StringComparison.Ordinal))
@@ -264,7 +490,8 @@ internal static class RommAssetsApi
             var parts = key.Split('|');
             if (parts.Length < 3) return null;
             var e = FindVaultEntry(parts[1], string.Join("|", parts, 2, parts.Length - 2));
-            return e == null ? null : ViewOf(e, assetId);
+            int idx = tokenId is int t ? RommRoms.ClientIndexOf(t) : 0;
+            return e == null ? null : ViewOf(e, assetId, idx > 0 ? "c" + idx : null);
         }
 
         if (key.StartsWith("screen|", StringComparison.Ordinal))
@@ -355,7 +582,7 @@ internal static class RommAssetsApi
 
     /// <summary>One vault copy as the API sees it. Shared by the per-game listing, the bare listing and
     /// id lookup, which used to build the same object three times over and drift.</summary>
-    private static RommAssetView ViewOf(VaultEntry e, int? assetId = null)
+    private static RommAssetView ViewOf(VaultEntry e, int? assetId = null, string? mine = null)
     {
         var abs = SaveVault.Abs(e);
         return new RommAssetView
@@ -372,7 +599,9 @@ internal static class RommAssetsApi
             UpdatedUtc = ContentTimeUtc(abs, e.DisplayCreatedUtc),
             CreatedUtc = ContentTimeUtc(abs, e.DisplayCreatedUtc),
             Slot = e.Slot,
-            SlotRomm = SlotForRom(null, e.GameId, e.GroupId),
+            SlotRomm = SlotOfGroupId(e.GroupId, mine, e.IsState, e.Slot),
+            ServeRealName = BranchOf(e.GroupId) != null
+                         && string.Equals(BranchOf(e.GroupId), mine, StringComparison.OrdinalIgnoreCase),
             Md5 = e.Md5,
             Missing = !(e.IsDirectory ? Directory.Exists(abs) : File.Exists(abs)),
         };
@@ -386,11 +615,24 @@ internal static class RommAssetsApi
 
     private static string ScreensRoot => LiteBoxPaths.Dir("romm-screens");
 
+    /// <summary>A client that cannot read slots: it takes the newest of whatever it is shown and
+    /// writes the served file name to disk verbatim, so it gets the single-line view. Freegosy is the
+    /// one known case, and its Flutter HTTP stack says so ("Dart/x.y (dart:io)"). Unknown agents get
+    /// the full view — the protocol documents `slot`, and both other clients read it.</summary>
+    internal static bool SlotBlind(HttpRequest? req)
+    {
+        var ua = req?.GetHeader("User-Agent") ?? "";
+        return ua.IndexOf("dart", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     // ── DTO ───────────────────────────────────────────────────────────────────
 
     public static object AssetDto(RommAssetView a, string kind, string? deviceId = null)
     {
-        var noExt = Path.GetFileNameWithoutExtension(a.FileName);
+        // Saves and states are advertised under their channel; a screenshot has no channel and keeps
+        // the name it was stored under.
+        var wire = kind == "screenshots" ? a.FileName : WireName(a);
+        var noExt = Path.GetFileNameWithoutExtension(wire);
         var syncPairs = new List<(string deviceId, object dto)>();
         foreach (var s in RommDevices.SyncsForAsset(a.Id))
         {
@@ -414,13 +656,13 @@ internal static class RommAssetsApi
             ["id"] = a.Id,
             ["rom_id"] = a.RomId,
             ["user_id"] = RommAuthApi.UserId,
-            ["file_name"] = a.FileName,
+            ["file_name"] = wire,
             ["file_name_no_tags"] = noExt,
             ["file_name_no_ext"] = noExt,
-            ["file_extension"] = Path.GetExtension(a.FileName).TrimStart('.'),
+            ["file_extension"] = Path.GetExtension(wire).TrimStart('.'),
             ["file_path"] = kind,
             ["file_size_bytes"] = a.Size,
-            ["full_path"] = kind + "/" + a.FileName,
+            ["full_path"] = kind + "/" + wire,
             ["download_path"] = $"/api/{kind}/{a.Id}/content?timestamp={a.UpdatedUtc:yyyyMMddHHmmss}",
             ["missing_from_fs"] = a.Missing,
             ["created_at"] = RommAuthApi.Iso(a.CreatedUtc),
@@ -463,8 +705,63 @@ internal static class RommAssetsApi
     private const string SavesOffMessage =
         "Save synchronisation is not available on this server yet";
 
-    public static HttpResponse SavesCollection(RouteContext ctx) => AssetsOff(ctx, "saves");
-    public static HttpResponse StatesCollection(RouteContext ctx) => AssetsOff(ctx, "states");
+    // ── Le PUSH : la branche du client, et elle seule ─────────────────────────
+    //
+    // Un push atterrit dans la branche du client qui pousse — toujours. Le slot annonce n'entre pas
+    // dans le choix de la cible : un client qui a restaure depuis « lb-ra-snes9x » repoussera sous ce
+    // nom-la (restaurer change son canal actif), et refuser serait compte comme un envoi rate puis
+    // reessaye. La garantie est tenue par NOTRE ciblage, jamais par un refus.
+    //
+    // La save en jeu n'est touchee que si l'utilisateur a promu la branche de CE client dans Game
+    // Saves — ecraser le jeu en cours est une permission qui s'accorde jeu par jeu, en promouvant, et
+    // qui par defaut n'existe pas. Meme promue : strictement plus recent seulement, et jamais sans que
+    // la save deplacee ait ete mise a l'abri d'abord.
+    private const bool PushEnabled = true;
+
+    private const string PushOffMessage =
+        "Save uploads are paused on this server; downloads are unaffected";
+
+    private static HttpResponse PushOff(string kind)
+    {
+        RommTrace.Note($"{kind}: upload refused — the push is paused");
+        return RommApi.Error(501, PushOffMessage);
+    }
+
+    public static HttpResponse SavesCollection(RouteContext ctx) => Collection(ctx, states: false);
+    public static HttpResponse StatesCollection(RouteContext ctx) => Collection(ctx, states: true);
+
+    /// <summary>GET /api/saves/summary?rom_id= — the per-slot digest Grout's menus read: one row per
+    /// channel with its count and newest asset. Same view as the listing, so the two can never
+    /// disagree about which slots exist.</summary>
+    public static HttpResponse SavesSummary(RouteContext ctx)
+    {
+        var refused = RommAuthApi.Require(ctx, RommScopes.AssetsRead, out var identity);
+        if (refused != null) return refused;
+        var req = ctx.Request!;
+        int romId = req.GetQueryInt("rom_id", -1);
+        var romRow = RommIndexer.RowOf(romId);
+        var game = romRow == null ? null : SafeGame(romRow.GuidLb);
+        if (game == null) return RommApi.Error(404, "Rom not found");
+
+        var list = romRow!.Emulated
+            ? ListForGame(game, states: false, identity?.TokenId, romRow, SlotBlind(req))
+            : new List<RommAssetView>();
+        var deviceId = req.GetQuery("device_id");
+        var slots = list
+            .GroupBy(a => a.SlotRomm ?? DefaultSlot, StringComparer.OrdinalIgnoreCase)
+            .Select(gr => (object)new Dictionary<string, object?>
+            {
+                ["slot"] = gr.Key,
+                ["count"] = gr.Count(),
+                ["latest"] = AssetDto(gr.OrderByDescending(a => a.UpdatedUtc).First(), "saves", deviceId),
+            })
+            .ToArray();
+        return RommApi.Json(new Dictionary<string, object?>
+        {
+            ["total_count"] = list.Count,
+            ["slots"] = slots,
+        });
+    }
 
     private static HttpResponse AssetsOff(RouteContext ctx, string kind)
     {
@@ -475,14 +772,16 @@ internal static class RommAssetsApi
         return reading ? RommApi.Json(Array.Empty<object>()) : RommApi.Error(501, SavesOffMessage);
     }
 
-    private static HttpResponse CollectionUnused(RouteContext ctx, bool states) => Collection(ctx, states);
-
+    /// <summary>La LECTURE est ouverte, l'ECRITURE est en pause. Un GET repond honnetement ; un POST
+    /// repond 501, que nul client ne confond avec « reessaie ».</summary>
     private static HttpResponse Collection(RouteContext ctx, bool states)
     {
         bool post = string.Equals(ctx.Request?.Method, "POST", StringComparison.OrdinalIgnoreCase);
-        var refused = RommAuthApi.Require(ctx, post ? RommScopes.AssetsWrite : RommScopes.AssetsRead, out var identity);
+        var refused = RommAuthApi.Require(ctx, post ? RommScopes.AssetsWrite : RommScopes.AssetsRead,
+                                          out var identity);
         if (refused != null) return refused;
-
+        // Avant toute lecture du multipart : un envoi refuse ne doit pas dependre de ce qu'il contient.
+        if (post && !PushEnabled) return PushOff(states ? "states" : "saves");
         return post ? Upload(ctx, states, identity?.TokenId) : List(ctx, states, identity?.TokenId);
     }
 
@@ -496,9 +795,13 @@ internal static class RommAssetsApi
         int romId = req.GetQueryInt("rom_id", -1);
         if (romId > 0)
         {
-            var game = RommLibrary.GameByRomId(romId);
+            // Le rom_id NOMME la ROM : on liste son groupe, pas ceux du jeu entier.
+            var romRow = RommIndexer.RowOf(romId);
+            var game = romRow == null ? null : SafeGame(romRow.GuidLb);
             if (game == null) return RommApi.Error(404, "Rom not found");
-            var list = ListForGame(game, states, tokenId);
+            if (!romRow!.Emulated) return RommApi.Json(Array.Empty<object>());
+
+            var list = ListForGame(game, states, tokenId, romRow, SlotBlind(req));
             // Filtered on RomM's channel, the thing the client actually named.
             var slot = req.GetQuery("slot");
             if (!string.IsNullOrEmpty(slot))
@@ -519,37 +822,34 @@ internal static class RommAssetsApi
         IGame[] games;
         try { games = Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetAllGames() ?? Array.Empty<IGame>(); }
         catch (Exception ex) { return RommApi.Error(500, "Could not read the library: " + ex.Message); }
+        int clientIdx0 = tokenId is int tid0 ? RommRoms.ClientIndexOf(tid0) : 0;
+        string? mine0 = clientIdx0 > 0 ? "c" + clientIdx0 : null;
         foreach (var g in games)
         {
             foreach (var e in VaultEntriesOf(g))
             {
                 if (e.IsState != states) continue;
-                all.Add(AssetDto(ViewOf(e), kind, deviceId));
+                all.Add(AssetDto(ViewOf(e, mine: mine0), kind, deviceId));
             }
         }
         return RommApi.Json(all.ToArray());
     }
 
-    public static HttpResponse SaveById(RouteContext ctx) => AssetOffById(ctx, "saves");
-    public static HttpResponse StateById(RouteContext ctx) => AssetOffById(ctx, "states");
-
-    private static HttpResponse AssetOffById(RouteContext ctx, string kind)
-    {
-        var refused = RommAuthApi.Require(ctx, RommScopes.AssetsRead, out _);
-        if (refused != null) return refused;
-        RommTrace.Note($"{kind}/id: not served (out of scope)");
-        return RommApi.Error(404, "Asset not found");
-    }
-
-    private static HttpResponse AssetByIdUnused(RouteContext ctx, string kind) => AssetById(ctx, kind);
+    // Un client qui voit #54 dans une liste demande ensuite /api/saves/54 : laisser cette route fermee
+    // pendant que la liste est ouverte lui montre un identifiant qu'il ne peut pas suivre.
+    public static HttpResponse SaveById(RouteContext ctx) => AssetById(ctx, "saves");
+    public static HttpResponse StateById(RouteContext ctx) => AssetById(ctx, "states");
 
     private static HttpResponse AssetById(RouteContext ctx, string kind)
     {
         bool put = string.Equals(ctx.Request?.Method, "PUT", StringComparison.OrdinalIgnoreCase);
         var refused = RommAuthApi.Require(ctx, put ? RommScopes.AssetsWrite : RommScopes.AssetsRead, out var identity);
         if (refused != null) return refused;
+        // Meme porte que le POST, et avant la resolution de l'asset : une ecriture en pause se refuse
+        // pour ce qu'elle est, pas parce que la cible manque.
+        if (put && !PushEnabled) return PushOff(kind);
 
-        var a = ById(ctx.GetRouteInt("id", -1));
+        var a = ById(ctx.GetRouteInt("id", -1), identity?.TokenId);
         if (a == null) return RommApi.Error(404, "Asset not found");
 
         if (put) return UpdateContent(ctx, a, identity?.TokenId);
@@ -558,10 +858,10 @@ internal static class RommAssetsApi
 
     public static HttpResponse Content(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.AssetsRead, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.AssetsRead, out var identity);
         if (refused != null) return refused;
 
-        var a = ById(ctx.GetRouteInt("id", -1));
+        var a = ById(ctx.GetRouteInt("id", -1), identity?.TokenId);
         if (a == null) return RommApi.Error(404, "Asset not found");
 
         if (a.IsDirectory)
@@ -578,12 +878,12 @@ internal static class RommAssetsApi
                     fs.CopyTo(es);
                 }
             }, "application/zip");
-            resp.Headers["Content-Disposition"] = HttpResponse.BuildDisposition(a.FileName + ".zip");
+            resp.Headers["Content-Disposition"] = HttpResponse.BuildDisposition(WireName(a) + ".zip");
             return resp;
         }
 
         if (!File.Exists(a.AbsPath)) return RommApi.Error(404, "Asset file missing on disk");
-        return HttpResponse.FromFile(a.AbsPath, "application/octet-stream", ctx.Request, a.FileName);
+        return HttpResponse.FromFile(a.AbsPath, "application/octet-stream", ctx.Request, WireName(a));
     }
 
     // ── Upload ────────────────────────────────────────────────────────────────
@@ -593,8 +893,14 @@ internal static class RommAssetsApi
         var req = ctx.Request!;
         var kind = states ? "states" : "saves";
         int romId = req.GetQueryInt("rom_id", -1);
-        var game = RommLibrary.GameByRomId(romId);
+
+        // Le rom_id NOMME la ROM. Plus aucune deduction depuis le nom du fichier recu : c'est ce qui
+        // faisait atterrir "autosave.srm" et "… (Beta) [horodatage].state.auto" dans un groupe invente.
+        var romRow = RommIndexer.RowOf(romId);
+        var game = romRow == null ? null : SafeGame(romRow.GuidLb);
         if (game == null) return RommApi.Error(404, "Rom not found");
+        if (!romRow!.Emulated)
+            return RommApi.Error(422, "This game is not distributed as a file, so it has no saves here");
 
         var deviceId = req.GetQuery("device_id");
         bool overwrite = req.GetQueryBool("overwrite");
@@ -608,8 +914,9 @@ internal static class RommAssetsApi
 
         // Device-conflict guard (upstream's 409): the device pushes over an asset that moved since its
         // last sync, and did not say overwrite → refuse, the device pulls first.
-        var existing = ListForGame(game, states, tokenId).FirstOrDefault(a =>
-            a.IsLive && string.Equals(a.FileName, fileName, StringComparison.OrdinalIgnoreCase));
+        // Either name: a client pushes back the name it was SERVED, which is the channel's, while a
+        // client that read the disk name is just as right.
+        var existing = ListForGame(game, states, tokenId).FirstOrDefault(a => a.IsLive && NameMatches(a, fileName));
         if (deviceId != null && existing != null && !overwrite)
         {
             var sync = RommDevices.SyncsForAsset(existing.Id).FirstOrDefault(s => s.DeviceId == deviceId);
@@ -635,8 +942,8 @@ internal static class RommAssetsApi
             // more, and used to be dropped here for failing to parse.
             int? slotInt = int.TryParse(slot, out var si) ? si : null;
             var (fresh, target, lerr) = LandUpload(game, scan, tmpFile, fileName, states, slotInt,
-                                                   tokenId, ClientLabel(tokenId, deviceId));
-            if (lerr != null) return RommApi.Error(500, lerr);
+                                                   tokenId, ClientLabel(tokenId, deviceId), romRow);
+            if (lerr != null) return RommApi.Error(422, lerr);
 
             // What the client gets back is the live save, because that is what a push becomes in every
             // case but one. The name it was uploaded under only narrows the search: a bundle is stored
@@ -649,7 +956,8 @@ internal static class RommAssetsApi
                 // the whole result, and it is a real one: recorded,
                 // listed, and restorable by hand from Game Saves.
                 if (fresh == null) return RommApi.Error(409, "Nothing was stored: the upload held only saves this game already has");
-                var v = ViewOf(fresh);
+                int mineIdx = tokenId is int tidv ? RommRoms.ClientIndexOf(tidv) : 0;
+                var v = ViewOf(fresh, mine: mineIdx > 0 ? "c" + mineIdx : null);
                 if (deviceId != null) RommDevices.MarkSynced(deviceId, v.Id);
                 return RommApi.Json(AssetDto(v, kind, deviceId), 201);
             }
@@ -671,15 +979,39 @@ internal static class RommAssetsApi
     /// Game Saves. With no plugin the second half simply does not happen, and the caller is told.</summary>
     private static (VaultEntry? entry, SaveGroup? group, string? error) LandUpload(
         IGame game, SaveScan scan, string tmpFile, string fileName, bool states, int? slot,
-        int? tokenId = null, string? client = null)
+        int? tokenId, string? client, RommGameRow rom)
     {
+        // L'entree d'archive que la ligne nomme, s'il y en a une. Une recherche, une fois, contre une
+        // egalite de chemin — pas une deduction depuis le nom de ce que le client a envoye.
+        SaveEntry? romEntry = null;
+        if (rom.RomPath.Length > 0)
+        {
+            try
+            {
+                romEntry = SaveEntries.For(game, null)
+                    .FirstOrDefault(e => RommIndexPass.PathEq(e.PathInArchive, rom.RomPath));
+            }
+            catch { }
+            if (romEntry == null)
+                return (null, null, "The ROM this rom_id names is no longer inside the archive");
+        }
+
+        // Sans client appaire, pas de branche pour recevoir : c'est un 422 clair plutot qu'une
+        // ecriture dans une ligne qui n'appartiendrait a personne. Les trois clients vises passent
+        // tous par l'appairage ; seul un identifiant de mot de passe brut arrive ici sans index.
+        int clientIdx = tokenId is int tid ? RommRoms.ClientIndexOf(tid) : 0;
+        if (clientIdx <= 0)
+            return (null, null, "Uploads need a paired client: this credential has no save line of its own");
+        string branch = "c" + clientIdx;
+
         // What was pushed, unpacked. One upload can hold several saves for several ROMs — Freegosy
         // bundles whenever it has more than one file, and its background queue bundles always.
         var work = Path.Combine(Path.GetDirectoryName(tmpFile) ?? Path.GetTempPath(), "unpack");
         var candidates = RommPushPlanner.Expand(tmpFile, fileName, work);
         if (candidates.Count == 0) return (null, null, "Nothing usable in the upload");
 
-        foreach (var c in candidates) c.Entry = ResolveEntry(game, c.FileName, tokenId);
+        // Toutes les pieces sont de CETTE ROM : c'est le rom_id qui le dit, pas leur nom.
+        foreach (var c in candidates) c.Entry = romEntry;
 
         VaultEntry? firstFresh = null;
         SaveGroup? firstTarget = null;
@@ -693,24 +1025,19 @@ internal static class RommAssetsApi
             bool lotStates = ordered[0].IsState;
             var entry = ordered[0].Entry;
 
+            // La cible : la branche de CE client sur CETTE ROM. Le nom du fichier recu n'entre pas
+            // dans le choix, et le slot annonce non plus — il ne sert qu'a distinguer une save d'un
+            // savestate, ce que RommPushPlanner a deja fait.
             var target = (lotStates ? scan.States : scan.Files).FirstOrDefault(g =>
-                g.Active != null && g.Plugin != null && SameEntry(g, entry) &&
-                string.Equals(Path.GetFileName(g.ActivePath.TrimEnd('\\', '/')),
-                              ordered[0].FileName, StringComparison.OrdinalIgnoreCase));
+                BelongsToRom(g, rom)
+                && string.Equals(BranchOf(g.GroupId), branch, StringComparison.OrdinalIgnoreCase));
 
-            // Why nothing matched, when nothing matched. A push landing in an empty slot is normal once;
-            // landing in one every single time means the live save is there but unrecognised, and the
-            // difference is invisible from the outcome alone.
+            // La branche EN JEU — l'utilisateur l'a promue dans Game Saves — est le seul cas ou un
+            // push touche la save que l'emulateur lit.
+            bool promoted = target?.Active != null;
+
             if (target == null)
-            {
-                var pool = (lotStates ? scan.States : scan.Files).Where(g => g.Active != null).ToList();
-                RommTrace.Note(pool.Count == 0
-                    ? $"no live {(lotStates ? "state" : "save")} at all for this game"
-                    : $"no live match for \"{ordered[0].FileName}\" (entry {entry?.Key ?? "none"}) among: "
-                      + string.Join(", ", pool.Take(4).Select(g =>
-                          $"\"{Path.GetFileName(g.ActivePath.TrimEnd('\\', '/'))}\" entry={SaveManager.EntryKeyOf(g.GroupId) ?? "none"}"
-                          + (g.Plugin == null ? " NO-PLUGIN" : ""))));
-            }
+                RommTrace.Note("this client has no line of its own yet for this ROM — the push starts it");
 
             // What we already hold for this group, live and archived. A push that brings back what is
             // already here is the normal end of a round trip and must cost nothing.
@@ -725,13 +1052,13 @@ internal static class RommAssetsApi
                     continue;
                 }
 
-                // The newest one that is genuinely new is the candidate for the live save; everything
-                // after it is history and goes to the vault at its own date.
-                bool wantsLive = !tookLive;
+                // The newest genuinely-new piece is the one that may also go live — and only when
+                // the user promoted this client's line. Everything else is history at its own date.
+                bool liveEligible = promoted && !tookLive;
                 tookLive = true;
 
                 var (fresh, err) = Land(game, c, lotStates, slot, target, entry,
-                                        client, wantsLive, known);
+                                        client, liveEligible, known, branch, BranchName(client));
                 if (err != null) { firstError ??= err; continue; }
                 // Held now whatever became of it — live save or version. A bundle carrying the same
                 // bytes twice must not be filed twice.
@@ -746,50 +1073,30 @@ internal static class RommAssetsApi
         return (firstFresh, firstTarget, null);
     }
 
-    /// <summary>Files one candidate: into the vault always, and onto the live save when it is newer than
-    /// what is there.</summary>
+    /// <summary>Files one candidate into the client's branch: a labelled vault copy always, and the
+    /// live save too when the branch is the save in play — the user promoted it — and the piece is
+    /// strictly newer than what plays.
+    ///
+    /// The copy is filed FIRST. On the promoted line it doubles the history (the displaced save is
+    /// secured separately), which is deliberate: the labelled copy is the record of what arrived and
+    /// from whom, and it is what the user looks at in Game Saves before trusting a client further.</summary>
     private static (VaultEntry? fresh, string? error) Land(
         IGame game, PushCandidate c, bool states, int? slot, SaveGroup? target, SaveEntry? entry,
-        string? client, bool wantsLive, HashSet<string> known)
+        string? client, bool liveEligible, HashSet<string> known, string branch, string? branchName)
     {
-        // target is only ever a group that HAS a live save, so a null one means the emulator has nothing
-        // for this ROM yet. Either way the newest thing the client sent is what should be in play: what
-        // arrives from a client is progress, and progress that sits in the vault while the emulator runs
-        // on an older file is progress lost at the next launch.
-        bool promotes = wantsLive
-                     && (target == null
-                         || c.ModifiedUtc > (target.LastModified?.ToUniversalTime() ?? DateTime.MinValue));
-
-        // An older copy only earns a place if the cap has one to give. Evicting a newer save to file an
-        // older one would be the opposite of what a retention limit is for.
-        if (!promotes && target != null && !HasRoomFor(target, c.ModifiedUtc))
+        // An older copy only earns a vault place if the cap has one to give. Evicting a newer save to
+        // file an older one would be the opposite of what a retention limit is for.
+        if (!liveEligible && target != null && !HasRoomFor(target, c.ModifiedUtc))
         {
             RommTrace.Note($"skipped (older than everything the cap holds): {c.FileName}");
             return (null, null);
         }
 
-        // Displacing a live save: keep what is about to go, unless the vault already holds it — which is
-        // the common case, the save having been archived when it was taken. Then put the received file
-        // in play STRAIGHT FROM THE UPLOAD. Going through the vault would leave a copy byte-identical to
-        // the save it had just become: a history entry recording nothing, and one of the two copies the
-        // cap can hold spent on it.
-        if (promotes && target != null)
-        {
-            PreserveBeforeOverwrite(target);
-            var perr = SaveManager.RestoreFrom(target, c.TempPath, slot, states, () => true,
-                                               RommLabel(client));
-            if (perr != null)
-            {
-                RommTrace.Note("could not apply the save: " + perr);
-                return (null, "Could not apply the save: " + perr);
-            }
-            RommTrace.Note($"replaced the live save: {c.FileName} ({c.ModifiedUtc:HH:mm:ss})");
-            return (null, null);
-        }
-
         var before = new HashSet<string>(VaultEntriesOf(game).Select(e => e.VaultPath), StringComparer.OrdinalIgnoreCase);
         var err = SaveManager.Import(game, c.TempPath, states, slot, target?.AppId, entry: entry,
-                                     originalName: c.FileName);
+                                     originalName: c.FileName,
+                                     branch: target == null ? branch : null,
+                                     groupName: branchName);
         if (err != null) return (null, "Import failed: " + err);
 
         var fresh = VaultEntriesOf(game).FirstOrDefault(e => !before.Contains(e.VaultPath));
@@ -800,31 +1107,39 @@ internal static class RommAssetsApi
         try { File.SetCreationTimeUtc(SaveVault.Abs(fresh), c.ModifiedUtc); } catch { }
 
         if (target != null) Adopt(game, fresh, target, client);
-        if (!promotes)
+
+        if (!liveEligible)
         {
             RommTrace.Note($"archived as a version: {c.FileName} ({c.ModifiedUtc:HH:mm:ss})");
             return (fresh, null);
         }
 
-        // Nothing was in play. The copy just imported is the group's first backup — the one it would
-        // otherwise never get, since a save only reaches the vault by being displaced — so unlike the
-        // branch above it stays, and the group starts out with a history rather than with none.
-        var landed = FreshGroupFor(game, fresh);
-        if (landed == null)
+        // The branch is the save in play. Strictly newer only: a phone clock that drifted backwards
+        // must not put an old game back in play — the copy stays in the history either way.
+        var liveTime = target!.LastModified?.ToUniversalTime() ?? DateTime.MinValue;
+        if (c.ModifiedUtc <= liveTime)
         {
-            RommTrace.Note($"archived, but no group to put it in play: {c.FileName}");
+            RommTrace.Note($"older than the line in play — filed, not applied: {c.FileName}");
             return (fresh, null);
         }
-        Adopt(game, fresh, landed, client);   // it has a group now, and a name of its own
-        // Restore carries that label onto the live record, so the file is called the same thing in
-        // both places — which is the whole point of the label belonging to the file.
-        var rerr = SaveManager.Restore(landed, fresh, slot, () => true);
-        if (rerr != null)
+        if (target.Plugin == null)
         {
-            RommTrace.Note("kept as a version, could not put it in play: " + rerr);
-            return (fresh, "Could not apply the save: " + rerr);
+            RommTrace.Note("no integration plugin — filed, not applied: " + c.FileName);
+            return (fresh, null);
         }
-        RommTrace.Note($"became the live save, and its first backup: {c.FileName}");
+        // The displaced save is secured BEFORE anything overwrites it, and a failed net stops the act:
+        // a full disk or a file the emulator holds must never turn into a silent overwrite.
+        if (!PreserveBeforeOverwrite(target))
+            return (fresh, "The save in play could not be secured first, so it was not replaced; " +
+                           "the upload was archived as a version instead");
+        var perr = SaveManager.RestoreFrom(target, c.TempPath, slot, states, () => true,
+                                           RommLabel(client));
+        if (perr != null)
+        {
+            RommTrace.Note("could not apply the save: " + perr);
+            return (fresh, "Could not apply the save: " + perr);
+        }
+        RommTrace.Note($"replaced the save in play: {c.FileName} ({c.ModifiedUtc:HH:mm:ss})");
         return (fresh, null);
     }
 
@@ -950,25 +1265,29 @@ internal static class RommAssetsApi
     /// whatever it was called while in play goes into the vault with it, which WriteBackupRow now does on
     /// its own. Labelling it after the client that displaced it was the mistake: a label says what a file
     /// IS, not what happened to be running when it moved.</summary>
-    private static void PreserveBeforeOverwrite(SaveGroup g)
+    /// <summary>Secures the save a write is about to displace. FALSE means the net is NOT in place —
+    /// a full disk, a file the emulator holds — and the caller must not overwrite: a failed backup
+    /// that still lets the write through is a silent overwrite with extra steps.</summary>
+    private static bool PreserveBeforeOverwrite(SaveGroup g)
     {
         try
         {
-            if (g.Active == null || g.ActivePath.Length == 0) return;
+            if (g.Active == null || g.ActivePath.Length == 0) return true;
 
             var res = SaveManager.Backup(g, force: false, auto: true);
-            if (res == null) return;
-            if (res.Error != null) { RommTrace.Note("could not keep the live save: " + res.Error); return; }
+            if (res == null) return true;
+            if (res.Error != null) { RommTrace.Note("could not keep the live save: " + res.Error); return false; }
             if (res.Entry == null)
             {
                 // Identical to the latest copy — the original is already in the vault, under whatever
                 // label it was given then. Nothing to add, and a duplicate would only clutter.
                 RommTrace.Note("live save already archived, nothing to keep");
-                return;
+                return true;
             }
             RommTrace.Note("kept the live save as \"" + res.Entry.Title + "\"");
+            return true;
         }
-        catch (Exception ex) { RommTrace.Note("could not keep the live save: " + ex.Message); }
+        catch (Exception ex) { RommTrace.Note("could not keep the live save: " + ex.Message); return false; }
     }
 
     /// <summary>The save in play for this game, preferring the one named like what was uploaded — a
@@ -977,9 +1296,14 @@ internal static class RommAssetsApi
     private static RommAssetView? LiveOf(IGame game, bool states, int? tokenId, string? fileName)
     {
         var live = ListForGame(game, states, tokenId).Where(a => a.IsLive).ToList();
-        return live.FirstOrDefault(a => string.Equals(a.FileName, fileName, StringComparison.OrdinalIgnoreCase))
+        return live.FirstOrDefault(a => NameMatches(a, fileName))
             ?? live.FirstOrDefault();
     }
+
+    /// <summary>The heading a client's own save line carries in Game Saves. Its own name, so it reads
+    /// as a timeline rather than as a stray copy.</summary>
+    private static string BranchName(string? client)
+        => string.IsNullOrWhiteSpace(client) ? "RomM client" : client!;
 
     /// <summary>Who caused a write, in the terms the save history should show: the paired client's name
     /// when it authenticated with a token, else the device id it volunteered, else nothing useful.</summary>
@@ -1054,9 +1378,12 @@ internal static class RommAssetsApi
 
     private static HttpResponse UpdateContent(RouteContext ctx, RommAssetView a, int? tokenId)
     {
-        // PUT replaces the CONTENT of a live save (multipart, same fields as the POST). Vault versions
-        // are history — history does not get edited, a new upload makes a new version.
-        if (!a.IsLive) return RommApi.Error(422, "Vault versions are immutable; upload a new save instead");
+        // PUT lands in the requester's branch like every other write. It is honest only when the asset
+        // addressed IS the requester's own channel — its autosave view, live or not: a PUT against
+        // somebody else's line would "succeed" into a different group than the one addressed, and the
+        // client would then re-read an asset its write never touched.
+        if (!a.ServeRealName)
+            return RommApi.Error(422, "This save line is read-only for this client; upload to your own channel instead");
 
         var game = SafeGame(a.GameId);
         if (game == null) return RommApi.Error(404, "Rom not found");
@@ -1068,7 +1395,6 @@ internal static class RommAssetsApi
         SaveScan scan;
         try { scan = SaveManager.ScanBase(game); }
         catch (Exception ex) { return RommApi.Error(500, "Save scan failed: " + ex.Message); }
-        if (scan.Plugin == null) return RommApi.Error(422, "No integration plugin for this game's emulator");
 
         var tmpDir = Path.Combine(Path.GetTempPath(), "litebox-romm-up-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmpDir);
@@ -1077,21 +1403,24 @@ internal static class RommAssetsApi
         {
             if (!filePart.SaveTo(tmpFile)) return RommApi.Error(500, "Could not store the upload");
 
-            // PUT replaces a LIVE save, so the version alone is not an acceptable outcome here — unlike
-            // POST, which is happy to leave one when no plugin can promote it.
-            var (_, target, lerr) = LandUpload(game, scan, tmpFile, a.FileName, a.IsState,
-                                               a.Slot, tokenId,
-                                               ClientLabel(tokenId, ctx.Request!.GetQuery("device_id")));
-            if (lerr != null) return RommApi.Error(500, lerr);
+            // The asset already names its rom, so the row comes from there rather than from a query
+            // string: a PUT addresses something that exists, and what it names is not in doubt.
+            var putRow = RommIndexer.RowOf(a.RomId);
+            if (putRow == null) return RommApi.Error(404, "Rom not found");
 
-            // What is in play now decides, not `target` — which names the group that ALREADY had a live
-            // save and is therefore null in the one case where the write did the most: filling an empty
-            // slot. Judging on it answered 422 to a state that had just been put in play, and the client
-            // dutifully retried the same write seven times over.
+            var (fresh, _, lerr) = LandUpload(game, scan, tmpFile, a.FileName, a.IsState,
+                                              a.Slot, tokenId,
+                                              ClientLabel(tokenId, ctx.Request!.GetQuery("device_id")),
+                                              putRow);
+            if (lerr != null) return RommApi.Error(422, lerr);
+
+            // Answer with the requester's view of what its channel holds now: the addressed asset when
+            // it still resolves, else the newest live match, else the copy just filed.
             var live = LiveOf(game, a.IsState, tokenId, a.FileName);
-            if (live == null) return RommApi.Error(422, "No integration plugin could apply this save");
-
-            var after = ById(a.Id) ?? live;
+            int mineIdxPut = tokenId is int tidPv ? RommRoms.ClientIndexOf(tidPv) : 0;
+            var after = ById(a.Id, tokenId) ?? live
+                     ?? (fresh != null ? ViewOf(fresh, mine: mineIdxPut > 0 ? "c" + mineIdxPut : null) : null);
+            if (after == null) return RommApi.Error(409, "Nothing was stored: the upload held only saves this game already has");
             var deviceId = ctx.Request!.GetQuery("device_id");
             if (deviceId != null) RommDevices.MarkSynced(deviceId, after.Id);
             return RommApi.Json(AssetDto(after, a.IsState ? "states" : "saves", deviceId));
@@ -1144,10 +1473,10 @@ internal static class RommAssetsApi
 
     public static HttpResponse ConfirmDownloaded(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.DevicesWrite, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.DevicesWrite, out var identity);
         if (refused != null) return refused;
 
-        var a = ById(ctx.GetRouteInt("id", -1));
+        var a = ById(ctx.GetRouteInt("id", -1), identity?.TokenId);
         if (a == null) return RommApi.Error(404, "Asset not found");
 
         string? deviceId = null;
@@ -1169,10 +1498,10 @@ internal static class RommAssetsApi
 
     private static HttpResponse SetTracking(RouteContext ctx, bool tracked)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.DevicesWrite, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.DevicesWrite, out var identity);
         if (refused != null) return refused;
 
-        var a = ById(ctx.GetRouteInt("id", -1));
+        var a = ById(ctx.GetRouteInt("id", -1), identity?.TokenId);
         if (a == null) return RommApi.Error(404, "Asset not found");
 
         string? deviceId = null;

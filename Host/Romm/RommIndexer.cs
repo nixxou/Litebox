@@ -335,6 +335,23 @@ internal static class RommIndexer
         }
     }
 
+    /// <summary>The rows behind a PAGE of rom ids — one query for the whole page.
+    ///
+    /// This is what keeps the file name true without keeping it resident: a name per game would cost
+    /// tens of megabytes on a large library, and a query per row would cost a round trip per row. The
+    /// page is materialised before the DTOs are built, so it is asked once.</summary>
+    public static Dictionary<long, RommGameRow> RowsOf(IReadOnlyCollection<long> romIds)
+    {
+        try
+        {
+            if (romIds.Count == 0) return new Dictionary<long, RommGameRow>();
+            using var conn = RommDb.OpenForIndex();
+            if (conn == null) return new Dictionary<long, RommGameRow>();
+            return RommGamesTable.ByIds(conn, romIds);
+        }
+        catch { return new Dictionary<long, RommGameRow>(); }
+    }
+
     /// <summary>What a rom id names, straight from the table — one query, on the download path only.</summary>
     public static RommGameRow? RowOf(long romId)
     {

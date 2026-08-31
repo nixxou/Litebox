@@ -329,6 +329,84 @@ moved are worth naming because each was a wrong assumption, not a refactor:
   carries its creation date a century ahead on purpose; a device told a save was made in 2126
   would hold it newest for ever and never pull again.
 
+### 5.6ter The save contract — settled 2026-08-31, implemented the same day
+
+Settled over a long session, then implemented and verified against the three clients' sources
+(argosy-launcher, grout and Freegosy checkouts). What follows is the contract as SHIPPED.
+
+**Slot naming — one channel per group, never per copy.** A group is a line the emulator keeps
+writing to; a vault copy is frozen history that retention evicts, and a slot pointing at one would
+vanish under a client that had pinned it. Per REQUESTING client:
+
+| slot | what it is |
+|---|---|
+| `autosave` | the requester's own branch — the only place its pushes land. With no branch yet, the game's primary LiteBox line stands in (real id, real file name), so the first pull→play→push round trip never leaves the default channel. |
+| `romm-cN` | another client's branch, a read-only extra (a deliberate reversal of the old hiding — with named slots the choice now has a meaning). |
+| `lb-ra-<core>` / `lb-<emu>` | a LiteBox group. Inactive groups are served too (their line lives in the vault); when several groups answer to one name — Make New Save builds a second In-Vault group on the same core — the one in play wins, else the most recently written, and the trace names the ones set aside. |
+
+No entry names in slots: with extraction off the archive IS the ROM (one main-bucket group), with
+extraction on the `rom_id` already narrowed the listing to one entry — either way the component is
+constant, hence mute. Character set: no `:` (illegal in a Windows file name), no `.` (Argosy cuts
+channel names at the last one), no `#` (an unencoded `?slot=` truncates at the fragment), `@` avoided
+as a precaution. Slots are not machine-parseable and need not be: `emulator` carries the core verbatim.
+
+**The wire file name follows the slot — except on autosave.** Argosy seeds its slot table from the
+file name alone (`parseServerChannelNameForSync` never reads `slot`), so named lines must be
+channel-named. The autosave channel carries the file's REAL name instead: a name equal to the ROM's
+base name is precisely what says "the latest save" to Argosy, and it is the name Freegosy writes to
+disk verbatim, where only the real one lets the emulator find the save.
+
+**Per-client view.** A slot-blind client (Freegosy: takes the newest of whatever it is shown) is
+recognised by its Dart User-Agent and served ONLY the autosave line — for it a multi-line view would
+not read as a choice but as the truth. Unknown agents get the full view.
+
+**Origin, not activity.** `#cN` on a group id IS the origin marker; a promoted branch stays
+`romm-cN`/`autosave`, which makes `ReassignRecord` keeping the suffix correct rather than a bug.
+
+**Write rules (the push, reopened).** A push lands in the pusher's branch — always. The announced
+slot never picks the target (a client that restored from `lb-ra-snes9x` pushes under that name, and a
+refusal would be retried in a loop); the guarantee is held by our targeting, never by refusing. The
+live save is written ONLY when the user promoted that client's branch in Game Saves — overwriting the
+game in play is a per-game permission granted by promoting, and it does not exist by default. Even
+promoted: strictly newer only (a phone clock gone backwards cannot put an old game back in play — the
+copy is still filed), the displaced save is secured FIRST and a failed net stops the act
+(`PreserveBeforeOverwrite` returns bool), and the incoming copy is archived labelled even when it goes
+live — it is what the user inspects before trusting a client further. No paired client → 422. PUT
+accepts only the requester's own channel. The per-client push mode is gone (UI, plumbing; the
+`push_mode` column stays in the schema, unread).
+
+**Negotiate (implemented — Grout REQUIRES it).** `POST /api/sync/negotiate` +
+`POST /api/sync/sessions/{id}/complete`. The client sends its whole inventory (saves only); the
+server answers one op per save — `upload|download|conflict|no_op` with a reason — in a numbered,
+DB-persisted session (a complete answered 404 makes Argosy drop local rows; a LiteBox restart must
+not cause that). Decisions are permissive by design: nothing a client uploads can overwrite a live
+save, so doubt costs one vault copy, not progress. The data is weak and treated as such —
+`content_hash` is the client's LAST-UPLOAD hash, `updated_at` its clock; hash equality means "in
+sync", inequality decides nothing alone, and `conflict` is reserved for the one honest case (both
+sides moved since THIS device's last sync mark). No downloads volunteered beyond the inventory:
+Grout's discovery fallback queries `/api/saves` for ROMs with no local save, by its own design.
+`/api/saves/summary` (per-slot digest) is served for Grout's menus.
+
+**The three clients, verified against their sources:**
+
+| | slots | restore naming | negotiate | verdict |
+|---|---|---|---|---|
+| Argosy | yes (seeding path reads file names — covered by channel-named files) | computes its own paths | optional; empty plan on error | works |
+| Grout | yes, cleanest | ROM basename + server extension | **mandatory, no fallback** | works now that negotiate exists |
+| Freegosy | none — newest of the list, writes served names verbatim | served name, verbatim | never calls it | works via the single-line autosave view |
+
+**Known leftovers, deliberate:**
+
+- `/api/roms/{id}` embedded saves now carry the rom row and the token (they used to cover the whole
+  game and filter the requester's own branch, contradicting `/api/saves`).
+- The seed's asset id changes when a client's first push creates its branch; device sync marks follow
+  the POST answer, so `is_current` stays coherent.
+- A slot name can flip lines when the user activates a different group of the same core — the name is
+  "that core's line as of now", accepted; the trace records set-aside groups if it ever matters.
+- Freegosy's `pruneOldSaves` calls the (closed) bulk delete → 501, swallowed by the client; its
+  `autocleanup` query param is ignored — our vault retention (cap 25, locked copies never evicted) is
+  the retention.
+
 ### 5.9 Deliberately not implemented
 
 Scanning and metadata providers (`/api/search`, `/api/tasks`, all `METADATA_SOURCES` flags

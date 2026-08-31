@@ -1,4 +1,4 @@
-// RomM server module config panel.
+﻿// RomM server module config panel.
 //
 // Three tabs:
 //   • Server      — port (+ live in-use probe), LAN allow-list, and the plain warning that this surface has
@@ -268,18 +268,24 @@ internal static class RommPanel
         pClients.Controls.Add(gCli);
         yc += gCli.Height + S(12);
 
-        var grid = ModulePanelKit.Grid(dpiS, readOnly: true);   // a row is selected, never typed into
+        var grid = ModulePanelKit.Grid(dpiS);
         grid.Location = new Point(S(14), S(24));
         grid.Size = new Size(S(GroupW - 32), S(160));
         grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
         grid.Columns.Add("name", "Client");
         grid.Columns.Add("created", "Paired");
         grid.Columns.Add("used", "Last used");
-        grid.Columns.Add("pinned", "Games pinned");
-        grid.Columns[0].Width = S(210);
-        grid.Columns[1].Width = S(90);
-        grid.Columns[2].Width = S(90);
-        grid.Columns[3].Width = S(100);
+        // « Pinned elsewhere », et non « pinned » : c'est le nombre de jeux ou ce client est sur un
+        // fichier AUTRE que le defaut. Un client suit le defaut partout ailleurs, sans rien stocker.
+        grid.Columns.Add("pinned", "Pinned elsewhere");
+        // Plus de colonne de mode : un push atterrit TOUJOURS dans la branche du client, et la save en
+        // jeu n'est touchee que si l'utilisateur promeut cette branche dans Game Saves — la permission
+        // est par jeu, pas par client.
+        grid.Columns[0].Width = S(230);
+        grid.Columns[1].Width = S(100);
+        grid.Columns[2].Width = S(100);
+        grid.Columns[3].Width = S(130);
+        grid.ReadOnly = true;
         gCli.Controls.Add(grid);
 
         var tokenIds = new List<int>();
@@ -303,6 +309,7 @@ internal static class RommPanel
             }
         }
         ReloadClients = Reload;
+        grid.DataError += (_, e) => { e.ThrowException = false; };
 
         int? SelectedToken()
         {
@@ -339,10 +346,14 @@ internal static class RommPanel
         gCli.Controls.Add(btnRevoke);
 
         var lblBindHint = ModulePanelKit.Caption(
-            "A client is pinned to one file of a game the first time it downloads one, and stays on it. "
-          + "The Assignment tab shows which, and lets you move a client to another version. Only PAIRED "
-          + "clients can be pinned — one signing in with the account password always gets the default.",
-            dpiS, maxWidth: 520);
+            "On push decides only WHERE a client's saves land — never what it is shown, which is always "
+          + "the ROM's own save line AND the client's. \"Replace the save in play\" overwrites the "
+          + "active save and files the displaced one in the vault; \"Keep to its own line\" leaves the "
+          + "active save alone and stores in a group named after the client.\n\n"
+          + "Pinned elsewhere counts the games where this client is on a file other than the default — "
+          + "move it in the Assignment tab. Only PAIRED clients can be pinned; one signing in with the "
+          + "account password always gets the default.",
+            dpiS, maxWidth: 560);
         lblBindHint.Location = new Point(S(14), S(226));
         gCli.Controls.Add(lblBindHint);
 
@@ -445,6 +456,7 @@ internal static class RommPanel
 
     /// <summary>The address a client should be pointed at: this machine's LAN IPv4 when the allow-list opens
     /// the surface up, otherwise loopback (which is all that would answer).</summary>
+
     private static string LocalAddress(string? allowedIps)
     {
         if (string.IsNullOrWhiteSpace(allowedIps)) return "127.0.0.1";

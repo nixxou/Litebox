@@ -18,6 +18,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using LbApiHost.Host.Saves;
 using LbApiHost.Host.Web;
 
 namespace LbApiHost.Host.Romm;
@@ -160,6 +161,7 @@ internal static class RommSelfTest
         Devices(http, baseUrl);
         Assets(http, baseUrl);
         RomSlots();
+        SyncDecisions();
         GamesTable();
         PushBundles();
     }
@@ -236,44 +238,117 @@ internal static class RommSelfTest
         finally { try { Directory.Delete(dir, recursive: true); } catch { } }
     }
 
-    // ── The sync channel names the ROM ────────────────────────────────────────
+    // ── The sync channel is a NAMED slot ──────────────────────────────────────
     //
-    // Several versions of one game share a rom id and land in one list; the RomM `slot` is what keeps
-    // them apart. The derivation is pure string work on a SaveGroupId, so it pins here exactly — the
-    // API behaviour around it needs a real multi-entry archive and a real emulator plugin, neither of
-    // which a harness can honestly fake.
-    //
-    // The shape under test is "entry:{signature}:{path in archive}", with the ":sN" of a savestate
-    // stripped by EntryKeyOf before anything else looks at it.
+    // RomM's clients put `slot` in front of the user, so these names are read by a person and have to
+    // be stable — a client stores the slot it chose per ROM and would lose that choice if the name
+    // drifted. The model (docs/romm-server-plan.md §5.6ter): "autosave" is the requester's own branch,
+    // "romm-cN" another client's, "lb-…" a LiteBox group named by its core. The real thing is called
+    // here, not a copy of it. The seed rule and the per-client view need a real scan with real
+    // emulator plugins, which a harness cannot honestly fake — they pin at the HTTP layer instead.
 
     private static void RomSlots()
     {
-        string? Slot(string groupId)
-        {
-            var key = Saves.SaveManager.EntryKeyOf(groupId);
-            if (key == null) return null;
-            int sep = key.IndexOf(':', "entry:".Length);
-            if (sep < 0) return null;
-            var name = System.IO.Path.GetFileName(key.Substring(sep + 1).Replace('/', '\\').TrimEnd('\\'));
-            return name.Length > 0 ? name : null;
-        }
+        SaveGroup Lb(string core, string exe, bool state = false, int? slot = null) =>
+            new SaveGroup { EmulatorCore = core, EmulatorFileName = exe, IsState = state, Slot = slot };
 
-        Check("an entry group answers with its ROM's file name",
-            Slot("entry:Sonic _1B6F1FCB:Sonic (Japan).md") == "Sonic (Japan).md");
+        // LiteBox groups: the channel says which line this is, in characters every client survives.
+        Check("a RetroArch core names its line",
+            RommAssetsApi.LbSlot(Lb("snes9x_libretro", "retroarch.exe")) == "lb-ra-snes9x");
+        Check("a second core is a second line",
+            RommAssetsApi.LbSlot(Lb("bsnes_libretro", "retroarch.exe")) == "lb-ra-bsnes");
+        Check("an emulator without cores answers with itself",
+            RommAssetsApi.LbSlot(Lb("", "Dolphin.exe")) == "lb-dolphin");
+        Check("a cored emulator that is not RetroArch skips the ra prefix",
+            RommAssetsApi.LbSlot(Lb("mGBA", "bizhawk.exe")) == "lb-mgba");
+        Check("spaces and dots become dashes, nothing illegal survives",
+            RommAssetsApi.LbSlot(Lb("", "Project64 3.0.exe")) == "lb-project64-3-0");
 
-        Check("a savestate's slot suffix does not reach the name",
-            Slot("entry:Sonic _1B6F1FCB:Sonic (Japan).md:s0") == "Sonic (Japan).md");
+        // Savestate slots: two state slots of one ROM are two saves to choose between; the plain
+        // ".state" is slot 0 and stays on the unqualified channel.
+        Check("the plain .state stays unqualified",
+            RommAssetsApi.StateSuffixed("autosave", true, 0) == "autosave");
+        Check("a numbered savestate names its slot",
+            RommAssetsApi.StateSuffixed("autosave", true, 2) == "autosave-state2");
+        Check("the auto savestate says so",
+            RommAssetsApi.StateSuffixed("lb-ra-snes9x", true, -1) == "lb-ra-snes9x-auto");
+        Check("a save file takes no suffix",
+            RommAssetsApi.StateSuffixed("autosave", false, 3) == "autosave");
 
-        Check("a path inside the archive keeps only its file name",
-            Slot("entry:Sonic _1B6F1FCB:roms/disc 1/Sonic (Japan).md") == "Sonic (Japan).md");
+        // Branches, seen from the vault view: the requester's own is its autosave, anybody else's is
+        // named after its client.
+        Check("my branch is my autosave",
+            RommAssetsApi.SlotOfGroupId("abcdef#c5", "c5", false, null) == "autosave");
+        Check("another client's branch carries its name",
+            RommAssetsApi.SlotOfGroupId("abcdef#c7", "c5", false, null) == "romm-c7");
+        Check("no requester, no autosave",
+            RommAssetsApi.SlotOfGroupId("abcdef#c5", null, false, null) == "romm-c5");
+        Check("a LiteBox group with no scan context says the family",
+            RommAssetsApi.SlotOfGroupId(System.Guid.NewGuid().ToString("N"), "c5", false, null) == "lb");
+        Check("a branch keeps its savestate slots apart",
+            RommAssetsApi.SlotOfGroupId("abcdef#c5", "c5", true, 2) == "autosave-state2");
 
-        Check("two versions of one game answer with different channels",
-            Slot("entry:Sonic _1B6F1FCB:Sonic (Japan).md") != Slot("entry:Sonic _1B6F1FCB:Sonic (USA).md"));
+        // The wire name: an asset is advertised under its channel — Argosy seeds its slot table from
+        // the file name — except on the autosave channel, which carries the file's real name: it is
+        // what says "latest" to Argosy and what a name-blind client writes to disk verbatim.
+        string Wire(string slot, string file, bool real) =>
+            RommAssetsApi.WireName(new RommAssetView { FileName = file, SlotRomm = slot, ServeRealName = real });
 
-        // A plain group has no entry, so the caller falls back to the game's own ROM name. What matters
-        // here is that the derivation says so instead of inventing something.
-        Check("an ordinary group has no entry to name", Slot(System.Guid.NewGuid().ToString("N")) == null);
-        Check("an empty group id has none either", Slot("") == null);
+        Check("a named channel names the file after itself",
+            Wire("lb-ra-snes9x", "Zelda (France).srm", false) == "lb-ra-snes9x.srm");
+        Check("the autosave channel keeps the real name",
+            Wire("autosave", "Zelda (France).srm", true) == "Zelda (France).srm");
+        Check("a savestate keeps the extension that says it is one",
+            Wire("lb-ra-snes9x-state2", "Zelda (France).state2", false) == "lb-ra-snes9x-state2.state2");
+        Check("a slot that sanitises to nothing falls back to the real name",
+            Wire("///", "Zelda (France).srm", false) == "Zelda (France).srm");
+
+        // The slot-blind detector: Freegosy's Flutter stack, and nothing else known.
+        Check("a Dart agent gets the single-line view",
+            RommAssetsApi.SlotBlind(new HttpRequest { Headers = { ["User-Agent"] = "Dart/3.3 (dart:io)" } }));
+        Check("okhttp (Argosy) gets the full view",
+            !RommAssetsApi.SlotBlind(new HttpRequest { Headers = { ["User-Agent"] = "okhttp/5.3.2" } }));
+        Check("an unknown agent gets the full view",
+            !RommAssetsApi.SlotBlind(new HttpRequest()));
+    }
+
+    // ── Negotiate: the decision core ──────────────────────────────────────────
+    //
+    // The inventory's content_hash is the hash of the client's LAST UPLOAD, not of its current file,
+    // and updated_at is the phone's clock — so hash equality means "in sync", hash inequality decides
+    // nothing alone, and CONFLICT is reserved for the one honest case. Pure function, pinned here;
+    // the HTTP surface around it is pinned in the server block below.
+
+    private static void SyncDecisions()
+    {
+        var t0 = new System.DateTime(2026, 8, 31, 12, 0, 0, System.DateTimeKind.Utc);
+        System.DateTime T(int s2) => t0.AddSeconds(s2);
+        string A(System.DateTime c, string? ch, System.DateTime sv, string? sh, bool held, System.DateTime? mark)
+            => RommSyncApi.Decide(c, ch, sv, sh, held, mark).action;
+
+        Check("same hash, same date: in sync",
+            A(t0, "AB", t0, "AB", true, null) == "no_op");
+        Check("same hash but the file moved since its upload: upload",
+            A(T(60), "AB", t0, "AB", true, null) == "upload");
+        Check("client newer, no mark: upload",
+            A(T(60), "AB", t0, "CD", false, null) == "upload");
+        Check("server newer, no mark: download",
+            A(t0, "AB", T(60), "CD", false, null) == "download");
+        Check("both moved since this device last synced: the one honest conflict",
+            A(T(60), "AB", T(90), "CD", false, T(-60)) == "conflict");
+        // "Did not move" means: not since the MARK. A file dated after the device's last sync has
+        // moved, whatever the other side did — the first draft of these two put the unchanged side
+        // AFTER the mark and earned the conflict it claimed to rule out.
+        Check("server moved, client did not: download, not conflict",
+            A(T(-90), "AB", T(90), "CD", false, T(-60)) == "download");
+        Check("client moved, server did not: upload, not conflict",
+            A(T(90), "AB", T(-90), "CD", false, T(-60)) == "upload");
+        Check("same date, hash already held somewhere in the line: no_op",
+            A(t0, "AB", t0, "CD", true, null) == "no_op");
+        Check("same date, unknown content: accepted — doubt must not cost progress",
+            A(t0, "AB", t0, "CD", false, null) == "upload");
+        Check("within tolerance is the same date",
+            A(t0.AddSeconds(1), "AB", t0, "AB", true, null) == "no_op");
     }
 
     // ── S5: devices ───────────────────────────────────────────────────────────
@@ -342,12 +417,65 @@ internal static class RommSelfTest
         using var form = new MultipartFormDataContent("----romm-selftest-save");
         form.Add(new ByteArrayContent(new byte[512]), "saveFile", "test.srm");
         var upload = Send(http, HttpMethod.Post, baseUrl + "/api/saves?rom_id=424242", form, auth);
-        Check("an upload is refused as not implemented, not as an error to retry",
-            (int)upload.StatusCode == 501);
+        // Le push est rouvert : un rom_id inconnu ne nomme aucune ROM, donc 404 — et non 501, qui
+        // voudrait dire « pas implemente ».
+        Check("an upload against a rom that does not exist is a 404",
+            (int)upload.StatusCode == 404);
 
         var badDelete = Post(http, baseUrl + "/api/saves/delete",
             new StringContent("{\"saves\":[]}", Encoding.UTF8, "application/json"), auth);
         Check("bulk delete is refused the same way", (int)badDelete.StatusCode == 501);
+
+        // Negotiate: the route Grout REQUIRES — its save sync aborts on any error here.
+        var negNoDev = Post(http, baseUrl + "/api/sync/negotiate",
+            new StringContent("{\"saves\":[]}", Encoding.UTF8, "application/json"), auth);
+        Check("negotiate without a device is refused", (int)negNoDev.StatusCode == 400);
+
+        var neg = Post(http, baseUrl + "/api/sync/negotiate",
+            new StringContent(
+                "{\"device_id\":\"selftest-device\",\"saves\":[" +
+                "{\"rom_id\":424242,\"file_name\":\"x.srm\",\"slot\":\"autosave\"," +
+                "\"updated_at\":\"2026-08-31T10:00:00Z\",\"file_size_bytes\":8192}]}",
+                Encoding.UTF8, "application/json"), auth);
+        var negText = neg.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        long sessionId = 0;
+        bool negShape = false, unknownRomIsNoOp = false;
+        try
+        {
+            using var doc = JsonDocument.Parse(negText);
+            var root = doc.RootElement;
+            sessionId = root.GetProperty("session_id").GetInt64();
+            var ops = root.GetProperty("operations");
+            negShape = ops.ValueKind == JsonValueKind.Array && ops.GetArrayLength() == 1
+                    && root.GetProperty("total_no_op").GetInt32() == 1;
+            unknownRomIsNoOp = ops[0].GetProperty("action").GetString() == "no_op"
+                            && ops[0].GetProperty("rom_id").GetInt32() == 424242;
+        }
+        catch { }
+        Check("negotiate answers a session and one operation per save",
+            neg.StatusCode == HttpStatusCode.OK && negShape && sessionId > 0);
+        Check("a rom this server does not hold is a no_op, never an error", unknownRomIsNoOp);
+
+        var done = Post(http, baseUrl + $"/api/sync/sessions/{sessionId}/complete",
+            new StringContent("{\"operations_completed\":1,\"operations_failed\":0}",
+                Encoding.UTF8, "application/json"), auth);
+        var doneText = done.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        bool doneShape = false;
+        try
+        {
+            using var doc = JsonDocument.Parse(doneText);
+            var sess = doc.RootElement.GetProperty("session");
+            doneShape = sess.GetProperty("status").GetString() == "completed"
+                     && sess.GetProperty("operations_completed").GetInt32() == 1
+                     && sess.GetProperty("created_at").ValueKind == JsonValueKind.String
+                     && sess.GetProperty("updated_at").ValueKind == JsonValueKind.String;
+        }
+        catch { }
+        Check("complete closes the session with the shape Grout models", doneShape);
+
+        var ghost = Post(http, baseUrl + "/api/sync/sessions/999999999/complete",
+            new StringContent("{}", Encoding.UTF8, "application/json"), auth);
+        Check("an unknown session reads as absent", (int)ghost.StatusCode == 404);
 
         // S6: collections + the rom_user write-back.
         var cols = Get(http, baseUrl + "/api/collections", auth);

@@ -86,8 +86,10 @@ internal static class RommDownloadApi
             if (named.RomPath.Length > 0)
                 return ServeArchiveEntry(ctx, game, named.AppId.Length == 0 ? null : named.AppId,
                                          named.RomPath,
-                                         requestedName.Length > 0 ? requestedName
-                                             : Path.GetFileName(named.RomPath.Replace('/', '\\')),
+                                         // Le nom vient de la LIGNE, jamais de l'URL : un client rejoue le nom qu'un
+                                         // listing lui a donne, et le sien peut etre perime. Mesure : 2 Mo de .smc
+                                         // enregistres sous "Yoshi's Island.7z" parce qu'on lui renvoyait son nom.
+                                         Path.GetFileName(named.RomPath.Replace('/', '\\')),
                                          hiddenFolder, identity);
 
             if (named.FilePath.Length > 0)

@@ -47,6 +47,15 @@ internal static class RommConfig
     /// unless somebody is actually looking.</summary>
     public static bool LogRequests { get; private set; }
 
+    /// <summary>Also record each exchange IN FULL — headers and bodies, both ways ([RommServer]
+    /// LogBodies, default false; implies LogRequests).
+    ///
+    /// A heavy instrument, and deliberately so: it writes what a client sent and what it was answered,
+    /// which is the only way to settle "the server sent the wrong thing" against "the client asked for
+    /// the wrong thing". Credentials are redacted and binary payloads are described, never dumped — a
+    /// download would otherwise put megabytes of ROM in a text file.</summary>
+    public static bool LogBodies { get; private set; }
+
     // ── Two throwaway probes ──────────────────────────────────────────────────
     //
     // Both exist to answer one question: what makes a client drop its cached copy of the library?
@@ -76,6 +85,7 @@ internal static class RommConfig
             ExposeHiddenGames = c.GetSecBool(Section, "ExposeHiddenGames", false);
             IgnoreParental = c.GetSecBool(Section, "IgnoreParental", false);
             LogRequests = c.GetSecBool(Section, "LogRequests", false);
+            LogBodies = c.GetSecBool(Section, "LogBodies", false);
             DebugStampSummary = c.GetSecBool(Section, "DebugStampSummary", false);
             DebugBumpRomCount = ParseCount(c.GetSec(Section, "DebugBumpRomCount"), 0);
         }

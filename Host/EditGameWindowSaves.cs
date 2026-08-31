@@ -659,12 +659,56 @@ internal sealed partial class EditGameWindow
                     "Set as Active", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes);
             if (err != null) { SavesError(err); return; }
 
+            // Rien n'a ete deplace — il n'y avait pas de save en jeu. La boucle ci-dessus est alors
+            // muette, et c'est le cas que la promotion ratait : le greffon ecrivait le fichier vivant
+            // sous un groupe NEUF nomme « My Save File », laissant l'original en vault. LaunchBox n'en
+            // garde qu'un, qui conserve son nom.
+            bool displaced = destination.Length > 0;
+
+            // Rien n'a ete deplace : il n'y avait pas de save en jeu, et la boucle ci-dessus est muette.
+            // Le greffon vient pourtant d'ecrire le fichier vivant sous un groupe qu'il forge lui-meme —
+            // « My Save File » — en laissant le notre en vault.
+            //
+            // Ou est ce fichier ? Le greffon ne le dit pas, et les enregistrements en memoire ne le
+            // montrent pas encore : mesure, deux fois de suite, « destination=NONE ». Le SCAN, lui, le
+            // voit — c'est meme lui qui affichait la carte fautive. On le relance donc, et on ne retient
+            // une destination que si elle est SEULE : deux entrees d'une archive peuvent chacune avoir
+            // leur save en jeu, et se tromper de fichier serait pire que de ne rien faire.
+            if (!displaced && _game != null)
+            {
+                var found = new List<string>();
+                try
+                {
+                    var after = _focus == null ? SaveManager.ScanBase(_game) : SaveManager.ScanApp(_game, _focus);
+                    foreach (var other in (g.IsState ? after.States : after.Files))
+                    {
+                        if (other.Active == null || other.ActivePath.Length == 0) continue;
+                        if (string.Equals(other.GroupId, g.GroupId, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (!string.Equals(other.AppId ?? "", g.AppId ?? "", StringComparison.OrdinalIgnoreCase)) continue;
+                        if (g.IsState && other.Slot != slot) continue;
+                        if (!found.Any(p => SaveManager.PathEq(p, other.ActivePath))) found.Add(other.ActivePath);
+                    }
+                }
+                catch (Exception ex) { SaveManager.Diag("SetActive rescan failed: " + ex.Message); }
+                if (found.Count == 1) destination = found[0];
+                else if (found.Count > 1) SaveManager.Diag($"SetActive: {found.Count} live saves match — none taken");
+            }
+
+            SaveManager.Diag($"SetActive \"{g.GroupName}\": destination="
+                + (destination.Length == 0 ? "NONE" : destination)
+                + (displaced ? " (displaced a live save)" : " (nothing was in play)"));
+
             // Move the identity, not just the bytes. Without this the promoted group keeps pointing at
             // its vault copy and the card never changes — which is exactly what it did.
             if (destination.Length > 0)
             {
                 var rerr = SaveManager.ReassignRecord(g, destination);
                 if (rerr != null) SavesError(rerr);
+                // L'etiquette, seulement MAINTENANT : SetActiveLabel, appele par Restore, cherche la
+                // ligne vivante par l'identifiant du groupe, et le greffon venait d'en ecrire une sous
+                // le sien. Elle ne trouvait rien — d'ou une ligne sans Title en base. Une fois
+                // l'identite reprise, elle trouve.
+                else SaveManager.SetActiveLabel(g, e.Title);
             }
             Reload();
         }

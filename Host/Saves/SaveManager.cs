@@ -680,7 +680,7 @@ internal static class SaveManager
 
     // Diagnostic log (GUI has no console): every scan appends here so the real session's behaviour is
     // observable. Path: <LB>\Core\litebox\saves-diag.log.
-    private static void Diag(string msg)
+    internal static void Diag(string msg)
     {
         Console.WriteLine("[saves] " + msg);
         try { File.AppendAllText(LiteBoxPaths.File("saves-diag.log"), DateTime.Now.ToString("HH:mm:ss.fff") + "  " + msg + "\n"); }
@@ -1504,9 +1504,16 @@ internal static class SaveManager
     /// <param name="originalName">What the file is really called, when the path it is being read from
     /// is not it — a piece unpacked from a bundle sits under a collision-proof working name. This is the
     /// name clients are shown, so the working name must never reach it.</param>
+    /// <param name="branch">A second group on the same ROM, marked "#&lt;branch&gt;" at the END of the
+    /// group id — the shape Make New Save already uses and EntryKeyOf already strips, so everything that
+    /// asks "which ROM is this?" keeps getting the right answer. RomM lands a client's own save line
+    /// here.</param>
+    /// <param name="groupName">The heading LaunchBox prints for the group. A client's line is named
+    /// after the client, so it reads as its own timeline in Game Saves rather than as a stray copy.</param>
     public static string? Import(IGame game, string filePath, bool asState, int? slot,
                                  string? appId, string? platformOverride = null, SaveEntry? entry = null,
-                                 string? originalName = null)
+                                 string? originalName = null, string? branch = null,
+                                 string? groupName = null)
     {
         if (!File.Exists(filePath)) return "That file no longer exists.";
         if (game is not ILiteBoxGame lbg) return "This library is read-only.";
@@ -1547,10 +1554,13 @@ internal static class SaveManager
             string gid = entry != null
                 ? entry.Key + (asState ? ":s" + (slot ?? 0) : "")
                 : Guid.NewGuid().ToString("N");
+            // The branch goes LAST: EntryKeyOf cuts at '#' before looking for ":sN", so any other order
+            // would hide the slot from it.
+            if (!string.IsNullOrEmpty(branch)) gid += "#" + branch;
             var row = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = SafeStr(() => game.Id) };
             if (!string.IsNullOrEmpty(appId)) row["AdditionalApplicationId"] = appId!;
             row["EmulatorFileName"] = "";
-            row["SaveGroupName"] = DefaultGroupName(asState, gid);
+            row["SaveGroupName"] = groupName is { Length: > 0 } gn ? gn : DefaultGroupName(asState, gid);
             row["SaveGroupId"] = gid;
             row["MatchLineageId"] = gid;
             row["FilePath"] = SaveVault.Rel(target);
@@ -1610,6 +1620,7 @@ internal static class SaveManager
             var rows = lbg.GetSubEntities("GameSave")
                 .Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();
             var row = rows.FirstOrDefault(r => PathEq(AbsPath(r.GetValueOrDefault("FilePath") ?? ""), absPath));
+            bool found = row != null;
             if (row == null)
             {
                 row = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -1622,6 +1633,8 @@ internal static class SaveManager
                 if (to.IsState) row["Slot"] = (to.Slot ?? 0).ToString();
                 rows.Add(row);
             }
+            Diag($"ReassignRecord [{to.GroupName}]: {rows.Count} row(s) read, target row was "
+               + (found ? "FOUND" : "ABSENT (created)") + " for " + absPath);
             if (!string.IsNullOrEmpty(to.AppId)) row["AdditionalApplicationId"] = to.AppId!;
             row["SaveGroupId"] = to.GroupId;
             row["MatchLineageId"] = to.GroupId;
@@ -1858,6 +1871,11 @@ internal static class SaveManager
             var row = new Dictionary<string, string>(StringComparer.Ordinal) { ["GameId"] = SafeStr(() => g.Game.Id) };
             if (!string.IsNullOrEmpty(g.AppId)) row["AdditionalApplicationId"] = g.AppId!;
             row["EmulatorFileName"] = g.EmulatorFileName;
+            // Le coeur avec l'emulateur : la copie sort du MEME jeu, lu par le meme coeur. L'omettre
+            // affichait « retroarch.exe » tout court sur la nouvelle carte, la ou l'originale disait
+            // « retroarch.exe (snes9x_libretro) » — et c'est ce champ qui dit a quel coeur une save
+            // appartient, pas seulement une mention.
+            if (g.EmulatorCore.Length > 0) row["EmulatorCore"] = g.EmulatorCore;
             row["SaveGroupName"] = string.IsNullOrWhiteSpace(name) ? DefaultGroupName(g.IsState, gid) : name.Trim();
             row["SaveGroupId"] = gid;
             // A lineage of its own, which is what LaunchBox writes here and nowhere else (§1.4).

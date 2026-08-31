@@ -1,4 +1,4 @@
-// romm_games — une ligne par fichier jouable, et le romm_id est celui de la ligne.
+﻿// romm_games — une ligne par fichier jouable, et le romm_id est celui de la ligne.
 //
 // The whole identity model lives in this table. A row names ONE playable file of ONE game: its ROM, one
 // of its versions, or one ROM extracted from an archive. Rows are never rewritten to mean something else
@@ -96,7 +96,79 @@ internal static class RommGamesTable
         "CREATE TABLE IF NOT EXISTS client(" +
         "  client_id    INTEGER PRIMARY KEY AUTOINCREMENT," +
         "  token_id     INTEGER NOT NULL UNIQUE," +
-        "  removed_utc  TEXT);";
+        // 1 = a push replaces the save in play, the displaced one goes to the vault.
+        // 2 = a push lands in this client's OWN branch of the ROM, leaving the live save alone.
+        // The mode decides only WHERE a push goes — never what the client is shown, which is always
+        // the ROM's live line AND its own branch.
+        "  push_mode    INTEGER NOT NULL DEFAULT 2," +
+        "  removed_utc  TEXT);" +
+
+        // Negotiate sessions (RommSyncApi). Persisted rather than kept in memory: a client may close
+        // its session after a LiteBox restart, and a complete answered 404 makes Argosy drop local
+        // rows "to avoid zombies" — correct on its side, needless loss on ours.
+        "CREATE TABLE IF NOT EXISTS sync_session(" +
+        "  session_id    INTEGER PRIMARY KEY AUTOINCREMENT," +
+        "  device_id     TEXT    NOT NULL DEFAULT ''," +
+        "  client_token  INTEGER NOT NULL DEFAULT 0," +
+        "  status        TEXT    NOT NULL DEFAULT 'planned'," +
+        "  initiated_utc TEXT    NOT NULL DEFAULT ''," +
+        "  completed_utc TEXT," +
+        "  ops_planned   INTEGER NOT NULL DEFAULT 0," +
+        "  ops_completed INTEGER NOT NULL DEFAULT 0," +
+        "  ops_failed    INTEGER NOT NULL DEFAULT 0);";
+
+    /// <summary>Adds a column an existing database does not have yet.
+    ///
+    /// CREATE TABLE IF NOT EXISTS does NOTHING to a table that already exists, so a column added to the
+    /// schema above is silently absent on every install that ran an earlier build — and the reader that
+    /// wants it fails quietly and returns its fallback for ever. Shipped exactly that with push_mode.
+    /// Every future column goes through here.</summary>
+    public static void Migrate(SqliteConnection conn)
+    {
+        void EnsureColumn(string table, string column, string decl)
+        {
+            try
+            {
+                bool has = false;
+                using (var q = conn.CreateCommand())
+                {
+                    q.CommandText = $"PRAGMA table_info({table})";
+                    using var r = q.ExecuteReader();
+                    while (r.Read())
+                        if (string.Equals(r.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                        { has = true; break; }
+                }
+                if (has) return;
+                using var add = conn.CreateCommand();
+                add.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {decl}";
+                add.ExecuteNonQuery();
+                Console.WriteLine($"[romm-db] added {table}.{column}");
+            }
+            catch (Exception ex) { Console.WriteLine($"[romm-db] migrate {table}.{column}: {ex.Message}"); }
+        }
+
+        EnsureColumn("client", "push_mode", "INTEGER NOT NULL DEFAULT 2");
+
+        // Le mode a d'abord ete livre avec 1 pour defaut, et sa liste deroulante etait inerte : aucune
+        // valeur 1 en base ne peut donc etre un choix, seulement l'empreinte de l'ancien defaut. On les
+        // reprend UNE fois, jamais deux — apres quoi un 1 signifie vraiment « remplacer ».
+        try
+        {
+            int uv;
+            using (var q = conn.CreateCommand())
+            { q.CommandText = "PRAGMA user_version"; uv = Convert.ToInt32(q.ExecuteScalar()); }
+            if (uv < 1)
+            {
+                int n;
+                using (var up = conn.CreateCommand())
+                { up.CommandText = "UPDATE client SET push_mode=2 WHERE push_mode=1"; n = up.ExecuteNonQuery(); }
+                using (var st = conn.CreateCommand())
+                { st.CommandText = "PRAGMA user_version=1"; st.ExecuteNonQuery(); }
+                if (n > 0) Console.WriteLine($"[romm-db] push_mode: {n} client(s) moved to the new default");
+            }
+        }
+        catch (Exception ex) { Console.WriteLine("[romm-db] push_mode default: " + ex.Message); }
+    }
 
     // ── The comma-bounded client list ─────────────────────────────────────────
 
@@ -275,6 +347,7 @@ internal static class RommGamesTable
             return Convert.ToInt32(ins.ExecuteScalar());
         }
     }
+
 
     /// <summary>The client indices still in service, and the token each one stands for.</summary>
     public static Dictionary<int, int> LiveClients(SqliteConnection conn)

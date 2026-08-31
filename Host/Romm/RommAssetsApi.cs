@@ -320,7 +320,26 @@ internal static class RommAssetsApi
 
         if (key != null) return false;                       // an entry group, but the rom names no entry
         var app = g.AppId ?? "";
-        return string.Equals(app, rom.AppId ?? "", StringComparison.Ordinal);
+        if (string.Equals(app, rom.AppId ?? "", StringComparison.Ordinal)) return true;
+
+        // FakeCatalog twins. A "Play Version..." app that points at the very file this rom names is
+        // the same line under another identity: the live scan attributes the save to the APP (pass 1
+        // wins, and the scan's own base view includes those twins — the Edit window shows the save),
+        // while the romm row is anchored on the game. Measured on Secret of Mana: group AppId
+        // c0f567b1 (a version app whose path IS the game's ROM), row app_id "" — same file, and id
+        // equality answered "nothing to offer". So when the ids differ, compare the FILES: the path
+        // the group is attributed to against the path the row names.
+        string attributedPath = "";
+        try
+        {
+            if (app.Length == 0) attributedPath = g.Game?.ApplicationPath ?? "";
+            else
+                foreach (var a in g.Game?.GetAllAdditionalApplications() ?? Array.Empty<Unbroken.LaunchBox.Plugins.Data.IAdditionalApplication>())
+                    if (string.Equals(a?.Id, app, StringComparison.OrdinalIgnoreCase))
+                    { attributedPath = a!.ApplicationPath ?? ""; break; }
+        }
+        catch { }
+        return attributedPath.Length > 0 && RommIndexPass.PathEq(attributedPath, rom.FilePath);
     }
 
     /// <summary>The branch a group id carries, or null for the ROM's own line. "#c3" is client 3's.</summary>

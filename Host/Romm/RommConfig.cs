@@ -65,19 +65,6 @@ internal static class RommConfig
     /// download would otherwise put megabytes of ROM in a text file.</summary>
     public static bool LogBodies { get; private set; }
 
-    // ── Two throwaway probes ──────────────────────────────────────────────────
-    //
-    // Both exist to answer one question: what makes a client drop its cached copy of the library?
-    // Reading Freegosy's source says the per-platform view compares rom_count and nothing else -- no
-    // date is consulted -- but that is a deduction, and these turn it into a measurement. Delete both
-    // once the answer is written down.
-
-
-    /// <summary>Added to every platform's rom_count ([RommServer] DebugBumpRomCount, default 0). A client
-    /// that keys its cache on the count should notice one refresh and then settle -- it stores the new
-    /// count. Bump it again for another round; the value is read at startup.</summary>
-    public static int DebugBumpRomCount { get; private set; }
-
     /// <summary>Re-read the [RommServer] section. Failures leave the last good values in place.</summary>
     public static void Reload()
     {
@@ -96,18 +83,12 @@ internal static class RommConfig
             IgnoreParental = c.GetSecBool(Section, "IgnoreParental", false);
             LogRequests = c.GetSecBool(Section, "LogRequests", false);
             LogBodies = c.GetSecBool(Section, "LogBodies", false);
-            DebugBumpRomCount = ParseCount(c.GetSec(Section, "DebugBumpRomCount"), 0);
         }
         catch (Exception ex) { LbLog.Warn("romm", "config reload failed: " + ex.Message); }
     }
 
     private static int ParsePort(string? raw, int fallback)
         => int.TryParse((raw ?? "").Trim(), out var p) && p is > 0 and <= 65535 ? p : fallback;
-
-    /// <summary>A non-negative count, where 0 means "no limit". A blank or malformed value keeps the
-    /// default rather than silently becoming 0 — an unreadable setting must not lift a cap.</summary>
-    private static int ParseCount(string? raw, int fallback)
-        => int.TryParse((raw ?? "").Trim(), out var n) && n >= 0 ? n : fallback;
 
     // ── The account password ──────────────────────────────────────────────────
     //
@@ -127,6 +108,7 @@ internal static class RommConfig
             catch { return false; }
         }
     }
+
 
     /// <summary>Stores the verifier for <paramref name="plain"/>. An empty value clears it (and with it,
     /// every way in).</summary>

@@ -74,8 +74,7 @@ internal static class RommLibraryApi
         id = p.Id,
         slug = p.Slug,
         fs_slug = p.Slug,
-        // Probe: a client keying its cache on this count should refresh exactly once after it moves.
-        rom_count = p.RomCount + RommConfig.DebugBumpRomCount,
+        rom_count = p.RomCount,
         name = p.LbName,
         // The slug side of our map IS the IGDB-ish vocabulary, so advertising it as igdb_slug lets a
         // client that keys its emulator map off igdb_slug work unchanged.

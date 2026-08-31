@@ -42,15 +42,6 @@ internal static class RommConfig
     /// a locked library looks the same to a phone as it does to the TV.</summary>
     public static bool IgnoreParental { get; private set; }
 
-    /// <summary>How many of an archive's entries a rom advertises ([RommServer] MaxArchiveEntries,
-    /// default 25; 0 = no limit).
-    ///
-    /// A no-intro 7z set can hold hundreds of ROMs, and a client that receives them all renders a picker
-    /// nobody can use and a payload nobody needs. Cutting is only defensible because the listing arrives
-    /// ALREADY RANKED — RomExtractor scores by the profile's tag weights and floats favourites and the
-    /// last-played entry — so the first N are the ones worth having, not the first N alphabetically.</summary>
-    public static int MaxArchiveEntries { get; private set; } = 25;
-
     /// <summary>Write one line per request to Core\litebox\romm-requests.log ([RommServer] LogRequests,
     /// default off). A debugging instrument: it records which ROMs a client asks for, so it stays off
     /// unless somebody is actually looking.</summary>
@@ -84,7 +75,6 @@ internal static class RommConfig
             Username = user.Length > 0 ? user : "litebox";
             ExposeHiddenGames = c.GetSecBool(Section, "ExposeHiddenGames", false);
             IgnoreParental = c.GetSecBool(Section, "IgnoreParental", false);
-            MaxArchiveEntries = ParseCount(c.GetSec(Section, "MaxArchiveEntries"), 25);
             LogRequests = c.GetSecBool(Section, "LogRequests", false);
             DebugStampSummary = c.GetSecBool(Section, "DebugStampSummary", false);
             DebugBumpRomCount = ParseCount(c.GetSec(Section, "DebugBumpRomCount"), 0);

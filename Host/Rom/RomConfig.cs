@@ -208,8 +208,17 @@ internal sealed class RomConfig
     private static RomConfig? _instance;
     public static RomConfig Instance => _instance ??= Load();
 
+    /// <summary>Raised when the settings changed — the per-(platform, emulator) mode among them, which
+    /// decides whether an archive is the extractor's business at all. RomM listens: that answer moves
+    /// whole platforms in and out of its catalogue.</summary>
+    public static event Action? Changed;
+
     /// <summary>Force a reload from disk on next access (after a Save from the config panel).</summary>
-    public static void Invalidate() => _instance = null;
+    public static void Invalidate()
+    {
+        _instance = null;
+        try { Changed?.Invoke(); } catch { }
+    }
 
     /// <summary>Wipe every setting back to shipped defaults: drops all customized per-(platform, emulator)
     /// profiles, restores the Default profile (extensions + tag priority), the cache band, and the global

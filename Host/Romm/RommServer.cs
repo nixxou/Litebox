@@ -40,6 +40,17 @@ internal static class RommServer
             return;
         }
         if (_host.IsRunning) return;
+
+        // The index decides which games exist and which file each client gets. Listening before it has
+        // finished would answer a listing from an empty table, and a client CACHES what a listing tells
+        // it — the file name above all. A refused connection is retried; a wrong answer is kept.
+        if (!RommRoms.Ready)
+        {
+            LbLog.Info("romm", "waiting for the index before listening");
+            RommIndexer.StartBackground(() => Start(port));
+            return;
+        }
+
         try
         {
             RommConfig.Reload();
@@ -59,8 +70,7 @@ internal static class RommServer
 
     public static void Stop()
     {
-        _host.Stop();
-        RommIdMap.Flush();   // ids allocated by the last requests reach disk before shutdown
+        _host.Stop();   // romm.db commits per operation — nothing to flush on the way out
     }
 
     /// <summary>Stop + Start on the current config, so a port or allow-list change takes effect on Apply.</summary>

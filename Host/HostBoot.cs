@@ -724,6 +724,12 @@ internal static class HostBoot
             // sees the real set instead of wiping the BlockedId= lines. Also imports a pre-.dat install's
             // legacy Options-DB flags on first run. Runs regardless of the enable switch (blocks persist).
             try { Parental.ParentalGameFlag.Init(store); } catch { }
+            // Same shape, same reason: stamp each game's RomM default rom id onto its row from romm.db so
+            // the server answers a listing without a query per game. Runs regardless of the module switch
+            // — the ids are durable and a client may have persisted them before the module was turned off.
+            // L'index n'est PAS construit ici : RommServer.Start le demande quand il le trouve froid,
+            // et il est le seul a le faire. Le batir alors que le module est eteint serait du travail
+            // pour personne, et deux appelants feraient deux passes completes.
             // Refresh the native ASI's flat config (LB\Core\litebox-parental.dat) once the LB root +
             // Options DB are up — only when parental is configured, so a non-parental install isn't
             // littered. Save() keeps it current afterwards. Best-effort; never blocks boot.

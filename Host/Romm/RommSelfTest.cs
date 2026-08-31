@@ -159,7 +159,8 @@ internal static class RommSelfTest
         Library(http, baseUrl);
         Devices(http, baseUrl);
         Assets(http, baseUrl);
-        RomPicks();
+        RomSlots();
+        GamesTable();
         PushBundles();
     }
 
@@ -235,52 +236,44 @@ internal static class RommSelfTest
         finally { try { Directory.Delete(dir, recursive: true); } catch { } }
     }
 
-    // ── The client → ROM bindings ─────────────────────────────────────────────
+    // ── The sync channel names the ROM ────────────────────────────────────────
     //
-    // The store, not the routes: the API behaviour needs a real multi-entry archive and a real emulator
-    // plugin, neither of which a harness can honestly fake. What IS worth pinning here is the contract
-    // every surface reads through — including the two properties that are easy to get wrong, that a
-    // second download RE-POINTS rather than duplicating, and that identity is the pair (token, game).
+    // Several versions of one game share a rom id and land in one list; the RomM `slot` is what keeps
+    // them apart. The derivation is pure string work on a SaveGroupId, so it pins here exactly — the
+    // API behaviour around it needs a real multi-entry archive and a real emulator plugin, neither of
+    // which a harness can honestly fake.
+    //
+    // The shape under test is "entry:{signature}:{path in archive}", with the ":sN" of a savestate
+    // stripped by EntryKeyOf before anything else looks at it.
 
-    private static void RomPicks()
+    private static void RomSlots()
     {
-        const int tokenA = 4001, tokenB = 4002;
-        const string gameA = "game-aaa", gameB = "game-bbb";
-        try
+        string? Slot(string groupId)
         {
-            RommRomPicks.ClearToken(tokenA);
-            RommRomPicks.ClearToken(tokenB);
-
-            Check("an unbound client has no ROM binding", RommRomPicks.For(tokenA, gameA) == null);
-            Check("a null token never resolves to a binding", RommRomPicks.For(null, gameA) == null);
-
-            RommRomPicks.Set(tokenA, gameA, "roms/Sonic (Japan).md", "Sonic (Japan).md");
-            var bound = RommRomPicks.For(tokenA, gameA);
-            Check("a binding round-trips through the store",
-                bound != null && bound.PathInArchive == "roms/Sonic (Japan).md");
-
-            Check("another client is unaffected by it", RommRomPicks.For(tokenB, gameA) == null);
-            Check("another game of the same client is unaffected", RommRomPicks.For(tokenA, gameB) == null);
-
-            // Downloading a second entry moves the binding; it must not leave two rows for one game,
-            // which would make For() return whichever came first.
-            RommRomPicks.Set(tokenA, gameA, "roms/Sonic (USA).md", "Sonic (USA).md");
-            Check("a second download re-points the binding",
-                RommRomPicks.For(tokenA, gameA)?.PathInArchive == "roms/Sonic (USA).md");
-            Check("re-pointing leaves exactly one row", RommRomPicks.OfToken(tokenA).Count == 1);
-
-            RommRomPicks.Set(tokenA, gameB, "roms/Alex Kidd.md", "Alex Kidd.md");
-            Check("bindings are counted per client", RommRomPicks.CountFor(tokenA) == 2);
-
-            Check("clearing one game leaves the others", RommRomPicks.Clear(tokenA, gameA)
-                && RommRomPicks.For(tokenA, gameA) == null && RommRomPicks.CountFor(tokenA) == 1);
-
-            RommRomPicks.Set(tokenA, gameA, "roms/Sonic (USA).md", "Sonic (USA).md");
-            Check("revoking a client forgets every binding it had",
-                RommRomPicks.ClearToken(tokenA) == 2 && RommRomPicks.CountFor(tokenA) == 0);
+            var key = Saves.SaveManager.EntryKeyOf(groupId);
+            if (key == null) return null;
+            int sep = key.IndexOf(':', "entry:".Length);
+            if (sep < 0) return null;
+            var name = System.IO.Path.GetFileName(key.Substring(sep + 1).Replace('/', '\\').TrimEnd('\\'));
+            return name.Length > 0 ? name : null;
         }
-        catch (Exception ex) { Fail("rom-picks", ex.ToString()); }
-        finally { try { RommRomPicks.ClearToken(tokenA); RommRomPicks.ClearToken(tokenB); } catch { } }
+
+        Check("an entry group answers with its ROM's file name",
+            Slot("entry:Sonic _1B6F1FCB:Sonic (Japan).md") == "Sonic (Japan).md");
+
+        Check("a savestate's slot suffix does not reach the name",
+            Slot("entry:Sonic _1B6F1FCB:Sonic (Japan).md:s0") == "Sonic (Japan).md");
+
+        Check("a path inside the archive keeps only its file name",
+            Slot("entry:Sonic _1B6F1FCB:roms/disc 1/Sonic (Japan).md") == "Sonic (Japan).md");
+
+        Check("two versions of one game answer with different channels",
+            Slot("entry:Sonic _1B6F1FCB:Sonic (Japan).md") != Slot("entry:Sonic _1B6F1FCB:Sonic (USA).md"));
+
+        // A plain group has no entry, so the caller falls back to the game's own ROM name. What matters
+        // here is that the derivation says so instead of inventing something.
+        Check("an ordinary group has no entry to name", Slot(System.Guid.NewGuid().ToString("N")) == null);
+        Check("an empty group id has none either", Slot("") == null);
     }
 
     // ── S5: devices ───────────────────────────────────────────────────────────
@@ -340,17 +333,21 @@ internal static class RommSelfTest
                 && JsonDocument.Parse(r.Content.ReadAsStringAsync().GetAwaiter().GetResult()).RootElement.ValueKind == JsonValueKind.Array);
         }
 
+        // Saves and states are OUT OF SCOPE for now: nothing is served, nothing is accepted. A GET
+        // answers with an empty list — truthful, and a client handles it — while a write answers 501,
+        // which no client mistakes for "try again".
         var missing = Get(http, baseUrl + "/api/saves/999999", auth);
-        Check("an unknown save id 404s", (int)missing.StatusCode == 404);
+        Check("any save id reads as absent while saves are off", (int)missing.StatusCode == 404);
 
         using var form = new MultipartFormDataContent("----romm-selftest-save");
         form.Add(new ByteArrayContent(new byte[512]), "saveFile", "test.srm");
         var upload = Send(http, HttpMethod.Post, baseUrl + "/api/saves?rom_id=424242", form, auth);
-        Check("an upload against an unknown rom 404s", (int)upload.StatusCode == 404);
+        Check("an upload is refused as not implemented, not as an error to retry",
+            (int)upload.StatusCode == 501);
 
         var badDelete = Post(http, baseUrl + "/api/saves/delete",
             new StringContent("{\"saves\":[]}", Encoding.UTF8, "application/json"), auth);
-        Check("bulk delete with no ids is a 400", (int)badDelete.StatusCode == 400);
+        Check("bulk delete is refused the same way", (int)badDelete.StatusCode == 501);
 
         // S6: collections + the rom_user write-back.
         var cols = Get(http, baseUrl + "/api/collections", auth);
@@ -372,45 +369,200 @@ internal static class RommSelfTest
         }
     }
 
-    // ── S3: the id ledger ─────────────────────────────────────────────────────
+    // ── S3: the id ledger, and what a rom_id names ────────────────────────────
+    //
+    // A rom_id names a GAME AND A FILE. The '*' row is the game's default slot — it names no file, which
+    // is what lets a listing hand out ids without opening a single archive. A lock does not mint a
+    // private id: it SELECTS which existing one a client is served, so the catalogue stays shared.
 
     private static void IdLedger()
     {
-        var store = Path.Combine(Path.GetTempPath(), "litebox-romm-ids-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = Path.Combine(Path.GetTempPath(), "litebox-romm-" + Guid.NewGuid().ToString("N") + ".db");
         try
         {
-            RommIdMap.UseStore(store);
+            RommDb.UseStore(store);
 
-            int nes = RommIdMap.PlatformId("Nintendo Entertainment System");
-            int snes = RommIdMap.PlatformId("Super Nintendo Entertainment System");
+            int nes = RommDb.PlatformId("Nintendo Entertainment System");
+            int snes = RommDb.PlatformId("Super Nintendo Entertainment System");
             Check("platform ids are allocated monotonically", nes == 1 && snes == 2);
-            Check("asking again returns the SAME id", RommIdMap.PlatformId("Nintendo Entertainment System") == nes);
+            Check("asking again returns the SAME id", RommDb.PlatformId("Nintendo Entertainment System") == nes);
 
-            int romA = RommIdMap.RomId("guid-a");
-            int romB = RommIdMap.RomId("guid-b");
-            int fileA = RommIdMap.FileId("guid-a", "main");
-            int fileA2 = RommIdMap.FileId("guid-a", "entry:disc2.chd");
-            Check("rom and file ids are independent sequences",
-                romA == 1 && romB == 2 && fileA == 1 && fileA2 == 2);
+            int defA = RommDb.RomId("guid-a", RommDb.DefaultKey);
+            int defB = RommDb.RomId("guid-b", RommDb.DefaultKey);
+            Check("a game's default slot gets an id without naming a file", defA == 1 && defB == 2);
+            Check("asking for it again is the same id", RommDb.RomId("guid-a", RommDb.DefaultKey) == defA);
 
-            Check("reverse lookup finds the source key",
-                RommIdMap.GameIdOf(romB) == "guid-b"
-                && RommIdMap.PlatformNameOf(nes) == "Nintendo Entertainment System"
-                && RommIdMap.GameIdOf(999) == null);
+            int usa = RommDb.RomId("guid-a", "entry:Sonic (USA).md");
+            int jap = RommDb.RomId("guid-a", "entry:Sonic (Japan).md");
+            Check("each FILE of a game gets its own id", usa == 3 && jap == 4 && usa != defA);
 
-            // Persistence: flush, drop the in-memory state, reload from the same file.
-            RommIdMap.Flush();
-            RommIdMap.UseStore(store);
-            Check("ids survive a reload from disk",
-                RommIdMap.RomId("guid-a") == romA
-                && RommIdMap.PlatformId("Super Nintendo Entertainment System") == snes);
-            Check("a NEW entity after reload continues the sequence, never reuses",
-                RommIdMap.RomId("guid-c") == 3);
+            var named = RommDb.RomOf(usa);
+            Check("a rom id names the game and the file",
+                named?.GameGuid == "guid-a" && named?.FileKey == "entry:Sonic (USA).md");
+            Check("the default row answers with the sentinel, not a file",
+                RommDb.RomOf(defA)?.FileKey == RommDb.DefaultKey);
+            Check("an id nobody allocated names nothing", RommDb.RomOf(999) == null);
+
+            // Files, assets and collections keep their own sequences.
+            int fileA = RommDb.FileId("guid-a", "main");
+            int fileA2 = RommDb.FileId("guid-a", "entry:disc2.chd");
+            Check("file ids are an independent sequence", fileA == 1 && fileA2 == 2);
+            Check("a file id resolves back to its key", RommDb.FileKeyOf(fileA) == "guid-a|main");
+
+            // ── Locks ─────────────────────────────────────────────────────────
+            const int clientA = 11, clientB = 12;
+            Check("locking answers with the file's id, not a new one",
+                RommDb.Lock(clientA, "guid-a", "entry:Sonic (Japan).md") == jap);
+            Check("a second client on the SAME file gets the SAME id — the catalogue is shared",
+                RommDb.Lock(clientB, "guid-a", "entry:Sonic (Japan).md") == jap);
+            Check("a client on another file gets that file's id",
+                RommDb.Lock(clientB, "guid-a", "entry:Sonic (USA).md") == usa);
+
+            var locks = RommDb.AllLocks();
+            Check("re-locking replaces rather than accumulating",
+                locks.Count == 2 && locks.Count(l => l.TokenId == clientB) == 1);
+            Check("a lock carries the file it pins",
+                locks.First(l => l.TokenId == clientA).FileKey == "entry:Sonic (Japan).md");
+
+            Check("locking a file nobody had asked for allocates it once",
+                RommDb.Lock(clientA, "guid-b", "main") == 5
+                && RommDb.RomId("guid-b", "main") == 5);
+
+            Check("unlocking drops the hold", RommDb.Unlock(clientA, "guid-a")
+                && RommDb.AllLocks().Count(l => l.TokenId == clientA && l.GameGuid == "guid-a") == 0);
+            Check("revoking a client drops every hold it had",
+                RommDb.UnlockToken(clientA) == 1 && RommDb.AllLocks().All(l => l.TokenId != clientA));
+
+            // ── Persistence ───────────────────────────────────────────────────
+            RommDb.UseStore(store);          // drops the ready flag, reopens the same file
+            Check("ids survive a reload", RommDb.RomId("guid-a", RommDb.DefaultKey) == defA
+                && RommDb.PlatformId("Super Nintendo Entertainment System") == snes);
+            Check("a NEW combination after reload continues the sequence, never reuses",
+                RommDb.RomId("guid-c", RommDb.DefaultKey) == 6);
+
+            var defaults = RommDb.AllDefaults();
+            Check("the boot pass sees every default row and only those",
+                defaults.Count == 3 && defaults.Any(d => d.GameGuid == "guid-a" && d.RomId == defA));
         }
         finally
         {
-            RommIdMap.UseStore(null);
-            try { File.Delete(store); } catch { }
+            RommDb.UseStore(null);
+            foreach (var suffix in new[] { "", "-wal", "-shm" })
+                try { File.Delete(store + suffix); } catch { }
+        }
+    }
+
+    // ── S3: romm_games ────────────────────────────────────────────────────────
+    //
+    // The pass itself needs a real IGame and a real emulator, which a harness cannot honestly fake. What
+    // it CAN pin is everything the pass stands on, and those are the places a bug actually hides:
+    //
+    //   • the comma-bounded client list, where ",7," must not match client 17;
+    //   • the string surgery that adds and removes a client, done in SQL;
+    //   • the generations — including the rule that a pass must not revive what it just killed;
+    //   • the unique key, whose NOT NULL columns are what stop "insert if missing" duplicating.
+
+    private static void GamesTable()
+    {
+        var store = Path.Combine(Path.GetTempPath(), "litebox-rg-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            RommDb.UseStore(store);
+            using var conn = RommDb.OpenForIndex();
+            if (conn == null) { Check("romm_games: database opens", false); return; }
+
+            // ── La liste bornee par des virgules ──────────────────────────────
+            Check("an empty client list stays empty, not a stray separator",
+                RommGamesTable.FormatClients(new int[0]) == "");
+            Check("a list is bounded on both sides",
+                RommGamesTable.FormatClients(new[] { 3, 7 }) == ",3,7,");
+            Check("it round-trips",
+                string.Join("|", RommGamesTable.ParseClients(",3,7,")) == "3|7");
+            Check("an unbounded old form is still read",
+                string.Join("|", RommGamesTable.ParseClients("3,7")) == "3|7");
+
+            // THE trap: without the bounding commas, a LIKE for client 7 matches client 17.
+            var seventeen = RommGamesTable.FormatClients(new[] { 17 });
+            Check("client 17 does not contain client 7", !seventeen.Contains(",7,"));
+
+            // ── Les generations ───────────────────────────────────────────────
+            Check("a fresh table starts at generation 1", RommGamesTable.NextGeneration(conn) == 1);
+
+            var rows = new List<RommGameRow>
+            {
+                new() { GuidLb = "g1", PlatformId = 1, FilePath = @"roms\a.7z", RomPath = "in/a.smc",
+                        IsExtract = true, Action = RommRowAction.Add, IsDefaultUtc = DateTime.UtcNow },
+                new() { GuidLb = "g1", PlatformId = 1, FilePath = @"roms\a.7z", RomPath = "in/b.smc",
+                        IsExtract = true, Action = RommRowAction.Add },
+            };
+            RommGamesTable.Flush(conn, rows);
+            Check("both rows were written with ids", rows[0].RomId > 0 && rows[1].RomId > rows[0].RomId);
+
+            var back = RommGamesTable.ByGame(conn, "g1");
+            Check("they read back", back.Count == 2);
+            Check("the default is the one that carries the date",
+                back.Count(r => r.IsDefaultUtc != null) == 1);
+
+            // Disabling stamps the generation, so the NEXT pass gets a higher one.
+            var victim = back.First(r => r.RomPath == "in/b.smc");
+            victim.Disabled = 1; victim.DisabledUtc = DateTime.UtcNow; victim.Touch();
+            RommGamesTable.Flush(conn, new[] { victim });
+            Check("a disabled row pushes the next generation up", RommGamesTable.NextGeneration(conn) == 2);
+            Check("the valid row is untouched",
+                RommGamesTable.ByGame(conn, "g1").Count(r => r.IsValid) == 1);
+
+            // ── La cle unique ─────────────────────────────────────────────────
+            // Same (guid, filepath, rompath) as an existing row: the index must refuse it. Were rompath
+            // nullable, two NULLs would read as distinct and every pass would add a duplicate.
+            bool refused = false;
+            try
+            {
+                RommGamesTable.Flush(conn, new[] { new RommGameRow
+                {
+                    GuidLb = "g1", PlatformId = 1, FilePath = @"roms\a.7z", RomPath = "in/a.smc",
+                    Action = RommRowAction.Add,
+                } });
+            }
+            catch { refused = true; }
+            Check("the unique key refuses a second row for the same file", refused);
+
+            // ── Les clients, en SQL ───────────────────────────────────────────
+            int c1 = RommGamesTable.ClientIdFor(conn, tokenId: 101);
+            int c17 = RommGamesTable.ClientIdFor(conn, tokenId: 117);
+            Check("client indices are allocated once and reused",
+                c1 == 1 && c17 == 2 && RommGamesTable.ClientIdFor(conn, 101) == c1);
+
+            var def = RommGamesTable.ByGame(conn, "g1").First(r => r.IsDefaultUtc != null);
+            def.Clients.Add(c1); def.Clients.Add(c17); def.Touch();
+            RommGamesTable.Flush(conn, new[] { def });
+            Check("both clients are on the default",
+                RommGamesTable.ByGame(conn, "g1").First(r => r.IsDefaultUtc != null).Clients.Count == 2);
+
+            // Retiring one must remove EXACTLY one — this is the surgery that eats separators.
+            RommGamesTable.RetireClient(conn, c1);
+            var after = RommGamesTable.ByGame(conn, "g1").First(r => r.IsDefaultUtc != null);
+            Check("retiring a client removes it and only it",
+                after.Clients.Count == 1 && after.Clients[0] == c17);
+            Check("a retired client is out of the live set",
+                !RommGamesTable.LiveClients(conn).ContainsKey(c1));
+
+            RommGamesTable.RetireClient(conn, c17);
+            var empty = RommGamesTable.ByGame(conn, "g1").First(r => r.IsDefaultUtc != null);
+            Check("emptying the list leaves it EMPTY, not a lone comma", empty.Clients.Count == 0);
+
+            // ── Les chemins ───────────────────────────────────────────────────
+            Check("paths compare regardless of separator",
+                RommIndexPass.PathEq(@"roms\a.7z", "roms/a.7z"));
+            Check("a trailing separator does not make a different file",
+                RommIndexPass.PathEq(@"roms\dir\", @"roms\dir"));
+            Check("different files stay different",
+                !RommIndexPass.PathEq(@"roms\a.7z", @"roms\b.7z"));
+        }
+        finally
+        {
+            RommDb.UseStore(null);
+            foreach (var suffix in new[] { "", "-wal", "-shm" })
+                try { File.Delete(store + suffix); } catch { }
         }
     }
 

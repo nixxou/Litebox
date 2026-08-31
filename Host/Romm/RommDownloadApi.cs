@@ -17,7 +17,7 @@
 // a name matching exactly one archive entry serves THAT entry, because clients exist that address by
 // name and never send ids.
 //
-// Taking an archive entry also BINDS the calling client to it (RommRomPicks) when it authenticated with
+// Taking an archive entry binds nothing: every version stays available to every client, told apart by
 // a paired token. From then on the rom advertises only that entry and only its saves.
 
 #nullable enable
@@ -51,8 +51,15 @@ internal static class RommDownloadApi
         if (refused != null) return refused;
 
         var st = RommLibrary.Parental(ctx.Request);
-        var game = RommLibrary.GameByRomId(ctx.GetRouteInt("id", -1));
+        // Le rom_id NOMME le fichier : la ligne porte le chemin et, pour une ROM extraite, son chemin
+        // dans l'archive. Rien à décider ici, rien à figer — l'index a tranché avant que ce client ne
+        // voie la ligne. Le nom demandé dans l'URL n'est plus qu'un indice de repli.
+        int romId = ctx.GetRouteInt("id", -1);
+        var named = RommIndexer.RowOf(romId);
+        var game = named == null ? null : SafeGameOf(named.GuidLb);
         if (game == null) return RommApi.Error(404, "Rom not found");
+        if (!named!.Emulated)
+            return RommApi.Error(422, "This game is not distributed as a file");
         if (st != null && (st.IsHidden(RommLibrary.PlatformOf(game)) || !st.IsRatingAllowed(RommLibrary.EsrbOf(game))))
             return RommApi.Error(404, "Rom not found");
 
@@ -66,15 +73,43 @@ internal static class RommDownloadApi
 
         try
         {
-            return fileIds.Count > 0
-                ? ServeSelected(ctx, game, fileIds, requestedName, hiddenFolder, identity)
-                : ServeDefault(ctx, game, requestedName, hiddenFolder, identity);
+            if (fileIds.Count > 0)
+                return ServeSelected(ctx, game, fileIds, requestedName, hiddenFolder, identity);
+
+            // WHICH FILE this rom_id means. Either it names one — this client is locked, or it asked for
+            // a rom that names a file outright — or it is the game's default slot, which names none and
+            // resolves now to what the desktop picker would select.
+            //
+            // Only a game that HAS a choice is resolved and frozen. One with a single playable file has
+            // nothing to pin: a lock row for it would be an entry in the store saying what the absence of
+            // an entry already says.
+            if (named.RomPath.Length > 0)
+                return ServeArchiveEntry(ctx, game, named.AppId.Length == 0 ? null : named.AppId,
+                                         named.RomPath,
+                                         requestedName.Length > 0 ? requestedName
+                                             : Path.GetFileName(named.RomPath.Replace('/', '\\')),
+                                         hiddenFolder, identity);
+
+            if (named.FilePath.Length > 0)
+            {
+                var abs = RomPaths.ResolveAbsolute(named.FilePath);
+                if (abs == null || !File.Exists(abs)) return RommApi.Error(404, "ROM file missing on disk");
+                return FileDownload(ctx, abs, Path.GetFileName(abs));
+            }
+
+            return ServeDefault(ctx, game, requestedName, hiddenFolder, identity);
         }
         catch (Exception ex)
         {
             LbLog.Warn("romm", "download failed: " + ex.Message);
             return RommApi.Error(500, "Download failed: " + ex.Message);
         }
+    }
+
+    private static IGame? SafeGameOf(string guid)
+    {
+        try { return Unbroken.LaunchBox.Plugins.PluginHelper.DataManager?.GetGameById(guid); }
+        catch { return null; }
     }
 
     // ── No file_ids: the game's default shape ────────────────────────────────
@@ -141,24 +176,6 @@ internal static class RommDownloadApi
     /// account password has no durable identity to bind to, so it silently stays on the unbound default
     /// (every entry advertised, no save served). That limit is stated in the options panel rather than
     /// left to be discovered.</summary>
-    private static void BindPick(RommIdentity identity, IGame game, string pathInArchive, string entryFileName)
-    {
-        try
-        {
-            if (identity?.TokenId is not int tokenId)
-            {
-                RommTrace.Note("no binding recorded: the caller has no client-token id");
-                return;
-            }
-            var gameId = RommLibrary.IdOf(game);
-            if (gameId.Length == 0) return;
-            RommRomPicks.Set(tokenId, gameId, pathInArchive, entryFileName);
-            RommTrace.Note($"bound token #{tokenId} to \"{entryFileName}\"");
-            LbLog.Info("romm", $"client token {tokenId} bound to \"{entryFileName}\" for game {gameId}");
-        }
-        catch (Exception ex) { LbLog.Warn("romm", "could not record the ROM binding: " + ex.Message); }
-    }
-
     /// <summary>The in-archive path of the single entry whose file name is <paramref name="requested"/>,
     /// or null when the name matches nothing — or, deliberately, when it matches more than one: two
     /// entries can share a file name in different folders, and a download that quietly picks one of them
@@ -189,10 +206,8 @@ internal static class RommDownloadApi
         var (file, dir) = RomExtractor.ExtractEntryForDownload(game, appId, pathInArchive);
         if (file == null) return RommApi.Error(503, "Extraction failed (is the ROM extractor module on?)");
 
-        // Taking an entry BINDS the client to it: from here the game advertises only this ROM, and only
-        // this ROM's saves. Recorded after the extraction succeeds — a binding to something we could not
-        // deliver would be a lie the save filter then acts on.
-        BindPick(identity, game, pathInArchive, Path.GetFileName(file));
+        // Rien à figer ici : l'index a décidé quel fichier ce client reçoit avant même qu'il voie la
+        // ligne, et le rom_id demandé le nomme. Un téléchargement ne change plus rien à l'attribution.
 
         if (dir != null)
         {

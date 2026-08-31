@@ -77,6 +77,16 @@ internal struct GameRow
     // 300k library). Tier 1 on purpose: a running game must not lose its badges, and re-deriving them
     // costs a full pass.
     public int BadgeCombo;
+
+    // The game's RomM identity — the rom_id of its DEFAULT slot, 0 = never listed by a client. Its
+    // persistent home is the RomM database (romm.db); this is the runtime form, like ParentalBlocked
+    // above. Four bytes rather than a dictionary of guid→int, which is what the old JSON ledger was and
+    // what cost 2.8 MB resident on a 3057-game library.
+    //
+    // Tier 1 for the same reason as BadgeCombo: the RomM server answers while a game is RUNNING — a
+    // handheld syncing mid-session — which is precisely when the higher tiers are dropped. A client
+    // pinned to another file does not read this; see RommRoms for the resolution order.
+    public int RommRomId;
 }
 
 /// <summary>Bit flags packed into <see cref="GameRow.Flags"/>.</summary>

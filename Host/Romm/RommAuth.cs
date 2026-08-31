@@ -315,6 +315,11 @@ internal static class RommAuth
         };
         all.Add(record);
         SaveTokens(all);
+
+        // The client now knows what it will be given: every game that offers a choice gets an answer
+        // written down before this client ever lists one. Settling it here rather than at the first
+        // download is what lets a listing be truthful AND free — a client caches the file name on sight.
+        try { RommIndexer.AddClient(record.Id); } catch { }
         return (record, secret);
     }
 

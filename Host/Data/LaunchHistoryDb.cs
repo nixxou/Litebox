@@ -15,6 +15,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Microsoft.Data.Sqlite;
 
@@ -57,6 +58,27 @@ internal static class LaunchHistoryDb
         catch (Exception ex) { Log("open failed: " + ex.Message); return null; }
     }
 
+    /// <summary>The whole table in one read: game id, the version last launched, the archive entry last
+    /// extracted. The per-game getters below are right for a launch button; asking them once per game at
+    /// boot would be one round trip per game for a table that fits in a breath.</summary>
+    public static List<(string GameId, string? AppId, string? ExtractedRomPath)> AllLaunches()
+    {
+        var res = new List<(string, string?, string?)>();
+        try
+        {
+            using var conn = Open(); if (conn == null) return res;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT game_id, additional_app_id, extracted_rom_path FROM launch_history";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+                res.Add((r.GetString(0),
+                         r.IsDBNull(1) ? null : r.GetString(1),
+                         r.IsDBNull(2) ? null : r.GetString(2)));
+        }
+        catch (Exception ex) { Log("bulk read failed: " + ex.Message); }
+        return res;
+    }
+
     /// <summary>Upsert the last emulator/version used for a game (ROM left NULL — RecordLaunchRomEntry sets it).
     /// UPSERT, NOT INSERT OR REPLACE, so detection_ms / extracted_rom_path survive.</summary>
     public static void RecordLaunch(string gameId, string? emulatorId, string? additionalAppId)
@@ -84,6 +106,8 @@ internal static class LaunchHistoryDb
     /// extracted_rom_path (preserves emulator/app/detection_ms); creates a bare row when none exists.</summary>
     public static void RecordLaunchRomEntry(string gameId, string? romEntry)
     {
+        // Le defaut RomM suit le dernier joue : cette ROM vient peut-etre de le deplacer.
+        try { Romm.RommIndexer.Touch(gameId); } catch { }
         if (string.IsNullOrEmpty(gameId)) return;
         try
         {

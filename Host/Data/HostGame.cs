@@ -146,6 +146,11 @@ internal sealed class HostGame : DummyGame, ILiteBoxGame
     /// <summary>Index into BadgeTable (0 = not evaluated). Written by the badge pass, read by every
     /// surface that draws badges — it is the whole per-game badge state, four bytes inside the row.</summary>
     public int BadgeCombo { get => R.BadgeCombo; set => _s.Rows[_i].BadgeCombo = value; }
+
+    /// <summary>The rom_id RomM serves for this game by DEFAULT (0 = never listed). Runtime form of
+    /// romm.db's default row, stamped at boot by <see cref="Romm.RommRoms"/>. A client locked onto
+    /// another file of the same game is served from the lock map instead — never from here.</summary>
+    public int RommRomId { get => R.RommRomId; set => _s.Rows[_i].RommRomId = value; }
     public override string ScummVmGameDataFolderPath { get => _s.Str(R.ScummDataIdx); set => _s.SetGameField(_i, "ScummVMGameDataFolderPath", value); }
     public override string ScummVmGameType { get => _s.Str(R.ScummTypeIdx); set => _s.SetGameField(_i, "ScummVMGameType", value); }
     public override string Series { get => _s.Str(R.SeriesIdx); set => _s.SetGameField(_i, "Series", value); }

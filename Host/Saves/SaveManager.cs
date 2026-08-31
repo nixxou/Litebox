@@ -1501,8 +1501,12 @@ internal static class SaveManager
     /// import made while browsing an entry used to land in the MAIN bucket — visible nowhere near where
     /// it was made. The entry decides three things at once: the group's identity, the folder the copy
     /// goes into, and the name it takes.</param>
+    /// <param name="originalName">What the file is really called, when the path it is being read from
+    /// is not it — a piece unpacked from a bundle sits under a collision-proof working name. This is the
+    /// name clients are shown, so the working name must never reach it.</param>
     public static string? Import(IGame game, string filePath, bool asState, int? slot,
-                                 string? appId, string? platformOverride = null, SaveEntry? entry = null)
+                                 string? appId, string? platformOverride = null, SaveEntry? entry = null,
+                                 string? originalName = null)
     {
         if (!File.Exists(filePath)) return "That file no longer exists.";
         if (game is not ILiteBoxGame lbg) return "This library is read-only.";
@@ -1550,7 +1554,8 @@ internal static class SaveManager
             row["SaveGroupId"] = gid;
             row["MatchLineageId"] = gid;
             row["FilePath"] = SaveVault.Rel(target);
-            row["OriginalFileName"] = Path.GetFileName(filePath);
+            row["OriginalFileName"] = originalName is { Length: > 0 } on
+                ? Path.GetFileName(on) : Path.GetFileName(filePath);
             if (asState) row["Slot"] = (slot ?? 0).ToString();
 
             var rows = lbg.GetSubEntities("GameSave").Select(r => new Dictionary<string, string>(r, StringComparer.Ordinal)).ToList();

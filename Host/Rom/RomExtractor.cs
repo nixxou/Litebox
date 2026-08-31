@@ -483,6 +483,9 @@ internal static class RomExtractor
                     .ToList();
                 shortSig = analysis.Signature?.ShortSignature ?? "";
                 ArchiveListingCache.Set(key, entries, absPath, size, shortSig);
+                // RomM ne peut nommer une archive qu'une fois son contenu connu : ce jeu vient
+                // peut-etre de devenir annoncable. Empile, jamais synchrone.
+                try { Romm.RommIndexer.Touch(game); } catch { }
             }
             if (entries.Count == 0) return new RomEntryListing { ArchivePath = absPath, Key = key, ShortSignature = shortSig };
 
@@ -732,6 +735,16 @@ internal static class RomExtractor
         catch { }
         return null;
     }
+
+    /// <summary>The title of the emulator a game ACTUALLY launches with. Exposed because deciding whether
+    /// a game's archive is even ours to open needs the same (platform, emulator) row the launcher uses —
+    /// answering that from the platform's default alone gets MAME/Arcade wrong.</summary>
+    internal static string? EffectiveEmulatorTitle(IGame game) => ResolveEmuTitle(game);
+
+    /// <summary>The emulator a game actually launches with. Exposed alongside the title because deciding
+    /// whether extraction is even ON for a game needs the emulator OBJECT: the answer is the per-platform
+    /// AutoExtract, nullable, falling back to the emulator-level flag.</summary>
+    internal static IEmulator? EffectiveEmulator(IGame game) => ResolveEffectiveEmulator(game);
 
     private static string? ResolveEmuTitle(IGame game) => Safe(() => ResolveEffectiveEmulator(game)?.Title);
 

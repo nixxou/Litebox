@@ -31,25 +31,25 @@ internal static class RommLibraryApi
 
     public static HttpResponse Platforms(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.PlatformsRead, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.PlatformsRead, out var identity);
         if (refused != null) return refused;
 
         var st = RommLibrary.Parental(ctx.Request);
-        return RommApi.Json(RommLibrary.Platforms(st).Select(PlatformDto).ToArray());
+        return RommApi.Json(RommLibrary.Platforms(st, identity?.TokenId).Select(PlatformDto).ToArray());
     }
 
     public static HttpResponse PlatformIdentifiers(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.PlatformsRead, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.PlatformsRead, out var identity);
         if (refused != null) return refused;
 
         var st = RommLibrary.Parental(ctx.Request);
-        return RommApi.Json(RommLibrary.Platforms(st).Select(p => p.Id).ToArray());
+        return RommApi.Json(RommLibrary.Platforms(st, identity?.TokenId).Select(p => p.Id).ToArray());
     }
 
     public static HttpResponse PlatformById(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.PlatformsRead, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.PlatformsRead, out var identity);
         if (refused != null) return refused;
 
         var st = RommLibrary.Parental(ctx.Request);
@@ -61,11 +61,11 @@ internal static class RommLibraryApi
     /// mapped set keeps it small and true.</summary>
     public static HttpResponse PlatformsSupported(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.PlatformsRead, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.PlatformsRead, out var identity);
         if (refused != null) return refused;
 
         var st = RommLibrary.Parental(ctx.Request);
-        return RommApi.Json(RommLibrary.Platforms(st).Select(PlatformDto).ToArray());
+        return RommApi.Json(RommLibrary.Platforms(st, identity?.TokenId).Select(PlatformDto).ToArray());
     }
 
     private static object PlatformDto(RommPlatform p) => new
@@ -135,7 +135,7 @@ internal static class RommLibraryApi
             req.GetQuery("search_term"),
             (req.GetQuery("order_by") ?? "name").ToLowerInvariant(),
             (req.GetQuery("order_dir") ?? "asc").ToLowerInvariant(),
-            st);
+            st, identity?.TokenId);
 
         int limit = Math.Clamp(req.GetQueryInt("limit", 50), 1, 10_000);
         int offset = Math.Max(0, req.GetQueryInt("offset", 0));
@@ -157,7 +157,7 @@ internal static class RommLibraryApi
         }
 
         var romIdIndex = req.GetQueryBool("with_rom_id_index", true)
-            ? games.Select(g => RommIdMap.RomId(RommLibrary.IdOf(g))).ToArray()
+            ? games.Select(g => (int)RommRoms.RomIdFor(g, identity?.TokenId)).ToArray()
             : Array.Empty<int>();
 
         object filterValues = new
@@ -189,14 +189,15 @@ internal static class RommLibraryApi
 
     public static HttpResponse RomIdentifiers(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.RomsRead, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.RomsRead, out var identity);
         if (refused != null) return refused;
 
         var req = ctx.Request!;
         var st = RommLibrary.Parental(req);
         int? platformId = int.TryParse(req.GetQuery("platform_ids"), out var pid) ? pid : null;
-        var games = RommLibrary.Query(platformId, req.GetQuery("search_term"), "name", "asc", st);
-        return RommApi.Json(games.Select(g => RommIdMap.RomId(RommLibrary.IdOf(g))).ToArray());
+        var games = RommLibrary.Query(platformId, req.GetQuery("search_term"), "name", "asc", st,
+                                      identity?.TokenId);
+        return RommApi.Json(games.Select(g => (int)RommRoms.RomIdFor(g, identity?.TokenId)).ToArray());
     }
 
     public static HttpResponse RomById(RouteContext ctx)
@@ -219,11 +220,11 @@ internal static class RommLibraryApi
 
     public static HttpResponse Stats(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.RomsRead, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.RomsRead, out var identity);
         if (refused != null) return refused;
 
         var st = RommLibrary.Parental(ctx.Request);
-        var platforms = RommLibrary.Platforms(st);
+        var platforms = RommLibrary.Platforms(st, identity?.TokenId);
         long totalGames = platforms.Sum(p => (long)p.RomCount);
         return RommApi.Json(new
         {
@@ -241,7 +242,7 @@ internal static class RommLibraryApi
     internal static object RomDto(IGame g, bool detailed, int? tokenId = null)
     {
         var gameId = RommLibrary.IdOf(g);
-        int romId = RommIdMap.RomId(gameId);
+        int romId = (int)RommRoms.RomIdFor(g, tokenId);
         var platformName = RommLibrary.PlatformOf(g);
         var slug = RommPlatformMap.SlugFor(platformName) ?? "unknown";
         int platformId = RommIdMap.PlatformId(platformName);
@@ -250,22 +251,37 @@ internal static class RommLibraryApi
         var fsName = absPath != null ? Path.GetFileName(absPath) : (RommLibrary.TitleOf(g) + ".rom");
         long size = RommLibrary.SizeOf(g);
         var fsPath = "roms/" + slug;
+        string fsNameNoExt, fsExt;
         bool missing = absPath == null || !SafeFileExists(absPath);
 
-        // An extraction-eligible archive is presented as a game with VERSIONS, exactly like one carrying
-        // additional applications: a real ROM as its main file, its siblings as the other files. Nothing
-        // names the .7z, because a client that learns about it asks for it — which is precisely how
-        // "download one ROM" ended up shipping the whole archive.
-        var entries = ArchiveEntries(g, absPath);
-        var pick = RommRomPicks.For(tokenId, gameId);
-        var main = MainEntry(entries, pick);
-        if (main != null)
-        {
-            fsName = main.FileName;
-            size = main.Size > 0 ? main.Size : size;
-        }
-        var fsNameNoExt = Path.GetFileNameWithoutExtension(fsName);
-        var fsExt = Path.GetExtension(fsName).TrimStart('.');
+        // ONE rom, ONE file. The rom_id already names which — either this client's lock, or the game's
+        // default slot, which resolves to what the desktop picker would select.
+        //
+        // NOTHING here may name the archive. A client builds its download URL from this field, and one
+        // did: it asked for "Super Mario World 2 - Yoshi's Island.7z" by name. Resolving the real file
+        // on a listing row would mean opening one archive per row, so a listing answers with the game's
+        // TITLE — which names nothing that can be requested — and the game page tells the truth as soon
+        // as a client actually looks at it.
+        // WHICH file this client gets. Settled at pairing, so a listing only reads it — and reads the
+        // NAME straight out of the stored key, without opening an archive. That is the whole reason the
+        // decision was moved to pairing: a client caches this field on sight.
+        // Le nom du fichier vient de la LIGNE, jamais d'une lecture d'archive. Une clé d'entrée porte
+        // le chemin dans l'archive, donc son basename est la réponse — et c'est ce qui rend un listing à
+        // la fois vrai et gratuit. Mesuré : un client construit son URL de téléchargement depuis ce
+        // champ et le met en cache dès qu'il voit la ligne.
+        var pin = RommRoms.PinnedFor(g, tokenId);
+        string? served = pin != null
+            ? (pin.RomPath.Length > 0 ? pin.RomPath : pin.FilePath)
+            : null;
+        if (served != null) fsName = Path.GetFileName(served.Replace('/', '\\').TrimEnd('\\'));
+
+        RommFile? chosen = null;
+        bool nameIsTitle = false;
+
+        // A title is not a file name: splitting "Mr. Do!" on its dot would advertise an extension of
+        // "Do!". Only a real file name has one.
+        fsNameNoExt = nameIsTitle ? fsName : Path.GetFileNameWithoutExtension(fsName);
+        fsExt = nameIsTitle ? "" : Path.GetExtension(fsName).TrimStart('.');
 
         var title = RommLibrary.TitleOf(g);
         var added = RommLibrary.AddedOf(g);
@@ -277,7 +293,7 @@ internal static class RommLibraryApi
         var regions = SplitList(RommLibrary.RegionOf(g));
         var genres = SplitList(RommLibrary.GenresOf(g));
 
-        var files = BuildFiles(g, gameId, romId, fsPath, added, modified, entries, pick);
+        var files = BuildFiles(g, gameId, romId, fsPath, added, modified, chosen);
 
         var dto = new Dictionary<string, object?>
         {
@@ -303,7 +319,7 @@ internal static class RommLibraryApi
 
             // The client builds its download URL from file_name first, falling back to fs_name;
             // both now name a ROM, so the archive can no longer be requested by accident.
-            ["file_name"] = main?.FileName,
+            ["file_name"] = chosen?.FileName,
             ["fs_name"] = fsName,
             ["fs_name_no_tags"] = StripTags(fsNameNoExt),
             ["fs_name_no_ext"] = fsNameNoExt,
@@ -440,27 +456,21 @@ internal static class RommLibraryApi
     /// <summary>The entry that stands in for the game itself: the one this client is bound to, else the
     /// best-ranked. Never arbitrary — RomExtractor scores by the profile's tag weights and floats
     /// favourites and the last-played entry, so the head of the list is the one you would launch.</summary>
-    private static Rom.RomEntryView? MainEntry(IReadOnlyList<Rom.RomEntryView> entries, RommRomPick? pick)
-    {
-        if (entries.Count == 0) return null;
-        if (pick != null)
-        {
-            var bound = entries.FirstOrDefault(e =>
-                string.Equals(e.PathInArchive, pick.PathInArchive, StringComparison.OrdinalIgnoreCase));
-            if (bound != null) return bound;
-        }
-        return entries[0];
-    }
+    /// <summary>The entry that stands for the game: the best-ranked one. SortForDisplay has already
+    /// floated favourites and last-played, so the head is the one worth naming.</summary>
+    private static Rom.RomEntryView? MainEntry(IReadOnlyList<Rom.RomEntryView> entries)
+        => entries.Count == 0 ? null : entries[0];
 
+    /// <summary>The rom's files — exactly ONE, because a rom_id names one file.
+    ///
+    /// has_multiple_files therefore falls to false through the client's own files.Count test, and every
+    /// picker it drives disappears. That is the point of the whole model: a device is never shown a
+    /// choice it could get wrong, and the choice itself lives in the assignment screen.</summary>
     private static List<object> BuildFiles(IGame g, string gameId, int romId, string fsPath,
-                                           DateTime added, DateTime modified,
-                                           IReadOnlyList<Rom.RomEntryView> entries, RommRomPick? pick)
+                                           DateTime added, DateTime modified, RommFile? chosen)
     {
         var files = new List<object>();
 
-        // Every file sits in the platform folder, entries included. Naming the archive as their
-        // directory was truer to the disk and wrong for the purpose: it told the client an archive
-        // exists. A version and an archive entry must be indistinguishable here.
         object FileDto(int id, string name, long bytes, string category) => new
         {
             id,
@@ -483,40 +493,15 @@ internal static class RommLibraryApi
             track_meta = (object?)null,
         };
 
-        if (entries.Count > 0)
-        {
-            // A bound client sees ONLY its own ROM, so has_multiple_files falls to false through the
-            // existing files.Count test and every picker it drives disappears — a device cannot pull
-            // another version's save onto the one it plays if it was never told that version exists.
-            IEnumerable<Rom.RomEntryView> shown = entries;
-            var bound = pick == null ? null : entries.FirstOrDefault(e =>
-                string.Equals(e.PathInArchive, pick.PathInArchive, StringComparison.OrdinalIgnoreCase));
-            if (bound != null) shown = new[] { bound };
-            else
-            {
-                // Ranked already — tag-weight score, favourites and last-played floated by
-                // SortForDisplay — so taking the head keeps the entries worth having. A no-intro set can
-                // hold hundreds, and shipping them all gives a picker nobody can scroll.
-                // (A binding whose entry has gone, the archive having changed, falls here too: the client
-                // is freed rather than left with a rom it can neither download nor unbind from.)
-                int cap = RommConfig.MaxArchiveEntries;
-                if (cap > 0 && entries.Count > cap) shown = entries.Take(cap);
-            }
-
-            foreach (var e in shown)
-                files.Add(FileDto(RommIdMap.FileId(gameId, "entry:" + e.PathInArchive), e.FileName, e.Size, "game"));
-        }
+        // No chosen file means a listing row, which does not resolve one — the game's own ROM name is
+        // the honest answer there, and the game page says what the file really is.
+        if (chosen != null)
+            files.Add(FileDto(RommIdMap.FileId(gameId, chosen.Key), chosen.FileName, Math.Max(0, chosen.Size), "game"));
         else
         {
             var mainAbs = RommLibrary.RomAbsPath(g);
             var name = mainAbs != null ? Path.GetFileName(mainAbs) : (RommLibrary.TitleOf(g) + ".rom");
-            files.Add(FileDto(RommIdMap.FileId(gameId, "main"), name, RommLibrary.SizeOf(g), "game"));
-        }
-
-        foreach (var (appId, abs) in RommDownloadApi.DiscApps(g))
-        {
-            long bytes = 0; try { bytes = new FileInfo(abs).Length; } catch { }
-            files.Add(FileDto(RommIdMap.FileId(gameId, "app:" + appId), Path.GetFileName(abs), bytes, "game"));
+            files.Add(FileDto(RommIdMap.FileId(gameId, RommFiles.MainKey), name, RommLibrary.SizeOf(g), "game"));
         }
 
         return files;

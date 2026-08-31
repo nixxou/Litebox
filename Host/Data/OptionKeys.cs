@@ -96,10 +96,8 @@ internal static class OptionKeys
         new("Romm.DeviceSyncs",   Glob, OptionType.Json, OptionCache.Cold, "Romm/RommDevices"),
         // Which ROM of an archive each paired client is bound to, per game — what stops a device that
         // played one version from pulling another version's save on top of it.
-        new("Romm.RomPicks",      Glob, OptionType.Json, OptionCache.Cold, "Romm/RommRomPicks"),
         // RomM's slot — a free-form sync-channel NAME, which LaunchBox has nowhere to put: its own Slot
         // is the savestate number. Keyed by the copy's vault path.
-        new("Romm.SaveSlots",     Glob, OptionType.Json, OptionCache.Cold, "Romm/RommSaveSlots"),
         // Per-game RomM user-state with no LaunchBox twin (backlogged / now_playing / difficulty /
         // completion / status) — what PUT /api/roms/{id}/user persists beyond the LB fields.
         new("Romm.RomUser",       Game, OptionType.Json, OptionCache.Cold, "Romm/RommUserApi"),

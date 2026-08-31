@@ -94,23 +94,6 @@ internal static class RommUserApi
             extras["status"] = status;
             // IGame.Completed is set below, once completion has been read too.
 
-            // "Dropped" releases this client's ROM binding — the one gesture a stock RomM client has for
-            // saying "I am done with this version". Without it the only way out of the lock is the
-            // desktop's Clients tab, which is no help on a handheld. Scoped to the CALLING client:
-            // another device's choice is not this one's to undo.
-            if (string.Equals(status, "retired", StringComparison.OrdinalIgnoreCase)
-             || string.Equals(status, "dropped", StringComparison.OrdinalIgnoreCase))
-            {
-                try
-                {
-                    if (identity?.TokenId is int tid && RommRomPicks.Clear(tid, gameId))
-                    {
-                        RommTrace.Note($"dropped: released token #{tid}'s ROM binding");
-                        LbLog.Info("romm", $"status dropped → released client token {tid} from game {gameId}");
-                    }
-                }
-                catch (Exception ex) { LbLog.Warn("romm", "could not release the binding: " + ex.Message); }
-            }
         }
         foreach (var name in new[] { "backlogged", "now_playing" })
             if (body.TryGetProperty(name, out var v) && (v.ValueKind is JsonValueKind.True or JsonValueKind.False))
@@ -148,7 +131,7 @@ internal static class RommUserApi
     public static object RomUserDto(IGame game)
     {
         var gameId = RommLibrary.IdOf(game);
-        int romId = RommIdMap.RomId(gameId);
+        int romId = (int)RommRoms.DefaultRomId(game, gameId);
         var extras = LoadExtras(gameId);
         var lastPlayed = RommLibrary.LastPlayedOf(game);
 
@@ -258,14 +241,14 @@ internal static class RommUserApi
 
     public static HttpResponse Collections(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.CollectionsRead, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.CollectionsRead, out var identity);
         if (refused != null) return refused;
 
         var st = RommLibrary.Parental(ctx.Request);
-        var list = new List<object> { FavoritesDto(st) };
+        var list = new List<object> { FavoritesDto(st, identity?.TokenId) };
         foreach (var pl in Playlists())
         {
-            var dto = PlaylistDto(pl, st);
+            var dto = PlaylistDto(pl, st, identity?.TokenId);
             if (dto != null) list.Add(dto);
         }
         return RommApi.Json(list.ToArray());
@@ -273,7 +256,7 @@ internal static class RommUserApi
 
     public static HttpResponse CollectionById(RouteContext ctx)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.CollectionsRead, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.CollectionsRead, out var identity);
         if (refused != null) return refused;
 
         var st = RommLibrary.Parental(ctx.Request);
@@ -282,10 +265,10 @@ internal static class RommUserApi
         if (name == null) return RommApi.Error(404, "Collection not found");
 
         if (string.Equals(name, FavoritesName, StringComparison.OrdinalIgnoreCase))
-            return RommApi.Json(FavoritesDto(st));
+            return RommApi.Json(FavoritesDto(st, identity?.TokenId));
 
         var pl = Playlists().FirstOrDefault(p => Safe(() => p.Name) == name);
-        var dto = pl == null ? null : PlaylistDto(pl, st);
+        var dto = pl == null ? null : PlaylistDto(pl, st, identity?.TokenId);
         return dto == null ? RommApi.Error(404, "Collection not found") : RommApi.Json(dto);
     }
 
@@ -308,7 +291,7 @@ internal static class RommUserApi
 
     private static HttpResponse Membership(RouteContext ctx, bool add, int? romIdFromRoute)
     {
-        var refused = RommAuthApi.Require(ctx, RommScopes.CollectionsWrite, out _);
+        var refused = RommAuthApi.Require(ctx, RommScopes.CollectionsWrite, out var identity);
         if (refused != null) return refused;
 
         int id = ctx.GetRouteInt("id", -1);
@@ -347,22 +330,24 @@ internal static class RommUserApi
         }
 
         var st = RommLibrary.Parental(ctx.Request);
-        return RommApi.Json(FavoritesDto(st));
+        return RommApi.Json(FavoritesDto(st, identity?.TokenId));
     }
 
     // ── DTOs ──────────────────────────────────────────────────────────────────
 
-    private static object FavoritesDto(WebParentalState? st)
+    // The CLIENT matters here too: a collection must not name a rom the client cannot see, nor hand it
+    // the default id when it is pinned to another file.
+    private static object FavoritesDto(WebParentalState? st, int? tokenId)
     {
         var romIds = new List<int>();
         foreach (var p in RommLibrary.Platforms(st))
-            foreach (var g in RommLibrary.GamesOf(p.LbName, st))
-                if (RommLibrary.FavoriteOf(g)) romIds.Add(RommIdMap.RomId(RommLibrary.IdOf(g)));
+            foreach (var g in RommLibrary.GamesOf(p.LbName, st, tokenId))
+                if (RommLibrary.FavoriteOf(g)) romIds.Add((int)RommRoms.RomIdFor(g, tokenId));
         return CollectionDto(RommIdMap.CollectionId(FavoritesName), FavoritesName,
             "Your LaunchBox favorites", romIds, isFavorite: true);
     }
 
-    private static object? PlaylistDto(IPlaylist pl, WebParentalState? st)
+    private static object? PlaylistDto(IPlaylist pl, WebParentalState? st, int? tokenId)
     {
         var name = Safe(() => pl.Name);
         if (string.IsNullOrEmpty(name)) return null;
@@ -375,7 +360,7 @@ internal static class RommUserApi
                 if (g == null) continue;
                 if (st != null && (st.IsHidden(RommLibrary.PlatformOf(g)) || !st.IsRatingAllowed(RommLibrary.EsrbOf(g)))) continue;
                 if (RommLibrary.HiddenOf(g) && !RommConfig.ExposeHiddenGames) continue;
-                romIds.Add(RommIdMap.RomId(RommLibrary.IdOf(g)));
+                romIds.Add((int)RommRoms.RomIdFor(g, tokenId));
             }
         }
         catch { }

@@ -254,7 +254,11 @@ internal static class RommLibrary
     public static bool FavoriteOf(IGame g) { try { return g.Favorite; } catch { return false; } }
     public static bool HiddenOf(IGame g) { try { return g.Hide; } catch { return false; } }
     public static float RatingOf(IGame g) { try { return g.CommunityOrLocalStarRating; } catch { return 0f; } }
-    public static string NotesOf(IGame g) { try { return g.Notes ?? ""; } catch { return ""; } }
+    // Via la doublure des themes web : pendant qu'un jeu tourne, la tranche Notes est larguee du
+    // store, et DescriptionOf sert alors la description de LaunchBox.Extended.Metadata.db a la
+    // place - un client qui synchronise en pleine partie ne doit pas encaisser un summary vide.
+    public static string NotesOf(IGame g)
+    { try { return LbApiHost.Host.Web.OwnedDataProvider.DescriptionOf(g) ?? ""; } catch { return ""; } }
     public static string RegionOf(IGame g) { try { return g.Region ?? ""; } catch { return ""; } }
     public static string VersionOf(IGame g) { try { return g.Version ?? ""; } catch { return ""; } }
     public static string GenresOf(IGame g) { try { return g.GenresString ?? ""; } catch { return ""; } }

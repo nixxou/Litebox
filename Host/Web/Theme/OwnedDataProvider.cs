@@ -587,7 +587,7 @@ internal static class OwnedDataProvider
     /// metadata DB's description as a stand-in. Gated on OptionalDropped rather than on "Notes are empty",
     /// so what is served in normal operation does not change: a game that genuinely has no description still
     /// reports none. See MetadataDb.OverviewForGame for why the substitute is acceptable.</summary>
-    private static string DescriptionOf(IGame game)
+    internal static string DescriptionOf(IGame game)
     {
         var notes = Safe(() => game.Notes);
         if (!string.IsNullOrWhiteSpace(notes) || !GameStore.OptionalDropped) return notes;
